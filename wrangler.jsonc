@@ -2,7 +2,6 @@
   "name": "subsub-main",
   "compatibility_date": "2026-09-16",
   "assets": {
-    "directory": "./",
-    "not_found_handling": "404-page"
+    "directory": "./"
   }
 }
