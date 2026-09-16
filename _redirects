@@ -1,0 +1,21 @@
+# Extensionless URLs -> files (Netlify / Cloudflare Pages)
+/pricing                    /pricing.html                    200
+/book-a-demo                /book-a-demo.html                200
+/get-started                /get-started.html                200
+/for-general-contractors    /for-general-contractors.html    200
+/for-property-managers      /for-property-managers.html      200
+/for-building-owners        /for-building-owners.html        200
+/for-portfolio-managers     /for-portfolio-managers.html     200
+/privacy-policy             /privacy-policy.html             200
+/terms-of-use               /terms-of-use.html               200
+
+# Old paths from earlier drafts
+/demo.html                  /book-a-demo.html                301
+/onboarding.html            /get-started.html                301
+/general-contractors.html   /for-general-contractors.html    301
+/property-managers.html     /for-property-managers.html      301
+/building-owners.html       /for-building-owners.html        301
+/portfolio-managers.html    /for-portfolio-managers.html     301
+/privacy.html                /privacy-policy.html             301
+/terms.html                  /terms-of-use.html               301
+/subsub-landing.html         /                                301
