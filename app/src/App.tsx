@@ -5,6 +5,19 @@ import {
   Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList,
   Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
 } from "lucide-react";
+import { api, getAuth, setAuth, clearAuth } from "./lib/api";
+
+// ---- Persistence bridge ---------------------------------------------------
+// The app below still reads/writes plain useState — every mutator additionally
+// calls the API so it survives a reload. See "persistence wiring" further
+// down for where each handler picks up its api.* call, and lib/api.js for
+// the client itself. Errors from a write-through call are logged, not
+// thrown — the local optimistic update already happened, so a transient
+// network failure doesn't freeze the UI; it just means that one write may
+// not have persisted (worth a toast in a later pass).
+const persist = (label, promise) => {
+  promise?.catch?.((err) => console.error(`[persist] ${label} failed:`, err));
+};
 
 // ---- Domain constants ----------------------------------------------------
 const CATEGORIES = [
@@ -977,6 +990,7 @@ export default function SubSub() {
   const [currentAccountId, setCurrentAccountId] = useState("a1");
   const now = useNow();
   const [loggedIn, setLoggedIn] = useState(false);
+  const [loading, setLoading] = useState(false);
   // White-label tenant branding — one GC per instance (outerhome.subsub.work)
 
   const [pane, setPane] = useState("jobs"); // contractor portal pane
@@ -1044,12 +1058,21 @@ export default function SubSub() {
   const brand = account;
   const plan = account.plan;
   const billing = account.billing || "monthly";
-  const setBilling = (c) => setAccounts((as) => as.map((a) =>
-    a.id === account.id ? { ...a, billing: c } : a));
-  const setBrand = (patch) => setAccounts((as) => as.map((a) =>
-    a.id === account.id ? { ...a, ...(typeof patch === "function" ? patch(a) : patch) } : a));
-  const setPlan = (p) => setAccounts((as) => as.map((a) =>
-    a.id === account.id ? { ...a, plan: p } : a));
+  const setBilling = (c) => {
+    persist("patchAccount.billing", api.patchAccount({ billing: c }));
+    setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, billing: c } : a));
+  };
+  const setBrand = (patch) => {
+    const resolved = typeof patch === "function" ? patch(account) : patch;
+    // Logo upload isn't wired to a real file picker yet (see README), so only
+    // name/useDefaultMark persist for now — logoData stays local-only.
+    persist("patchAccount.brand", api.patchAccount({ name: resolved.name, useDefaultMark: resolved.useDefaultMark }));
+    setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, ...resolved } : a));
+  };
+  const setPlan = (p) => {
+    persist("patchAccount.plan", api.patchAccount({ plan: p }));
+    setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, plan: p } : a));
+  };
 
   // Flatten company + engagement into the "sub" shape the UI consumes.
   const subs = useMemo(() => engagements
@@ -1147,12 +1170,23 @@ export default function SubSub() {
     (jobZip ? 1 : 0) + (inRangeOnly ? 1 : 0);
 
   // --- Jobs: a job has multiple trades, each trade gets its own contractor ---
-  const createJob = (job, forSub) => {
-    const id = Date.now();
+  // Persists first (so the id is real), then applies the same local
+  // optimistic shape the UI already expects. Falls back to a local-only id
+  // if the write fails, so the UI never just freezes on a network hiccup.
+  const createJob = async (job, forSub) => {
+    let id;
+    try { ({ id } = await api.createJob(job)); }
+    catch (err) { console.error("[persist] createJob failed:", err); id = Date.now(); }
+
     const assignments = {};
     if (forSub && docsComplete(forSub)) {
       job.trades.filter((t) => forSub.categories.includes(t)).forEach((t) => {
         assignments[t] = issueWO(forSub, job, t);
+        persist("assign", api.assign(id, {
+          trade: t, companyId: forSub.id, tradeScope: assignments[t].tradeScope,
+          value: assignments[t].value, crewName: assignments[t].crewName,
+          responseWindow: assignments[t].responseWindow,
+        }));
       });
     }
     setJobs((js) => [{ ...job, id, accountId: account.id, status: "active", notes: "",
@@ -1163,30 +1197,46 @@ export default function SubSub() {
   };
 
   // Mark a job complete — this is what unlocks rating and notes.
-  const completeJob = (id) =>
+  const completeJob = (id) => {
+    persist("completeJob", api.completeJob(id));
     setJobs((js) => js.map((j) => j.id === id ? {
       ...j, status: "completed", completedAt: new Date().toISOString().slice(0, 10) } : j));
-  const reopenJob = (id) =>
+  };
+  const reopenJob = (id) => {
+    persist("reopenJob", api.reopenJob(id));
     setJobs((js) => js.map((j) => j.id === id ? { ...j, status: "active", completedAt: null } : j));
-  const setJobNotes = (id, notes) =>
+  };
+  const setJobNotes = (id, notes) => {
+    persist("patchJob.notes", api.patchJob(id, { notes }));
     setJobs((js) => js.map((j) => j.id === id ? { ...j, notes } : j));
-  const addMeasurementDoc = (id, name) =>
-    setJobs((js) => js.map((j) => j.id === id ? {
-      ...j, measurementDocs: [...(j.measurementDocs || []), name] } : j));
-  const removeMeasurementDoc = (id, name) =>
-    setJobs((js) => js.map((j) => j.id === id ? {
-      ...j, measurementDocs: (j.measurementDocs || []).filter((d) => d !== name) } : j));
+  };
+  const addMeasurementDoc = (id, name) => {
+    const next = [...(allJobs.find((j) => j.id === id)?.measurementDocs || []), name];
+    persist("patchJob.measurementDocs", api.patchJob(id, { measurementDocs: next }));
+    setJobs((js) => js.map((j) => j.id === id ? { ...j, measurementDocs: next } : j));
+  };
+  const removeMeasurementDoc = (id, name) => {
+    const next = (allJobs.find((j) => j.id === id)?.measurementDocs || []).filter((d) => d !== name);
+    persist("patchJob.measurementDocs", api.patchJob(id, { measurementDocs: next }));
+    setJobs((js) => js.map((j) => j.id === id ? { ...j, measurementDocs: next } : j));
+  };
 
   // Assigning a contractor ISSUES a work order for that trade. The WO is never
   // authored separately — it is derived from the job plus these trade details.
   const assignContractor = (jobId, trade, sub, details = {}) => {
+    // One work order per trade, each with its OWN scope and value. Nothing
+    // is bundled implicitly — the admin ticked each trade on the form.
+    const wanted = (details.trades && details.trades.length)
+      ? details.trades
+      : [{ trade, tradeScope: details.tradeScope || "", value: details.value || "" }];
+    wanted.forEach((ln) => {
+      persist("assign", api.assign(jobId, {
+        trade: ln.trade, companyId: sub.id, tradeScope: ln.tradeScope, value: ln.value,
+        crewName: details.crewName, responseWindow: details.responseWindow,
+      }));
+    });
     setJobs((js) => js.map((j) => {
       if (j.id !== jobId) return j;
-      // One work order per trade, each with its OWN scope and value. Nothing
-      // is bundled implicitly — the admin ticked each trade on the form.
-      const wanted = (details.trades && details.trades.length)
-        ? details.trades
-        : [{ trade, tradeScope: details.tradeScope || "", value: details.value || "" }];
       const next = { ...j.assignments };
       wanted.forEach((ln) => {
         next[ln.trade] = issueWO(sub, j, ln.trade, {
@@ -1203,15 +1253,19 @@ export default function SubSub() {
     setTab("jobs");
   };
 
-  const unassignTrade = (jobId, trade) =>
+  const unassignTrade = (jobId, trade) => {
+    persist("unassign", api.unassignTrade(jobId, trade));
     setJobs((js) => js.map((j) => {
       if (j.id !== jobId) return j;
       const a = { ...j.assignments }; delete a[trade];
       return { ...j, assignments: a };
     }));
+  };
   // A reply after the deadline is refused here as well as in the UI, so a
   // stale tab can't accept an expired offer.
-  const respondTrade = (jobId, trade, status) =>
+  const respondTrade = (jobId, trade, status) => {
+    const woId = allJobs.find((j) => j.id === jobId)?.assignments?.[trade]?.id;
+    if (woId) persist("respond", api.respondToWorkOrder(woId, status));
     setJobs((js) => js.map((j) => {
       if (j.id !== jobId) return j;
       const a = j.assignments[trade];
@@ -1219,9 +1273,12 @@ export default function SubSub() {
       return { ...j, assignments: { ...j.assignments, [trade]: {
         ...a, status, respondedAt: new Date().toISOString() } } };
     }));
+  };
   // Rate a contractor's performance on one trade of one job; the contractor's
   // overall rating becomes the average of all their rated jobs.
   const rateAssignment = (jobId, trade, stars) => {
+    const woId = allJobs.find((j) => j.id === jobId)?.assignments?.[trade]?.id;
+    if (woId) persist("rate", api.rateWorkOrder(woId, stars));
     setJobs((js) => {
       const next = js.map((j) => j.id !== jobId ? j : {
         ...j, assignments: { ...j.assignments, [trade]: { ...j.assignments[trade], rating: stars } },
@@ -1233,6 +1290,8 @@ export default function SubSub() {
         if (all.length) {
           const avg = all.reduce((n, a) => n + a.rating, 0) / all.length;
           // Your rating of them belongs to the relationship, not the company.
+          // (The server already recomputed this same average — this just
+          // keeps the local view in sync without waiting for a refetch.)
           setEngagements((es) => es.map((e) =>
             (e.companyId === subId && e.accountId === currentAccountId)
               ? { ...e, rating: Math.round(avg * 10) / 10, ratedJobs: all.length } : e));
@@ -1242,13 +1301,19 @@ export default function SubSub() {
     });
   };
 
-  const uploadSignedWO = (jobId, trade, name) =>
+  const uploadSignedWO = (jobId, trade, name) => {
+    const woId = allJobs.find((j) => j.id === jobId)?.assignments?.[trade]?.id;
+    if (woId) persist("signed", api.setWorkOrderSigned(woId, name));
     setJobs((js) => js.map((j) => j.id !== jobId ? j : {
       ...j, assignments: { ...j.assignments, [trade]: { ...j.assignments[trade], signedWO: name } } }));
-  const setTradeCrew = (jobId, trade, crewName) =>
+  };
+  const setTradeCrew = (jobId, trade, crewName) => {
+    const woId = allJobs.find((j) => j.id === jobId)?.assignments?.[trade]?.id;
+    if (woId) persist("crew", api.setWorkOrderCrew(woId, crewName));
     setJobs((js) => js.map((j) => j.id !== jobId ? j : {
       ...j, assignments: { ...j.assignments, [trade]: { ...j.assignments[trade], crewName } },
     }));
+  };
 
   const atContractorLimit = subs.length >= PLANS[plan].limit;
   // Basic allows 5 jobs per calendar month; Scale is unlimited.
@@ -1268,6 +1333,9 @@ export default function SubSub() {
     const existing = lic ? companies.find((c) => (c.license || "").toUpperCase() === lic) : null;
     const { co, en } = splitSeed(sub);
     const companyId = existing ? existing.id : Date.now();
+    // Server dedupes the same way (on license, then email) — local ids only
+    // drift from the real ones for a brand-new company until the next hydrate.
+    persist("addSub", api.addSub(sub));
     if (!existing) setCompanies((cs) => [{ ...co, id: companyId }, ...cs]);
     setEngagements((es) => [{
       id: "e" + Date.now(), accountId: account.id, companyId,
@@ -1301,7 +1369,7 @@ export default function SubSub() {
   };
 
   const saveNotes = (id, notes) =>
-    patchEngagement(id, { notes });
+    patchSub(id, { notes });
 
   // job slots assigned to me, for the contractor dashboard + tab badge
   const myAssignments = mySub ? jobs.flatMap((j) =>
@@ -1313,6 +1381,7 @@ export default function SubSub() {
   // --- user management (admin only) ---
   // A user is global; joining an account is a membership.
   const addUser = (u) => {
+    persist("addAccountUser", api.addAccountUser(u));
     const existing = users.find((x) => x.email.toLowerCase() === (u.email || "").toLowerCase());
     const userId = existing ? existing.id : "u" + Date.now();
     if (!existing) setUsers((us) => [...us, { id: userId, name: u.name, email: u.email, phone: u.phone }]);
@@ -1322,9 +1391,14 @@ export default function SubSub() {
   };
   // Removing someone from an account drops the membership, not the person —
   // they may still be a contractor or admin elsewhere.
-  const removeUser = (id) => setMemberships((ms) =>
-    ms.filter((m) => !(m.userId === id && m.accountId === account.id)));
+  const removeUser = (id) => {
+    persist("removeAccountUser", api.removeAccountUser(id));
+    setMemberships((ms) => ms.filter((m) => !(m.userId === id && m.accountId === account.id)));
+  };
   const updateUser = (u) => {
+    persist("updateAccountUser", api.updateAccountUser(u.id, {
+      name: u.name, email: u.email, phone: u.phone, role: u.role, subId: u.subId,
+    }));
     // name/email/phone are the person; role is the membership.
     setMemberships((ms) => ms.map((m) =>
       (m.userId === u.id && m.accountId === account.id)
@@ -1334,7 +1408,10 @@ export default function SubSub() {
   };
 
   // ---- writers ------------------------------------------------------------
-  // Every contractor write goes through here, so the routing lives in ONE place.
+  // Every contractor write goes through here, so the routing lives in ONE place
+  // — and, now, the one place that persists. The server's own splitPatch
+  // routes the same flat object to companies/engagements independently, so
+  // sending it unmodified is enough.
   const patchCompany = (companyId, patch) =>
     setCompanies((cs) => cs.map((c) => (c.id === companyId ? { ...c, ...patch } : c)));
   const patchEngagement = (companyId, patch) =>
@@ -1342,6 +1419,7 @@ export default function SubSub() {
       (e.companyId === companyId && e.accountId === account.id) ? { ...e, ...patch } : e));
   // Split a flat patch and write each half to its own table.
   const patchSub = (companyId, patch) => {
+    persist("patchSub", api.patchSub(companyId, patch));
     const { co, en } = splitPatch(patch);
     if (Object.keys(co).length) patchCompany(companyId, co);
     if (Object.keys(en).length) patchEngagement(companyId, en);
@@ -1349,7 +1427,7 @@ export default function SubSub() {
   // Merge into the engagement's docReview (per-GC verdict on a shared file).
   const patchDocReview = (companyId, kind, review) => {
     const cur = engagements.find((e) => e.companyId === companyId && e.accountId === account.id);
-    patchEngagement(companyId, {
+    patchSub(companyId, {
       docReview: { ...((cur && cur.docReview) || {}), [kind]: review },
     });
   };
@@ -1374,10 +1452,19 @@ export default function SubSub() {
   };
 
   // Runs the L&I lookup and stores the result on the contractor record.
-  const verifyLicense = (id) => {
-    // The state registry's answer is the same for every GC, so it lives on the company.
+  // The state registry's answer is the same for every GC, so it lives on the
+  // company. Calls the real data.wa.gov lookup server-side; falls back to the
+  // local simulation if that fails (e.g. no network from this environment).
+  const verifyLicense = async (id) => {
     const co = companies.find((c) => c.id === id);
-    if (co) patchCompany(id, { licenseCheck: lookupLicense(co) });
+    if (!co) return;
+    try {
+      const result = await api.verifyLicense(id);
+      patchCompany(id, { licenseCheck: result });
+    } catch (err) {
+      console.error("[persist] verifyLicense failed, using local simulation:", err);
+      patchCompany(id, { licenseCheck: lookupLicense(co) });
+    }
   };
 
   // The FILE belongs to the company (uploaded once, shared by every GC).
@@ -1408,32 +1495,143 @@ export default function SubSub() {
     setServiceCalls((cs) => cs.map((c) => c.id !== id ? c : {
       ...c, status: "resolved", resolvedAt: new Date().toISOString() }));
 
+  // No real file picker yet (see README — uploads are filenames only, same
+  // as the prototype), so this calls the API with a placeholder file key.
+  // The server endpoint is what actually reopens review on every OTHER
+  // account that engages this company, not just the one uploading here.
   const uploadSubDoc = (id, key, filename) => {
+    persist("uploadDoc", api.uploadDocument(id, key, `local/${key}/${filename}`, filename));
     const co = companies.find((c) => c.id === id);
     patchCompany(id, { [key]: true, docFiles: { ...((co && co.docFiles) || {}), [key]: filename } });
     setEngagements((es) => es.map((e) => e.companyId !== id ? e : {
       ...e, docReview: { ...(e.docReview || {}), [key]: { status: "pending" } } }));
   };
   const deleteSubDoc = (id, key) => {
+    persist("deleteDoc", api.deleteDocument(id, key));
     const co = companies.find((c) => c.id === id);
     patchCompany(id, { [key]: false, docFiles: { ...((co && co.docFiles) || {}), [key]: null } });
     setEngagements((es) => es.map((e) => e.companyId !== id ? e : {
       ...e, docReview: { ...(e.docReview || {}), [key]: null } }));
   };
 
+  // ---- persistence wiring ---------------------------------------------
+  // Pulls this account's companies/engagements/jobs/members from the API and
+  // replaces the corresponding local state. Called on login and whenever the
+  // account switcher changes accounts.
+  async function hydrateAccount(accountId, userId) {
+    setLoading(true);
+    try {
+      const [flatSubs, ownJobs, bookings, members] = await Promise.all([
+        api.listSubs(), api.listJobs(), api.listAllBookings(), api.listAccountUsers(),
+      ]);
+
+      const cos = [], ens = [];
+      flatSubs.forEach((flat) => {
+        const { co, en } = splitSeed(flat);
+        co.id = flat.id;
+        en.id = flat.engagementId; en.accountId = flat.accountId; en.companyId = flat.id;
+        cos.push(co); ens.push(en);
+      });
+      setCompanies(cos);
+      setEngagements(ens);
+
+      // Full detail for our own jobs, plus a privacy-preserving stub (date +
+      // which crew is busy, nothing else) for every OTHER account's booking,
+      // so dayStatus() still refuses to double-book a crew across GCs.
+      const otherStubs = {};
+      bookings.filter((b) => b.account_id !== accountId).forEach((b) => {
+        const j = (otherStubs[b.job_id] ||= { id: b.job_id, accountId: b.account_id, date: b.date, assignments: {} });
+        j.assignments[b.trade] = { subId: b.company_id, crewName: b.crew_name };
+      });
+      setJobs([...ownJobs, ...Object.values(otherStubs)]);
+
+      setUsers((prev) => {
+        const byId = Object.fromEntries(prev.map((u) => [u.id, u]));
+        members.forEach((m) => { byId[m.id] = { id: m.id, name: m.name, email: m.email, phone: m.phone }; });
+        return Object.values(byId);
+      });
+      setMemberships((prev) => {
+        const key = (m) => `${m.userId}:${m.accountId}`;
+        const byKey = Object.fromEntries(prev.map((m) => [key(m), m]));
+        members.forEach((m) => {
+          byKey[`${m.id}:${accountId}`] = { userId: m.id, accountId, role: m.role, companyId: m.subId };
+        });
+        return Object.values(byKey);
+      });
+    } catch (err) {
+      console.error("[hydrate] failed:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleLogin(email) {
+    const result = await api.devLogin(email).catch((err) => { console.error("[login] failed:", err); return null; });
+    if (!result) return;
+    const primary = result.memberships[0];
+    if (!primary) return;
+
+    setAuth({ userId: result.user.id, accountId: primary.accountId });
+    setUsers((prev) => [...prev.filter((u) => u.id !== result.user.id), result.user]);
+    setMemberships((prev) => [
+      ...prev.filter((m) => m.userId !== result.user.id),
+      ...result.memberships.map((m) => ({ userId: result.user.id, accountId: m.accountId, role: m.role, companyId: m.companyId })),
+    ]);
+    setAccounts((prev) => {
+      const byId = Object.fromEntries(prev.map((a) => [a.id, a]));
+      result.memberships.forEach((m) => {
+        byId[m.accountId] = { id: m.accountId, name: m.accountName, subdomain: m.subdomain,
+          plan: m.plan, billing: m.billing, logoData: byId[m.accountId]?.logoData ?? null, useDefaultMark: m.useDefaultMark };
+      });
+      return Object.values(byId);
+    });
+    setCurrentUserId(result.user.id);
+    setCurrentAccountId(primary.accountId);
+    setTab(ROLES[primary.role].can[0]);
+    setLoggedIn(true);
+    await hydrateAccount(primary.accountId, result.user.id);
+  }
+
+  // Resume a session across reloads — this is the whole point of Phase 1.
+  // The saved auth headers are enough for every other request; this just
+  // rebuilds the `accounts`/`users`/`memberships` state that normally comes
+  // from the dev-login response.
+  useEffect(() => {
+    const saved = getAuth();
+    if (!saved?.userId || !saved?.accountId) return;
+    (async () => {
+      const acct = await api.getAccount().catch((err) => { console.error("[resume] failed:", err); return null; });
+      if (!acct) { clearAuth(); return; }
+      setAccounts((prev) => [...prev.filter((a) => a.id !== acct.id), {
+        id: acct.id, name: acct.name, subdomain: acct.subdomain, plan: acct.plan, billing: acct.billing,
+        logoData: null, useDefaultMark: acct.useDefaultMark,
+      }]);
+      if (acct.user) setUsers((prev) => [...prev.filter((u) => u.id !== acct.user.id), acct.user]);
+      setCurrentUserId(saved.userId);
+      setCurrentAccountId(saved.accountId);
+      setLoggedIn(true);
+      await hydrateAccount(saved.accountId, saved.userId);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (!loggedIn) {
     return (
       <div className="ss-root">
         <style>{CSS}</style>
         <LoginPage users={users} brand={brand} accounts={accounts} memberships={memberships}
-          onLogin={(uid) => {
-            const u = users.find((x) => x.id === uid) || users[0];
-            setCurrentUserId(u.id);
-            const mem = seedMemberships.find((m) => m.userId === u.id);
-            if (mem) setCurrentAccountId(mem.accountId);
-            setTab(ROLES[u.role].can[0]);
-            setLoggedIn(true);
-          }} />
+          onLogin={(email) => handleLogin(email)} />
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: "var(--muted)" }}>
+          Loading…
+        </div>
       </div>
     );
   }
@@ -1491,9 +1689,11 @@ export default function SubSub() {
                           return (
                             <button key={m.accountId} className="um-acct"
                               onClick={() => {
+                                setAuth({ userId: currentUserId, accountId: m.accountId });
                                 setCurrentAccountId(m.accountId);
                                 setUserMenu(false); setSelected(null); setPane("jobs");
                                 setTab(ROLES[m.role].can[0]);
+                                hydrateAccount(m.accountId, currentUserId);
                               }}>
                               <span className="ua-name">{a.name}</span>
                               <span className="ua-role">{ROLES[m.role].label}</span>
@@ -1515,7 +1715,7 @@ export default function SubSub() {
                         <span className="um-role">{ROLES[u.role].label}</span>
                       </button>
                     ))}
-                    <button className="um-signout" onClick={() => { setUserMenu(false); setLoggedIn(false); }}>
+                    <button className="um-signout" onClick={() => { setUserMenu(false); clearAuth(); setLoggedIn(false); }}>
                       <LogOut size={14} /> Sign out
                     </button>
                   </div>
@@ -4612,7 +4812,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
     if (!u) { setErr("No account found for that email."); return; }
     if (!pw) { setErr("Enter your password."); return; }
     setErr("");
-    onLogin(u.id);
+    onLogin(u.email);
   };
 
   return (
@@ -4649,7 +4849,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
         <div className="login-demo">
           <div className="ld-label">Demo accounts — tap to sign in</div>
           {users.map((u) => (
-            <button key={u.id} className="ld-row" onClick={() => onLogin(u.id)}>
+            <button key={u.id} className="ld-row" onClick={() => onLogin(u.email)}>
               <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
               <span className="ld-main">
                 <span className="ld-name">{u.name}</span>

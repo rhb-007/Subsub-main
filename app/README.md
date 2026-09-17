@@ -4,29 +4,53 @@ The product itself — subcontractor onboarding, compliance verification,
 scheduling and work orders — as distinct from the marketing site at
 `subsub.work` (that's the repo root, this is `/app`).
 
-## Status: Phase 1 (persistence) — backend built and tested, not yet wired into the UI
+## Status: Phase 1 (persistence) — built, wired into the UI, and verified end-to-end
 
-- `src/App.tsx` is the original prototype, unchanged. It still runs entirely
-  on `useState` and seed data — reload and it resets. This is the known,
-  working baseline.
 - `worker/` is a real Cloudflare Worker (Hono) API over D1 + R2, implementing
   the production data model the prototype's own `COMPANY_FIELDS` /
   `ENGAGEMENT_FIELDS` / `splitPatch()` / `composeSub()` already describe:
   **companies** (a business, global, deduped on WA L&I license) ×
   **accounts** (a hiring company's workspace) × **engagements** (the
   relationship between them, where per-GC rating/docs/auto-schedule live).
-- `src/lib/api.js` is a fetch client for that API, ready to use, not yet
-  called from `App.tsx`.
-- **What's tested:** schema applied and seeded locally; auth headers, role
-  enforcement (contractor blocked from admin actions), the `splitPatch`
-  field-routing (a patch with both a company field and an engagement field
-  lands in both tables correctly), job creation, work-order issuance
-  (including the documents-incomplete gate blocking assignment), and
-  license-check storage — all verified against a local D1 instance with
-  `wrangler dev`.
-- **What's not done yet:** `App.tsx` still doesn't call the API. Wiring it in
-  — replacing each relevant `useState` with a fetch, keeping the same props
-  every child component already expects — is the next chunk of work.
+- `src/App.tsx` still holds all its original `useState`, but every mutator
+  now also writes through to the API (`src/lib/api.js`), and login/reload
+  hydrate real state from D1 instead of seed data — see "Persistence
+  wiring" below for exactly what's covered and what's a known rough edge.
+- **Verified two ways:** `scripts/e2e-smoke.mjs` drives a real headless
+  browser through the actual UI — sign in, create a job, **reload the page**,
+  confirm the session AND the job survive — then a direct D1 query confirms
+  the row is really there, not a client-side illusion. Underneath that, the
+  API itself was curl-tested for auth/role enforcement, the `splitPatch`
+  field-routing, the documents-incomplete gate blocking work-order
+  assignment, and the cross-account document-review reset on re-upload.
+- Run it yourself: start both dev servers (see "Local development" below),
+  then `node scripts/e2e-smoke.mjs` from `app/`.
+
+### Persistence wiring — what's covered, what isn't
+
+Covered (write-through: the existing local `useState` update still runs for
+instant UI feedback, and the same action also calls the API): jobs (create/
+complete/reopen/notes/measurement docs), work orders (assign/unassign/
+respond/rate/crew/signed-file), companies & engagements (add, edit, WA L&I
+verify, document review, document upload — including the cross-account
+review reset), account users (add/edit/remove), account branding/plan/
+billing (name and plan/billing persist; logo does not, see below).
+
+Not yet covered — genuinely local-only, will not survive a reload:
+- **Uniform orders and service calls (callback/warranty).** Tables exist in
+  `schema.sql`; no API endpoints yet.
+- **Real file uploads.** Documents are still filenames only, same as the
+  original prototype — `api.uploadDocument` is called with a placeholder
+  key. Wiring an actual `<input type=file>` to the presigned R2 flow
+  (`api.signUpload`) is straightforward but not done.
+- **Account logo.** `useDefaultMark`/name persist; the logo image itself
+  doesn't have an upload flow yet, same reason as above.
+- **New company/user ids drift locally until the next reload.** `addSub`/
+  `addUser` optimistically assign a `Date.now()`-based id client-side; the
+  server assigns its own (or reuses an existing company on license/email
+  match). They reconcile on the next hydrate (reload or account switch),
+  but a same-session reference to a brand-new id before that point is
+  using the local one, not the server's.
 
 ## Before this can go live, you need to:
 

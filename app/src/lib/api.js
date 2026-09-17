@@ -41,14 +41,31 @@ export const api = {
   verifyLicense: (companyId) => request(`/subs/${companyId}/verify-license`, { method: "POST" }),
   reviewDocument: (companyId, kind, review) =>
     request(`/subs/${companyId}/documents/${kind}/review`, { method: "POST", body: JSON.stringify(review) }),
+  uploadDocument: (companyId, kind, fileKey, fileName) =>
+    request(`/subs/${companyId}/documents/${kind}`, { method: "POST", body: JSON.stringify({ fileKey, fileName }) }),
+  deleteDocument: (companyId, kind) =>
+    request(`/subs/${companyId}/documents/${kind}`, { method: "DELETE" }),
 
   listJobs: () => request("/jobs"),
   listAllBookings: () => request("/jobs/all-bookings"),
   createJob: (job) => request("/jobs", { method: "POST", body: JSON.stringify(job) }),
+  patchJob: (jobId, patch) => request(`/jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   completeJob: (jobId) => request(`/jobs/${jobId}/complete`, { method: "POST" }),
+  reopenJob: (jobId) => request(`/jobs/${jobId}/reopen`, { method: "POST" }),
   assign: (jobId, details) => request(`/jobs/${jobId}/assign`, { method: "POST", body: JSON.stringify(details) }),
+  unassignTrade: (jobId, trade) => request(`/jobs/${jobId}/unassign/${trade}`, { method: "POST" }),
   reissueWorkOrder: (woId, changes) => request(`/work-orders/${woId}/reissue`, { method: "POST", body: JSON.stringify(changes) }),
   respondToWorkOrder: (woId, status) => request(`/work-orders/${woId}/respond`, { method: "POST", body: JSON.stringify({ status }) }),
+  setWorkOrderCrew: (woId, crewName) => request(`/work-orders/${woId}/crew`, { method: "POST", body: JSON.stringify({ crewName }) }),
+  setWorkOrderSigned: (woId, fileKey) => request(`/work-orders/${woId}/signed`, { method: "POST", body: JSON.stringify({ fileKey }) }),
+  rateWorkOrder: (woId, rating) => request(`/work-orders/${woId}/rate`, { method: "POST", body: JSON.stringify({ rating }) }),
+
+  listAccountUsers: () => request("/account-users"),
+  addAccountUser: (u) => request("/account-users", { method: "POST", body: JSON.stringify(u) }),
+  updateAccountUser: (userId, patch) => request(`/account-users/${userId}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  removeAccountUser: (userId) => request(`/account-users/${userId}`, { method: "DELETE" }),
+  getAccount: () => request("/account"),
+  patchAccount: (patch) => request("/account", { method: "PATCH", body: JSON.stringify(patch) }),
 
   signUpload: (kind, fileName) => request("/uploads/sign", { method: "POST", body: JSON.stringify({ kind, fileName }) }),
 };

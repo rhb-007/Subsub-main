@@ -33,7 +33,7 @@ const companyRowToJs = (r) => ({
   available: !!r.available,
   unavailableDays: parseJson(r.unavailable_days, []),
   warranty: parseJson(r.warranty),
-  insurance: parseJson(r.insurance), bond: parseJson(r.bond), contract: parseJson(r.contract),
+  insurance: !!r.insurance, bond: !!r.bond, contract: !!r.contract,
   docFiles: parseJson(r.doc_files, {}),
   notify: parseJson(r.notify, { email: true, sms: false }),
 });
@@ -101,16 +101,108 @@ app.post("/api/auth/dev-login", async (c) => {
   const user = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(email).first();
   if (!user) return c.json({ error: "not_found" }, 404);
   const { results: memberships } = await c.env.DB.prepare(
-    `SELECT m.*, a.name as account_name, a.subdomain FROM memberships m
-     JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
+    `SELECT m.*, a.name as account_name, a.subdomain, a.plan, a.billing, a.logo_key, a.use_default_mark
+     FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
   ).bind(user.id).all();
   return c.json({
     user: { id: user.id, name: user.name, email: user.email, phone: user.phone },
     memberships: memberships.map((m) => ({
       accountId: m.account_id, accountName: m.account_name, subdomain: m.subdomain,
       role: m.role, companyId: m.company_id,
+      plan: m.plan, billing: m.billing, logoKey: m.logo_key, useDefaultMark: !!m.use_default_mark,
     })),
   });
+});
+
+// This account's members (admin/pm/contractor), composed with the person's
+// name/email/phone — what the UI calls `accountUsers`.
+app.get("/api/account-users", async (c) => {
+  const { accountId } = c.get("auth");
+  const { results } = await c.env.DB.prepare(
+    `SELECT u.*, m.role, m.company_id FROM memberships m
+     JOIN users u ON u.id = m.user_id WHERE m.account_id = ?`
+  ).bind(accountId).all();
+  return c.json(results.map((r) => ({
+    id: r.id, name: r.name, email: r.email, phone: r.phone, role: r.role, subId: r.company_id,
+  })));
+});
+
+// Add (or re-invite) a person to this account. Dedupes the person on email —
+// same person can already exist as a user from another account.
+app.post("/api/account-users", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  const b = await c.req.json(); // { name, email, phone, role, subId }
+  let user = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(b.email).first();
+  const userId = user?.id ?? uid();
+  if (!user) {
+    await c.env.DB.prepare(`INSERT INTO users (id, name, email, phone) VALUES (?, ?, ?, ?)`)
+      .bind(userId, b.name, b.email, b.phone || null).run();
+  }
+  const existingMembership = await c.env.DB.prepare(
+    `SELECT id FROM memberships WHERE user_id = ? AND account_id = ?`
+  ).bind(userId, accountId).first();
+  if (existingMembership) {
+    await c.env.DB.prepare(`UPDATE memberships SET role = ?, company_id = ? WHERE id = ?`)
+      .bind(b.role, b.subId ?? null, existingMembership.id).run();
+  } else {
+    await c.env.DB.prepare(`INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, ?, ?)`)
+      .bind(uid(), userId, accountId, b.role, b.subId ?? null).run();
+  }
+  return c.json({ id: userId }, 201);
+});
+
+app.patch("/api/account-users/:userId", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  const userId = c.req.param("userId");
+  const b = await c.req.json(); // { name, email, phone, role, subId }
+  if (b.name != null || b.email != null || b.phone != null) {
+    await c.env.DB.prepare(`UPDATE users SET name = COALESCE(?, name), email = COALESCE(?, email), phone = COALESCE(?, phone) WHERE id = ?`)
+      .bind(b.name ?? null, b.email ?? null, b.phone ?? null, userId).run();
+  }
+  if (b.role != null) {
+    await c.env.DB.prepare(`UPDATE memberships SET role = ?, company_id = ? WHERE user_id = ? AND account_id = ?`)
+      .bind(b.role, b.subId ?? null, userId, accountId).run();
+  }
+  return c.json({ ok: true });
+});
+
+// Drops the membership, not the person — they may still belong elsewhere.
+app.delete("/api/account-users/:userId", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  await c.env.DB.prepare(`DELETE FROM memberships WHERE user_id = ? AND account_id = ?`)
+    .bind(c.req.param("userId"), accountId).run();
+  return c.json({ ok: true });
+});
+
+// Current account's own info — lets a resumed session (page reload) rebuild
+// its `accounts` state without needing to re-run dev-login.
+app.get("/api/account", async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const a = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!a) return c.json({ error: "not_found" }, 404);
+  const user = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(userId).first();
+  return c.json({
+    id: a.id, name: a.name, subdomain: a.subdomain, plan: a.plan, billing: a.billing,
+    logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark,
+    user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone } : null,
+  });
+});
+
+// Branding/plan/billing for the current account.
+app.patch("/api/account", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  const b = await c.req.json(); // { name, plan, billing, logoKey, useDefaultMark }
+  const sets = [], vals = [];
+  if (b.name != null) { sets.push("name = ?"); vals.push(b.name); }
+  if (b.plan != null) { sets.push("plan = ?"); vals.push(b.plan); }
+  if (b.billing != null) { sets.push("billing = ?"); vals.push(b.billing); }
+  if (b.logoKey !== undefined) { sets.push("logo_key = ?"); vals.push(b.logoKey); }
+  if (b.useDefaultMark != null) { sets.push("use_default_mark = ?"); vals.push(b.useDefaultMark ? 1 : 0); }
+  if (sets.length) {
+    vals.push(accountId);
+    await c.env.DB.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
+  }
+  return c.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -183,9 +275,11 @@ app.post("/api/subs", requireRole("admin", "pm"), async (c) => {
 
 // Patch a sub — routes fields to companies vs engagements exactly like the
 // prototype's splitPatch(), so callers can keep sending the same flat object.
-app.patch("/api/subs/:companyId", requireRole("admin", "pm"), async (c) => {
-  const { accountId, userId } = c.get("auth");
+app.patch("/api/subs/:companyId", async (c) => {
+  const auth = c.get("auth");
+  const { accountId, userId } = auth;
   const companyId = c.req.param("companyId");
+  if (auth.role === "contractor" && auth.companyId !== companyId) return c.json({ error: "forbidden" }, 403);
   const patch = await c.req.json();
 
   const engagement = await c.env.DB.prepare(
@@ -207,7 +301,7 @@ app.patch("/api/subs/:companyId", requireRole("admin", "pm"), async (c) => {
     insurance: "insurance", bond: "bond", contract: "contract",
     docFiles: "doc_files", notify: "notify",
   };
-  const JSON_FIELDS = new Set(["crews", "coverage", "unavailableDays", "warranty", "insurance", "bond", "contract", "docFiles", "notify"]);
+  const JSON_FIELDS = new Set(["crews", "coverage", "unavailableDays", "warranty", "docFiles", "notify"]);
   const coSets = [], coVals = [];
   for (const [k, v] of Object.entries(coPatch)) {
     if (!COL[k]) continue;
@@ -328,7 +422,7 @@ app.get("/api/jobs", async (c) => {
 // correct across GCs without leaking one account's job details to another.
 app.get("/api/jobs/all-bookings", async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT wo.company_id, j.id as job_id, j.date, j.account_id
+    `SELECT wo.company_id, wo.trade, wo.crew_name, j.id as job_id, j.date, j.account_id
      FROM work_orders wo JOIN jobs j ON j.id = wo.job_id
      WHERE wo.voided_at IS NULL AND wo.status != 'declined' AND j.status = 'active'`
   ).all();
@@ -339,7 +433,7 @@ function jobRowToJs(j, workOrders) {
   const assignments = {};
   for (const w of workOrders) {
     assignments[w.trade] = {
-      subId: w.company_id, wo: w.wo_number, woIssued: w.issued_at?.slice(0, 10),
+      id: w.id, subId: w.company_id, wo: w.wo_number, woIssued: w.issued_at?.slice(0, 10),
       crewName: w.crew_name, tradeScope: w.trade_scope, value: w.value_cents != null ? String(w.value_cents / 100) : "",
       status: w.status, auto: !!w.auto_scheduled, responseWindow: w.response_window, respondBy: w.respond_by,
       respondedAt: w.responded_at, rating: w.rating, distance: w.distance, inRange: !!w.in_range,
@@ -347,11 +441,11 @@ function jobRowToJs(j, workOrders) {
     };
   }
   return {
-    id: j.id, title: j.title, client: j.client, address: j.address, area: j.area, zip: j.zip,
+    id: j.id, accountId: j.account_id, title: j.title, client: j.client, address: j.address, area: j.area, zip: j.zip,
     sqft: j.sqft, stories: j.stories, date: j.date, time: j.time,
     trades: parseJson(j.trades, []), scope: j.scope, materialSource: j.material_source,
     materialsPaidBy: j.materials_paid_by, measurementDocs: parseJson(j.measurement_docs, []),
-    status: j.status, completedAt: j.completed_at, notes: j.notes, assignments,
+    status: j.status, completedAt: j.completed_at, notes: j.notes, createdAt: j.created_at?.slice(0, 10), assignments,
   };
 }
 
@@ -379,6 +473,28 @@ app.post("/api/jobs/:id/complete", requireRole("admin", "pm"), async (c) => {
     `UPDATE jobs SET status = 'completed', completed_at = ? WHERE id = ? AND account_id = ?`
   ).bind(new Date().toISOString().slice(0, 10), id, accountId).run();
   await logEvent(c.env, accountId, userId, "job.completed", id, {});
+  return c.json({ ok: true });
+});
+
+app.post("/api/jobs/:id/reopen", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  await c.env.DB.prepare(
+    `UPDATE jobs SET status = 'active', completed_at = NULL WHERE id = ? AND account_id = ?`
+  ).bind(c.req.param("id"), accountId).run();
+  return c.json({ ok: true });
+});
+
+// Everything about a job that ISN'T a work order — notes, measurement docs.
+app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const id = c.req.param("id");
+  const b = await c.req.json(); // { notes?, measurementDocs? }
+  const sets = [], vals = [];
+  if (b.notes !== undefined) { sets.push("notes = ?"); vals.push(b.notes); }
+  if (b.measurementDocs !== undefined) { sets.push("measurement_docs = ?"); vals.push(JSON.stringify(b.measurementDocs)); }
+  if (!sets.length) return c.json({ ok: true });
+  vals.push(id, accountId);
+  await c.env.DB.prepare(`UPDATE jobs SET ${sets.join(", ")} WHERE id = ? AND account_id = ?`).bind(...vals).run();
   return c.json({ ok: true });
 });
 
@@ -480,6 +596,70 @@ app.post("/api/work-orders/:id/respond", async (c) => {
   return c.json({ ok: true });
 });
 
+// Pull a trade off a job entirely — voids the live WO, issues nothing new.
+app.post("/api/jobs/:jobId/unassign/:trade", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const { jobId, trade } = c.req.param();
+  const wo = await c.env.DB.prepare(
+    `SELECT wo.id FROM work_orders wo JOIN jobs j ON j.id = wo.job_id
+     WHERE wo.job_id = ? AND wo.trade = ? AND wo.voided_at IS NULL AND j.account_id = ?`
+  ).bind(jobId, trade, accountId).first();
+  if (!wo) return c.json({ error: "not_found" }, 404);
+  await c.env.DB.prepare(`UPDATE work_orders SET voided_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(wo.id).run();
+  await logEvent(c.env, accountId, userId, "wo.voided", wo.id, { jobId, trade });
+  return c.json({ ok: true });
+});
+
+// Reassigning which crew covers a WO is operational, not a contract term —
+// unlike reissue(), this updates the live row in place.
+app.post("/api/work-orders/:id/crew", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const id = c.req.param("id");
+  const { crewName } = await c.req.json();
+  const wo = await c.env.DB.prepare(
+    `SELECT wo.id FROM work_orders wo JOIN jobs j ON j.id = wo.job_id WHERE wo.id = ? AND j.account_id = ?`
+  ).bind(id, accountId).first();
+  if (!wo) return c.json({ error: "not_found" }, 404);
+  await c.env.DB.prepare(`UPDATE work_orders SET crew_name = ? WHERE id = ?`).bind(crewName, id).run();
+  return c.json({ ok: true });
+});
+
+app.post("/api/work-orders/:id/signed", async (c) => {
+  const { accountId } = c.get("auth");
+  const id = c.req.param("id");
+  const { fileKey } = await c.req.json();
+  const wo = await c.env.DB.prepare(
+    `SELECT wo.id FROM work_orders wo JOIN jobs j ON j.id = wo.job_id WHERE wo.id = ? AND j.account_id = ?`
+  ).bind(id, accountId).first();
+  if (!wo) return c.json({ error: "not_found" }, 404);
+  await c.env.DB.prepare(`UPDATE work_orders SET signed_file_key = ? WHERE id = ?`).bind(fileKey, id).run();
+  return c.json({ ok: true });
+});
+
+// Rating a job's work belongs to the RELATIONSHIP, not the company — the
+// engagement's rating is the average across every rated WO under it.
+app.post("/api/work-orders/:id/rate", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = c.req.param("id");
+  const { rating } = await c.req.json(); // 1-5
+  const wo = await c.env.DB.prepare(
+    `SELECT wo.*, j.account_id FROM work_orders wo JOIN jobs j ON j.id = wo.job_id WHERE wo.id = ?`
+  ).bind(id).first();
+  if (!wo || wo.account_id !== accountId) return c.json({ error: "not_found" }, 404);
+
+  await c.env.DB.prepare(`UPDATE work_orders SET rating = ? WHERE id = ?`).bind(rating, id).run();
+
+  const { results: rated } = await c.env.DB.prepare(
+    `SELECT rating FROM work_orders WHERE engagement_id = ? AND rating IS NOT NULL`
+  ).bind(wo.engagement_id).all();
+  const avg = rated.reduce((n, r) => n + r.rating, 0) / rated.length;
+  await c.env.DB.prepare(`UPDATE engagements SET rating = ?, rated_jobs = ? WHERE id = ?`)
+    .bind(Math.round(avg * 10) / 10, rated.length, wo.engagement_id).run();
+
+  await logEvent(c.env, accountId, userId, "wo.rated", id, { rating });
+  return c.json({ ok: true, rating: Math.round(avg * 10) / 10 });
+});
+
 // ---------------------------------------------------------------------------
 // Document review (per-engagement verdict on a company's uploaded file)
 // ---------------------------------------------------------------------------
@@ -500,6 +680,62 @@ app.post("/api/subs/:companyId/documents/:kind/review", requireRole("admin", "pm
     .bind(JSON.stringify(docReview), engagement.id).run();
 
   await logEvent(c.env, accountId, userId, "doc.reviewed", companyId, { kind, status: body.status });
+  return c.json({ ok: true });
+});
+
+// The FILE belongs to the company (uploaded once, shared by every GC that
+// engages them). Re-uploading reopens the review queue for EVERY account
+// that engages this company, not just the one who uploaded it — same
+// design as the prototype's uploadSubDoc().
+app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "contractor"), async (c) => {
+  const auth = c.get("auth");
+  const { companyId } = c.req.param();
+  const kind = c.req.param("kind"); // insurance | bond | contract | w9
+  if (auth.role === "contractor" && auth.companyId !== companyId) return c.json({ error: "forbidden" }, 403);
+  const { fileKey, fileName } = await c.req.json();
+
+  const company = await c.env.DB.prepare(`SELECT doc_files FROM companies WHERE id = ?`).bind(companyId).first();
+  if (!company) return c.json({ error: "not_found" }, 404);
+  const docFiles = { ...parseJson(company.doc_files, {}), [kind]: fileName };
+
+  const col = { insurance: "insurance", bond: "bond", contract: "contract" }[kind];
+  await c.env.DB.prepare(
+    `UPDATE companies SET doc_files = ?${col ? `, ${col} = 1` : ""} WHERE id = ?`
+  ).bind(JSON.stringify(docFiles), companyId).run();
+
+  const { results: engagements } = await c.env.DB.prepare(
+    `SELECT id, doc_review FROM engagements WHERE company_id = ?`
+  ).bind(companyId).all();
+  for (const e of engagements) {
+    const docReview = { ...parseJson(e.doc_review, {}), [kind]: { status: "pending" } };
+    await c.env.DB.prepare(`UPDATE engagements SET doc_review = ? WHERE id = ?`).bind(JSON.stringify(docReview), e.id).run();
+  }
+  return c.json({ ok: true });
+});
+
+app.delete("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "contractor"), async (c) => {
+  const auth = c.get("auth");
+  const { companyId } = c.req.param();
+  const kind = c.req.param("kind");
+  if (auth.role === "contractor" && auth.companyId !== companyId) return c.json({ error: "forbidden" }, 403);
+
+  const company = await c.env.DB.prepare(`SELECT doc_files FROM companies WHERE id = ?`).bind(companyId).first();
+  if (!company) return c.json({ error: "not_found" }, 404);
+  const docFiles = { ...parseJson(company.doc_files, {}), [kind]: null };
+
+  const col = { insurance: "insurance", bond: "bond", contract: "contract" }[kind];
+  await c.env.DB.prepare(
+    `UPDATE companies SET doc_files = ?${col ? `, ${col} = 0` : ""} WHERE id = ?`
+  ).bind(JSON.stringify(docFiles), companyId).run();
+
+  const { results: engagements } = await c.env.DB.prepare(
+    `SELECT id, doc_review FROM engagements WHERE company_id = ?`
+  ).bind(companyId).all();
+  for (const e of engagements) {
+    const docReview = { ...parseJson(e.doc_review, {}) };
+    delete docReview[kind];
+    await c.env.DB.prepare(`UPDATE engagements SET doc_review = ? WHERE id = ?`).bind(JSON.stringify(docReview), e.id).run();
+  }
   return c.json({ ok: true });
 });
 
