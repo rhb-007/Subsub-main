@@ -33,7 +33,7 @@ const companyRowToJs = (r) => ({
   available: !!r.available,
   unavailableDays: parseJson(r.unavailable_days, []),
   warranty: parseJson(r.warranty),
-  insurance: !!r.insurance, bond: !!r.bond, contract: !!r.contract,
+  insurance: !!r.insurance, bond: !!r.bond, contract: !!r.contract, w9: !!r.w9,
   docFiles: parseJson(r.doc_files, {}),
   notify: parseJson(r.notify, { email: true, sms: false }),
 });
@@ -63,7 +63,10 @@ const uid = () => crypto.randomUUID();
 // Auth (dev stub — see file header)
 // ---------------------------------------------------------------------------
 app.use("/api/*", async (c, next) => {
-  if (c.req.path === "/api/auth/dev-login") return next();
+  // A brand logo has to render on the login screen, before anyone is
+  // authenticated — so this one route is intentionally public. Never do
+  // this for compliance documents; those stay behind auth.
+  if (c.req.path === "/api/auth/dev-login" || c.req.path.startsWith("/api/logo/")) return next();
   const userId = c.req.header("X-User-Id");
   const accountId = c.req.header("X-Account-Id");
   if (!userId || !accountId) return c.json({ error: "unauthenticated" }, 401);
@@ -188,6 +191,22 @@ app.get("/api/account", async (c) => {
   });
 });
 
+// Public: serves an account's uploaded logo image. Only ever serves the one
+// key stored against that account's own logo_key column — never an
+// arbitrary path — so this can't be used to read anything else out of R2.
+app.get("/api/logo/:accountId", async (c) => {
+  const a = await c.env.DB.prepare(`SELECT logo_key FROM accounts WHERE id = ?`).bind(c.req.param("accountId")).first();
+  if (!a?.logo_key) return c.notFound();
+  const obj = await c.env.FILES.get(a.logo_key);
+  if (!obj) return c.notFound();
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": obj.httpMetadata?.contentType || "image/png",
+      "Cache-Control": "public, max-age=300",
+    },
+  });
+});
+
 // Branding/plan/billing for the current account.
 app.patch("/api/account", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
@@ -298,7 +317,7 @@ app.patch("/api/subs/:companyId", async (c) => {
     mailStreet: "mail_street", mailCity: "mail_city", mailState: "mail_state", mailZip: "mail_zip",
     crews: "crews", coverage: "coverage", available: "available",
     unavailableDays: "unavailable_days", warranty: "warranty",
-    insurance: "insurance", bond: "bond", contract: "contract",
+    insurance: "insurance", bond: "bond", contract: "contract", w9: "w9",
     docFiles: "doc_files", notify: "notify",
   };
   const JSON_FIELDS = new Set(["crews", "coverage", "unavailableDays", "warranty", "docFiles", "notify"]);
@@ -698,7 +717,7 @@ app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "con
   if (!company) return c.json({ error: "not_found" }, 404);
   const docFiles = { ...parseJson(company.doc_files, {}), [kind]: fileName };
 
-  const col = { insurance: "insurance", bond: "bond", contract: "contract" }[kind];
+  const col = { insurance: "insurance", bond: "bond", contract: "contract", w9: "w9" }[kind];
   await c.env.DB.prepare(
     `UPDATE companies SET doc_files = ?${col ? `, ${col} = 1` : ""} WHERE id = ?`
   ).bind(JSON.stringify(docFiles), companyId).run();
@@ -723,7 +742,7 @@ app.delete("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "c
   if (!company) return c.json({ error: "not_found" }, 404);
   const docFiles = { ...parseJson(company.doc_files, {}), [kind]: null };
 
-  const col = { insurance: "insurance", bond: "bond", contract: "contract" }[kind];
+  const col = { insurance: "insurance", bond: "bond", contract: "contract", w9: "w9" }[kind];
   await c.env.DB.prepare(
     `UPDATE companies SET doc_files = ?${col ? `, ${col} = 0` : ""} WHERE id = ?`
   ).bind(JSON.stringify(docFiles), companyId).run();

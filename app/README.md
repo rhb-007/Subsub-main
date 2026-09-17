@@ -16,64 +16,74 @@ scheduling and work orders — as distinct from the marketing site at
   now also writes through to the API (`src/lib/api.js`), and login/reload
   hydrate real state from D1 instead of seed data — see "Persistence
   wiring" below for exactly what's covered and what's a known rough edge.
-- **Verified three ways.** `scripts/e2e-smoke.mjs` drives a real headless
+- **Verified four ways.** `scripts/e2e-smoke.mjs` drives a real headless
   browser through the actual UI — sign in, create a job, **reload the page**,
   confirm the session AND the job survive — then a direct D1 query confirms
   the row is really there, not a client-side illusion. `scripts/e2e-upload-smoke.mjs`
-  does the same for a real file: signs in as a contractor with a missing
-  document, uploads a real file through the actual `<input type=file>`,
-  reloads, and confirms it still shows as under review — then a direct R2 +
-  D1 check confirms the bytes and the record are both really there.
-  Underneath both, the API itself was curl-tested for auth/role enforcement,
-  the `splitPatch` field-routing, the documents-incomplete gate blocking
-  work-order assignment, and the cross-account document-review reset on
-  re-upload.
+  does the same for a real document: signs in as a contractor with one
+  missing, uploads a real file through the actual `<input type=file>`,
+  reloads, confirms it still shows as under review — then a direct R2 + D1
+  check confirms the bytes and the record are both really there.
+  `scripts/e2e-logo-smoke.mjs` does the same for account branding: signs in
+  as a Scale-plan admin, uploads a logo, reloads, and confirms the persisted
+  `<img>` actually loads from the public `/api/logo/:accountId` endpoint (not
+  a cached local blob). Underneath all three, the API itself was curl-tested
+  for auth/role enforcement, the `splitPatch` field-routing, the
+  documents-incomplete gate blocking work-order assignment, and the
+  cross-account document-review reset on re-upload.
 - Run them yourself: start both dev servers (see "Local development" below),
-  then `node scripts/e2e-smoke.mjs` and `node scripts/e2e-upload-smoke.mjs`
-  from `app/`.
+  then any of `node scripts/e2e-smoke.mjs`, `node scripts/e2e-upload-smoke.mjs`,
+  `node scripts/e2e-logo-smoke.mjs` from `app/`.
+- **Two real bugs caught by these tests while building this, both fixed:**
+  the "Switch user" dev menu assumed `user.role` existed directly on the
+  (now-global, correctly normalized) user record — it crashed the whole app
+  the moment you opened the user menu as a real hydrated user, since role
+  actually lives on the membership now. And the original upload endpoint
+  called `R2Bucket.createPresignedUrl()`, which isn't a real method — see
+  below.
 
 ### Persistence wiring — what's covered, what isn't
 
 Covered (write-through: the existing local `useState` update still runs for
 instant UI feedback, and the same action also calls the API): jobs (create/
-complete/reopen/notes/measurement docs), work orders (assign/unassign/
-respond/rate/crew/signed-file), companies & engagements (add, edit, WA L&I
-verify, document review, **real file upload** — a genuine binary PUT through
-the Worker into R2, not a filename placeholder, including the cross-account
-review reset), account users (add/edit/remove), account branding/plan/
-billing (name and plan/billing persist; logo does not, see below), uniform
-orders (submit/approve/deny), and service calls (raise/confirm/resolve).
+complete/reopen/notes/measurement docs on an EXISTING job), work orders
+(assign/unassign/respond/rate/crew/signed-file — signed-file is a real
+upload), companies & engagements (add, edit, WA L&I verify, document review,
+**real file upload** — a genuine binary PUT through the Worker into R2, not
+a filename placeholder, including the cross-account review reset), account
+users (add/edit/remove), account branding/plan/billing (name, plan, billing,
+**and now a real logo upload**, served publicly from `/api/logo/:accountId`
+since the login screen needs to show it before anyone's authenticated),
+uniform orders (submit/approve/deny), and service calls (raise/confirm/resolve).
 
 Note on how uploads work: `R2Bucket` has no `createPresignedUrl()` — real S3-
 style presigned URLs on R2 need the S3-compatible API signed with an R2 API
-token, not the Workers binding. `POST /api/uploads/:kind/:fileName` instead
+token, not the Workers binding. `PUT /api/uploads/:kind/:fileName` instead
 streams the upload straight through the Worker into R2 with the binding's
-own `put()`. Simpler, and fine for compliance-doc-sized files; if upload
-volume ever justifies taking the Worker out of the data path, swap it for
-real presigned URLs via `aws4fetch` + an R2 API token.
+own `put()`. Simpler, and fine for compliance-doc- and logo-sized files; if
+upload volume ever justifies taking the Worker out of the data path, swap it
+for real presigned URLs via `aws4fetch` + an R2 API token.
 
 Not yet covered — genuinely local-only, will not survive a reload:
-- **Measurement docs on a new job, and the admin "edit sub" doc fields**
-  (`SubForm`) are still filename-only — real upload is wired for the
-  contractor's own document self-service (`uploadSubDoc`) and signed work
-  orders (`uploadSignedWO`), the two paths that actually matter for the
-  compliance workflow, but not yet these two secondary ones.
-- **Account logo.** `useDefaultMark`/name persist; the logo image itself
-  doesn't have an upload flow yet.
+- **Measurement docs when creating a NEW job, and the admin "edit sub" doc
+  fields** (`SubForm`) are still filename-only — real upload is wired for
+  the two paths that actually matter for the compliance workflow
+  (contractor document self-service and signed work orders), not yet these
+  two secondary ones. (Measurement docs on an already-existing job persist
+  fine — it's specifically the new-job form, before the job has an id in a
+  way the UI's current flow makes convenient, that's still local-only.)
 - **New company/user ids drift locally until the next reload.** `addSub`/
   `addUser` optimistically assign a `Date.now()`-based id client-side; the
   server assigns its own (or reuses an existing company on license/email
   match). They reconcile on the next hydrate (reload or account switch),
   but a same-session reference to a brand-new id before that point is
   using the local one, not the server's.
-- **The `w9` document kind's top-level boolean flag doesn't round-trip** —
-  this is a pre-existing gap in the prototype itself: `w9` is seeded on the
-  flat sub object but was never added to `COMPANY_FIELDS`, so `splitSeed`/
-  `splitPatch` silently drop it (its nested `docFiles.w9`/`docReview.w9`
-  values are fine, since those live inside fields that ARE tracked). Cosmetic
-  only — worst case the w9 row's button always reads "Upload" instead of
-  "Replace" — but worth fixing by adding `w9` to `COMPANY_FIELDS` if you
-  want it exact.
+
+Fixed along the way: `w9` used to be seeded on the flat sub object without
+ever being added to `COMPANY_FIELDS`, so `splitSeed`/`splitPatch` silently
+dropped it on every round-trip (a pre-existing gap in the prototype itself).
+Added `w9` to `COMPANY_FIELDS` and a matching `companies.w9` column —
+verified it now round-trips through the API the same as insurance/bond/contract.
 
 ## Before this can go live, you need to:
 

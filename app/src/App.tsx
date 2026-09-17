@@ -331,7 +331,7 @@ const COMPANY_FIELDS = [
   // double-book real people across two GCs on the same day
   "crews", "coverage", "available", "unavailableDays", "warranty",
   // one certificate, uploaded once, shared by every GC that engages them
-  "insurance", "bond", "contract", "docFiles",
+  "insurance", "bond", "contract", "w9", "docFiles",
   // how they want to be contacted — their preference, not yours
   "notify",
 ];
@@ -1611,7 +1611,8 @@ export default function SubSub() {
       const byId = Object.fromEntries(prev.map((a) => [a.id, a]));
       result.memberships.forEach((m) => {
         byId[m.accountId] = { id: m.accountId, name: m.accountName, subdomain: m.subdomain,
-          plan: m.plan, billing: m.billing, logoData: byId[m.accountId]?.logoData ?? null, useDefaultMark: m.useDefaultMark };
+          plan: m.plan, billing: m.billing,
+          logoData: m.logoKey ? `/api/logo/${m.accountId}` : null, useDefaultMark: m.useDefaultMark };
       });
       return Object.values(byId);
     });
@@ -1634,7 +1635,7 @@ export default function SubSub() {
       if (!acct) { clearAuth(); return; }
       setAccounts((prev) => [...prev.filter((a) => a.id !== acct.id), {
         id: acct.id, name: acct.name, subdomain: acct.subdomain, plan: acct.plan, billing: acct.billing,
-        logoData: null, useDefaultMark: acct.useDefaultMark,
+        logoData: acct.logoKey ? `/api/logo/${acct.id}` : null, useDefaultMark: acct.useDefaultMark,
       }]);
       if (acct.user) setUsers((prev) => [...prev.filter((u) => u.id !== acct.user.id), acct.user]);
       setCurrentUserId(saved.userId);
@@ -1734,17 +1735,24 @@ export default function SubSub() {
                       </>
                     )}
                     <div className="user-menu-label">Switch user</div>
-                    {users.map((u) => (
-                      <button key={u.id} className={u.id === currentUserId ? "on" : ""}
-                        onClick={() => {
-                          setCurrentUserId(u.id);
-                          setUserMenu(false);
-                          setTab(ROLES[u.role].can[0]);
-                        }}>
-                        <span className="um-name">{u.name}</span>
-                        <span className="um-role">{ROLES[u.role].label}</span>
-                      </button>
-                    ))}
+                    {users.map((u) => {
+                      // Role lives on the membership, not the (now global)
+                      // user record — a user with no membership in this
+                      // account at all shouldn't appear in this list.
+                      const um = memberships.find((m) => m.userId === u.id && m.accountId === account.id);
+                      if (!um) return null;
+                      return (
+                        <button key={u.id} className={u.id === currentUserId ? "on" : ""}
+                          onClick={() => {
+                            setCurrentUserId(u.id);
+                            setUserMenu(false);
+                            setTab(ROLES[um.role].can[0]);
+                          }}>
+                          <span className="um-name">{u.name}</span>
+                          <span className="um-role">{ROLES[um.role].label}</span>
+                        </button>
+                      );
+                    })}
                     <button className="um-signout" onClick={() => { setUserMenu(false); clearAuth(); setLoggedIn(false); }}>
                       <LogOut size={14} /> Sign out
                     </button>
@@ -2807,10 +2815,22 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   const [b, setB] = useState({ ...brand });
   const [bSaved, setBSaved] = useState(false);
   const setBrandField = (k, v) => { setB((x) => ({ ...x, [k]: v })); setBSaved(false); };
+  // Instant local preview via a data URI (unchanged UX), plus a real upload
+  // to R2 that persists independently of the rest of the "Save" flow below —
+  // the same immediate-on-pick pattern the document uploads use.
   const readMark = (file) => {
     const r = new FileReader();
     r.onload = () => { setB((x) => ({ ...x, logoData: r.result, useDefaultMark: false })); setBSaved(false); };
     r.readAsDataURL(file);
+
+    (async () => {
+      try {
+        const { key } = await api.uploadFile("logo", file);
+        await api.patchAccount({ logoKey: key });
+      } catch (err) {
+        console.error("[persist] logo upload failed:", err);
+      }
+    })();
   };
   const [adding, setAdding] = useState(false);
   const slug = (b.subdomain || "").toLowerCase().replace(/[^a-z0-9-]/g, "");
@@ -2993,7 +3013,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 <label className="dm-replace"><Upload size={12} /> Upload
                   <input type="file" hidden accept="image/*,.svg" onChange={(e) => { if (e.target.files.length) readMark(e.target.files[0]); }} /></label>
                 {b.logoData
-                  ? <button type="button" className="dm-delete" onClick={() => { setBrandField("logoData", null); setBrandField("useDefaultMark", true); }}><Trash2 size={12} /> Remove</button>
+                  ? <button type="button" className="dm-delete" onClick={() => {
+                      setBrandField("logoData", null); setBrandField("useDefaultMark", true);
+                      persist("patchAccount.logo", api.patchAccount({ logoKey: null }));
+                    }}><Trash2 size={12} /> Remove</button>
                   : !b.useDefaultMark && <button type="button" className="dm-replace" onClick={() => setBrandField("useDefaultMark", true)}>Default</button>}
               </div>
             </div>

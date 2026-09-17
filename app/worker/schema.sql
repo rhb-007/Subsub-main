@@ -47,6 +47,7 @@ CREATE TABLE companies (
   insurance            INTEGER NOT NULL DEFAULT 0,   -- has a file uploaded (filename lives in doc_files)
   bond                 INTEGER NOT NULL DEFAULT 0,
   contract             INTEGER NOT NULL DEFAULT 0,
+  w9                   INTEGER NOT NULL DEFAULT 0,
   doc_files            TEXT NOT NULL DEFAULT '{}',   -- JSON: {insurance,bond,contract,w9: filename}
   notify               TEXT NOT NULL DEFAULT '{"email":true,"sms":false}', -- JSON
   created_at           TEXT DEFAULT CURRENT_TIMESTAMP
