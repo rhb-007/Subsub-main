@@ -1,0 +1,19 @@
+name = "subsub-api"
+main = "worker/index.js"
+compatibility_date = "2026-01-01"
+
+# Filled in after you run `wrangler d1 create subsub-db` — see app/README.md.
+[[d1_databases]]
+binding = "DB"
+database_name = "subsub-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# Filled in after you run `wrangler r2 bucket create subsub-files`.
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "subsub-files"
+
+# Nightly WA L&I license re-check (03:00 UTC). Requires CRON_SECRET to be
+# set with `wrangler secret put CRON_SECRET` before this is useful.
+[triggers]
+crons = ["0 3 * * *"]

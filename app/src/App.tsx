@@ -1,0 +1,6919 @@
+import React, { useState, useMemo, useEffect } from "react";
+import {
+  Search, Phone, Mail, MapPin, FileText, Shield, ScrollText, Calendar,
+  CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
+  Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList,
+  Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
+} from "lucide-react";
+
+// ---- Domain constants ----------------------------------------------------
+const CATEGORIES = [
+  { id: "roofing", label: "Roofing", icon: Home },
+  { id: "siding", label: "Siding", icon: PanelTop },
+  { id: "windows_doors", label: "Windows / Doors", icon: Building2 },
+  { id: "gutters", label: "Gutters", icon: Wind },
+  { id: "deck_fence", label: "Deck / Fence", icon: Fence },
+  { id: "hardscaping", label: "Hardscaping", icon: Layers },
+  { id: "soffit_fascia", label: "Soffit / Fascia", icon: Ruler },
+  { id: "coping", label: "Coping", icon: BrickWall },
+];
+
+const CAP_LIBRARY = {
+  roofing: ["Asphalt shingle", "Metal roof", "Cedar shake", "Flat / TPO", "Tear-off", "Repair / leak", "Skylight"],
+  siding: ["Fiber cement", "Vinyl", "LP SmartSide", "Cedar", "Stucco"],
+  windows_doors: ["Vinyl windows", "Wood windows", "Entry doors", "Patio / slider", "Egress cut-in", "Trim / casing"],
+  gutters: ["5\" K-style", "6\" oversized", "Seamless", "Gutter guards", "Downspout / drainage"],
+  deck_fence: ["Composite deck", "Cedar deck", "PT framing", "Wood fence", "Vinyl fence", "Railing"],
+  hardscaping: ["Paver patio", "Retaining wall", "Concrete flatwork", "Walkway", "Fire pit", "Drainage / grading"],
+  soffit_fascia: ["Aluminum soffit", "Vinyl soffit", "Wood soffit", "Fascia board", "Fascia wrap", "Vented soffit", "Repair / rot"],
+  coping: ["Stone coping", "Precast concrete coping", "Metal coping", "Brick coping", "Wall cap", "Chimney cap", "Parapet coping"],
+};
+
+const AREAS = ["Seattle", "Bellevue", "Tacoma", "Everett", "Kirkland", "Renton", "Kent", "Redmond", "Lynnwood", "Auburn"];
+
+// Approx lat/lng centroids for demo proximity math (no geocoding backend).
+const ZIP_GEO = {
+  "98101": [47.6106, -122.3345], "98004": [47.6180, -122.2043], "98402": [47.2529, -122.4443],
+  "98201": [47.9790, -122.2021], "98033": [47.6769, -122.2060], "98052": [47.6740, -122.1215],
+  "98055": [47.4519, -122.2043], "98032": [47.3809, -122.2348], "98037": [47.8279, -122.2854],
+  "98002": [47.3082, -122.2126], "90210": [34.0901, -118.4065],
+};
+const CITY_ZIP = {
+  Seattle: "98101", Bellevue: "98004", Tacoma: "98402", Everett: "98201", Kirkland: "98033",
+  Redmond: "98052", Renton: "98055", Kent: "98032", Lynnwood: "98037", Auburn: "98002",
+};
+// Haversine miles; falls back to a stable pseudo-distance for unknown ZIPs.
+function zipDistance(a, b) {
+  if (!a || !b) return null;
+  if (a === b) return 0;
+  const ga = ZIP_GEO[a], gb = ZIP_GEO[b];
+  if (ga && gb) {
+    const [la1, lo1] = ga, [la2, lo2] = gb;
+    const R = 3958.8, toR = (d) => (d * Math.PI) / 180;
+    const dLa = toR(la2 - la1), dLo = toR(lo2 - lo1);
+    const h = Math.sin(dLa / 2) ** 2 + Math.cos(toR(la1)) * Math.cos(toR(la2)) * Math.sin(dLo / 2) ** 2;
+    return Math.round(2 * R * Math.asin(Math.sqrt(h)));
+  }
+  // unknown ZIP: deterministic estimate so the UI still behaves
+  const n = (z) => [...String(z)].reduce((s, c) => s + c.charCodeAt(0), 0);
+  return Math.abs(n(a) - n(b)) % 60;
+}
+const RATING_TIERS = [4.5, 4.0, 3.5, 3.0];
+const EARN_TIERS = [
+  { id: "0", label: "No earnings yet", test: (n) => n === 0 },
+  { id: "1", label: "Under $10k", test: (n) => n > 0 && n < 10000 },
+  { id: "2", label: "$10k – $50k", test: (n) => n >= 10000 && n < 50000 },
+  { id: "3", label: "$50k+", test: (n) => n >= 50000 },
+];
+const SORTS = [
+  { id: "match", label: "Best match" },
+  { id: "rating", label: "Rating (high → low)" },
+  { id: "earned", label: "Earnings (high → low)" },
+  { id: "completed", label: "Jobs completed (most)" },
+  { id: "accept", label: "Accept rate (high → low)" },
+  { id: "crew", label: "Crew size (largest)" },
+  { id: "name", label: "Company name (A → Z)" },
+  { id: "distance", label: "Distance (nearest)" },
+];
+const DONE_TIERS = [
+  { id: "0", label: "None yet", test: (n) => n === 0 },
+  { id: "1", label: "1 – 5 jobs", test: (n) => n >= 1 && n <= 5 },
+  { id: "2", label: "6 – 20 jobs", test: (n) => n >= 6 && n <= 20 },
+  { id: "3", label: "20+ jobs", test: (n) => n > 20 },
+];
+// Work-order trades map to sub categories for recommendations
+const WO_TRADES = [
+  { id: "roofing", label: "Roofing" },
+  { id: "siding", label: "Siding" },
+  { id: "windows_doors", label: "Windows" },
+  { id: "gutters", label: "Gutters" },
+  { id: "deck_fence", label: "Deck / Fence" },
+  { id: "hardscaping", label: "Hardscaping" },
+  { id: "soffit_fascia", label: "Soffit / Fascia" },
+  { id: "coping", label: "Coping" },
+];
+const CREW_TIERS = [
+  { id: "1-3", label: "1–3", test: (n) => n <= 3 },
+  { id: "4-7", label: "4–7", test: (n) => n >= 4 && n <= 7 },
+  { id: "8+", label: "8+", test: (n) => n >= 8 },
+];
+
+// ---- Sample data ---------------------------------------------------------
+// coverage: { cities:[...], radius:{ zip, miles }|null } — cities and/or a travel radius
+// Demo off-days: a few upcoming dates so availability is visible immediately.
+const _d = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+
+const seedSubs = [
+  {
+    id: 1, company: "Cascade Roofworks", contact: "Miguel Alvarez", phone: "206-555-0142",
+    email: "miguel@cascaderoof.com", categories: ["roofing", "gutters"],
+    warranty: "10",
+    license: "CASCADR842KL", ubi: "603221887",
+    licenseCheck: { found: true, licenseNumber: "CASCADR842KL", businessName: "Cascade Roofworks", licenseType: "CONSTRUCTION CONTRACTOR", status: "ACTIVE", effectiveDate: "2023-04-11", expirationDate: _d(420), suspendDate: null, bond: { surety: "North River Insurance Company", number: "46CF842686", amount: 30000, expires: "Until Canceled" }, insurance: { carrier: "State National Ins Co", policy: "NXT9PTHTLT-01-GL", coverage: 1000000, expires: _d(420) }, checkedAt: _d(-7) },
+    mailStreet: "4120 Airport Way S", mailCity: "Seattle", mailState: "WA", mailZip: "98108",
+    city: "Seattle", state: "WA", zip: "98108",
+    caps: ["Asphalt shingle", "Metal roof", "Tear-off", "Repair / leak", "Seamless"],
+    coverage: { mode: "cities", cities: ["Seattle", "Bellevue", "Renton", "Kent"], radii: [] },
+    crews: [
+      { id: "c1", name: "Roof Crew A", available: true, unavailableDays: [_d(3), _d(4)], members: [
+        { name: "Miguel Alvarez", role: "Lead" }, { name: "Diego Ruiz", role: "Installer" },
+        { name: "Sam Okafor", role: "Installer" } ] },
+      { id: "c2", name: "Roof Crew B", available: true, unavailableDays: [], members: [
+        { name: "Luis Mendez", role: "Lead" }, { name: "Ty Brooks", role: "Installer" },
+        { name: "Owen Park", role: "Laborer" } ] },
+    ],
+    rating: 4.8, bond: true, insurance: true, contract: true, available: true,
+    accepted: 34, declined: 3,
+    notify: { email: true, sms: true },
+    unavailableDays: [],
+    autoSchedule: true,
+    w9: true,
+    docFiles: { insurance: "cascade-insurance.pdf", bond: "cascade-bond.pdf", contract: "cascade-agreement.pdf", w9: "cascade-w9.pdf" },
+    docReview: { insurance: { status: "verified", limits: { cgl_occ: "1000000", cgl_agg: "2000000", prod_comp: "2000000", auto: "1000000", empl: "1000000", umbrella: "2000000" }, expires: _d(240), checks: { named: true, primary: true, wc: true, current: true, carrier: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-30) }, bond: { status: "verified", amount: "50000", checks: { active: true, amount: true, principal: true, surety: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-30) }, contract: { status: "verified", checks: { signed: true, counter: true, version: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-30) }, w9: { status: "verified", checks: { tin: true, name: true, entity: true, signed: true, current: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-30) } },
+    notes: "Preferred roofer. Fast on tear-offs. Owner answers his phone. Net-15 terms.",
+  },
+  {
+    id: 2, company: "Emerald Exteriors", contact: "Dana Cho", phone: "425-555-0198",
+    email: "dana@emeraldext.com", categories: ["siding", "windows_doors", "soffit_fascia"],
+    warranty: "5",
+    license: "EMERALE119QP", ubi: "602884113",
+    licenseCheck: { found: true, licenseNumber: "EMERALE119QP", businessName: "Emerald Exteriors", licenseType: "CONSTRUCTION CONTRACTOR", status: "ACTIVE", effectiveDate: "2023-04-11", expirationDate: _d(300), suspendDate: null, bond: { surety: "North River Insurance Company", number: "46CF842686", amount: 30000, expires: "Until Canceled" }, insurance: { carrier: "State National Ins Co", policy: "NXT9PTHTLT-01-GL", coverage: 1000000, expires: _d(300) }, checkedAt: _d(-7) },
+    mailStreet: "820 108th Ave NE", mailCity: "Bellevue", mailState: "WA", mailZip: "98004",
+    city: "Bellevue", state: "WA", zip: "98004",
+    caps: ["Fiber cement", "LP SmartSide", "Cedar", "Trim / casing", "Aluminum soffit", "Fascia board"],
+    coverage: { mode: "radius", cities: [], radii: [{ zip: "98004", miles: 30 }] },
+    crews: [
+      { id: "c1", name: "Siding Crew", available: true, unavailableDays: [], members: [
+        { name: "Dana Cho", role: "Lead" }, { name: "Marco Reyes", role: "Installer" },
+        { name: "Beth Lang", role: "Installer" }, { name: "Kai Winters", role: "Laborer" } ] },
+    ],
+    rating: 4.5, bond: true, insurance: true, contract: false, available: true,
+    accepted: 21, declined: 5,
+    notify: { email: true, sms: false },
+    unavailableDays: [],
+    autoSchedule: false,
+    docFiles: { insurance: "emerald-insurance.pdf", bond: "emerald-bond.pdf", contract: null },
+    docReview: { insurance: { status: "pending" }, bond: { status: "verified", amount: "30000", checks: { active: true, amount: true, principal: true, surety: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-12) } },
+    notes: "Great fiber cement work. Books out ~2 weeks. Still need signed contract on file.",
+  },
+  {
+    id: 3, company: "Rainshield Gutters", contact: "Tom Betancourt", phone: "253-555-0177",
+    email: "tom@rainshield.com", categories: ["gutters"],
+    warranty: "2",
+    license: "RAINSHG733X", ubi: "601447290",
+    licenseCheck: { found: true, licenseNumber: "RAINSHG733X", businessName: "Rainshield Gutters", licenseType: "CONSTRUCTION CONTRACTOR", status: "EXPIRED", effectiveDate: "2023-04-11", expirationDate: _d(-40), suspendDate: null, bond: { surety: "North River Insurance Company", number: "46CF842686", amount: 30000, expires: "Until Canceled" }, insurance: { carrier: "State National Ins Co", policy: "NXT9PTHTLT-01-GL", coverage: 1000000, expires: _d(400) }, checkedAt: _d(-7) },
+    city: "Tacoma", state: "WA", zip: "98409",
+    caps: ["Seamless", "6\" oversized", "Gutter guards", "Downspout / drainage"],
+    coverage: { mode: "cities", cities: ["Tacoma", "Auburn", "Kent"], radii: [] },
+    crews: [
+      { id: "c1", name: "Gutter Crew", available: true, unavailableDays: [], members: [
+        { name: "Tom Betancourt", role: "Lead" }, { name: "Rico Salas", role: "Installer" } ] },
+    ],
+    rating: 4.2, bond: false, insurance: true, contract: true, available: false,
+    accepted: 12, declined: 8,
+    notify: { email: true, sms: true },
+    unavailableDays: [],
+    autoSchedule: false,
+    docFiles: { insurance: "rainshield-insurance.pdf", bond: null, contract: "rainshield-agreement.pdf" },
+    docReview: { insurance: { status: "rejected", note: "Outerhome is not listed as additional insured — please ask your carrier to add us and resend.", verifiedBy: "Richard Braun", verifiedAt: _d(-5) }, contract: { status: "pending" } },
+    notes: "Small crew, south-end only. Declines a lot when busy. No bond yet.",
+  },
+  {
+    id: 4, company: "Northwest Window Co", contact: "Priya Nair", phone: "206-555-0231",
+    email: "priya@nwwindow.com", categories: ["windows_doors"],
+    warranty: "lifetime",
+    license: "NORTHWW551MC", ubi: "604112556",
+    licenseCheck: { found: true, licenseNumber: "NORTHWW551MC", businessName: "Northwest Window Co", licenseType: "CONSTRUCTION CONTRACTOR", status: "ACTIVE", effectiveDate: "2023-04-11", expirationDate: _d(500), suspendDate: null, bond: { surety: "North River Insurance Company", number: "46CF842686", amount: 30000, expires: "Until Canceled" }, insurance: { carrier: "State National Ins Co", policy: "NXT9PTHTLT-01-GL", coverage: 1000000, expires: _d(500) }, checkedAt: _d(-7) },
+    city: "Seattle", state: "WA", zip: "98134",
+    caps: ["Vinyl windows", "Entry doors", "Patio / slider", "Egress cut-in"],
+    coverage: { mode: "radius", cities: [], radii: [{ zip: "98101", miles: 40 }, { zip: "98201", miles: 20 }] },
+    crews: [
+      { id: "c1", name: "Install Team 1", available: true, unavailableDays: [_d(6), _d(7)], members: [
+        { name: "Priya Nair", role: "Lead" }, { name: "Josh Hale", role: "Installer" },
+        { name: "Amir Fadel", role: "Installer" } ] },
+      { id: "c2", name: "Install Team 2", available: true, unavailableDays: [], members: [
+        { name: "Grace Liu", role: "Lead" }, { name: "Neil Ross", role: "Installer" } ] },
+    ],
+    rating: 4.9, bond: true, insurance: true, contract: true, available: true,
+    accepted: 47, declined: 2,
+    notify: { email: true, sms: true },
+    unavailableDays: [],
+    autoSchedule: true,
+    w9: true,
+    docFiles: { insurance: "northwest-insurance.pdf", bond: "northwest-bond.pdf", contract: "northwest-agreement.pdf", w9: "northwest-w9.pdf" },
+    docReview: { insurance: { status: "verified", limits: { cgl_occ: "2000000", cgl_agg: "4000000", prod_comp: "4000000", auto: "1000000", empl: "1000000", umbrella: "2000000" }, expires: _d(180), checks: { named: true, primary: true, wc: true, current: true, carrier: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-60) }, bond: { status: "verified", amount: "60000", checks: { active: true, amount: true, principal: true, surety: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-60) }, contract: { status: "verified", checks: { signed: true, counter: true, version: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-60) }, w9: { status: "verified", checks: { tin: true, name: true, entity: true, signed: true, current: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-60) } },
+    notes: "Top-rated. Handles egress cut-ins others won't. Worth the premium.",
+  },
+  {
+    id: 5, company: "Sound Deck & Fence", contact: "Kyle Meyer", phone: "425-555-0165",
+    email: "kyle@sounddeck.com", categories: ["deck_fence", "hardscaping"],
+    warranty: "3",
+    license: "SOUNDDF298TR", ubi: "602775431",
+    licenseCheck: { found: true, licenseNumber: "SOUNDDF298TR", businessName: "Sound Deck & Fence", licenseType: "CONSTRUCTION CONTRACTOR", status: "ACTIVE", effectiveDate: "2023-04-11", expirationDate: _d(260), suspendDate: null, bond: { surety: "North River Insurance Company", number: "46CF842686", amount: 30000, expires: "Until Canceled" }, insurance: { carrier: "State National Ins Co", policy: "NXT9PTHTLT-01-GL", coverage: 1000000, expires: _d(260) }, checkedAt: _d(-7) },
+    city: "Kirkland", state: "WA", zip: "98033",
+    caps: ["Composite deck", "Cedar deck", "Wood fence", "Railing", "Paver patio"],
+    coverage: { mode: "cities", cities: ["Kirkland", "Redmond", "Bellevue", "Seattle"], radii: [] },
+    crews: [
+      { id: "c1", name: "Deck Crew", available: true, unavailableDays: [], members: [
+        { name: "Kyle Meyer", role: "Lead" }, { name: "Brant Cole", role: "Carpenter" },
+        { name: "Jess Ivy", role: "Carpenter" }, { name: "Rudy Vance", role: "Laborer" } ] },
+      { id: "c2", name: "Fence Crew", available: false, unavailableDays: [], members: [
+        { name: "Hana Kim", role: "Lead" }, { name: "Cole Duff", role: "Installer" },
+        { name: "Pat Nunez", role: "Installer" }, { name: "Wes Tran", role: "Laborer" } ] },
+    ],
+    rating: 4.4, bond: true, insurance: false, contract: true, available: true,
+    accepted: 29, declined: 6,
+    notify: { email: true, sms: false },
+    unavailableDays: [],
+    autoSchedule: false,
+    docFiles: { insurance: null, bond: "sound-bond.pdf", contract: "sound-agreement.pdf" },
+    notes: "Big crew, can move fast on decks. Insurance cert expired — chase renewal.",
+  },
+  {
+    id: 6, company: "Stoneline Hardscapes", contact: "Rosa Delgado", phone: "253-555-0119",
+    email: "rosa@stoneline.com", categories: ["hardscaping", "coping"],
+    warranty: "1",
+    license: "STONELH664BV", ubi: "603998210",
+    licenseCheck: { found: true, licenseNumber: "STONELH664BV", businessName: "Stoneline Hardscapes", licenseType: "CONSTRUCTION CONTRACTOR", status: "ACTIVE", effectiveDate: "2023-04-11", expirationDate: _d(380), suspendDate: null, bond: { surety: "North River Insurance Company", number: "46CF842686", amount: 30000, expires: "Until Canceled" }, insurance: { carrier: "State National Ins Co", policy: "NXT9PTHTLT-01-GL", coverage: 1000000, expires: _d(380) }, checkedAt: _d(-7) },
+    city: "Tacoma", state: "WA", zip: "98402",
+    caps: ["Paver patio", "Retaining wall", "Walkway", "Drainage / grading", "Stone coping", "Wall cap", "Precast concrete coping"],
+    coverage: { mode: "radius", cities: [], radii: [{ zip: "98402", miles: 50 }] },
+    crews: [
+      { id: "c1", name: "Hardscape Crew", available: true, unavailableDays: [], members: [
+        { name: "Rosa Delgado", role: "Lead" }, { name: "Ed Marsh", role: "Mason" },
+        { name: "Vic Alonzo", role: "Mason" }, { name: "Lena Ford", role: "Laborer" },
+        { name: "Cruz Vega", role: "Laborer" } ] },
+    ],
+    rating: 4.7, bond: true, insurance: true, contract: true, available: false,
+    accepted: 38, declined: 4,
+    notify: { email: false, sms: true },
+    unavailableDays: [],
+    autoSchedule: true,
+    w9: true,
+    docFiles: { insurance: "stoneline-insurance.pdf", bond: "stoneline-bond.pdf", contract: "stoneline-agreement.pdf", w9: "stoneline-w9.pdf" },
+    docReview: { insurance: { status: "verified", limits: { cgl_occ: "1000000", cgl_agg: "2000000", prod_comp: "2000000", auto: "1000000", empl: "1000000" }, expires: _d(90), checks: { named: true, primary: true, wc: true, current: true, carrier: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-20) }, bond: { status: "verified", amount: "30000", checks: { active: true, amount: true, principal: true, surety: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-20) }, contract: { status: "verified", checks: { signed: true, counter: true, version: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-20) }, w9: { status: "pending" } },
+    notes: "Excellent retaining walls. Booked solid through next month.",
+  },
+  {
+    id: 7, company: "Summit Roofing LLC", contact: "Aaron Webb", phone: "425-555-0140",
+    email: "aaron@summitroof.com", categories: ["roofing", "soffit_fascia"],
+    warranty: "7",
+    license: "SUMMITR407WD", ubi: "601330974",
+    licenseCheck: { found: true, licenseNumber: "SUMMITR407WD", businessName: "Summit Roofing LLC", licenseType: "CONSTRUCTION CONTRACTOR", status: "ACTIVE", effectiveDate: "2023-04-11", expirationDate: _d(340), suspendDate: null, bond: { surety: "North River Insurance Company", number: "46CF842686", amount: 30000, expires: "Until Canceled" }, insurance: { carrier: "State National Ins Co", policy: "NXT9PTHTLT-01-GL", coverage: 1000000, expires: _d(340) }, checkedAt: _d(-7) },
+    city: "Everett", state: "WA", zip: "98201",
+    caps: ["Asphalt shingle", "Cedar shake", "Flat / TPO", "Skylight", "Fascia wrap", "Vented soffit"],
+    coverage: { mode: "cities", cities: ["Everett", "Lynnwood", "Kirkland"], radii: [] },
+    crews: [
+      { id: "c1", name: "Roof Crew", available: true, unavailableDays: [], members: [
+        { name: "Aaron Webb", role: "Lead" }, { name: "Nate Sims", role: "Installer" },
+        { name: "Kurt Homes", role: "Installer" } ] },
+    ],
+    rating: 4.6, bond: true, insurance: true, contract: true, available: true,
+    accepted: 26, declined: 3,
+    notify: { email: true, sms: false },
+    unavailableDays: [],
+    autoSchedule: false,
+    docFiles: { insurance: "summit-insurance.pdf", bond: "summit-bond.pdf", contract: "summit-agreement.pdf" },
+    docReview: { insurance: { status: "verified", limits: { cgl_occ: "1000000", cgl_agg: "1500000", prod_comp: "2000000", auto: "1000000", empl: "1000000" }, overrides: { cgl_agg: "Small-crew gutter work only; $1.5M aggregate accepted for this scope." }, expires: _d(150), checks: { named: true, primary: true, wc: true, current: true, carrier: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-45) }, bond: { status: "verified", amount: "35000", checks: { active: true, amount: true, principal: true, surety: true }, verifiedBy: "Richard Braun", verifiedAt: _d(-45) }, contract: { status: "pending" } },
+    notes: "North-end roofer. Solid on flat/TPO. Good backup to Cascade.",
+  },
+];
+
+// ---- Users & roles -------------------------------------------------------
+const ROLES = {
+  admin: { label: "Admin", can: ["dashboard", "contractors", "calendar", "jobs", "uniforms", "account"] },
+  pm: { label: "Project Manager", can: ["dashboard", "contractors", "calendar", "jobs", "uniforms", "account"] },
+  contractor: { label: "Contractor", can: ["portal", "account"] },
+};
+const seedUsers = [
+  { id: "u1", name: "Richard Braun", email: "rb@outerhome.com", role: "admin" },
+  { id: "u2", name: "Alicia Gomez", email: "alicia@outerhome.com", role: "pm" },
+  // Demo: a second admin whose account sits on the Scale plan, so the two
+  // plans can be compared side by side without changing billing.
+  { id: "u5", name: "Ross Mather", email: "ross@outerhome.com", role: "admin" },
+  { id: "u3", name: "Miguel Alvarez", email: "miguel@cascaderoof.com", role: "contractor", subId: 1 },
+  { id: "u4", name: "Dana Cho", email: "dana@emeraldext.com", role: "contractor", subId: 2 },
+];
+
+// ===========================================================================
+// DATA MODEL — production shape, see DEPLOYMENT.md "The identity model"
+// ===========================================================================
+// A subcontractor is NOT owned by the company that hires them. Three concepts:
+//
+//   companies    a business in the world. Global. Deduped on WA L&I licence.
+//   accounts     a hiring company's workspace (plan, branding, users, jobs).
+//   engagements  the account <-> company relationship. Per-GC data lives here.
+//
+// The UI still works with a flat "sub" object, composed on the fly by
+// composeSub(). Writes are routed back to the right table by splitPatch().
+// That keeps the components simple while the STORAGE matches production, so
+// the server implementation is a direct translation of what's below.
+
+// Which table owns which field. This map is the whole design in one place.
+const COMPANY_FIELDS = [
+  // identity — one business, one row
+  "company", "contact", "phone", "email", "license", "ubi", "licenseCheck",
+  "city", "state", "zip", "mailStreet", "mailCity", "mailState", "mailZip",
+  // their crews are their crews; availability MUST be global or you
+  // double-book real people across two GCs on the same day
+  "crews", "coverage", "available", "unavailableDays", "warranty",
+  // one certificate, uploaded once, shared by every GC that engages them
+  "insurance", "bond", "contract", "docFiles",
+  // how they want to be contacted — their preference, not yours
+  "notify",
+];
+const ENGAGEMENT_FIELDS = [
+  // your verdict on their documents, against YOUR requirements.
+  // GC A may require $2M aggregate where GC B accepts $1M.
+  "docReview",
+  // what they do for you specifically
+  "categories", "caps",
+  // your experience of them
+  "rating", "ratedJobs", "accepted", "declined", "autoSchedule", "notes",
+  "status",
+];
+
+// Split one flat seed record into its company half and engagement half.
+function splitSeed(s) {
+  const co = { id: s.id }, en = {};
+  COMPANY_FIELDS.forEach((k) => { if (k in s) co[k] = s[k]; });
+  ENGAGEMENT_FIELDS.forEach((k) => { if (k in s) en[k] = s[k]; });
+  return { co, en };
+}
+// Route a patch to the correct table(s).
+function splitPatch(patch) {
+  const co = {}, en = {};
+  Object.keys(patch).forEach((k) => {
+    if (ENGAGEMENT_FIELDS.includes(k)) en[k] = patch[k];
+    else co[k] = patch[k];              // default to the company record
+  });
+  return { co, en };
+}
+// Flatten a company + engagement back into the shape the UI expects.
+// `id` stays the COMPANY id, so every existing reference (a.subId === sub.id)
+// keeps working unchanged.
+function composeSub(co, en) {
+  return {
+    ...co, ...en,
+    id: co.id,
+    engagementId: en.id,
+    accountId: en.accountId,
+  };
+}
+
+const seedCompanies = seedSubs.map((s) => splitSeed(s).co);
+
+// Outerhome's actual logo mark (their file, not a recolour), used as the
+// logo for their own account only.
+const OUTERHOME_MARK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjY2IDI0MiAxMjQgMTExIj48cG9seWdvbiBmaWxsPSIjMTgxNzE2IiBwb2ludHM9IjE4NC45OSwyNzcuNDggMTg0Ljk5LDM0Ny42NyAxNjMuMzMsMzQ3LjY3IDE2My4zMywyOTAuMTggMTI4LjI0LDI3MS41MSA5My4xNCwyOTAuMTggOTMuMTQsMzMyLjc0IDkzLjE2LDMzMi43MyAxMjguMzIsMzExLjM5IDEyOC4yNCwzNDcuNjcgNzEuNDksMzQ3LjY3IDcxLjQ5LDI3Ny40OCAxMjguMjQsMjQ3LjYxIi8+PC9zdmc+";
+
+// Two hiring accounts, so the same subcontractor can be seen in both.
+const seedAccounts = [
+  { id: "a1", name: "Outerhome", subdomain: "outerhome", plan: "basic", billing: "monthly",
+    logoData: OUTERHOME_MARK, useDefaultMark: false },
+  { id: "a2", name: "Harbor Point Builders", subdomain: "harborpoint", plan: "scale", billing: "annual",
+    logoData: null, useDefaultMark: false },
+];
+
+// Outerhome engages all seven. Harbor Point engages three of the same
+// companies — one record each, two relationships.
+const seedEngagements = (function () {
+  const out = [];
+  seedSubs.forEach((s) => {
+    out.push({ id: "e" + s.id, accountId: "a1", companyId: s.id, ...splitSeed(s).en });
+  });
+  // Harbor Point's own view of Cascade, Northwest and Summit: their own
+  // ratings, their own auto-schedule setting, and their own document verdicts.
+  [
+    { companyId: 1, rating: 4.4, ratedJobs: 6,  autoSchedule: false,
+      notes: "Roofing only for us. Good on tear-offs.",
+      docReview: { insurance: { status: "pending" } } },
+    { companyId: 4, rating: 5.0, ratedJobs: 11, autoSchedule: true,
+      notes: "Our go-to for window packages.",
+      docReview: {
+        insurance: { status: "verified", limits: { cgl_occ: "2000000", cgl_agg: "4000000", prod_comp: "4000000", auto: "1000000", empl: "1000000" }, expires: _d(180), checks: { named: true, primary: true, wc: true, current: true, carrier: true }, verifiedBy: "Ross Mather", verifiedAt: _d(-14) },
+        bond: { status: "verified", amount: "60000", checks: { active: true, amount: true, principal: true, surety: true }, verifiedBy: "Ross Mather", verifiedAt: _d(-14) },
+        contract: { status: "verified", checks: { signed: true, counter: true, version: true }, verifiedBy: "Ross Mather", verifiedAt: _d(-14) } } },
+    { companyId: 7, rating: 0, ratedJobs: 0, autoSchedule: false,
+      notes: "Just invited — no jobs yet.",
+      docReview: {} },
+  ].forEach((e, i) => {
+    const base = seedSubs.find((s) => s.id === e.companyId);
+    out.push({
+      id: "e2" + (i + 1), accountId: "a2", companyId: e.companyId,
+      categories: base.categories, caps: base.caps,
+      accepted: 0, declined: 0, status: "active",
+      ...e,
+    });
+  });
+  return out;
+})();
+
+// Users are global. `memberships` joins a person to an account with a role,
+// so one login can be a contractor in several accounts and an admin in their own.
+const seedMemberships = [
+  { userId: "u1", accountId: "a1", role: "admin" },
+  { userId: "u2", accountId: "a1", role: "pm" },
+  { userId: "u5", accountId: "a2", role: "admin" },
+  // Miguel is a contractor for BOTH hiring companies, and an admin of his own.
+  { userId: "u3", accountId: "a1", role: "contractor", companyId: 1 },
+  { userId: "u3", accountId: "a2", role: "contractor", companyId: 1 },
+  { userId: "u4", accountId: "a1", role: "contractor", companyId: 2 },
+];
+
+
+// ---- Helpers -------------------------------------------------------------
+const catMeta = (id) => CATEGORIES.find((c) => c.id === id) || CATEGORIES[0];
+const acceptRate = (s) => {
+  const t = s.accepted + s.declined;
+  return t ? Math.round((s.accepted / t) * 100) : 0;
+};
+// ---- Availability is CREW based -------------------------------------------
+// Each crew carries its own on/off switch and marked-off days. A contractor is
+// bookable on a day only if they're taking work AND at least one crew is free.
+// How a contractor wants to receive system notifications. SMS is notification-
+// only — admins and PMs cannot send ad-hoc texts, just email.
+const notifyPrefs = (s) => s.notify || { email: true, sms: false };
+const notifyLabel = (s) => {
+  const n = notifyPrefs(s);
+  if (n.email && n.sms) return "Email + SMS";
+  if (n.sms) return "SMS only";
+  return "Email only";
+};
+const crewOffDays = (c) => c.unavailableDays || [];
+const crewFreeOn = (c, day) => c.available !== false && !crewOffDays(c).includes(day);
+// legacy contractor-level off-days still respected if present
+const isOffDay = (s, day) => (s.unavailableDays || []).includes(day);
+function freeCrews(sub, day) {
+  if (!sub.available || isOffDay(sub, day)) return [];
+  return (sub.crews || []).filter((c) => crewFreeOn(c, day));
+}
+const availableOn = (s, day) => freeCrews(s, day).length > 0;
+
+// IMPORTANT: pass ALL jobs here, across every account. A crew booked by another
+// hiring company is physically unavailable to you that day. Details of other
+// accounts' jobs are never shown — only the fact that the crew is taken.
+function dayStatus(sub, jobs, day, ignoreJobId, viewAccountId) {
+  if (!day) return null;
+  if (!sub.available) return { kind: "unavailable", label: "Not taking work", crews: [] };
+  const free = freeCrews(sub, day);
+  if (free.length === 0) {
+    return { kind: "off", label: "All crews marked off this day", crews: [] };
+  }
+  // crews already committed to another job that day
+  const busy = new Set();
+  let elsewhere = 0;
+  (jobs || []).forEach((j) => {
+    if (j.date !== day || j.id === ignoreJobId) return;
+    Object.values(j.assignments || {}).forEach((a) => {
+      if (a.subId !== sub.id || !a.crewName) return;
+      busy.add(a.crewName);
+      // booked by a different hiring company — count it, but don't leak details
+      if (viewAccountId && j.accountId && j.accountId !== viewAccountId) elsewhere += 1;
+    });
+  });
+  const open = free.filter((c) => !busy.has(c.name));
+  if (open.length === 0) {
+    return {
+      kind: "booked",
+      label: elsewhere > 0
+        ? `All free crews booked — ${elsewhere} on another company's job`
+        : `All free crews booked: ${[...busy].join(", ")}`,
+      crews: [],
+    };
+  }
+  return {
+    kind: "free",
+    label: `${open.length} crew${open.length === 1 ? "" : "s"} free: ${open.map((c) => c.name).join(", ")}`,
+    crews: open,
+  };
+}
+
+// Earnings and completed-job counts, derived from issued work orders.
+function contractorStats(sub, jobs) {
+  let earned = 0, completed = 0, active = 0;
+  (jobs || []).forEach((j) => Object.values(j.assignments || {}).forEach((a) => {
+    if (a.subId !== sub.id) return;
+    const live = a.status === "accepted" || a.auto;
+    if (!live) return;
+    if (j.status === "completed") { completed += 1; earned += Number(moneyRaw(a.value) || 0); }
+    else active += 1;
+  }));
+  return { earned, completed, active };
+}
+// A work order is DERIVED from a job when a contractor is assigned to a trade.
+// It is never authored on its own — these are the only WO-specific fields.
+// One clock for the whole app, so every countdown ticks in step.
+function useNow(intervalMs = 1000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(t);
+  }, [intervalMs]);
+  return now;
+}
+
+// ---- Response deadlines --------------------------------------------------
+// The admin picks how long the subcontractor has to reply when the work order
+// goes out. Past the deadline the offer is expired: the sub can no longer
+// accept, and the admin is prompted to match someone else.
+const RESPONSE_WINDOWS = [
+  { id: "15m", label: "15 minutes", mins: 15 },
+  { id: "1h",  label: "1 hour",     mins: 60 },
+  { id: "4h",  label: "4 hours",    mins: 240 },
+  { id: "12h", label: "12 hours",   mins: 720 },
+  { id: "24h", label: "24 hours",   mins: 1440 },
+  { id: "2d",  label: "2 days",     mins: 2880 },
+  { id: "3d",  label: "3 days",     mins: 4320 },
+  { id: "7d",  label: "7 days",     mins: 10080 },
+];
+const DEFAULT_WINDOW = "24h";
+const windowMins = (id) => (RESPONSE_WINDOWS.find((w) => w.id === id) || { mins: 1440 }).mins;
+
+// Only a pending offer can expire. Accepted, declined and auto-booked are settled.
+const awaitingReply = (a) => !!a && a.status === "pending" && !a.auto && !!a.respondBy;
+const msLeft = (a, now) => (awaitingReply(a) ? new Date(a.respondBy).getTime() - now : null);
+const isExpired = (a, now) => { const m = msLeft(a, now); return m !== null && m <= 0; };
+// "4h 12m" / "38m" / "45s" — coarse at distance, precise near the wire.
+function countdown(ms) {
+  if (ms === null) return "";
+  const t = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(t / 86400), h = Math.floor((t % 86400) / 3600);
+  const m = Math.floor((t % 3600) / 60), sec = t % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+// Under an hour is worth flagging visually.
+const urgencyOf = (ms) => ms === null ? "" : ms <= 0 ? "expired"
+  : ms < 3600000 ? "soon" : ms < 14400000 ? "today" : "ok";
+
+function issueWO(sub, job, trade, details = {}) {
+  const prox = job.zip ? coversZip(sub, job.zip) : null;
+  return {
+    subId: sub.id, company: sub.company, contact: sub.contact,
+    crewName: details.crewName || (sub.crews && sub.crews[0]?.name) || null,
+    wo: "WO-" + Math.floor(1000 + Math.random() * 9000),
+    woIssued: new Date().toISOString().slice(0, 10),
+    tradeScope: details.tradeScope || "",
+    value: details.value || "",
+    signedWO: null,
+    status: sub.autoSchedule ? "accepted" : "pending",
+    auto: !!sub.autoSchedule,
+    // deadline only applies when someone actually has to reply
+    responseWindow: sub.autoSchedule ? null : (details.responseWindow || DEFAULT_WINDOW),
+    respondBy: sub.autoSchedule ? null
+      : new Date(Date.now() + windowMins(details.responseWindow || DEFAULT_WINDOW) * 60000).toISOString(),
+    respondedAt: null,
+    rating: null,
+    distance: prox?.distance ?? null, inRange: prox?.inRange ?? null,
+  };
+}
+
+// Ratings are recorded per crew per job; these roll them up.
+function crewRatings(sub, jobs) {
+  const byCrew = {};
+  (jobs || []).forEach((j) => Object.values(j.assignments || {}).forEach((a) => {
+    if (a.subId !== sub.id || !a.rating) return;
+    const key = a.crewName || "Unassigned crew";
+    (byCrew[key] ||= []).push(a.rating);
+  }));
+  return Object.entries(byCrew).map(([name, rs]) => ({
+    name, count: rs.length, avg: Math.round((rs.reduce((n, r) => n + r, 0) / rs.length) * 10) / 10,
+  }));
+}
+const crewCount = (s) => (s.crews || []).length;
+const headCount = (s) => (s.crews || []).reduce((n, c) => n + (c.members?.length || 0), 0);
+const DOC_LABELS = { insurance: "Certificate of insurance", bond: "Surety bond", contract: "Signed subcontractor agreement", w9: "IRS Form W-9" };
+const DOC_KINDS = ["insurance", "bond", "contract", "w9"];
+// Used mid-sentence. Lowercasing DOC_LABELS would mangle "IRS Form W-9".
+const DOC_LABELS_INLINE = {
+  insurance: "certificate of insurance",
+  bond: "surety bond",
+  contract: "signed subcontractor agreement",
+  w9: "IRS Form W-9",
+};
+
+// ---- Washington State insurance & bond requirements ----------------------
+// The schedule Outerhome holds subcontractors to. Reviewers check each line
+// against the certificate of insurance.
+const INSURANCE_LINES = [
+  { id: "cgl_occ",   label: "Commercial General Liability", sub: "per occurrence",              min: 1000000 },
+  { id: "cgl_agg",   label: "General aggregate",            sub: "",                            min: 2000000 },
+  { id: "prod_comp", label: "Products & completed operations", sub: "",                          min: 2000000 },
+  { id: "auto",      label: "Auto liability",               sub: "combined single limit",        min: 1000000 },
+  { id: "empl",      label: "Employer's liability",         sub: "",                            min: 1000000 },
+  { id: "umbrella",  label: "Umbrella / excess",            sub: "higher-risk or larger subs",  min: 1000000, optional: true },
+];
+const INSURANCE_ATTEST = [
+  { id: "named",   label: (b) => `${b} named as additional insured on CGL` },
+  { id: "primary", label: () => "Primary & non-contributory wording present" },
+  { id: "wc",      label: () => "WA L&I workers' comp account active (or exempt)" },
+  { id: "current", label: () => "Policy period covers the work dates" },
+  { id: "carrier", label: () => "Carrier and policy number legible" },
+];
+const BOND_MIN = 30000;
+
+// ---- Warranties and callbacks -------------------------------------------
+// Each subcontractor states how long they warranty their labour: 1–10 years
+// in one-year steps, or lifetime. A callback is a defect reported soon after
+// the job (industry norm is 30 days); a warranty claim is anything later that
+// still falls inside their stated window.
+const WARRANTY_OPTIONS = [
+  ...Array.from({ length: 10 }, (_, i) => ({ id: String(i + 1), label: `${i + 1} year${i ? "s" : ""}`, years: i + 1 })),
+  { id: "lifetime", label: "Lifetime", years: Infinity },
+];
+const CALLBACK_DAYS = 30;
+const warrantyYears = (s) => {
+  const w = s && s.warranty;
+  if (!w) return null;
+  if (w === "lifetime") return Infinity;
+  const n = Number(w);
+  return Number.isFinite(n) ? n : null;
+};
+const warrantyLabel = (s) => {
+  const y = warrantyYears(s);
+  if (y === null) return "No warranty on file";
+  return y === Infinity ? "Lifetime labour warranty" : `${y} year${y > 1 ? "s" : ""} labour warranty`;
+};
+const daysSince = (iso, now) => iso ? Math.floor((now - new Date(iso).getTime()) / 86400000) : null;
+// Which remedy applies to a completed job right now.
+function coverageFor(sub, job, now) {
+  const done = job && job.completedAt;
+  if (!done) return { kind: "none", label: "Job not completed" };
+  const d = daysSince(done, now);
+  const y = warrantyYears(sub);
+  if (d <= CALLBACK_DAYS) {
+    return { kind: "callback", days: d,
+      label: `Callback window — ${CALLBACK_DAYS - d} of ${CALLBACK_DAYS} days left` };
+  }
+  if (y === null) return { kind: "expired", days: d, label: `${d} days ago · no warranty on file` };
+  if (y === Infinity) return { kind: "warranty", days: d, label: `Lifetime warranty — covered` };
+  const withinYears = d <= y * 365;
+  return withinYears
+    ? { kind: "warranty", days: d,
+        label: `Within ${y}-year warranty — ${Math.max(0, y - Math.floor(d / 365))} year${y - Math.floor(d / 365) === 1 ? "" : "s"} remaining` }
+    : { kind: "expired", days: d, label: `${Math.floor(d / 365)} years ago · ${y}-year warranty expired` };
+}
+
+// ---- WA L&I license verification ----------------------------------------
+// Washington publishes the contractor registry as free open data (Socrata
+// SODA, no API key). Four datasets join on the license number:
+//   m8qx-ubtq  general    — status, type, effective/expiration, UBI, principal
+//   ciwg-agsx  insurance  — carrier, policy #, coverage amount, dates
+//   bzff-4fmt  bond       — surety firm, bond amount, impairment, dates
+//   4xk5-x9j6  principals — owners and officers of record
+// In production this is a single fetch; here it is stubbed so the UI is real.
+const LNI_BASE = "https://data.wa.gov/resource";
+const LNI_DATASETS = { general: "m8qx-ubtq", insurance: "ciwg-agsx", bond: "bzff-4fmt", principals: "4xk5-x9j6" };
+const lniVerifyUrl = (lic) =>
+  `${LNI_BASE}/${LNI_DATASETS.general}.json?contractorlicensenumber=${encodeURIComponent(lic)}`;
+const lniPublicLookup = (lic) =>
+  `https://secure.lni.wa.gov/verify/Detail.aspx?LIC=${encodeURIComponent(lic)}`;
+
+// Stand-in for the live lookup. Returns the same shape the SODA join gives.
+function lookupLicense(sub) {
+  const lic = (sub.license || "").trim();
+  if (!lic) return { found: false, error: "No license number on file" };
+  // Demo behaviour: a license ending in "X" simulates an expired registration.
+  const expired = /X$/i.test(lic);
+  const today = new Date();
+  const exp = new Date(today); exp.setDate(today.getDate() + (expired ? -40 : 400));
+  return {
+    found: true,
+    licenseNumber: lic,
+    businessName: sub.company,
+    ubi: sub.ubi || null,
+    licenseType: "CONSTRUCTION CONTRACTOR",
+    status: expired ? "EXPIRED" : "ACTIVE",
+    effectiveDate: "2023-04-11",
+    expirationDate: exp.toISOString().slice(0, 10),
+    suspendDate: null,
+    primaryPrincipal: sub.contact,
+    bond: { surety: "North River Insurance Company", number: "46CF842686", amount: 30000, expires: "Until Canceled" },
+    insurance: { carrier: "State National Ins Co", policy: "NXT9PTHTLT-01-GL", coverage: 1000000, expires: exp.toISOString().slice(0, 10) },
+    checkedAt: new Date().toISOString().slice(0, 10),
+    source: lniVerifyUrl(lic),
+  };
+}
+// License must be found, ACTIVE, not suspended, and not past expiry.
+function licenseOk(sub) {
+  const c = sub.licenseCheck;
+  if (!c?.found) return false;
+  if (c.status !== "ACTIVE" || c.suspendDate) return false;
+  return !c.expirationDate || c.expirationDate >= new Date().toISOString().slice(0, 10);
+}
+// What an admin/PM must confirm for bond and agreement. Insurance uses the
+// coverage schedule above instead of a flat checklist.
+const DOC_CHECKS = {
+  bond: (b) => [
+    { id: "active", label: "Bond is active, not cancelled" },
+    { id: "amount", label: `Bond amount at least ${formatMoney(BOND_MIN)}` },
+    { id: "principal", label: "Principal matches the company name on file" },
+    { id: "surety", label: "Surety is licensed in Washington" },
+  ],
+  w9: (b) => [
+    { id: "tin", label: "TIN or EIN filled in and legible" },
+    { id: "name", label: "Name and business name match the company on file" },
+    { id: "entity", label: "Tax classification selected (LLC, S-corp, sole prop…)" },
+    { id: "signed", label: "Signed and dated in Part II" },
+    { id: "current", label: "Current form revision (Rev. March 2024 or later)" },
+  ],
+  contract: (b) => [
+    { id: "signed", label: "Signed and dated by the contractor" },
+    { id: "counter", label: `Countersigned by ${b}` },
+    { id: "version", label: "Current version of the agreement" },
+  ],
+};
+
+const lineLabel = (id) => id === "bond" ? "Bond amount"
+  : (INSURANCE_LINES.find((l) => l.id === id)?.label || id);
+const activeOverrides = (rv) => Object.entries(rv?.overrides || {})
+  .filter(([, reason]) => reason && reason.trim())
+  .map(([id, reason]) => ({ id, label: lineLabel(id), reason }));
+const INSURANCE_MIN = 1000000; // headline CGL figure used in copy
+
+// A document is only usable once a human has reviewed it.
+const docReview = (s, kind) => (s.docReview || {})[kind] || null;
+const docStatus = (s, kind) => {
+  if (!s[kind]) return "missing";
+  const r = docReview(s, kind);
+  return r?.status || "pending";
+};
+const docVerified = (s, kind) => docStatus(s, kind) === "verified";
+const DOC_STATUS_LABEL = { missing: "Not uploaded", pending: "Awaiting review", verified: "Verified", rejected: "Rejected" };
+// "Missing" means not usable: absent, unreviewed, or rejected.
+const missingDocs = (s) => DOC_KINDS.filter((k) => !docVerified(s, k));
+// Full compliance = three verified documents AND an active WA registration.
+const complianceGaps = (s) => [
+  ...missingDocs(s).map((k) => DOC_LABELS[k]),
+  ...(licenseOk(s) ? [] : ["Active WA contractor registration"]),
+];
+const unverifiedDocs = (s) => DOC_KINDS.filter((k) => s[k] && !docVerified(s, k));
+const pendingReviewDocs = (s) => DOC_KINDS.filter((k) => docStatus(s, k) === "pending");
+const docsComplete = (s) => missingDocs(s).length === 0 && licenseOk(s);
+// email body for "matched but blocked on paperwork"
+// The documents email tells the contractor to sign in and upload — never to
+// reply with attachments. `brand` supplies the tenant's portal URL.
+// ---- Outbound notifications (one way, no reply) --------------------------
+// The platform has no inbox. Everything sent is a no-reply system notification
+// that points the contractor back into their portal.
+const portalUrl = (brand) => `${brand ? brand.subdomain : "app"}.subsub.work`;
+const docsLink = (brand) => `https://${portalUrl(brand)}/documents`;
+// A contractor signs in with their email address — show it so they don't guess.
+const usernameOf = (sub) => sub.email || "(no email on file)";
+
+function buildDocEmail(sub, job, trade, brand) {
+  const miss = missingDocs(sub).map((k) => `  \u2022 ${DOC_LABELS[k]}`).join("\n");
+  const company = brand ? brand.name : "our team";
+  const lead = job
+    ? `You've been matched to a job, but we can't release the work order until your compliance documents are on file.`
+    : `Your ${company} contractor account is set up, but we can't send you work until your compliance documents are on file.`;
+  const jobBlock = job ? `\nTHE JOB\n  ${job.title || "New job"}\n  Trade: ${trade ? catMeta(trade).label : "—"}${
+    job.address ? `\n  Where: ${[job.address, job.area, job.zip].filter(Boolean).join(", ")}` : ""}${
+    job.date ? `\n  Starts: ${formatWhen(job.date, job.time) || job.date}` : ""}\n` : "";
+
+  return `Hi ${sub.contact},
+
+${lead}
+${jobBlock}
+WHAT WE NEED
+${miss}
+${missingDocs(sub).includes("insurance") ? `
+INSURANCE REQUIREMENTS
+${INSURANCE_LINES.map((l) => `  ${l.label}${l.sub ? ` (${l.sub})` : ""}: ${formatMoney(l.min)}${l.optional ? " (if applicable)" : ""}`).join("\n")}
+  Workers' compensation: WA L&I active account, as applicable
+${INSURANCE_ATTEST.map((a) => `  \u2022 ${a.label(brand ? brand.name : "We")}`).join("\n")}
+` : ""}${missingDocs(sub).includes("bond") ? `
+BOND REQUIREMENT
+  ${formatMoney(BOND_MIN)} minimum, surety licensed in Washington
+` : ""}${missingDocs(sub).includes("w9") ? `
+W-9
+  Your TIN or EIN, tax classification, and a signature in Part II.
+  We can't issue payment without it.
+` : ""}
+UPLOAD THEM HERE
+  ${docsLink(brand)}
+
+  Your username: ${usernameOf(sub)}
+
+Tap the link, sign in, and upload. A photo from your phone is fine.${job ? "\n\nWe'll hold the job for you until then." : ""}
+
+— ${company}
+
+This is an automated message from an unmonitored address. Replies aren't received, and documents emailed back won't be filed. Please upload them at the link above.`;
+}
+
+// SMS has to work for someone standing on a roof: one line, one link.
+// Kept under 160 chars where possible so it sends as a single segment.
+function buildDocSms(sub, job, brand) {
+  const n = missingDocs(sub).length;
+  const company = brand ? brand.name : "SubSub";
+  const need = `${n} doc${n === 1 ? "" : "s"} needed`;
+  const why = job ? "to release your work order" : "to activate your account";
+  return `${company}: ${need} ${why}. Upload at ${docsLink(brand)} — user: ${usernameOf(sub)}. No replies.`;
+}
+
+// Currency helpers: keep raw digits in state, display formatted.
+// Round figures in marketing copy read better without cents.
+const formatDollars = (n) => "$" + Number(n || 0).toLocaleString("en-US", { maximumFractionDigits: 0 });
+
+function formatMoney(v) {
+  if (v === "" || v == null) return "";
+  const n = Number(String(v).replace(/[^0-9.]/g, ""));
+  if (!isFinite(n)) return "";
+  return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+// live-typing display: group digits, allow one decimal, no forced cents yet
+function moneyLive(v) {
+  const raw = String(v).replace(/[^0-9.]/g, "");
+  if (!raw) return "";
+  const [i, ...rest] = raw.split(".");
+  const dec = rest.length ? "." + rest.join("").slice(0, 2) : "";
+  const int = i ? Number(i).toLocaleString("en-US") : "0";
+  return "$" + int + dec;
+}
+const moneyRaw = (v) => String(v ?? "").replace(/[^0-9.]/g, "");
+
+// short day label like "Sep 16"
+function formatDay(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(`${dateStr}T12:00:00`);
+  return isNaN(d) ? dateStr : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+// pretty preview like "Wed, Sep 16 · 7:00 AM"
+function formatWhen(dateStr, timeStr) {
+  if (!dateStr) return null;
+  const [h = "07", min = "00"] = (timeStr || "07:00").split(":");
+  const d = new Date(`${dateStr}T${(timeStr || "07:00")}:00`);
+  if (isNaN(d)) return null;
+  const day = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const hr = Number(h); const ap = hr >= 12 ? "PM" : "AM"; const h12 = hr % 12 || 12;
+  return `${day} · ${h12}:${min} ${ap}`;
+}
+// coverage: { cities:[...], radius:{ zip, miles } | null }
+// Coverage is EITHER a set of named cities OR one-or-more ZIP radii.
+// { mode: "cities"|"radius", cities: [...], radii: [{ zip, miles }] }
+const covRadii = (c) => c.radii || (c.radius ? [c.radius] : []);
+const covMode = (c) => c.mode || (covRadii(c).length && !(c.cities || []).length ? "radius" : "cities");
+const coverageAreas = (c) => (covMode(c) === "cities" ? (c.cities || []) : []);
+const coverageLabel = (c) => {
+  if (covMode(c) === "radius") {
+    const r = covRadii(c);
+    return r.length ? r.map((x) => `${x.miles} mi of ${x.zip}`).join(" · ") : "No radius set";
+  }
+  const cities = c.cities || [];
+  return cities.length ? cities.join(", ") : "No area set";
+};
+// Does a contractor cover a given job ZIP? Cities mode matches named cities;
+// radius mode matches if ANY of their radii reach it.
+function coversZip(sub, zip) {
+  if (!zip) return null;
+  const c = sub.coverage;
+  if (covMode(c) === "cities") {
+    const cityZips = (c.cities || []).map((city) => CITY_ZIP[city]).filter(Boolean);
+    if (cityZips.includes(zip)) return { inRange: true, distance: 0, via: "city" };
+    const dists = cityZips.map((z) => zipDistance(z, zip)).filter((d) => d != null);
+    if (dists.length) return { inRange: false, distance: Math.min(...dists), via: "city" };
+    return { inRange: false, distance: null, via: null };
+  }
+  // radius mode: nearest radius wins
+  let best = null;
+  covRadii(c).forEach((r) => {
+    const d = zipDistance(r.zip, zip);
+    if (d == null) return;
+    const hit = { inRange: d <= r.miles, distance: d, via: "radius", miles: r.miles, from: r.zip };
+    if (!best || (hit.inRange && !best.inRange) || d < best.distance) best = hit;
+  });
+  return best || { inRange: false, distance: null, via: null };
+}
+
+// ---- Multi-select dropdown ----------------------------------------------
+function MultiSelect({ label, icon: Icon, options, selected, onChange, disabled, renderOpt }) {
+  const [open, setOpen] = useState(false);
+  const toggle = (v) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+  return (
+    <div className="ms">
+      <label>{Icon && <Icon size={13} />} {label}</label>
+      <button className={`ms-btn ${disabled ? "disabled" : ""}`} onClick={() => !disabled && setOpen(!open)}>
+        <span>{selected.length ? `${selected.length} selected` : "Any"}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open && !disabled && (
+        <>
+          <div className="ms-scrim" onClick={() => setOpen(false)} />
+          <div className="ms-menu">
+            {options.map((o) => {
+              const val = typeof o === "object" ? o.id : o;
+              const lab = renderOpt ? renderOpt(o) : (typeof o === "object" ? o.label : o);
+              return (
+                <button key={val} className={`ms-opt ${selected.includes(val) ? "on" : ""}`} onClick={() => toggle(val)}>
+                  <span className="ms-check">{selected.includes(val) && <Check size={12} />}</span>
+                  {lab}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MoneyInput({ value, onChange, placeholder = "$0.00" }) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <input
+      inputMode="decimal"
+      value={focused ? moneyLive(value) : (value === "" ? "" : formatMoney(value))}
+      placeholder={placeholder}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onChange={(e) => onChange(moneyRaw(e.target.value))}
+    />
+  );
+}
+
+function StarRate({ value, onRate, label = "Rate" }) {
+  const [hover, setHover] = useState(0);
+  const shown = hover || value || 0;
+  return (
+    <div className="star-rate" onMouseLeave={() => setHover(0)}>
+      <span className="sr-label">{value ? "Rated" : label}</span>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button key={n} className={`sr-star ${n <= shown ? "on" : ""}`}
+          onMouseEnter={() => setHover(n)} onClick={() => onRate(n)}
+          title={`${n} star${n > 1 ? "s" : ""}`}>
+          <Star size={15} fill={n <= shown ? "currentColor" : "none"} />
+        </button>
+      ))}
+      {value ? <span className="sr-val">{value}.0</span> : null}
+    </div>
+  );
+}
+
+function DocPill({ ok, label }) {
+  return (
+    <span className={`doc-pill ${ok ? "doc-ok" : "doc-missing"}`}>
+      {ok ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}{label}
+    </span>
+  );
+}
+function Stars({ value }) {
+  return <span className="stars"><Star size={12} fill="currentColor" /> {value.toFixed(1)}</span>;
+}
+
+// ---- Main app ------------------------------------------------------------
+export default function SubSub() {
+  // Storage matches production: three tables, not one.
+  const [companies, setCompanies] = useState(seedCompanies);
+  const [engagements, setEngagements] = useState(seedEngagements);
+  const [accounts, setAccounts] = useState(seedAccounts);
+  const [memberships, setMemberships] = useState(seedMemberships);
+  const [users, setUsers] = useState(seedUsers);
+  const [currentUserId, setCurrentUserId] = useState("u1");
+  const [currentAccountId, setCurrentAccountId] = useState("a1");
+  const now = useNow();
+  const [loggedIn, setLoggedIn] = useState(false);
+  // White-label tenant branding — one GC per instance (outerhome.subsub.work)
+
+  const [pane, setPane] = useState("jobs"); // contractor portal pane
+  const [userMenu, setUserMenu] = useState(false);
+  const [userForm, setUserForm] = useState(false);
+  const [editUser, setEditUser] = useState(null);
+  const [allJobs, setJobs] = useState([]);   // global; a crew can only be in one place
+  const [query, setQuery] = useState("");
+  const [fCats, setFCats] = useState([]);
+  const [fCaps, setFCaps] = useState([]);
+  const [fAreas, setFAreas] = useState([]);
+  const [fRatings, setFRatings] = useState([]);
+  const [fCrew, setFCrew] = useState([]);
+  const [fAvail, setFAvail] = useState([]);
+  const [readyOnly, setReadyOnly] = useState(false);
+  const [autoOnly, setAutoOnly] = useState(false);
+  const [jobPhase, setJobPhase] = useState("active");
+
+  const [uniformOrders, setUniformOrders] = useState([]);
+  const [upgradePrompt, setUpgradePrompt] = useState(null); // { kind: "contractor" | "user" }
+  const [reviewing, setReviewing] = useState(null); // { sub, kind }
+  // Callbacks and warranty claims raised against a completed job.
+  const [serviceCalls, setServiceCalls] = useState([]);
+  const [raising, setRaising] = useState(null);   // { job, trade, a, kind }
+  const [fEarn, setFEarn] = useState([]);
+  const [fDone, setFDone] = useState([]);
+  const [sortBy, setSortBy] = useState("match");
+  const [filtersOpen, setFiltersOpen] = useState(true);
+  const [jobZip, setJobZip] = useState("");
+  const [inRangeOnly, setInRangeOnly] = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [jobForm, setJobForm] = useState(null);           // { forSub? } create-job modal
+  const [assigning, setAssigning] = useState(null);       // { job, trade } -> pick contractor
+  const [viewWO, setViewWO] = useState(null);   // { job, trade, a }
+  const [assignSub, setAssignSub] = useState(null);       // { sub } -> pick job+trade
+  const [notifying, setNotifying] = useState(null); // one-way system notification
+  const [adding, setAdding] = useState(false);
+  const [addMenu, setAddMenu] = useState(false);
+  const [editing, setEditing] = useState(null); // sub being edited
+  const [tab, setTab] = useState("dashboard");
+
+  const capOptions = useMemo(() => {
+    const cats = fCats.length ? fCats : CATEGORIES.map((c) => c.id);
+    return [...new Set(cats.flatMap((c) => CAP_LIBRARY[c] || []))];
+  }, [fCats]);
+
+  const minRating = fRatings.length ? Math.min(...fRatings) : 0;
+
+  // --- current user / role ---
+  const me = users.find((u) => u.id === currentUserId) || users[0];
+
+  // ---- derived view -------------------------------------------------------
+  // Role is per ACCOUNT, not per user: the same person can be a contractor in
+  // one account and an admin in another.
+  const myMemberships = memberships.filter((m) => m.userId === currentUserId);
+  const membership = myMemberships.find((m) => m.accountId === currentAccountId)
+    || myMemberships[0] || { role: "contractor", accountId: currentAccountId };
+  const role = membership.role;
+  const can = (view) => ROLES[role].can.includes(view);
+  const canRate = role === "admin" || role === "pm";
+  const canComplete = role === "admin" || role === "pm";
+
+  // The account being viewed supplies branding and the plan.
+  const account = accounts.find((a) => a.id === membership.accountId) || accounts[0];
+  const brand = account;
+  const plan = account.plan;
+  const billing = account.billing || "monthly";
+  const setBilling = (c) => setAccounts((as) => as.map((a) =>
+    a.id === account.id ? { ...a, billing: c } : a));
+  const setBrand = (patch) => setAccounts((as) => as.map((a) =>
+    a.id === account.id ? { ...a, ...(typeof patch === "function" ? patch(a) : patch) } : a));
+  const setPlan = (p) => setAccounts((as) => as.map((a) =>
+    a.id === account.id ? { ...a, plan: p } : a));
+
+  // Flatten company + engagement into the "sub" shape the UI consumes.
+  const subs = useMemo(() => engagements
+    .filter((e) => e.accountId === account.id)
+    .map((e) => {
+      const co = companies.find((c) => c.id === e.companyId);
+      return co ? composeSub(co, e) : null;
+    })
+    .filter(Boolean), [engagements, companies, account.id]);
+
+  // Jobs you can see are your account's. But crew AVAILABILITY is computed from
+  // allJobs — a crew booked by another GC genuinely cannot work for you that day.
+  const jobs = useMemo(() => allJobs.filter((j) => j.accountId === account.id),
+    [allJobs, account.id]);
+
+  // Users visible in THIS account, with their role in it.
+  const accountUsers = useMemo(() => memberships
+    .filter((m) => m.accountId === account.id)
+    .map((m) => {
+      const u = users.find((x) => x.id === m.userId);
+      return u ? { ...u, role: m.role, subId: m.companyId ?? null } : null;
+    })
+    .filter(Boolean), [memberships, users, account.id]);
+
+  const mySub = role === "contractor"
+    ? subs.find((s) => s.id === membership.companyId)
+    : null;
+  const filtered = useMemo(() => {
+    const list = subs.filter((s) => {
+      if (fCats.length && !s.categories.some((c) => fCats.includes(c))) return false;
+      if (fCaps.length && !s.caps.some((c) => fCaps.includes(c))) return false;
+      if (fAreas.length) {
+        const cov = coverageAreas(s.coverage);
+        if (!cov.some((a) => fAreas.includes(a))) return false;
+      }
+      if (fRatings.length && s.rating < minRating) return false;
+      if (fCrew.length && !fCrew.some((id) => CREW_TIERS.find((t) => t.id === id)?.test(headCount(s)))) return false;
+      if (fAvail.length) {
+        const state = s.available ? "available" : "unavailable";
+        if (!fAvail.includes(state)) return false;
+      }
+      if (readyOnly && !(s.bond && s.insurance && s.contract)) return false;
+      if (autoOnly && !s.autoSchedule) return false;
+      if (fEarn.length || fDone.length) {
+        const st = contractorStats(s, jobs);
+        if (fEarn.length && !fEarn.some((id) => EARN_TIERS.find((t) => t.id === id)?.test(st.earned))) return false;
+        if (fDone.length && !fDone.some((id) => DONE_TIERS.find((t) => t.id === id)?.test(st.completed))) return false;
+      }
+      if (inRangeOnly && jobZip) {
+        const p = coversZip(s, jobZip);
+        if (!p?.inRange) return false;
+      }
+      if (query.trim()) {
+        const q = query.toLowerCase();
+        const hay = [s.company, s.contact, s.email, s.notes, coverageLabel(s.coverage),
+          ...s.caps, ...s.categories.map((c) => catMeta(c).label)].join(" ").toLowerCase();
+        const rq = parseFloat(q);
+        if (!hay.includes(q) && !(rq && s.rating >= rq)) return false;
+      }
+      return true;
+    });
+    const withProx = jobZip ? list.map((s) => ({ ...s, _prox: coversZip(s, jobZip) })) : list;
+    const st = (x) => contractorStats(x, jobs);
+    const byDistance = (a, b) => {
+      const da = a._prox?.distance, db = b._prox?.distance;
+      if (da == null) return 1; if (db == null) return -1;
+      return da - db;
+    };
+    const sorted = [...withProx];
+    switch (sortBy) {
+      case "rating":    sorted.sort((a, b) => b.rating - a.rating); break;
+      case "earned":    sorted.sort((a, b) => st(b).earned - st(a).earned); break;
+      case "completed": sorted.sort((a, b) => st(b).completed - st(a).completed); break;
+      case "accept":    sorted.sort((a, b) => acceptRate(b) - acceptRate(a)); break;
+      case "crew":      sorted.sort((a, b) => headCount(b) - headCount(a)); break;
+      case "name":      sorted.sort((a, b) => a.company.localeCompare(b.company)); break;
+      case "distance":  sorted.sort(byDistance); break;
+      default:
+        // best match: nearest first when a job ZIP is set, else docs+available+rating
+        if (jobZip) sorted.sort(byDistance);
+        else sorted.sort((a, b) =>
+          (docsComplete(b) - docsComplete(a)) ||
+          (Number(b.available) - Number(a.available)) ||
+          (b.rating - a.rating));
+    }
+    return sorted;
+  }, [subs, fCats, fCaps, fAreas, fRatings, minRating, fCrew, fAvail, readyOnly, autoOnly, fEarn, fDone, jobs, query, jobZip, inRangeOnly, sortBy]);
+
+  const clearFilters = () => {
+    setQuery(""); setFCats([]); setFCaps([]); setFAreas([]); setFRatings([]); setFCrew([]); setFAvail([]);
+    setReadyOnly(false); setAutoOnly(false); setFEarn([]); setFDone([]); setJobZip(""); setInRangeOnly(false);
+  };
+  const activeCount = fCats.length + fCaps.length + fAreas.length + fRatings.length +
+    fCrew.length + fAvail.length + fEarn.length + fDone.length + (readyOnly ? 1 : 0) + (autoOnly ? 1 : 0) + (query.trim() ? 1 : 0) +
+    (jobZip ? 1 : 0) + (inRangeOnly ? 1 : 0);
+
+  // --- Jobs: a job has multiple trades, each trade gets its own contractor ---
+  const createJob = (job, forSub) => {
+    const id = Date.now();
+    const assignments = {};
+    if (forSub && docsComplete(forSub)) {
+      job.trades.filter((t) => forSub.categories.includes(t)).forEach((t) => {
+        assignments[t] = issueWO(forSub, job, t);
+      });
+    }
+    setJobs((js) => [{ ...job, id, accountId: account.id, status: "active", notes: "",
+      createdAt: new Date().toISOString().slice(0, 10), assignments }, ...js]);
+    setJobForm(null);
+    setTab("jobs");
+    return id;
+  };
+
+  // Mark a job complete — this is what unlocks rating and notes.
+  const completeJob = (id) =>
+    setJobs((js) => js.map((j) => j.id === id ? {
+      ...j, status: "completed", completedAt: new Date().toISOString().slice(0, 10) } : j));
+  const reopenJob = (id) =>
+    setJobs((js) => js.map((j) => j.id === id ? { ...j, status: "active", completedAt: null } : j));
+  const setJobNotes = (id, notes) =>
+    setJobs((js) => js.map((j) => j.id === id ? { ...j, notes } : j));
+  const addMeasurementDoc = (id, name) =>
+    setJobs((js) => js.map((j) => j.id === id ? {
+      ...j, measurementDocs: [...(j.measurementDocs || []), name] } : j));
+  const removeMeasurementDoc = (id, name) =>
+    setJobs((js) => js.map((j) => j.id === id ? {
+      ...j, measurementDocs: (j.measurementDocs || []).filter((d) => d !== name) } : j));
+
+  // Assigning a contractor ISSUES a work order for that trade. The WO is never
+  // authored separately — it is derived from the job plus these trade details.
+  const assignContractor = (jobId, trade, sub, details = {}) => {
+    setJobs((js) => js.map((j) => {
+      if (j.id !== jobId) return j;
+      // One work order per trade, each with its OWN scope and value. Nothing
+      // is bundled implicitly — the admin ticked each trade on the form.
+      const wanted = (details.trades && details.trades.length)
+        ? details.trades
+        : [{ trade, tradeScope: details.tradeScope || "", value: details.value || "" }];
+      const next = { ...j.assignments };
+      wanted.forEach((ln) => {
+        next[ln.trade] = issueWO(sub, j, ln.trade, {
+          crewName: details.crewName,
+          responseWindow: details.responseWindow,
+          tradeScope: ln.tradeScope,
+          value: ln.value,
+        });
+      });
+      return { ...j, assignments: next };
+    }));
+    setAssigning(null);
+    setAssignSub(null);
+    setTab("jobs");
+  };
+
+  const unassignTrade = (jobId, trade) =>
+    setJobs((js) => js.map((j) => {
+      if (j.id !== jobId) return j;
+      const a = { ...j.assignments }; delete a[trade];
+      return { ...j, assignments: a };
+    }));
+  // A reply after the deadline is refused here as well as in the UI, so a
+  // stale tab can't accept an expired offer.
+  const respondTrade = (jobId, trade, status) =>
+    setJobs((js) => js.map((j) => {
+      if (j.id !== jobId) return j;
+      const a = j.assignments[trade];
+      if (!a || isExpired(a, Date.now())) return j;
+      return { ...j, assignments: { ...j.assignments, [trade]: {
+        ...a, status, respondedAt: new Date().toISOString() } } };
+    }));
+  // Rate a contractor's performance on one trade of one job; the contractor's
+  // overall rating becomes the average of all their rated jobs.
+  const rateAssignment = (jobId, trade, stars) => {
+    setJobs((js) => {
+      const next = js.map((j) => j.id !== jobId ? j : {
+        ...j, assignments: { ...j.assignments, [trade]: { ...j.assignments[trade], rating: stars } },
+      });
+      const subId = next.find((j) => j.id === jobId)?.assignments[trade]?.subId;
+      if (subId != null) {
+        const all = next.flatMap((j) => Object.values(j.assignments || {})
+          .filter((a) => a.subId === subId && a.rating));
+        if (all.length) {
+          const avg = all.reduce((n, a) => n + a.rating, 0) / all.length;
+          // Your rating of them belongs to the relationship, not the company.
+          setEngagements((es) => es.map((e) =>
+            (e.companyId === subId && e.accountId === currentAccountId)
+              ? { ...e, rating: Math.round(avg * 10) / 10, ratedJobs: all.length } : e));
+        }
+      }
+      return next;
+    });
+  };
+
+  const uploadSignedWO = (jobId, trade, name) =>
+    setJobs((js) => js.map((j) => j.id !== jobId ? j : {
+      ...j, assignments: { ...j.assignments, [trade]: { ...j.assignments[trade], signedWO: name } } }));
+  const setTradeCrew = (jobId, trade, crewName) =>
+    setJobs((js) => js.map((j) => j.id !== jobId ? j : {
+      ...j, assignments: { ...j.assignments, [trade]: { ...j.assignments[trade], crewName } },
+    }));
+
+  const atContractorLimit = subs.length >= PLANS[plan].limit;
+  // Basic allows 5 jobs per calendar month; Scale is unlimited.
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const jobsThisMonth = jobs.filter((j) => (j.createdAt || "").slice(0, 7) === thisMonth).length;
+  const atJobLimit = jobsThisMonth >= PLANS[plan].jobsPerMonth;
+  const canBrand = PLANS[plan].branding;
+  // Basic includes a single user; Scale is unlimited. Contractor logins don't
+  // count against the seat limit — only admins and project managers do.
+  const seatCount = users.filter((u) => u.role !== "contractor").length;
+  const atSeatLimit = seatCount >= PLANS[plan].userLimit;
+  const addSub = (sub) => {
+    // Dedupe on WA L&I licence: if this business is already on SubSub for
+    // another account, reuse the company record and only add the relationship.
+    // Their profile, crews and documents come across immediately.
+    const lic = (sub.license || "").trim().toUpperCase();
+    const existing = lic ? companies.find((c) => (c.license || "").toUpperCase() === lic) : null;
+    const { co, en } = splitSeed(sub);
+    const companyId = existing ? existing.id : Date.now();
+    if (!existing) setCompanies((cs) => [{ ...co, id: companyId }, ...cs]);
+    setEngagements((es) => [{
+      id: "e" + Date.now(), accountId: account.id, companyId,
+      ...en, status: "active", rating: 0, ratedJobs: 0, accepted: 0, declined: 0,
+    }, ...es]);
+    setAdding(false);
+  };
+  // Called instead of opening the form when the plan is maxed out.
+  const tryAddJob = (forSub) => {
+    if (atJobLimit) { setAddMenu(false); setUpgradePrompt({ kind: "job" }); return; }
+    setJobForm(forSub ? { forSub } : {});
+  };
+  const tryAddContractor = () => {
+    if (atContractorLimit) { setAddMenu(false); setUpgradePrompt({ kind: "contractor" }); return; }
+    setAdding(true);
+  };
+  const tryAddUser = () => {
+    if (atSeatLimit) { setAddMenu(false); setUpgradePrompt({ kind: "user" }); return; }
+    setUserForm(true);
+  };
+  const updateSub = (sub) => {
+    patchSub(sub.id, sub);
+    setEditing(null);
+  };
+  // One place for the "you've been matched but we need paperwork" email.
+  // Available from every surface where a non-compliant contractor appears.
+  // One-way compliance notification. Email always, SMS optional.
+  const requestDocs = (sub, job = null, trade = null) => {
+    setSelected(null); setAssigning(null); setAssignSub(null);
+    setNotifying({ sub, job, trade });
+  };
+
+  const saveNotes = (id, notes) =>
+    patchEngagement(id, { notes });
+
+  // job slots assigned to me, for the contractor dashboard + tab badge
+  const myAssignments = mySub ? jobs.flatMap((j) =>
+    Object.entries(j.assignments || {})
+      .filter(([, a]) => a.subId === mySub.id)
+      .map(([trade, a]) => ({ job: j, trade, a }))) : [];
+  const pendingCount = myAssignments.filter((m) => m.a.status === "pending" && !m.a.auto).length;
+
+  // --- user management (admin only) ---
+  // A user is global; joining an account is a membership.
+  const addUser = (u) => {
+    const existing = users.find((x) => x.email.toLowerCase() === (u.email || "").toLowerCase());
+    const userId = existing ? existing.id : "u" + Date.now();
+    if (!existing) setUsers((us) => [...us, { id: userId, name: u.name, email: u.email, phone: u.phone }]);
+    setMemberships((ms) => [...ms.filter((m) => !(m.userId === userId && m.accountId === account.id)),
+      { userId, accountId: account.id, role: u.role, companyId: u.subId ?? null }]);
+    setUserForm(false);
+  };
+  // Removing someone from an account drops the membership, not the person —
+  // they may still be a contractor or admin elsewhere.
+  const removeUser = (id) => setMemberships((ms) =>
+    ms.filter((m) => !(m.userId === id && m.accountId === account.id)));
+  const updateUser = (u) => {
+    // name/email/phone are the person; role is the membership.
+    setMemberships((ms) => ms.map((m) =>
+      (m.userId === u.id && m.accountId === account.id)
+        ? { ...m, role: u.role, companyId: u.subId ?? m.companyId } : m));
+    setUsers((us) => us.map((x) => (x.id === u.id ? { ...x, ...u } : x)));
+    setEditUser(null);
+  };
+
+  // ---- writers ------------------------------------------------------------
+  // Every contractor write goes through here, so the routing lives in ONE place.
+  const patchCompany = (companyId, patch) =>
+    setCompanies((cs) => cs.map((c) => (c.id === companyId ? { ...c, ...patch } : c)));
+  const patchEngagement = (companyId, patch) =>
+    setEngagements((es) => es.map((e) =>
+      (e.companyId === companyId && e.accountId === account.id) ? { ...e, ...patch } : e));
+  // Split a flat patch and write each half to its own table.
+  const patchSub = (companyId, patch) => {
+    const { co, en } = splitPatch(patch);
+    if (Object.keys(co).length) patchCompany(companyId, co);
+    if (Object.keys(en).length) patchEngagement(companyId, en);
+  };
+  // Merge into the engagement's docReview (per-GC verdict on a shared file).
+  const patchDocReview = (companyId, kind, review) => {
+    const cur = engagements.find((e) => e.companyId === companyId && e.accountId === account.id);
+    patchEngagement(companyId, {
+      docReview: { ...((cur && cur.docReview) || {}), [kind]: review },
+    });
+  };
+
+  // --- contractor self-service ---
+  // Verification: a document only counts once a human has checked it.
+  const verifySubDoc = (id, kind, data) => {
+    patchDocReview(id, kind, {
+      status: "verified", ...data,
+      verifiedBy: me.name, verifiedAt: new Date().toISOString().slice(0, 10),
+    });
+    setReviewing(null);
+  };
+  const rejectSubDoc = (id, kind, data) => {
+    patchDocReview(id, kind, {
+      status: "rejected", ...data,
+      verifiedBy: me.name, verifiedAt: new Date().toISOString().slice(0, 10),
+    });
+    setReviewing(null);
+    const target = subs.find((x) => x.id === id);
+    if (target) requestDocs({ ...target, docReview: { ...(target.docReview || {}), [kind]: { status: "rejected", ...data } } });
+  };
+
+  // Runs the L&I lookup and stores the result on the contractor record.
+  const verifyLicense = (id) => {
+    // The state registry's answer is the same for every GC, so it lives on the company.
+    const co = companies.find((c) => c.id === id);
+    if (co) patchCompany(id, { licenseCheck: lookupLicense(co) });
+  };
+
+  // The FILE belongs to the company (uploaded once, shared by every GC).
+  // The REVIEW belongs to each engagement, so a re-upload re-opens the queue
+  // for every account that engages them.
+  // Raise a callback or warranty claim. The sub has to confirm the return
+  // visit from their own dashboard before it counts as scheduled.
+  const raiseServiceCall = (job, trade, a, data) => {
+    setServiceCalls((cs) => [{
+      id: "sc" + Date.now(),
+      accountId: account.id, jobId: job.id, trade, subId: a.subId,
+      company: a.company, crewName: a.crewName,
+      kind: data.kind,                       // "callback" | "warranty"
+      issue: data.issue,
+      returnDate: data.returnDate || null,
+      status: "awaiting-confirmation",       // -> scheduled -> resolved
+      raisedBy: me.name,
+      raisedAt: new Date().toISOString(),
+      confirmedAt: null, resolvedAt: null, subNote: "",
+    }, ...cs]);
+    setRaising(null);
+  };
+  // Sub confirms (or proposes a different date) from their portal.
+  const confirmServiceCall = (id, patch = {}) =>
+    setServiceCalls((cs) => cs.map((c) => c.id !== id ? c : {
+      ...c, status: "scheduled", confirmedAt: new Date().toISOString(), ...patch }));
+  const resolveServiceCall = (id) =>
+    setServiceCalls((cs) => cs.map((c) => c.id !== id ? c : {
+      ...c, status: "resolved", resolvedAt: new Date().toISOString() }));
+
+  const uploadSubDoc = (id, key, filename) => {
+    const co = companies.find((c) => c.id === id);
+    patchCompany(id, { [key]: true, docFiles: { ...((co && co.docFiles) || {}), [key]: filename } });
+    setEngagements((es) => es.map((e) => e.companyId !== id ? e : {
+      ...e, docReview: { ...(e.docReview || {}), [key]: { status: "pending" } } }));
+  };
+  const deleteSubDoc = (id, key) => {
+    const co = companies.find((c) => c.id === id);
+    patchCompany(id, { [key]: false, docFiles: { ...((co && co.docFiles) || {}), [key]: null } });
+    setEngagements((es) => es.map((e) => e.companyId !== id ? e : {
+      ...e, docReview: { ...(e.docReview || {}), [key]: null } }));
+  };
+
+  if (!loggedIn) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <LoginPage users={users} brand={brand} accounts={accounts} memberships={memberships}
+          onLogin={(uid) => {
+            const u = users.find((x) => x.id === uid) || users[0];
+            setCurrentUserId(u.id);
+            const mem = seedMemberships.find((m) => m.userId === u.id);
+            if (mem) setCurrentAccountId(mem.accountId);
+            setTab(ROLES[u.role].can[0]);
+            setLoggedIn(true);
+          }} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="ss-root">
+      <style>{CSS}</style>
+      <header className="ss-header">
+        <div className="header-top">
+          <div className="brand">
+            <div className="brand-logo"><BrandMark brand={brand} height={26} /></div>
+            <div className="brand-txt">
+              <h1>{brand.name}</h1>
+              <p>{brand.subdomain}.subsub.work</p>
+            </div>
+          </div>
+          <div className="header-right">
+            {role !== "contractor" && (
+              <div className="add-wrap">
+                <button className="add-btn" onClick={() => setAddMenu((v) => !v)}><Plus size={16} /> Add</button>
+                {addMenu && (
+                  <>
+                    <div className="add-scrim" onClick={() => setAddMenu(false)} />
+                    <div className="add-menu">
+                      <button onClick={() => { setAddMenu(false); tryAddContractor(); }}><Hammer size={14} /> Contractor</button>
+                        <button onClick={() => { setAddMenu(false); tryAddJob(); }}><Calendar size={14} /> Job</button>
+                      {can("users") && <button onClick={() => { setAddMenu(false); tryAddUser(); }}><Users size={14} /> User</button>}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            <div className="user-wrap">
+              <button className="user-btn" onClick={() => setUserMenu((v) => !v)}>
+                <span className="user-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+                <span className="user-meta">
+                  <span className="user-name">{me.name}</span>
+                  <span className="user-role">{ROLES[role].label}</span>
+                </span>
+                <ChevronDown size={13} />
+              </button>
+              {userMenu && (
+                <>
+                  <div className="add-scrim" onClick={() => setUserMenu(false)} />
+                  <div className="add-menu user-menu">
+                    <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
+                      <UserCog size={14} /> My account
+                    </button>
+                    {myMemberships.length > 1 && (
+                      <>
+                        <div className="um-sec">Switch account</div>
+                        {myMemberships.map((m) => {
+                          const a = accounts.find((x) => x.id === m.accountId);
+                          if (!a) return null;
+                          return (
+                            <button key={m.accountId} className="um-acct"
+                              onClick={() => {
+                                setCurrentAccountId(m.accountId);
+                                setUserMenu(false); setSelected(null); setPane("jobs");
+                                setTab(ROLES[m.role].can[0]);
+                              }}>
+                              <span className="ua-name">{a.name}</span>
+                              <span className="ua-role">{ROLES[m.role].label}</span>
+                              {m.accountId === account.id && <Check size={13} className="ua-tick" />}
+                            </button>
+                          );
+                        })}
+                      </>
+                    )}
+                    <div className="user-menu-label">Switch user</div>
+                    {users.map((u) => (
+                      <button key={u.id} className={u.id === currentUserId ? "on" : ""}
+                        onClick={() => {
+                          setCurrentUserId(u.id);
+                          setUserMenu(false);
+                          setTab(ROLES[u.role].can[0]);
+                        }}>
+                        <span className="um-name">{u.name}</span>
+                        <span className="um-role">{ROLES[u.role].label}</span>
+                      </button>
+                    ))}
+                    <button className="um-signout" onClick={() => { setUserMenu(false); setLoggedIn(false); }}>
+                      <LogOut size={14} /> Sign out
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+        <nav className="tabs">
+          {can("dashboard") && (
+            <button className={tab === "dashboard" ? "on" : ""} onClick={() => setTab("dashboard")}>
+              Dashboard
+            </button>
+          )}
+          {can("contractors") && (
+            <button className={tab === "network" ? "on" : ""} onClick={() => setTab("network")}>
+              Contractors <span className="count">{subs.length}</span>
+            </button>
+          )}
+          {can("calendar") && (
+            <button className={tab === "calendar" ? "on" : ""} onClick={() => setTab("calendar")}>
+              Availability
+            </button>
+          )}
+          {can("jobs") && (
+            <button className={tab === "jobs" ? "on" : ""} onClick={() => setTab("jobs")}>
+              Jobs <span className="count">{jobs.length}</span>
+            </button>
+          )}
+          {can("uniforms") && (
+            <button className={tab === "uniforms" ? "on" : ""} onClick={() => setTab("uniforms")}>
+              Uniforms{uniformOrders.filter((o) => o.status === "pending").length > 0 &&
+                <span className="count amber">{uniformOrders.filter((o) => o.status === "pending").length}</span>}
+            </button>
+          )}
+          {can("portal") && [
+            ["jobs", "My Jobs"], ["settings", "Job Settings"],
+            ["crews", "My Crews"], ["docs", "My Documents"], ["uniforms", "Uniforms"],
+          ].map(([id, label]) => (
+            <button key={id} className={tab === "portal" && pane === id ? "on" : ""}
+              onClick={() => { setPane(id); setTab("portal"); }}>
+              {label}
+              {id === "jobs" && pendingCount > 0 && <span className="count amber">{pendingCount}</span>}
+              {id === "docs" && mySub && !docsComplete(mySub) && (
+                <span className="count red">{missingDocs(mySub).length}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+      </header>
+
+      {tab === "dashboard" && can("dashboard") && (
+        <AdminDashboard subs={subs} jobs={jobs} role={role} me={me} now={now}
+          onGoJobs={() => setTab("jobs")} onGoContractors={() => setTab("network")}
+          onNewJob={() => tryAddJob()}
+          onAssign={(job, trade, replacing) => setAssigning({ job, trade, replacing })}
+          onRequestDocs={requestDocs} onOpenSub={(sb) => setSelected(sb)}
+          onReviewDoc={(sb, kind) => setReviewing({ sub: sb, kind })}
+          onVerifyLicense={(sb) => verifyLicense(sb.id)} />
+      )}
+
+      {tab === "network" && can("contractors") && (
+        <main className="ss-main">
+          <div className="searchbar">
+            <div className="search-input">
+              <Search size={18} />
+              <input placeholder="Search name, contact, capability, notes, or rating (e.g. 4.5)…"
+                value={query} onChange={(e) => setQuery(e.target.value)} />
+              {query && <button className="clear-x" onClick={() => setQuery("")}><X size={15} /></button>}
+            </div>
+          </div>
+
+          <div className="filter-bar">
+            <button className="filter-toggle" onClick={() => setFiltersOpen((v) => !v)}>
+              <Filter size={14} /> Filters
+              {activeCount > 0 && <span className="ft-count">{activeCount}</span>}
+              <ChevronDown size={14} className={`ft-chev ${filtersOpen ? "open" : ""}`} />
+            </button>
+            <label className="sort-ctl">
+              <ArrowUpDown size={13} />
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+                {SORTS.filter((o) => o.id !== "distance" || jobZip).map((o) => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            {activeCount > 0 && <button className="clear-filters" onClick={clearFilters}>Clear all</button>}
+          </div>
+
+          {filtersOpen && (
+          <div className="filters">
+            <MultiSelect label="Category" icon={Filter} options={CATEGORIES} selected={fCats}
+              onChange={(v) => { setFCats(v); setFCaps([]); }} />
+            <MultiSelect label="Capability" options={capOptions} selected={fCaps} onChange={setFCaps} />
+            <MultiSelect label="Service area" options={AREAS} selected={fAreas} onChange={setFAreas} />
+            <div className="ms">
+              <label><Target size={13} /> Job-site ZIP</label>
+              <div className="zip-filter">
+                <input placeholder="98101" value={jobZip}
+                  onChange={(e) => setJobZip(e.target.value.trim())} />
+                {jobZip && <button className="zip-x" onClick={() => { setJobZip(""); setInRangeOnly(false); }}><X size={13} /></button>}
+              </div>
+            </div>
+            {jobZip && (
+              <label className="ready-toggle">
+                <input type="checkbox" checked={inRangeOnly} onChange={(e) => setInRangeOnly(e.target.checked)} />
+                In-range only
+              </label>
+            )}
+            <MultiSelect label="Min rating" icon={Star} options={RATING_TIERS} selected={fRatings}
+              onChange={setFRatings} renderOpt={(r) => `${r.toFixed(1)}+`} />
+            <MultiSelect label="Crew size" icon={Users} options={CREW_TIERS} selected={fCrew} onChange={setFCrew} />
+            <MultiSelect label="Earnings" icon={Target} options={EARN_TIERS} selected={fEarn} onChange={setFEarn} />
+            <MultiSelect label="Jobs completed" icon={CheckCircle2} options={DONE_TIERS} selected={fDone} onChange={setFDone} />
+            <MultiSelect label="Availability" icon={Clock}
+              options={[{ id: "available", label: "Available" }, { id: "unavailable", label: "Not available" }]}
+              selected={fAvail} onChange={setFAvail} />
+            <label className="ready-toggle">
+              <input type="checkbox" checked={readyOnly} onChange={(e) => setReadyOnly(e.target.checked)} />
+              <Shield size={13} /> Docs complete
+            </label>
+            <label className="ready-toggle">
+              <input type="checkbox" checked={autoOnly} onChange={(e) => setAutoOnly(e.target.checked)} />
+              <Zap size={13} /> Auto-schedule
+            </label>
+          </div>
+          )}
+
+          {jobZip && <div className="zip-note"><Target size={12} /> Ranking contractors by distance from {jobZip}</div>}
+
+          <div className="result-meta">{filtered.length} {filtered.length === 1 ? "contractor" : "contractors"} match</div>
+
+          {filtered.length === 0 ? (
+            <div className="empty"><Search size={28} /><p>No contractors match these filters.</p>
+              <button onClick={clearFilters}>Reset filters</button></div>
+          ) : (
+            <div className="grid">
+              {filtered.map((s) => {
+                const ready = s.bond && s.insurance && s.contract;
+                return (
+                  <div key={s.id} className="card" onClick={() => setSelected(s)}>
+                    <div className="card-top">
+                      <div className="cat-row">
+                        {s.categories.map((c) => {
+                          const M = catMeta(c);
+                          return <span key={c} className={`cat-badge cat-${c}`}><M.icon size={12} /> {M.label}</span>;
+                        })}
+                      </div>
+                      <span className={`avail-dot ${s.available ? "up" : "down"}`} title={s.available ? "Available" : "Not available"} />
+                    </div>
+                    <div className="name-row">
+                      <h3>{s.company}</h3>
+                      {s.rating > 0 && <Stars value={s.rating} />}
+                    </div>
+                    <p className="contact">{s.contact} · <Users size={11} /> {crewCount(s)} {crewCount(s) === 1 ? "crew" : "crews"} · {headCount(s)} ppl</p>
+                    <div className="caps">
+                      {s.caps.slice(0, 3).map((c) => <span key={c} className="cap">{c}</span>)}
+                      {s.caps.length > 3 && <span className="cap more">+{s.caps.length - 3}</span>}
+                    </div>
+                    <div className="areas"><MapPin size={12} /> {coverageLabel(s.coverage)}</div>
+                    {jobZip && s._prox && (
+                      <div className={`prox-badge ${s._prox.inRange ? "in" : "out"}`}>
+                        <Target size={12} />
+                        {s._prox.distance != null
+                          ? `${s._prox.distance} mi · ${s._prox.inRange ? "in range" : "out of range"}`
+                          : "distance unknown"}
+                      </div>
+                    )}
+                    {s.autoSchedule && <div className="auto-badge card"><Zap size={11} /> Auto-schedule enabled</div>}
+                    {(() => { const st = contractorStats(s, jobs); return (
+                      <div className="stat-strip">
+                        <span className="stat ok"><CheckCircle2 size={12} /> {st.completed} done</span>
+                        <span className="stat earn">{st.earned ? formatMoney(st.earned) : "$0"}</span>
+                        <span className="stat rate">{acceptRate(s)}% accept</span>
+                      </div>
+                    ); })()}
+                    <div className="card-docs">
+                      <DocPill ok={s.bond} label="Bond" />
+                      <DocPill ok={s.insurance} label="Insurance" />
+                      <DocPill ok={s.contract} label="Contract" />
+                    </div>
+                    <div className="card-actions" onClick={(e) => e.stopPropagation()}>
+                      <button className="mini primary" onClick={() => setAssignSub({ sub: s })}><Calendar size={13} /> Assign</button>
+                    </div>
+                    {!ready && (
+                      <div className="req-docs-bar" onClick={(e) => e.stopPropagation()}>
+                        <span className="rd-text"><AlertTriangle size={12} /> {complianceGaps(s).length} compliance gap{complianceGaps(s).length > 1 ? "s" : ""}</span>
+                        <button className="rd-btn" onClick={() => requestDocs(s)}><Mail size={12} /> Request docs</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </main>
+      )}
+
+      {tab === "calendar" && can("calendar") && (
+        <AvailabilityView subs={subs} jobs={jobs} allJobs={allJobs} accountId={account.id}
+          onSchedule={(sub, date) => {
+            if (!(sub.bond && sub.insurance && sub.contract)) return;
+            setAssignSub({ sub, date });
+          }}
+          onRequestDocs={requestDocs} />
+      )}
+
+      {tab === "jobs" && can("jobs") && (
+        <main className="ss-main">
+          {jobs.length === 0 ? (
+            <div className="empty"><ClipboardList size={28} /><p>No jobs yet.</p>
+              <button onClick={() => tryAddJob()}>Create a job</button></div>
+          ) : (
+            <div className="jobs-list">
+              <div className="jobs-head">
+                <div className="seg-tabs sm">
+                  {[["active", "Active"], ["completed", "Completed"], ["all", "All"]].map(([id, l]) => {
+                    const n = id === "all" ? jobs.length : jobs.filter((x) => (x.status === "completed") === (id === "completed")).length;
+                    return (
+                      <button key={id} className={jobPhase === id ? "on" : ""} onClick={() => setJobPhase(id)}>
+                        {l} <span className="seg-n">{n}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <button className="add-btn small" onClick={() => tryAddJob()}><Plus size={14} /> New job</button>
+              </div>
+              {jobs.filter((j) => jobPhase === "all" || (j.status === "completed") === (jobPhase === "completed")).length === 0 && (
+                <div className="dash-empty"><ClipboardList size={24} />
+                  <p>No {jobPhase === "all" ? "" : jobPhase} jobs.</p></div>
+              )}
+              {jobs.filter((j) => jobPhase === "all" || (j.status === "completed") === (jobPhase === "completed")).map((j) => {
+                const filled = j.trades.filter((t) => j.assignments[t]).length;
+                const allAssigned = filled === j.trades.length;
+                const done = j.status === "completed";
+                return (
+                  <div key={j.id} className={`job-card ${done ? "done" : ""}`}>
+                    <div className="job-card-head">
+                      <div>
+                        <div className="job-title-row">
+                          <h3>{j.title}</h3>
+                          <span className={`job-phase ${done ? "done" : ""}`}>{done ? "completed" : "active"}</span>
+                        </div>
+                        <div className="job-meta">
+                          <span><Calendar size={12} /> {formatWhen(j.date, j.time) || j.date || "No date"}</span>
+                          <span><MapPin size={12} /> {[j.address, j.area, j.zip].filter(Boolean).join(", ") || "No address"}</span>
+                          {j.sqft && <span><Ruler size={12} /> {Number(j.sqft).toLocaleString()} sq ft</span>}
+                          {j.materialSource && <span><Layers size={12} /> {j.materialSource}</span>}
+                        </div>
+                      </div>
+                      <span className={`fill-badge ${allAssigned ? "full" : ""}`}>{filled}/{j.trades.length} trades</span>
+                    </div>
+                    {j.scope && <p className="job-scope">{j.scope}</p>}
+                    {(j.measurementDocs || []).length > 0 && (
+                      <div className="job-meas">
+                        {j.measurementDocs.map((d) => (
+                          <span key={d} className="meas-chip"><FileText size={11} /> {d}</span>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="trade-rows">
+                      {j.trades.map((t) => {
+                        const M = catMeta(t);
+                        const a = j.assignments[t];
+                        const sub = a && subs.find((s) => s.id === a.subId);
+                        return (
+                          <div key={t} className={`trade-row ${a ? "filled" : "open"}`}>
+                            <div className={`trade-icon cat-${t}`}><M.icon size={15} /></div>
+                            <div className="trade-main">
+                              <span className="trade-name">{M.label}</span>
+                              {a ? (
+                                <div className="trade-assigned">
+                                  <span className="ta-company">{a.company}</span>
+                                  {sub && sub.crews?.length > 1 ? (
+                                    <select className="ta-crew" value={a.crewName || ""}
+                                      onChange={(e) => setTradeCrew(j.id, t, e.target.value)}>
+                                      {sub.crews.map((c) => {
+                                        const ok = crewFreeOn(c, j.date);
+                                        return <option key={c.id} value={c.name}>
+                                          {c.name}{ok ? "" : " (off that day)"}
+                                        </option>;
+                                      })}
+                                    </select>
+                                  ) : a.crewName ? <span className="ta-crew-flat"><Users size={11} /> {a.crewName}</span> : null}
+                                  {a.value && <span className="ta-val">{formatMoney(a.value)}</span>}
+                                  <button className="ta-wo-link" onClick={() => setViewWO({ job: j, trade: t, a })}>
+                                    <ScrollText size={11} /> {a.wo}
+                                  </button>
+                                  {a.signedWO && <span className="ta-signed"><CheckCircle2 size={11} /> signed</span>}
+                                </div>
+                              ) : <span className="trade-open-note">No contractor · no work order issued</span>}
+                            </div>
+                            {a ? (
+                              <div className="trade-side">
+                                {a.auto ? (
+                                  <div className="trade-actions">
+                                    <span className="job-final accepted"><Zap size={14} /> Auto-scheduled</span>
+                                    {!done && <button className="trade-swap" onClick={() => unassignTrade(j.id, t)}>Replace</button>}
+                                  </div>
+                                ) : a.status === "pending" && isExpired(a, now) ? (
+                                  <div className="trade-actions">
+                                    <span className="job-status st-expired">
+                                      <XCircle size={12} /> no reply — expired
+                                    </span>
+                                    <button className="trade-rematch"
+                                      onClick={() => setAssigning({ job: j, trade: t, replacing: a.subId })}>
+                                      <Zap size={12} /> Find alternatives
+                                    </button>
+                                    <button className="trade-swap" onClick={() => unassignTrade(j.id, t)}>Withdraw</button>
+                                  </div>
+                                ) : a.status === "pending" ? (
+                                  <div className="trade-actions">
+                                    <span className={`job-status st-pending ddl-chip u-${urgencyOf(msLeft(a, now))}`}>
+                                      <Clock size={12} /> {countdown(msLeft(a, now))} to reply
+                                    </span>
+                                    <button className="trade-swap" onClick={() => unassignTrade(j.id, t)}>Withdraw</button>
+                                  </div>
+                                ) : (
+                                  <div className="trade-actions">
+                                    <span className={`job-final ${a.status}`}>
+                                      {a.status === "accepted" ? <><CheckCircle2 size={14} /> Accepted</> : <><XCircle size={14} /> Declined</>}
+                                    </span>
+                                    {!done && <button className="trade-swap" onClick={() => unassignTrade(j.id, t)}>Replace</button>}
+                                  </div>
+                                )}
+                                {canRate && done && a.status !== "declined" && (
+                                  <StarRate value={a.rating} onRate={(n) => rateAssignment(j.id, t, n)}
+                                    label={a.crewName ? `Rate ${a.crewName}` : "Rate crew"} />
+                                )}
+                                {done && a.status !== "declined" && (() => {
+                                  const sb = subs.find((x) => x.id === a.subId);
+                                  const cov = coverageFor(sb, j, now);
+                                  const open = serviceCalls.filter((c) =>
+                                    c.jobId === j.id && c.trade === t && c.status !== "resolved");
+                                  return (
+                                    <div className="sc-cta">
+                                      <button className="trade-issue" onClick={() => setRaising({ job: j, trade: t, a })}>
+                                        <Wrench size={12} /> Report an issue
+                                      </button>
+                                      <span className={`cov-pill cov-${cov.kind}`}>{cov.label}</span>
+                                      {open.length > 0 && (
+                                        <span className="sc-open-pill">{open.length} open</span>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+                            ) : (
+                              <button className="trade-assign" onClick={() => setAssigning({ job: j, trade: t })}>
+                                <Plus size={13} /> Assign &amp; issue WO
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {serviceCalls.filter((c) => c.jobId === j.id).length > 0 && (
+                      <div className="sc-block">
+                        <div className="form-sec">Callbacks &amp; warranty claims</div>
+                        {serviceCalls.filter((c) => c.jobId === j.id).map((c) => (
+                          <ServiceCallRow key={c.id} c={c} job={j} onResolve={resolveServiceCall} />
+                        ))}
+                      </div>
+                    )}
+
+                    {canComplete && (
+                      <div className="job-footer">
+                        {!done ? (
+                          <>
+                            <span className="jf-note">
+                              {allAssigned ? "All trades assigned — mark complete when the work is finished to rate crews."
+                                : `${j.trades.length - filled} trade${j.trades.length - filled > 1 ? "s" : ""} still unassigned.`}
+                            </span>
+                            <button className="btn-solid jf-btn" onClick={() => completeJob(j.id)}>
+                              <CheckCircle2 size={15} /> Mark job complete
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="jf-note done"><CheckCircle2 size={13} /> Completed {j.completedAt} — rate crews above</span>
+                            <button className="btn-ghost jf-btn" onClick={() => reopenJob(j.id)}>Reopen</button>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {done && canComplete && (
+                      <div className="job-notes">
+                        <label className="fld">Job notes <span className="fld-note">how it went, issues, callbacks</span>
+                          <textarea rows={2} value={j.notes || ""}
+                            onChange={(e) => setJobNotes(j.id, e.target.value)}
+                            placeholder="Add notes about this completed job…" />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </main>
+      )}
+
+      {tab === "account" && (
+        <AccountView me={me} users={accountUsers} subs={subs} jobs={jobs} brand={brand} plan={plan} role={role}
+          seatCount={seatCount} atSeatLimit={atSeatLimit}
+          jobsThisMonth={jobsThisMonth} canBrand={canBrand}
+          billing={billing} onSetBilling={setBilling}
+          canManage={can("account") && role === "admin"} mySub={mySub}
+          onSaveUser={updateUser} onSaveBrand={setBrand} onSetPlan={setPlan}
+          onAddUser={addUser} onRemoveUser={removeUser} onEditUser={setEditUser}
+          onLoginAs={(id) => {
+            const m = memberships.find((x) => x.userId === id && x.accountId === account.id);
+            setCurrentUserId(id); setPane("jobs");
+            setTab(ROLES[(m && m.role) || "contractor"].can[0]);
+          }}
+          currentUserId={currentUserId}
+          onPatchSub={patchSub} onRequestDocs={requestDocs}
+          onSeatLimit={() => setUpgradePrompt({ kind: "user" })} />
+      )}
+
+      {tab === "uniforms" && can("uniforms") && (
+        <UniformAdmin orders={uniformOrders} subs={subs}
+          onDecide={(id, status) => setUniformOrders((os) => os.map((o) => o.id === id ? { ...o, status } : o))} />
+      )}
+
+      {can("portal") && tab !== "account" && (
+        mySub ? (
+          <ContractorPortal sub={mySub} jobs={jobs} pane={pane} mine={myAssignments} brand={brand} me={me} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
+            serviceCalls={serviceCalls.filter((c) => c.subId === mySub.id && c.accountId === account.id)}
+            onConfirmCall={confirmServiceCall}
+            orders={uniformOrders.filter((o) => o.subId === mySub.id)}
+            onOrderUniform={(order) => setUniformOrders((os) => [{
+              ...order, id: Date.now(), subId: mySub.id, company: mySub.company,
+              status: "pending", createdAt: new Date().toISOString().slice(0, 10),
+            }, ...os])}
+            onSetAutoSchedule={(v) => patchSub(mySub.id, { autoSchedule: v })}
+            onSetCrews={(crews) => patchSub(mySub.id, { crews })}
+            onSetCoverage={(coverage) => patchSub(mySub.id, { coverage })}
+            onToggleCrewDay={(crewId, day) => patchSub(mySub.id, {
+              crews: (mySub.crews || []).map((c) => c.id !== crewId ? c : {
+                ...c,
+                unavailableDays: crewOffDays(c).includes(day)
+                  ? crewOffDays(c).filter((d) => d !== day)
+                  : [...crewOffDays(c), day],
+              }),
+            })}
+            onToggleCrewAvailable={(crewId, v) => patchSub(mySub.id, {
+              crews: (mySub.crews || []).map((c) => c.id !== crewId ? c : { ...c, available: v }),
+            })}
+            onSetWarranty={(w) => patchSub(mySub.id, { warranty: w })}
+            onSetCategories={(cats) => patchSub(mySub.id, {
+              categories: cats,
+              caps: mySub.caps.filter((c) => cats.some((cat) => (CAP_LIBRARY[cat] || []).includes(c))),
+            })}
+            onSetCaps={(caps) => patchSub(mySub.id, { caps })}
+            onUploadDoc={(k, fn) => uploadSubDoc(mySub.id, k, fn)}
+            onDeleteDoc={(k) => deleteSubDoc(mySub.id, k)}
+            onRespond={(jobId, trade, status) => respondTrade(jobId, trade, status)} now={now} />
+        ) : (
+          <main className="ss-main">
+            <div className="empty"><AlertTriangle size={28} />
+              <p>This contractor login isn't linked to a contractor record yet.</p></div>
+          </main>
+        )
+      )}
+
+      {selected && (
+        <Modal onClose={() => setSelected(null)} wide>
+          <SubDetail sub={selected} jobs={jobs} onSaveNotes={saveNotes} onRequestDocs={requestDocs}
+            onEdit={() => { setEditing(selected); setSelected(null); }}
+            onReviewDoc={(sb, kind) => { setSelected(null); setReviewing({ sub: sb, kind }); }}
+            onVerifyLicense={(sb) => verifyLicense(sb.id)}
+            onSchedule={() => { setAssignSub({ sub: selected }); setSelected(null); }} />
+        </Modal>
+      )}
+      {jobForm && <Modal onClose={() => setJobForm(null)} wide>
+        <JobForm allJobs={allJobs} accountId={account.id} forSub={jobForm.forSub} jobs={jobs}
+          onSubmit={(job) => createJob(job, jobForm.forSub)}
+          onCancel={() => setJobForm(null)} /></Modal>}
+      {assigning && <Modal onClose={() => setAssigning(null)} wide>
+        <PickContractor allJobs={allJobs} accountId={account.id} job={assigning.job} trade={assigning.trade}
+          replacing={assigning.replacing} subs={subs} jobs={jobs}
+          onPick={(sub, details) => assignContractor(assigning.job.id, assigning.trade, sub, details)}
+          onNotify={(sub) => requestDocs(sub, assigning.job, assigning.trade)}
+          onCancel={() => setAssigning(null)} /></Modal>}
+      {assignSub && <Modal onClose={() => setAssignSub(null)} wide>
+        <PickJobSlot allJobs={allJobs} accountId={account.id} sub={assignSub.sub} jobs={jobs}
+          onPick={(job, trade) => assignContractor(job.id, trade, assignSub.sub)}
+          onNewJob={() => { const s0 = assignSub.sub; setAssignSub(null); tryAddJob(s0); }}
+          onNotify={(job, trade) => requestDocs(assignSub.sub, job, trade)}
+          onRequestDocs={requestDocs}
+          onCancel={() => setAssignSub(null)} /></Modal>}
+      {viewWO && <Modal onClose={() => setViewWO(null)} wide>
+        <WorkOrderDoc job={viewWO.job} trade={viewWO.trade}
+          a={(jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a}
+          canUpload={role !== "contractor"} brand={brand}
+          onUploadSigned={(name) => uploadSignedWO(viewWO.job.id, viewWO.trade, name)}
+          onClose={() => setViewWO(null)} /></Modal>}
+      {notifying && <Modal onClose={() => setNotifying(null)} wide>
+        <NotifyForm data={notifying} brand={brand} onClose={() => setNotifying(null)} /></Modal>}
+      {raising && <Modal onClose={() => setRaising(null)}>
+        <ServiceCallForm job={raising.job} trade={raising.trade} a={raising.a}
+          sub={subs.find((x) => x.id === raising.a.subId)} now={now}
+          onSubmit={(data) => raiseServiceCall(raising.job, raising.trade, raising.a, data)}
+          onCancel={() => setRaising(null)} /></Modal>}
+      {reviewing && <Modal onClose={() => setReviewing(null)} wide>
+        <DocReview sub={subs.find((x) => x.id === reviewing.sub.id) || reviewing.sub}
+          kind={reviewing.kind} brand={brand}
+          onVerify={(kind, data) => verifySubDoc(reviewing.sub.id, kind, data)}
+          onReject={(kind, data) => rejectSubDoc(reviewing.sub.id, kind, data)}
+          onClose={() => setReviewing(null)} /></Modal>}
+      {upgradePrompt && <Modal onClose={() => setUpgradePrompt(null)}>
+        <UpgradePrompt kind={upgradePrompt.kind} plan={plan} billing={billing} onSetBilling={setBilling}
+          count={upgradePrompt.kind === "contractor" ? subs.length
+            : upgradePrompt.kind === "job" ? jobsThisMonth : seatCount}
+          onUpgrade={() => {
+            setPlan("scale"); setUpgradePrompt(null);
+            if (upgradePrompt.kind === "contractor") setAdding(true);
+            else if (upgradePrompt.kind === "job") setJobForm({});
+            else setUserForm(true);
+          }}
+          onDecline={() => setUpgradePrompt(null)} /></Modal>}
+      {userForm && <Modal onClose={() => setUserForm(false)}>
+        <UserForm subs={subs} onSubmit={addUser} onCancel={() => setUserForm(false)} /></Modal>}
+      {editUser && <Modal onClose={() => setEditUser(null)}>
+        <UserForm subs={subs} existing={editUser} isSelf={editUser.id === currentUserId}
+          canChangeRole={can("users") && editUser.id !== currentUserId}
+          onSubmit={updateUser} onCancel={() => setEditUser(null)} /></Modal>}
+      {adding && <Modal onClose={() => setAdding(false)} wide>
+        <SubForm onSubmit={addSub} onCancel={() => setAdding(false)} /></Modal>}
+      {editing && <Modal onClose={() => setEditing(null)} wide>
+        <SubForm existing={editing} onSubmit={updateSub} onCancel={() => setEditing(null)} /></Modal>}
+
+      <footer className="ss-footer">
+        <span>{brand.name} · {brand.subdomain}.subsub.work</span>
+        <span className="powered">Powered by <strong>SubSub</strong></span>
+      </footer>
+    </div>
+  );
+}
+
+// ---- Raise a callback or warranty claim ---------------------------------
+function ServiceCallForm({ job, trade, a, sub, now, onSubmit, onCancel }) {
+  const cov = coverageFor(sub, job, now);
+  const [kind, setKind] = useState(cov.kind === "warranty" ? "warranty" : "callback");
+  const [issue, setIssue] = useState("");
+  const [returnDate, setReturnDate] = useState("");
+  const M = catMeta(trade);
+  const blocked = cov.kind === "expired" || cov.kind === "none";
+
+  return (
+    <div className="form">
+      <h2>Report an issue</h2>
+      <p className="form-sub">{job.title} · {M.label} · {a.company}</p>
+
+      <div className={`cov-banner cov-${cov.kind}`}>
+        {cov.kind === "callback" ? <Wrench size={15} />
+          : cov.kind === "warranty" ? <ShieldCheck size={15} />
+          : <AlertTriangle size={15} />}
+        <div>
+          <strong>{cov.label}</strong>
+          <span className="cov-sub">
+            Completed {job.completedAt} · {warrantyLabel(sub)}
+          </span>
+        </div>
+      </div>
+
+      {blocked ? (
+        <>
+          <p className="cov-hint">
+            This job is outside both the {CALLBACK_DAYS}-day callback window and
+            {warrantyYears(sub) === null ? " they have no warranty on file" : " their stated warranty"}.
+            You can still send them back, but it's chargeable work rather than a claim —
+            create it as a new job instead.
+          </p>
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={onCancel}>Close</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="form-sec">What kind of return is this?</div>
+          <div className="roles two-up-roles">
+            <label className={`role ${kind === "callback" ? "on" : ""}`}>
+              <input type="radio" name="sckind" checked={kind === "callback"}
+                onChange={() => setKind("callback")} />
+              <span>Callback<em>Defect or snag from the original work</em></span>
+            </label>
+            <label className={`role ${kind === "warranty" ? "on" : ""} ${cov.kind !== "warranty" ? "dim" : ""}`}>
+              <input type="radio" name="sckind" checked={kind === "warranty"}
+                onChange={() => setKind("warranty")} />
+              <span>Warranty claim<em>Failure covered by their labour warranty</em></span>
+            </label>
+          </div>
+
+          <label className="fld">What's wrong?
+            <textarea rows={3} value={issue} onChange={(e) => setIssue(e.target.value)}
+              placeholder="e.g. two ridge caps lifted on the north slope, homeowner reports a drip in the upstairs hall" />
+          </label>
+
+          <label className="fld">Requested return date
+            <span className="fld-note">they can confirm or propose another</span>
+            <input type="date" value={returnDate} onChange={(e) => setReturnDate(e.target.value)} />
+          </label>
+
+          <div className="notify-note">
+            <Bell size={13} />
+            {a.company} is notified by {notifyLabel(sub).toLowerCase()} and has to confirm the
+            visit from their own dashboard before it shows as scheduled.
+          </div>
+
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+            <button className="btn-solid" disabled={!issue.trim()}
+              onClick={() => onSubmit({ kind, issue: issue.trim(), returnDate })}>
+              <Send size={15} /> Send to {a.company.split(" ")[0]}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- One service call, as a row ----------------------------------------
+function ServiceCallRow({ c, job, showSubActions, onConfirm, onResolve, onReschedule }) {
+  const [alt, setAlt] = useState("");
+  const [proposing, setProposing] = useState(false);
+  return (
+    <div className={`sc-row sc-${c.status}`}>
+      <span className={`sc-kind k-${c.kind}`}>
+        {c.kind === "callback" ? <Wrench size={11} /> : <ShieldCheck size={11} />}
+        {c.kind === "callback" ? "Callback" : "Warranty"}
+      </span>
+      <div className="sc-main">
+        <span className="sc-job">{job ? job.title : "Job"} · {catMeta(c.trade).label}</span>
+        <span className="sc-issue">{c.issue}</span>
+        <span className="sc-meta">
+          {c.company}{c.crewName ? ` · ${c.crewName}` : ""} · raised {c.raisedAt.slice(0, 10)} by {c.raisedBy}
+          {c.returnDate ? ` · return ${formatDay(c.returnDate)}` : ""}
+        </span>
+        {c.subNote && <span className="sc-note">“{c.subNote}”</span>}
+      </div>
+      <div className="sc-side">
+        <span className={`sc-status s-${c.status}`}>
+          {c.status === "awaiting-confirmation" ? "Awaiting confirmation"
+            : c.status === "scheduled" ? "Confirmed" : "Resolved"}
+        </span>
+        {showSubActions && c.status === "awaiting-confirmation" && !proposing && (
+          <div className="trade-actions">
+            <button className="resp accept" onClick={() => onConfirm(c.id)}>
+              <Check size={12} /> Confirm {c.returnDate ? formatDay(c.returnDate) : "visit"}
+            </button>
+            <button className="resp decline" onClick={() => setProposing(true)}>Propose another date</button>
+          </div>
+        )}
+        {showSubActions && proposing && (
+          <div className="sc-propose">
+            <input type="date" value={alt} onChange={(e) => setAlt(e.target.value)} />
+            <button className="resp accept" disabled={!alt}
+              onClick={() => { onConfirm(c.id, { returnDate: alt, subNote: "Proposed a different date" }); setProposing(false); }}>
+              <Check size={12} /> Send
+            </button>
+          </div>
+        )}
+        {!showSubActions && c.status === "scheduled" && (
+          <button className="trade-swap" onClick={() => onResolve(c.id)}>Mark resolved</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- Document review (admin / PM verifies each document) ----------------
+function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
+  const r = docReview(sub, kind);
+  const isIns = kind === "insurance";
+  const checks = isIns ? [] : DOC_CHECKS[kind](brand.name);
+
+  const [ticked, setTicked] = useState(() => {
+    const init = {};
+    (isIns ? INSURANCE_ATTEST : checks).forEach((c) => { init[c.id] = !!r?.checks?.[c.id]; });
+    return init;
+  });
+  const [limits, setLimits] = useState(() => {
+    const init = {};
+    INSURANCE_LINES.forEach((l) => { init[l.id] = r?.limits?.[l.id] || ""; });
+    return init;
+  });
+  const [amount, setAmount] = useState(r?.amount || "");
+  // A reviewer can accept a limit that falls short, as long as they say why.
+  const [overrides, setOverrides] = useState(() => ({ ...(r?.overrides || {}) }));
+  const setOverride = (id, val) => setOverrides((o) => {
+    const next = { ...o };
+    if (val === null) delete next[id]; else next[id] = val;
+    return next;
+  });
+  const [expires, setExpires] = useState(r?.expires || "");
+  const [note, setNote] = useState(r?.status === "rejected" ? "" : (r?.note || ""));
+  const [rejecting, setRejecting] = useState(false);
+
+  const file = (sub.docFiles || {})[kind] || "document.pdf";
+  const lineShort = (l) => {
+    const v = Number(moneyRaw(limits[l.id]) || 0);
+    return !!limits[l.id] && v < l.min;
+  };
+  const lineOk = (l) => {
+    if (!limits[l.id]) return l.optional;      // optional lines may be blank
+    if (!lineShort(l)) return true;
+    return !!(overrides[l.id] && overrides[l.id].trim()); // accepted with a reason
+  };
+  const allLinesOk = INSURANCE_LINES.every(lineOk);
+  const requiredLinesFilled = INSURANCE_LINES.filter((l) => !l.optional).every((l) => limits[l.id]);
+  const attestOk = (isIns ? INSURANCE_ATTEST : checks).every((c) => ticked[c.id]);
+  const bondAmt = Number(moneyRaw(amount) || 0);
+  const bondShort = kind === "bond" && !!amount && bondAmt < BOND_MIN;
+  const bondOk = kind !== "bond" || (!!amount && (!bondShort
+    || !!(overrides.bond && overrides.bond.trim())));
+  const canVerify = isIns
+    ? attestOk && allLinesOk && requiredLinesFilled && expires
+    : attestOk && bondOk;
+
+  const openFile = () => {
+    const lines = [
+      DOC_LABELS[kind].toUpperCase(),
+      `File: ${file}`,
+      `Contractor: ${sub.company}`,
+      "",
+      "Placeholder preview — wired to object storage in production.",
+      "",
+      isIns ? "REQUIRED COVERAGE" : "REVIEWER CHECKS",
+      ...(isIns
+        ? INSURANCE_LINES.map((l) => `  ${l.label}${l.sub ? ` (${l.sub})` : ""}: ${formatMoney(l.min)}${l.optional ? " — if applicable" : ""}`)
+            .concat(["", ...INSURANCE_ATTEST.map((a) => `  - ${a.label(brand.name)}`)])
+        : checks.map((c) => `  - ${c.label}`)),
+    ].join("\n");
+    const url = URL.createObjectURL(new Blob([lines], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url; a.target = "_blank"; a.rel = "noopener";
+    a.download = file.replace(/\.\w+$/, "") + "-preview.txt";
+    a.click(); URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="form">
+      <h2>Review {DOC_LABELS_INLINE[kind]}</h2>
+      <p className="form-sub">{sub.company} · {sub.contact}</p>
+
+      <div className="rv-file">
+        <FileText size={20} />
+        <div className="rv-file-main">
+          <span className="rv-name">{file}</span>
+          <span className="rv-meta">
+            {r?.status === "verified" ? `Verified ${r.verifiedAt} by ${r.verifiedBy}`
+              : r?.status === "rejected" ? `Rejected ${r.verifiedAt} by ${r.verifiedBy}`
+              : "Uploaded by contractor · not yet reviewed"}
+          </span>
+        </div>
+        <div className="rv-file-actions">
+          <button className="btn-ghost rv-btn" onClick={openFile}><FileText size={13} /> Open</button>
+          <button className="btn-ghost rv-btn" onClick={openFile}><Download size={13} /> Download</button>
+        </div>
+      </div>
+
+      {r?.status === "rejected" && r.note && (
+        <div className="doc-block"><AlertTriangle size={15} />
+          <div><strong>Previously rejected.</strong> {r.note}</div></div>
+      )}
+
+      {isIns ? (
+        <>
+          <div className="form-sec">Coverage limits <span className="fld-note">WA subcontractor requirements</span></div>
+          <div className="cov-table">
+            {INSURANCE_LINES.map((l) => {
+              const v = limits[l.id];
+              const short = lineShort(l);
+              const ok = lineOk(l);
+              const ovr = overrides[l.id];
+              return (
+                <div key={l.id} className={`cov-line ${short ? (ovr ? "waived" : "short") : v ? "ok" : ""}`}>
+                  <div className="cov-line-top">
+                    <div className="cl-label">
+                      <span className="cl-name">{l.label}{l.optional && <span className="cl-opt">if applicable</span>}</span>
+                      <span className="cl-req">{l.sub ? `${l.sub} · ` : ""}min {formatMoney(l.min)}</span>
+                    </div>
+                    <div className="cl-input">
+                      <MoneyInput value={v} onChange={(x) => setLimits((z) => ({ ...z, [l.id]: x }))} />
+                      {v && (ok
+                        ? <CheckCircle2 size={15} className={ovr ? "cl-waived" : "cl-ok"} />
+                        : <AlertTriangle size={15} className="cl-bad" />)}
+                    </div>
+                  </div>
+                  {short && (
+                    <div className="cl-override">
+                      <label className="cl-ovr-toggle">
+                        <input type="checkbox" checked={ovr !== undefined}
+                          onChange={(e) => setOverride(l.id, e.target.checked ? "" : null)} />
+                        Accept {formatMoney(v)} anyway — below the {formatMoney(l.min)} requirement
+                      </label>
+                      {ovr !== undefined && (
+                        <input className="cl-ovr-reason" value={ovr}
+                          onChange={(e) => setOverride(l.id, e.target.value)}
+                          placeholder="Why is this acceptable? (required)" />
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {INSURANCE_LINES.some((l) => !lineOk(l) && limits[l.id]) && (
+            <p className="fld-err"><AlertTriangle size={12} /> Limits below requirement — either accept them with a reason above, or reject and ask for more.</p>
+          )}
+          {Object.keys(overrides).filter((k) => overrides[k]?.trim()).length > 0 && (
+            <p className="ovr-summary">
+              <Shield size={12} /> {Object.keys(overrides).filter((k) => overrides[k]?.trim()).length} limit
+              {Object.keys(overrides).filter((k) => overrides[k]?.trim()).length === 1 ? "" : "s"} accepted below
+              requirement — recorded against your name.
+            </p>
+          )}
+
+          <div className="form-sec">Confirm on the certificate</div>
+          <div className="rv-checks">
+            {INSURANCE_ATTEST.map((c) => (
+              <label key={c.id} className={`rv-check ${ticked[c.id] ? "on" : ""}`}>
+                <input type="checkbox" checked={!!ticked[c.id]}
+                  onChange={(e) => setTicked((t) => ({ ...t, [c.id]: e.target.checked }))} />
+                <span>{c.label(brand.name)}</span>
+              </label>
+            ))}
+          </div>
+          <label className="fld" style={{ marginTop: 14 }}>Policy expires
+            <input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
+          </label>
+        </>
+      ) : (
+        <>
+          <div className="form-sec">Confirm on the document</div>
+          <div className="rv-checks">
+            {checks.map((c) => (
+              <label key={c.id} className={`rv-check ${ticked[c.id] ? "on" : ""}`}>
+                <input type="checkbox" checked={!!ticked[c.id]}
+                  onChange={(e) => setTicked((t) => ({ ...t, [c.id]: e.target.checked }))} />
+                <span>{c.label}</span>
+              </label>
+            ))}
+          </div>
+          {kind === "bond" && (
+            <>
+              <label className="fld" style={{ marginTop: 14 }}>Bond amount
+                <span className="fld-note">min {formatMoney(BOND_MIN)}</span>
+                <MoneyInput value={amount} onChange={setAmount} />
+              </label>
+              {bondShort && (
+                <div className="cl-override standalone">
+                  <label className="cl-ovr-toggle">
+                    <input type="checkbox" checked={overrides.bond !== undefined}
+                      onChange={(e) => setOverride("bond", e.target.checked ? "" : null)} />
+                    Accept {formatMoney(amount)} anyway — below the {formatMoney(BOND_MIN)} requirement
+                  </label>
+                  {overrides.bond !== undefined && (
+                    <input className="cl-ovr-reason" value={overrides.bond}
+                      onChange={(e) => setOverride("bond", e.target.value)}
+                      placeholder="Why is this acceptable? (required)" />
+                  )}
+                  {overrides.bond === undefined && (
+                    <p className="fld-err" style={{ margin: "8px 0 0" }}>
+                      <AlertTriangle size={12} /> Below the {formatMoney(BOND_MIN)} requirement.
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      <label className="fld">Reviewer note {rejecting && <span className="fld-note">required when rejecting</span>}
+        <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
+          placeholder={rejecting ? "What needs fixing? This goes to the contractor." : "Optional — anything worth recording"} />
+      </label>
+
+      {!rejecting ? (
+        <>
+          {!canVerify && (
+            <p className="cov-hint">
+              {isIns
+                ? "Enter every required limit, tick each confirmation, and set the expiry to verify."
+                : "Tick each confirmation" + (kind === "bond" ? " and enter the bond amount" : "") + " to verify."}
+            </p>
+          )}
+          <div className="form-actions">
+            <button className="btn-warn" onClick={() => setRejecting(true)}><XCircle size={15} /> Reject</button>
+            <button className="btn-solid" disabled={!canVerify}
+              onClick={() => onVerify(kind, isIns
+                ? { checks: ticked, limits, expires, note, overrides }
+                : { checks: ticked, amount, note, overrides })}>
+              <CheckCircle2 size={15} /> Verify document
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="form-actions">
+          <button className="btn-ghost" onClick={() => setRejecting(false)}>Back</button>
+          <button className="btn-warn" disabled={!note.trim()}
+            onClick={() => onReject(kind, { note: note.trim() })}>
+            <XCircle size={15} /> Reject &amp; notify contractor
+          </button>
+        </div>
+      )}
+      <button className="rv-close" onClick={onClose}>Close without deciding</button>
+    </div>
+  );
+}
+
+// ---- Upgrade gate (shown instead of the add form when a plan is maxed) ---
+function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, onDecline }) {
+  const cur = PLANS[plan];
+  const next = PLANS.scale;
+  const [cycle, setCycle] = useState(billing === "annual" ? "annual" : "monthly");
+  const annual = cycle === "annual";
+
+  // Why they're seeing this, in their own numbers.
+  const title = kind === "job" ? "You've used this month's jobs"
+    : kind === "user" ? "You've used your only seat"
+    : `You've reached ${cur.limit} subcontractors`;
+  const why = kind === "job"
+    ? `Basic covers ${cur.jobsPerMonth} jobs a month and you've created ${count}. The count resets on the 1st, or Scale removes the cap entirely.`
+    : kind === "user"
+      ? `Basic includes ${cur.userLimit} user for your own team and you have ${count}. Contractor logins are free and don't use a seat, either way.`
+      : `You have ${count} on your account. Scale lifts the cap and keeps everything you've already set up — your subs, their documents and every job.`;
+  const keep = kind === "job" ? `my ${cur.jobsPerMonth} jobs a month`
+    : kind === "user" ? `${cur.userLimit} user` : `${cur.limit} subcontractors`;
+
+  return (
+    <div className="form up-form">
+      <span className="up-badge"><Zap size={13} /> Plan limit</span>
+      <h2>{title}</h2>
+      <p className="up-sub">{why}</p>
+
+      <p className="up-gets">
+        <strong>Scale</strong> gives you unlimited subcontractors, users and jobs, your own logo
+        and sign-in address, SMS notifications and uniform ordering.
+      </p>
+
+      <div className="cycle up-cycle" role="tablist" aria-label="Billing cycle">
+        {[["monthly", "Monthly"], ["annual", "Annual"]].map(([c, l]) => (
+          <button key={c} role="tab" aria-selected={cycle === c}
+            onClick={() => { setCycle(c); if (onSetBilling) onSetBilling(c); }}>
+            {l}{c === "annual" && <span className="cy-save">2 months free</span>}
+          </button>
+        ))}
+      </div>
+
+      <div className="up-buy">
+        <div className="up-price-block">
+          <span className="up-amt">{annual ? next.annualMonthly : next.price}<em>/mo</em></span>
+          <span className="up-terms">
+            {annual
+              ? `${formatDollars(next.annual)} billed once a year · saves ${formatDollars(next.annualSaving)}`
+              : "Billed monthly · cancel any time"}
+          </span>
+        </div>
+        <button className="btn-solid up-go" onClick={onUpgrade}>Upgrade to Scale</button>
+      </div>
+
+      <button className="up-stay" onClick={onDecline}>Not now — keep {keep}</button>
+    </div>
+  );
+}
+
+// ---- Subscription plans -------------------------------------------------
+// ARCHITECTURE: one contractor, many hiring companies (see DEPLOYMENT.md)
+// ---------------------------------------------------------------------------
+// Implemented, not stubbed. The three tables are companies / accounts /
+// engagements, and the UI reads a flat "sub" composed from company+engagement.
+// Everything you need to port this to a server is in three functions:
+//   COMPANY_FIELDS / ENGAGEMENT_FIELDS  which table owns which field
+//   splitPatch(patch)                   routes a write to the right table(s)
+//   composeSub(company, engagement)     flattens them for the UI
+// Demo data: Outerhome (Basic) engages 7 companies; Harbor Point (Scale)
+// engages 3 of the same ones. Cascade Roofworks is ONE company with TWO
+// engagements — different rating, notes and document verdicts in each.
+// Sign in as miguel@cascaderoof.com to see the account switcher.
+const PLANS = {
+  basic: {
+    id: "basic", name: "Basic", price: "Free", per: "",
+    limit: 3, userLimit: 1, jobsPerMonth: 5, branding: false,
+    features: [
+      "Up to 3 subcontractors",
+      "1 user",
+      "5 jobs & work orders per month",
+      "Schedule and manage contractors in one place",
+      "Compliance document tracking",
+      "Contractor portal",
+    ],
+    excluded: ["Your own logo", "Your own sign-in address"],
+  },
+  scale: {
+    id: "scale", name: "Scale", price: "$99", per: "/mo",
+    // Annual is two months free: $990 vs $1,188 billed monthly.
+    annual: 990, annualPer: "/yr", annualMonthly: "$82.50", annualSaving: 198,
+    limit: Infinity, userLimit: Infinity, jobsPerMonth: Infinity, branding: true,
+    features: [
+      "Unlimited subcontractors",
+      "Unlimited users",
+      "Unlimited jobs and work orders",
+      "Your logo and your own sign-in address",
+      "Email & SMS notifications available",
+      "Uniform ordering and approvals",
+      "Easy Pay contractors (coming soon)",
+    ],
+    excluded: [],
+  },
+};
+const UNIFORM_CATALOG = [
+  { sku: "tee", label: "T-shirt", note: "Cotton, company logo" },
+  { sku: "hoodie", label: "Hoodie", note: "Midweight fleece" },
+  { sku: "hat", label: "Hat", note: "Structured cap" },
+  { sku: "hivis", label: "Hi-vis vest", note: "ANSI Class 2, safety" },
+  { sku: "hivis-tee", label: "Hi-vis T-shirt", note: "ANSI Class 2, safety" },
+];
+const SIZES = ["S", "M", "L", "XL", "2XL", "3XL"];
+
+// ---- Account (profile, company, users, subscription) --------------------
+function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
+  jobsThisMonth, canBrand, billing, onSetBilling,
+  onSaveUser, onSaveBrand, onSetPlan, onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
+  onPatchSub, onRequestDocs, onSeatLimit }) {
+  const panes = [["profile", "Profile"]]
+    .concat(canManage ? [["company", "Company"], ["users", "Users"], ["billing", "Subscription"]] : []);
+  const brandingOn = PLANS[plan].branding;
+  const [pane, setPane] = useState("profile");
+
+  // profile form
+  const [p, setP] = useState({ name: me.name, email: me.email, phone: me.phone || "" });
+  const [pSaved, setPSaved] = useState(false);
+  // contractor mailing address lives on their contractor record
+  const [addr, setAddr] = useState(mySub ? {
+    mailStreet: mySub.mailStreet || "", mailCity: mySub.mailCity || mySub.city || "",
+    mailState: mySub.mailState || mySub.state || "", mailZip: mySub.mailZip || mySub.zip || "",
+  } : null);
+  const [aSaved, setASaved] = useState(false);
+  const [nf, setNf] = useState(mySub ? { ...notifyPrefs(mySub) } : { email: true, sms: false });
+  const [nSaved, setNSaved] = useState(false);
+  const [co, setCo] = useState(mySub?.company || "");
+  const [lic, setLic] = useState(mySub?.license || "");
+  const [ubi, setUbi] = useState(mySub?.ubi || "");
+  // company branding
+  const [b, setB] = useState({ ...brand });
+  const [bSaved, setBSaved] = useState(false);
+  const setBrandField = (k, v) => { setB((x) => ({ ...x, [k]: v })); setBSaved(false); };
+  const readMark = (file) => {
+    const r = new FileReader();
+    r.onload = () => { setB((x) => ({ ...x, logoData: r.result, useDefaultMark: false })); setBSaved(false); };
+    r.readAsDataURL(file);
+  };
+  const [adding, setAdding] = useState(false);
+  const slug = (b.subdomain || "").toLowerCase().replace(/[^a-z0-9-]/g, "");
+  const active = PLANS[plan];
+
+  return (
+    <main className="ss-main">
+      {panes.length > 1 && (
+        <div className="seg-tabs">
+          {panes.map(([id, l]) => (
+            <button key={id} className={pane === id ? "on" : ""} onClick={() => setPane(id)}>{l}</button>
+          ))}
+        </div>
+      )}
+
+      {pane === "profile" && (
+        <>
+          <div className="portal-panel settings-panel">
+            <h4>Your details</h4>
+            {mySub && (
+              <>
+                <label className="fld">Company name <span className="fld-note">shown on your dashboard</span>
+                  <input value={co} onChange={(e) => { setCo(e.target.value); setPSaved(false); }} placeholder="Your company" />
+                </label>
+                <div className="fld-row">
+                  <label className="fld">WA L&amp;I license #
+                    <span className="fld-note">checked against the state registry</span>
+                    <input value={lic} onChange={(e) => { setLic(e.target.value.toUpperCase().trim()); setPSaved(false); }} placeholder="ABCDEF123GH" />
+                  </label>
+                  <label className="fld">UBI
+                    <input inputMode="numeric" value={ubi} onChange={(e) => { setUbi(e.target.value.trim()); setPSaved(false); }} placeholder="603221887" />
+                  </label>
+                </div>
+                {mySub.licenseCheck && (
+                  <p className={licenseOk(mySub) ? "cov-hint" : "fld-err"}>
+                    {licenseOk(mySub)
+                      ? <>Verified with L&amp;I · {mySub.licenseCheck.status} · expires {mySub.licenseCheck.expirationDate}</>
+                      : <><AlertTriangle size={12} /> L&amp;I shows this registration as {mySub.licenseCheck.status.toLowerCase()} — renew it to keep receiving work.</>}
+                  </p>
+                )}
+              </>
+            )}
+            <div className="fld-row">
+              <label className="fld">Full name<input value={p.name} onChange={(e) => { setP({ ...p, name: e.target.value }); setPSaved(false); }} /></label>
+              <label className="fld">Email<input type="email" value={p.email} onChange={(e) => { setP({ ...p, email: e.target.value }); setPSaved(false); }} /></label>
+            </div>
+            <label className="fld">Phone<input type="tel" value={p.phone} onChange={(e) => { setP({ ...p, phone: e.target.value }); setPSaved(false); }} placeholder="206-555-0100" /></label>
+            <div className="role-locked">
+              <span className={`role-badge r-${role}`}>{ROLES[role].label}</span>
+              <span className="rl-note">Only an admin can change roles.</span>
+            </div>
+            <div className="panel-actions">
+              <span className="panel-count">{me.email}</span>
+              {pSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+                : <button className="btn-solid" disabled={!p.name || !p.email || (mySub && !co.trim())}
+                    onClick={() => {
+                      onSaveUser({ ...me, ...p });
+                      if (mySub) onPatchSub(mySub.id, { company: co.trim(), license: lic, ubi });
+                      setPSaved(true);
+                    }}>
+                    <Check size={15} /> Save details</button>}
+            </div>
+          </div>
+
+          {mySub && (
+            <div className="portal-panel settings-panel" style={{ marginTop: 16 }}>
+              <h4>Notifications</h4>
+              <p className="panel-note">How you hear about job requests, work orders, and document reminders. Pick at least one.</p>
+              <div className="notify-opts">
+                <label className={`notify-opt ${nf.email ? "on" : ""}`}>
+                  <input type="checkbox" checked={nf.email}
+                    onChange={(e) => { setNf({ ...nf, email: e.target.checked }); setNSaved(false); }} />
+                  <Mail size={17} />
+                  <span className="no-txt">
+                    <span className="no-name">Email</span>
+                    <span className="no-sub">{mySub.email || "no email on file"}</span>
+                  </span>
+                </label>
+                <label className={`notify-opt ${nf.sms ? "on" : ""}`}>
+                  <input type="checkbox" checked={nf.sms}
+                    onChange={(e) => { setNf({ ...nf, sms: e.target.checked }); setNSaved(false); }} />
+                  <Phone size={17} />
+                  <span className="no-txt">
+                    <span className="no-name">Text message (SMS)</span>
+                    <span className="no-sub">{mySub.phone || "no phone on file"}</span>
+                  </span>
+                </label>
+              </div>
+              {!nf.email && !nf.sms && (
+                <div className="doc-block" style={{ marginTop: 12, marginBottom: 0 }}>
+                  <AlertTriangle size={15} />
+                  <div><strong>Pick at least one.</strong> You'd miss job requests and document reminders with both switched off.</div>
+                </div>
+              )}
+              <p className="cov-hint">Email &amp; SMS is for automated notifications only — nobody can message you from the platform, and these are no-reply.</p>
+              <div className="panel-actions">
+                <span className="panel-count">
+                  {nf.email && nf.sms ? "Email + SMS" : nf.sms ? "SMS only" : nf.email ? "Email only" : "None selected"}
+                </span>
+                {nSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+                  : <button className="btn-solid" disabled={!nf.email && !nf.sms}
+                      onClick={() => { onPatchSub(mySub.id, { notify: nf }); setNSaved(true); }}>
+                      <Check size={15} /> Save notifications</button>}
+              </div>
+            </div>
+          )}
+
+          {mySub && addr && (
+            <div className="portal-panel settings-panel" style={{ marginTop: 16 }}>
+              <h4>Mailing address</h4>
+              <p className="panel-note">Where uniforms and paperwork get shipped.</p>
+              <label className="fld">Street<input value={addr.mailStreet} onChange={(e) => { setAddr({ ...addr, mailStreet: e.target.value }); setASaved(false); }} placeholder="1234 Industrial Way, Suite B" /></label>
+              <div className="fld-row">
+                <label className="fld">City<input value={addr.mailCity} onChange={(e) => { setAddr({ ...addr, mailCity: e.target.value }); setASaved(false); }} placeholder="Seattle" /></label>
+                <label className="fld">State<input value={addr.mailState} maxLength={2} onChange={(e) => { setAddr({ ...addr, mailState: e.target.value.toUpperCase().slice(0, 2) }); setASaved(false); }} placeholder="WA" /></label>
+                <label className="fld">ZIP<input inputMode="numeric" value={addr.mailZip} onChange={(e) => { setAddr({ ...addr, mailZip: e.target.value }); setASaved(false); }} placeholder="98108" /></label>
+              </div>
+              <div className="panel-actions">
+                <span className="panel-count">{[addr.mailCity, addr.mailState, addr.mailZip].filter(Boolean).join(", ") || "Not set"}</span>
+                {aSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+                  : <button className="btn-solid" disabled={!addr.mailStreet || !addr.mailZip}
+                      onClick={() => { onPatchSub(mySub.id, addr); setASaved(true); }}>
+                      <Check size={15} /> Save address</button>}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {pane === "company" && canManage && !canBrand && (
+        <div className="portal-panel settings-panel">
+          <h4>Company branding</h4>
+          <div className="doc-block with-cta">
+            <AlertTriangle size={15} />
+            <div><strong>Branding comes with Scale.</strong> On Basic your contractors sign in
+              through SubSub. Upgrade to use your own logo and your own sign-in address —
+              nothing needs re-entering.</div>
+            <button className="btn-notify" onClick={() => onSetPlan("scale")}><Zap size={14} /> Upgrade to Scale</button>
+          </div>
+          <p className="cov-hint">Everything else about your company is set when you add contractors and create jobs.</p>
+        </div>
+      )}
+
+      {pane === "company" && canManage && canBrand && (
+        <div className="portal-panel settings-panel">
+          <h4>Company branding</h4>
+          <p className="panel-note">What your contractors see when they sign in. SubSub stays in the background.</p>
+
+          <div className="brand-preview">
+            <div className="bp-chrome">
+              <span className="bp-dot" /><span className="bp-dot" /><span className="bp-dot" />
+              <span className="bp-url">{slug || "yourcompany"}.subsub.work</span>
+            </div>
+            <div className="bp-body">
+              <div className="brand-logo lg"><BrandMark brand={b} height={34} /></div>
+              <div>
+                <div className="bp-name">{b.name || "Your company"}</div>
+                <div className="bp-sub">Contractor portal</div>
+              </div>
+            </div>
+            <div className="bp-foot">Powered by SubSub</div>
+          </div>
+
+          <label className="fld">Company name<input value={b.name} onChange={(e) => setBrandField("name", e.target.value)} placeholder="Outerhome" /></label>
+          <label className="fld">Subdomain <span className="fld-note">where your team and contractors sign in</span>
+            <div className="subdomain-row">
+              <input value={b.subdomain} onChange={(e) => setBrandField("subdomain", e.target.value)} placeholder="yourcompany" />
+              <span className="sd-suffix">.subsub.work</span>
+            </div>
+          </label>
+
+          <div className="fld">Logo mark
+            <div className="mark-row">
+              <div className="mark-preview"><BrandMark brand={b} height={30} /></div>
+              <div className="mark-meta">
+                <span className="mark-name">{b.name || "Your company"}</span>
+                <span className="mark-hint">{b.logoData ? "Custom mark" : b.useDefaultMark ? "Default roof mark" : "Initials"}</span>
+              </div>
+              <div className="mark-actions">
+                <label className="dm-replace"><Upload size={12} /> Upload
+                  <input type="file" hidden accept="image/*,.svg" onChange={(e) => { if (e.target.files.length) readMark(e.target.files[0]); }} /></label>
+                {b.logoData
+                  ? <button type="button" className="dm-delete" onClick={() => { setBrandField("logoData", null); setBrandField("useDefaultMark", true); }}><Trash2 size={12} /> Remove</button>
+                  : !b.useDefaultMark && <button type="button" className="dm-replace" onClick={() => setBrandField("useDefaultMark", true)}>Default</button>}
+              </div>
+            </div>
+            <p className="cov-hint">Mark only — your company name is rendered as text beside it.</p>
+          </div>
+
+          <div className="panel-actions">
+            <span className="panel-count">{slug || "yourcompany"}.subsub.work</span>
+            {bSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+              : <button className="btn-solid" disabled={!b.name || !slug}
+                  onClick={() => { onSaveBrand({ ...b, subdomain: slug }); setBSaved(true); }}>
+                  <Check size={15} /> Save branding</button>}
+          </div>
+        </div>
+      )}
+
+      {pane === "users" && canManage && (
+        <>
+          <div className="jobs-head">
+            <h3>{seatCount} of {PLANS[plan].userLimit === Infinity ? "unlimited" : PLANS[plan].userLimit} user seat{PLANS[plan].userLimit === 1 ? "" : "s"} used</h3>
+            <button className="add-btn small" onClick={() => atSeatLimit ? onSeatLimit() : setAdding(true)}>
+              <Plus size={14} /> New user
+            </button>
+          </div>
+          {adding && (
+            <div className="portal-panel" style={{ marginBottom: 12 }}>
+              <UserForm subs={subs} onSubmit={(u) => { onAddUser(u); setAdding(false); }} onCancel={() => setAdding(false)} />
+            </div>
+          )}
+          <div className="user-list">
+            {users.map((u) => {
+              const linked = u.subId && subs.find((x) => x.id === u.subId);
+              return (
+                <div key={u.id} className="user-row">
+                  <span className="user-avatar lg">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+                  <div className="user-row-main">
+                    <div className="user-row-head">
+                      <h4>{u.name}</h4>
+                      <span className={`role-badge r-${u.role}`}>{ROLES[u.role].label}</span>
+                      {u.id === currentUserId && <span className="you-badge">you</span>}
+                    </div>
+                    <p className="user-row-sub">{u.email}{linked ? ` · ${linked.company}` : ""}</p>
+                  </div>
+                  <div className="user-row-actions">
+                    {linked && !docsComplete(linked) && (
+                      <button className="btn-notify sm" onClick={() => onRequestDocs(linked)}><Mail size={12} /> Request docs</button>
+                    )}
+                    {u.id !== currentUserId && (
+                      <button className="login-as-btn" onClick={() => onLoginAs(u.id)}><LogIn size={13} /> Log in as</button>
+                    )}
+                    <button className="edit-btn" onClick={() => onEditUser(u)}><Pencil size={13} /> Edit</button>
+                    {u.id !== currentUserId && (
+                      <button className="icon-x" onClick={() => onRemoveUser(u.id)} title="Remove user"><Trash2 size={13} /></button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {pane === "billing" && canManage && (
+        <>
+          <div className="plan-current">
+            <div>
+              <span className="pc-label">Current plan</span>
+              <span className="pc-name">{active.name}</span>
+              {active.annual && (
+                <span className="pc-cycle">
+                  {billing === "annual"
+                    ? `${formatDollars(active.annual)}/yr · renews annually`
+                    : `${active.price}/mo · renews monthly`}
+                </span>
+              )}
+            </div>
+            <div className="pc-usage">
+              <span><strong>{subs.length}</strong> of {active.limit === Infinity ? "unlimited" : active.limit} contractors</span>
+              <span><strong>{seatCount}</strong> of {active.userLimit === Infinity ? "unlimited" : active.userLimit} user{active.userLimit === 1 ? "" : "s"}</span>
+              <span><strong>{jobsThisMonth}</strong> of {active.jobsPerMonth === Infinity ? "unlimited" : active.jobsPerMonth} job{active.jobsPerMonth === 1 ? "" : "s"} this month</span>
+            </div>
+          </div>
+          <div className="cycle-row">
+            <div className="cycle" role="tablist" aria-label="Billing cycle">
+              {[["monthly", "Monthly"], ["annual", "Annual"]].map(([c, l]) => (
+                <button key={c} role="tab" aria-selected={billing === c}
+                  onClick={() => onSetBilling(c)}>
+                  {l}{c === "annual" && <span className="cy-save">2 months free</span>}
+                </button>
+              ))}
+            </div>
+            {billing === "annual" && (
+              <span className="cycle-note">
+{formatDollars(PLANS.scale.annual)} a year on Scale — saves {formatDollars(PLANS.scale.annualSaving)}
+              </span>
+            )}
+          </div>
+          <div className="plan-grid">
+            {Object.values(PLANS).map((pl) => (
+              <div key={pl.id} className={`plan-card ${plan === pl.id ? "on" : ""}`}>
+                {plan === pl.id && <span className="plan-badge">Current</span>}
+                <span className="plan-name">{pl.name}</span>
+                <div className="plan-price">
+                  {pl.annual && billing === "annual"
+                    ? <>{pl.annualMonthly}<span>{pl.per}</span></>
+                    : <>{pl.price}<span>{pl.per}</span></>}
+                </div>
+                {pl.annual && (
+                  <span className="plan-bill">
+                    {billing === "annual"
+                      ? `${formatDollars(pl.annual)} billed once a year`
+                      : "Billed monthly, cancel any time"}
+                  </span>
+                )}
+                <ul className="plan-feats">
+                  {pl.features.map((ft) => <li key={ft}><Check size={13} /> {ft}</li>)}
+                  {(pl.excluded || []).map((ft) => (
+                    <li key={ft} className="feat-off"><X size={13} /> {ft}</li>
+                  ))}
+                </ul>
+                {plan === pl.id
+                  ? <button className="btn-ghost plan-btn" disabled>Current plan</button>
+                  : <button className="btn-solid plan-btn" onClick={() => onSetPlan(pl.id)}>
+                      {pl.id === "scale" ? <><Zap size={15} /> Upgrade</> : "Downgrade"}
+                    </button>}
+              </div>
+            ))}
+          </div>
+          {plan === "scale" && (
+            <div className="usage-panel">
+              <h4>Usage this month</h4>
+              <div className="usage-rows">
+                <div className="wd-row"><span>Email notifications</span><strong>Included</strong></div>
+                <div className="wd-row"><span>SMS notifications</span><strong>$0.02 each</strong></div>
+                <div className="wd-row"><span>Contractors on account</span><strong>{subs.length}</strong></div>
+                <div className="wd-row"><span>User seats</span><strong>{seatCount} · unlimited</strong></div>
+              </div>
+              <p className="cov-hint">SMS usage is billed monthly alongside your $50 subscription. Email notifications are included.</p>
+            </div>
+          )}
+        </>
+      )}
+    </main>
+  );
+}
+
+// ---- Contractor: order uniforms ----------------------------------------
+function UniformOrder({ sub, orders, onOrder, brand }) {
+  const [qty, setQty] = useState({});
+  const [size, setSize] = useState({});
+  const [note, setNote] = useState("");
+  const hasAddr = sub.mailStreet && sub.mailZip;
+  const set = (sku, n) => setQty((q) => ({ ...q, [sku]: Math.max(0, (q[sku] || 0) + n) }));
+  const lines = UNIFORM_CATALOG
+    .filter((c) => qty[c.sku] > 0)
+    .map((c) => ({ sku: c.sku, label: c.label, size: size[c.sku] || "L", qty: qty[c.sku] }));
+  const total = lines.reduce((n, l) => n + l.qty, 0);
+
+  return (
+    <div className="portal-panel">
+      <h4>Order uniforms</h4>
+      <p className="panel-note">Branded gear from {brand.name}. Orders go to them for approval, then ship to your mailing address.</p>
+
+      {!hasAddr && (
+        <div className="doc-block with-cta">
+          <AlertTriangle size={15} />
+          <div><strong>Mailing address needed.</strong> Add it under My account before ordering.</div>
+        </div>
+      )}
+
+      <div className="uni-grid">
+        {UNIFORM_CATALOG.map((c) => (
+          <div key={c.sku} className={`uni-card ${qty[c.sku] > 0 ? "on" : ""}`}>
+            <div className="uni-top">
+              <span className="uni-name">{c.label}</span>
+              {c.sku.startsWith("hivis") && <span className="uni-safety">Safety</span>}
+            </div>
+            <span className="uni-note">{c.note}</span>
+            <div className="uni-controls">
+              <select value={size[c.sku] || "L"} onChange={(e) => setSize((z) => ({ ...z, [c.sku]: e.target.value }))}>
+                {SIZES.map((z) => <option key={z}>{z}</option>)}
+              </select>
+              <div className="uni-qty">
+                <button onClick={() => set(c.sku, -1)} disabled={!qty[c.sku]}>−</button>
+                <span>{qty[c.sku] || 0}</span>
+                <button onClick={() => set(c.sku, 1)}>+</button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <label className="fld" style={{ marginTop: 16 }}>Note <span className="fld-note">crew names, special sizing, anything else</span>
+        <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. 3 shirts for Roof Crew A…" />
+      </label>
+
+      <div className="panel-actions">
+        <span className="panel-count">{total} item{total === 1 ? "" : "s"}{hasAddr ? ` → ${[sub.mailCity, sub.mailState].filter(Boolean).join(", ")}` : ""}</span>
+        <button className="btn-solid" disabled={!total || !hasAddr}
+          onClick={() => { onOrder({ lines, note, ship: { street: sub.mailStreet, city: sub.mailCity, state: sub.mailState, zip: sub.mailZip } }); setQty({}); setNote(""); }}>
+          <Send size={15} /> Submit for approval
+        </button>
+      </div>
+
+      {orders.length > 0 && (
+        <>
+          <div className="form-sec">Your orders</div>
+          {orders.map((o) => (
+            <div key={o.id} className="uni-order">
+              <div className="uo-main">
+                <span className="uo-items">{o.lines.map((l) => `${l.qty}× ${l.label} (${l.size})`).join(", ")}</span>
+                <span className="uo-date">Submitted {o.createdAt}</span>
+              </div>
+              <span className={`job-status st-${o.status === "approved" ? "accepted" : o.status === "denied" ? "declined" : "pending"}`}>{o.status}</span>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- Admin / PM: approve uniform orders --------------------------------
+function UniformAdmin({ orders, subs, onDecide }) {
+  const pending = orders.filter((o) => o.status === "pending");
+  const decided = orders.filter((o) => o.status !== "pending");
+  const Row = ({ o, showActions }) => (
+    <div className="uni-order admin">
+      <div className="dash-avatar">{(o.company || "?").split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
+      <div className="uo-main">
+        <span className="uo-co">{o.company}</span>
+        <span className="uo-items">{o.lines.map((l) => `${l.qty}× ${l.label} (${l.size})`).join(", ")}</span>
+        {o.note && <span className="uo-note">“{o.note}”</span>}
+        <span className="uo-date">
+          Ship to {[o.ship?.street, o.ship?.city, o.ship?.state, o.ship?.zip].filter(Boolean).join(", ")} · {o.createdAt}
+        </span>
+      </div>
+      {showActions ? (
+        <div className="trade-actions">
+          <button className="resp accept" onClick={() => onDecide(o.id, "approved")}><Check size={12} /> Approve</button>
+          <button className="resp decline" onClick={() => onDecide(o.id, "denied")}><X size={12} /> Deny</button>
+        </div>
+      ) : (
+        <span className={`job-status st-${o.status === "approved" ? "accepted" : "declined"}`}>{o.status}</span>
+      )}
+    </div>
+  );
+  return (
+    <main className="ss-main">
+      <div className="dash-hello">
+        <div>
+          <h2>Uniform orders</h2>
+          <p>{pending.length === 0 ? "Nothing waiting on approval." : `${pending.length} order${pending.length === 1 ? "" : "s"} awaiting your approval`}</p>
+        </div>
+      </div>
+      {orders.length === 0 ? (
+        <div className="dash-empty"><Shirt size={24} /><p>No uniform orders yet. Contractors order from their portal.</p></div>
+      ) : (
+        <>
+          {pending.length > 0 && (
+            <section className="dash-sec">
+              <h3><Clock size={15} /> Awaiting approval <span className="sec-count amber">{pending.length}</span></h3>
+              {pending.map((o) => <Row key={o.id} o={o} showActions />)}
+            </section>
+          )}
+          {decided.length > 0 && (
+            <section className="dash-sec">
+              <h3><CheckCircle2 size={15} /> Decided <span className="sec-count">{decided.length}</span></h3>
+              {decided.map((o) => <Row key={o.id} o={o} />)}
+            </section>
+          )}
+        </>
+      )}
+    </main>
+  );
+}
+
+// ---- Admin / PM dashboard ----------------------------------------------
+function AdminDashboard({ subs, jobs, role, me, now, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const slots = jobs.flatMap((j) => j.trades.map((t) => ({ job: j, trade: t, a: j.assignments[t] })));
+  const open = slots.filter((s) => !s.a);
+  const pending = slots.filter((s) => s.a && s.a.status === "pending" && !s.a.auto);
+  const declined = slots.filter((s) => s.a && s.a.status === "declined");
+  const upcoming = jobs.filter((j) => j.status !== "completed" && j.date).sort((a, b) => a.date.localeCompare(b.date));
+  const nonCompliant = subs.filter((s) => DOC_KINDS.some((k) => !s[k]));
+  const toReview = subs.map((s) => ({ sub: s, kinds: pendingReviewDocs(s) })).filter((x) => x.kinds.length);
+  const licenseIssues = subs.filter((s) => !licenseOk(s));
+  // Offers that ran out of time need a different action from ones still ticking.
+  const expiredOffers = [];
+  jobs.filter((j) => j.status !== "completed").forEach((j) =>
+    Object.entries(j.assignments || {}).forEach(([t, a]) => {
+      if (isExpired(a, now)) expiredOffers.push({ job: j, trade: t, a });
+    }));
+  // Anyone who wasn't declined was on the job, so they can be rated.
+  const unrated = slots.filter((s) => s.a && s.a.status !== "declined" && !s.a.rating
+    && s.job.status === "completed");
+  const committed = slots.filter((s) => s.a && (s.a.status === "accepted" || s.a.auto))
+    .reduce((n, s) => n + Number(moneyRaw(s.a.value) || 0), 0);
+  const readyToComplete = jobs.filter((j) => j.status !== "completed"
+    && j.trades.every((t) => j.assignments[t] && (j.assignments[t].status === "accepted" || j.assignments[t].auto)));
+
+  const first = me.name.split(" ")[0];
+
+  return (
+    <main className="ss-main">
+      <div className="dash-hello">
+        <div>
+          <h2>Good to see you, {first}</h2>
+          <p>{jobs.length === 0 ? "No jobs yet — create one to get started." :
+            `${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${open.length} trade slot${open.length === 1 ? "" : "s"} still unassigned`}</p>
+        </div>
+        <div className="dash-cta">
+          <button className="btn-solid" onClick={onNewJob}><Plus size={15} /> New job</button>
+          <button className="btn-ghost" onClick={onGoJobs}><ClipboardList size={15} /> All jobs</button>
+        </div>
+      </div>
+
+      <div className="dash-grid">
+        <button className={`dash-card ${open.length ? "accent" : ""}`} onClick={onGoJobs}>
+          <span className="dc-num">{open.length}</span>
+          <span className="dc-lab">Unassigned trade slots</span>
+        </button>
+        <button className="dash-card" onClick={onGoJobs}>
+          <span className="dc-num">{pending.length}</span>
+          <span className="dc-lab">Awaiting contractor reply</span>
+        </button>
+        <button className={`dash-card ${nonCompliant.length ? "warn" : ""}`} onClick={onGoContractors}>
+          <span className="dc-num">{nonCompliant.length}</span>
+          <span className="dc-lab">Contractors missing docs</span>
+        </button>
+        <button className="dash-card" onClick={onGoJobs}>
+          <span className="dc-num">{committed ? formatMoney(committed) : "—"}</span>
+          <span className="dc-lab">Committed sub spend</span>
+        </button>
+      </div>
+
+      {open.length > 0 && (
+        <section className="dash-sec">
+          <h3><AlertTriangle size={15} /> Needs a contractor <span className="sec-count amber">{open.length}</span></h3>
+          {open.slice(0, 6).map(({ job, trade }) => {
+            const M = catMeta(trade);
+            return (
+              <div key={`${job.id}-${trade}`} className="dash-row">
+                <div className={`trade-icon cat-${trade}`}><M.icon size={15} /></div>
+                <div className="dash-row-main">
+                  <span className="dr-title">{job.title}</span>
+                  <span className="dr-meta">{M.label} · {formatWhen(job.date, job.time) || "no date"}{job.zip ? ` · ${job.zip}` : ""}</span>
+                </div>
+                <button className="btn-solid dash-row-btn" onClick={() => onAssign(job, trade)}>
+                  <Plus size={13} /> Assign
+                </button>
+              </div>
+            );
+          })}
+          {open.length > 6 && <button className="dash-more" onClick={onGoJobs}>View all {open.length} open slots →</button>}
+        </section>
+      )}
+
+      {expiredOffers.length > 0 && (
+        <section className="dash-sec">
+          <h3><Clock size={15} /> No reply — needs re-matching
+            <span className="sec-count red">{expiredOffers.length}</span></h3>
+          {expiredOffers.map(({ job, trade, a }) => (
+            <div key={`${job.id}-${trade}`} className="dash-row">
+              <div className="dash-avatar">{(a.company || "?").split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
+              <div className="dash-row-main">
+                <span className="dr-title" onClick={() => onGoJobs()}>{job.title}</span>
+                <span className="dr-meta">
+                  {catMeta(trade).label} · {a.company} didn't reply by {new Date(a.respondBy)
+                    .toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}
+                </span>
+              </div>
+              <button className="btn-solid dash-row-btn"
+                onClick={() => onAssign(job, trade, a.subId)}>
+                <Zap size={13} /> Find alternatives
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {licenseIssues.length > 0 && (
+        <section className="dash-sec">
+          <h3><Shield size={15} /> Registration problems <span className="sec-count red">{licenseIssues.length}</span></h3>
+          {licenseIssues.map((s) => (
+            <div key={s.id} className="dash-row">
+              <div className="dash-avatar">{s.company.split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
+              <div className="dash-row-main">
+                <span className="dr-title" onClick={() => onOpenSub(s)}>{s.company}</span>
+                <span className="dr-meta">
+                  {!s.license ? "No L&I license number on file"
+                    : !s.licenseCheck ? `${s.license} — not yet verified`
+                    : `${s.license} — ${s.licenseCheck.status.toLowerCase()}${s.licenseCheck.expirationDate ? `, expired ${s.licenseCheck.expirationDate}` : ""}`}
+                </span>
+              </div>
+              <button className="btn-solid dash-row-btn" onClick={() => onVerifyLicense(s)}>
+                <Shield size={13} /> {s.licenseCheck ? "Re-check" : "Verify"}
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {toReview.length > 0 && (
+        <section className="dash-sec">
+          <h3><Shield size={15} /> Documents to verify <span className="sec-count amber">{toReview.reduce((n, x) => n + x.kinds.length, 0)}</span></h3>
+          {toReview.map(({ sub, kinds }) => (
+            <div key={sub.id} className="dash-row">
+              <div className="dash-avatar">{sub.company.split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
+              <div className="dash-row-main">
+                <span className="dr-title" onClick={() => onOpenSub(sub)}>{sub.company}</span>
+                <span className="dr-meta">Uploaded, awaiting review: {kinds.map((k) => DOC_LABELS[k]).join(", ")}</span>
+              </div>
+              <button className="btn-solid dash-row-btn" onClick={() => onReviewDoc(sub, kinds[0])}>
+                <Shield size={13} /> Review
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {nonCompliant.length > 0 && (
+        <section className="dash-sec">
+          <h3><AlertTriangle size={15} /> Awaiting documents <span className="sec-count red">{nonCompliant.length}</span></h3>
+          {nonCompliant.map((s) => (
+            <div key={s.id} className="dash-row">
+              <div className="dash-avatar">{s.company.split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
+              <div className="dash-row-main">
+                <span className="dr-title" onClick={() => onOpenSub(s)}>{s.company}</span>
+                <span className="dr-meta">Not uploaded: {DOC_KINDS.filter((k) => !s[k]).map((k) => DOC_LABELS[k]).join(", ")}</span>
+              </div>
+              <button className="btn-notify dash-row-btn" onClick={() => onRequestDocs(s)}>
+                <Mail size={13} /> Request
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {declined.length > 0 && (
+        <section className="dash-sec">
+          <h3><XCircle size={15} /> Declined — needs reassigning <span className="sec-count red">{declined.length}</span></h3>
+          {declined.map(({ job, trade, a }) => {
+            const M = catMeta(trade);
+            return (
+              <div key={`${job.id}-${trade}`} className="dash-row">
+                <div className={`trade-icon cat-${trade}`}><M.icon size={15} /></div>
+                <div className="dash-row-main">
+                  <span className="dr-title">{job.title}</span>
+                  <span className="dr-meta">{a.company} declined {M.label}</span>
+                </div>
+                <button className="btn-solid dash-row-btn" onClick={onGoJobs}>Review</button>
+              </div>
+            );
+          })}
+        </section>
+      )}
+
+      {readyToComplete.length > 0 && (
+        <section className="dash-sec">
+          <h3><CheckCircle2 size={15} /> Ready to mark complete <span className="sec-count">{readyToComplete.length}</span></h3>
+          {readyToComplete.slice(0, 5).map((j) => (
+            <div key={j.id} className="dash-row">
+              <div className="dash-avatar"><CheckCircle2 size={15} /></div>
+              <div className="dash-row-main">
+                <span className="dr-title">{j.title}</span>
+                <span className="dr-meta">All {j.trades.length} trade{j.trades.length > 1 ? "s" : ""} accepted · complete it to rate crews</span>
+              </div>
+              <button className="btn-solid dash-row-btn" onClick={onGoJobs}>Review</button>
+            </div>
+          ))}
+        </section>
+      )}
+
+      <section className="dash-sec">
+        <h3><Calendar size={15} /> Upcoming jobs {upcoming.length > 0 && <span className="sec-count">{upcoming.length}</span>}</h3>
+        {upcoming.length === 0 ? (
+          <div className="dash-empty"><ClipboardList size={24} /><p>Nothing scheduled yet.</p></div>
+        ) : upcoming.slice(0, 5).map((j) => {
+          const filled = j.trades.filter((t) => j.assignments[t]).length;
+          return (
+            <div key={j.id} className="dash-row" onClick={onGoJobs}>
+              <div className="dash-date">
+                <span className="dd-mon">{new Date(`${j.date}T12:00:00`).toLocaleDateString(undefined, { month: "short" })}</span>
+                <span className="dd-day">{new Date(`${j.date}T12:00:00`).getDate()}</span>
+              </div>
+              <div className="dash-row-main">
+                <span className="dr-title">{j.title}</span>
+                <span className="dr-meta">
+                  {[j.area, j.zip].filter(Boolean).join(" ")} · {filled}/{j.trades.length} trades
+                  {j.sqft ? ` · ${Number(j.sqft).toLocaleString()} sq ft` : ""}
+                </span>
+              </div>
+              <span className={`fill-badge ${filled === j.trades.length ? "full" : ""}`}>{filled}/{j.trades.length}</span>
+            </div>
+          );
+        })}
+      </section>
+
+      {unrated.length > 0 && (
+        <section className="dash-sec">
+          <h3><Star size={15} /> Completed, not yet rated <span className="sec-count">{unrated.length}</span></h3>
+          {unrated.slice(0, 5).map(({ job, trade, a }) => (
+            <div key={`${job.id}-${trade}`} className="dash-row" onClick={onGoJobs}>
+              <div className="dash-avatar">{(a.company || "?").split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
+              <div className="dash-row-main">
+                <span className="dr-title">{job.title}</span>
+                <span className="dr-meta">{a.crewName || a.company} · {catMeta(trade).label}</span>
+              </div>
+              <button className="btn-ghost dash-row-btn" onClick={onGoJobs}>Rate</button>
+            </div>
+          ))}
+        </section>
+      )}
+    </main>
+  );
+}
+
+// ---- Availability calendar ----------------------------------------------
+function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onRequestDocs }) {
+  const today = new Date();
+  const days = [...Array(14)].map((_, i) => {
+    const d = new Date(today); d.setDate(today.getDate() + i); return d;
+  });
+  const fmt = (d) => d.toISOString().slice(0, 10);
+  const jobsByDay = useMemo(() => {
+    const map = {};
+    jobs.forEach((j) => { (map[j.date] ||= []).push(j); });
+    return map;
+  }, [jobs]);
+
+  return (
+    <main className="ss-main">
+      <div className="cal-legend">
+        <span><span className="lg up" /> Available</span>
+        <span><span className="lg down" /> Not available</span>
+        <span><span className="lg booked" /> Booked job</span>
+        <span><span className="lg needdocs" /> Docs needed — click to request</span>
+        <span className="cal-hint">Click an available day to assign</span>
+      </div>
+      <div className="cal-wrap">
+        <div className="cal-grid">
+          <div className="cal-corner">Contractor <span className="cc-note">free crews</span></div>
+          {days.map((d) => (
+            <div key={fmt(d)} className="cal-dayhead">
+              <span className="dow">{d.toLocaleDateString(undefined, { weekday: "short" })}</span>
+              <span className="dom">{d.getDate()}</span>
+            </div>
+          ))}
+          {subs.map((s) => {
+            const ready = s.bond && s.insurance && s.contract;
+            return (
+              <React.Fragment key={s.id}>
+                <div className="cal-sub">
+                  <span className={`avail-dot ${s.available ? "up" : "down"}`} />
+                  <span className="cal-sub-name">{s.company}</span>
+                </div>
+                {days.map((d) => {
+                  const dayJobs = (jobsByDay[fmt(d)] || []).filter((j) =>
+                    Object.values(j.assignments || {}).some((a) => a.subId === s.id));
+                  const booked = dayJobs.length > 0;
+                  const dayKey = fmt(d);
+                  const free = availableOn(s, dayKey);
+                  const cls = booked ? "booked" : free ? "up" : "down";
+                  const clickable = !booked && free && ready;
+                  const dstat = dayStatus(s, allJobs, dayKey, null, accountId);
+                  const freeCt = dstat?.crews?.length || 0;
+                  const needDocs = !ready && !booked && free;
+                  const title = booked ? dayJobs.map((j) => j.title).join(", ")
+                    : !s.available ? "Not taking work"
+                    : !free ? (dstat?.label || "No crews free this day")
+                    : !ready ? `Available — complete docs to schedule`
+                    : dstat?.label || `Assign ${s.company} to a job`;
+                  return (
+                    <div key={dayKey}
+                      className={`cal-cell ${cls} ${clickable ? "clickable" : ""} ${needDocs ? "needdocs" : ""}`}
+                      title={needDocs
+                        ? `Missing ${missingDocs(s).map((k) => DOC_LABELS[k]).join(", ")} — click to request documents`
+                        : title}
+                      onClick={clickable ? () => onSchedule(s, dayKey)
+                        : needDocs ? () => onRequestDocs(s) : undefined}>
+                      {booked ? <span className="cal-job">{dayJobs.length}</span>
+                        : needDocs ? <span className="cal-doc"><Mail size={11} /></span>
+                        : clickable ? <span className="cal-crews">{freeCt}</span> : null}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+// ---- Create job ----------------------------------------------------------
+// The job holds every project fact. Work orders are derived from it on assign.
+function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId }) {
+  const [f, setF] = useState({
+    title: "", client: "", address: "", area: "", zip: "",
+    sqft: "", stories: "",
+    date: "", time: "07:00",
+    trades: forSub ? [...forSub.categories] : [],
+    scope: "", materialSource: "", materialsPaidBy: "Outerhome",
+    measurementDocs: [],
+  });
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const toggleTrade = (id) => setF((s) => ({ ...s, trades: s.trades.includes(id) ? s.trades.filter((x) => x !== id) : [...s.trades, id] }));
+  const when = formatWhen(f.date, f.time);
+  const valid = f.title && f.trades.length && f.address;
+
+  return (
+    <div className="form">
+      <h2>Create job</h2>
+      <p className="form-sub">Enter the project once. Work orders are generated per trade when you assign contractors.</p>
+      {forSub && (
+        <div className={`for-sub ${docsComplete(forSub) ? "" : "warn"}`}>
+          {docsComplete(forSub)
+            ? <><CheckCircle2 size={14} /> {forSub.company} will be assigned to the trades they cover, and a work order issued.</>
+            : <><AlertTriangle size={14} /> {forSub.company} has outstanding documents — trades will be left open.</>}
+        </div>
+      )}
+
+      <div className="form-sec">1 · Project</div>
+      <label className="fld">Job name<input value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. 1420 Maple St — full exterior" /></label>
+      <label className="fld">Homeowner / client<input value={f.client} onChange={(e) => set("client", e.target.value)} placeholder="Client name" /></label>
+      <label className="fld">Service address<input value={f.address} onChange={(e) => set("address", e.target.value)} placeholder="1420 Maple St" /></label>
+      <div className="fld-row">
+        <label className="fld">City
+          <select value={f.area} onChange={(e) => { set("area", e.target.value); if (CITY_ZIP[e.target.value]) set("zip", CITY_ZIP[e.target.value]); }}>
+            <option value="">Select…</option>
+            {AREAS.map((a) => <option key={a}>{a}</option>)}
+          </select>
+        </label>
+        <label className="fld">ZIP<input inputMode="numeric" value={f.zip} onChange={(e) => set("zip", e.target.value.trim())} placeholder="98101" /></label>
+      </div>
+      <div className="fld-row">
+        <label className="fld">Square footage<input inputMode="numeric" value={f.sqft} onChange={(e) => set("sqft", e.target.value.replace(/[^0-9]/g, ""))} placeholder="2400" /></label>
+        <label className="fld">Stories<input inputMode="numeric" value={f.stories} onChange={(e) => set("stories", e.target.value.replace(/[^0-9]/g, ""))} placeholder="2" /></label>
+      </div>
+
+      <div className="form-sec">2 · Schedule</div>
+      <div className="fld-row">
+        <label className="fld">Start date<input type="date" value={f.date} onChange={(e) => set("date", e.target.value)} /></label>
+        <label className="fld">Start time<input type="time" value={f.time} onChange={(e) => set("time", e.target.value)} /></label>
+      </div>
+      {when && <div className="when-preview"><Calendar size={14} /> Starts <strong>{when}</strong></div>}
+      {forSub && f.date && (() => {
+        const day = dayStatus(forSub, allJobs || jobs, f.date, null, accountId);
+        if (!day || day.kind === "free") return (
+          <div className="for-sub"><CheckCircle2 size={14} /> {forSub.company} is free on {formatDay(f.date)}.</div>
+        );
+        return (
+          <div className="for-sub warn">
+            <AlertTriangle size={14} />
+            <span>{forSub.company} {day.kind === "off" ? `has ${formatDay(f.date)} marked off`
+              : day.kind === "booked" ? `is already booked on ${formatDay(f.date)}` : "isn't taking work"} — pick another date.</span>
+          </div>
+        );
+      })()}
+
+      <div className="form-sec">3 · Trades needed</div>
+      <div className="fld">
+        <div className="pick-grid">
+          {CATEGORIES.map((c) => (
+            <button key={c.id} type="button" className={`pick ${f.trades.includes(c.id) ? "on" : ""}`} onClick={() => toggleTrade(c.id)}>{c.label}</button>
+          ))}
+        </div>
+        {f.trades.length > 1 && <p className="cov-hint">{f.trades.length} trades — each gets its own contractor and work order.</p>}
+      </div>
+      <label className="fld">Overall scope<textarea rows={3} value={f.scope} onChange={(e) => set("scope", e.target.value)} placeholder="What the job covers end to end…" /></label>
+
+      <div className="form-sec">4 · Materials</div>
+      <label className="fld">Material source / supplier<input value={f.materialSource} onChange={(e) => set("materialSource", e.target.value)} placeholder="e.g. ABC Supply — Ballard" /></label>
+      <label className="fld">Materials paid by
+        <select value={f.materialsPaidBy} onChange={(e) => set("materialsPaidBy", e.target.value)}>
+          <option>Outerhome</option><option>Subcontractor (reimbursed)</option>
+        </select>
+      </label>
+
+      <div className="form-sec">5 · Measurement documents</div>
+      <p className="sec-note">Uploaded by you — contractors see these on their work order.</p>
+      <div className="meas-list">
+        {f.measurementDocs.map((d) => (
+          <div key={d} className="meas-row">
+            <FileText size={14} /><span className="meas-name">{d}</span>
+            <button type="button" className="icon-x" onClick={() => set("measurementDocs", f.measurementDocs.filter((x) => x !== d))}><X size={12} /></button>
+          </div>
+        ))}
+        <label className="meas-upload">
+          <Upload size={14} /> Upload measurements, takeoff, or drawings
+          <input type="file" hidden multiple onChange={(e) => {
+            const names = [...e.target.files].map((x) => x.name);
+            set("measurementDocs", [...new Set([...f.measurementDocs, ...names])]);
+          }} />
+        </label>
+      </div>
+
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-solid" onClick={() => onSubmit(f)} disabled={!valid}>
+          <Plus size={15} /> Create job &amp; find contractors
+        </button>
+      </div>
+    </div>
+  );
+}
+// ---- Pick a contractor for one trade slot --------------------------------
+function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing, onPick, onNotify, onCancel }) {
+  // When re-matching after an expiry, the sub who didn't reply drops off the list.
+  const pool = replacing ? subs.filter((x) => x.id !== replacing) : subs;
+  const lapsed = replacing ? subs.find((x) => x.id === replacing) : null;
+  const [chosen, setChosen] = useState(null);
+  // One scope + value PER TRADE. Bundling a sub across two trades must not
+  // copy the same money onto both.
+  const [lines, setLines] = useState({});        // { [trade]: { on, scope, value } }
+  const [crewPick, setCrewPick] = useState("");
+  const [respWindow, setRespWindow] = useState(DEFAULT_WINDOW);
+  const setLine = (t, patch) => setLines((l) => ({ ...l, [t]: { ...l[t], ...patch } }));
+  // Trades on this job still unassigned that the chosen sub also covers.
+  const bundleable = (sb) => (job.trades || []).filter((t) =>
+    t !== trade && !job.assignments?.[t] && sb.categories.includes(t));
+  const openLines = chosen
+    ? [trade, ...bundleable(chosen).filter((t) => lines[t]?.on)]
+    : [trade];
+  const lineTotal = openLines.reduce((n, t) => n + Number(moneyRaw(lines[t]?.value || "") || 0), 0);
+  const pickSub = (sb) => {
+    const init = { [trade]: { on: true, scope: "", value: "" } };
+    bundleable(sb).forEach((t) => { init[t] = { on: false, scope: "", value: "" }; });
+    setLines(init);
+    const fc = dayStatus(sb, allJobs || jobs, job.date, job.id, accountId)?.crews || sb.crews || [];
+    setCrewPick(fc[0]?.name || "");
+    setChosen(sb);
+  };
+  // crews of the chosen contractor that are free on this job's date
+  const freeForDay = chosen
+    ? (dayStatus(chosen, allJobs || jobs, job.date, job.id, accountId)?.crews || chosen.crews || [])
+    : [];
+  const M = catMeta(trade);
+  const alreadyOn = Object.values(job.assignments || {}).map((a) => a.subId);
+  const ranked = useMemo(() => pool
+    .filter((s) => s.categories.includes(trade))
+    .map((s) => {
+      const prox = job.zip ? coversZip(s, job.zip) : null;
+      const docs = s.bond && s.insurance && s.contract;
+      const day = dayStatus(s, allJobs || jobs, job.date, job.id, accountId);
+      // Bundling bonus: one sub covering several of this job's open trades
+      // means one crew, one mobilisation and one point of contact, so rank
+      // them ahead of a single-trade sub of similar standing.
+      const covers = (job.trades || []).filter((t) =>
+        !job.assignments?.[t] && s.categories.includes(t));
+      let score = s.rating * 4 + (docs ? 25 : 0) + (s.available ? 15 : 0) + (s.autoSchedule ? 30 : 0);
+      score += Math.max(0, covers.length - 1) * 35;
+      if (prox?.inRange) score += 20;
+      if (prox?.distance != null) score -= Math.min(prox.distance, 40) * 0.5;
+      // day-level availability against this job's date
+      if (day?.kind === "free") score += 25;
+      if (day?.kind === "booked") score -= 40;
+      if (day?.kind === "off") score -= 60;
+      return { sub: s, prox, docs, day, score, covers, dup: alreadyOn.includes(s.id) };
+    })
+    .sort((a, b) => b.score - a.score), [pool, trade, job, jobs, allJobs, accountId]);
+
+  // Step 2: the only details a work order adds on top of the job
+  if (chosen) {
+    return (
+      <div className="form">
+        <h2>Work order details</h2>
+        <p className="form-sub">{chosen.company} · {M.label} · {job.title}</p>
+        <label className="fld">Response deadline
+        <span className="fld-note">how long they have to accept before the offer expires</span>
+        <select value={respWindow} onChange={(e) => setRespWindow(e.target.value)}>
+          {RESPONSE_WINDOWS.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
+        </select>
+      </label>
+      {chosen && chosen.autoSchedule ? (
+        <p className="cov-hint">{chosen.company} has auto-schedule on — the job books straight
+          onto their calendar, so no deadline applies.</p>
+      ) : (
+        <p className="cov-hint">Expires {new Date(Date.now() + windowMins(respWindow) * 60000)
+          .toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric",
+            hour: "numeric", minute: "2-digit" })}. If they don't reply by then you'll be
+          prompted to match someone else.</p>
+      )}
+
+      {freeForDay.length > 0 && (
+        <label className="fld">Crew <span className="fld-note">crews free on {formatDay(job.date) || "this job"}</span>
+          <select value={crewPick} onChange={(e) => setCrewPick(e.target.value)}>
+            {freeForDay.map((c) => <option key={c.id} value={c.name}>{c.name} ({c.members.length} people)</option>)}
+          </select>
+        </label>
+      )}
+      <div className="wo-inherit">
+          <ScrollText size={14} />
+          <div>
+            <strong>Inherited from the job:</strong> address, {job.sqft ? `${Number(job.sqft).toLocaleString()} sq ft, ` : ""}
+            schedule, materials{(job.measurementDocs || []).length ? `, ${job.measurementDocs.length} measurement doc${job.measurementDocs.length > 1 ? "s" : ""}` : ""}.
+          </div>
+        </div>
+        {bundleable(chosen).length > 0 && (
+          <div className="bundle-box">
+            <Layers size={15} />
+            <div>
+              <strong>{chosen.company} also covers {bundleable(chosen).map((t) => catMeta(t).label.toLowerCase()).join(" and ")} on this job.</strong>
+              <span className="bundle-sub">Add them below and each trade gets its own work
+                order, scope and value — one crew on site instead of two.</span>
+            </div>
+          </div>
+        )}
+
+        <div className="form-sec">Work orders to issue</div>
+        {[trade, ...bundleable(chosen)].map((t) => {
+          const TM = catMeta(t);
+          const isPrimary = t === trade;
+          const on = isPrimary || !!lines[t]?.on;
+          return (
+            <div key={t} className={`wo-line ${on ? "on" : ""}`}>
+              <div className="wol-head">
+                {isPrimary ? (
+                  <span className="wol-title"><TM.icon size={14} /> {TM.label}
+                    <span className="wol-tag">this assignment</span></span>
+                ) : (
+                  <label className="wol-check">
+                    <input type="checkbox" checked={!!lines[t]?.on}
+                      onChange={(e) => setLine(t, { on: e.target.checked })} />
+                    <TM.icon size={14} /> {TM.label}
+                    <span className="wol-tag alt">also available</span>
+                  </label>
+                )}
+                {on && lines[t]?.value && (
+                  <span className="wol-val">{formatMoney(lines[t].value)}</span>
+                )}
+              </div>
+              {on && (
+                <div className="wol-body">
+                  <label className="fld">Scope for {TM.label.toLowerCase()}
+                    <textarea rows={2} value={lines[t]?.scope || ""}
+                      onChange={(e) => setLine(t, { scope: e.target.value })}
+                      placeholder={`${TM.label} work included in this work order…`} />
+                  </label>
+                  <label className="fld">Subcontractor value for {TM.label.toLowerCase()}
+                    <span className="fld-note">their pay for this trade only</span>
+                    <MoneyInput value={lines[t]?.value || ""}
+                      onChange={(v) => setLine(t, { value: v })} />
+                  </label>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {openLines.length > 1 && (
+          <div className="wol-total">
+            <span>{openLines.length} work orders</span>
+            <strong>{formatMoney(lineTotal)} total to {chosen.company}</strong>
+          </div>
+        )}
+
+        <div className="form-actions">
+          <button className="btn-ghost" onClick={() => setChosen(null)}>Back</button>
+          <button className="btn-solid"
+            disabled={openLines.some((t) => !lines[t]?.value)}
+            onClick={() => onPick(chosen, {
+              crewName: crewPick || freeForDay[0]?.name || null,
+              responseWindow: respWindow,
+              trades: openLines.map((t) => ({
+                trade: t, tradeScope: lines[t]?.scope || "", value: lines[t]?.value || "" })),
+            })}>
+            <Send size={15} /> Issue {openLines.length > 1 ? `${openLines.length} work orders` : "work order"}
+          </button>
+        </div>
+        {openLines.some((t) => !lines[t]?.value) && (
+          <p className="cov-hint">Enter a value for each trade you're issuing.</p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="form">
+      <h2>{replacing ? `Find an alternative ${M.label.toLowerCase()} contractor`
+        : `Assign ${M.label.toLowerCase()} contractor`}</h2>
+      {lapsed && (
+        <div className="doc-block" style={{ marginBottom: 14, marginTop: 10 }}>
+          <Clock size={15} />
+          <div><strong>{lapsed.company} didn't reply in time.</strong> They've been left off the
+            list below. The job and its details are unchanged — pick someone else and a new work
+            order is issued.</div>
+        </div>
+      )}
+      <p className="form-sub">{job.title}
+        {job.date ? ` · ${formatWhen(job.date, job.time) || job.date}` : " · no date set"}
+        {job.zip ? ` · from ${job.zip}` : ""}</p>
+      {job.date && <p className="pick-hint">Contractors free on this date are ranked first.</p>}
+      {ranked.length === 0 ? (
+        <div className="empty"><Search size={26} /><p>No contractors cover {M.label.toLowerCase()}.</p></div>
+      ) : (
+        <div className="pick-list">
+          {ranked.map(({ sub, prox, docs, day, covers, dup }, i) => (
+            <div key={sub.id} className="pick-row">
+              <div className="rec-rank">{i + 1}</div>
+              <div className="rec-main">
+                <div className="rec-head">
+                  <h4>{sub.company}</h4>
+                  <Stars value={sub.rating} />
+                  <span className={`avail-dot ${sub.available ? "up" : "down"}`} />
+                </div>
+                <div className="rec-tags">
+                  <span className="cap">{crewCount(sub)} crews · {headCount(sub)} ppl</span>
+                  {sub.autoSchedule && <span className="auto-badge"><Zap size={11} /> Auto-schedule</span>}
+                  {prox && prox.distance != null && (
+                    <span className={`prox-badge ${prox.inRange ? "in" : "out"}`}><Target size={11} /> {prox.distance} mi{prox.inRange ? "" : " · out"}</span>
+                  )}
+                  {docs ? <span className="rec-ok"><Shield size={11} /> Docs complete</span>
+                    : <span className="rec-warn"><AlertTriangle size={11} /> {complianceGaps(sub).length} outstanding</span>}
+                  {covers && covers.length > 1 && (
+                    <span className="rec-bundle">
+                      <Layers size={11} /> covers {covers.length} trades on this job
+                    </span>
+                  )}
+                  {dup && <span className="rec-dup">already on this job</span>}
+                </div>
+              </div>
+              {docs ? (
+                <button className={`rec-send ${day && (day.kind === "off" || day.kind === "booked" || day.kind === "unavailable") ? "btn-warn" : "btn-solid"}`}
+                  title={day && day.kind !== "free" ? day.label : undefined}
+                  onClick={() => pickSub(sub)}>
+                  <Send size={14} /> {day && day.kind !== "free" && day.kind !== undefined && job.date ? "Select anyway" : "Select"}
+                </button>
+              ) : (
+                <button className="btn-notify rec-send" onClick={() => onNotify(sub)}>
+                  <Mail size={14} /> Request docs
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="form-actions"><button className="btn-ghost" onClick={onCancel}>Cancel</button></div>
+    </div>
+  );
+}
+
+// ---- Pick which job + trade to put a contractor on -----------------------
+function PickJobSlot({ sub, jobs, allJobs, accountId, onPick, onNewJob, onNotify, onRequestDocs, onCancel }) {
+  const ok = docsComplete(sub);
+  const off = sub.unavailableDays || [];
+  const rank = { free: 0, booked: 1, off: 2, unavailable: 3 };
+  const slots = jobs.flatMap((j) =>
+    j.trades
+      .filter((t) => !j.assignments[t] && sub.categories.includes(t))
+      .map((t) => ({ job: j, trade: t }))
+  ).sort((a, b) => {
+    const ka = rank[dayStatus(sub, allJobs || jobs, a.job.date, a.job.id, accountId)?.kind] ?? 9;
+    const kb = rank[dayStatus(sub, allJobs || jobs, b.job.date, b.job.id, accountId)?.kind] ?? 9;
+    return ka - kb;
+  });
+  // Ask first: existing job or brand-new one?
+  const [mode, setMode] = useState(null);
+
+  if (!ok) {
+    return (
+      <div className="form">
+        <h2>Assign {sub.company}</h2>
+        <div className="doc-block">
+          <AlertTriangle size={15} />
+          <div>
+            <strong>Can't assign yet.</strong> Outstanding: {complianceGaps(sub).join(", ")}.
+            Send a request and they'll be assignable once the paperwork is in.
+          </div>
+        </div>
+        {slots.length > 0 && (
+          <>
+            <p className="form-sub">They were matched to {slots.length} open slot{slots.length > 1 ? "s" : ""}:</p>
+            <div className="pick-list">
+              {slots.map(({ job, trade }) => {
+                const M = catMeta(trade);
+                return (
+                  <div key={`${job.id}-${trade}`} className="pick-row">
+                    <div className={`trade-icon cat-${trade}`}><M.icon size={15} /></div>
+                    <div className="rec-main">
+                      <div className="rec-head"><h4>{job.title}</h4></div>
+                      <div className="rec-tags">
+                        <span className={`cat-badge cat-${trade}`}>{M.label}</span>
+                        <span className="cap">{formatWhen(job.date, job.time) || "No date"}</span>
+                      </div>
+                    </div>
+                    <button className="btn-notify rec-send" onClick={() => onNotify(job, trade)}><Mail size={14} /> Request docs</button>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+        <div className="form-actions">
+          <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+          <button className="btn-notify" onClick={() => onRequestDocs(sub)}><Mail size={15} /> Request documents</button>
+        </div>
+      </div>
+    );
+  }
+
+  // Step 1: choose the path
+  if (mode === null) {
+    return (
+      <div className="form">
+        <h2>Assign {sub.company}</h2>
+        <p className="form-sub">Add them to a job you've already created, or set up a new one.</p>
+        <div className="assign-choice">
+          <button className="ac-card" disabled={slots.length === 0} onClick={() => setMode("existing")}>
+            <ClipboardList size={22} />
+            <span className="ac-title">Assign to an existing job</span>
+            <span className="ac-desc">
+              {slots.length === 0
+                ? "No open trade slots match their trades"
+                : `${slots.length} open slot${slots.length > 1 ? "s" : ""} they can cover`}
+            </span>
+            {slots.length > 0 && <ChevronRight size={16} className="ac-arrow" />}
+          </button>
+          <button className="ac-card" onClick={onNewJob}>
+            <Plus size={22} />
+            <span className="ac-title">Create a new job for them</span>
+            <span className="ac-desc">Pre-fills their trades and assigns them on creation</span>
+            <ChevronRight size={16} className="ac-arrow" />
+          </button>
+        </div>
+        {off.length > 0 && (
+          <div className="off-days"><XCircle size={13} /> Marked off: {off.slice().sort().map(formatDay).join(", ")}</div>
+        )}
+        <div className="form-actions"><button className="btn-ghost" onClick={onCancel}>Cancel</button></div>
+      </div>
+    );
+  }
+
+  // Step 2: pick the slot
+  return (
+    <div className="form">
+      <h2>Pick a job for {sub.company}</h2>
+      <p className="form-sub">Open trade slots they can cover · free dates first</p>
+      <div className="pick-list">
+        {slots.map(({ job, trade }) => {
+          const M = catMeta(trade);
+          const prox = job.zip ? coversZip(sub, job.zip) : null;
+          const day = dayStatus(sub, allJobs || jobs, job.date, job.id, accountId);
+          return (
+            <div key={`${job.id}-${trade}`} className="pick-row">
+              <div className={`trade-icon cat-${trade}`}><M.icon size={15} /></div>
+              <div className="rec-main">
+                <div className="rec-head"><h4>{job.title}</h4></div>
+                <div className="rec-tags">
+                  <span className={`cat-badge cat-${trade}`}>{M.label}</span>
+                  <span className="cap">{formatWhen(job.date, job.time) || "No date"}</span>
+                  {day && (
+                    <span className={`day-badge d-${day.kind}`} title={day.label}>
+                      {day.kind === "free" ? <><CheckCircle2 size={11} /> Free</>
+                        : day.kind === "booked" ? <><Calendar size={11} /> Already booked</>
+                        : day.kind === "off" ? <><XCircle size={11} /> Marked off</>
+                        : <><AlertTriangle size={11} /> Not taking work</>}
+                    </span>
+                  )}
+                  {prox && prox.distance != null && (
+                    <span className={`prox-badge ${prox.inRange ? "in" : "out"}`}><Target size={11} /> {prox.distance} mi{prox.inRange ? "" : " · out"}</span>
+                  )}
+                </div>
+              </div>
+              <button className={`rec-send ${day && day.kind !== "free" ? "btn-warn" : "btn-solid"}`}
+                onClick={() => onPick(job, trade)}>
+                <Send size={14} /> {day && day.kind !== "free" ? "Assign anyway" : "Assign"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={() => setMode(null)}>Back</button>
+        <button className="btn-solid" onClick={onNewJob}><Plus size={15} /> New job instead</button>
+      </div>
+    </div>
+  );
+}
+// ---- Contractor portal (contractor role) ---------------------------------
+function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, serviceCalls, onConfirmCall, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage }) {
+  const [sub2, setSub2] = useState("trades");
+  const caps = [...new Set(sub.categories.flatMap((c) => CAP_LIBRARY[c] || []))];
+  const miss = missingDocs(sub);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const first = (me?.name || sub.contact || sub.company).split(" ")[0];
+  const pending = mine.filter((m) => m.a.status === "pending" && !m.a.auto);
+  const accepted = mine.filter((m) => m.a.status === "accepted" || m.a.auto);
+  const upcoming = accepted.filter((m) => m.job.status !== "completed")
+    .sort((a, b) => (a.job.date || "9").localeCompare(b.job.date || "9"));
+  const past = accepted.filter((m) => m.job.status === "completed");
+  const declined = mine.filter((m) => m.a.status === "declined");
+  const earnings = accepted.reduce((n, m) => n + Number(moneyRaw(m.a.value) || 0), 0);
+
+  return (
+    <main className="ss-main">
+      {miss.length > 0 && pane !== "docs" && (
+        <div className="doc-block with-cta">
+          <AlertTriangle size={15} />
+          <div><strong>Action needed.</strong> You can't be assigned jobs until you upload: {miss.map((k) => DOC_LABELS[k]).join(", ")}.</div>
+          <button className="btn-notify" onClick={onGoDocs}>
+            <Upload size={14} /> Upload {miss.length === 1 ? "document" : "documents"}
+          </button>
+        </div>
+      )}
+
+      {pane === "jobs" && (
+        <>
+          {(serviceCalls || []).filter((c) => c.status !== "resolved").length > 0 && (
+            <section className="portal-sec">
+              <h3><Wrench size={15} /> Return visits
+                <span className="sec-count amber">
+                  {(serviceCalls || []).filter((c) => c.status === "awaiting-confirmation").length}
+                </span>
+              </h3>
+              <p className="portal-sec-note">
+                {brand.name} has reported an issue on a job you completed. Confirm the date and
+                it's added to your schedule.
+              </p>
+              {(serviceCalls || []).filter((c) => c.status !== "resolved").map((c) => (
+                <ServiceCallRow key={c.id} c={c} job={jobs.find((j) => j.id === c.jobId)}
+                  showSubActions onConfirm={onConfirmCall} />
+              ))}
+            </section>
+          )}
+          <div className="dash-hello">
+            <div>
+              <h2>Good to see you, {first}</h2>
+              <p>
+                {pending.length > 0
+                  ? `${pending.length} job request${pending.length === 1 ? "" : "s"} waiting on you`
+                  : upcoming.length > 0
+                    ? `${upcoming.length} job${upcoming.length === 1 ? "" : "s"} booked — nothing waiting on you`
+                    : miss.length > 0
+                      ? "Upload your documents to start receiving job requests"
+                      : "No jobs booked right now"}
+              </p>
+            </div>
+            <div className="who-bar">
+              <div className="who-txt">
+                <span className="who-me">{sub.company}</span>
+                <span className="who-for">Subcontracting for {brand.name}</span>
+              </div>
+            </div>
+          </div>
+          <div className="dash-grid">
+            <div className="dash-card accent">
+              <span className="dc-num">{pending.length}</span>
+              <span className="dc-lab">Job request{pending.length === 1 ? "" : "s"} awaiting you</span>
+            </div>
+            <div className="dash-card">
+              <span className="dc-num">{upcoming.length}</span>
+              <span className="dc-lab">Upcoming job{upcoming.length === 1 ? "" : "s"}</span>
+            </div>
+            <div className="dash-card">
+              <span className="dc-num">{crewCount(sub)}</span>
+              <span className="dc-lab">Crews · {headCount(sub)} people</span>
+            </div>
+            <div className="dash-card">
+              <span className="dc-num">{earnings ? formatMoney(earnings) : "—"}</span>
+              <span className="dc-lab">Booked value</span>
+            </div>
+          </div>
+
+          {sub.autoSchedule && (
+            <div className="auto-strip"><Zap size={14} /> Auto-schedule is on — jobs matching your availability are booked directly.</div>
+          )}
+
+          {pending.length > 0 && (
+            <section className="dash-sec">
+              <h3><Clock size={15} /> Job requests <span className="sec-count amber">{pending.length}</span></h3>
+              {pending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} showActions />)}
+            </section>
+          )}
+
+          <section className="dash-sec">
+            <h3><Calendar size={15} /> Current &amp; upcoming {upcoming.length > 0 && <span className="sec-count">{upcoming.length}</span>}</h3>
+            {upcoming.length === 0
+              ? <div className="dash-empty"><ClipboardList size={24} /><p>No upcoming jobs booked.</p></div>
+              : upcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} />)}
+          </section>
+
+          {past.length > 0 && (
+            <section className="dash-sec">
+              <h3><CheckCircle2 size={15} /> Completed <span className="sec-count">{past.length}</span></h3>
+              {past.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} past />)}
+            </section>
+          )}
+
+          {declined.length > 0 && (
+            <section className="dash-sec">
+              <h3><XCircle size={15} /> Declined <span className="sec-count">{declined.length}</span></h3>
+              {declined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} />)}
+            </section>
+          )}
+        </>
+      )}
+
+      {pane === "crews" && <MyCrews crews={sub.crews || []} onSave={onSetCrews} />}
+
+      {pane === "uniforms" && (
+        <UniformOrder sub={sub} orders={orders} onOrder={onOrderUniform} brand={brand} />
+      )}
+
+      {pane === "settings" && (
+        <>
+          <div className="seg-tabs">
+            {[["trades", "Trades"], ["coverage", "Coverage"], ["availability", "Availability"]].map(([id, l]) => (
+              <button key={id} className={sub2 === id ? "on" : ""} onClick={() => setSub2(id)}>{l}</button>
+            ))}
+          </div>
+
+          {sub2 === "trades" && (
+            <div className="portal-panel" style={{ marginBottom: 16 }}>
+              <h4>Your labour warranty</h4>
+              <p className="panel-note">How long you stand behind your workmanship. {brand.name}
+                uses this to decide whether a later issue is a warranty claim or chargeable work.</p>
+              <div className="pick-grid warranty-grid">
+                {WARRANTY_OPTIONS.map((w) => (
+                  <button key={w.id} type="button"
+                    className={`pick ${String(sub.warranty || "") === w.id ? "on" : ""}`}
+                    onClick={() => onSetWarranty(w.id)}>{w.label}</button>
+                ))}
+              </div>
+              <p className="cov-hint">
+                {warrantyLabel(sub)}. Separately, defects reported within {CALLBACK_DAYS} days of
+                completing a job are treated as callbacks and always come back to you.
+              </p>
+            </div>
+          )}
+
+          {sub2 === "trades" && (
+            <div className="portal-panel">
+              <h4>Trades you work in</h4>
+              <p className="panel-note">You'll only be matched to jobs in these trades.</p>
+              <div className="pick-grid">
+                {CATEGORIES.map((c) => (
+                  <button key={c.id} type="button" className={`pick ${sub.categories.includes(c.id) ? "on" : ""}`}
+                    onClick={() => {
+                      const next = sub.categories.includes(c.id)
+                        ? sub.categories.filter((x) => x !== c.id)
+                        : [...sub.categories, c.id];
+                      if (next.length) onSetCategories(next);
+                    }}>{c.label}</button>
+                ))}
+              </div>
+              <h4 style={{ marginTop: 20 }}>Specific capabilities</h4>
+              <div className="pick-grid">
+                {caps.map((c) => (
+                  <button key={c} type="button" className={`pick ${sub.caps.includes(c) ? "on" : ""}`}
+                    onClick={() => onSetCaps(sub.caps.includes(c) ? sub.caps.filter((x) => x !== c) : [...sub.caps, c])}>{c}</button>
+                ))}
+              </div>
+              <div className={`auto-card ${sub.autoSchedule ? "on" : ""}`} style={{ marginTop: 20, marginBottom: 0 }}>
+                <Zap size={18} />
+                <div className="auto-card-main">
+                  <span className="auto-title">Auto-schedule</span>
+                  <span className="auto-desc">
+                    {sub.autoSchedule
+                      ? "On — jobs matching your availability are booked directly, no approval needed. You get priority in matching."
+                      : "Off — you review and accept or decline every job request."}
+                  </span>
+                </div>
+                <label className="auto-toggle">
+                  <input type="checkbox" checked={!!sub.autoSchedule} onChange={(e) => onSetAutoSchedule(e.target.checked)} />
+                  <span>{sub.autoSchedule ? "On" : "Off"}</span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {sub2 === "coverage" && <MyCoverage sub={sub} onSave={onSetCoverage} />}
+
+          {sub2 === "availability" && <MyAvailability sub={sub} jobs={jobs}
+            onToggleCrewDay={onToggleCrewDay} onToggleCrewAvailable={onToggleCrewAvailable} />}
+        </>
+      )}
+
+
+      {pane === "docs" && (
+        <div className="portal-panel">
+          <h4>My documents</h4>
+          {miss.length > 0 ? (
+            <div className="doc-alert">
+              <AlertTriangle size={16} />
+              <div>
+                <strong>{miss.length} document{miss.length > 1 ? "s" : ""} outstanding.</strong>
+                <span> {brand.name} reviews each one — you'll be cleared for work once all {DOC_KINDS.length} are verified.</span>
+              </div>
+            </div>
+          ) : (
+            <div className="doc-ok-banner"><CheckCircle2 size={16} /> All documents on file — you're cleared for work.</div>
+          )}
+          {sub.license && (
+            <div className={`lic-card ${licenseOk(sub) ? "ok" : "bad"}`} style={{ marginBottom: 16 }}>
+              {licenseOk(sub) ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+              <div className="lic-main">
+                <span className="lic-num">WA registration {sub.license}
+                  <span className={`lic-status s-${(sub.licenseCheck?.status || "unknown").toLowerCase()}`}>
+                    {sub.licenseCheck?.status || "Not checked"}
+                  </span>
+                </span>
+                <span className="lic-meta">
+                  {licenseOk(sub)
+                    ? `Active with L&I · expires ${sub.licenseCheck.expirationDate}`
+                    : "Renew with L&I to keep receiving work — this is checked against the state registry."}
+                </span>
+              </div>
+            </div>
+          )}
+
+          <details className="req-box">
+            <summary><Shield size={14} /> What {brand.name} requires</summary>
+            <div className="req-body">
+              <div className="req-sec">Certificate of insurance</div>
+              <table className="req-table">
+                <tbody>
+                  {INSURANCE_LINES.map((l) => (
+                    <tr key={l.id}>
+                      <td>{l.label}{l.sub ? <span className="rt-sub"> ({l.sub})</span> : null}</td>
+                      <td className="rt-amt">{formatMoney(l.min)}{l.optional ? "*" : ""}</td>
+                    </tr>
+                  ))}
+                  <tr><td>Workers' compensation</td><td className="rt-amt">WA L&amp;I active</td></tr>
+                </tbody>
+              </table>
+              <ul className="req-list">
+                {INSURANCE_ATTEST.map((a) => <li key={a.id}><Check size={12} /> {a.label(brand.name)}</li>)}
+              </ul>
+              <div className="req-sec">Surety bond</div>
+              <p className="req-note">{formatMoney(BOND_MIN)} minimum, active, surety licensed in Washington.</p>
+              <div className="req-sec">Subcontractor agreement</div>
+              <p className="req-note">Signed and dated by you, current version.</p>
+              <div className="req-sec">IRS Form W-9</div>
+              <p className="req-note">Needed before we can pay you. Your TIN or EIN, tax
+                classification, and a signature in Part II. Current revision of the form.</p>
+              <p className="req-note">* Umbrella / excess applies to higher-risk or larger crews.</p>
+            </div>
+          </details>
+
+          <div className="doc-manage">
+            {[["w9", "IRS Form W-9", Receipt],
+              ["insurance", "Certificate of insurance", FileText],
+              ["bond", "Surety bond", Shield],
+              ["contract", "Signed subcontractor agreement", ScrollText]].map(([k, l, Icon]) => (
+              <div key={k} className={`doc-manage-row st-doc-${docStatus(sub, k)}`}>
+                <Icon size={16} />
+                <div className="dm-info">
+                  <span className="dm-label">{l}</span>
+                  {sub[k] && <span className="dm-file">{sub.docFiles?.[k] || "document.pdf"}</span>}
+                  <span className={`doc-state s-${docStatus(sub, k)}`}>
+                    {docStatus(sub, k) === "verified" && <><CheckCircle2 size={11} /> Verified</>}
+                    {docStatus(sub, k) === "pending" && <><Clock size={11} /> {brand.name} is reviewing this</>}
+                    {docStatus(sub, k) === "rejected" && <><XCircle size={11} /> Needs a new copy — {docReview(sub, k)?.note}</>}
+                    {docStatus(sub, k) === "missing" && <><AlertTriangle size={11} /> Not uploaded</>}
+                  </span>
+                </div>
+                {sub[k] ? (
+                  <div className="dm-actions">
+                    <label className="dm-replace"><Upload size={12} /> Replace
+                      <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(k, e.target.files[0].name); }} /></label>
+                    <button type="button" className="dm-delete" onClick={() => onDeleteDoc(k)}><Trash2 size={12} /> Delete</button>
+                  </div>
+                ) : (
+                  <label className="dm-upload"><Upload size={13} /> Upload
+                    <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(k, e.target.files[0].name); }} /></label>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+    </main>
+  );
+}
+
+// ---- Contractor dashboard job card -------------------------------------
+function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO, now }) {
+  const M = catMeta(trade);
+  const left = msLeft(a, now);
+  const expired = isExpired(a, now);
+  const urgency = urgencyOf(left);
+  return (
+    <div className={`job-card jr-card ${past ? "past" : ""}`}>
+      <div className="job-card-head">
+        <div>
+          <h3>{job.title}</h3>
+          <div className="job-meta">
+            <span><Calendar size={12} /> {formatWhen(job.date, job.time) || job.date || "No date"}</span>
+            <span><MapPin size={12} /> {[job.address, job.area, job.zip].filter(Boolean).join(", ") || "No address"}</span>
+            {job.sqft && <span><Ruler size={12} /> {Number(job.sqft).toLocaleString()} sq ft</span>}
+            {a.value && <span className="job-val">{formatMoney(a.value)} your pay</span>}
+          </div>
+        </div>
+        <span className={`cat-badge cat-${trade}`}><M.icon size={12} /> {M.label}</span>
+      </div>
+      {(a.tradeScope || job.scope) && <p className="job-scope">{a.tradeScope || job.scope}</p>}
+      {a.crewName && <p className="portal-crew"><Users size={12} /> Your crew: {a.crewName}</p>}
+      {job.materialSource && <p className="portal-crew"><Layers size={12} /> Materials: {job.materialSource} ({job.materialsPaidBy})</p>}
+      <button className="wo-open-btn" onClick={() => onViewWO({ job, trade, a })}>
+        <ScrollText size={13} /> View work order {a.wo}
+        {(job.measurementDocs || []).length > 0 && <span className="wo-open-meas">+{job.measurementDocs.length} measurement doc{job.measurementDocs.length > 1 ? "s" : ""}</span>}
+      </button>
+      {a.rating ? (
+        <p className="portal-crew"><Star size={12} fill="currentColor" /> Rated {a.rating}.0 by the GC</p>
+      ) : null}
+      {showActions && awaitingReply(a) && (
+        <div className={`ddl ddl-${urgency}`}>
+          {expired ? <><XCircle size={14} /> <b>Expired</b> — this offer has been withdrawn.
+            Contact the office if you still want the work.</>
+            : <><Clock size={14} /> <b>{countdown(left)}</b> left to respond
+              <span className="ddl-when">by {new Date(a.respondBy).toLocaleString(undefined,
+                { weekday: "short", hour: "numeric", minute: "2-digit" })}</span></>}
+        </div>
+      )}
+      {showActions && !expired ? (
+        <div className="portal-respond">
+          <span className="respond-label">Do you accept this job?</span>
+          <div className="respond-btns">
+            <button className="resp accept" onClick={() => onRespond(job.id, trade, "accepted")}><Check size={13} /> Accept</button>
+            <button className="resp decline" onClick={() => onRespond(job.id, trade, "declined")}><X size={13} /> Decline</button>
+          </div>
+        </div>
+      ) : showActions && expired ? null : (
+        <div className={`job-final ${a.status} portal-final`}>
+          {a.auto ? <><Zap size={15} /> Auto-scheduled — booked to your calendar</>
+            : a.status === "accepted" ? <><CheckCircle2 size={15} /> You accepted this job</>
+            : <><XCircle size={15} /> You declined this job</>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Contractor: manage own crews ---------------------------------------
+function MyCrews({ crews, onSave }) {
+  const [list, setList] = useState(() => JSON.parse(JSON.stringify(crews.length ? crews : [{ id: "c1", name: "Crew 1", available: true, unavailableDays: [], members: [{ name: "", role: "" }] }])));
+  const [saved, setSaved] = useState(false);
+  const touch = (next) => { setList(next); setSaved(false); };
+  const addCrew = () => touch([...list, { id: "c" + Date.now(), name: `Crew ${list.length + 1}`, members: [{ name: "", role: "" }] }]);
+  const removeCrew = (ci) => touch(list.filter((_, i) => i !== ci));
+  const setName = (ci, name) => touch(list.map((c, i) => i === ci ? { ...c, name } : c));
+  const addMember = (ci) => touch(list.map((c, i) => i === ci ? { ...c, members: [...c.members, { name: "", role: "" }] } : c));
+  const removeMember = (ci, mi) => touch(list.map((c, i) => i === ci ? { ...c, members: c.members.filter((_, j) => j !== mi) } : c));
+  const setMember = (ci, mi, k, v) => touch(list.map((c, i) => i === ci ? { ...c, members: c.members.map((m, j) => j === mi ? { ...m, [k]: v } : m) } : c));
+
+  const clean = list.map((c) => ({ ...c, members: c.members.filter((m) => m.name.trim()) })).filter((c) => c.members.length);
+  const total = clean.reduce((n, c) => n + c.members.length, 0);
+
+  return (
+    <div className="portal-panel">
+      <h4>My crews</h4>
+      <p className="panel-note">Name each crew and list who's on it. Admins pick which crew runs a job.</p>
+      <div className="crew-edit">
+        {list.map((cr, ci) => (
+          <div key={cr.id} className="crew-edit-card">
+            <div className="crew-edit-head">
+              <input className="crew-name-input" value={cr.name} onChange={(e) => setName(ci, e.target.value)} placeholder={`Crew ${ci + 1}`} />
+              {list.length > 1 && <button type="button" className="icon-x" onClick={() => removeCrew(ci)}><X size={13} /></button>}
+            </div>
+            {cr.members.map((m, mi) => (
+              <div key={mi} className="member-row">
+                <input value={m.name} onChange={(e) => setMember(ci, mi, "name", e.target.value)} placeholder="Member name" />
+                <input value={m.role} onChange={(e) => setMember(ci, mi, "role", e.target.value)} placeholder="Role" />
+                {cr.members.length > 1 && <button type="button" className="icon-x" onClick={() => removeMember(ci, mi)}><X size={12} /></button>}
+              </div>
+            ))}
+            <button type="button" className="add-line" onClick={() => addMember(ci)}><Plus size={12} /> Member</button>
+          </div>
+        ))}
+        <button type="button" className="add-crew" onClick={addCrew}><Plus size={13} /> Add crew</button>
+      </div>
+      <div className="panel-actions">
+        <span className="panel-count">{clean.length} {clean.length === 1 ? "crew" : "crews"} · {total} people</span>
+        {saved
+          ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+          : <button className="btn-solid" disabled={!clean.length} onClick={() => { onSave(clean); setSaved(true); }}>
+              <Check size={15} /> Save crews
+            </button>}
+      </div>
+    </div>
+  );
+}
+
+// ---- Contractor: choose where they work --------------------------------
+function MyCoverage({ sub, onSave }) {
+  const [mode, setMode] = useState(covMode(sub.coverage));
+  const [cities, setCities] = useState(sub.coverage.cities || []);
+  const [radii, setRadii] = useState(() => {
+    const r = covRadii(sub.coverage);
+    return r.length ? r.map((x) => ({ ...x })) : [{ zip: sub.zip || "", miles: 25 }];
+  });
+  const [newCity, setNewCity] = useState("");
+  const [saved, setSaved] = useState(false);
+  const touch = (fn) => { fn(); setSaved(false); };
+
+  const toggleCity = (c) => touch(() => setCities((cs) => cs.includes(c) ? cs.filter((x) => x !== c) : [...cs, c]));
+  const addCity = () => {
+    const c = newCity.trim();
+    if (!c) return;
+    touch(() => { setCities((cs) => cs.includes(c) ? cs : [...cs, c]); setNewCity(""); });
+  };
+  const setRadius = (i, k, v) => touch(() => setRadii((rs) => rs.map((r, j) => j === i ? { ...r, [k]: v } : r)));
+  const addRadius = () => touch(() => setRadii((rs) => [...rs, { zip: "", miles: 25 }]));
+  const removeRadius = (i) => touch(() => setRadii((rs) => rs.filter((_, j) => j !== i)));
+
+  const cleanRadii = radii.filter((r) => r.zip && r.miles).map((r) => ({ zip: r.zip, miles: Number(r.miles) }));
+  const valid = mode === "cities" ? cities.length > 0 : cleanRadii.length > 0;
+  const custom = cities.filter((c) => !AREAS.includes(c));
+
+  return (
+    <div className="portal-panel">
+      <h4>Where you'll work</h4>
+      <p className="panel-note">Choose named cities or set travel radii from ZIP codes — one or the other. You'll only be matched to jobs inside your coverage.</p>
+
+      <div className="cov-toggle">
+        <button type="button" className={mode === "cities" ? "on" : ""} onClick={() => touch(() => setMode("cities"))}>Specific cities</button>
+        <button type="button" className={mode === "radius" ? "on" : ""} onClick={() => touch(() => setMode("radius"))}>ZIP radius</button>
+      </div>
+
+      {mode === "cities" ? (
+        <>
+          <div className="cov-sub" style={{ marginTop: 16 }}>Cities you cover</div>
+          <div className="pick-grid">
+            {AREAS.map((a) => (
+              <button key={a} type="button" className={`pick ${cities.includes(a) ? "on" : ""}`} onClick={() => toggleCity(a)}>{a}</button>
+            ))}
+          </div>
+          {custom.length > 0 && (
+            <>
+              <div className="cov-sub" style={{ marginTop: 14 }}>Cities you added</div>
+              <div className="pick-grid">
+                {custom.map((c) => (
+                  <button key={c} type="button" className="pick on" onClick={() => toggleCity(c)}>
+                    {c} <X size={11} />
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          <div className="add-city-row">
+            <input value={newCity} placeholder="Add another city…"
+              onChange={(e) => setNewCity(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addCity()} />
+            <button type="button" className="btn-solid" disabled={!newCity.trim()} onClick={addCity}>
+              <Plus size={14} /> Add
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="cov-sub" style={{ marginTop: 16 }}>Radius areas</div>
+          <div className="radii-edit">
+            {radii.map((r, i) => (
+              <div key={i} className="radius-row">
+                <input inputMode="numeric" value={r.zip} placeholder="ZIP (e.g. 98101)"
+                  onChange={(e) => setRadius(i, "zip", e.target.value.trim())} />
+                <span>within</span>
+                <input type="number" min="1" value={r.miles}
+                  onChange={(e) => setRadius(i, "miles", e.target.value)} />
+                <span>mi</span>
+                {radii.length > 1 && (
+                  <button type="button" className="icon-x" onClick={() => removeRadius(i)}><X size={12} /></button>
+                )}
+              </div>
+            ))}
+            <button type="button" className="add-line" onClick={addRadius}><Plus size={12} /> Add another radius</button>
+          </div>
+        </>
+      )}
+
+      <div className="cov-preview">
+        <Target size={14} />
+        <span>
+          {valid
+            ? (mode === "cities"
+                ? <strong>{cities.join(", ")}</strong>
+                : <strong>{cleanRadii.map((r) => `${r.miles} mi of ${r.zip}`).join(" · ")}</strong>)
+            : <em>No coverage set — you won't be matched to any jobs.</em>}
+        </span>
+      </div>
+
+      <div className="panel-actions">
+        <span className="panel-count">
+          {mode === "cities"
+            ? `${cities.length} ${cities.length === 1 ? "city" : "cities"}`
+            : `${cleanRadii.length} radius ${cleanRadii.length === 1 ? "area" : "areas"}`}
+        </span>
+        {saved
+          ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+          : <button className="btn-solid" disabled={!valid}
+              onClick={() => {
+                onSave(mode === "cities"
+                  ? { mode: "cities", cities, radii: [] }
+                  : { mode: "radius", cities: [], radii: cleanRadii });
+                setSaved(true);
+              }}>
+              <Check size={15} /> Save coverage
+            </button>}
+      </div>
+    </div>
+  );
+}
+// ---- Contractor: crew-based availability --------------------------------
+function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable }) {
+  const crews = sub.crews || [];
+  const [crewId, setCrewId] = useState(crews[0]?.id || "");
+  const [offset, setOffset] = useState(0);
+  const today = new Date();
+  const start = new Date(today); start.setDate(today.getDate() + offset * 28);
+  const days = [...Array(28)].map((_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
+  const fmt = (d) => d.toISOString().slice(0, 10);
+
+  const isAll = crewId === "__all";
+  const crew = crews.find((c) => c.id === crewId);
+
+  // which days each crew is booked on
+  const bookedFor = (name) => new Set(
+    jobs.filter((j) => Object.values(j.assignments || {})
+      .some((a) => a.subId === sub.id && a.crewName === name)).map((j) => j.date)
+  );
+  const crewBooked = crew ? bookedFor(crew.name) : new Set();
+
+  if (crews.length === 0) {
+    return (
+      <div className="portal-panel">
+        <h4>My availability</h4>
+        <div className="dash-empty"><Users size={24} />
+          <p>Add a crew under My Crews first — availability is set per crew.</p></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="portal-panel">
+      <h4>My availability</h4>
+      <p className="panel-note">Availability is set per crew. Pick a crew, then tap days it can't work.</p>
+
+      <div className="crew-picker">
+        {crews.map((c) => {
+          const off = crewOffDays(c).length;
+          return (
+            <button key={c.id} className={`cp-btn ${crewId === c.id ? "on" : ""} ${c.available === false ? "paused" : ""}`}
+              onClick={() => setCrewId(c.id)}>
+              <span className="cp-name">{c.name}</span>
+              <span className="cp-meta">
+                {c.available === false ? "Paused" : off > 0 ? `${off} day${off === 1 ? "" : "s"} off` : "Fully open"}
+                {" · "}{c.members.length} ppl
+              </span>
+            </button>
+          );
+        })}
+        <button className={`cp-btn all ${isAll ? "on" : ""}`} onClick={() => setCrewId("__all")}>
+          <span className="cp-name">All crews</span>
+          <span className="cp-meta">Overview</span>
+        </button>
+      </div>
+
+      {isAll ? (
+        <>
+          <div className="cal-legend">
+            <span><span className="lg up" /> At least one crew free</span>
+            <span><span className="lg down" /> No crews free</span>
+          </div>
+          <div className="all-crew-grid">
+            <div className="acg-head">Crew</div>
+            {days.slice(0, 14).map((d) => (
+              <div key={fmt(d)} className="acg-day">
+                <span className="dow">{d.toLocaleDateString(undefined, { weekday: "narrow" })}</span>
+                <span className="dom">{d.getDate()}</span>
+              </div>
+            ))}
+            {crews.map((c) => {
+              const bk = bookedFor(c.name);
+              return (
+                <React.Fragment key={c.id}>
+                  <div className="acg-name">{c.name}</div>
+                  {days.slice(0, 14).map((d) => {
+                    const k = fmt(d);
+                    const booked = bk.has(k);
+                    const free = crewFreeOn(c, k);
+                    return <div key={k} className={`acg-cell ${booked ? "booked" : free ? "up" : "down"}`}
+                      title={`${c.name} · ${booked ? "booked" : free ? "free" : "off"} ${formatDay(k)}`} />;
+                  })}
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="crew-switch-row">
+            <label className={`avail-switch ${crew.available !== false ? "on" : ""}`}>
+              <input type="checkbox" checked={crew.available !== false}
+                onChange={(e) => onToggleCrewAvailable(crew.id, e.target.checked)} />
+              <span className={`avail-dot ${crew.available !== false ? "up" : "down"}`} />
+              {crew.available !== false ? `${crew.name} is taking work` : `${crew.name} is paused`}
+            </label>
+          </div>
+
+          {crew.available === false && (
+            <div className="doc-block">
+              <AlertTriangle size={15} />
+              <div><strong>{crew.name} is paused.</strong> It won't be offered for any job until you switch it back on.</div>
+            </div>
+          )}
+
+          <div className="cal-legend">
+            <span><span className="lg up" /> Available</span>
+            <span><span className="lg down" /> Marked off</span>
+            <span><span className="lg booked" /> Booked</span>
+            <span className="cal-hint">{crewOffDays(crew).length} day{crewOffDays(crew).length === 1 ? "" : "s"} off</span>
+          </div>
+
+          <div className="mini-cal-nav">
+            <button onClick={() => setOffset((o) => Math.max(0, o - 1))} disabled={offset === 0}>← Earlier</button>
+            <span>{days[0].toLocaleDateString(undefined, { month: "long", day: "numeric" })} – {days[27].toLocaleDateString(undefined, { month: "long", day: "numeric" })}</span>
+            <button onClick={() => setOffset((o) => o + 1)}>Later →</button>
+          </div>
+          <div className="mini-cal">
+            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <div key={d} className="mc-dow">{d}</div>)}
+            {[...Array(days[0].getDay())].map((_, i) => <div key={"pad" + i} />)}
+            {days.map((d) => {
+              const key = fmt(d);
+              const booked = crewBooked.has(key);
+              const off = crewOffDays(crew).includes(key);
+              const paused = crew.available === false;
+              return (
+                <button key={key}
+                  className={`mc-day ${booked ? "booked" : paused ? "down" : off ? "off" : "free"}`}
+                  disabled={booked || paused}
+                  title={booked ? `${crew.name} has a job this day`
+                    : paused ? `${crew.name} is paused`
+                    : off ? "Marked off — tap to free up" : "Available — tap to mark off"}
+                  onClick={() => !booked && !paused && onToggleCrewDay(crew.id, key)}>
+                  <span className="mc-num">{d.getDate()}</span>
+                  {booked && <Hammer size={10} />}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- Create / edit user -------------------------------------------------
+function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = true }) {
+  const [f, setF] = useState(existing
+    ? { id: existing.id, name: existing.name, email: existing.email, role: existing.role, subId: existing.subId || "" }
+    : { name: "", email: "", role: "pm", subId: "" });
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const valid = f.name && f.email && (f.role !== "contractor" || f.subId);
+  const roleLocked = existing && !canChangeRole;
+  return (
+    <div className="form">
+      <h2>{isSelf ? "My account" : existing ? "Edit user" : "New user"}</h2>
+      <p className="form-sub">
+        {isSelf ? "Update your own name and email."
+          : existing ? "Change this user's details, role, or access."
+          : "Admins manage users; project managers do everything else."}
+      </p>
+      <label className="fld">Full name<input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Jane Doe" /></label>
+      <label className="fld">Email<input value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="jane@company.com" /></label>
+      <div className="fld">Role
+        {roleLocked ? (
+          <div className="role-locked">
+            <span className={`role-badge r-${f.role}`}>{ROLES[f.role].label}</span>
+            <span className="rl-note">{isSelf ? "You can't change your own role." : "Only an admin can change roles."}</span>
+          </div>
+        ) : (
+          <div className="role-pick">
+            {Object.entries(ROLES).map(([k, r]) => (
+              <button key={k} type="button" className={f.role === k ? "on" : ""} onClick={() => set("role", k)}>
+                <span className="rp-label">{r.label}</span>
+                <span className="rp-desc">
+                  {k === "admin" && "Full access, can manage users"}
+                  {k === "pm" && "Create jobs & work orders, assign contractors"}
+                  {k === "contractor" && "Own availability, trades, docs, job responses"}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {f.role === "contractor" && !roleLocked && (
+        <label className="fld">Link to contractor record
+          <select value={f.subId} onChange={(e) => set("subId", Number(e.target.value))}>
+            <option value="">Select contractor…</option>
+            {subs.map((x) => <option key={x.id} value={x.id}>{x.company}</option>)}
+          </select>
+        </label>
+      )}
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-solid" onClick={() => onSubmit({ ...f, subId: f.subId || undefined })} disabled={!valid}>
+          {existing ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Create user</>}
+        </button>
+      </div>
+    </div>
+  );
+}
+// ---- Default tenant mark (roof/home glyph only — the name is set in text) --
+// NOTE: this polygon is OUTERHOME'S mark, used only as their own account logo.
+// It is not a generic default — a tenant without a logo falls back to initials.
+function HomeMark({ height = 26 }) {
+  return (
+    <svg viewBox="66 242 124 111" height={height} role="img" aria-label="Home mark"
+      style={{ display: "block", width: "auto" }}>
+      <polygon fill="currentColor" points="184.99,277.48 184.99,347.67 163.33,347.67 163.33,290.18 128.24,271.51 93.14,290.18 93.14,332.74 93.16,332.73 128.32,311.39 128.24,347.67 71.49,347.67 71.49,277.48 128.24,247.61"/>
+    </svg>
+  );
+}
+
+// ---- Tenant brand mark (custom upload, else default, else initials) -----
+function BrandMark({ brand, height = 24 }) {
+  if (brand.logoData) {
+    return <img src={brand.logoData} alt={brand.name} style={{ height, width: "auto", display: "block" }} />;
+  }
+  // No borrowed marks: a tenant with no logo of their own gets their initials.
+  return (
+    <div className="brand-initials" style={{ height, minWidth: height }}>
+      {brand.name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
+    </div>
+  );
+}
+
+// ---- Login / splash ------------------------------------------------------
+function LoginPage({ users, brand, accounts, memberships, onLogin }) {
+  // Show which account each demo login lands in — the same person can hold
+  // memberships in several.
+  const acctOf = (u) => {
+    const m = (memberships || []).find((x) => x.userId === u.id);
+    return m ? (accounts || []).find((a) => a.id === m.accountId) : null;
+  };
+  const roleOf = (u) => {
+    const m = (memberships || []).find((x) => x.userId === u.id);
+    return m ? m.role : "contractor";
+  };
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+
+  const submit = () => {
+    const u = users.find((x) => x.email.toLowerCase() === email.trim().toLowerCase());
+    if (!u) { setErr("No account found for that email."); return; }
+    if (!pw) { setErr("Enter your password."); return; }
+    setErr("");
+    onLogin(u.id);
+  };
+
+  return (
+    <div className="login-wrap">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-logo-wrap"><BrandMark brand={brand} height={38} /></div>
+          <h1>{brand.name}</h1>
+          <p>Contractor portal · {brand.subdomain}.subsub.work</p>
+        </div>
+
+        <div className="login-form">
+          <label className="fld">Email
+            <input type="email" inputMode="email" autoComplete="username"
+              value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); }}
+              placeholder="you@company.com"
+              onKeyDown={(e) => e.key === "Enter" && submit()} />
+          </label>
+          <label className="fld">Password
+            <input type="password" autoComplete="current-password"
+              value={pw} onChange={(e) => { setPw(e.target.value); setErr(""); }}
+              placeholder="••••••••"
+              onKeyDown={(e) => e.key === "Enter" && submit()} />
+          </label>
+          {err && <div className="login-err"><AlertTriangle size={13} /> {err}</div>}
+          <button className="btn-solid login-btn" onClick={submit}>
+            <Lock size={15} /> Sign in
+          </button>
+          <button className="login-forgot" onClick={() => setErr("Password reset isn't wired up in this demo.")}>
+            Forgot password?
+          </button>
+        </div>
+
+        <div className="login-demo">
+          <div className="ld-label">Demo accounts — tap to sign in</div>
+          {users.map((u) => (
+            <button key={u.id} className="ld-row" onClick={() => onLogin(u.id)}>
+              <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+              <span className="ld-main">
+                <span className="ld-name">{u.name}</span>
+                <span className="ld-email">{u.email}</span>
+              </span>
+              <span className="ld-badges">
+                <span className={`role-badge r-${u.role}`}>{ROLES[u.role].label}</span>
+                {roleOf(u) !== "contractor" && (
+                  <span className={`plan-pill ${acctOf(u) && acctOf(u).plan === "scale" ? "scale" : ""}`}>
+                    {acctOf(u) ? acctOf(u).name : "—"}
+                  </span>
+                )}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="login-foot">
+        <span className="powered">Powered by <strong>SubSub</strong></span>
+        <span className="login-demo-note">Demo build · no real authentication</span>
+      </p>
+    </div>
+  );
+}
+
+// ---- Work order document (derived view, downloadable) -------------------
+function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand }) {
+  const M = catMeta(trade);
+  const download = () => {
+    const lines = [
+      `WORK ORDER ${a.wo}`,
+      `Issued: ${a.woIssued}`,
+      "",
+      `Contractor: ${a.company}  (${a.contact})`,
+      a.crewName ? `Crew: ${a.crewName}` : "",
+      `Trade: ${M.label}`,
+      "",
+      `Job: ${job.title}`,
+      job.client ? `Client: ${job.client}` : "",
+      `Address: ${[job.address, job.area, job.zip].filter(Boolean).join(", ")}`,
+      job.sqft ? `Square footage: ${Number(job.sqft).toLocaleString()} sq ft` : "",
+      job.stories ? `Stories: ${job.stories}` : "",
+      `Start: ${formatWhen(job.date, job.time) || job.date || "TBD"}`,
+      "",
+      `Materials source: ${job.materialSource || "—"}`,
+      `Materials paid by: ${job.materialsPaidBy || "—"}`,
+      "",
+      "SCOPE OF WORK",
+      a.tradeScope || job.scope || "—",
+      "",
+      `Subcontractor value: ${a.value ? formatMoney(a.value) : "—"}`,
+      "",
+      (job.measurementDocs || []).length
+        ? `Measurement documents: ${job.measurementDocs.join(", ")}` : "",
+      "",
+      `Status: ${a.auto ? "Auto-scheduled" : a.status}`,
+      "",
+      brand ? `${brand.name} — powered by SubSub` : "Powered by SubSub",
+    ].filter((l) => l !== "");
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url; link.download = `${a.wo}-${M.label.replace(/\W+/g, "-").toLowerCase()}.txt`;
+    link.click(); URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="wo-doc">
+      <div className="wo-doc-head">
+        <div>
+          <div className="wdh-label">{brand ? `${brand.name} · work order` : "Work order"}</div>
+          <h2>{a.wo}</h2>
+          <p className="wdh-sub">Issued {a.woIssued} · {M.label}</p>
+        </div>
+        <span className={`job-status st-${a.auto ? "accepted" : a.status}`}>{a.auto ? "auto-scheduled" : a.status}</span>
+      </div>
+
+      <div className="wo-doc-grid">
+        <div className="wd-row"><span>Contractor</span><strong>{a.company}</strong></div>
+        <div className="wd-row"><span>Contact</span><strong>{a.contact}</strong></div>
+        {a.crewName && <div className="wd-row"><span>Crew</span><strong>{a.crewName}</strong></div>}
+        <div className="wd-row"><span>Trade</span><strong>{M.label}</strong></div>
+      </div>
+
+      <div className="wo-doc-sec">Job</div>
+      <div className="wo-doc-grid">
+        <div className="wd-row"><span>Job</span><strong>{job.title}</strong></div>
+        {job.client && <div className="wd-row"><span>Client</span><strong>{job.client}</strong></div>}
+        <div className="wd-row"><span>Address</span><strong>{[job.address, job.area, job.zip].filter(Boolean).join(", ") || "—"}</strong></div>
+        {job.sqft && <div className="wd-row"><span>Square footage</span><strong>{Number(job.sqft).toLocaleString()} sq ft</strong></div>}
+        {job.stories && <div className="wd-row"><span>Stories</span><strong>{job.stories}</strong></div>}
+        <div className="wd-row"><span>Start</span><strong>{formatWhen(job.date, job.time) || "TBD"}</strong></div>
+      </div>
+
+      <div className="wo-doc-sec">Materials</div>
+      <div className="wo-doc-grid">
+        <div className="wd-row"><span>Source</span><strong>{job.materialSource || "—"}</strong></div>
+        <div className="wd-row"><span>Paid by</span><strong>{job.materialsPaidBy || "—"}</strong></div>
+      </div>
+
+      <div className="wo-doc-sec">Scope of work</div>
+      <p className="wo-doc-scope">{a.tradeScope || job.scope || "No scope recorded."}</p>
+
+      <div className="wo-doc-sec">Compensation</div>
+      <div className="wo-value">{a.value ? formatMoney(a.value) : "—"}<span> subcontractor value</span></div>
+
+      <div className="wo-doc-sec">Measurement documents</div>
+      {(job.measurementDocs || []).length === 0 ? (
+        <p className="muted">None attached to this job.</p>
+      ) : (
+        <div className="meas-list">
+          {job.measurementDocs.map((d) => (
+            <div key={d} className="meas-row view">
+              <FileText size={14} /><span className="meas-name">{d}</span>
+              <button className="meas-dl" onClick={download}><Download size={12} /> Open</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="wo-doc-sec">Signed copy</div>
+      {a.signedWO ? (
+        <div className="meas-row view"><CheckCircle2 size={14} /><span className="meas-name">{a.signedWO}</span></div>
+      ) : canUpload ? (
+        <label className="meas-upload">
+          <Upload size={14} /> Upload signed work order
+          <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadSigned(e.target.files[0].name); }} />
+        </label>
+      ) : <p className="muted">Not yet uploaded.</p>}
+
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onClose}>Close</button>
+        <button className="btn-solid" onClick={download}><Download size={15} /> Download work order</button>
+      </div>
+    </div>
+  );
+}
+
+// ---- Modal shell ---------------------------------------------------------
+function Modal({ children, onClose, wide }) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className={`modal ${wide ? "modal-wide" : ""}`} onClick={(e) => e.stopPropagation()}>
+        <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ---- Sub detail ----------------------------------------------------------
+function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense }) {
+  const ready = sub.bond && sub.insurance && sub.contract;
+  const [notes, setNotes] = useState(sub.notes || "");
+  const [dirty, setDirty] = useState(false);
+  const docs = [
+    { key: "insurance", label: DOC_LABELS.insurance, icon: FileText },
+    { key: "bond", label: DOC_LABELS.bond, icon: Shield },
+    { key: "contract", label: DOC_LABELS.contract, icon: ScrollText },
+    { key: "w9", label: DOC_LABELS.w9, icon: Receipt },
+  ];
+  return (
+    <div className="detail">
+      <div className="detail-head">
+        <div className="cat-row">
+          {sub.categories.map((c) => {
+            const M = catMeta(c);
+            return <span key={c} className={`cat-badge cat-${c}`}><M.icon size={12} /> {M.label}</span>;
+          })}
+        </div>
+        <button className="edit-btn" onClick={onEdit}><Pencil size={13} /> Edit</button>
+      </div>
+      <div className="name-row big"><h2>{sub.company}</h2>
+        {sub.rating > 0 && <span className="rating-wrap"><Stars value={sub.rating} />
+          {sub.ratedJobs ? <span className="rated-count">from {sub.ratedJobs} {sub.ratedJobs === 1 ? "job" : "jobs"}</span> : null}</span>}
+      </div>
+      <div className="detail-contact">
+        <a href={`tel:${sub.phone}`}><Phone size={14} /> {sub.phone}</a>
+        <a href={`mailto:${sub.email}`}><Mail size={14} /> {sub.email}</a>
+        <span className="notify-chip" title="How long they warranty their labour">
+          <ShieldCheck size={12} /> {warrantyLabel(sub)}
+        </span>
+        <span className="notify-chip" title="How this contractor receives automated notifications">
+          <Bell size={12} /> {notifyLabel(sub)}
+        </span>
+      </div>
+      {(sub.city || sub.zip) && (
+        <p className="detail-addr"><MapPin size={13} /> {[sub.city, sub.state, sub.zip].filter(Boolean).join(", ")}</p>
+      )}
+      <p className="detail-person">
+        {sub.contact} · <Users size={13} /> {crewCount(sub)} {crewCount(sub) === 1 ? "crew" : "crews"} · {headCount(sub)} people ·
+        <span className={`avail-inline ${sub.available ? "up" : "down"}`}>
+          {sub.available ? "Available" : "Not available"}</span>
+      </p>
+
+      {(() => { const st = contractorStats(sub, jobs); return (
+        <div className="stat-cards">
+          <div className="stat-card"><span className="sc-num">{st.completed}</span><span className="sc-lab"><CheckCircle2 size={12} /> Jobs done</span></div>
+          <div className="stat-card"><span className="sc-num">{st.earned ? formatMoney(st.earned) : "$0"}</span><span className="sc-lab"><Target size={12} /> Earned</span></div>
+          <div className="stat-card"><span className="sc-num">{acceptRate(sub)}%</span><span className="sc-lab"><Check size={12} /> Accept rate</span></div>
+        </div>
+      ); })()}
+
+      <section><h4>Capabilities</h4><div className="caps">{sub.caps.map((c) => <span key={c} className="cap">{c}</span>)}</div></section>
+
+      <section>
+        <h4>Coverage</h4>
+        {covMode(sub.coverage) === "cities" ? (
+          (sub.coverage.cities || []).length > 0
+            ? <div className="area-chips">{sub.coverage.cities.map((a) => <span key={a} className="area-chip"><MapPin size={11} /> {a}</span>)}</div>
+            : <p className="muted">No cities set.</p>
+        ) : (
+          covRadii(sub.coverage).length > 0
+            ? <div className="radii-list">
+                {covRadii(sub.coverage).map((r, i) => (
+                  <div key={i} className="cov-radius"><Target size={14} /> Works within <strong>{r.miles} miles</strong> of {r.zip}</div>
+                ))}
+              </div>
+            : <p className="muted">No radius set.</p>
+        )}
+      </section>
+
+      {(sub.unavailableDays || []).length > 0 && (
+        <section>
+          <h4><Calendar size={13} /> Days marked off</h4>
+          <div className="area-chips">
+            {sub.unavailableDays.slice().sort().map((d) => (
+              <span key={d} className="off-chip"><XCircle size={11} /> {formatDay(d)}</span>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section>
+        <h4><Users size={13} /> Crews &amp; members</h4>
+        {(sub.crews || []).length === 0 ? <p className="muted">No crews set.</p> : (
+          <div className="crew-list">
+            {sub.crews.map((cr) => {
+              const cr2 = crewRatings(sub, jobs).find((x) => x.name === cr.name);
+              return (
+              <div key={cr.id} className="crew-card">
+                <div className="crew-head">
+                  <span className="crew-name">{cr.name}</span>
+                  <span className="crew-head-right">
+                    {cr2 ? <span className="crew-rating"><Star size={11} fill="currentColor" /> {cr2.avg.toFixed(1)} <em>({cr2.count})</em></span> : <span className="crew-unrated">unrated</span>}
+                    <span className="crew-size">{cr.members.length} {cr.members.length === 1 ? "member" : "members"}</span>
+                  </span>
+                </div>
+                <div className="crew-members">
+                  {cr.members.map((m, i) => (
+                    <span key={i} className="member"><span className="m-name">{m.name}</span>{m.role ? <span className="m-role">{m.role}</span> : null}</span>
+                  ))}
+                </div>
+              </div>
+            );})}
+          </div>
+        )}
+        {crewRatings(sub, jobs).length > 0 && (
+          <p className="rollup-note">
+            Crew ratings roll up to the contractor's overall score
+            {sub.rating ? <> — currently <strong>{sub.rating.toFixed(1)}</strong></> : null}
+            {sub.ratedJobs ? ` across ${sub.ratedJobs} rated ${sub.ratedJobs === 1 ? "job" : "jobs"}` : ""}.
+          </p>
+        )}
+      </section>
+
+      <section>
+        <h4><StickyNote size={13} /> Notes</h4>
+        <textarea className="notes-area" value={notes} rows={3}
+          onChange={(e) => { setNotes(e.target.value); setDirty(true); }} placeholder="Add notes about this sub…" />
+        {dirty && <button className="notes-save" onClick={() => { onSaveNotes(sub.id, notes); setDirty(false); }}>Save notes</button>}
+      </section>
+
+      <section>
+        <h4><Shield size={13} /> WA contractor registration</h4>
+        {(() => {
+          const c = sub.licenseCheck;
+          const ok = licenseOk(sub);
+          if (!sub.license) return (
+            <div className="lic-card none">
+              <AlertTriangle size={16} />
+              <div className="lic-main">
+                <span className="lic-num">No license number on file</span>
+                <span className="lic-meta">Add their L&amp;I registration number to verify it against the state registry.</span>
+              </div>
+              <button className="doc-add" onClick={onEdit}><Pencil size={13} /> Add</button>
+            </div>
+          );
+          return (
+            <div className={`lic-card ${ok ? "ok" : "bad"}`}>
+              {ok ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+              <div className="lic-main">
+                <span className="lic-num">{sub.license}
+                  <span className={`lic-status s-${(c?.status || "unknown").toLowerCase()}`}>{c?.status || "Not checked"}</span>
+                </span>
+                {c?.found ? (
+                  <span className="lic-meta">
+                    {c.licenseType} · expires {c.expirationDate}
+                    {sub.ubi ? ` · UBI ${sub.ubi}` : ""}
+                    {c.checkedAt ? ` · checked ${c.checkedAt}` : ""}
+                  </span>
+                ) : <span className="lic-meta">Not yet verified against L&amp;I.</span>}
+                {c?.found && (
+                  <span className="lic-state">
+                    State record: bond {c.bond ? `${formatMoney(c.bond.amount)} (${c.bond.surety})` : "none"} · insurance {c.insurance ? `${formatMoney(c.insurance.coverage)} (${c.insurance.carrier})` : "none"}
+                  </span>
+                )}
+              </div>
+              <div className="lic-actions">
+                <button className="doc-review" onClick={() => onVerifyLicense(sub)}>
+                  <Shield size={13} /> {c ? "Re-check" : "Verify"}
+                </button>
+                <a className="lic-link" href={lniPublicLookup(sub.license)} target="_blank" rel="noopener noreferrer">
+                  L&amp;I record
+                </a>
+              </div>
+            </div>
+          );
+        })()}
+        {sub.licenseCheck?.found && !licenseOk(sub) && (
+          <p className="rollup-note" style={{ color: "var(--red)" }}>
+            Registration is {sub.licenseCheck.status.toLowerCase()} — this contractor can't be assigned until it's renewed.
+          </p>
+        )}
+      </section>
+
+      <section>
+        <h4>Compliance documents</h4>
+        <div className="doc-rows">
+          {docs.map((d) => {
+            const st = docStatus(sub, d.key);
+            const rv = docReview(sub, d.key);
+            return (
+              <div key={d.key} className={`doc-row st-doc-${st}`}>
+                <d.icon size={16} />
+                <div className="doc-label-wrap">
+                  <span className="doc-label">{d.label}</span>
+                  {sub.docFiles?.[d.key] && <span className="doc-file">{sub.docFiles[d.key]}</span>}
+                  <span className={`doc-state s-${st}`}>
+                    {st === "verified" && <><CheckCircle2 size={11} /> Verified {rv?.verifiedAt} by {rv?.verifiedBy}
+                      {rv?.limits?.cgl_occ ? ` · CGL ${formatMoney(rv.limits.cgl_occ)}` : rv?.amount ? ` · ${formatMoney(rv.amount)}` : ""}{rv?.expires ? ` · expires ${rv.expires}` : ""}</>}
+                    {st === "pending" && <><Clock size={11} /> Awaiting review</>}
+                    {st === "rejected" && <><XCircle size={11} /> Rejected — {rv?.note}</>}
+                    {st === "missing" && <><AlertTriangle size={11} /> Not uploaded</>}
+                  </span>
+                </div>
+                {activeOverrides(rv).length > 0 && (
+                  <span className="doc-waived" title={activeOverrides(rv).map((o) => `${o.label}: ${o.reason}`).join(" · ")}>
+                    <Shield size={11} /> {activeOverrides(rv).length} accepted below requirement
+                  </span>
+                )}
+                {st === "missing" ? (
+                  <div className="doc-row-actions">
+                    <button className="doc-add" onClick={onEdit}><Upload size={13} /> Upload</button>
+                    <button className="doc-req" onClick={() => onRequestDocs(sub)}><Mail size={12} /> Request</button>
+                  </div>
+                ) : (
+                  <button className={`doc-review ${st === "pending" ? "urgent" : ""}`}
+                    onClick={() => onReviewDoc(sub, d.key)}>
+                    {st === "verified" ? <><FileText size={13} /> View</> : <><Shield size={13} /> Review</>}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {pendingReviewDocs(sub).length > 0 && (
+          <p className="rollup-note">
+            {pendingReviewDocs(sub).length} document{pendingReviewDocs(sub).length === 1 ? "" : "s"} uploaded but
+            not yet verified — this contractor can't be assigned until they're reviewed.
+          </p>
+        )}
+      </section>
+
+      <div className="detail-actions">
+        <button className="mini primary" onClick={onSchedule}><Calendar size={14} /> Assign to a job</button>
+      </div>
+      {!ready && (
+        <div className="doc-block detail-doc-block">
+          <AlertTriangle size={15} />
+          <div>
+            <strong>Not assignable yet.</strong> Outstanding: {complianceGaps(sub).join(", ")}.
+          </div>
+          <button className="btn-notify" onClick={() => onRequestDocs(sub)}><Mail size={14} /> Request docs</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Send a compliance notification (one way: email, optionally + SMS) ---
+function NotifyForm({ data, brand, onClose }) {
+  const { sub, job, trade } = data;
+  const prefs = notifyPrefs(sub);
+  const hasEmail = !!sub.email;
+  const hasPhone = !!sub.phone;
+  const [sendEmail, setSendEmail] = useState(hasEmail);
+  const [sendSms, setSendSms] = useState(hasPhone && prefs.sms);
+  const [sent, setSent] = useState(false);
+
+  const emailBody = buildDocEmail(sub, job, trade, brand);
+  const smsBody = buildDocSms(sub, job, brand);
+  const subject = job
+    ? `Action needed: upload documents for ${job.title}`
+    : "Action needed: upload your compliance documents";
+  const canSend = (sendEmail && hasEmail) || (sendSms && hasPhone);
+
+  if (sent) {
+    return (
+      <div className="form sent-state">
+        <CheckCircle2 size={40} />
+        <h2>Notification sent</h2>
+        <p>
+          {[sendEmail && `email to ${sub.email}`, sendSms && `text to ${sub.phone}`]
+            .filter(Boolean).join(" and ")} — {sub.contact} at {sub.company}.
+        </p>
+        <button className="btn-solid" onClick={onClose}>Done</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="form">
+      <h2>Request documents</h2>
+      <p className="form-sub">
+        {sub.company} · outstanding: {complianceGaps(sub).join(", ")}
+      </p>
+
+      <div className="notify-note">
+        <Bell size={13} />
+        Email &amp; SMS is for automated notifications only. This points them to their portal to upload — there's no reply address.
+      </div>
+
+      <div className="form-sec">Send via</div>
+      <div className="notify-opts">
+        <label className={`notify-opt ${sendEmail ? "on" : ""} ${!hasEmail ? "disabled" : ""}`}>
+          <input type="checkbox" checked={sendEmail} disabled={!hasEmail}
+            onChange={(e) => setSendEmail(e.target.checked)} />
+          <Mail size={17} />
+          <span className="no-txt">
+            <span className="no-name">Email <span className="no-tag">default</span></span>
+            <span className="no-sub">{sub.email || "No email on file"}</span>
+          </span>
+        </label>
+        <label className={`notify-opt ${sendSms ? "on" : ""} ${!hasPhone ? "disabled" : ""}`}>
+          <input type="checkbox" checked={sendSms} disabled={!hasPhone}
+            onChange={(e) => setSendSms(e.target.checked)} />
+          <Phone size={17} />
+          <span className="no-txt">
+            <span className="no-name">Also send a text message</span>
+            <span className="no-sub">
+              {sub.phone
+                ? prefs.sms ? `${sub.phone} · SMS is on for this contractor` : `${sub.phone} · they prefer email`
+                : "No phone on file"}
+            </span>
+          </span>
+        </label>
+      </div>
+      {!prefs.sms && sendSms && hasPhone && (
+        <p className="cov-hint">This contractor has SMS switched off in their notification settings — send it only if it's urgent.</p>
+      )}
+
+      {sendEmail && hasEmail && (
+        <>
+          <div className="form-sec">Email preview</div>
+          <div className="msg-preview">
+            <div className="mp-head"><span>Subject</span><strong>{subject}</strong></div>
+            <pre className="mp-body">{emailBody}</pre>
+          </div>
+        </>
+      )}
+
+      {sendSms && hasPhone && (
+        <>
+          <div className="form-sec">Text preview</div>
+          <div className="sms-bubble">{smsBody}</div>
+          <p className="cov-hint">{smsBody.length} characters · {Math.ceil(smsBody.length / 160)} SMS segment{smsBody.length > 160 ? "s" : ""}</p>
+        </>
+      )}
+
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn-solid" disabled={!canSend} onClick={() => setSent(true)}>
+          <Send size={15} /> Send notification
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---- Add / edit sub form -------------------------------------------------
+function SubForm({ onSubmit, onCancel, existing }) {
+  const init = existing ? {
+    company: existing.company, contact: existing.contact, phone: existing.phone, email: existing.email,
+    categories: existing.categories, caps: existing.caps,
+    city: existing.city || "", state: existing.state || "", zip2: existing.zip || "",
+    license: existing.license || "", ubi: existing.ubi || "",
+    notifyEmail: notifyPrefs(existing).email, notifySms: notifyPrefs(existing).sms,
+    mailStreet: existing.mailStreet || "", mailCity: existing.mailCity || "",
+    mailState: existing.mailState || "", mailZip: existing.mailZip || "",
+    crews: existing.crews ? JSON.parse(JSON.stringify(existing.crews)) : [],
+    cities: existing.coverage.cities || [],
+    covMode: covMode(existing.coverage),
+    radii: covRadii(existing.coverage).length ? covRadii(existing.coverage).map((r) => ({ ...r })) : [{ zip: "", miles: 25 }],
+    rating: existing.rating || 0,
+    bond: existing.bond, insurance: existing.insurance, contract: existing.contract,
+    docFiles: { bond: existing.docFiles?.bond || null, insurance: existing.docFiles?.insurance || null, contract: existing.docFiles?.contract || null },
+    available: existing.available, notes: existing.notes || "",
+  } : {
+    company: "", contact: "", phone: "", email: "", categories: [], caps: [],
+    city: "", state: "", zip2: "",
+    license: "", ubi: "",
+    notifyEmail: true, notifySms: false,
+    mailStreet: "", mailCity: "", mailState: "", mailZip: "",
+    crews: [{ id: "c1", name: "Crew 1", available: true, unavailableDays: [], members: [{ name: "", role: "" }] }],
+    cities: [], covMode: "cities", radii: [{ zip: "", miles: 25 }], rating: 0,
+    bond: false, insurance: false, contract: false, available: true, notes: "",
+    docFiles: { bond: null, insurance: null, contract: null },
+  };
+  const [f, setF] = useState(init);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const toggle = (k, v) => setF((s) => ({ ...s, [k]: s[k].includes(v) ? s[k].filter((x) => x !== v) : [...s[k], v] }));
+
+  // crew editing helpers
+  const addCrew = () => setF((s) => ({ ...s, crews: [...s.crews, { id: "c" + Date.now(), name: `Crew ${s.crews.length + 1}`, members: [{ name: "", role: "" }] }] }));
+  const removeCrew = (ci) => setF((s) => ({ ...s, crews: s.crews.filter((_, i) => i !== ci) }));
+  const setCrewName = (ci, name) => setF((s) => ({ ...s, crews: s.crews.map((c, i) => i === ci ? { ...c, name } : c) }));
+  const addMember = (ci) => setF((s) => ({ ...s, crews: s.crews.map((c, i) => i === ci ? { ...c, members: [...c.members, { name: "", role: "" }] } : c) }));
+  const removeMember = (ci, mi) => setF((s) => ({ ...s, crews: s.crews.map((c, i) => i === ci ? { ...c, members: c.members.filter((_, j) => j !== mi) } : c) }));
+  const setMember = (ci, mi, k, v) => setF((s) => ({ ...s, crews: s.crews.map((c, i) => i === ci ? { ...c, members: c.members.map((m, j) => j === mi ? { ...m, [k]: v } : m) } : c) }));
+
+  const uploadDoc = (key, filename) => setF((s) => ({ ...s, [key]: true, docFiles: { ...s.docFiles, [key]: filename } }));
+  const deleteDoc = (key) => setF((s) => ({ ...s, [key]: false, docFiles: { ...s.docFiles, [key]: null } }));
+
+  const toggleCategory = (id) => {
+    setF((s) => {
+      const nextCats = s.categories.includes(id) ? s.categories.filter((x) => x !== id) : [...s.categories, id];
+      const allowedCaps = new Set(nextCats.flatMap((cat) => CAP_LIBRARY[cat] || []));
+      return { ...s, categories: nextCats, caps: s.caps.filter((c) => allowedCaps.has(c)) };
+    });
+  };
+
+  const caps = [...new Set(f.categories.flatMap((c) => CAP_LIBRARY[c] || []))];
+  const cleanRadii = (f.radii || []).filter((r) => r.zip && r.miles).map((r) => ({ zip: r.zip, miles: Number(r.miles) }));
+  const coverageOk = f.covMode === "cities" ? f.cities.length > 0 : cleanRadii.length > 0;
+  // clean crews: drop empty members, drop crews with no named members
+  const cleanCrews = f.crews
+    .map((c) => ({ ...c, members: c.members.filter((m) => m.name.trim()) }))
+    .filter((c) => c.members.length);
+  const valid = f.company && f.contact && f.categories.length && f.caps.length && coverageOk && cleanCrews.length
+    && (f.notifyEmail || f.notifySms);
+  const build = () => onSubmit({
+    ...(existing ? { id: existing.id } : {}),
+    company: f.company, contact: f.contact, phone: f.phone, email: f.email,
+    city: f.city, state: f.state, zip: f.zip2,
+    license: f.license, ubi: f.ubi,
+    notify: { email: f.notifyEmail, sms: f.notifySms },
+    mailStreet: f.mailStreet, mailCity: f.mailCity, mailState: f.mailState, mailZip: f.mailZip,
+    categories: f.categories, caps: f.caps, crews: cleanCrews,
+    coverage: f.covMode === "cities"
+      ? { mode: "cities", cities: f.cities, radii: [] }
+      : { mode: "radius", cities: [], radii: cleanRadii },
+    bond: f.bond, insurance: f.insurance, contract: f.contract, available: f.available, notes: f.notes,
+    rating: Number(f.rating) || 0, docFiles: f.docFiles,
+  });
+  // Three steps: who they are, what they do, who's on the crew + paperwork.
+  // Editing an existing record opens on step 1 but can jump between steps.
+  const [step, setStep] = useState(1);
+  const STEPS = [
+    { n: 1, label: "Company" },
+    { n: 2, label: "Trades & coverage" },
+    { n: 3, label: "Crews & paperwork" },
+  ];
+  const step1Ok = !!(f.company.trim() && f.contact.trim() && (f.notifyEmail || f.notifySms));
+  const step2Ok = !!(f.categories.length && f.caps.length && coverageOk);
+  const step3Ok = cleanCrews.length > 0;
+  const stepOk = step === 1 ? step1Ok : step === 2 ? step2Ok : step3Ok;
+
+  return (
+    <div className="form">
+      <h2>{existing ? "Edit subcontractor" : "Add subcontractor"}</h2>
+      <p className="form-sub">Step {step} of 3 · {STEPS[step - 1].label}</p>
+
+      <div className="steps-bar sf-steps">
+        {STEPS.map((st) => (
+          <button key={st.n} type="button"
+            data-state={st.n === step ? "now" : st.n < step ? "done" : undefined}
+            onClick={() => { if (st.n < step || existing) setStep(st.n); }}
+            disabled={st.n > step && !existing}>
+            <span className="sb-n">{st.n < step ? <Check size={12} /> : st.n}</span>
+            {st.label}
+          </button>
+        ))}
+      </div>
+
+      {step === 1 && (<>
+      <div className="fld-row">
+        <label className="fld">Company<input value={f.company} onChange={(e) => set("company", e.target.value)} placeholder="Company name" /></label>
+        <label className="fld">Contact<input value={f.contact} onChange={(e) => set("contact", e.target.value)} placeholder="Primary contact" /></label>
+      </div>
+      <div className="fld-row">
+        <label className="fld">WA L&amp;I license # <span className="fld-note">verified against the state registry</span>
+          <input value={f.license} onChange={(e) => set("license", e.target.value.toUpperCase().trim())} placeholder="CASCADR842KL" />
+        </label>
+        <label className="fld">UBI
+          <input inputMode="numeric" value={f.ubi} onChange={(e) => set("ubi", e.target.value.trim())} placeholder="603221887" />
+        </label>
+      </div>
+
+      <div className="fld-row">
+        <label className="fld">Phone<input type="tel" inputMode="tel" value={f.phone} onChange={(e) => set("phone", e.target.value)} placeholder="206-555-0100" /></label>
+        <label className="fld">Email<input type="email" inputMode="email" value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="name@company.com" /></label>
+      </div>
+      <div className="fld-row">
+        <label className="fld">City<input value={f.city} onChange={(e) => set("city", e.target.value)} placeholder="Seattle" /></label>
+        <label className="fld">State<input value={f.state} onChange={(e) => set("state", e.target.value.toUpperCase().slice(0, 2))} placeholder="WA" maxLength={2} /></label>
+        <label className="fld">ZIP<input inputMode="numeric" value={f.zip2} onChange={(e) => set("zip2", e.target.value)} placeholder="98101" /></label>
+      </div>
+      <div className="fld-row">
+        <label className="fld">Status
+          <select value={f.available ? "y" : "n"} onChange={(e) => set("available", e.target.value === "y")}>
+            <option value="y">Available</option><option value="n">Not available</option></select>
+        </label>
+        <div className="fld">Overall rating
+          <div className="rating-edit">
+            <StarRate value={Math.round(f.rating)} onRate={(n) => set("rating", n)} label="Set" />
+            <input type="number" min="0" max="5" step="0.1" value={f.rating}
+              onChange={(e) => set("rating", e.target.value)} />
+          </div>
+        </div>
+      </div>
+      <div className="fld">Notifications <span className="fld-note">how they receive automated alerts</span>
+        <div className="notify-opts compact">
+          <label className={`notify-opt ${f.notifyEmail ? "on" : ""}`}>
+            <input type="checkbox" checked={f.notifyEmail}
+              onChange={(e) => set("notifyEmail", e.target.checked)} />
+            <Mail size={15} /><span className="no-name">Email</span>
+          </label>
+          <label className={`notify-opt ${f.notifySms ? "on" : ""}`}>
+            <input type="checkbox" checked={f.notifySms}
+              onChange={(e) => set("notifySms", e.target.checked)} />
+            <Phone size={15} /><span className="no-name">SMS</span>
+          </label>
+        </div>
+        {!f.notifyEmail && !f.notifySms
+          ? <p className="fld-err"><AlertTriangle size={12} /> Pick at least one — they'd miss job requests otherwise.</p>
+          : <p className="cov-hint">Email &amp; SMS is for automated notifications only — one-way, no replies. Contractors can change this in their own account.</p>}
+      </div>
+
+      <div className="fld">Mailing address <span className="fld-note">for uniforms &amp; paperwork</span>
+        <input value={f.mailStreet} onChange={(e) => set("mailStreet", e.target.value)} placeholder="1234 Industrial Way, Suite B" />
+      </div>
+      <div className="fld-row">
+        <label className="fld">City<input value={f.mailCity} onChange={(e) => set("mailCity", e.target.value)} placeholder="Seattle" /></label>
+        <label className="fld">State<input value={f.mailState} maxLength={2} onChange={(e) => set("mailState", e.target.value.toUpperCase().slice(0, 2))} placeholder="WA" /></label>
+        <label className="fld">ZIP<input inputMode="numeric" value={f.mailZip} onChange={(e) => set("mailZip", e.target.value)} placeholder="98108" /></label>
+      </div>
+
+      </>)}
+
+      {step === 3 && (<>
+      <div className="fld">Crews &amp; members
+        <div className="crew-edit">
+          {f.crews.map((cr, ci) => (
+            <div key={cr.id} className="crew-edit-card">
+              <div className="crew-edit-head">
+                <input className="crew-name-input" value={cr.name} onChange={(e) => setCrewName(ci, e.target.value)} placeholder={`Crew ${ci + 1}`} />
+                {f.crews.length > 1 && <button type="button" className="icon-x" onClick={() => removeCrew(ci)}><X size={13} /></button>}
+              </div>
+              {cr.members.map((m, mi) => (
+                <div key={mi} className="member-row">
+                  <input value={m.name} onChange={(e) => setMember(ci, mi, "name", e.target.value)} placeholder="Member name" />
+                  <input value={m.role} onChange={(e) => setMember(ci, mi, "role", e.target.value)} placeholder="Role" />
+                  {cr.members.length > 1 && <button type="button" className="icon-x" onClick={() => removeMember(ci, mi)}><X size={12} /></button>}
+                </div>
+              ))}
+              <button type="button" className="add-line" onClick={() => addMember(ci)}><Plus size={12} /> Member</button>
+            </div>
+          ))}
+          <button type="button" className="add-crew" onClick={addCrew}><Plus size={13} /> Add crew</button>
+        </div>
+      </div>
+      </>)}
+
+      {step === 2 && (<>
+      <div className="fld">Categories (choose one or more)
+        <div className="pick-grid">{CATEGORIES.map((c) => (
+          <button key={c.id} type="button" className={`pick ${f.categories.includes(c.id) ? "on" : ""}`}
+            onClick={() => toggleCategory(c.id)}>{c.label}</button>
+        ))}</div>
+      </div>
+      {caps.length > 0 && (
+        <div className="fld">Capabilities<div className="pick-grid">
+          {caps.map((c) => <button key={c} type="button" className={`pick ${f.caps.includes(c) ? "on" : ""}`} onClick={() => toggle("caps", c)}>{c}</button>)}
+        </div></div>
+      )}
+      <div className="fld">Coverage
+        <div className="cov-toggle">
+          <button type="button" className={f.covMode === "cities" ? "on" : ""} onClick={() => set("covMode", "cities")}>Specific cities</button>
+          <button type="button" className={f.covMode === "radius" ? "on" : ""} onClick={() => set("covMode", "radius")}>ZIP radius</button>
+        </div>
+        {f.covMode === "cities" ? (
+          <div className="pick-grid">
+            {AREAS.map((a) => <button key={a} type="button" className={`pick ${f.cities.includes(a) ? "on" : ""}`} onClick={() => toggle("cities", a)}>{a}</button>)}
+          </div>
+        ) : (
+          <div className="radii-edit">
+            {(f.radii || []).map((r, i) => (
+              <div key={i} className="radius-row">
+                <input inputMode="numeric" value={r.zip} placeholder="ZIP"
+                  onChange={(e) => set("radii", f.radii.map((x, j) => j === i ? { ...x, zip: e.target.value.trim() } : x))} />
+                <span>within</span>
+                <input type="number" min="1" value={r.miles}
+                  onChange={(e) => set("radii", f.radii.map((x, j) => j === i ? { ...x, miles: e.target.value } : x))} />
+                <span>mi</span>
+                {f.radii.length > 1 && (
+                  <button type="button" className="icon-x" onClick={() => set("radii", f.radii.filter((_, j) => j !== i))}><X size={12} /></button>
+                )}
+              </div>
+            ))}
+            <button type="button" className="add-line" onClick={() => set("radii", [...f.radii, { zip: "", miles: 25 }])}>
+              <Plus size={12} /> Add another radius
+            </button>
+          </div>
+        )}
+        <p className="cov-hint">Coverage is either named cities or one-or-more ZIP radii — not both.</p>
+      </div>
+      <label className="fld">Notes<textarea rows={2} value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Anything worth remembering…" /></label>
+      <div className="fld">Documents
+        <div className="doc-manage">
+          {[["w9", "IRS Form W-9", Receipt],
+            ["insurance", "Certificate of insurance", FileText],
+            ["bond", "Surety bond", Shield],
+            ["contract", "Subcontractor agreement", ScrollText]].map(([k, l, Icon]) => (
+            <div key={k} className={`doc-manage-row ${f[k] ? "has" : "none"}`}>
+              <Icon size={16} />
+              <div className="dm-info">
+                <span className="dm-label">{l}</span>
+                {f[k] && <span className="dm-file">{f.docFiles[k] || "document.pdf"}</span>}
+              </div>
+              {f[k] ? (
+                <div className="dm-actions">
+                  <label className="dm-replace"><Upload size={12} /> Replace
+                    <input type="file" hidden onChange={(e) => { if (e.target.files.length) uploadDoc(k, e.target.files[0].name); }} /></label>
+                  <button type="button" className="dm-delete" onClick={() => deleteDoc(k)}><Trash2 size={12} /> Delete</button>
+                </div>
+              ) : (
+                <label className="dm-upload"><Upload size={13} /> Upload
+                  <input type="file" hidden onChange={(e) => { if (e.target.files.length) uploadDoc(k, e.target.files[0].name); }} /></label>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+      </>)}
+
+      <div className="form-actions">
+        {step === 1
+          ? <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+          : <button className="btn-ghost" onClick={() => setStep(step - 1)}>Back</button>}
+        {step < 3
+          ? <button className="btn-solid" onClick={() => setStep(step + 1)} disabled={!stepOk}>
+              Continue
+            </button>
+          : <button className="btn-solid" onClick={build} disabled={!valid}>
+              {existing ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Add subcontractor</>}
+            </button>}
+      </div>
+      {!stepOk && (
+        <p className="cov-hint">
+          {step === 1 ? "Company, contact and at least one notification method are needed."
+            : step === 2 ? "Pick at least one trade, one capability, and set a coverage area."
+            : "Add at least one crew with a named member."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ---- Styles --------------------------------------------------------------
+const CSS = `
+:root{--ink:#1a2b23;--ink-soft:#4a5c53;--paper:#f6f4ee;--card:#fffdf8;--line:#e2ddd0;
+  --brand:#1f6b4a;--brand-dk:#14523a;--amber:#c8871e;--red:#b5442e;--shadow:0 1px 2px rgba(26,43,35,.06)}
+*{box-sizing:border-box}
+.ss-root{font-family:'Inter',system-ui,sans-serif;background:var(--paper);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
+.ss-header{display:flex;flex-direction:column;gap:12px;padding:14px 24px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+.header-top{display:flex;justify-content:space-between;align-items:center;gap:14px}
+.ss-header .tabs{align-self:flex-start}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{width:38px;height:38px;border-radius:9px;background:var(--brand);color:#fff;display:grid;place-items:center}
+.brand h1{margin:0;font-size:19px;font-weight:700;letter-spacing:-.02em}
+.brand p{margin:0;font-size:12.5px;color:var(--ink-soft)}
+.tabs{display:flex;gap:4px;background:var(--paper);padding:4px;border-radius:10px}
+.tabs button{border:0;background:none;padding:8px 14px;border-radius:7px;font-size:13.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;gap:7px}
+.tabs button.on{background:var(--card);color:var(--ink);box-shadow:var(--shadow)}
+.tabs .count{background:var(--brand);color:#fff;font-size:11px;padding:1px 7px;border-radius:20px;font-weight:700}
+.tabs button:not(.on) .count{background:var(--line);color:var(--ink-soft)}
+.ss-main{max-width:1160px;margin:0 auto;padding:22px 24px 60px}
+
+.searchbar{display:flex;margin-bottom:14px}
+.searchbar .search-input{width:100%}
+.search-input{flex:1;display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:0 14px;box-shadow:var(--shadow)}
+.search-input svg{color:var(--ink-soft);flex:none}
+.search-input input{flex:1;border:0;background:none;padding:13px 0;font-size:14.5px;color:var(--ink);outline:none}
+.clear-x{border:0;background:none;color:var(--ink-soft);cursor:pointer;display:grid;place-items:center;padding:4px}
+.add-btn{border:0;background:var(--brand);color:#fff;font-weight:600;font-size:13.5px;padding:10px 16px;border-radius:11px;cursor:pointer;display:flex;align-items:center;gap:7px}
+.add-btn:hover{background:var(--brand-dk)}
+.add-wrap{position:relative;flex:none}
+.add-scrim{position:fixed;inset:0;z-index:30}
+.add-menu{position:absolute;top:100%;right:0;margin-top:6px;background:var(--card);border:1px solid var(--line);border-radius:11px;box-shadow:0 8px 24px rgba(26,43,35,.15);z-index:31;min-width:180px;padding:5px;display:flex;flex-direction:column}
+.add-menu button{display:flex;align-items:center;gap:9px;border:0;background:none;padding:10px 12px;font-size:13.5px;font-weight:600;color:var(--ink);cursor:pointer;border-radius:8px;text-align:left}
+.add-menu button:hover{background:var(--paper);color:var(--brand)}
+
+.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.ms{position:relative;display:flex;flex-direction:column;gap:5px}
+.ms>label{font-size:11.5px;font-weight:600;color:var(--ink-soft);display:flex;align-items:center;gap:5px}
+.ms-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:132px;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13px;color:var(--ink);cursor:pointer;font-weight:500}
+.ms-btn.disabled{opacity:.5;cursor:not-allowed}
+.ms-scrim{position:fixed;inset:0;z-index:30}
+.ms-menu{position:absolute;top:100%;left:0;margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(26,43,35,.15);z-index:31;min-width:160px;max-height:260px;overflow-y:auto;padding:4px}
+.ms-opt{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;padding:8px 10px;font-size:13px;color:var(--ink);cursor:pointer;border-radius:7px;text-align:left}
+.ms-opt:hover{background:var(--paper)}
+.ms-opt.on{color:var(--brand);font-weight:600}
+.ms-check{width:16px;height:16px;border:1.5px solid var(--line);border-radius:4px;display:grid;place-items:center;flex:none}
+.ms-opt.on .ms-check{background:var(--brand);border-color:var(--brand);color:#fff}
+.ready-toggle{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--ink-soft);background:var(--card);border:1px solid var(--line);border-radius:9px;padding:9px 12px;cursor:pointer;height:37px}
+.ready-toggle input{accent-color:var(--brand)}
+.clear-filters{background:none;border:0;color:var(--brand);font-weight:600;font-size:13px;cursor:pointer;padding:9px 4px;height:37px}
+.result-meta{font-size:12.5px;color:var(--ink-soft);margin:18px 2px 14px}
+
+.zip-filter{display:flex;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:0 8px 0 11px;min-width:132px}
+.zip-filter input{border:0;background:none;padding:9px 0;font-size:13px;color:var(--ink);outline:none;width:100%;min-width:0}
+.zip-x{border:0;background:none;color:var(--ink-soft);cursor:pointer;display:grid;place-items:center;padding:2px}
+.zip-note{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--brand);font-weight:600;margin-top:10px}
+.prox-badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;padding:4px 9px;border-radius:7px;margin-bottom:10px}
+.prox-badge.in{background:#e2f0e7;color:#1f6b4a}
+.prox-badge.out{background:#f7e5df;color:var(--red)}
+.prox{display:flex;align-items:center;gap:8px;font-size:13px;padding:10px 12px;border-radius:9px;margin-bottom:14px}
+.prox.in{background:#e2f0e7;color:#1f6b4a}
+.prox.out{background:#f7e5df;color:#b5442e}
+.prox strong{font-weight:800}
+.dist-out{color:var(--red);font-weight:600}
+.muted{font-size:13px;color:var(--ink-soft)}
+.radius-toggle{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ink);margin-top:2px}
+.radius-toggle input{accent-color:var(--brand)}
+.cov-hint{font-size:11.5px;color:var(--ink-soft);margin:8px 0 0;font-weight:400;font-style:italic}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;box-shadow:var(--shadow);transition:border-color .15s,transform .15s}
+.card:hover{border-color:var(--brand);transform:translateY(-2px)}
+.card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px}
+.cat-row{display:flex;flex-wrap:wrap;gap:5px}
+.cat-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;background:#eef1ee;color:var(--brand-dk)}
+.cat-roofing{background:#eaf3ee;color:#1f6b4a}
+.cat-siding{background:#fdf1e3;color:#a86a18}
+.cat-windows_doors{background:#e9f0f6;color:#2b5c85}
+.cat-gutters{background:#eef1f4;color:#4a5c6b}
+.cat-deck_fence{background:#f2eee5;color:#7a5a2e}
+.cat-hardscaping{background:#f0ecf0;color:#6b4a6b}
+.cat-soffit_fascia{background:#eaf0f2;color:#3d6470}
+.cat-coping{background:#f4efe8;color:#7a6142}
+.avail-dot{width:11px;height:11px;border-radius:50%;flex:none;margin-top:3px}
+.avail-dot.up{background:#3a9b63;box-shadow:0 0 0 3px #d9ecdf}
+.avail-dot.down{background:#c05a3f;box-shadow:0 0 0 3px #f2ddd5}
+.name-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.name-row.big{margin:8px 0 6px}
+.name-row h3{margin:0;font-size:16px;font-weight:700;letter-spacing:-.01em}
+.name-row h2{margin:0;font-size:22px;letter-spacing:-.02em}
+.stars{font-size:12.5px;font-weight:700;color:var(--amber);display:inline-flex;align-items:center;gap:3px;flex:none}
+.contact{margin:2px 0 11px;font-size:13px;color:var(--ink-soft);display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.caps{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:11px}
+.cap{font-size:11.5px;background:var(--paper);border:1px solid var(--line);padding:3px 8px;border-radius:6px;color:var(--ink-soft)}
+.cap.more{font-weight:700;color:var(--brand)}
+.areas{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--ink-soft);margin-bottom:10px}
+.stat-strip{display:flex;gap:8px;margin-bottom:11px}
+.stat{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;padding:3px 8px;border-radius:6px;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft)}
+.stat.ok{color:#1f6b4a}.stat.no{color:var(--red)}.stat.rate{color:var(--ink);margin-left:auto}
+.card-docs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.doc-pill{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px}
+.doc-ok{background:#e8f2ea;color:#1f6b4a}.doc-missing{background:#faece7;color:var(--red)}
+.card-actions{display:flex;gap:7px}
+.mini{flex:1;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:12.5px;font-weight:600;padding:8px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px}
+.mini:hover{background:var(--paper)}
+.mini.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
+.mini.primary:hover{background:var(--brand-dk)}
+.mini:disabled{opacity:.45;cursor:not-allowed}
+.blocked-note{font-size:11.5px;color:var(--red);margin-top:9px;text-align:center}
+.blocked-note.big{font-size:13px;background:#faece7;padding:10px;border-radius:8px;margin-top:14px}
+
+.empty{text-align:center;padding:70px 20px;color:var(--ink-soft)}
+.empty svg{opacity:.5;margin-bottom:12px}
+.empty p{margin:0 0 14px;font-size:15px}
+.empty button{border:1px solid var(--line);background:var(--card);padding:9px 18px;border-radius:9px;font-weight:600;color:var(--brand);cursor:pointer}
+
+.jobs-list{display:flex;flex-direction:column;gap:12px}
+.job-row{display:flex;align-items:center;gap:16px;background:var(--card);border:1px solid var(--line);border-radius:13px;padding:16px 18px;box-shadow:var(--shadow)}
+.job-cat{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;flex:none}
+.job-main{flex:1;min-width:0}
+.job-head{display:flex;align-items:center;gap:10px}
+.job-head h3{margin:0;font-size:15.5px;font-weight:700}
+.job-status{font-size:11px;font-weight:700;text-transform:capitalize;padding:2px 9px;border-radius:20px}
+.st-pending{background:#fbf0dd;color:#a86a18}
+.st-accepted{background:#e8f2ea;color:#1f6b4a}
+.st-declined{background:#faece7;color:var(--red)}
+.job-sub{margin:3px 0 8px;font-size:13px;color:var(--ink-soft)}
+.job-meta{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--ink-soft)}
+.job-meta span{display:flex;align-items:center;gap:5px}
+.wo-sent{color:var(--brand);font-weight:600}
+.job-respond{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex:none}
+.respond-label{font-size:11px;color:var(--ink-soft)}
+.respond-btns{display:flex;gap:7px}
+.resp{display:flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:600;cursor:pointer;background:var(--card)}
+.resp.accept{color:#1f6b4a;border-color:#bfe0cb}.resp.accept:hover{background:#e8f2ea}
+.resp.decline{color:var(--red);border-color:#f0d1c8}.resp.decline:hover{background:#faece7}
+.job-final{display:flex;align-items:center;gap:6px;font-size:13.5px;font-weight:700;flex:none}
+.job-final.accepted{color:var(--brand)}.job-final.declined{color:var(--red)}
+
+.cal-legend{display:flex;gap:20px;margin-bottom:16px;font-size:12.5px;color:var(--ink-soft)}
+.cal-legend span{display:flex;align-items:center;gap:7px}
+.lg{width:13px;height:13px;border-radius:4px;display:inline-block}
+.lg.up{background:#3a9b63}.lg.down{background:#c05a3f}.lg.booked{background:#2b5c85}
+.cal-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:13px;padding:4px;box-shadow:var(--shadow)}
+.cal-grid{display:grid;grid-template-columns:170px repeat(14,minmax(42px,1fr));gap:3px;min-width:760px}
+.cal-corner{font-size:11.5px;font-weight:700;color:var(--ink-soft);padding:8px;display:flex;align-items:center}
+.cal-dayhead{display:flex;flex-direction:column;align-items:center;padding:6px 2px;font-size:11px}
+.cal-dayhead .dow{color:var(--ink-soft)}
+.cal-dayhead .dom{font-weight:700;font-size:13px}
+.cal-sub{display:flex;align-items:center;gap:8px;padding:8px;font-size:12.5px;font-weight:600;border-top:1px solid var(--line)}
+.cal-sub-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal-cell{border-top:1px solid var(--line);border-radius:5px;min-height:34px;display:grid;place-items:center;margin-top:-1px}
+.cal-cell.up{background:#e2f0e7}.cal-cell.down{background:#f7e5df}.cal-cell.booked{background:#dbe8f2}
+.cal-cell.clickable{cursor:pointer}
+.cal-cell.clickable:hover{background:#cfe6d8;box-shadow:inset 0 0 0 2px var(--brand)}
+.cal-job{font-size:11px;font-weight:700;color:#2b5c85;background:#fff;width:20px;height:20px;border-radius:50%;display:grid;place-items:center}
+.cal-plus{font-size:16px;font-weight:700;color:#3a9b63;opacity:0;transition:opacity .12s}
+.cal-cell.clickable:hover .cal-plus{opacity:1}
+.cal-hint{margin-left:auto;font-style:italic;color:var(--ink-soft)}
+
+.modal-backdrop{position:fixed;inset:0;background:rgba(26,43,35,.4);display:grid;place-items:center;padding:20px;z-index:50;backdrop-filter:blur(2px)}
+.modal{background:var(--card);border-radius:16px;padding:26px;max-width:440px;width:100%;max-height:90vh;overflow-y:auto;position:relative;box-shadow:0 20px 50px rgba(26,43,35,.25)}
+.modal-wide{max-width:560px}
+.modal-close{position:absolute;top:16px;right:16px;border:0;background:var(--paper);width:30px;height:30px;border-radius:8px;display:grid;place-items:center;cursor:pointer;color:var(--ink-soft)}
+.modal-close:hover{background:var(--line)}
+
+.detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:2px}
+.edit-btn{display:flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;flex:none}
+.edit-btn:hover{background:var(--paper);border-color:var(--brand);color:var(--brand)}
+.detail-contact{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:6px}
+.detail-contact a{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--brand);text-decoration:none;font-weight:600}
+.detail-person{font-size:13px;color:var(--ink-soft);margin:0 0 16px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.avail-inline{font-weight:700;margin-left:2px}.avail-inline.up{color:#3a9b63}.avail-inline.down{color:#c05a3f}
+.stat-cards{display:flex;gap:10px;margin-bottom:18px}
+.stat-card{flex:1;background:var(--paper);border:1px solid var(--line);border-radius:11px;padding:12px;text-align:center}
+.sc-num{display:block;font-size:22px;font-weight:800;letter-spacing:-.02em}
+.sc-lab{display:flex;align-items:center;justify-content:center;gap:4px;font-size:11px;color:var(--ink-soft);margin-top:3px;font-weight:600}
+.detail section{margin-bottom:22px}
+.detail h4{margin:0 0 9px;font-size:12.5px;font-weight:700;color:var(--ink-soft);display:flex;align-items:center;gap:5px}
+.area-chips{display:flex;flex-wrap:wrap;gap:7px}
+.area-chips + .cov-radius{margin-top:10px}
+.area-chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:var(--paper);border:1px solid var(--line);padding:4px 9px;border-radius:7px;color:var(--ink-soft)}
+.cov-radius{display:flex;align-items:center;gap:7px;font-size:13.5px;color:var(--ink);background:var(--paper);border:1px solid var(--line);padding:10px 12px;border-radius:9px;margin-top:10px}
+.notes-area{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:13.5px;font-family:inherit;color:var(--ink);background:var(--card);resize:vertical}
+.notes-save{margin-top:8px;border:0;background:var(--brand);color:#fff;font-weight:600;font-size:12.5px;padding:7px 14px;border-radius:8px;cursor:pointer}
+.doc-rows{display:flex;flex-direction:column;gap:8px}
+.doc-row{display:flex;align-items:center;gap:11px;padding:11px 13px;border-radius:10px;border:1px solid var(--line)}
+.doc-row.ok{background:#f2f8f4;border-color:#d4e7db}
+.doc-row.missing{background:#fbf1ed;border-color:#f0d9d1}
+.doc-label{flex:1;font-size:13.5px;font-weight:600}
+.doc-status{display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--brand);font-weight:600}
+.doc-upload{display:flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;color:var(--red);cursor:pointer;background:var(--card);border:1px solid #f0d9d1;padding:5px 10px;border-radius:7px}
+.detail-actions{display:flex;gap:9px;margin-top:20px}
+
+.form h2{margin:0 0 4px;font-size:20px;letter-spacing:-.01em}
+.form-sub{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-soft);margin:0 0 20px}
+.fld{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin-bottom:14px}
+.fld input,.fld select,.fld textarea{width:100%;margin-top:6px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:14px;color:var(--ink);background:var(--card);font-family:inherit}
+.fld textarea{resize:vertical}
+.fld-row{display:flex;gap:12px}.fld-row .fld{flex:1}
+.pick-grid{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
+.pick{border:1px solid var(--line);background:var(--card);font-size:12.5px;padding:6px 11px;border-radius:7px;cursor:pointer;color:var(--ink-soft);font-weight:600}
+.pick.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.cov-toggle{display:flex;gap:6px;margin-top:8px;margin-bottom:4px}
+.cov-toggle button{flex:1;border:1px solid var(--line);background:var(--card);padding:8px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);cursor:pointer}
+.cov-toggle button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.radius-row{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;color:var(--ink-soft)}
+.radius-row input{width:auto;flex:1;margin-top:0}.radius-row input[type=number]{max-width:80px;flex:none}
+.doc-manage{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.doc-manage-row{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:9px;border:1px solid var(--line)}
+.doc-manage-row.has{background:#f2f8f4;border-color:#d4e7db}
+.doc-manage-row.none{background:var(--card)}
+.dm-info{flex:1;min-width:0;display:flex;flex-direction:column}
+.dm-label{font-size:13px;font-weight:600;color:var(--ink)}
+.dm-file{font-size:11px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dm-actions{display:flex;gap:6px;flex:none}
+.dm-upload{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:var(--brand);cursor:pointer;background:var(--card);border:1px solid var(--brand);padding:6px 11px;border-radius:7px}
+.dm-replace{display:flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;background:var(--card);border:1px solid var(--line);padding:6px 9px;border-radius:7px}
+.dm-replace:hover{border-color:var(--brand);color:var(--brand)}
+.dm-delete{display:flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:var(--red);cursor:pointer;background:var(--card);border:1px solid #f0d1c8;padding:6px 9px;border-radius:7px}
+.dm-delete:hover{background:#faece7}
+.doc-label-wrap{flex:1;min-width:0;display:flex;flex-direction:column}
+.doc-file{font-size:11px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.doc-add{display:flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;color:var(--red);cursor:pointer;background:var(--card);border:1px solid #f0d9d1;padding:5px 10px;border-radius:7px}
+.doc-add:hover{background:#faece7}
+.wo-box{background:var(--paper);border:1px solid var(--line);border-radius:11px;padding:14px;margin-bottom:18px}
+.wo-box-head{display:flex;align-items:center;gap:7px;font-size:13.5px;font-weight:700;margin-bottom:11px}
+.wo-upload{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--brand);cursor:pointer;background:var(--card);border:1px dashed var(--brand);padding:10px;border-radius:9px;margin-bottom:11px}
+.wo-check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink)}
+.wo-check input{accent-color:var(--brand)}
+.form-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:8px}
+.btn-ghost{border:1px solid var(--line);background:var(--card);color:var(--ink);font-weight:600;font-size:13.5px;padding:10px 18px;border-radius:10px;cursor:pointer}
+.btn-solid{border:0;background:var(--brand);color:#fff;font-weight:600;font-size:13.5px;padding:10px 20px;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:7px}
+.btn-solid:hover{background:var(--brand-dk)}
+.btn-solid:disabled{opacity:.45;cursor:not-allowed}
+.sent-state{text-align:center;padding:14px 0}
+.sent-state svg{color:var(--brand);margin-bottom:8px}
+.sent-state p{color:var(--ink-soft);margin:0 0 20px}
+@media(max-width:640px){.fld-row{flex-direction:column;gap:0}.detail-actions,.card-actions{flex-wrap:wrap}.stat-cards{flex-wrap:wrap}}
+
+/* crews — detail */
+.crew-list{display:flex;flex-direction:column;gap:10px}
+.crew-card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+.crew-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.crew-name{font-size:13.5px;font-weight:700}
+.crew-size{font-size:11px;font-weight:600;color:var(--ink-soft);background:var(--card);border:1px solid var(--line);padding:2px 8px;border-radius:20px}
+.crew-members{display:flex;flex-wrap:wrap;gap:6px}
+.member{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:7px;padding:4px 9px;font-size:12px}
+.m-name{font-weight:600;color:var(--ink)}
+.m-role{color:var(--ink-soft);font-size:11px;background:var(--paper);padding:1px 6px;border-radius:5px}
+/* crews — editor */
+.crew-edit{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+.crew-edit-card{border:1px solid var(--line);border-radius:10px;padding:11px;background:var(--card)}
+.crew-edit-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.crew-name-input{flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;font-weight:700;font-family:inherit;color:var(--ink)}
+.member-row{display:flex;gap:7px;align-items:center;margin-bottom:6px}
+.member-row input{flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;font-family:inherit;color:var(--ink);min-width:0}
+.member-row input:last-of-type{max-width:110px;flex:none}
+.icon-x{border:0;background:var(--paper);color:var(--ink-soft);width:26px;height:26px;border-radius:7px;display:grid;place-items:center;cursor:pointer;flex:none}
+.icon-x:hover{background:#f2ddd5;color:var(--red)}
+.add-line{border:1px dashed var(--line);background:none;color:var(--brand);font-size:12px;font-weight:600;padding:6px 10px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;margin-top:3px}
+.add-crew{border:1px solid var(--brand);background:var(--card);color:var(--brand);font-size:12.5px;font-weight:700;padding:8px 12px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;align-self:flex-start}
+
+/* schedule preview */
+.when-preview{display:flex;align-items:center;gap:8px;background:#eef5f1;border:1px solid #cfe0d6;color:var(--brand-dk);font-size:13px;padding:9px 12px;border-radius:9px;margin-bottom:14px}
+.when-preview strong{font-weight:800}
+.wo-flag{display:inline-flex;align-items:center;gap:6px;background:#fbf0dd;color:#a86a18;font-size:12px;font-weight:700;padding:5px 10px;border-radius:7px;margin-bottom:14px}
+
+/* work order sheet */
+.wo-sheet{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;box-shadow:var(--shadow);max-width:720px;margin:0 auto}
+.wo-section{border-top:1px solid var(--line);padding-top:16px;margin-top:16px}
+.wo-section:first-of-type{border-top:0;margin-top:0;padding-top:0}
+.wo-section h4{margin:0 0 12px;font-size:12px;font-weight:800;letter-spacing:.06em;color:var(--brand-dk);text-transform:uppercase}
+.wo-checks{display:flex;flex-direction:column;gap:9px}
+.wo-check-row{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--ink)}
+.wo-check-row input{accent-color:var(--brand);width:16px;height:16px}
+.wo-complete{width:100%;justify-content:center;margin-top:20px;padding:13px}
+.wo-complete-note{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:20px;background:#e8f2ea;color:var(--brand);font-weight:700;font-size:13.5px;padding:12px;border-radius:10px}
+
+/* recommendations */
+.wo-recs{max-width:720px;margin:22px auto 0}
+.wo-recs h3{margin:0 0 3px;font-size:17px;letter-spacing:-.01em}
+.wo-recs-sub{margin:0 0 16px;font-size:12.5px;color:var(--ink-soft)}
+.rec-row{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow);margin-bottom:10px}
+.rec-rank{width:28px;height:28px;border-radius:50%;background:var(--brand);color:#fff;font-weight:800;font-size:13px;display:grid;place-items:center;flex:none}
+.rec-main{flex:1;min-width:0}
+.rec-head{display:flex;align-items:center;gap:9px;margin-bottom:7px}
+.rec-head h4{margin:0;font-size:15px;font-weight:700}
+.rec-tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.rec-ok{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:#1f6b4a;background:#e8f2ea;padding:3px 8px;border-radius:6px}
+.rec-warn{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:var(--red);background:#faece7;padding:3px 8px;border-radius:6px}
+.rec-send{flex:none;padding:9px 14px;font-size:13px}
+
+/* work order guide */
+.wo-guide{background:var(--paper);border:1px solid var(--line);border-radius:11px;padding:13px 16px;margin-bottom:18px}
+.wo-guide h5{margin:0 0 9px;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--brand-dk)}
+.wo-guide ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.wo-guide li{font-size:12.5px;color:var(--ink-soft);line-height:1.45}
+.wo-guide strong{color:var(--ink)}
+
+/* jobs: multi-trade cards */
+.jobs-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.jobs-head h3{margin:0;font-size:16px}
+.add-btn.small{padding:8px 13px;font-size:12.5px;border-radius:9px}
+.add-btn:disabled{opacity:.45;cursor:not-allowed}
+.job-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:var(--shadow)}
+.job-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.job-card-head h3{margin:0 0 6px;font-size:16.5px;font-weight:700;letter-spacing:-.01em}
+.fill-badge{flex:none;font-size:11px;font-weight:700;padding:4px 10px;border-radius:20px;background:#fbf0dd;color:#a86a18}
+.fill-badge.full{background:#e8f2ea;color:#1f6b4a}
+.job-scope{font-size:13px;color:var(--ink-soft);margin:10px 0 0;line-height:1.45}
+.trade-rows{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.trade-row{display:flex;align-items:center;gap:12px;padding:11px 13px;border-radius:10px;border:1px solid var(--line)}
+.trade-row.open{background:var(--paper);border-style:dashed}
+.trade-row.filled{background:#f7faf8}
+.trade-icon{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;flex:none}
+.trade-main{flex:1;min-width:0}
+.trade-name{display:block;font-size:13.5px;font-weight:700}
+.trade-open-note{font-size:12px;color:var(--ink-soft)}
+.trade-assigned{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin-top:3px}
+.ta-company{font-size:12.5px;font-weight:600;color:var(--brand)}
+.ta-crew{font-size:11.5px;border:1px solid var(--line);border-radius:6px;padding:2px 6px;background:var(--card);color:var(--ink-soft);font-family:inherit}
+.ta-crew-flat{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--ink-soft)}
+.ta-wo{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--ink-soft)}
+.ta-in{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:#1f6b4a;font-weight:600}
+.ta-out{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--red);font-weight:600}
+.trade-actions{display:flex;align-items:center;gap:7px;flex:none;flex-wrap:wrap;justify-content:flex-end}
+.trade-row .star-rate{margin-right:4px}
+.trade-assign{display:flex;align-items:center;gap:6px;border:1px solid var(--brand);background:var(--card);color:var(--brand);font-size:12.5px;font-weight:700;padding:8px 13px;border-radius:8px;cursor:pointer;flex:none}
+.trade-assign:hover{background:#eef5f1}
+.trade-swap{border:1px solid var(--line);background:var(--card);color:var(--ink-soft);font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:7px;cursor:pointer}
+.trade-swap:hover{border-color:var(--brand);color:var(--brand)}
+
+/* pick lists (assign modals) */
+.pick-list{display:flex;flex-direction:column;gap:9px;margin-bottom:16px;max-height:54vh;overflow-y:auto}
+.pick-row{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:11px;padding:12px 13px;background:var(--card)}
+.rec-dup{font-size:10.5px;font-weight:700;color:#a86a18;background:#fbf0dd;padding:3px 7px;border-radius:5px}
+
+
+/* header right: add + user switcher */
+.header-right{display:flex;align-items:center;gap:10px;flex:none}
+.user-wrap{position:relative}
+.user-btn{display:flex;align-items:center;gap:9px;background:var(--paper);border:1px solid var(--line);border-radius:11px;padding:6px 11px 6px 7px;cursor:pointer}
+.user-btn:hover{border-color:var(--brand)}
+.user-avatar{width:28px;height:28px;border-radius:50%;background:var(--brand);color:#fff;font-size:11px;font-weight:800;display:grid;place-items:center;flex:none}
+.user-avatar.lg{width:36px;height:36px;font-size:12.5px}
+.user-meta{display:flex;flex-direction:column;align-items:flex-start;line-height:1.2}
+.user-name{font-size:12.5px;font-weight:700;color:var(--ink)}
+.user-role{font-size:10.5px;color:var(--ink-soft);font-weight:600}
+.user-menu{min-width:210px}
+.user-menu-label{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);padding:7px 12px 5px}
+.user-menu button{flex-direction:column;align-items:flex-start !important;gap:1px !important}
+.user-menu button.on{background:#eef5f1}
+.um-name{font-size:13px;font-weight:600}
+.um-role{font-size:11px;color:var(--ink-soft);font-weight:500}
+
+/* users tab */
+.user-list{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.user-row{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}
+.user-row-main{flex:1;min-width:0}
+.user-row-head{display:flex;align-items:center;gap:9px}
+.user-row-head h4{margin:0;font-size:15px;font-weight:700}
+.user-row-sub{margin:3px 0 0;font-size:12.5px;color:var(--ink-soft)}
+.user-row-perms{font-size:11.5px;color:var(--ink-soft);max-width:230px;text-align:right;flex:none}
+.role-badge{font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em}
+.r-admin{background:#eae4f2;color:#5b3f7a}
+.r-pm{background:#e9f0f6;color:#2b5c85}
+.r-contractor{background:#eaf3ee;color:#1f6b4a}
+.you-badge{font-size:10px;font-weight:700;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft);padding:2px 7px;border-radius:20px}
+.role-pick{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.role-pick button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:11px 13px;cursor:pointer;text-align:left}
+.role-pick button.on{border-color:var(--brand);background:#f2f8f4}
+.rp-label{font-size:13.5px;font-weight:700;color:var(--ink)}
+.rp-desc{font-size:11.5px;color:var(--ink-soft)}
+
+/* contractor portal */
+.portal-head{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+.portal-head h2{margin:0;font-size:21px;letter-spacing:-.02em}
+.portal-sub{margin:3px 0 0;font-size:13px;color:var(--ink-soft)}
+.avail-switch{display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:10px 14px;font-size:13px;font-weight:700;color:var(--ink-soft);cursor:pointer}
+.avail-switch.on{border-color:#bfe0cb;background:#f2f8f4;color:#1f6b4a}
+.avail-switch input{accent-color:var(--brand)}
+.portal-tabs{display:flex;gap:4px;background:var(--paper);padding:4px;border-radius:10px;margin-bottom:18px;align-self:flex-start;width:fit-content}
+.portal-tabs button{border:0;background:none;padding:9px 15px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;gap:7px}
+.portal-tabs button.on{background:var(--card);color:var(--ink);box-shadow:var(--shadow)}
+.portal-tabs .count{background:var(--amber);color:#fff;font-size:11px;padding:1px 7px;border-radius:20px;font-weight:700}
+.portal-panel{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:20px;box-shadow:var(--shadow)}
+.portal-panel h4{margin:0 0 4px;font-size:12.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--brand-dk)}
+.portal-crew{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-soft);margin:10px 0 0}
+.portal-respond{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.portal-final{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+
+/* doc-blocked notice + notify button */
+.doc-block{display:flex;align-items:flex-start;gap:10px;background:#fbf0dd;border:1px solid #ecd9b0;color:#8a5a12;font-size:12.5px;line-height:1.45;padding:12px 14px;border-radius:10px;margin-bottom:16px}
+.doc-block svg{flex:none;margin-top:1px}
+.doc-block strong{color:#6d460c}
+.doc-block.with-cta{align-items:center;flex-wrap:wrap}
+.doc-block.with-cta>div{flex:1;min-width:180px}
+.doc-block.with-cta .btn-notify{flex:none}
+.btn-notify{border:0;background:var(--amber);color:#fff;font-weight:600;font-size:13px;padding:9px 14px;border-radius:9px;cursor:pointer;display:flex;align-items:center;gap:6px;flex:none}
+.btn-notify:hover{background:#a86a18}
+.for-sub{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;padding:11px 13px;border-radius:9px;margin-bottom:16px;background:#f2f8f4;border:1px solid #d4e7db;color:#1f6b4a;line-height:1.4}
+.for-sub.warn{background:#fbf0dd;border-color:#ecd9b0;color:#8a5a12}
+.for-sub svg{flex:none;margin-top:1px}
+
+
+/* user row actions */
+.user-row-actions{display:flex;align-items:center;gap:7px;flex:none}
+.um-sec{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--ink-soft);padding:10px 14px 5px;border-top:1px solid var(--line);margin-top:4px}
+.um-acct{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;
+  padding:9px 14px;cursor:pointer;text-align:left;font:inherit}
+.um-acct:hover{background:var(--paper)}
+.ua-name{font-size:13.5px;font-weight:600;color:var(--ink)}
+.ua-role{font-size:11px;color:var(--ink-soft)}
+.ua-tick{margin-left:auto;color:var(--brand);flex:none}
+.um-account{border-bottom:1px solid var(--line);border-radius:8px 8px 0 0 !important;margin-bottom:3px;color:var(--brand) !important;font-weight:700 !important}
+.role-locked{display:flex;align-items:center;gap:10px;margin-top:8px;background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.rl-note{font-size:11.5px;color:var(--ink-soft);font-weight:400}
+
+/* auto-schedule */
+.auto-badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:800;color:#8a5a12;background:#fbf0dd;padding:3px 8px;border-radius:6px;text-transform:uppercase;letter-spacing:.03em}
+.auto-badge.card{margin-bottom:10px;width:fit-content}
+.auto-card{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:13px;padding:16px 18px;margin-bottom:18px;box-shadow:var(--shadow)}
+.auto-card.on{border-color:#ecd9b0;background:#fffdf6}
+.auto-card>svg{color:var(--ink-soft);flex:none}
+.auto-card.on>svg{color:var(--amber)}
+.auto-card-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.auto-title{font-size:14.5px;font-weight:700}
+.auto-desc{font-size:12.5px;color:var(--ink-soft);line-height:1.4}
+.auto-toggle{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--ink-soft);cursor:pointer;flex:none}
+.auto-toggle input{accent-color:var(--amber);width:17px;height:17px}
+.auto-booked{display:flex;align-items:center;gap:7px;color:#8a5a12;font-weight:700;font-size:13.5px}
+
+
+/* star rating */
+.star-rate{display:flex;align-items:center;gap:2px;flex:none}
+.sr-label{font-size:10.5px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em;margin-right:5px}
+.sr-star{border:0;background:none;padding:1px;cursor:pointer;color:var(--line);display:grid;place-items:center}
+.sr-star.on{color:var(--amber)}
+.sr-star:hover{color:var(--amber)}
+.sr-val{font-size:11.5px;font-weight:800;color:var(--amber);margin-left:4px}
+.rating-edit{display:flex;align-items:center;gap:10px;margin-top:6px}
+.rating-edit input{width:70px;flex:none;margin-top:0}
+.rating-wrap{display:flex;align-items:center;gap:7px}
+.rated-count{font-size:10.5px;color:var(--ink-soft);font-weight:600}
+
+/* portal panel extras */
+.panel-note{font-size:12.5px;color:var(--ink-soft);margin:0 0 14px;line-height:1.4}
+.panel-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.panel-count{font-size:12.5px;color:var(--ink-soft);font-weight:600}
+.saved-note{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--brand)}
+
+/* mini calendar (contractor availability) */
+.mini-cal-nav{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:14px 0 10px;font-size:13px;font-weight:700}
+.mini-cal-nav button{border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:12px;font-weight:600;padding:6px 11px;border-radius:8px;cursor:pointer}
+.mini-cal-nav button:hover:not(:disabled){border-color:var(--brand);color:var(--brand)}
+.mini-cal-nav button:disabled{opacity:.4;cursor:not-allowed}
+.mini-cal{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+.mc-dow{text-align:center;font-size:10.5px;font-weight:700;color:var(--ink-soft);padding-bottom:3px;text-transform:uppercase}
+.mc-day{aspect-ratio:1;border:1px solid var(--line);border-radius:8px;background:var(--card);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:0}
+.mc-num{font-size:12.5px;font-weight:700;color:var(--ink)}
+.mc-day.free{background:#e2f0e7;border-color:#cfe0d6}
+.mc-day.free:hover{background:#cfe6d8;border-color:var(--brand)}
+.mc-day.off{background:#f7e5df;border-color:#f0d1c8}
+.mc-day.off .mc-num{color:var(--red);text-decoration:line-through}
+.mc-day.off:hover{background:#f2ddd5}
+.mc-day.booked{background:#dbe8f2;border-color:#c3d8e8;cursor:not-allowed;color:#2b5c85}
+.mc-day.booked .mc-num{color:#2b5c85}
+
+
+/* day-level availability in assign flows */
+.day-badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:6px}
+.d-free{background:#e2f0e7;color:#1f6b4a}
+.d-booked{background:#dbe8f2;color:#2b5c85}
+.d-off{background:#f7e5df;color:var(--red)}
+.d-unavailable{background:#f2ddd5;color:var(--red)}
+.btn-warn{border:0;background:var(--amber);color:#fff;font-weight:600;font-size:13px;padding:9px 14px;border-radius:9px;cursor:pointer;display:flex;align-items:center;gap:6px;flex:none}
+.btn-warn:hover{background:#a86a18}
+.pick-hint{font-size:11.5px;color:var(--ink-soft);font-style:italic;margin:-12px 0 14px}
+.off-days{display:flex;align-items:center;gap:7px;flex-wrap:wrap;background:#f7e5df;border:1px solid #f0d1c8;color:var(--red);font-size:12px;font-weight:600;padding:9px 12px;border-radius:9px;margin-bottom:14px}
+.off-chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:#f7e5df;border:1px solid #f0d1c8;padding:4px 9px;border-radius:7px;color:var(--red);font-weight:600}
+
+
+/* ---- request documentation CTAs ---- */
+.req-docs-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;background:#fbf0dd;border:1px solid #ecd9b0;border-radius:9px;padding:7px 9px}
+.rd-text{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;color:#8a5a12}
+.rd-btn{display:inline-flex;align-items:center;gap:5px;border:0;background:var(--amber);color:#fff;font-size:11.5px;font-weight:700;padding:6px 10px;border-radius:7px;cursor:pointer;flex:none}
+.rd-btn:hover{background:#a86a18}
+.detail-doc-block{margin-top:16px;align-items:center;flex-wrap:wrap}
+.detail-doc-block>div{flex:1;min-width:160px}
+.btn-notify.sm{padding:6px 10px;font-size:11.5px;border-radius:7px}
+.doc-row-actions{display:flex;gap:6px;flex:none}
+.doc-req{display:flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;color:#fff;background:var(--amber);border:0;padding:6px 10px;border-radius:7px;cursor:pointer}
+.doc-req:hover{background:#a86a18}
+.cal-hint svg{vertical-align:-2px;color:var(--amber)}
+
+/* ---- crew ratings ---- */
+.crew-head-right{display:flex;align-items:center;gap:7px;flex:none}
+.crew-rating{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:800;color:var(--amber);background:var(--card);border:1px solid var(--line);padding:2px 8px;border-radius:20px}
+.crew-rating em{font-style:normal;font-weight:600;color:var(--ink-soft);font-size:10.5px}
+.crew-unrated{font-size:10.5px;color:var(--ink-soft);font-weight:600}
+.rollup-note{font-size:11.5px;color:var(--ink-soft);margin:11px 0 0;line-height:1.45;font-style:italic}
+.rollup-note strong{color:var(--amber);font-style:normal}
+
+/* ---- login / splash ---- */
+.login-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px;background:var(--paper)}
+.login-card{width:100%;max-width:400px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:28px 24px;box-shadow:0 8px 30px rgba(26,43,35,.08)}
+.login-brand{text-align:center;margin-bottom:24px}
+.logo.lg{width:52px;height:52px;border-radius:13px;margin:0 auto 12px}
+.login-brand h1{margin:0;font-size:26px;font-weight:800;letter-spacing:-.03em}
+.login-brand p{margin:3px 0 0;font-size:13px;color:var(--ink-soft)}
+.login-form .fld{margin-bottom:13px}
+.login-btn{width:100%;justify-content:center;padding:13px;margin-top:4px}
+.login-err{display:flex;align-items:center;gap:7px;background:#faece7;border:1px solid #f0d1c8;color:var(--red);font-size:12.5px;font-weight:600;padding:9px 11px;border-radius:9px;margin-bottom:12px}
+.login-forgot{display:block;width:100%;border:0;background:none;color:var(--ink-soft);font-size:12.5px;font-weight:600;padding:11px 0 0;cursor:pointer;text-align:center}
+.login-forgot:hover{color:var(--brand)}
+.login-demo{margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}
+.ld-label{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);margin-bottom:10px;text-align:center}
+.ld-row{display:flex;align-items:center;gap:11px;width:100%;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:9px 11px;margin-bottom:7px;cursor:pointer;text-align:left}
+.ld-row:hover{border-color:var(--brand);background:#f7faf8}
+.ld-main{flex:1;min-width:0;display:flex;flex-direction:column}
+.ld-name{font-size:13px;font-weight:700;color:var(--ink)}
+.ld-email{font-size:11px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.login-foot{font-size:11.5px;color:var(--ink-soft);margin-top:18px;text-align:center}
+.um-signout{border-top:1px solid var(--line);border-radius:0 0 8px 8px !important;margin-top:3px;color:var(--red) !important;font-weight:700 !important}
+
+
+/* splash logo — centered, square, no squash */
+.login-logo{width:60px;height:60px;border-radius:16px;background:var(--brand);color:#fff;
+  display:flex;align-items:center;justify-content:center;margin:0 auto 14px;box-shadow:0 4px 14px rgba(31,107,74,.28)}
+.login-logo svg{display:block;width:28px;height:28px;flex:none}
+
+/* header availability toggle (contractor) */
+.hdr-avail{display:flex;align-items:center;gap:8px;background:var(--paper);border:1px solid var(--line);
+  border-radius:11px;padding:8px 12px;font-size:12.5px;font-weight:700;color:var(--ink-soft);cursor:pointer;flex:none}
+.hdr-avail.on{border-color:#bfe0cb;background:#f2f8f4;color:#1f6b4a}
+.hdr-avail input{accent-color:var(--brand);width:15px;height:15px}
+.hdr-avail .avail-dot{margin-top:0}
+.count.amber{background:var(--amber) !important;color:#fff !important}
+
+/* contractor dashboard */
+.dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-bottom:18px}
+.dash-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px;box-shadow:var(--shadow);
+  display:flex;flex-direction:column;gap:4px}
+.dash-card.accent{border-color:#ecd9b0;background:#fffdf6}
+.dc-num{font-size:24px;font-weight:800;letter-spacing:-.03em;line-height:1.1}
+.dash-card.accent .dc-num{color:var(--amber)}
+.dc-lab{font-size:11.5px;color:var(--ink-soft);font-weight:600;line-height:1.3}
+.auto-strip{display:flex;align-items:center;gap:8px;background:#fbf0dd;border:1px solid #ecd9b0;color:#8a5a12;
+  font-size:12.5px;font-weight:600;padding:10px 13px;border-radius:10px;margin-bottom:18px}
+.dash-sec{margin-bottom:24px}
+.dash-sec h3{display:flex;align-items:center;gap:8px;margin:0 0 11px;font-size:14px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft)}
+.sec-count{background:var(--line);color:var(--ink);font-size:11px;font-weight:800;padding:1px 8px;border-radius:20px}
+.sec-count.amber{background:var(--amber);color:#fff}
+.dash-sec .job-card{margin-bottom:10px}
+.jr-card.past{opacity:.72}
+.dash-empty{text-align:center;padding:28px 16px;color:var(--ink-soft);background:var(--card);
+  border:1px dashed var(--line);border-radius:12px}
+.dash-empty svg{opacity:.5;margin-bottom:8px}
+.dash-empty p{margin:0;font-size:13.5px}
+
+/* assign: choose existing vs new */
+.assign-choice{display:flex;flex-direction:column;gap:10px;margin-bottom:16px}
+.ac-card{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:3px;
+  border:1px solid var(--line);background:var(--card);border-radius:12px;padding:16px 44px 16px 16px;cursor:pointer;text-align:left}
+.ac-card:hover:not(:disabled){border-color:var(--brand);background:#f7faf8}
+.ac-card:disabled{opacity:.5;cursor:not-allowed}
+.ac-card>svg:first-child{color:var(--brand);margin-bottom:5px}
+.ac-title{font-size:14.5px;font-weight:700;color:var(--ink)}
+.ac-desc{font-size:12px;color:var(--ink-soft);line-height:1.35}
+.ac-arrow{position:absolute;right:16px;top:50%;transform:translateY(-50%);color:var(--ink-soft)}
+
+
+/* segmented sub-tabs (Job Settings) */
+.seg-tabs{display:flex;gap:4px;background:var(--paper);border:1px solid var(--line);padding:4px;border-radius:10px;margin:4px 0 16px;width:fit-content}
+.seg-tabs button{border:0;background:none;padding:8px 16px;border-radius:7px;font-size:13px;font-weight:700;color:var(--ink-soft);cursor:pointer}
+.seg-tabs button.on{background:var(--card);color:var(--ink);box-shadow:var(--shadow)}
+
+/* documents notices */
+.doc-alert{display:flex;align-items:flex-start;gap:10px;background:#faece7;border:1px solid #f0d1c8;color:var(--red);
+  font-size:12.5px;line-height:1.45;padding:12px 14px;border-radius:10px;margin:0 0 16px}
+.doc-alert svg{flex:none;margin-top:1px}
+.doc-alert strong{display:block;color:#8f2f1c}
+.doc-ok-banner{display:flex;align-items:center;gap:8px;background:#e8f2ea;border:1px solid #bfe0cb;color:var(--brand);
+  font-size:12.5px;font-weight:700;padding:11px 14px;border-radius:10px;margin:0 0 16px}
+.count.red{background:var(--red) !important;color:#fff !important}
+
+/* coverage editor */
+.cov-sub{font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);margin-bottom:4px}
+.cov-preview{display:flex;align-items:flex-start;gap:8px;background:var(--paper);border:1px solid var(--line);
+  border-radius:9px;padding:11px 13px;margin-top:18px;font-size:12.5px;color:var(--ink);line-height:1.45}
+.cov-preview svg{flex:none;margin-top:2px;color:var(--brand)}
+.cov-preview em{font-style:normal;color:var(--red);font-weight:600}
+.detail-addr{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-soft);margin:0 0 6px}
+
+
+/* admin dashboard */
+.dash-hello{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+.dash-hello h2{margin:0;font-size:21px;letter-spacing:-.02em}
+.dash-hello p{margin:4px 0 0;font-size:13px;color:var(--ink-soft)}
+.dash-cta{display:flex;gap:8px;flex:none}
+.dash-card{text-align:left;border:1px solid var(--line);cursor:pointer;font-family:inherit}
+.dash-card:hover{border-color:var(--brand)}
+.dash-card.warn{border-color:#f0d1c8;background:#fdf7f5}
+.dash-card.warn .dc-num{color:var(--red)}
+.dash-row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
+  border-radius:11px;padding:12px 14px;margin-bottom:8px}
+.dash-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.dr-title{font-size:14px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dr-meta{font-size:11.5px;color:var(--ink-soft)}
+.dash-row-btn{flex:none;padding:8px 13px;font-size:12.5px}
+.dash-avatar{width:34px;height:34px;border-radius:9px;background:var(--paper);border:1px solid var(--line);
+  display:grid;place-items:center;font-size:11.5px;font-weight:800;color:var(--ink-soft);flex:none}
+.dash-date{width:40px;flex:none;display:flex;flex-direction:column;align-items:center;background:var(--paper);
+  border:1px solid var(--line);border-radius:9px;padding:4px 0}
+.dd-mon{font-size:9.5px;font-weight:800;text-transform:uppercase;color:var(--ink-soft)}
+.dd-day{font-size:15px;font-weight:800;line-height:1.1}
+.dash-more{border:0;background:none;color:var(--brand);font-size:12.5px;font-weight:700;cursor:pointer;padding:6px 2px}
+.sec-count.red{background:var(--red);color:#fff}
+
+/* coverage: custom cities + multiple radii */
+.add-city-row{display:flex;gap:8px;margin-top:12px}
+.add-city-row input{flex:1;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:14px;
+  font-family:inherit;color:var(--ink);background:var(--card);min-width:0}
+.add-city-row .btn-solid{flex:none;padding:10px 14px}
+.radii-edit{display:flex;flex-direction:column;gap:4px}
+.radii-edit .radius-row{margin-top:4px}
+.radii-list{display:flex;flex-direction:column;gap:8px}
+
+
+/* job lifecycle */
+.form-sec{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--brand-dk);
+  margin:22px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.form-sec:first-of-type{margin-top:8px}
+.sec-note{font-size:11.5px;color:var(--ink-soft);margin:-6px 0 10px;font-style:italic}
+.job-title-row{display:flex;align-items:center;gap:9px;margin-bottom:6px}
+.job-title-row h3{margin:0 !important}
+.job-phase{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
+  background:#e9f0f6;color:#2b5c85;padding:3px 8px;border-radius:20px}
+.job-phase.done{background:#e8f2ea;color:#1f6b4a}
+.job-card.done{background:#fbfcfb}
+.job-meas{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px}
+.meas-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;background:var(--paper);
+  border:1px solid var(--line);padding:4px 9px;border-radius:6px;color:var(--ink-soft)}
+.ta-val{font-size:11.5px;font-weight:700;color:var(--ink)}
+.ta-wo-link{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;color:var(--brand);
+  background:none;border:0;padding:0;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.ta-signed{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:var(--brand)}
+.job-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+  margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.jf-note{font-size:12px;color:var(--ink-soft);flex:1;min-width:140px}
+.jf-note.done{display:flex;align-items:center;gap:6px;color:var(--brand);font-weight:600}
+.jf-btn{flex:none}
+.job-notes{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.job-notes .fld{margin-bottom:0}
+
+/* measurement docs */
+.meas-list{display:flex;flex-direction:column;gap:7px;margin-top:8px}
+.meas-row{display:flex;align-items:center;gap:9px;background:var(--paper);border:1px solid var(--line);
+  border-radius:9px;padding:9px 11px;font-size:12.5px}
+.meas-row.view{background:var(--card)}
+.meas-name{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meas-dl{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:var(--brand);
+  background:none;border:1px solid var(--line);padding:4px 9px;border-radius:6px;cursor:pointer}
+.meas-upload{display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;font-weight:600;
+  color:var(--brand);cursor:pointer;background:var(--card);border:1px dashed var(--brand);
+  padding:12px;border-radius:9px;margin-top:2px}
+
+/* work order document */
+.wo-inherit{display:flex;align-items:flex-start;gap:9px;background:var(--paper);border:1px solid var(--line);
+  border-radius:9px;padding:11px 13px;margin-bottom:16px;font-size:12px;color:var(--ink-soft);line-height:1.45}
+.wo-inherit svg{flex:none;margin-top:1px;color:var(--brand)}
+.wo-inherit strong{color:var(--ink)}
+.wo-doc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
+  padding-bottom:16px;margin-bottom:16px;border-bottom:2px solid var(--ink)}
+.wdh-label{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:var(--ink-soft)}
+.wo-doc-head h2{margin:2px 0 0;font-size:24px;letter-spacing:-.02em}
+.wdh-sub{margin:3px 0 0;font-size:12.5px;color:var(--ink-soft)}
+.wo-doc-sec{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--brand-dk);margin:20px 0 9px}
+.wo-doc-grid{display:flex;flex-direction:column;gap:0}
+.wd-row{display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}
+.wd-row span{color:var(--ink-soft)}
+.wd-row strong{text-align:right;font-weight:600}
+.wo-doc-scope{font-size:13px;line-height:1.55;color:var(--ink);background:var(--paper);
+  border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin:0;white-space:pre-wrap}
+.wo-value{font-size:22px;font-weight:800;letter-spacing:-.02em;color:var(--brand)}
+.wo-value span{font-size:12px;font-weight:600;color:var(--ink-soft);margin-left:7px;letter-spacing:0}
+.wo-open-btn{display:flex;align-items:center;gap:7px;width:100%;background:var(--paper);border:1px solid var(--line);
+  border-radius:9px;padding:11px 13px;font-size:12.5px;font-weight:700;color:var(--brand);cursor:pointer;margin-top:12px}
+.wo-open-btn:hover{border-color:var(--brand)}
+.wo-open-meas{margin-left:auto;font-size:11px;font-weight:600;color:var(--ink-soft)}
+
+
+/* ---- white label branding ---- */
+.brand-logo{display:flex;align-items:center;color:var(--ink);flex:none}
+.brand-logo.sm{color:var(--ink)}
+.brand-logo.lg,.brand-logo.xl{color:var(--ink)}
+.brand-initials{display:grid;place-items:center;background:var(--brand);color:#fff;border-radius:8px;
+  font-size:12px;font-weight:800;padding:0 8px;letter-spacing:.02em}
+.brand-txt h1{margin:0;font-size:17px;font-weight:700;letter-spacing:-.02em}
+.brand-txt p{margin:1px 0 0;font-size:11.5px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.ss-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+  max-width:1160px;margin:0 auto;padding:18px 24px 28px;font-size:11.5px;color:var(--ink-soft);
+  border-top:1px solid var(--line)}
+.powered{font-weight:600}
+.powered strong{color:var(--brand);font-weight:800;letter-spacing:-.01em}
+.login-logo-wrap{display:flex;align-items:center;justify-content:center;color:var(--ink);margin-bottom:14px;min-height:40px}
+.login-foot{display:flex;flex-direction:column;align-items:center;gap:5px}
+.login-demo-note{font-size:10.5px;opacity:.75}
+
+/* contractor: who they work for */
+.dash-hello .who-bar{margin-bottom:0;flex:none}
+.who-bar{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
+  border-radius:12px;padding:13px 16px;margin-bottom:16px;box-shadow:var(--shadow)}
+.who-txt{display:flex;flex-direction:column;min-width:0}
+.who-me{font-size:14.5px;font-weight:700;letter-spacing:-.01em}
+.who-for{font-size:11.5px;color:var(--ink-soft);font-weight:600}
+
+/* brand settings */
+.settings-panel{max-width:620px}
+.brand-preview{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:14px 0 4px;background:var(--card)}
+.bp-chrome{display:flex;align-items:center;gap:6px;background:var(--paper);border-bottom:1px solid var(--line);padding:9px 12px}
+.bp-dot{width:8px;height:8px;border-radius:50%;background:var(--line)}
+.bp-url{margin-left:8px;font-size:11.5px;color:var(--ink-soft);font-weight:600;
+  background:var(--card);border:1px solid var(--line);border-radius:20px;padding:3px 12px}
+.bp-body{display:flex;align-items:center;gap:14px;padding:20px 18px}
+.bp-name{font-size:16px;font-weight:700;letter-spacing:-.02em}
+.bp-sub{font-size:12px;color:var(--ink-soft)}
+.bp-foot{border-top:1px solid var(--line);padding:9px 18px;font-size:10.5px;color:var(--ink-soft);
+  text-align:right;font-weight:600}
+.subdomain-row{display:flex;align-items:center;gap:0;margin-top:6px}
+.subdomain-row input{border-radius:9px 0 0 9px;margin-top:0;border-right:0}
+.sd-suffix{background:var(--paper);border:1px solid var(--line);border-left:0;border-radius:0 9px 9px 0;
+  padding:10px 12px;font-size:13.5px;color:var(--ink-soft);font-weight:600;white-space:nowrap}
+.logo-opts{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:8px}
+.logo-current{display:flex;flex-direction:column;gap:8px;background:var(--paper);border:1px solid var(--line);
+  border-radius:11px;padding:16px 18px;min-width:190px}
+.lc-label{font-size:11px;color:var(--ink-soft);font-weight:600}
+.logo-actions{display:flex;flex-direction:column;gap:7px;flex:1;min-width:150px}
+.logo-actions .dm-upload,.logo-actions .dm-delete,.logo-actions .dm-replace{justify-content:center}
+
+
+/* logo mark editing (My account) */
+.mark-row{display:flex;align-items:center;gap:13px;background:var(--paper);border:1px solid var(--line);
+  border-radius:11px;padding:13px 14px;margin-top:8px;flex-wrap:wrap}
+.mark-preview{display:flex;align-items:center;justify-content:center;min-width:46px;min-height:38px;
+  background:var(--card);border:1px solid var(--line);border-radius:9px;padding:6px 10px;color:var(--ink);flex:none}
+.mark-meta{flex:1;min-width:90px;display:flex;flex-direction:column}
+.mark-name{font-size:14px;font-weight:700;letter-spacing:-.01em}
+.mark-hint{font-size:11px;color:var(--ink-soft);font-weight:600}
+.mark-actions{display:flex;gap:6px;flex:none}
+.brand-save{margin-bottom:14px}
+
+
+/* log in as (users tab) */
+.login-as-btn{display:flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--card);
+  color:var(--brand);font-size:12.5px;font-weight:700;padding:6px 11px;border-radius:8px;cursor:pointer;flex:none}
+.login-as-btn:hover{background:#eef5f1;border-color:var(--brand)}
+
+/* calendar: per-day docs prompt */
+.cal-grid .cal-cell.needdocs{background:#fbf0dd;box-shadow:inset 0 0 0 1px #ecd9b0;cursor:pointer}
+.cal-grid .cal-cell.needdocs:hover{background:#f6dfb4;box-shadow:inset 0 0 0 2px var(--amber)}
+.cal-doc{display:grid;place-items:center;color:#a86a18;opacity:.75}
+.cal-cell.needdocs:hover .cal-doc{opacity:1}
+.lg.needdocs{background:var(--amber)}
+
+
+/* subscription plans */
+.plan-current{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
+  background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;
+  margin-bottom:14px;box-shadow:var(--shadow)}
+.pc-label{display:block;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft)}
+.pc-name{font-size:20px;font-weight:800;letter-spacing:-.02em}
+.pc-usage{font-size:12.5px;color:var(--ink-soft);display:flex;flex-direction:column;gap:3px;text-align:right}
+.pc-usage strong{font-size:16px;color:var(--ink)}
+.plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}
+.plan-card{position:relative;background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:20px;display:flex;flex-direction:column;gap:10px;box-shadow:var(--shadow)}
+.plan-card.on{border-color:var(--brand);background:#f7faf8}
+.plan-badge{position:absolute;top:14px;right:14px;font-size:10px;font-weight:800;text-transform:uppercase;
+  background:var(--brand);color:#fff;padding:3px 9px;border-radius:20px}
+.plan-name{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft)}
+.plan-price{font-size:30px;font-weight:800;letter-spacing:-.03em;line-height:1}
+.plan-price span{font-size:13px;font-weight:600;color:var(--ink-soft);letter-spacing:0}
+.plan-feats{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:7px;flex:1}
+.plan-feats li{display:flex;align-items:flex-start;gap:7px;font-size:12.5px;color:var(--ink-soft);line-height:1.4}
+.plan-feats svg{flex:none;margin-top:2px;color:var(--brand)}
+.plan-feats li.feat-off{color:#A9B3AD}
+.plan-feats li.feat-off svg{color:#A9B3AD}
+.plan-btn{width:100%;justify-content:center;margin-top:6px}
+.usage-panel{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:18px;margin-top:14px;box-shadow:var(--shadow)}
+.usage-panel h4{margin:0 0 10px;font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--brand-dk)}
+.usage-rows{display:flex;flex-direction:column}
+.stat.earn{color:var(--brand);font-weight:700}
+
+/* uniforms */
+.uni-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:11px;margin-top:10px}
+.uni-card{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:13px;
+  display:flex;flex-direction:column;gap:4px}
+.uni-card.on{border-color:var(--brand);background:#f7faf8}
+.uni-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.uni-name{font-size:13.5px;font-weight:700}
+.uni-safety{font-size:9.5px;font-weight:800;text-transform:uppercase;background:#fbf0dd;color:#8a5a12;
+  padding:2px 7px;border-radius:20px}
+.uni-note{font-size:11px;color:var(--ink-soft)}
+.uni-controls{display:flex;align-items:center;gap:8px;margin-top:8px}
+.uni-controls select{flex:1;border:1px solid var(--line);border-radius:7px;padding:6px 8px;
+  font-size:12.5px;font-family:inherit;background:var(--card);color:var(--ink);min-width:0}
+.uni-qty{display:flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:7px;overflow:hidden;flex:none}
+.uni-qty button{border:0;background:var(--paper);width:26px;height:28px;font-size:15px;font-weight:700;
+  color:var(--ink);cursor:pointer;line-height:1}
+.uni-qty button:disabled{opacity:.4;cursor:not-allowed}
+.uni-qty span{min-width:26px;text-align:center;font-size:13px;font-weight:700}
+.uni-order{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
+  border-radius:11px;padding:12px 14px;margin-bottom:8px}
+.uni-order.admin{align-items:flex-start}
+.uo-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.uo-co{font-size:14px;font-weight:700}
+.uo-items{font-size:12.5px;color:var(--ink);font-weight:600}
+.uo-note{font-size:11.5px;color:var(--ink-soft);font-style:italic}
+.uo-date{font-size:11px;color:var(--ink-soft)}
+.seg-tabs.sm button{padding:7px 12px;font-size:12.5px}
+.seg-n{font-size:10.5px;font-weight:800;opacity:.6;margin-left:3px}
+
+
+/* filter bar: collapse/expand + sort */
+.filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.filter-toggle{display:flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;padding:9px 13px;font-size:13px;font-weight:700;color:var(--ink);cursor:pointer}
+.filter-toggle:hover{border-color:var(--brand)}
+.ft-count{background:var(--brand);color:#fff;font-size:10.5px;font-weight:800;padding:1px 7px;border-radius:20px}
+.ft-chev{transition:transform .15s;color:var(--ink-soft)}
+.ft-chev.open{transform:rotate(180deg)}
+.sort-ctl{display:flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;padding:0 11px;color:var(--ink-soft)}
+.sort-ctl select{border:0;background:none;padding:9px 0;font-size:13px;font-weight:600;color:var(--ink);
+  font-family:inherit;cursor:pointer;outline:none;max-width:190px}
+.filters{padding-bottom:4px}
+
+/* plan notice spacing */
+.plan-notice{margin-top:18px;margin-bottom:4px}
+
+
+/* crew-based availability */
+.crew-picker{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 16px}
+.cp-btn{display:flex;flex-direction:column;align-items:flex-start;gap:2px;background:var(--card);
+  border:1px solid var(--line);border-radius:10px;padding:10px 14px;cursor:pointer;text-align:left;min-width:132px}
+.cp-btn:hover{border-color:var(--brand)}
+.cp-btn.on{border-color:var(--brand);background:#f2f8f4}
+.cp-btn.paused{opacity:.7}
+.cp-btn.paused .cp-meta{color:var(--red)}
+.cp-btn.all{background:var(--paper)}
+.cp-name{font-size:13.5px;font-weight:700;color:var(--ink)}
+.cp-meta{font-size:10.5px;color:var(--ink-soft);font-weight:600}
+.crew-switch-row{margin-bottom:14px}
+.crew-switch-row .avail-switch{width:100%;justify-content:center}
+.cal-crews{font-size:11px;font-weight:800;color:#1f6b4a;opacity:.65}
+.cal-cell.clickable:hover .cal-crews{opacity:1}
+.cc-note{display:block;font-size:9.5px;font-weight:600;color:var(--ink-soft);text-transform:none;letter-spacing:0}
+
+/* all-crews overview grid */
+.all-crew-grid{display:grid;grid-template-columns:110px repeat(14,1fr);gap:3px;margin-top:12px}
+.acg-head{font-size:10.5px;font-weight:800;text-transform:uppercase;color:var(--ink-soft);
+  display:flex;align-items:flex-end;padding-bottom:4px}
+.acg-day{display:flex;flex-direction:column;align-items:center;font-size:10px}
+.acg-day .dow{color:var(--ink-soft)}
+.acg-day .dom{font-weight:700;font-size:11.5px}
+.acg-name{font-size:11.5px;font-weight:600;display:flex;align-items:center;padding:6px 0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-top:1px solid var(--line)}
+.acg-cell{min-height:26px;border-radius:4px;border-top:1px solid var(--line);margin-top:-1px}
+.acg-cell.up{background:#e2f0e7}
+.acg-cell.down{background:#f7e5df}
+.acg-cell.booked{background:#dbe8f2}
+
+
+/* notification preferences */
+.notify-opts{display:flex;flex-direction:column;gap:9px;margin-top:10px}
+.notify-opts.compact{flex-direction:row;gap:8px;margin-top:8px}
+.notify-opt{display:flex;align-items:center;gap:11px;background:var(--card);border:1px solid var(--line);
+  border-radius:11px;padding:13px 15px;cursor:pointer}
+.notify-opts.compact .notify-opt{flex:1;padding:10px 12px;gap:8px}
+.notify-opt:hover{border-color:var(--brand)}
+.notify-opt.on{border-color:var(--brand);background:#f2f8f4}
+.notify-opt input{accent-color:var(--brand);width:17px;height:17px;flex:none}
+.notify-opt>svg{color:var(--ink-soft);flex:none}
+.notify-opt.on>svg{color:var(--brand)}
+.no-txt{display:flex;flex-direction:column;min-width:0}
+.no-name{font-size:13.5px;font-weight:700;color:var(--ink)}
+.no-sub{font-size:11px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.notify-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;
+  background:var(--paper);border:1px solid var(--line);color:var(--ink-soft);padding:3px 9px;border-radius:20px}
+.notify-note{display:flex;align-items:flex-start;gap:8px;background:var(--paper);border:1px solid var(--line);
+  border-radius:9px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--ink-soft);line-height:1.45}
+.notify-note svg{flex:none;margin-top:1px}
+
+
+/* notification previews */
+.msg-preview{border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--card);margin-bottom:4px}
+.mp-head{display:flex;gap:10px;align-items:baseline;background:var(--paper);border-bottom:1px solid var(--line);padding:10px 13px}
+.mp-head span{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);flex:none}
+.mp-head strong{font-size:12.5px;font-weight:700;color:var(--ink)}
+.mp-body{margin:0;padding:14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
+  line-height:1.6;color:var(--ink);white-space:pre-wrap;word-break:break-word;max-height:260px;overflow-y:auto}
+.sms-bubble{background:#e2f0e7;border:1px solid #cfe0d6;border-radius:14px 14px 14px 4px;padding:12px 14px;
+  font-size:13px;line-height:1.5;color:var(--ink);max-width:340px;word-break:break-word}
+.no-tag{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:var(--brand);
+  color:#fff;padding:2px 6px;border-radius:20px;margin-left:6px;vertical-align:1px}
+.notify-opt.disabled{opacity:.5;cursor:not-allowed}
+.fld-err{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--red);font-weight:600;margin:8px 0 0}
+
+
+/* upgrade gate — left aligned, the delta table carries the argument */
+.up-form{gap:0}
+.up-top{margin-bottom:20px}
+.up-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.05em;background:#fbf0dd;color:#8a5a12;
+  padding:5px 10px;border-radius:20px;margin-bottom:12px}
+.up-form h2{font-size:23px;letter-spacing:-.03em;margin:0}
+.up-sub{margin-top:8px;font-size:14.5px;color:var(--ink-soft);line-height:1.5;max-width:46ch}
+
+.up-gets{font-size:14px;color:var(--ink-soft);line-height:1.55;background:var(--paper);
+  border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin-top:16px}
+.up-gets strong{color:var(--ink);font-weight:700}
+.up-cycle{margin-top:16px;width:100%}
+.up-cycle button{flex:1;justify-content:center}
+
+.up-buy{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  margin-top:18px;padding:16px 18px;background:#f2f8f4;border:1px solid #d4e7db;border-radius:11px}
+.up-price-block{display:flex;flex-direction:column}
+.up-amt{font-family:inherit;font-size:27px;font-weight:800;letter-spacing:-.04em;line-height:1;color:var(--ink)}
+.up-amt em{font-style:normal;font-size:14px;font-weight:600;letter-spacing:0;color:var(--ink-soft)}
+.up-terms{font-size:12px;color:var(--ink-soft);margin-top:5px}
+.up-go{flex:none;padding:14px 22px;font-size:15.5px}
+
+.up-stay{display:block;width:100%;border:0;background:none;color:var(--ink-soft);
+  font:600 13.5px Inter,sans-serif;padding:16px 0 2px;cursor:pointer;text-align:center}
+.up-stay:hover{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+
+.plan-pill{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
+  background:var(--line);color:var(--ink-soft);padding:2px 7px;border-radius:20px}
+.plan-pill.scale{background:#fbf0dd;color:#8a5a12}
+
+
+/* document review */
+.rv-file{display:flex;align-items:center;gap:13px;background:var(--paper);border:1px solid var(--line);
+  border-radius:11px;padding:14px 16px;margin-bottom:16px;flex-wrap:wrap}
+.rv-file>svg{color:var(--brand);flex:none}
+.rv-file-main{flex:1;min-width:130px;display:flex;flex-direction:column}
+.rv-name{font-size:13.5px;font-weight:700;word-break:break-all}
+.rv-meta{font-size:11px;color:var(--ink-soft)}
+.rv-file-actions{display:flex;gap:7px;flex:none}
+.rv-btn{padding:8px 12px;font-size:12.5px;display:flex;align-items:center;gap:5px}
+.rv-checks{display:flex;flex-direction:column;gap:8px}
+.rv-check{display:flex;align-items:flex-start;gap:10px;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;padding:12px 14px;cursor:pointer;font-size:13px;line-height:1.4}
+.rv-check:hover{border-color:var(--brand)}
+.rv-check.on{border-color:var(--brand);background:#f2f8f4}
+.rv-check input{accent-color:var(--brand);width:17px;height:17px;flex:none;margin-top:1px}
+.rv-close{display:block;width:100%;border:0;background:none;color:var(--ink-soft);font-size:12px;
+  font-weight:600;padding:12px 0 0;cursor:pointer;text-align:center}
+.rv-close:hover{color:var(--ink)}
+
+/* document status chips */
+.doc-state{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;margin-top:3px;line-height:1.35}
+.doc-state.s-verified{color:var(--brand)}
+.doc-state.s-pending{color:var(--amber)}
+.doc-state.s-rejected{color:var(--red)}
+.doc-state.s-missing{color:var(--ink-soft)}
+.doc-row.st-doc-verified{background:#f2f8f4;border-color:#d4e7db}
+.doc-row.st-doc-pending{background:#fffdf6;border-color:#ecd9b0}
+.doc-row.st-doc-rejected{background:#fbf1ed;border-color:#f0d9d1}
+.doc-row.st-doc-missing{background:var(--card)}
+.doc-manage-row.st-doc-verified{background:#f2f8f4;border-color:#d4e7db}
+.doc-manage-row.st-doc-pending{background:#fffdf6;border-color:#ecd9b0}
+.doc-manage-row.st-doc-rejected{background:#fbf1ed;border-color:#f0d9d1}
+.doc-review{display:flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--card);
+  color:var(--ink);font-size:12px;font-weight:700;padding:7px 12px;border-radius:8px;cursor:pointer;flex:none}
+.doc-review:hover{border-color:var(--brand);color:var(--brand)}
+.doc-review.urgent{background:var(--amber);border-color:var(--amber);color:#fff}
+.doc-review.urgent:hover{background:#a86a18;color:#fff}
+
+
+/* coverage schedule review */
+.cov-table{display:flex;flex-direction:column;gap:7px}
+.cov-line{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;padding:10px 13px}
+.cov-line.ok{border-color:#cfe0d6;background:#f7faf8}
+.cov-line.short{border-color:#f0d1c8;background:#fbf1ed}
+.cl-label{flex:1;min-width:0;display:flex;flex-direction:column}
+.cl-name{font-size:13px;font-weight:700;color:var(--ink)}
+.cl-opt{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  background:var(--paper);border:1px solid var(--line);color:var(--ink-soft);padding:1px 6px;border-radius:20px;margin-left:7px}
+.cl-req{font-size:10.5px;color:var(--ink-soft)}
+.cl-input{display:flex;align-items:center;gap:7px;flex:none;width:150px}
+.cl-input input{margin-top:0;width:100%;font-size:13.5px;padding:8px 10px}
+.cl-ok{color:var(--brand);flex:none}
+.cl-bad{color:var(--red);flex:none}
+
+/* requirements reference (contractor side) */
+.req-box{border:1px solid var(--line);border-radius:11px;background:var(--paper);margin-bottom:16px}
+.req-box summary{display:flex;align-items:center;gap:8px;padding:12px 14px;cursor:pointer;
+  font-size:13px;font-weight:700;color:var(--ink);list-style:none}
+.req-box summary::-webkit-details-marker{display:none}
+.req-box summary svg{color:var(--brand)}
+.req-body{padding:0 14px 14px;border-top:1px solid var(--line)}
+.req-sec{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--brand-dk);margin:14px 0 7px}
+.req-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.req-table td{padding:5px 0;border-bottom:1px solid var(--line);color:var(--ink-soft)}
+.req-table td:first-child{color:var(--ink)}
+.rt-sub{color:var(--ink-soft);font-size:11px}
+.rt-amt{text-align:right;font-weight:700;color:var(--ink) !important;white-space:nowrap}
+.req-list{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:5px}
+.req-list li{display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--ink-soft);line-height:1.4}
+.req-list svg{flex:none;margin-top:2px;color:var(--brand)}
+.req-note{font-size:12px;color:var(--ink-soft);margin:0;line-height:1.45}
+
+
+/* coverage overrides */
+.cov-line{flex-direction:column;align-items:stretch;gap:0}
+.cov-line-top{display:flex;align-items:center;gap:12px}
+.cov-line.waived{border-color:#cdd9e6;background:#f6f9fc}
+.cl-waived{color:#2b5c85;flex:none}
+.cl-override{border-top:1px dashed var(--line);margin-top:10px;padding-top:10px}
+.cl-override.standalone{border-top:0;margin-top:8px;padding-top:0}
+.cl-ovr-toggle{display:flex;align-items:flex-start;gap:8px;font-size:12px;font-weight:600;
+  color:var(--ink);cursor:pointer;line-height:1.4}
+.cl-ovr-toggle input{accent-color:#2b5c85;width:15px;height:15px;flex:none;margin-top:1px}
+.cl-ovr-reason{width:100%;margin-top:8px;border:1px solid #cdd9e6;border-radius:8px;padding:8px 11px;
+  font-size:12.5px;font-family:inherit;color:var(--ink);background:var(--card)}
+.ovr-summary{display:flex;align-items:center;gap:6px;font-size:11.5px;color:#2b5c85;font-weight:600;
+  background:#f0f5fa;border:1px solid #cdd9e6;border-radius:8px;padding:9px 11px;margin:10px 0 0}
+.doc-waived{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;color:#2b5c85;
+  background:#eaf0f6;border:1px solid #cdd9e6;padding:3px 8px;border-radius:20px;flex:none;cursor:help}
+
+
+/* WA license verification */
+.lic-card{display:flex;align-items:flex-start;gap:12px;border:1px solid var(--line);border-radius:11px;
+  padding:14px 16px;background:var(--card);flex-wrap:wrap}
+.lic-card.ok{background:#f2f8f4;border-color:#d4e7db}
+.lic-card.ok>svg{color:var(--brand);flex:none;margin-top:1px}
+.lic-card.bad{background:#fbf1ed;border-color:#f0d9d1}
+.lic-card.bad>svg{color:var(--red);flex:none;margin-top:1px}
+.lic-card.none{background:var(--paper)}
+.lic-card.none>svg{color:var(--ink-soft);flex:none;margin-top:1px}
+.lic-main{flex:1;min-width:150px;display:flex;flex-direction:column;gap:2px}
+.lic-num{font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.lic-status{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:20px}
+.lic-status.s-active{background:#e8f2ea;color:#1f6b4a}
+.lic-status.s-expired,.lic-status.s-suspended,.lic-status.s-revoked{background:#faece7;color:var(--red)}
+.lic-status.s-unknown{background:var(--line);color:var(--ink-soft)}
+.lic-meta{font-size:11.5px;color:var(--ink-soft);line-height:1.4}
+.lic-state{font-size:11px;color:var(--ink-soft);font-style:italic;margin-top:2px}
+.lic-actions{display:flex;align-items:center;gap:8px;flex:none}
+.lic-link{font-size:11.5px;font-weight:700;color:var(--brand);text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
+
+
+/* billing cycle */
+.cycle-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:6px}
+.cycle{display:inline-flex;gap:4px;background:var(--paper);border:1px solid var(--line);
+  padding:4px;border-radius:10px}
+.cycle button{appearance:none;border:0;background:none;font:600 13.5px Inter,sans-serif;
+  color:var(--ink-soft);padding:9px 14px;border-radius:7px;cursor:pointer;
+  display:flex;align-items:center;gap:7px}
+.cycle button[aria-selected="true"]{background:var(--card);color:var(--ink);box-shadow:var(--shadow)}
+.cy-save{font-size:10px;font-weight:800;background:#e8f2ea;color:#1f6b4a;padding:2px 7px;border-radius:20px}
+.cycle button[aria-selected="true"] .cy-save{background:var(--amber);color:#fff}
+.cycle-note{font-size:12.5px;color:var(--brand);font-weight:600}
+.plan-bill{font-size:11.5px;color:var(--ink-soft);margin-top:6px;display:block}
+.pc-cycle{display:block;font-size:12px;color:var(--ink-soft);margin-top:2px}
+
+
+/* response deadlines */
+.ddl{display:flex;align-items:flex-start;gap:9px;border-radius:9px;padding:11px 13px;
+  margin-top:12px;font-size:13px;line-height:1.45;border:1px solid}
+.ddl svg{flex:none;margin-top:1px}
+.ddl b{font-weight:700}
+.ddl-ok{background:#f2f8f4;border-color:#d4e7db;color:var(--brand-dk)}
+.ddl-today{background:#fffdf6;border-color:#ecd9b0;color:#8a5a12}
+.ddl-soon{background:#fbf2e4;border-color:#e6c98f;color:#8a5a12}
+.ddl-expired{background:#fbf1ed;border-color:#f0d9d1;color:var(--red)}
+.ddl-when{opacity:.8;margin-left:5px}
+.ddl-chip{display:inline-flex;align-items:center;gap:5px}
+.ddl-chip.u-soon{background:#f6dfb4;color:#7a4e0c}
+.ddl-chip.u-expired{background:#faece7;color:var(--red)}
+.st-expired{display:inline-flex;align-items:center;gap:5px;background:#faece7;color:var(--red);
+  font-size:11px;font-weight:700;padding:4px 9px;border-radius:20px;text-transform:lowercase}
+.trade-rematch{display:inline-flex;align-items:center;gap:5px;background:var(--brand);color:#fff;
+  border:0;font-size:12px;font-weight:700;padding:7px 12px;border-radius:8px;cursor:pointer}
+.trade-rematch:hover{background:var(--brand-dk)}
+
+
+/* callbacks & warranty */
+.cov-banner{display:flex;align-items:flex-start;gap:11px;border:1px solid;border-radius:10px;
+  padding:13px 15px;margin-bottom:16px}
+.cov-banner svg{flex:none;margin-top:1px}
+.cov-banner strong{display:block;font-size:14px}
+.cov-sub{display:block;font-size:12px;opacity:.85;margin-top:2px}
+.cov-callback{background:#fffdf6;border-color:#ecd9b0;color:#8a5a12}
+.cov-warranty{background:#f0f5fa;border-color:#cdd9e6;color:#2b5c85}
+.cov-expired,.cov-none{background:#fbf1ed;border-color:#f0d9d1;color:var(--red)}
+.cov-pill{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.cov-pill.cov-callback{background:#fbf0dd;color:#8a5a12;border:0}
+.cov-pill.cov-warranty{background:#eaf0f6;color:#2b5c85;border:0}
+.cov-pill.cov-expired,.cov-pill.cov-none{background:#faece7;color:var(--red);border:0}
+.sc-cta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+.trade-issue{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
+  background:var(--card);color:var(--ink);font-size:12px;font-weight:700;padding:7px 12px;
+  border-radius:8px;cursor:pointer}
+.trade-issue:hover{border-color:var(--amber);color:#8a5a12}
+.sc-open-pill{font-size:10.5px;font-weight:700;background:var(--amber);color:#fff;
+  padding:3px 9px;border-radius:20px}
+.sc-block{border-top:1px solid var(--line);padding:14px 16px;background:#fafbfa}
+.sc-row{display:flex;align-items:flex-start;gap:12px;background:var(--card);
+  border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:8px;flex-wrap:wrap}
+.sc-row.sc-resolved{opacity:.72}
+.sc-kind{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.04em;padding:4px 9px;border-radius:20px;flex:none}
+.sc-kind.k-callback{background:#fbf0dd;color:#8a5a12}
+.sc-kind.k-warranty{background:#eaf0f6;color:#2b5c85}
+.sc-main{flex:1;min-width:180px;display:flex;flex-direction:column;gap:2px}
+.sc-job{font-size:13.5px;font-weight:700}
+.sc-issue{font-size:13px;color:var(--ink)}
+.sc-meta{font-size:11px;color:var(--ink-soft)}
+.sc-note{font-size:11.5px;color:var(--ink-soft);font-style:italic}
+.sc-side{display:flex;flex-direction:column;align-items:flex-end;gap:7px;flex:none}
+.sc-status{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px}
+.sc-status.s-awaiting-confirmation{background:#fbf0dd;color:#8a5a12}
+.sc-status.s-scheduled{background:#e8f2ea;color:#1f6b4a}
+.sc-status.s-resolved{background:var(--line);color:var(--ink-soft)}
+.sc-propose{display:flex;gap:6px;align-items:center}
+.sc-propose input{border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:12.5px;font-family:inherit}
+.warranty-grid{grid-template-columns:repeat(auto-fill,minmax(92px,1fr))}
+.portal-sec-note{font-size:13px;color:var(--ink-soft);margin:-4px 0 12px}
+.role.dim span{opacity:.6}
+
+
+/* per-trade work order lines */
+.bundle-box{display:flex;align-items:flex-start;gap:11px;background:#f2f8f4;border:1px solid #d4e7db;
+  border-radius:10px;padding:13px 15px;margin-bottom:16px;color:var(--brand-dk)}
+.bundle-box svg{flex:none;margin-top:1px}
+.bundle-box strong{display:block;font-size:13.5px}
+.bundle-sub{display:block;font-size:12.5px;color:var(--ink-soft);margin-top:3px;line-height:1.45}
+.wo-line{border:1px solid var(--line);border-radius:10px;margin-bottom:10px;overflow:hidden;background:var(--card)}
+.wo-line.on{border-color:var(--brand)}
+.wol-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:12px 14px;background:var(--paper)}
+.wo-line.on .wol-head{background:#f2f8f4}
+.wol-title,.wol-check{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;cursor:default}
+.wol-check{cursor:pointer;font-weight:600}
+.wol-check input{accent-color:var(--brand);width:16px;height:16px;margin:0}
+.wol-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
+  background:var(--brand);color:#fff;padding:2px 7px;border-radius:20px}
+.wol-tag.alt{background:var(--line);color:var(--ink-soft)}
+.wol-val{font-family:inherit;font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums}
+.wol-body{padding:13px 14px;display:flex;flex-direction:column;gap:12px}
+.wol-total{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:13px 15px;background:var(--paper);border:1px solid var(--line);border-radius:10px;
+  font-size:13.5px;color:var(--ink-soft);margin-bottom:4px}
+.wol-total strong{font-size:15px;color:var(--ink)}
+.rec-bundle{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;
+  background:#e8f2ea;color:#1f6b4a;padding:3px 8px;border-radius:20px}
+
+
+/* multi-step contractor form */
+.sf-steps{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;
+  margin:14px 0 20px}
+.sf-steps button{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;
+  appearance:none;border:0;border-right:1px solid var(--line);background:var(--paper);
+  padding:12px 10px;font:600 13px Inter,sans-serif;color:var(--ink-soft);cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sf-steps button:last-child{border-right:0}
+.sf-steps button:disabled{cursor:default}
+.sf-steps button:not(:disabled):hover{background:#eef2ef}
+.sf-steps button[data-state="now"]{background:var(--card);color:var(--ink)}
+.sf-steps button[data-state="done"]{background:var(--card);color:var(--brand)}
+.sf-steps .sb-n{width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line);
+  background:var(--card);display:grid;place-items:center;font-size:11px;flex:none}
+.sf-steps button[data-state="now"] .sb-n{background:var(--brand);border-color:var(--brand);color:#fff}
+.sf-steps button[data-state="done"] .sb-n{background:var(--brand);border-color:var(--brand);color:#fff}
+
+/* ============ RESPONSIVE ============ */
+/* Base: allow horizontal safety everywhere */
+.ss-root{overflow-x:hidden}
+.trade-side{display:flex;align-items:center;gap:10px;flex:none;flex-wrap:wrap;justify-content:flex-end}
+
+/* ---- Tablet (<=1024px) ---- */
+@media (max-width:1024px){
+  .ss-main{padding:18px 18px 60px}
+  .ss-header{padding:12px 18px}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:13px}
+  .wo-sheet,.wo-recs{max-width:none}
+  .user-row-perms{max-width:180px}
+  .cal-grid{grid-template-columns:150px repeat(14,minmax(38px,1fr))}
+}
+
+/* ---- Small tablet / large phone (<=820px) ---- */
+@media (max-width:820px){
+  .tabs{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tabs button{white-space:nowrap;flex:none}
+  .filters{gap:8px}
+  .ms,.ms-btn{min-width:0}
+  .ms-btn{min-width:118px}
+  .user-row-perms{display:none}
+  .dash-grid{grid-template-columns:repeat(2,1fr)}
+  .trade-row{flex-wrap:wrap}
+  .trade-side{width:100%;justify-content:space-between;padding-top:10px;margin-top:4px;border-top:1px solid var(--line)}
+  .job-card-head{flex-direction:column;align-items:flex-start;gap:8px}
+  .fill-badge{align-self:flex-start}
+}
+
+/* ---- Phone (<=640px) ---- */
+@media (max-width:640px){
+  .ss-main{padding:14px 14px 48px}
+  .ss-header{padding:10px 14px;gap:10px}
+  .brand h1{font-size:17px}
+  .brand p{font-size:11px}
+  .logo{width:32px;height:32px}
+  .user-meta{display:none}
+  .user-btn{padding:6px}
+  .add-btn{padding:9px 13px;font-size:13px}
+
+  /* stacked form rows */
+  .fld-row{flex-direction:column;gap:0}
+  .fld-row .fld{width:100%}
+
+  /* filters become a 2-up grid so nothing is cramped */
+  .filters{display:grid;grid-template-columns:1fr 1fr;gap:9px;align-items:end}
+  .ms{min-width:0}
+  .ms-btn{width:100%;min-width:0}
+  .ms-menu{left:0;right:0;min-width:0}
+  .zip-filter{min-width:0;width:100%}
+  .ready-toggle{height:auto;padding:9px 10px;font-size:12px;justify-content:center}
+  .clear-filters{grid-column:1 / -1;text-align:center;padding:6px}
+
+  /* cards full width */
+  .grid{grid-template-columns:1fr;gap:12px}
+  .card{padding:14px}
+  .card-actions{gap:6px}
+  .mini{font-size:12px;padding:9px 6px}
+
+  /* modals become sheets */
+  .modal-backdrop{padding:0;align-items:flex-end}
+  .modal,.modal-wide{max-width:none;width:100%;max-height:92vh;border-radius:16px 16px 0 0;padding:22px 16px 26px}
+  .modal-close{top:12px;right:12px}
+  .form-actions{flex-direction:column-reverse;gap:8px}
+  .form-actions button{width:100%;justify-content:center}
+
+  /* jobs + trades */
+  .job-card{padding:15px}
+  .job-meta{gap:9px;font-size:11.5px}
+  .trade-row{padding:12px;gap:10px}
+  .trade-side{flex-direction:column;align-items:stretch;gap:10px}
+  .trade-actions{justify-content:space-between;width:100%}
+  .trade-assign{width:100%;justify-content:center}
+  .trade-assigned{gap:7px}
+  /* rating: give it a labelled full-width row with big tap targets */
+  .trade-side .star-rate{width:100%;justify-content:space-between;background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:9px 12px}
+  .sr-star{padding:4px}
+  .sr-star svg{width:20px;height:20px}
+  .resp{padding:9px 12px;font-size:12.5px}
+
+  /* pick lists / recommendations */
+  .rec-row,.pick-row{flex-wrap:wrap;padding:13px}
+  .rec-main{width:calc(100% - 42px)}
+  .rec-send,.btn-notify,.btn-warn{width:100%;justify-content:center;margin-top:4px}
+  .rec-rank{width:26px;height:26px;font-size:12px}
+  .pick-list{max-height:none}
+
+  /* users */
+  .user-row{flex-wrap:wrap}
+  .user-row-main{width:calc(100% - 52px)}
+  .user-row-actions{width:100%;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--line)}
+
+  /* contractor portal */
+  .portal-head{flex-direction:column;align-items:stretch}
+  .avail-switch{justify-content:center}
+  .portal-tabs{width:100%;overflow-x:auto;scrollbar-width:none}
+  .portal-tabs::-webkit-scrollbar{display:none}
+  .portal-tabs button{white-space:nowrap;flex:none;padding:9px 12px;font-size:12.5px}
+  .portal-panel{padding:15px}
+  .auto-card{flex-wrap:wrap}
+  .auto-card-main{width:calc(100% - 32px)}
+  .auto-toggle{width:100%;justify-content:center;padding-top:8px;border-top:1px solid var(--line)}
+  .portal-respond{flex-direction:column;align-items:stretch}
+  .portal-respond .respond-btns{display:flex;gap:8px}
+  .portal-respond .resp{flex:1;justify-content:center}
+
+  /* availability grids */
+  .cal-legend{gap:12px;font-size:11.5px;flex-wrap:wrap}
+  .cal-hint{margin-left:0;width:100%}
+  .cal-grid{grid-template-columns:112px repeat(14,44px)}
+  .cal-sub{font-size:11.5px;padding:8px 6px}
+  .mini-cal{gap:4px}
+  .mc-day{border-radius:7px}
+  .mc-num{font-size:12px}
+  .mini-cal-nav{font-size:11.5px;gap:6px}
+  .mini-cal-nav span{text-align:center}
+
+  /* crew editor */
+  .member-row{flex-wrap:wrap;gap:6px}
+  .member-row input{min-width:0;flex:1 1 100%}
+  .member-row input:last-of-type{max-width:none;flex:1 1 100%}
+  .crew-edit-card{padding:12px}
+
+  /* docs */
+  .doc-manage-row{flex-wrap:wrap}
+  .dm-info{width:calc(100% - 30px)}
+  .dm-actions,.dm-upload{width:100%;justify-content:center;margin-top:6px}
+  .dm-replace,.dm-delete{flex:1;justify-content:center}
+  .doc-row{flex-wrap:wrap}
+  .doc-label-wrap{width:calc(100% - 30px)}
+
+  /* work order */
+  .wo-sheet{padding:16px}
+  .wo-guide{padding:12px 14px}
+  .wo-guide li{font-size:12px}
+  .jobs-head{flex-wrap:wrap;gap:10px}
+
+  /* notification previews on phones */
+  .mp-body{font-size:11px;padding:12px;max-height:200px}
+  .mp-head{flex-direction:column;gap:2px}
+  .sms-bubble{max-width:none;font-size:12.5px}
+
+  /* notifications on phones */
+  .notify-opts.compact{flex-direction:column}
+
+  /* crew availability on phones */
+  .crew-picker{gap:6px}
+  .cp-btn{flex:1 1 calc(50% - 3px);min-width:0;padding:9px 11px}
+  .all-crew-grid{grid-template-columns:78px repeat(14,minmax(16px,1fr));gap:2px}
+  .acg-name{font-size:10.5px}
+  .acg-cell{min-height:22px}
+  .acg-day .dom{font-size:10px}
+
+  /* filter bar on phones */
+  .filter-bar{gap:8px}
+  .filter-toggle{flex:1;justify-content:center}
+  .sort-ctl{flex:1;min-width:0}
+  .sort-ctl select{max-width:none;flex:1;min-width:0}
+  .plan-notice{margin-top:14px}
+
+  /* license card on phones */
+  .lic-actions{width:100%;justify-content:space-between;padding-top:8px;border-top:1px solid var(--line)}
+  .lic-actions .doc-review{width:auto;margin-top:0}
+
+  /* coverage schedule on phones */
+  .cov-line-top{flex-wrap:wrap;gap:8px}
+  .cl-input{width:100%}
+  .req-table td{font-size:12px}
+
+  /* callbacks on phones */
+  .sc-row{flex-direction:column}
+  .sc-side{align-items:stretch;width:100%}
+  .sc-side .trade-actions{width:100%}
+  .cov-pill{white-space:normal}
+
+  /* document review on phones */
+  .rv-file{flex-direction:column;align-items:stretch;gap:10px}
+  .rv-file-actions{width:100%}
+  .rv-btn{flex:1;justify-content:center}
+  .doc-row,.doc-manage-row{flex-wrap:wrap}
+  .doc-review{width:100%;justify-content:center;margin-top:8px}
+
+  /* stepped form on phones */
+  .sf-steps button{font-size:0;gap:0;padding:12px 6px}
+  .sf-steps button .sb-n{font-size:11px}
+  .sf-steps button[data-state="now"]{font-size:12.5px;gap:7px}
+
+  /* upgrade gate on phones */
+  .up-buy{flex-direction:column;align-items:stretch;gap:12px}
+  .up-go{width:100%;justify-content:center}
+  .up-form h2{font-size:20px}
+  .ld-badges{flex-wrap:wrap;justify-content:flex-end}
+
+  /* plans + uniforms on phones */
+  .plan-grid{grid-template-columns:1fr}
+  .cycle{width:100%}
+  .cycle button{flex:1;justify-content:center}
+  .cycle-row{gap:10px}
+  .plan-current{flex-direction:column;align-items:flex-start;gap:8px}
+  .pc-usage{text-align:left}
+  .uni-grid{grid-template-columns:1fr 1fr;gap:9px}
+  .uni-card{padding:11px}
+  .uni-controls{flex-direction:column;align-items:stretch;gap:6px}
+  .uni-qty{align-self:stretch;justify-content:space-between}
+  .uni-qty span{flex:1}
+  .uni-order{flex-wrap:wrap}
+  .uni-order .trade-actions{width:100%;padding-top:8px;border-top:1px solid var(--line)}
+
+  /* branding on phones */
+  .mark-row{gap:10px}
+  .mark-actions{width:100%;justify-content:stretch}
+  .mark-actions>*{flex:1;justify-content:center}
+  .brand-txt p{display:none}
+  .ss-footer{flex-direction:column;align-items:flex-start;gap:6px;padding:16px 14px 24px}
+  .logo-opts{flex-direction:column;align-items:stretch}
+  .logo-current{align-items:center}
+  .bp-body{padding:16px 14px}
+  .subdomain-row{flex-direction:column;align-items:stretch}
+  .subdomain-row input{border-radius:9px;border-right:1px solid var(--line)}
+  .sd-suffix{border-radius:9px;border-left:1px solid var(--line);border-top:0;text-align:center}
+  .who-bar{padding:11px 13px}
+  .dash-hello .who-bar{width:100%}
+
+  /* job lifecycle on phones */
+  .job-footer{flex-direction:column;align-items:stretch}
+  .jf-btn{width:100%;justify-content:center}
+  .wd-row{flex-direction:column;gap:2px}
+  .wd-row strong{text-align:left}
+  .wo-doc-head{flex-direction:column}
+  .wo-doc-head h2{font-size:20px}
+  .job-title-row{flex-wrap:wrap}
+
+  /* admin dashboard on phones */
+  .dash-hello{flex-direction:column}
+  .dash-cta{width:100%}
+  .dash-cta button{flex:1;justify-content:center}
+  .dash-row{flex-wrap:wrap}
+  .dash-row-main{width:calc(100% - 92px)}
+  .dash-row-btn{width:100%;justify-content:center;margin-top:8px}
+  .add-city-row{flex-direction:column}
+  .add-city-row .btn-solid{width:100%;justify-content:center}
+  .radius-row{flex-wrap:wrap}
+  .radius-row input{flex:1 1 100%}
+  .radius-row input[type=number]{max-width:90px;flex:none}
+
+  /* job settings / docs on phones */
+  .seg-tabs{width:100%}
+  .seg-tabs button{flex:1;padding:9px 6px;font-size:12.5px}
+  .cov-preview{font-size:12px}
+
+  /* contractor dashboard on phones */
+  .dash-grid{grid-template-columns:1fr 1fr;gap:9px}
+  .dash-card{padding:12px}
+  .dc-num{font-size:20px}
+  .hdr-avail{padding:7px 9px}
+  .hdr-avail-text{display:none}
+  .dash-sec h3{font-size:12.5px}
+  .ac-card{padding:14px 40px 14px 14px}
+
+  /* login + request-docs on phones */
+  .login-card{padding:22px 16px;border-radius:14px}
+  .login-brand h1{font-size:23px}
+  .req-docs-bar{flex-direction:column;align-items:stretch;gap:7px}
+  .rd-btn{justify-content:center;padding:9px}
+  .detail-doc-block{flex-direction:column;align-items:stretch}
+  .doc-block.with-cta{flex-direction:column;align-items:stretch}
+  .doc-block.with-cta .btn-notify{width:100%;justify-content:center}
+  .detail-doc-block .btn-notify{width:100%;justify-content:center}
+  .doc-row-actions{width:100%;margin-top:6px}
+  .doc-row-actions button{flex:1;justify-content:center}
+  .crew-head{flex-wrap:wrap;gap:6px}
+  .user-row-actions{flex-wrap:wrap}
+  .login-as-btn{flex:1;justify-content:center}
+  .user-row-actions .btn-notify.sm{flex:1;justify-content:center}
+
+  /* misc */
+  .searchbar .search-input input{font-size:16px} /* prevents iOS zoom-on-focus */
+  .fld input,.fld select,.fld textarea{font-size:16px}
+  .stat-cards{gap:7px}
+  .stat-card{padding:10px}
+  .sc-num{font-size:18px}
+  .detail-actions{flex-direction:column}
+  .detail-actions .mini{width:100%}
+  .pick-grid{gap:6px}
+  .pick{padding:8px 12px;font-size:12.5px}
+}
+
+/* ---- Very small (<=380px) ---- */
+@media (max-width:380px){
+  .filters{grid-template-columns:1fr}
+  .card-actions{flex-direction:column}
+  .mini{width:100%}
+  .cal-grid{grid-template-columns:96px repeat(14,42px)}
+}
+
+/* Touch targets & no hover-stick on touch devices */
+@media (hover:none){
+  .card:hover{transform:none;border-color:var(--line)}
+  .cal-cell.clickable:hover{box-shadow:none}
+  .cal-plus{opacity:1}
+  button,.pick,.mini,.resp{touch-action:manipulation}
+}
+`;
