@@ -2,6 +2,22 @@ name = "subsub-api"
 main = "worker/index.js"
 compatibility_date = "2026-01-01"
 
+# Real auth (Supabase). Deliberately NOT set here as a plain [vars] block,
+# even though both values are safe to be non-secret (the anon key is meant
+# to be public) — if they were always-on in this checked-in file, local
+# `wrangler dev` would force every request into real-auth mode too, and
+# local development / the e2e scripts (which use the dev-stub auth) would
+# break. Instead:
+#   - Production: set both in the Cloudflare dashboard (Worker → Settings →
+#     Variables) or `wrangler secret put SUPABASE_ANON_KEY` — see app/README.md.
+#   - Local, only if you want to test real auth from a machine that (unlike
+#     this project's dev sandbox) can actually reach Supabase: create
+#     app/.dev.vars (gitignored, wrangler loads it automatically) with:
+#       SUPABASE_URL = "https://qxioxairvpbqaiottcxu.supabase.co"
+#       SUPABASE_ANON_KEY = "..."
+# Leaving both unset (the default) runs on the dev-stub auth — see
+# app/README.md "Local development".
+
 # Filled in after you run `wrangler d1 create subsub-db` — see app/README.md.
 [[d1_databases]]
 binding = "DB"

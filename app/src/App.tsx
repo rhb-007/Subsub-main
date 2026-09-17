@@ -6,6 +6,7 @@ import {
   Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth } from "./lib/api";
+import { supabase, supabaseEnabled } from "./lib/supabaseClient";
 
 // ---- Persistence bridge ---------------------------------------------------
 // The app below still reads/writes plain useState — every mutator additionally
@@ -1595,8 +1596,12 @@ export default function SubSub() {
     }
   }
 
+  // `email` is only used in dev-stub mode (see LoginPage) — in real-auth
+  // mode, identity already comes from the Supabase session that
+  // signInWithPassword() just established, so this just asks who that is.
   async function handleLogin(email) {
-    const result = await api.devLogin(email).catch((err) => { console.error("[login] failed:", err); return null; });
+    const result = await (supabaseEnabled ? api.getMe() : api.devLogin(email))
+      .catch((err) => { console.error("[login] failed:", err); return null; });
     if (!result) return;
     const primary = result.memberships[0];
     if (!primary) return;
@@ -1734,25 +1739,32 @@ export default function SubSub() {
                         })}
                       </>
                     )}
-                    <div className="user-menu-label">Switch user</div>
-                    {users.map((u) => {
-                      // Role lives on the membership, not the (now global)
-                      // user record — a user with no membership in this
-                      // account at all shouldn't appear in this list.
-                      const um = memberships.find((m) => m.userId === u.id && m.accountId === account.id);
-                      if (!um) return null;
-                      return (
-                        <button key={u.id} className={u.id === currentUserId ? "on" : ""}
-                          onClick={() => {
-                            setCurrentUserId(u.id);
-                            setUserMenu(false);
-                            setTab(ROLES[um.role].can[0]);
-                          }}>
-                          <span className="um-name">{u.name}</span>
-                          <span className="um-role">{ROLES[um.role].label}</span>
-                        </button>
-                      );
-                    })}
+                    {/* Instantly becoming someone else with no password was
+                        always a demo-only convenience — makes no sense once
+                        real auth is wired, so it's gone the moment it is. */}
+                    {!supabaseEnabled && (
+                      <>
+                        <div className="user-menu-label">Switch user</div>
+                        {users.map((u) => {
+                          // Role lives on the membership, not the (now global)
+                          // user record — a user with no membership in this
+                          // account at all shouldn't appear in this list.
+                          const um = memberships.find((m) => m.userId === u.id && m.accountId === account.id);
+                          if (!um) return null;
+                          return (
+                            <button key={u.id} className={u.id === currentUserId ? "on" : ""}
+                              onClick={() => {
+                                setCurrentUserId(u.id);
+                                setUserMenu(false);
+                                setTab(ROLES[um.role].can[0]);
+                              }}>
+                              <span className="um-name">{u.name}</span>
+                              <span className="um-role">{ROLES[um.role].label}</span>
+                            </button>
+                          );
+                        })}
+                      </>
+                    )}
                     <button className="um-signout" onClick={() => { setUserMenu(false); clearAuth(); setLoggedIn(false); }}>
                       <LogOut size={14} /> Sign out
                     </button>
@@ -4865,13 +4877,51 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
+  // "Create an account" only ever creates the LOGIN — it does not create a
+  // membership anywhere. An admin has to have already added this email via
+  // Users → Add (or this be the very first person in a brand-new org's
+  // account) for signing in afterward to actually land anywhere; see
+  // resolveSupabaseUser() in worker/index.js, which links by email on
+  // first login rather than requiring a separate provisioning step.
+  const [mode, setMode] = useState("signin"); // "signin" | "signup"
+  const [signupSent, setSignupSent] = useState(false);
 
-  const submit = () => {
-    const u = users.find((x) => x.email.toLowerCase() === email.trim().toLowerCase());
-    if (!u) { setErr("No account found for that email."); return; }
-    if (!pw) { setErr("Enter your password."); return; }
-    setErr("");
-    onLogin(u.email);
+  const submit = async () => {
+    if (!supabaseEnabled) {
+      const u = users.find((x) => x.email.toLowerCase() === email.trim().toLowerCase());
+      if (!u) { setErr("No account found for that email."); return; }
+      if (!pw) { setErr("Enter your password."); return; }
+      setErr("");
+      onLogin(u.email);
+      return;
+    }
+
+    if (!email.trim() || !pw) { setErr("Enter your email and password."); return; }
+    setErr(""); setBusy(true);
+
+    if (mode === "signup") {
+      const { data, error } = await supabase.auth.signUp({ email: email.trim(), password: pw });
+      setBusy(false);
+      if (error) { setErr(error.message); return; }
+      if (data.session) { onLogin(); return; } // email confirmation disabled — straight in
+      setSignupSent(true); // otherwise Supabase mailed a confirmation link
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pw });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onLogin(); // identity now comes from the Supabase session itself
+  };
+
+  const forgotPassword = async () => {
+    if (!supabaseEnabled) { setErr("Password reset isn't wired up in this demo."); return; }
+    if (!email.trim()) { setErr("Enter your email first, then tap this again."); return; }
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+    if (error) setErr(error.message);
+    else setResetSent(true);
   };
 
   return (
@@ -4884,47 +4934,65 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
         </div>
 
         <div className="login-form">
-          <label className="fld">Email
-            <input type="email" inputMode="email" autoComplete="username"
-              value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); }}
-              placeholder="you@company.com"
-              onKeyDown={(e) => e.key === "Enter" && submit()} />
-          </label>
-          <label className="fld">Password
-            <input type="password" autoComplete="current-password"
-              value={pw} onChange={(e) => { setPw(e.target.value); setErr(""); }}
-              placeholder="••••••••"
-              onKeyDown={(e) => e.key === "Enter" && submit()} />
-          </label>
-          {err && <div className="login-err"><AlertTriangle size={13} /> {err}</div>}
-          <button className="btn-solid login-btn" onClick={submit}>
-            <Lock size={15} /> Sign in
-          </button>
-          <button className="login-forgot" onClick={() => setErr("Password reset isn't wired up in this demo.")}>
-            Forgot password?
-          </button>
+          {supabaseEnabled && signupSent ? (
+            <div className="login-err" style={{ color: "var(--forest-lift)" }}>
+              <CheckCircle2 size={13} /> Check {email} for a confirmation link, then come back and sign in.
+            </div>
+          ) : (
+            <>
+              <label className="fld">Email
+                <input type="email" inputMode="email" autoComplete="username"
+                  value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); setResetSent(false); }}
+                  placeholder="you@company.com"
+                  onKeyDown={(e) => e.key === "Enter" && submit()} />
+              </label>
+              <label className="fld">Password
+                <input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                  value={pw} onChange={(e) => { setPw(e.target.value); setErr(""); }}
+                  placeholder="••••••••"
+                  onKeyDown={(e) => e.key === "Enter" && submit()} />
+              </label>
+              {err && <div className="login-err"><AlertTriangle size={13} /> {err}</div>}
+              {resetSent && <div className="login-err" style={{ color: "var(--forest-lift)" }}><CheckCircle2 size={13} /> Check your email for a reset link.</div>}
+              <button className="btn-solid login-btn" onClick={submit} disabled={busy}>
+                <Lock size={15} /> {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
+              </button>
+              {mode === "signin" ? (
+                <button className="login-forgot" onClick={forgotPassword}>
+                  Forgot password?
+                </button>
+              ) : null}
+              {supabaseEnabled && (
+                <button className="login-forgot" onClick={() => { setMode(mode === "signup" ? "signin" : "signup"); setErr(""); }}>
+                  {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
+                </button>
+              )}
+            </>
+          )}
         </div>
 
-        <div className="login-demo">
-          <div className="ld-label">Demo accounts — tap to sign in</div>
-          {users.map((u) => (
-            <button key={u.id} className="ld-row" onClick={() => onLogin(u.email)}>
-              <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
-              <span className="ld-main">
-                <span className="ld-name">{u.name}</span>
-                <span className="ld-email">{u.email}</span>
-              </span>
-              <span className="ld-badges">
-                <span className={`role-badge r-${u.role}`}>{ROLES[u.role].label}</span>
-                {roleOf(u) !== "contractor" && (
-                  <span className={`plan-pill ${acctOf(u) && acctOf(u).plan === "scale" ? "scale" : ""}`}>
-                    {acctOf(u) ? acctOf(u).name : "—"}
-                  </span>
-                )}
-              </span>
-            </button>
-          ))}
-        </div>
+        {!supabaseEnabled && (
+          <div className="login-demo">
+            <div className="ld-label">Demo accounts — tap to sign in</div>
+            {users.map((u) => (
+              <button key={u.id} className="ld-row" onClick={() => onLogin(u.email)}>
+                <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+                <span className="ld-main">
+                  <span className="ld-name">{u.name}</span>
+                  <span className="ld-email">{u.email}</span>
+                </span>
+                <span className="ld-badges">
+                  <span className={`role-badge r-${u.role}`}>{ROLES[u.role].label}</span>
+                  {roleOf(u) !== "contractor" && (
+                    <span className={`plan-pill ${acctOf(u) && acctOf(u).plan === "scale" ? "scale" : ""}`}>
+                      {acctOf(u) ? acctOf(u).name : "—"}
+                    </span>
+                  )}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <p className="login-foot">
         <span className="powered">Powered by <strong>SubSub</strong></span>

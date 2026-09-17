@@ -103,12 +103,46 @@ verified it now round-trips through the API the same as insurance/bond/contract.
    wrangler d1 execute subsub-db --remote --file=./worker/schema.sql
    wrangler r2 bucket create subsub-files
    ```
-2. **Decide on auth.** `worker/index.js`'s auth middleware is a dev stub —
-   it trusts `X-User-Id`/`X-Account-Id` headers with zero verification. Fine
-   for local testing, not safe on the internet. Clerk or Supabase Auth are
-   the recommended options (see DEPLOYMENT.pdf) — either needs an account
-   only you can create, same as the Cal.com/Formspree signups for the
-   marketing site.
+2. **Auth: built, needs your anon key + a live-network check.** Real auth
+   (Supabase) is wired end to end — sign in/sign up/forgot password on the
+   frontend, JWT verification against Supabase on the Worker, auto-linking
+   a Supabase login to an existing internal `users` row by email on first
+   sign-in. It activates automatically wherever both are configured, and
+   falls back to the `X-User-Id` dev stub wherever they aren't — same code,
+   two modes, chosen by whether the env vars below are set. To turn it on:
+   - **Frontend**: copy `app/.env.example` to `app/.env`, fill in
+     `VITE_SUPABASE_ANON_KEY` from Project Settings → API → "anon public" in
+     your Supabase dashboard (the URL is already filled in).
+   - **Worker**: set `SUPABASE_URL` and `SUPABASE_ANON_KEY` the same way —
+     in the Cloudflare dashboard (Worker → Settings → Variables) for the
+     deployed Worker, or in a local `app/.dev.vars` (gitignored) if testing
+     from a machine that can actually reach Supabase.
+   - **What I could NOT verify from this environment**: this sandbox's
+     network policy blocks `*.supabase.co` the same way it blocks
+     `data.wa.gov` and the Census geocoder — confirmed by watching the
+     Worker's own log show `SUPABASE_URL`/`SUPABASE_ANON_KEY` correctly
+     loaded from a test `.dev.vars`, correctly rejecting the old dev-stub
+     header once real-auth mode was active, and correctly attempting (then
+     network-failing) the real Supabase verification call. That proves the
+     branching logic is sound; it does NOT prove a real login round-trips
+     successfully. **Test one real sign-up + sign-in once you have the anon
+     key and either deploy or run locally on a machine with real network
+     access** before relying on this.
+   - **Inviting people**: adding someone via Users → Add only creates the
+     internal `users`/`membership` rows (unchanged from before) — it does
+     NOT create their Supabase login. They create that themselves via
+     "New here? Create an account" on the login screen using the same
+     email you invited; `resolveSupabaseUser()` in `worker/index.js` links
+     the two by email automatically on their first sign-in. No service_role
+     key needed for this. (A service_role key would let an admin provision
+     + email-invite someone directly from the Worker instead of them
+     self-registering — not built, since the self-serve path above covers
+     the same need without a second secret to manage.)
+   - **The demo-account picker and "Switch user" menu disappear** once
+     `supabaseEnabled` is true — they were always dev-only conveniences,
+     and letting anyone become anyone else with a menu click makes no
+     sense next to a real auth system, so the code hides both rather than
+     leaving them reachable.
 3. **Set `CRON_SECRET`** (`wrangler secret put CRON_SECRET`) before the
    nightly license-sweep endpoint (`/api/cron/license-sweep`) is usable.
 4. **Connect this repo to a new Cloudflare Pages/Workers project** for

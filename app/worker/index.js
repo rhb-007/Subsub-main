@@ -60,16 +60,61 @@ function parseJson(v, fallback = null) {
 const uid = () => crypto.randomUUID();
 
 // ---------------------------------------------------------------------------
-// Auth (dev stub — see file header)
+// Auth — real when SUPABASE_URL/SUPABASE_ANON_KEY are configured (see
+// wrangler.toml and app/README.md), a dev stub otherwise. The dev stub
+// trusts a plain X-User-Id header with zero verification — fine for local
+// development, never for anything reachable from the internet. Neither
+// mode has been exercised against a live network from this environment
+// (see README) — the Supabase branch in particular needs a real check
+// once deployed.
 // ---------------------------------------------------------------------------
+// Verifies a `Bearer <token>` header against Supabase itself (no
+// crypto/JWKS handling needed in the Worker — costs one extra fetch per
+// request; swap for local JWKS verification later if that latency ever
+// matters) and resolves it to an internal users row, linking by email on
+// first login if one exists but auth_id hasn't been set yet. Returns null
+// on any failure — every caller turns that into its own 401/403.
+async function resolveSupabaseUser(env, authHeader) {
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  const supaRes = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+    headers: { Authorization: authHeader, apikey: env.SUPABASE_ANON_KEY },
+  });
+  if (!supaRes.ok) return null;
+  const supaUser = await supaRes.json();
+
+  let user = await env.DB.prepare(`SELECT * FROM users WHERE auth_id = ?`).bind(supaUser.id).first();
+  if (!user && supaUser.email) {
+    // First real login for someone who already has an internal users row
+    // (seeded, or added via the invite flow before they'd signed up) —
+    // link it by email instead of requiring a separate provisioning step.
+    user = await env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(supaUser.email).first();
+    if (user) await env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ?`).bind(supaUser.id, user.id).run();
+  }
+  return user;
+}
+
 app.use("/api/*", async (c, next) => {
   // A brand logo has to render on the login screen, before anyone is
   // authenticated — so this one route is intentionally public. Never do
   // this for compliance documents; those stay behind auth.
-  if (c.req.path === "/api/auth/dev-login" || c.req.path.startsWith("/api/logo/")) return next();
-  const userId = c.req.header("X-User-Id");
+  // /api/auth/me and /api/auth/dev-login are also exempted: both exist
+  // specifically to discover which accounts a person can choose from
+  // *before* any X-Account-Id is known, so they can't require one — they
+  // do their own (lighter) verification inline instead.
+  if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path.startsWith("/api/logo/")) return next();
+
   const accountId = c.req.header("X-Account-Id");
-  if (!userId || !accountId) return c.json({ error: "unauthenticated" }, 401);
+  let userId;
+
+  if (c.env.SUPABASE_URL && c.env.SUPABASE_ANON_KEY) {
+    if (!accountId) return c.json({ error: "unauthenticated" }, 401);
+    const user = await resolveSupabaseUser(c.env, c.req.header("Authorization"));
+    if (!user) return c.json({ error: "unauthenticated" }, 401);
+    userId = user.id;
+  } else {
+    userId = c.req.header("X-User-Id");
+    if (!userId || !accountId) return c.json({ error: "unauthenticated" }, 401);
+  }
 
   const membership = await c.env.DB.prepare(
     `SELECT * FROM memberships WHERE user_id = ? AND account_id = ?`
@@ -99,22 +144,37 @@ async function logEvent(env, accountId, actorId, kind, subjectId, payload) {
 // The frontend stores userId + a chosen accountId and sends them as headers.
 // Replace with real session auth (Clerk/Supabase) before shipping.
 // ---------------------------------------------------------------------------
-app.post("/api/auth/dev-login", async (c) => {
-  const { email } = await c.req.json();
-  const user = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(email).first();
-  if (!user) return c.json({ error: "not_found" }, 404);
-  const { results: memberships } = await c.env.DB.prepare(
+async function loginResponse(db, user) {
+  const { results: memberships } = await db.prepare(
     `SELECT m.*, a.name as account_name, a.subdomain, a.plan, a.billing, a.logo_key, a.use_default_mark
      FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
   ).bind(user.id).all();
-  return c.json({
+  return {
     user: { id: user.id, name: user.name, email: user.email, phone: user.phone },
     memberships: memberships.map((m) => ({
       accountId: m.account_id, accountName: m.account_name, subdomain: m.subdomain,
       role: m.role, companyId: m.company_id,
       plan: m.plan, billing: m.billing, logoKey: m.logo_key, useDefaultMark: !!m.use_default_mark,
     })),
-  });
+  };
+}
+
+app.post("/api/auth/dev-login", async (c) => {
+  const { email } = await c.req.json();
+  const user = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(email).first();
+  if (!user) return c.json({ error: "not_found" }, 404);
+  return c.json(await loginResponse(c.env.DB, user));
+});
+
+// Real-auth equivalent: identity comes from a verified Supabase bearer
+// token, not a trusted request body. Exempted from the main auth
+// middleware above for the same reason dev-login is — discovering which
+// accounts to offer has to work before any of them is chosen yet.
+app.get("/api/auth/me", async (c) => {
+  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) return c.json({ error: "auth_not_configured" }, 501);
+  const user = await resolveSupabaseUser(c.env, c.req.header("Authorization"));
+  if (!user) return c.json({ error: "unauthenticated" }, 401);
+  return c.json(await loginResponse(c.env.DB, user));
 });
 
 // This account's members (admin/pm/contractor), composed with the person's

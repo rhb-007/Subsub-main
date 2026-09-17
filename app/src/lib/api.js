@@ -1,6 +1,17 @@
-// Thin fetch client for the Worker API. Auth is a dev stub for now (see
-// worker/index.js header) — the frontend just remembers which user/account
-// it logged in as and sends them as headers on every request.
+// Thin fetch client for the Worker API.
+//
+// Two auth modes, chosen automatically by whether Supabase is configured
+// (see lib/supabaseClient.js):
+//   - Real auth (Supabase configured): identity comes from a verified
+//     Supabase session JWT, sent as `Authorization: Bearer <token>`. The
+//     worker verifies it against Supabase itself — see worker/index.js.
+//   - Dev stub (Supabase NOT configured, e.g. local development without
+//     .env set): identity is just a trusted `X-User-Id` header. Fine for
+//     local testing, never for anything reachable from the internet.
+// Either way, `X-Account-Id` is still sent — it's not an identity claim,
+// just which of the signed-in person's accounts they're currently acting
+// in; the server always re-checks that a real membership backs it up.
+import { supabase, supabaseEnabled } from "./supabaseClient";
 
 const AUTH_KEY = "subsub.auth";
 
@@ -12,13 +23,25 @@ export function setAuth(auth) {
 }
 export function clearAuth() {
   localStorage.removeItem(AUTH_KEY);
+  if (supabaseEnabled) supabase.auth.signOut();
+}
+
+async function authHeaders() {
+  const auth = getAuth();
+  const headers = {};
+  if (auth?.accountId) headers["X-Account-Id"] = auth.accountId;
+
+  if (supabaseEnabled) {
+    const { data } = await supabase.auth.getSession();
+    if (data?.session?.access_token) headers["Authorization"] = `Bearer ${data.session.access_token}`;
+  } else if (auth?.userId) {
+    headers["X-User-Id"] = auth.userId;
+  }
+  return headers;
 }
 
 async function request(path, options = {}) {
-  const auth = getAuth();
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  if (auth?.userId) headers["X-User-Id"] = auth.userId;
-  if (auth?.accountId) headers["X-Account-Id"] = auth.accountId;
+  const headers = { "Content-Type": "application/json", ...(await authHeaders()), ...(options.headers || {}) };
 
   const res = await fetch(`/api${path}`, { ...options, headers });
   if (!res.ok) {
@@ -35,10 +58,7 @@ async function request(path, options = {}) {
 // File uploads go straight through, not via request() — the body is the
 // raw file, not JSON, and Content-Type should be the file's own type.
 async function uploadFile(kind, file) {
-  const auth = getAuth();
-  const headers = { "Content-Type": file.type || "application/octet-stream" };
-  if (auth?.userId) headers["X-User-Id"] = auth.userId;
-  if (auth?.accountId) headers["X-Account-Id"] = auth.accountId;
+  const headers = { "Content-Type": file.type || "application/octet-stream", ...(await authHeaders()) };
 
   const res = await fetch(`/api/uploads/${encodeURIComponent(kind)}/${encodeURIComponent(file.name)}`, {
     method: "PUT", headers, body: file,
@@ -49,6 +69,9 @@ async function uploadFile(kind, file) {
 
 export const api = {
   devLogin: (email) => request("/auth/dev-login", { method: "POST", body: JSON.stringify({ email }) }),
+  // Real-auth equivalent of devLogin: identity comes from the verified
+  // bearer token, not a request body — returns the same {user, memberships} shape.
+  getMe: () => request("/auth/me"),
 
   listSubs: () => request("/subs"),
   addSub: (sub) => request("/subs", { method: "POST", body: JSON.stringify(sub) }),
