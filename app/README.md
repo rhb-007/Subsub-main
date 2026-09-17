@@ -34,13 +34,22 @@ scheduling and work orders — as distinct from the marketing site at
 - Run them yourself: start both dev servers (see "Local development" below),
   then any of `node scripts/e2e-smoke.mjs`, `node scripts/e2e-upload-smoke.mjs`,
   `node scripts/e2e-logo-smoke.mjs` from `app/`.
-- **Two real bugs caught by these tests while building this, both fixed:**
-  the "Switch user" dev menu assumed `user.role` existed directly on the
-  (now-global, correctly normalized) user record — it crashed the whole app
-  the moment you opened the user menu as a real hydrated user, since role
-  actually lives on the membership now. And the original upload endpoint
-  called `R2Bucket.createPresignedUrl()`, which isn't a real method — see
-  below.
+- **Three real bugs caught while building this, all fixed:** the "Switch
+  user" dev menu assumed `user.role` existed directly on the (now-global,
+  correctly normalized) user record — it crashed the whole app the moment
+  you opened the user menu as a real hydrated user, since role actually
+  lives on the membership now. The original upload endpoint called
+  `R2Bucket.createPresignedUrl()`, which isn't a real method — see below.
+  And `POST /api/subs` only ever persisted a new company's identity fields
+  (name, contact, license, ...) — crews, coverage, insurance/bond/contract/w9
+  and categories typed into the same "add a sub" form were silently dropped
+  on the server, even though they displayed fine locally until the next
+  reload wiped them. Fixed by extracting the same field-routing logic the
+  PATCH endpoint already used into a shared `applySubPatch()`, applied on
+  creation too — but **only** for a genuinely new company; verified with
+  curl that inviting an *existing* (deduped, shared) company with a blank
+  form does NOT wipe out that company's real profile, since only categories/
+  caps (this account's own view of them) get written in that case.
 
 ### Persistence wiring — what's covered, what isn't
 

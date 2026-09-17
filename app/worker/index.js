@@ -288,12 +288,68 @@ app.post("/api/subs", requireRole("admin", "pm"), async (c) => {
      VALUES (?, ?, ?, 'invited', ?, ?)`
   ).bind(engagementId, accountId, companyId, JSON.stringify(body.categories || []), JSON.stringify(body.caps || [])).run();
 
-  await logEvent(c.env, accountId, userId, "engagement.invited", engagementId, { companyId });
+  // Only for a genuinely NEW company: crews, coverage, doc flags, etc. from
+  // the invite form. An EXISTING (deduped) company keeps its established
+  // profile — categories/caps above are the only things that are ever
+  // this account's own to set on someone else's shared company record.
+  if (!company) {
+    await applySubPatch(c.env.DB, companyId, engagementId, body);
+  }
+
+  await logEvent(c.env, accountId, userId, "engagement.invited", engagementId, { companyId, reused: !!company });
   return c.json({ companyId, engagementId, reused: !!company }, 201);
 });
 
-// Patch a sub — routes fields to companies vs engagements exactly like the
-// prototype's splitPatch(), so callers can keep sending the same flat object.
+// Routes a flat patch to companies/engagements exactly like splitPatch() on
+// the client, and writes both halves. Shared by PATCH /api/subs/:companyId
+// (editing an existing sub) and POST /api/subs (a new sub's initial fields —
+// crews, coverage, doc flags, categories — beyond just its identity).
+const SUB_COMPANY_COL = {
+  company: "company", contact: "contact", phone: "phone", email: "email",
+  license: "license", ubi: "ubi", city: "city", state: "state", zip: "zip",
+  mailStreet: "mail_street", mailCity: "mail_city", mailState: "mail_state", mailZip: "mail_zip",
+  crews: "crews", coverage: "coverage", available: "available",
+  unavailableDays: "unavailable_days", warranty: "warranty",
+  insurance: "insurance", bond: "bond", contract: "contract", w9: "w9",
+  docFiles: "doc_files", notify: "notify",
+};
+const SUB_COMPANY_JSON_FIELDS = new Set(["crews", "coverage", "unavailableDays", "warranty", "docFiles", "notify"]);
+const SUB_ENGAGEMENT_COL = {
+  docReview: "doc_review", categories: "categories", caps: "caps",
+  rating: "rating", ratedJobs: "rated_jobs", accepted: "accepted", declined: "declined",
+  autoSchedule: "auto_schedule", notes: "notes", status: "status",
+};
+const SUB_ENGAGEMENT_JSON_FIELDS = new Set(["docReview", "categories", "caps"]);
+
+async function applySubPatch(db, companyId, engagementId, patch) {
+  const coPatch = {}, enPatch = {};
+  for (const [k, v] of Object.entries(patch)) {
+    (ENGAGEMENT_FIELDS.has(k) ? enPatch : coPatch)[k] = v;
+  }
+
+  const coSets = [], coVals = [];
+  for (const [k, v] of Object.entries(coPatch)) {
+    if (!SUB_COMPANY_COL[k]) continue;
+    coSets.push(`${SUB_COMPANY_COL[k]} = ?`);
+    coVals.push(SUB_COMPANY_JSON_FIELDS.has(k) ? JSON.stringify(v) : (typeof v === "boolean" ? (v ? 1 : 0) : v));
+  }
+  if (coSets.length) {
+    coVals.push(companyId);
+    await db.prepare(`UPDATE companies SET ${coSets.join(", ")} WHERE id = ?`).bind(...coVals).run();
+  }
+
+  const enSets = [], enVals = [];
+  for (const [k, v] of Object.entries(enPatch)) {
+    if (!SUB_ENGAGEMENT_COL[k]) continue;
+    enSets.push(`${SUB_ENGAGEMENT_COL[k]} = ?`);
+    enVals.push(SUB_ENGAGEMENT_JSON_FIELDS.has(k) ? JSON.stringify(v) : (typeof v === "boolean" ? (v ? 1 : 0) : v));
+  }
+  if (enSets.length) {
+    enVals.push(engagementId);
+    await db.prepare(`UPDATE engagements SET ${enSets.join(", ")} WHERE id = ?`).bind(...enVals).run();
+  }
+}
+
 app.patch("/api/subs/:companyId", async (c) => {
   const auth = c.get("auth");
   const { accountId, userId } = auth;
@@ -306,48 +362,7 @@ app.patch("/api/subs/:companyId", async (c) => {
   ).bind(accountId, companyId).first();
   if (!engagement) return c.json({ error: "not_found" }, 404);
 
-  const coPatch = {}, enPatch = {};
-  for (const [k, v] of Object.entries(patch)) {
-    (ENGAGEMENT_FIELDS.has(k) ? enPatch : coPatch)[k] = v;
-  }
-
-  const COL = {
-    company: "company", contact: "contact", phone: "phone", email: "email",
-    license: "license", ubi: "ubi", city: "city", state: "state", zip: "zip",
-    mailStreet: "mail_street", mailCity: "mail_city", mailState: "mail_state", mailZip: "mail_zip",
-    crews: "crews", coverage: "coverage", available: "available",
-    unavailableDays: "unavailable_days", warranty: "warranty",
-    insurance: "insurance", bond: "bond", contract: "contract", w9: "w9",
-    docFiles: "doc_files", notify: "notify",
-  };
-  const JSON_FIELDS = new Set(["crews", "coverage", "unavailableDays", "warranty", "docFiles", "notify"]);
-  const coSets = [], coVals = [];
-  for (const [k, v] of Object.entries(coPatch)) {
-    if (!COL[k]) continue;
-    coSets.push(`${COL[k]} = ?`);
-    coVals.push(JSON_FIELDS.has(k) ? JSON.stringify(v) : (typeof v === "boolean" ? (v ? 1 : 0) : v));
-  }
-  if (coSets.length) {
-    coVals.push(companyId);
-    await c.env.DB.prepare(`UPDATE companies SET ${coSets.join(", ")} WHERE id = ?`).bind(...coVals).run();
-  }
-
-  const ECOL = {
-    docReview: "doc_review", categories: "categories", caps: "caps",
-    rating: "rating", ratedJobs: "rated_jobs", accepted: "accepted", declined: "declined",
-    autoSchedule: "auto_schedule", notes: "notes", status: "status",
-  };
-  const EJSON_FIELDS = new Set(["docReview", "categories", "caps"]);
-  const enSets = [], enVals = [];
-  for (const [k, v] of Object.entries(enPatch)) {
-    if (!ECOL[k]) continue;
-    enSets.push(`${ECOL[k]} = ?`);
-    enVals.push(EJSON_FIELDS.has(k) ? JSON.stringify(v) : (typeof v === "boolean" ? (v ? 1 : 0) : v));
-  }
-  if (enSets.length) {
-    enVals.push(engagement.id);
-    await c.env.DB.prepare(`UPDATE engagements SET ${enSets.join(", ")} WHERE id = ?`).bind(...enVals).run();
-  }
+  await applySubPatch(c.env.DB, companyId, engagement.id, patch);
 
   await logEvent(c.env, accountId, userId, "sub.updated", companyId, { fields: Object.keys(patch) });
   return c.json({ ok: true });
