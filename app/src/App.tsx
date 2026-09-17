@@ -1473,6 +1473,10 @@ export default function SubSub() {
   // Raise a callback or warranty claim. The sub has to confirm the return
   // visit from their own dashboard before it counts as scheduled.
   const raiseServiceCall = (job, trade, a, data) => {
+    persist("raiseServiceCall", api.raiseServiceCall({
+      jobId: job.id, trade, subId: a.subId, crewName: a.crewName,
+      kind: data.kind, issue: data.issue, returnDate: data.returnDate || null, raisedBy: me.name,
+    }));
     setServiceCalls((cs) => [{
       id: "sc" + Date.now(),
       accountId: account.id, jobId: job.id, trade, subId: a.subId,
@@ -1488,12 +1492,16 @@ export default function SubSub() {
     setRaising(null);
   };
   // Sub confirms (or proposes a different date) from their portal.
-  const confirmServiceCall = (id, patch = {}) =>
+  const confirmServiceCall = (id, patch = {}) => {
+    persist("confirmServiceCall", api.confirmServiceCall(id, patch));
     setServiceCalls((cs) => cs.map((c) => c.id !== id ? c : {
       ...c, status: "scheduled", confirmedAt: new Date().toISOString(), ...patch }));
-  const resolveServiceCall = (id) =>
+  };
+  const resolveServiceCall = (id) => {
+    persist("resolveServiceCall", api.resolveServiceCall(id));
     setServiceCalls((cs) => cs.map((c) => c.id !== id ? c : {
       ...c, status: "resolved", resolvedAt: new Date().toISOString() }));
+  };
 
   // No real file picker yet (see README — uploads are filenames only, same
   // as the prototype), so this calls the API with a placeholder file key.
@@ -1521,9 +1529,12 @@ export default function SubSub() {
   async function hydrateAccount(accountId, userId) {
     setLoading(true);
     try {
-      const [flatSubs, ownJobs, bookings, members] = await Promise.all([
+      const [flatSubs, ownJobs, bookings, members, uniformOrderRows, serviceCallRows] = await Promise.all([
         api.listSubs(), api.listJobs(), api.listAllBookings(), api.listAccountUsers(),
+        api.listUniformOrders(), api.listServiceCalls(),
       ]);
+      setUniformOrders(uniformOrderRows);
+      setServiceCalls(serviceCallRows);
 
       const cos = [], ens = [];
       flatSubs.forEach((flat) => {
@@ -2141,7 +2152,10 @@ export default function SubSub() {
 
       {tab === "uniforms" && can("uniforms") && (
         <UniformAdmin orders={uniformOrders} subs={subs}
-          onDecide={(id, status) => setUniformOrders((os) => os.map((o) => o.id === id ? { ...o, status } : o))} />
+          onDecide={(id, status) => {
+            persist("decideUniformOrder", api.decideUniformOrder(id, status));
+            setUniformOrders((os) => os.map((o) => o.id === id ? { ...o, status } : o));
+          }} />
       )}
 
       {can("portal") && tab !== "account" && (
@@ -2150,10 +2164,13 @@ export default function SubSub() {
             serviceCalls={serviceCalls.filter((c) => c.subId === mySub.id && c.accountId === account.id)}
             onConfirmCall={confirmServiceCall}
             orders={uniformOrders.filter((o) => o.subId === mySub.id)}
-            onOrderUniform={(order) => setUniformOrders((os) => [{
-              ...order, id: Date.now(), subId: mySub.id, company: mySub.company,
-              status: "pending", createdAt: new Date().toISOString().slice(0, 10),
-            }, ...os])}
+            onOrderUniform={(order) => {
+              persist("createUniformOrder", api.createUniformOrder(order));
+              setUniformOrders((os) => [{
+                ...order, id: Date.now(), subId: mySub.id, company: mySub.company,
+                status: "pending", createdAt: new Date().toISOString().slice(0, 10),
+              }, ...os]);
+            }}
             onSetAutoSchedule={(v) => patchSub(mySub.id, { autoSchedule: v })}
             onSetCrews={(crews) => patchSub(mySub.id, { crews })}
             onSetCoverage={(coverage) => patchSub(mySub.id, { coverage })}

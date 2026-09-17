@@ -776,4 +776,96 @@ app.get("/api/cron/license-sweep", async (c) => {
   return c.json({ checked: companies.length, flagged });
 });
 
+// ---------------------------------------------------------------------------
+// Uniform orders (Scale-plan feature) — a contractor orders branded gear,
+// the hiring account approves or denies it.
+// ---------------------------------------------------------------------------
+const uniformOrderRowToJs = (o) => ({
+  id: o.id, subId: o.company_id, company: o.company_name,
+  lines: parseJson(o.items, []), note: o.note, ship: parseJson(o.ship, {}),
+  status: o.status, createdAt: o.created_at?.slice(0, 10),
+});
+
+app.get("/api/uniform-orders", async (c) => {
+  const { accountId } = c.get("auth");
+  const { results } = await c.env.DB.prepare(
+    `SELECT uo.*, co.company as company_name FROM uniform_orders uo
+     JOIN companies co ON co.id = uo.company_id WHERE uo.account_id = ? ORDER BY uo.created_at DESC`
+  ).bind(accountId).all();
+  return c.json(results.map(uniformOrderRowToJs));
+});
+
+app.post("/api/uniform-orders", async (c) => {
+  const auth = c.get("auth");
+  if (auth.role !== "contractor" || !auth.companyId) return c.json({ error: "forbidden" }, 403);
+  const b = await c.req.json(); // { lines, note, ship }
+  const id = uid();
+  await c.env.DB.prepare(
+    `INSERT INTO uniform_orders (id, account_id, company_id, items, note, ship) VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(id, auth.accountId, auth.companyId, JSON.stringify(b.lines || []), b.note || null, JSON.stringify(b.ship || {})).run();
+  return c.json({ id }, 201);
+});
+
+app.post("/api/uniform-orders/:id/decide", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const { status } = await c.req.json(); // 'approved' | 'denied'
+  if (!["approved", "denied"].includes(status)) return c.json({ error: "bad_status" }, 400);
+  await c.env.DB.prepare(`UPDATE uniform_orders SET status = ? WHERE id = ? AND account_id = ?`)
+    .bind(status, c.req.param("id"), accountId).run();
+  return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Service calls — a warranty claim or callback raised against a completed
+// job. The contractor has to confirm (or propose a different date) before
+// it counts as scheduled.
+// ---------------------------------------------------------------------------
+const serviceCallRowToJs = (r) => ({
+  id: r.id, accountId: r.account_id, jobId: r.job_id, trade: r.trade, subId: r.company_id,
+  company: r.company_name, crewName: r.crew_name, kind: r.kind, issue: r.issue,
+  returnDate: r.return_date, status: r.status, subNote: r.sub_note,
+  raisedBy: r.raised_by, raisedAt: r.raised_at, confirmedAt: r.confirmed_at, resolvedAt: r.resolved_at,
+});
+
+app.get("/api/service-calls", async (c) => {
+  const { accountId } = c.get("auth");
+  const { results } = await c.env.DB.prepare(
+    `SELECT sc.*, co.company as company_name FROM service_calls sc
+     JOIN companies co ON co.id = sc.company_id WHERE sc.account_id = ? ORDER BY sc.raised_at DESC`
+  ).bind(accountId).all();
+  return c.json(results.map(serviceCallRowToJs));
+});
+
+app.post("/api/service-calls", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json(); // { jobId, trade, subId, crewName, kind, issue, returnDate, raisedBy }
+  const id = uid();
+  await c.env.DB.prepare(
+    `INSERT INTO service_calls (id, account_id, job_id, trade, company_id, crew_name, kind, issue, return_date, raised_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, accountId, b.jobId, b.trade, b.subId, b.crewName || null, b.kind, b.issue || null,
+    b.returnDate || null, b.raisedBy || userId).run();
+  return c.json({ id }, 201);
+});
+
+app.post("/api/service-calls/:id/confirm", async (c) => {
+  const { accountId } = c.get("auth");
+  const b = await c.req.json(); // { returnDate?, subNote? }
+  const sets = ["status = 'scheduled'", "confirmed_at = CURRENT_TIMESTAMP"];
+  const vals = [];
+  if (b.returnDate !== undefined) { sets.push("return_date = ?"); vals.push(b.returnDate); }
+  if (b.subNote !== undefined) { sets.push("sub_note = ?"); vals.push(b.subNote); }
+  vals.push(c.req.param("id"), accountId);
+  await c.env.DB.prepare(`UPDATE service_calls SET ${sets.join(", ")} WHERE id = ? AND account_id = ?`).bind(...vals).run();
+  return c.json({ ok: true });
+});
+
+app.post("/api/service-calls/:id/resolve", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  await c.env.DB.prepare(
+    `UPDATE service_calls SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ?`
+  ).bind(c.req.param("id"), accountId).run();
+  return c.json({ ok: true });
+});
+
 export default app;

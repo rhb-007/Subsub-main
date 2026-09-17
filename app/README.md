@@ -34,11 +34,10 @@ complete/reopen/notes/measurement docs), work orders (assign/unassign/
 respond/rate/crew/signed-file), companies & engagements (add, edit, WA L&I
 verify, document review, document upload — including the cross-account
 review reset), account users (add/edit/remove), account branding/plan/
-billing (name and plan/billing persist; logo does not, see below).
+billing (name and plan/billing persist; logo does not, see below), uniform
+orders (submit/approve/deny), and service calls (raise/confirm/resolve).
 
 Not yet covered — genuinely local-only, will not survive a reload:
-- **Uniform orders and service calls (callback/warranty).** Tables exist in
-  `schema.sql`; no API endpoints yet.
 - **Real file uploads.** Documents are still filenames only, same as the
   original prototype — `api.uploadDocument` is called with a placeholder
   key. Wiring an actual `<input type=file>` to the presigned R2 flow

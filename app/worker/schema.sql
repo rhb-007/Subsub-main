@@ -181,24 +181,34 @@ CREATE TABLE uniform_orders (
   id             TEXT PRIMARY KEY,
   account_id     TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   company_id     TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  items          TEXT NOT NULL DEFAULT '[]',  -- JSON: [{item,size,qty}]
+  items          TEXT NOT NULL DEFAULT '[]',  -- JSON: [{sku,label,size,qty}]
   note           TEXT,
-  status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','declined')),
+  ship           TEXT,                        -- JSON: {street,city,state,zip}
+  status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied')),
   created_at     TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX idx_uniform_orders_account ON uniform_orders(account_id);
 
 -- Service calls (warranty / callback) raised against a completed job.
 CREATE TABLE service_calls (
   id             TEXT PRIMARY KEY,
+  account_id     TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   job_id         TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   trade          TEXT NOT NULL,
   company_id     TEXT NOT NULL REFERENCES companies(id),
+  crew_name      TEXT,
   kind           TEXT NOT NULL CHECK (kind IN ('warranty','callback')),
   issue          TEXT,
   return_date    TEXT,
-  status         TEXT NOT NULL DEFAULT 'open',
-  created_at     TEXT DEFAULT CURRENT_TIMESTAMP
+  status         TEXT NOT NULL DEFAULT 'awaiting-confirmation'
+                 CHECK (status IN ('awaiting-confirmation','scheduled','resolved')),
+  sub_note       TEXT,
+  raised_by      TEXT,
+  raised_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+  confirmed_at   TEXT,
+  resolved_at    TEXT
 );
+CREATE INDEX idx_service_calls_account ON service_calls(account_id);
 
 -- Append-only audit log.
 CREATE TABLE events (

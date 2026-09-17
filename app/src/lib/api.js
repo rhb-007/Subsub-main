@@ -68,4 +68,13 @@ export const api = {
   patchAccount: (patch) => request("/account", { method: "PATCH", body: JSON.stringify(patch) }),
 
   signUpload: (kind, fileName) => request("/uploads/sign", { method: "POST", body: JSON.stringify({ kind, fileName }) }),
+
+  listUniformOrders: () => request("/uniform-orders"),
+  createUniformOrder: (order) => request("/uniform-orders", { method: "POST", body: JSON.stringify(order) }),
+  decideUniformOrder: (id, status) => request(`/uniform-orders/${id}/decide`, { method: "POST", body: JSON.stringify({ status }) }),
+
+  listServiceCalls: () => request("/service-calls"),
+  raiseServiceCall: (call) => request("/service-calls", { method: "POST", body: JSON.stringify(call) }),
+  confirmServiceCall: (id, patch) => request(`/service-calls/${id}/confirm`, { method: "POST", body: JSON.stringify(patch || {}) }),
+  resolveServiceCall: (id) => request(`/service-calls/${id}/resolve`, { method: "POST" }),
 };
