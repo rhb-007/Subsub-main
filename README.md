@@ -20,7 +20,16 @@ external requests are Google Fonts.
 | `terms-of-use.html` | `/terms-of-use` | Terms of Use |
 | `404.html` | — | Not-found page |
 
-Plus `robots.txt`, `sitemap.xml`, `_redirects`.
+Plus `robots.txt`, `sitemap.xml`, `_redirects`, `site.webmanifest` and the icon set
+(`favicon.ico`, `favicon.svg`, `favicon-16x16.png`, `favicon-32x32.png`,
+`apple-touch-icon.png`, `icon-192.png`, `icon-512.png`).
+
+Icon and page paths are all relative, so the folder works served from a domain root, from
+a subdirectory, or opened straight off disk for a local preview.
+
+`favicon.svg` is black in a light browser UI and switches to brand gold in dark mode, so
+it stays visible either way. The `.ico` and PNG fallbacks are gold for the same reason —
+a black mark all but disappears on a dark tab bar.
 
 ## Deploying
 
@@ -44,7 +53,7 @@ Drop the whole folder in as the publish directory.
    together, or you'll split signals.
 3. **Add an OG image.** Every page has `og:title`/`og:description` and
    `twitter:card=summary_large_image`, but no image is set. A 1200×630 PNG referenced as
-   `og:image` on each page is the last piece.
+   `og:image` on each page is the last piece. (Favicons and app icons are done.)
 4. **Wire up the forms.** The demo booking and the signup flow are front-end only —
    they validate and show a confirmation but post nothing. Point them at your backend,
    or at Formspree / Netlify Forms / Cal.com for the booking calendar.
