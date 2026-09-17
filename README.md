@@ -54,9 +54,8 @@ Drop the whole folder in as the publish directory.
    extensionless URLs and you'd rather canonicalise to those, strip `.html` from the
    `<link rel="canonical">` and `og:url` tags and from `sitemap.xml` — but change both
    together, or you'll split signals.
-3. **Add an OG image.** Every page has `og:title`/`og:description` and
-   `twitter:card=summary_large_image`, but no image is set. A 1200×630 PNG referenced as
-   `og:image` on each page is the last piece. (Favicons and app icons are done.)
+3. **OG image** — `og-image.png` (1200×630) is referenced as `og:image`/`twitter:image`
+   on every page.
 4. **Wire up the forms.** The demo booking and the signup flow are front-end only —
    they validate and show a confirmation but post nothing. Point them at your backend,
    or at Formspree / Netlify Forms / Cal.com for the booking calendar.
