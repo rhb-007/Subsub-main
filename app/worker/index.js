@@ -740,14 +740,22 @@ app.delete("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "c
 });
 
 // ---------------------------------------------------------------------------
-// File uploads — presigned R2 PUT, never routed through the Worker.
+// File uploads. R2Bucket has no createPresignedUrl() — that's an S3-style
+// presigned URL, which on R2 needs the S3-compatible API signed with an R2
+// API token (Account ID + Access Key + Secret), not the Workers binding.
+// Simpler and sufficient for compliance-doc-sized files: stream the upload
+// straight through the Worker into R2 with the binding's own put(). If
+// upload volume ever justifies it, swap this for real presigned URLs via
+// aws4fetch + an R2 API token to take the Worker out of the data path.
 // ---------------------------------------------------------------------------
-app.post("/api/uploads/sign", async (c) => {
+app.put("/api/uploads/:kind/:fileName", async (c) => {
   const { accountId } = c.get("auth");
-  const { kind, fileName } = await c.req.json();
-  const key = `${accountId}/${kind}/${uid()}-${fileName}`;
-  const url = await c.env.FILES.createPresignedUrl(key, { method: "PUT", expiresIn: 600 });
-  return c.json({ url, key });
+  const { kind, fileName } = c.req.param();
+  const key = `${accountId}/${kind}/${uid()}-${decodeURIComponent(fileName)}`;
+  await c.env.FILES.put(key, c.req.raw.body, {
+    httpMetadata: { contentType: c.req.header("Content-Type") || "application/octet-stream" },
+  });
+  return c.json({ key });
 });
 
 // ---------------------------------------------------------------------------

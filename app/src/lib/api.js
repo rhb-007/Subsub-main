@@ -32,6 +32,21 @@ async function request(path, options = {}) {
   return res.json();
 }
 
+// File uploads go straight through, not via request() — the body is the
+// raw file, not JSON, and Content-Type should be the file's own type.
+async function uploadFile(kind, file) {
+  const auth = getAuth();
+  const headers = { "Content-Type": file.type || "application/octet-stream" };
+  if (auth?.userId) headers["X-User-Id"] = auth.userId;
+  if (auth?.accountId) headers["X-Account-Id"] = auth.accountId;
+
+  const res = await fetch(`/api/uploads/${encodeURIComponent(kind)}/${encodeURIComponent(file.name)}`, {
+    method: "PUT", headers, body: file,
+  });
+  if (!res.ok) throw new Error(`upload_failed_${res.status}`);
+  return res.json(); // { key }
+}
+
 export const api = {
   devLogin: (email) => request("/auth/dev-login", { method: "POST", body: JSON.stringify({ email }) }),
 
@@ -67,7 +82,7 @@ export const api = {
   getAccount: () => request("/account"),
   patchAccount: (patch) => request("/account", { method: "PATCH", body: JSON.stringify(patch) }),
 
-  signUpload: (kind, fileName) => request("/uploads/sign", { method: "POST", body: JSON.stringify({ kind, fileName }) }),
+  uploadFile,
 
   listUniformOrders: () => request("/uniform-orders"),
   createUniformOrder: (order) => request("/uniform-orders", { method: "POST", body: JSON.stringify(order) }),

@@ -1301,11 +1301,20 @@ export default function SubSub() {
     });
   };
 
-  const uploadSignedWO = (jobId, trade, name) => {
+  const uploadSignedWO = (jobId, trade, file) => {
+    const name = file.name;
     const woId = allJobs.find((j) => j.id === jobId)?.assignments?.[trade]?.id;
-    if (woId) persist("signed", api.setWorkOrderSigned(woId, name));
     setJobs((js) => js.map((j) => j.id !== jobId ? j : {
       ...j, assignments: { ...j.assignments, [trade]: { ...j.assignments[trade], signedWO: name } } }));
+    if (!woId) return;
+    (async () => {
+      try {
+        const { key: fileKey } = await api.uploadFile("signed-wo", file);
+        await api.setWorkOrderSigned(woId, fileKey);
+      } catch (err) {
+        console.error("[persist] uploadSignedWO failed:", err);
+      }
+    })();
   };
   const setTradeCrew = (jobId, trade, crewName) => {
     const woId = allJobs.find((j) => j.id === jobId)?.assignments?.[trade]?.id;
@@ -1503,16 +1512,26 @@ export default function SubSub() {
       ...c, status: "resolved", resolvedAt: new Date().toISOString() }));
   };
 
-  // No real file picker yet (see README — uploads are filenames only, same
-  // as the prototype), so this calls the API with a placeholder file key.
-  // The server endpoint is what actually reopens review on every OTHER
-  // account that engages this company, not just the one uploading here.
-  const uploadSubDoc = (id, key, filename) => {
-    persist("uploadDoc", api.uploadDocument(id, key, `local/${key}/${filename}`, filename));
+  // Real upload: PUT the file to R2 (via the Worker, see api.uploadFile),
+  // then tell the API the real key. That second call is what reopens review
+  // on every OTHER account that engages this company, not just this one.
+  // The local state
+  // update happens immediately so the UI doesn't wait on the network.
+  const uploadSubDoc = (id, key, file) => {
+    const filename = file.name;
     const co = companies.find((c) => c.id === id);
     patchCompany(id, { [key]: true, docFiles: { ...((co && co.docFiles) || {}), [key]: filename } });
     setEngagements((es) => es.map((e) => e.companyId !== id ? e : {
       ...e, docReview: { ...(e.docReview || {}), [key]: { status: "pending" } } }));
+
+    (async () => {
+      try {
+        const { key: fileKey } = await api.uploadFile(key, file);
+        await api.uploadDocument(id, key, fileKey, filename);
+      } catch (err) {
+        console.error("[persist] uploadSubDoc failed:", err);
+      }
+    })();
   };
   const deleteSubDoc = (id, key) => {
     persist("deleteDoc", api.deleteDocument(id, key));
@@ -2232,7 +2251,7 @@ export default function SubSub() {
         <WorkOrderDoc job={viewWO.job} trade={viewWO.trade}
           a={(jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a}
           canUpload={role !== "contractor"} brand={brand}
-          onUploadSigned={(name) => uploadSignedWO(viewWO.job.id, viewWO.trade, name)}
+          onUploadSigned={(file) => uploadSignedWO(viewWO.job.id, viewWO.trade, file)}
           onClose={() => setViewWO(null)} /></Modal>}
       {notifying && <Modal onClose={() => setNotifying(null)} wide>
         <NotifyForm data={notifying} brand={brand} onClose={() => setNotifying(null)} /></Modal>}
@@ -4339,12 +4358,12 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, servi
                 {sub[k] ? (
                   <div className="dm-actions">
                     <label className="dm-replace"><Upload size={12} /> Replace
-                      <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(k, e.target.files[0].name); }} /></label>
+                      <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(k, e.target.files[0]); }} /></label>
                     <button type="button" className="dm-delete" onClick={() => onDeleteDoc(k)}><Trash2 size={12} /> Delete</button>
                   </div>
                 ) : (
                   <label className="dm-upload"><Upload size={13} /> Upload
-                    <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(k, e.target.files[0].name); }} /></label>
+                    <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(k, e.target.files[0]); }} /></label>
                 )}
               </div>
             ))}
@@ -4993,7 +5012,7 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
       ) : canUpload ? (
         <label className="meas-upload">
           <Upload size={14} /> Upload signed work order
-          <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadSigned(e.target.files[0].name); }} />
+          <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadSigned(e.target.files[0]); }} />
         </label>
       ) : <p className="muted">Not yet uploaded.</p>}
 
