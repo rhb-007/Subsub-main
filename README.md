@@ -10,7 +10,7 @@ external requests are Google Fonts.
 |---|---|---|
 | `index.html` | `/` | Home — platform lifecycle, two-sided model, audiences |
 | `pricing.html` | `/pricing` | Plans, monthly/annual toggle, comparison, FAQ |
-| `book-a-demo.html` | `/book-a-demo` | Demo request with calendar picker |
+| `book-a-demo.html` | `/book-a-demo` | Two-step demo booking: pick a time, then details |
 | `get-started.html` | `/get-started` | 4-step signup flow (**noindex**) |
 | `for-general-contractors.html` | `/for-general-contractors` | GC landing page |
 | `for-property-managers.html` | `/for-property-managers` | Property manager landing page |
@@ -80,3 +80,14 @@ Drop the whole folder in as the publish directory.
 
 Each page carries `<meta name="build" content="...">` and an HTML comment at the top of
 `<head>`. View source on a published page to confirm which version is live.
+
+## Responsive behaviour
+
+Breakpoints at 1000px (tablet), 900px (mobile nav), 760px, 560px and 400px.
+
+- Below 900px the header nav becomes a hamburger drawer: full-screen panel, body scroll
+  locked while open, closes on link click, Escape, or resize back to desktop.
+- All multi-column grids collapse to one column; the pricing comparison table scrolls
+  horizontally rather than clipping.
+- Buttons and nav links are at least 44px tall for touch.
+- Below 400px the side gutters tighten and stacked CTAs go full width.

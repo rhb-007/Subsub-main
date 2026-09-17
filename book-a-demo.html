@@ -1,12 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- build: v8 2026-09-17 02:22 UTC -->
+<!-- build: v9 2026-09-17 15:31 UTC -->
 <meta charset="utf-8">
-<meta name="build" content="v8 2026-09-17 02:22 UTC">
+<meta name="build" content="v9 2026-09-17 15:31 UTC">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Book a Demo — 30-Minute Walkthrough | SubSub</title>
-<meta name="description" content="Book a 30-minute SubSub walkthrough using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.">
+<meta name="description" content="Book a 30-minute SubSub demo using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.">
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
@@ -258,7 +258,6 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
 /* ---------- responsive ---------- */
 @media (max-width:1000px){
   .phero-grid{grid-template-columns:1fr;gap:44px}
-  nav.top a:not(.keep){display:none}
   .cmp th:first-child{width:40%}
 }
 @media (max-width:760px){
@@ -290,6 +289,53 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
 .foot-legal a{text-decoration:none;display:inline;padding:0}
 .foot-legal a:hover{color:#fff;text-decoration:underline;text-underline-offset:3px}
 @media (max-width:560px){.foot-legal{flex-direction:column;align-items:flex-start;gap:12px}}
+
+/* ---------- mobile nav ---------- */
+.nav-toggle{display:none;margin-left:auto;align-items:center;justify-content:center;
+  width:44px;height:44px;border:1px solid var(--forest-line);border-radius:9px;
+  background:none;cursor:pointer;flex:none;padding:0}
+.nav-toggle span{display:block;width:19px;height:2px;background:#fff;border-radius:2px;
+  position:relative;transition:transform .18s,opacity .18s}
+.nav-toggle span::before,.nav-toggle span::after{content:"";position:absolute;left:0;
+  width:19px;height:2px;background:#fff;border-radius:2px;transition:transform .18s,top .18s}
+.nav-toggle span::before{top:-6px}
+.nav-toggle span::after{top:6px}
+.nav-toggle[aria-expanded="true"] span{background:transparent}
+.nav-toggle[aria-expanded="true"] span::before{top:0;transform:rotate(45deg)}
+.nav-toggle[aria-expanded="true"] span::after{top:0;transform:rotate(-45deg)}
+body.nav-open{overflow:hidden}
+
+@media (max-width:900px){
+  .nav-toggle{display:flex}
+  nav.top{position:fixed;inset:70px 0 0;background:var(--forest);
+    flex-direction:column;align-items:stretch;gap:0;margin:0;padding:10px 0 32px;
+    overflow-y:auto;transform:translateY(-8px);opacity:0;pointer-events:none;
+    transition:opacity .18s,transform .18s;z-index:59}
+  nav.top[data-open="true"]{transform:none;opacity:1;pointer-events:auto}
+  nav.top a{display:block;padding:16px 30px;font-size:17px;color:#fff;
+    border-bottom:1px solid rgba(255,255,255,.08)}
+  nav.top a:last-child{border-bottom:0}
+  nav.top a[aria-current]{background:var(--forest-lift)}
+  nav.top a.keep{margin:20px 30px 0;text-align:center;justify-content:center;
+    border-bottom:0;font-size:16px;padding:15px 20px}
+}
+
+@media (max-width:560px){
+  /* long strings shouldn't push the layout wide */
+  .legal-body p,.legal-body li,.lede,.lede-d{overflow-wrap:break-word}
+  .aw-url b,.r-meta,.s-meta{overflow-wrap:anywhere}
+  /* headline sizes on small phones */
+  .h-xl{font-size:31px}
+  .h-lg{font-size:26px}
+  /* tap targets */
+  nav.top a,.btn{min-height:44px}
+  .btn{padding-top:13px;padding-bottom:13px}
+}
+@media (max-width:400px){
+  .wrap,.narrow{padding:0 16px}
+  .cta-row{flex-direction:column;align-items:stretch}
+  .cta-row .btn{width:100%;justify-content:center}
+}
 </style>
 <style>
   .dgrid{display:grid;grid-template-columns:.9fr 1.1fr;gap:48px;align-items:start;
@@ -300,6 +346,18 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
   .agenda .m{font:600 13px Inter;color:var(--muted);padding-top:2px;white-space:nowrap}
   .agenda b{display:block;font-size:15.5px;font-weight:600}
   .agenda p{font-size:14px;color:var(--muted);margin-top:3px;line-height:1.5}
+  .bk-steps{display:flex;gap:0;border:1px solid var(--rule);border-radius:9px;overflow:hidden;
+    margin-bottom:22px}
+  .bk-step{flex:1;padding:11px 12px;font-size:13px;font-weight:600;color:var(--muted);
+    background:var(--bone);border-right:1px solid var(--rule);text-align:center}
+  .bk-step:last-child{border-right:0}
+  .bk-step[data-on]{background:#fff;color:var(--ink)}
+  .bk-back{display:inline-flex;align-items:center;gap:7px;background:none;border:0;padding:0 0 14px;
+    font:600 14px Inter,sans-serif;color:var(--forest-lift);cursor:pointer}
+  .bk-back:hover{text-decoration:underline;text-underline-offset:3px}
+  .bk-chosen{display:flex;align-items:center;gap:10px;background:#f1f6f3;border:1.5px solid var(--forest);
+    border-radius:9px;padding:13px 15px;font-size:15px;margin-bottom:22px}
+  .bk-chosen b{font-weight:700}
   .picked{display:flex;align-items:center;gap:10px;background:#F1F6F3;border:1.5px solid var(--forest);
     border-radius:8px;padding:13px 15px;font-size:15px;margin-top:16px}
   .picked b{font-weight:600}
@@ -310,19 +368,20 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="SubSub">
 <meta property="og:title" content="Book a Demo — 30-Minute Walkthrough | SubSub">
-<meta property="og:description" content="Book a 30-minute SubSub walkthrough using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.">
+<meta property="og:description" content="Book a 30-minute SubSub demo using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.">
 <meta property="og:url" content="https://subsub.work/book-a-demo.html">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Book a Demo — 30-Minute Walkthrough | SubSub">
-<meta name="twitter:description" content="Book a 30-minute SubSub walkthrough using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.">
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://subsub.work/#org","name":"SubSub","legalName":"SubSub, LLC","url":"https://subsub.work/","logo":"https://subsub.work/index.html","email":"legal@subsub.work","address":{"@type":"PostalAddress","streetAddress":"4616 25th Ave NE","addressLocality":"Seattle","addressRegion":"WA","postalCode":"98105","addressCountry":"US"}},{"@type":"SoftwareApplication","@id":"https://subsub.work/#software","name":"SubSub","applicationCategory":"BusinessApplication","operatingSystem":"Web browser","description":"Contractor management software for onboarding subcontractors, verifying insurance, bonds and state licences, scheduling crews and issuing work orders.","url":"https://subsub.work/","publisher":{"@id":"https://subsub.work/#org"},"offers":[{"@type":"Offer","name":"Basic","price":"0","priceCurrency":"USD","description":"Free for up to 3 subcontractors, 1 user and 5 jobs per month."},{"@type":"Offer","name":"Scale","price":"99","priceCurrency":"USD","description":"Unlimited subcontractors, users and jobs, plus your own branding. $990 per year paid annually."}]},{"@type":"WebPage","@id":"https://subsub.work/book-a-demo.html","url":"https://subsub.work/book-a-demo.html","name":"Book a Demo \u2014 30-Minute Walkthrough | SubSub","description":"Book a 30-minute SubSub walkthrough using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.","isPartOf":{"@id":"https://subsub.work/#software"},"publisher":{"@id":"https://subsub.work/#org"}}]}</script>
+<meta name="twitter:description" content="Book a 30-minute SubSub demo using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://subsub.work/#org","name":"SubSub","legalName":"SubSub, LLC","url":"https://subsub.work/","logo":"https://subsub.work/index.html","email":"legal@subsub.work","address":{"@type":"PostalAddress","streetAddress":"4616 25th Ave NE","addressLocality":"Seattle","addressRegion":"WA","postalCode":"98105","addressCountry":"US"}},{"@type":"SoftwareApplication","@id":"https://subsub.work/#software","name":"SubSub","applicationCategory":"BusinessApplication","operatingSystem":"Web browser","description":"Contractor management software for onboarding subcontractors, verifying insurance, bonds and state licences, scheduling crews and issuing work orders.","url":"https://subsub.work/","publisher":{"@id":"https://subsub.work/#org"},"offers":[{"@type":"Offer","name":"Basic","price":"0","priceCurrency":"USD","description":"Free for up to 3 subcontractors, 1 user and 5 jobs per month."},{"@type":"Offer","name":"Scale","price":"99","priceCurrency":"USD","description":"Unlimited subcontractors, users and jobs, plus your own branding. $990 per year paid annually."}]},{"@type":"WebPage","@id":"https://subsub.work/book-a-demo.html","url":"https://subsub.work/book-a-demo.html","name":"Book a Demo \u2014 30-Minute Walkthrough | SubSub","description":"Book a 30-minute SubSub demo using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.","isPartOf":{"@id":"https://subsub.work/#software"},"publisher":{"@id":"https://subsub.work/#org"}}]}</script>
 </head>
 <body>
 
 <header class="site">
   <div class="wrap bar">
     <a class="logo" href="index.html"><svg class="ss-logo" width="105.7" height="24" viewBox="36 62 502 114" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SubSub"><path fill="#E39B32" d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/><path fill="#E39B32" d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/><path fill="#E39B32" d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/><path fill="#FFFFFF" d="M159.95,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C178.27,159.09,166.67,155.94,159.95,151.25z"/><path fill="#FFFFFF" d="M281.36,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.82,11.47c5.49,0,10-3.63,10-12.55v-25.59H281.36z"/><path fill="#FFFFFF" d="M345.6,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C333.93,103.69,345.6,114.19,345.6,131.05z M326.78,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S326.78,139.19,326.78,131.05z"/><path fill="#FFFFFF" d="M345.41,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C363.74,159.09,352.13,155.94,345.41,151.25z"/><path fill="#FFFFFF" d="M466.81,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.83,11.47c5.49,0,10-3.63,10-12.55v-25.59H466.81z"/><path fill="#FFFFFF" d="M531.05,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C519.38,103.69,531.05,114.19,531.05,131.05z M512.22,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S512.22,139.19,512.22,131.05z"/></svg></a>
-    <nav class="top">
+    <button class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="siteNav" aria-label="Menu"><span></span></button>
+    <nav class="top" id="siteNav">
       <a href="index.html#lifecycle">Platform</a>
       <a href="index.html#who">Who it's for</a>
       <a href="pricing.html">Pricing</a>
@@ -336,7 +395,7 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
   <div class="wrap dgrid">
 
     <div>
-      <h1 class="h-lg" style="max-width:18ch">Book a walkthrough.</h1>
+      <h1 class="h-lg" style="max-width:18ch">Book a demo.</h1>
       <p class="lede">Thirty minutes, screen shared, using your trades and your insurance
         requirements rather than a canned demo. If SubSub isn't a fit we'll say so.</p>
 
@@ -345,7 +404,7 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
           <div><b>What you're dealing with now</b>
             <p>How many subs, how you track certificates today, what breaks.</p></div></li>
         <li><span class="m">5–20 min</span>
-          <div><b>The walkthrough</b>
+          <div><b>The demo</b>
             <p>Onboarding a sub, approving their documents, creating a job and issuing work orders
               to a crew.</p></div></li>
         <li><span class="m">20–30 min</span>
@@ -360,10 +419,14 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
 
     <div class="card card-pad-lg">
       <form id="demoForm">
-        <div>
-          <h2 class="h-md" style="font-size:23px">Pick a time</h2>
-          <p class="fine" style="margin-top:8px">Weekdays, Pacific time. Thirty minutes.</p>
+        <div class="bk-steps">
+          <span class="bk-step" data-on>1 · Pick a time</span>
+          <span class="bk-step">2 · Your details</span>
         </div>
+
+        <div id="stepTime">
+          <h2 class="h-md" style="font-size:22px">Pick a time</h2>
+          <p class="fine" style="margin-top:8px">Weekdays, Pacific time. Thirty minutes.</p>
 
         <div class="cal">
           <div class="cal-hd">
@@ -378,6 +441,13 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
           <div class="slots hide" id="slots"></div>
           <p class="pick-note hide" id="pickNote"></p>
         </div>
+        </div>
+
+        <div id="stepDetails" class="hide">
+          <button type="button" class="bk-back" id="bkBack">
+            <span aria-hidden="true">&#8249;</span> Change time
+          </button>
+          <div class="bk-chosen" id="bkChosen"></div>
 
         <div class="two">
           <div class="field"><label for="name">Your name</label>
@@ -417,8 +487,9 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
           <textarea id="notes" rows="3" placeholder="e.g. we're chasing certificates across 40 vendors and keep missing renewals"></textarea>
         </div>
 
-        <button class="btn btn-forest btn-lg" type="submit">Book the walkthrough</button>
-        <p class="fine">We'll email a calendar invite with a video link. No sales sequence.</p>
+          <button class="btn btn-forest btn-lg btn-block" type="submit">Book a demo</button>
+          <p class="fine">We'll email a calendar invite with a video link. No sales sequence.</p>
+        </div>
       </form>
 
       <div class="done" id="done">
@@ -532,7 +603,7 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
       var b=document.createElement('button');
       b.type='button'; b.className='slot'; b.textContent=s;
       b.setAttribute('aria-pressed', chosenSlot===s ? 'true':'false');
-      b.addEventListener('click', function(){ chosenSlot=s; showSlots(); });
+      b.addEventListener('click', function(){ chosenSlot=s; showSlots(); toStep(2); });
       wrap.appendChild(b);
     });
     note.classList.remove('hide');
@@ -540,6 +611,25 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
       ? 'Booking <b>' + fmtLong(chosenDay) + ' at ' + chosenSlot + '</b>, Pacific time.'
       : 'Pick a time on <b>' + fmtLong(chosenDay) + '</b>.';
   }
+  function toStep(n){
+    var a=document.getElementById('stepTime'), b=document.getElementById('stepDetails');
+    var tabs=document.querySelectorAll('.bk-step');
+    if(n===2){
+      a.classList.add('hide'); b.classList.remove('hide');
+      tabs[0].removeAttribute('data-on'); tabs[1].setAttribute('data-on','');
+      document.getElementById('bkChosen').innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2">'
+        + '<path d="M3 9.5l4 4 8-9"/></svg><span><b>' + fmtLong(chosenDay) + ' at ' + chosenSlot
+        + '</b> · 30 minutes, Pacific time</span>';
+    } else {
+      b.classList.add('hide'); a.classList.remove('hide');
+      tabs[1].removeAttribute('data-on'); tabs[0].setAttribute('data-on','');
+    }
+    var card=document.querySelector('.card');
+    if(card) card.scrollIntoView({block:'start',behavior:'smooth'});
+  }
+  document.getElementById('bkBack').addEventListener('click', function(){ toStep(1); });
+
   document.getElementById('prevM').addEventListener('click', function(){
     view = new Date(view.getFullYear(), view.getMonth()-1, 1); render();
   });
@@ -549,13 +639,7 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
 
   document.getElementById('demoForm').addEventListener('submit', function(e){
     e.preventDefault();
-    if(!chosenDay || !chosenSlot){
-      document.getElementById('pickNote').classList.remove('hide');
-      document.getElementById('pickNote').innerHTML =
-        '<b style="color:var(--red)">Pick a day and a time to book.</b>';
-      document.querySelector('.cal').scrollIntoView({block:'center',behavior:'smooth'});
-      return;
-    }
+    if(!chosenDay || !chosenSlot){ toStep(1); return; }
     var need=['name','company','email'];
     for(var i=0;i<need.length;i++){
       var el=document.getElementById(need[i]);
@@ -569,6 +653,22 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
   });
 
   render();
+})();
+</script>
+<script>
+(function(){
+  var t=document.getElementById('navToggle'), n=document.getElementById('siteNav');
+  if(!t||!n) return;
+  function set(open){
+    t.setAttribute('aria-expanded', open?'true':'false');
+    if(open){ n.setAttribute('data-open','true'); } else { n.removeAttribute('data-open'); }
+    document.body.classList.toggle('nav-open', open);
+  }
+  t.addEventListener('click', function(){ set(t.getAttribute('aria-expanded')!=='true'); });
+  // close on navigation or Escape, and when resizing back to desktop
+  n.addEventListener('click', function(e){ if(e.target.closest('a')) set(false); });
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape') set(false); });
+  window.addEventListener('resize', function(){ if(window.innerWidth>900) set(false); });
 })();
 </script>
 </body>

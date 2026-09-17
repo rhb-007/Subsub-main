@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- build: v8 2026-09-17 02:22 UTC -->
+<!-- build: v9 2026-09-17 15:31 UTC -->
 <meta charset="utf-8">
-<meta name="build" content="v8 2026-09-17 02:22 UTC">
+<meta name="build" content="v9 2026-09-17 15:31 UTC">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Terms of Use | SubSub</title>
 <meta name="description" content="The terms governing your use of SubSub contractor management software, including plans, billing, your responsibilities and limitation of liability.">
@@ -258,7 +258,6 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
 /* ---------- responsive ---------- */
 @media (max-width:1000px){
   .phero-grid{grid-template-columns:1fr;gap:44px}
-  nav.top a:not(.keep){display:none}
   .cmp th:first-child{width:40%}
 }
 @media (max-width:760px){
@@ -315,6 +314,53 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
 .foot-legal a{text-decoration:none;display:inline;padding:0}
 .foot-legal a:hover{color:#fff;text-decoration:underline;text-underline-offset:3px}
 @media (max-width:560px){.foot-legal{flex-direction:column;align-items:flex-start;gap:12px}}
+
+/* ---------- mobile nav ---------- */
+.nav-toggle{display:none;margin-left:auto;align-items:center;justify-content:center;
+  width:44px;height:44px;border:1px solid var(--forest-line);border-radius:9px;
+  background:none;cursor:pointer;flex:none;padding:0}
+.nav-toggle span{display:block;width:19px;height:2px;background:#fff;border-radius:2px;
+  position:relative;transition:transform .18s,opacity .18s}
+.nav-toggle span::before,.nav-toggle span::after{content:"";position:absolute;left:0;
+  width:19px;height:2px;background:#fff;border-radius:2px;transition:transform .18s,top .18s}
+.nav-toggle span::before{top:-6px}
+.nav-toggle span::after{top:6px}
+.nav-toggle[aria-expanded="true"] span{background:transparent}
+.nav-toggle[aria-expanded="true"] span::before{top:0;transform:rotate(45deg)}
+.nav-toggle[aria-expanded="true"] span::after{top:0;transform:rotate(-45deg)}
+body.nav-open{overflow:hidden}
+
+@media (max-width:900px){
+  .nav-toggle{display:flex}
+  nav.top{position:fixed;inset:70px 0 0;background:var(--forest);
+    flex-direction:column;align-items:stretch;gap:0;margin:0;padding:10px 0 32px;
+    overflow-y:auto;transform:translateY(-8px);opacity:0;pointer-events:none;
+    transition:opacity .18s,transform .18s;z-index:59}
+  nav.top[data-open="true"]{transform:none;opacity:1;pointer-events:auto}
+  nav.top a{display:block;padding:16px 30px;font-size:17px;color:#fff;
+    border-bottom:1px solid rgba(255,255,255,.08)}
+  nav.top a:last-child{border-bottom:0}
+  nav.top a[aria-current]{background:var(--forest-lift)}
+  nav.top a.keep{margin:20px 30px 0;text-align:center;justify-content:center;
+    border-bottom:0;font-size:16px;padding:15px 20px}
+}
+
+@media (max-width:560px){
+  /* long strings shouldn't push the layout wide */
+  .legal-body p,.legal-body li,.lede,.lede-d{overflow-wrap:break-word}
+  .aw-url b,.r-meta,.s-meta{overflow-wrap:anywhere}
+  /* headline sizes on small phones */
+  .h-xl{font-size:31px}
+  .h-lg{font-size:26px}
+  /* tap targets */
+  nav.top a,.btn{min-height:44px}
+  .btn{padding-top:13px;padding-bottom:13px}
+}
+@media (max-width:400px){
+  .wrap,.narrow{padding:0 16px}
+  .cta-row{flex-direction:column;align-items:stretch}
+  .cta-row .btn{width:100%;justify-content:center}
+}
 </style>
 <style>
   .phead{padding:56px 0 10px}
@@ -378,7 +424,8 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
 <header class="site">
   <div class="wrap bar">
     <a class="logo" href="index.html"><svg class="ss-logo" width="105.7" height="24" viewBox="36 62 502 114" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SubSub"><path fill="#E39B32" d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/><path fill="#E39B32" d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/><path fill="#E39B32" d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/><path fill="#FFFFFF" d="M159.95,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C178.27,159.09,166.67,155.94,159.95,151.25z"/><path fill="#FFFFFF" d="M281.36,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.82,11.47c5.49,0,10-3.63,10-12.55v-25.59H281.36z"/><path fill="#FFFFFF" d="M345.6,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C333.93,103.69,345.6,114.19,345.6,131.05z M326.78,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S326.78,139.19,326.78,131.05z"/><path fill="#FFFFFF" d="M345.41,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C363.74,159.09,352.13,155.94,345.41,151.25z"/><path fill="#FFFFFF" d="M466.81,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.83,11.47c5.49,0,10-3.63,10-12.55v-25.59H466.81z"/><path fill="#FFFFFF" d="M531.05,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C519.38,103.69,531.05,114.19,531.05,131.05z M512.22,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S512.22,139.19,512.22,131.05z"/></svg></a>
-    <nav class="top">
+    <button class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="siteNav" aria-label="Menu"><span></span></button>
+    <nav class="top" id="siteNav">
       <a href="index.html#lifecycle">Platform</a>
       <a href="index.html#who">Who it's for</a>
       <a href="pricing.html">Pricing</a>
@@ -584,5 +631,21 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
 
 </footer>
 
+<script>
+(function(){
+  var t=document.getElementById('navToggle'), n=document.getElementById('siteNav');
+  if(!t||!n) return;
+  function set(open){
+    t.setAttribute('aria-expanded', open?'true':'false');
+    if(open){ n.setAttribute('data-open','true'); } else { n.removeAttribute('data-open'); }
+    document.body.classList.toggle('nav-open', open);
+  }
+  t.addEventListener('click', function(){ set(t.getAttribute('aria-expanded')!=='true'); });
+  // close on navigation or Escape, and when resizing back to desktop
+  n.addEventListener('click', function(e){ if(e.target.closest('a')) set(false); });
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape') set(false); });
+  window.addEventListener('resize', function(){ if(window.innerWidth>900) set(false); });
+})();
+</script>
 </body>
 </html>
