@@ -35,6 +35,9 @@ a black mark all but disappears on a dark tab bar.
 
 Drop the whole folder in as the publish directory.
 
+- **Cloudflare Workers (Static Assets)** — this repo ships a `wrangler.jsonc` pointing
+  `assets.directory` at `./`, deployed with `npx wrangler deploy`. `_redirects` is read
+  automatically, same as Pages.
 - **Cloudflare Pages / Netlify** — `_redirects` is read automatically. It gives you
   extensionless URLs (`/pricing` → `pricing.html`) and 301s from the older draft filenames.
 - **Vercel** — translate `_redirects` into `vercel.json` rewrites, or leave the `.html`
