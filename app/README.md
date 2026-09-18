@@ -192,6 +192,43 @@ See `worker/schema.sql` for the full schema and inline comments, and
 `DEPLOYMENT.pdf` for the reasoning behind it (the identity model, WA L&I
 license verification, work-order immutability, suggested phased rollout).
 
+## Trades, white-label colors, and the public application form
+
+- **Trades**: `CATEGORIES`/`CAP_LIBRARY` in `src/App.tsx` cover 29 trades
+  across exterior/structure/MEP/interior finishes/outdoor/specialty — no
+  schema change, since a company's/job's trades were always a free-form
+  JSON array.
+- **White-label colors**: an account's own subdomain (`outerhome.subsub.work`)
+  can be recolored — page/card background, text, button color, button text
+  — via a 5-swatch picker in Account → Company, with a live WCAG contrast
+  warning and a themed preview. Stored as `accounts.theme` (JSON), validated
+  server-side against `^#[0-9a-fA-F]{6}$` before it's ever written (these
+  values become CSS custom properties on a public page, so an unvalidated
+  string is a stylesheet-injection vector). Applies to exactly two pages —
+  the sign-in screen and the application form below — never the app itself.
+- **Public application form**: "Apply to work with {name}" on a real
+  subdomain's login screen opens a 3-step, unauthenticated form
+  (`SubSignup` → `POST /api/apply/:subdomain`) — company info, trades,
+  warranty/notification prefs. It creates a bare company profile
+  (documents incomplete, same starting state as an admin's own minimal
+  "add a sub"), an `invited` engagement, and an internal `users` row with
+  `auth_id` left null — so when that person later signs up for real via
+  "Already invited? Create your password" on the login page,
+  `resolveSupabaseUser()`'s existing by-email linking picks it up with no
+  further wiring. Dedupes on license number exactly like the admin's own
+  invite flow, so a contractor already on SubSub for another GC doesn't
+  get a duplicate profile. This fully replaces the narrower self-signup
+  mechanism from earlier (which needed a Supabase account to already
+  exist) — it's public and unauthenticated by design, matching
+  `DEPLOYMENT.pdf`'s own description of this as "the only unauthenticated
+  endpoint in the product."
+  - **Not yet built**: rate limiting, a CAPTCHA, and not-confirming
+    whether an email/license already exists in the response — all
+    explicitly called out in `DEPLOYMENT.pdf` as needed before this is
+    genuinely public-internet-safe. Fine for now since nothing links to
+    it publicly yet, but do this before a real GC puts this URL on their
+    website.
+
 ## Expanding license verification beyond Washington
 
 `STATE_LICENSING_APIS.md` surveys all 49 other states + DC for the same
