@@ -103,6 +103,8 @@ export const api = {
   updateAccountUser: (userId, patch) => request(`/account-users/${userId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removeAccountUser: (userId) => request(`/account-users/${userId}`, { method: "DELETE" }),
   getAccount: () => request("/account"),
+  // Public — no auth required, used to brand a login screen before signin.
+  getAccountBySubdomain: (subdomain) => request(`/account-by-subdomain/${encodeURIComponent(subdomain)}`),
   patchAccount: (patch) => request("/account", { method: "PATCH", body: JSON.stringify(patch) }),
 
   uploadFile,

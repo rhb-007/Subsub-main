@@ -97,6 +97,9 @@ app.use("/api/*", async (c, next) => {
   // A brand logo has to render on the login screen, before anyone is
   // authenticated — so this one route is intentionally public. Never do
   // this for compliance documents; those stay behind auth.
+  // /api/account-by-subdomain/* is the same idea: the login screen for
+  // e.g. outerhome.subsub.work needs to know which account that subdomain
+  // belongs to (for its branding) before anyone has signed in.
   // /api/auth/me and /api/auth/dev-login are also exempted: both exist
   // specifically to discover which accounts a person can choose from
   // *before* any X-Account-Id is known, so they can't require one — they
@@ -104,7 +107,7 @@ app.use("/api/*", async (c, next) => {
   // Cron Trigger target with no user session at all — it does its own
   // CRON_SECRET bearer check inline instead (was dead code behind this
   // middleware until this exemption: every call 401'd before reaching it).
-  if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/")) return next();
+  if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
 
   const accountId = c.req.header("X-Account-Id");
   let userId;
@@ -267,6 +270,20 @@ app.get("/api/logo/:accountId", async (c) => {
       "Content-Type": obj.httpMetadata?.contentType || "image/png",
       "Cache-Control": "public, max-age=300",
     },
+  });
+});
+
+// Public: the branding a hiring account's own subdomain shows before login
+// (e.g. outerhome.subsub.work). Only exposes what a logged-out login screen
+// needs — never anything else about the account.
+app.get("/api/account-by-subdomain/:subdomain", async (c) => {
+  const a = await c.env.DB.prepare(
+    `SELECT id, name, subdomain, plan, billing, logo_key, use_default_mark FROM accounts WHERE subdomain = ?`
+  ).bind(c.req.param("subdomain").toLowerCase()).first();
+  if (!a) return c.notFound();
+  return c.json({
+    id: a.id, name: a.name, subdomain: a.subdomain, plan: a.plan, billing: a.billing,
+    logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark,
   });
 });
 

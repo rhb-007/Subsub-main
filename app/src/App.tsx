@@ -775,6 +775,17 @@ const docsComplete = (s) => missingDocs(s).length === 0 && licenseOk(s);
 // that points the contractor back into their portal.
 const portalUrl = (brand) => `${brand ? brand.subdomain : "app"}.subsub.work`;
 const docsLink = (brand) => `https://${portalUrl(brand)}/documents`;
+// The inverse of portalUrl(): which account's subdomain is this browser on
+// right now, if any? "app" is the generic, unbranded entry point — not a
+// company — and local/preview hosts (localhost, *.pages.dev) have no
+// subdomain to detect at all.
+function detectSubdomain() {
+  const host = window.location.hostname.toLowerCase();
+  if (!host.endsWith(".subsub.work")) return null;
+  const sub = host.slice(0, -".subsub.work".length);
+  if (!sub || sub === "app" || sub === "www" || sub.includes(".")) return null;
+  return sub;
+}
 // A contractor signs in with their email address — show it so they don't guess.
 const usernameOf = (sub) => sub.email || "(no email on file)";
 
@@ -990,6 +1001,23 @@ export default function SubSub() {
   const [currentUserId, setCurrentUserId] = useState("u1");
   const [currentAccountId, setCurrentAccountId] = useState("a1");
   const now = useNow();
+
+  // Which account's own subdomain (e.g. outerhome.subsub.work) this browser
+  // is on, if any — fetched once, publicly, so the login screen can show
+  // that account's real branding instead of generic/demo branding before
+  // anyone has signed in. Real-auth only: the dev-stub demo picker doesn't
+  // need this, and a production account may not even exist locally.
+  const [subdomainBrand, setSubdomainBrand] = useState(null);
+  useEffect(() => {
+    if (!supabaseEnabled) return;
+    const sub = detectSubdomain();
+    if (!sub) return;
+    api.getAccountBySubdomain(sub).then((a) => {
+      setSubdomainBrand({ id: a.id, name: a.name, subdomain: a.subdomain, plan: a.plan, billing: a.billing,
+        logoData: a.logoKey ? `/api/logo/${a.id}` : null, useDefaultMark: a.useDefaultMark });
+    }).catch(() => {}); // no account on this subdomain — fall through to generic branding
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [loggedIn, setLoggedIn] = useState(false);
   const [loading, setLoading] = useState(false);
   // White-label tenant branding — one GC per instance (outerhome.subsub.work)
@@ -1054,9 +1082,12 @@ export default function SubSub() {
   const canRate = role === "admin" || role === "pm";
   const canComplete = role === "admin" || role === "pm";
 
-  // The account being viewed supplies branding and the plan.
+  // The account being viewed supplies branding and the plan. Before login,
+  // prefer the real account this subdomain belongs to (if any) over the
+  // fallback — otherwise every subdomain would show the same generic/demo
+  // branding on its login screen.
   const account = accounts.find((a) => a.id === membership.accountId) || accounts[0];
-  const brand = account;
+  const brand = (!loggedIn && subdomainBrand) ? subdomainBrand : account;
   const plan = account.plan;
   const billing = account.billing || "monthly";
   const setBilling = (c) => {
@@ -1603,7 +1634,11 @@ export default function SubSub() {
     const result = await (supabaseEnabled ? api.getMe() : api.devLogin(email))
       .catch((err) => { console.error("[login] failed:", err); return null; });
     if (!result) return;
-    const primary = result.memberships[0];
+    // Land in the account this subdomain belongs to, if the person has a
+    // membership there — signing in on outerhome.subsub.work shouldn't drop
+    // someone into a different company they also happen to belong to.
+    const onSub = detectSubdomain();
+    const primary = (onSub && result.memberships.find((m) => m.subdomain === onSub)) || result.memberships[0];
     if (!primary) return;
 
     setAuth({ userId: result.user.id, accountId: primary.accountId });
