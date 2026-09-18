@@ -112,12 +112,10 @@ app.use("/api/*", async (c, next) => {
   // Cron Trigger target with no user session at all — it does its own
   // CRON_SECRET bearer check inline instead (was dead code behind this
   // middleware until this exemption: every call 401'd before reaching it).
-  // /api/self-signup is exempted for the same shape of reason as /me: a
-  // brand-new contractor signing up on a company's subdomain has a real,
-  // verified Supabase identity but by definition no membership yet — the
-  // membership row is exactly what this route creates. It does its own
-  // token verification inline (see verifySupabaseToken above).
-  if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path === "/api/self-signup"
+  // /api/apply/* is the public subcontractor-application form — genuinely
+  // unauthenticated, since the applicant has no session at all yet (that's
+  // exactly what a successful application eventually leads to).
+  if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path.startsWith("/api/apply/")
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
 
   const accountId = c.req.header("X-Account-Id");
@@ -163,7 +161,7 @@ async function logEvent(env, accountId, actorId, kind, subjectId, payload) {
 // ---------------------------------------------------------------------------
 async function loginResponse(db, user) {
   const { results: memberships } = await db.prepare(
-    `SELECT m.*, a.name as account_name, a.subdomain, a.plan, a.billing, a.logo_key, a.use_default_mark
+    `SELECT m.*, a.name as account_name, a.subdomain, a.plan, a.billing, a.logo_key, a.use_default_mark, a.theme
      FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
   ).bind(user.id).all();
   return {
@@ -172,6 +170,7 @@ async function loginResponse(db, user) {
       accountId: m.account_id, accountName: m.account_name, subdomain: m.subdomain,
       role: m.role, companyId: m.company_id,
       plan: m.plan, billing: m.billing, logoKey: m.logo_key, useDefaultMark: !!m.use_default_mark,
+      theme: parseJson(m.theme),
     })),
   };
 }
@@ -194,56 +193,88 @@ app.get("/api/auth/me", async (c) => {
   return c.json(await loginResponse(c.env.DB, user));
 });
 
-// Self-serve contractor application: someone with a fresh, verified
-// Supabase identity but no internal users/membership row yet, applying to
-// join the account behind whichever subdomain they signed up on. Creates a
-// bare company profile (documents incomplete, same starting state as an
-// admin's minimal "add a sub") + an engagement + a contractor membership,
-// so they land straight in the app afterward exactly like an invited
-// contractor would. Idempotent: re-posting for an account they're already
-// a member of just confirms rather than duplicating anything.
-app.post("/api/self-signup", async (c) => {
-  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) return c.json({ error: "auth_not_configured" }, 501);
-  const supaUser = await verifySupabaseToken(c.env, c.req.header("Authorization"));
-  if (!supaUser) return c.json({ error: "unauthenticated" }, 401);
-
-  const body = await c.req.json().catch(() => ({}));
-  const subdomain = (body.subdomain || "").trim().toLowerCase();
-  const name = (body.name || "").trim() || supaUser.email;
-  if (!subdomain) return c.json({ error: "missing_subdomain" }, 400);
-
+// Public subcontractor application (POST /api/apply/:subdomain): the
+// SubSignup form a GC links from their own site, before anyone has an
+// account at all — no Supabase token, no session, nothing. Creates a bare
+// company profile (documents incomplete, same starting state as an admin's
+// minimal "add a sub") + an 'invited' engagement + an internal users row
+// (auth_id left null), so "Already invited? Create your password" on the
+// login page links a real Supabase signup to this row by email later —
+// resolveSupabaseUser() already does that linking, so nothing more is
+// needed here. Dedupes the company by license number exactly like the
+// admin's own POST /api/subs, so a contractor who's already on SubSub for
+// another GC doesn't get a duplicate profile.
+app.post("/api/apply/:subdomain", async (c) => {
+  const subdomain = c.req.param("subdomain").trim().toLowerCase();
   const account = await c.env.DB.prepare(`SELECT id FROM accounts WHERE subdomain = ?`).bind(subdomain).first();
   if (!account) return c.json({ error: "unknown_account" }, 404);
 
-  let user = await c.env.DB.prepare(`SELECT * FROM users WHERE auth_id = ?`).bind(supaUser.id).first();
-  if (!user && supaUser.email) {
-    user = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(supaUser.email).first();
-    if (user) await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ?`).bind(supaUser.id, user.id).run();
+  const body = await c.req.json().catch(() => ({}));
+  if (!body.company?.trim() || !body.contact?.trim() || !body.email?.trim()) {
+    return c.json({ error: "missing_fields" }, 400);
   }
+  const licenseKey = (body.license || "").trim().toUpperCase();
+
+  let company = null;
+  if (licenseKey) {
+    company = await c.env.DB.prepare(`SELECT * FROM companies WHERE UPPER(TRIM(license)) = ?`).bind(licenseKey).first();
+  }
+  if (!company && body.email) {
+    company = await c.env.DB.prepare(`SELECT * FROM companies WHERE email = ?`).bind(body.email).first();
+  }
+
+  let companyId;
+  if (company) {
+    companyId = company.id;
+  } else {
+    companyId = uid();
+    await c.env.DB.prepare(
+      `INSERT INTO companies (id, company, contact, phone, email, license, ubi, city, state, zip)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(companyId, body.company, body.contact, body.phone || null, body.email,
+      body.license || null, body.ubi || null, body.city || null, body.state || null, body.zip || null).run();
+  }
+
+  let engagementId = (await c.env.DB.prepare(
+    `SELECT id FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(account.id, companyId).first())?.id;
+  if (!engagementId) {
+    engagementId = uid();
+    await c.env.DB.prepare(
+      `INSERT INTO engagements (id, account_id, company_id, status, categories, notes)
+       VALUES (?, ?, ?, 'invited', ?, 'Applied through the public application form.')`
+    ).bind(engagementId, account.id, companyId, JSON.stringify(body.categories || [])).run();
+  }
+
+  // Only for a genuinely new company — an existing (deduped) one keeps its
+  // established profile, same rule POST /api/subs follows.
+  if (!company) {
+    await applySubPatch(c.env.DB, companyId, engagementId, {
+      crews: [],
+      coverage: { mode: "cities", cities: body.city ? [body.city] : [] },
+      warranty: body.warranty || null,
+      notify: { email: !!body.notifyEmail, sms: !!body.notifySms },
+    });
+  }
+
+  let user = await c.env.DB.prepare(`SELECT id FROM users WHERE email = ?`).bind(body.email).first();
   if (!user) {
     const userId = uid();
-    await c.env.DB.prepare(`INSERT INTO users (id, auth_id, name, email) VALUES (?, ?, ?, ?)`)
-      .bind(userId, supaUser.id, name, supaUser.email).run();
+    await c.env.DB.prepare(`INSERT INTO users (id, name, email, phone) VALUES (?, ?, ?, ?)`)
+      .bind(userId, body.contact, body.email, body.phone || null).run();
     user = { id: userId };
   }
-
-  const existing = await c.env.DB.prepare(
-    `SELECT * FROM memberships WHERE user_id = ? AND account_id = ?`
+  const existingMembership = await c.env.DB.prepare(
+    `SELECT id FROM memberships WHERE user_id = ? AND account_id = ?`
   ).bind(user.id, account.id).first();
-  if (existing) return c.json({ ok: true, alreadyMember: true });
+  if (!existingMembership) {
+    await c.env.DB.prepare(
+      `INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, 'contractor', ?)`
+    ).bind(uid(), user.id, account.id, companyId).run();
+  }
 
-  const companyId = uid();
-  await c.env.DB.prepare(
-    `INSERT INTO companies (id, company, contact, email) VALUES (?, ?, ?, ?)`
-  ).bind(companyId, name, name, supaUser.email).run();
-  await c.env.DB.prepare(
-    `INSERT INTO engagements (id, account_id, company_id, status) VALUES (?, ?, ?, 'active')`
-  ).bind(uid(), account.id, companyId).run();
-  await c.env.DB.prepare(
-    `INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, 'contractor', ?)`
-  ).bind(uid(), user.id, account.id, companyId).run();
-
-  return c.json({ ok: true, alreadyMember: false });
+  await logEvent(c.env, account.id, user.id, "engagement.applied", engagementId, { companyId, reused: !!company });
+  return c.json({ ok: true });
 });
 
 // This account's members (admin/pm/contractor), composed with the person's
@@ -315,7 +346,7 @@ app.get("/api/account", async (c) => {
   const user = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(userId).first();
   return c.json({
     id: a.id, name: a.name, subdomain: a.subdomain, plan: a.plan, billing: a.billing,
-    logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark,
+    logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark, theme: parseJson(a.theme),
     user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone } : null,
   });
 });
@@ -341,25 +372,46 @@ app.get("/api/logo/:accountId", async (c) => {
 // needs — never anything else about the account.
 app.get("/api/account-by-subdomain/:subdomain", async (c) => {
   const a = await c.env.DB.prepare(
-    `SELECT id, name, subdomain, plan, billing, logo_key, use_default_mark FROM accounts WHERE subdomain = ?`
+    `SELECT id, name, subdomain, plan, billing, logo_key, use_default_mark, theme FROM accounts WHERE subdomain = ?`
   ).bind(c.req.param("subdomain").toLowerCase()).first();
   if (!a) return c.notFound();
   return c.json({
     id: a.id, name: a.name, subdomain: a.subdomain, plan: a.plan, billing: a.billing,
-    logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark,
+    logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark, theme: parseJson(a.theme),
   });
 });
+
+// Every value in a theme must be a plain 6-digit hex color. These get
+// interpolated as CSS custom properties on a public, unauthenticated page
+// (the login screen and the application form), so an unvalidated string is
+// a stylesheet-injection vector — reject anything that isn't exactly this
+// shape rather than trying to sanitize it.
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+function validTheme(theme) {
+  if (!theme || typeof theme !== "object") return null;
+  const out = {};
+  for (const k of ["bg", "surface", "text", "accent", "btnText"]) {
+    if (typeof theme[k] !== "string" || !HEX_COLOR.test(theme[k])) return null;
+    out[k] = theme[k];
+  }
+  return out;
+}
 
 // Branding/plan/billing for the current account.
 app.patch("/api/account", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
-  const b = await c.req.json(); // { name, plan, billing, logoKey, useDefaultMark }
+  const b = await c.req.json(); // { name, plan, billing, logoKey, useDefaultMark, theme }
   const sets = [], vals = [];
   if (b.name != null) { sets.push("name = ?"); vals.push(b.name); }
   if (b.plan != null) { sets.push("plan = ?"); vals.push(b.plan); }
   if (b.billing != null) { sets.push("billing = ?"); vals.push(b.billing); }
   if (b.logoKey !== undefined) { sets.push("logo_key = ?"); vals.push(b.logoKey); }
   if (b.useDefaultMark != null) { sets.push("use_default_mark = ?"); vals.push(b.useDefaultMark ? 1 : 0); }
+  if (b.theme !== undefined) {
+    const theme = validTheme(b.theme);
+    if (b.theme != null && !theme) return c.json({ error: "invalid_theme" }, 400);
+    sets.push("theme = ?"); vals.push(theme ? JSON.stringify(theme) : null);
+  }
   if (sets.length) {
     vals.push(accountId);
     await c.env.DB.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();

@@ -72,10 +72,13 @@ export const api = {
   // Real-auth equivalent of devLogin: identity comes from the verified
   // bearer token, not a request body — returns the same {user, memberships} shape.
   getMe: () => request("/auth/me"),
-  // Self-serve contractor application — joins the account behind `subdomain`.
-  // Requires a real Supabase session (authHeaders() supplies the bearer
-  // token); call before getMe() so the membership exists by then.
-  selfSignup: (subdomain, name) => request("/self-signup", { method: "POST", body: JSON.stringify({ subdomain, name }) }),
+  // Public subcontractor application — no session required, since the
+  // applicant doesn't have one yet. Creates a bare company + 'invited'
+  // engagement + an internal users row on the account behind `subdomain`,
+  // so "Already invited? Create your password" on the login page links up
+  // by email once they do sign up for real.
+  applyToAccount: (subdomain, data) =>
+    request(`/apply/${encodeURIComponent(subdomain)}`, { method: "POST", body: JSON.stringify(data) }),
 
   listSubs: () => request("/subs"),
   addSub: (sub) => request("/subs", { method: "POST", body: JSON.stringify(sub) }),

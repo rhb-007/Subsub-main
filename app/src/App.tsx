@@ -4,6 +4,9 @@ import {
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
   Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList,
   Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
+  Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
+  Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
+  DoorOpen, Droplets, SprayCan,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth } from "./lib/api";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
@@ -22,25 +25,78 @@ const persist = (label, promise) => {
 
 // ---- Domain constants ----------------------------------------------------
 const CATEGORIES = [
+  // Exterior
   { id: "roofing", label: "Roofing", icon: Home },
   { id: "siding", label: "Siding", icon: PanelTop },
   { id: "windows_doors", label: "Windows / Doors", icon: Building2 },
   { id: "gutters", label: "Gutters", icon: Wind },
-  { id: "deck_fence", label: "Deck / Fence", icon: Fence },
-  { id: "hardscaping", label: "Hardscaping", icon: Layers },
   { id: "soffit_fascia", label: "Soffit / Fascia", icon: Ruler },
   { id: "coping", label: "Coping", icon: BrickWall },
+  { id: "masonry", label: "Masonry / Brick", icon: Blocks },
+  { id: "solar", label: "Solar", icon: Sun },
+  // Structure & site
+  { id: "framing", label: "Framing", icon: Frame },
+  { id: "concrete", label: "Concrete", icon: Square },
+  { id: "foundation", label: "Foundation", icon: Layers3 },
+  { id: "excavation", label: "Excavation / Grading", icon: Shovel },
+  { id: "demolition", label: "Demolition", icon: Hammer },
+  // Mechanical, electrical, plumbing
+  { id: "electrical", label: "Electrical", icon: Zap },
+  { id: "plumbing", label: "Plumbing", icon: Droplet },
+  { id: "hvac", label: "HVAC", icon: Thermometer },
+  { id: "insulation", label: "Insulation", icon: Snowflake },
+  // Interior finishes
+  { id: "drywall", label: "Drywall / Sheetrock", icon: SquareStack },
+  { id: "painting", label: "Painting", icon: PaintRoller },
+  { id: "flooring", label: "Flooring / Carpet", icon: LayoutGrid },
+  { id: "tile_stone", label: "Tile / Stone", icon: Grid3x3 },
+  { id: "cabinets_counters", label: "Cabinets / Countertops", icon: Boxes },
+  { id: "trim_carpentry", label: "Finish Carpentry", icon: Slice },
+  // Outdoor
+  { id: "deck_fence", label: "Deck / Fence", icon: Fence },
+  { id: "hardscaping", label: "Hardscaping", icon: Layers },
+  { id: "landscaping", label: "Landscaping", icon: Trees },
+  // Specialty
+  { id: "garage_doors", label: "Garage Doors", icon: DoorOpen },
+  { id: "restoration", label: "Water / Fire Restoration", icon: Droplets },
+  { id: "cleaning", label: "Final Clean", icon: SprayCan },
 ];
 
 const CAP_LIBRARY = {
   roofing: ["Asphalt shingle", "Metal roof", "Cedar shake", "Flat / TPO", "Tear-off", "Repair / leak", "Skylight"],
-  siding: ["Fiber cement", "Vinyl", "LP SmartSide", "Cedar", "Stucco"],
+  siding: ["Fiber cement", "Vinyl", "LP SmartSide", "Cedar", "Stucco", "Board & batten"],
   windows_doors: ["Vinyl windows", "Wood windows", "Entry doors", "Patio / slider", "Egress cut-in", "Trim / casing"],
   gutters: ["5\" K-style", "6\" oversized", "Seamless", "Gutter guards", "Downspout / drainage"],
-  deck_fence: ["Composite deck", "Cedar deck", "PT framing", "Wood fence", "Vinyl fence", "Railing"],
+  soffit_fascia: ["Aluminum soffit", "Vented soffit", "Fascia wrap", "Cedar soffit", "Repair / rot"],
+  coping: ["Metal coping", "Stone coping", "Parapet detail", "Custom bend"],
+  masonry: ["Brick veneer", "Block wall", "Stone veneer", "Chimney repair", "Tuckpointing", "Repair / restoration"],
+  solar: ["Roof-mount PV", "Ground-mount PV", "Battery storage", "Inverter swap", "Panel removal / reset"],
+
+  framing: ["Rough framing", "Floor systems", "Roof trusses", "Steel stud", "Structural repair", "Additions"],
+  concrete: ["Flatwork / slab", "Footings", "Stem walls", "Driveway / approach", "Stamped / decorative", "Cut & remove"],
+  foundation: ["Stem wall", "Crawlspace", "Underpinning", "Waterproofing", "Drainage / french drain", "Crack repair"],
+  excavation: ["Site prep", "Grading", "Trenching", "Utility dig", "Haul-off", "Backfill / compaction"],
+  demolition: ["Interior strip-out", "Full teardown", "Selective demo", "Debris haul-off", "Asbestos-aware"],
+
+  electrical: ["Rough-in", "Panel upgrade", "Service change", "Lighting / fixtures", "EV charger", "Generator", "Low voltage", "Troubleshooting"],
+  plumbing: ["Rough-in", "Repipe", "Water heater", "Tankless", "Fixtures / trim", "Sewer / drain", "Gas line", "Leak repair"],
+  hvac: ["Furnace", "AC / condenser", "Heat pump", "Mini-split", "Ductwork", "Ventilation", "Service / maintenance"],
+  insulation: ["Batt", "Blown-in", "Spray foam", "Rigid board", "Air sealing", "Attic / crawlspace"],
+
+  drywall: ["Hang", "Tape / mud", "Texture", "Level 5 finish", "Patch / repair", "Ceilings"],
+  painting: ["Interior", "Exterior", "Cabinet refinish", "Spray / lacquer", "Stain / seal", "Prep / prime"],
+  flooring: ["LVP / vinyl plank", "Hardwood", "Engineered wood", "Carpet", "Laminate", "Sheet vinyl", "Subfloor prep", "Refinish / sand"],
+  tile_stone: ["Floor tile", "Shower / wet wall", "Backsplash", "Natural stone", "Large format", "Waterproofing", "Heated floor"],
+  cabinets_counters: ["Cabinet install", "Custom cabinetry", "Quartz", "Granite", "Solid surface", "Templating", "Refacing"],
+  trim_carpentry: ["Base / casing", "Crown molding", "Interior doors", "Stairs / railing", "Built-ins", "Wainscot / paneling"],
+
+  deck_fence: ["Composite deck", "Cedar deck", "PT framing", "Wood fence", "Vinyl fence", "Railing", "Pergola"],
   hardscaping: ["Paver patio", "Retaining wall", "Concrete flatwork", "Walkway", "Fire pit", "Drainage / grading"],
-  soffit_fascia: ["Aluminum soffit", "Vinyl soffit", "Wood soffit", "Fascia board", "Fascia wrap", "Vented soffit", "Repair / rot"],
-  coping: ["Stone coping", "Precast concrete coping", "Metal coping", "Brick coping", "Wall cap", "Chimney cap", "Parapet coping"],
+  landscaping: ["Planting / beds", "Sod / seed", "Irrigation", "Tree work", "Bark / rock", "Maintenance"],
+
+  garage_doors: ["Door install", "Opener", "Spring / cable repair", "Insulated door", "Custom / carriage"],
+  restoration: ["Water mitigation", "Fire / smoke", "Mold remediation", "Structural drying", "Contents / pack-out"],
+  cleaning: ["Construction clean", "Final / detail clean", "Window clean", "Pressure wash", "Debris removal"],
 };
 
 const AREAS = ["Seattle", "Bellevue", "Tacoma", "Everett", "Kirkland", "Renton", "Kent", "Redmond", "Lynnwood", "Auburn"];
@@ -786,6 +842,43 @@ function detectSubdomain() {
   if (!sub || sub === "app" || sub === "www" || sub.includes(".")) return null;
   return sub;
 }
+
+// ---- White-label theming -------------------------------------------------
+// Applies to the two pages a subcontractor sees before they're inside the app:
+// the sign-in page and the public application form a GC links to from their
+// own site. The app's own chrome is never themed.
+const DEFAULT_THEME = {
+  bg: "#F4F6F4", surface: "#FFFFFF", text: "#12211C",
+  accent: "#1F6B4A", btnText: "#FFFFFF",
+};
+const THEME_FIELDS = [
+  { id: "bg",       label: "Page background" },
+  { id: "surface",  label: "Card background" },
+  { id: "text",     label: "Text" },
+  { id: "accent",   label: "Buttons & links" },
+  { id: "btnText",  label: "Button text" },
+];
+const themeOf = (brand) => ({ ...DEFAULT_THEME, ...((brand && brand.theme) || {}) });
+// Inline custom properties so the themed pages don't need a stylesheet rebuild.
+const themeVars = (t) => ({
+  "--wl-bg": t.bg, "--wl-surface": t.surface, "--wl-text": t.text,
+  "--wl-accent": t.accent, "--wl-btn-text": t.btnText,
+});
+// Readable hint: rough relative luminance, used to warn on low contrast.
+function luminance(hex) {
+  const h = (hex || "").replace("#", "");
+  if (h.length !== 6) return 1;
+  const v = [0, 2, 4].map((i) => {
+    const c = parseInt(h.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+}
+const contrastRatio = (a, b) => {
+  const l1 = luminance(a), l2 = luminance(b);
+  const hi = Math.max(l1, l2), lo = Math.min(l1, l2);
+  return Math.round(((hi + 0.05) / (lo + 0.05)) * 10) / 10;
+};
 // A contractor signs in with their email address — show it so they don't guess.
 const usernameOf = (sub) => sub.email || "(no email on file)";
 
@@ -1014,11 +1107,12 @@ export default function SubSub() {
     if (!sub) return;
     api.getAccountBySubdomain(sub).then((a) => {
       setSubdomainBrand({ id: a.id, name: a.name, subdomain: a.subdomain, plan: a.plan, billing: a.billing,
-        logoData: a.logoKey ? `/api/logo/${a.id}` : null, useDefaultMark: a.useDefaultMark });
+        logoData: a.logoKey ? `/api/logo/${a.id}` : null, useDefaultMark: a.useDefaultMark, theme: a.theme });
     }).catch(() => {}); // no account on this subdomain — fall through to generic branding
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [loggedIn, setLoggedIn] = useState(false);
+  const [publicView, setPublicView] = useState("login"); // login | signup — the public application form
   const [loading, setLoading] = useState(false);
   // White-label tenant branding — one GC per instance (outerhome.subsub.work)
 
@@ -1097,8 +1191,10 @@ export default function SubSub() {
   const setBrand = (patch) => {
     const resolved = typeof patch === "function" ? patch(account) : patch;
     // Logo upload isn't wired to a real file picker yet (see README), so only
-    // name/useDefaultMark persist for now — logoData stays local-only.
-    persist("patchAccount.brand", api.patchAccount({ name: resolved.name, useDefaultMark: resolved.useDefaultMark }));
+    // name/useDefaultMark/theme persist for now — logoData stays local-only.
+    persist("patchAccount.brand", api.patchAccount({
+      name: resolved.name, useDefaultMark: resolved.useDefaultMark, theme: resolved.theme,
+    }));
     setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, ...resolved } : a));
   };
   const setPlan = (p) => {
@@ -1631,19 +1727,6 @@ export default function SubSub() {
   // mode, identity already comes from the Supabase session that
   // signInWithPassword() just established, so this just asks who that is.
   async function handleLogin(email) {
-    // A self-serve contractor application (see LoginPage) stashes its
-    // target account here — consume it now, before getMe(), so the
-    // membership it creates exists in time to actually land somewhere.
-    // Covers both the immediate-session and email-confirmation-required
-    // Supabase configurations, since this runs on every real sign-in.
-    if (supabaseEnabled) {
-      let pending = null;
-      try { pending = JSON.parse(localStorage.getItem("subsub.pendingSignup") || "null"); } catch {}
-      if (pending?.subdomain) {
-        localStorage.removeItem("subsub.pendingSignup");
-        await api.selfSignup(pending.subdomain, pending.name).catch((err) => console.error("[self-signup] failed:", err));
-      }
-    }
     const result = await (supabaseEnabled ? api.getMe() : api.devLogin(email))
       .catch((err) => { console.error("[login] failed:", err); return null; });
     if (!result) return;
@@ -1664,7 +1747,7 @@ export default function SubSub() {
       const byId = Object.fromEntries(prev.map((a) => [a.id, a]));
       result.memberships.forEach((m) => {
         byId[m.accountId] = { id: m.accountId, name: m.accountName, subdomain: m.subdomain,
-          plan: m.plan, billing: m.billing,
+          plan: m.plan, billing: m.billing, theme: m.theme,
           logoData: m.logoKey ? `/api/logo/${m.accountId}` : null, useDefaultMark: m.useDefaultMark };
       });
       return Object.values(byId);
@@ -1689,6 +1772,7 @@ export default function SubSub() {
       setAccounts((prev) => [...prev.filter((a) => a.id !== acct.id), {
         id: acct.id, name: acct.name, subdomain: acct.subdomain, plan: acct.plan, billing: acct.billing,
         logoData: acct.logoKey ? `/api/logo/${acct.id}` : null, useDefaultMark: acct.useDefaultMark,
+        theme: acct.theme,
       }]);
       if (acct.user) setUsers((prev) => [...prev.filter((u) => u.id !== acct.user.id), acct.user]);
       setCurrentUserId(saved.userId);
@@ -1703,8 +1787,15 @@ export default function SubSub() {
     return (
       <div className="ss-root">
         <style>{CSS}</style>
-        <LoginPage users={users} brand={brand} accounts={accounts} memberships={memberships}
-          onLogin={(email) => handleLogin(email)} />
+        {publicView === "signup" ? (
+          <SubSignup brand={brand}
+            onSubmit={(data) => api.applyToAccount(brand.subdomain, data)}
+            onBackToLogin={() => setPublicView("login")} />
+        ) : (
+          <LoginPage users={users} brand={brand} accounts={accounts} memberships={memberships}
+            onSignup={() => setPublicView("signup")}
+            onLogin={(email) => handleLogin(email)} />
+        )}
       </div>
     );
   }
@@ -2234,7 +2325,8 @@ export default function SubSub() {
           }}
           currentUserId={currentUserId}
           onPatchSub={patchSub} onRequestDocs={requestDocs}
-          onSeatLimit={() => setUpgradePrompt({ kind: "user" })} />
+          onSeatLimit={() => setUpgradePrompt({ kind: "user" })}
+          onPreviewSignup={() => { setLoggedIn(false); setPublicView("signup"); }} />
       )}
 
       {tab === "uniforms" && can("uniforms") && (
@@ -2851,7 +2943,7 @@ const SIZES = ["S", "M", "L", "XL", "2XL", "3XL"];
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
   jobsThisMonth, canBrand, billing, onSetBilling,
   onSaveUser, onSaveBrand, onSetPlan, onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
-  onPatchSub, onRequestDocs, onSeatLimit }) {
+  onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup }) {
   const panes = [["profile", "Profile"]]
     .concat(canManage ? [["company", "Company"], ["users", "Users"], ["billing", "Subscription"]] : []);
   const brandingOn = PLANS[plan].branding;
@@ -2873,6 +2965,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   const [ubi, setUbi] = useState(mySub?.ubi || "");
   // company branding
   const [b, setB] = useState({ ...brand });
+  const [th, setTh] = useState(() => themeOf(brand));
   const [bSaved, setBSaved] = useState(false);
   const setBrandField = (k, v) => { setB((x) => ({ ...x, [k]: v })); setBSaved(false); };
   // Instant local preview via a data URI (unchanged UX), plus a real upload
@@ -3051,7 +3144,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 <div className="bp-sub">Contractor portal</div>
               </div>
             </div>
-            <div className="bp-foot">Powered by <SubSubMark height={11} /></div>
+            <div className="bp-foot"><PoweredBy height={12} /></div>
           </div>
 
           <label className="fld">Company name<input value={b.name} onChange={(e) => setBrandField("name", e.target.value)} placeholder="Outerhome" /></label>
@@ -3083,11 +3176,79 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             <p className="cov-hint">Mark only — your company name is rendered as text beside it.</p>
           </div>
 
+          <div className="form-sec">Colors for your subcontractor-facing pages</div>
+          <p className="panel-note">These apply to the two pages your subcontractors see before
+            they're inside the app: your sign-in page and the public application form you link
+            from your website. The app itself keeps its own styling.</p>
+
+          <div className="theme-grid">
+            {THEME_FIELDS.map((tf) => (
+              <label key={tf.id} className="theme-row">
+                <span className="theme-label">{tf.label}</span>
+                <span className="theme-input">
+                  <input type="color" value={th[tf.id]}
+                    onChange={(e) => { setTh({ ...th, [tf.id]: e.target.value }); setBSaved(false); }} />
+                  <input className="theme-hex" value={th[tf.id]}
+                    onChange={(e) => {
+                      const v = e.target.value.trim();
+                      if (/^#?[0-9a-fA-F]{0,6}$/.test(v)) {
+                        setTh({ ...th, [tf.id]: v.startsWith("#") ? v : "#" + v });
+                        setBSaved(false);
+                      }
+                    }} />
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {(() => {
+            const cr = contrastRatio(th.text, th.surface);
+            const br = contrastRatio(th.btnText, th.accent);
+            const bad = cr < 4.5 || br < 4.5;
+            return bad ? (
+              <p className="fld-err"><AlertTriangle size={12} />
+                {cr < 4.5 && ` Text on cards is low contrast (${cr}:1).`}
+                {br < 4.5 && ` Button text is low contrast (${br}:1).`}
+                {" "}Aim for 4.5:1 or higher so it stays readable.
+              </p>
+            ) : (
+              <p className="cov-hint">Contrast looks good — text {cr}:1, buttons {br}:1.</p>
+            );
+          })()}
+
+          <div className="theme-preview" style={themeVars(th)}>
+            <div className="tp-bar">
+              <span>{slug || "yourcompany"}.subsub.work</span>
+            </div>
+            <div className="tp-body">
+              <div className="tp-card">
+                <div className="tp-brand"><BrandMark brand={b} height={22} />
+                  <span>{b.name || "Your company"}</span></div>
+                <div className="tp-h">Work with {b.name || "your company"}</div>
+                <div className="tp-p">Tell us about your company and we'll add you to our
+                  subcontractor list.</div>
+                <div className="tp-field" />
+                <div className="tp-field" />
+                <div className="tp-btn">Continue</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="theme-actions">
+            <button type="button" className="btn-ghost"
+              onClick={() => { setTh({ ...DEFAULT_THEME }); setBSaved(false); }}>Reset to default</button>
+            {onPreviewSignup && (
+              <a className="theme-link" href="#" onClick={(e) => { e.preventDefault(); onPreviewSignup(); }}>
+                Open the live application form
+              </a>
+            )}
+          </div>
+
           <div className="panel-actions">
             <span className="panel-count">{slug || "yourcompany"}.subsub.work</span>
             {bSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
               : <button className="btn-solid" disabled={!b.name || !slug}
-                  onClick={() => { onSaveBrand({ ...b, subdomain: slug }); setBSaved(true); }}>
+                  onClick={() => { onSaveBrand({ ...b, subdomain: slug, theme: th }); setBSaved(true); }}>
                   <Check size={15} /> Save branding</button>}
           </div>
         </div>
@@ -4902,11 +5063,10 @@ function HomeMark({ height = 26 }) {
 // a white-label login screen. The wordmark uses currentColor so it always
 // matches whatever text color it's dropped into; the mark keeps its own
 // brand orange regardless.
-function SubSubMark({ height = 14 }) {
-  const width = (height * 502) / 114; // preserves the source viewBox's aspect ratio
+function SubSubLogo({ height = 16 }) {
   return (
-    <svg width={width} height={height} viewBox="36 62 502 114" xmlns="http://www.w3.org/2000/svg"
-      role="img" aria-label="SubSub" style={{ verticalAlign: "middle", display: "inline-block" }}>
+    <svg className="ss-logo" height={height} viewBox="36 62 502 114" xmlns="http://www.w3.org/2000/svg"
+      role="img" aria-label="SubSub" style={{ width: "auto", display: "block", flex: "none" }}>
       <path fill="#E39B32" d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/>
       <path fill="#E39B32" d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/>
       <path fill="#E39B32" d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/>
@@ -4917,6 +5077,16 @@ function SubSubMark({ height = 14 }) {
       <path fill="currentColor" d="M466.81,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.83,11.47c5.49,0,10-3.63,10-12.55v-25.59H466.81z"/>
       <path fill="currentColor" d="M531.05,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C519.38,103.69,531.05,114.19,531.05,131.05z M512.22,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S512.22,139.19,512.22,131.05z"/>
     </svg>
+  );
+}
+
+// "Powered by" + the logo, used on the two pages a subcontractor sees
+// before they're inside the app.
+function PoweredBy({ height = 15, className = "" }) {
+  return (
+    <span className={`powered-by ${className}`}>
+      <span>Powered by</span><SubSubLogo height={height} />
+    </span>
   );
 }
 
@@ -4934,7 +5104,8 @@ function BrandMark({ brand, height = 24 }) {
 }
 
 // ---- Login / splash ------------------------------------------------------
-function LoginPage({ users, brand, accounts, memberships, onLogin }) {
+function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
+  const wl = themeOf(brand);
   // Show which account each demo login lands in — the same person can hold
   // memberships in several.
   const acctOf = (u) => {
@@ -4947,18 +5118,15 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
   };
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
-  const [name, setName] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [resetSent, setResetSent] = useState(false);
-  // On a company's own subdomain (outerhome.subsub.work), "Create an
-  // account" is a real self-serve contractor application: it creates the
-  // login AND a bare contractor membership in that account (see
-  // /api/self-signup in worker/index.js), so they land straight in the app.
-  // On the generic app.subsub.work (no subdomain detected), there's no
-  // account to join, so it only creates the login — an admin still has to
-  // have added this email via Users → Add for it to land anywhere;
-  // resolveSupabaseUser() links the two by email on first sign-in.
+  // "Create your password" only ever creates the LOGIN — it covers someone
+  // who already has an internal users row, either because an admin added
+  // them via Users → Add, or because they already applied through the
+  // public SubSignup form on this subdomain (which creates that row up
+  // front). resolveSupabaseUser() in worker/index.js links the two by
+  // email on first sign-in — no separate provisioning call needed here.
   const [mode, setMode] = useState("signin"); // "signin" | "signup"
   const [signupSent, setSignupSent] = useState(false);
   const onSubdomain = detectSubdomain();
@@ -4980,13 +5148,6 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
       const { data, error } = await supabase.auth.signUp({ email: email.trim(), password: pw });
       setBusy(false);
       if (error) { setErr(error.message); return; }
-      // Stash which account this application is for — handleLogin() reads
-      // this (and clears it) the moment a real session exists, whether
-      // that's right now or after they click an emailed confirmation link
-      // and sign in separately later.
-      if (onSubdomain) {
-        try { localStorage.setItem("subsub.pendingSignup", JSON.stringify({ subdomain: onSubdomain, name: name.trim() || email.trim() })); } catch {}
-      }
       if (data.session) { onLogin(); return; } // email confirmation disabled — straight in
       setSignupSent(true); // otherwise Supabase mailed a confirmation link
       return;
@@ -5007,7 +5168,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
   };
 
   return (
-    <div className="login-wrap">
+    <div className="login-wrap wl-themed" style={themeVars(wl)}>
       <div className="login-card">
         <div className="login-brand">
           <div className="login-logo-wrap"><BrandMark brand={brand} height={38} /></div>
@@ -5022,14 +5183,6 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
             </div>
           ) : (
             <>
-              {mode === "signup" && onSubdomain && (
-                <label className="fld">Your name
-                  <input type="text" autoComplete="name"
-                    value={name} onChange={(e) => setName(e.target.value)}
-                    placeholder="Jane Smith"
-                    onKeyDown={(e) => e.key === "Enter" && submit()} />
-                </label>
-              )}
               <label className="fld">Email
                 <input type="email" inputMode="email" autoComplete="username"
                   value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); setResetSent(false); }}
@@ -5045,7 +5198,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
               {err && <div className="login-err"><AlertTriangle size={13} /> {err}</div>}
               {resetSent && <div className="login-err" style={{ color: "var(--forest-lift)" }}><CheckCircle2 size={13} /> Check your email for a reset link.</div>}
               <button className="btn-solid login-btn" onClick={submit} disabled={busy}>
-                <Lock size={15} /> {busy ? "Please wait…" : mode === "signup" ? (onSubdomain ? "Apply" : "Create account") : "Sign in"}
+                <Lock size={15} /> {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
               </button>
               {mode === "signin" ? (
                 <button className="login-forgot" onClick={forgotPassword}>
@@ -5054,13 +5207,19 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
               ) : null}
               {supabaseEnabled && (
                 <button className="login-forgot" onClick={() => { setMode(mode === "signup" ? "signin" : "signup"); setErr(""); }}>
-                  {mode === "signup" ? "Already have an account? Sign in"
-                    : onSubdomain ? `New here? Apply to work with ${brand.name}` : "New here? Create an account"}
+                  {mode === "signup" ? "Already have an account? Sign in" : "Already invited? Create your password"}
                 </button>
               )}
             </>
           )}
         </div>
+
+        {onSignup && onSubdomain && (
+          <button className="login-signup" onClick={onSignup}>
+            <span>New subcontractor?</span>
+            <b>Apply to work with {brand.name} &#8250;</b>
+          </button>
+        )}
 
         {!supabaseEnabled && (
           <div className="login-demo">
@@ -5086,9 +5245,185 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
         )}
       </div>
       <p className="login-foot">
-        <span className="powered">Powered by <SubSubMark height={13} /></span>
+        <PoweredBy height={13} />
         {!supabaseEnabled && <span className="login-demo-note">Demo build · no real authentication</span>}
       </p>
+    </div>
+  );
+}
+
+// ---- Public subcontractor signup (white-labeled, linked from the GC's site) ----
+// No password here — this is an application, not an account. It creates a
+// bare company + an 'invited' engagement (and an internal users row, so
+// "Already invited? Create your password" on the sign-in page links up by
+// email later) via POST /api/apply/:subdomain — a public, unauthenticated
+// endpoint, since the applicant has no session yet.
+function SubSignup({ brand, onSubmit, onBackToLogin }) {
+  const t = themeOf(brand);
+  const [step, setStep] = useState(1);
+  const [f, setF] = useState({
+    company: "", contact: "", email: "", phone: "", license: "", ubi: "",
+    city: "", state: "WA", zip: "",
+    categories: [], warranty: "", crewCount: "1",
+    notifyEmail: true, notifySms: false,
+  });
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const toggleCat = (id) => setF((x) => ({
+    ...x,
+    categories: x.categories.includes(id)
+      ? x.categories.filter((c) => c !== id)
+      : [...x.categories, id],
+  }));
+  const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const ok1 = f.company.trim() && f.contact.trim() && f.email.trim();
+  const ok2 = f.categories.length > 0;
+  const stepOk = step === 1 ? ok1 : step === 2 ? ok2 : true;
+
+  const submit = async () => {
+    setBusy(true); setErr("");
+    try {
+      await onSubmit(f);
+      setSent(true);
+    } catch (e) {
+      setErr(e?.message || "Something went wrong — please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (sent) return (
+    <div className="wl-page" style={themeVars(t)}>
+      <div className="wl-card wl-done">
+        <div className="wl-brand"><BrandMark brand={brand} height={30} />
+          <span className="wl-brand-name">{brand.name}</span></div>
+        <div className="wl-tick"><CheckCircle2 size={34} /></div>
+        <h1>Thanks — we've got it.</h1>
+        <p>{brand.name} will review your details. You'll get an email at <b>{f.email}</b> with a
+          link to set a password, then you can upload your insurance, bond, W-9 and signed
+          agreement.</p>
+        <p className="wl-fine">Nothing gets assigned to you until those are approved, so there's
+          no rush today — but the sooner they're in, the sooner you can be scheduled.</p>
+        <button className="wl-btn" onClick={onBackToLogin}>Go to sign in</button>
+      </div>
+      <PoweredBy className="wl-foot" height={15} />
+    </div>
+  );
+
+  return (
+    <div className="wl-page" style={themeVars(t)}>
+      <div className="wl-card">
+        <div className="wl-brand"><BrandMark brand={brand} height={30} />
+          <span className="wl-brand-name">{brand.name}</span></div>
+
+        <h1>Work with {brand.name}</h1>
+        <p className="wl-lede">Tell us about your company and we'll add you to our
+          subcontractor list. Takes about two minutes.</p>
+
+        <div className="wl-steps">
+          {[[1, "Your company"], [2, "Trades"], [3, "Finish"]].map(([n, l]) => (
+            <span key={n} className={`wl-step ${step === n ? "on" : ""} ${step > n ? "done" : ""}`}>
+              {step > n ? <Check size={12} /> : n} {l}
+            </span>
+          ))}
+        </div>
+
+        {step === 1 && (
+          <>
+            <label className="wl-fld">Company name
+              <input value={f.company} onChange={(e) => set("company", e.target.value)} /></label>
+            <label className="wl-fld">Your name
+              <input value={f.contact} onChange={(e) => set("contact", e.target.value)} /></label>
+            <div className="wl-row">
+              <label className="wl-fld">Email
+                <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)} /></label>
+              <label className="wl-fld">Mobile
+                <input type="tel" value={f.phone} onChange={(e) => set("phone", e.target.value)}
+                  placeholder="206-555-0100" /></label>
+            </div>
+            <div className="wl-row">
+              <label className="wl-fld">WA L&amp;I license #
+                <input value={f.license} onChange={(e) => set("license", e.target.value.toUpperCase())}
+                  placeholder="ABCDEF123GH" /></label>
+              <label className="wl-fld">UBI
+                <input inputMode="numeric" value={f.ubi} onChange={(e) => set("ubi", e.target.value)} /></label>
+            </div>
+            <p className="wl-fine">We check your license against the state registry — it speeds
+              up approval.</p>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <div className="wl-label">What trades do you cover?</div>
+            <div className="wl-picks">
+              {CATEGORIES.map((c) => (
+                <button key={c.id} type="button"
+                  className={`wl-pick ${f.categories.includes(c.id) ? "on" : ""}`}
+                  onClick={() => toggleCat(c.id)}>{c.label}</button>
+              ))}
+            </div>
+            <div className="wl-row" style={{ marginTop: 18 }}>
+              <label className="wl-fld">City
+                <input value={f.city} onChange={(e) => set("city", e.target.value)} /></label>
+              <label className="wl-fld">ZIP
+                <input inputMode="numeric" value={f.zip} onChange={(e) => set("zip", e.target.value)} /></label>
+            </div>
+            <label className="wl-fld">How many crews do you run?
+              <select value={f.crewCount} onChange={(e) => set("crewCount", e.target.value)}>
+                {["1", "2", "3", "4", "5+"].map((n) => <option key={n}>{n}</option>)}
+              </select>
+            </label>
+          </>
+        )}
+
+        {step === 3 && (
+          <>
+            <label className="wl-fld">How long do you warranty your labor?
+              <select value={f.warranty} onChange={(e) => set("warranty", e.target.value)}>
+                <option value="">Select…</option>
+                {WARRANTY_OPTIONS.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
+              </select>
+            </label>
+            <div className="wl-label">How should we reach you?</div>
+            <div className="wl-checks">
+              <label className={`wl-check ${f.notifyEmail ? "on" : ""}`}>
+                <input type="checkbox" checked={f.notifyEmail}
+                  onChange={(e) => set("notifyEmail", e.target.checked)} /> Email</label>
+              <label className={`wl-check ${f.notifySms ? "on" : ""}`}>
+                <input type="checkbox" checked={f.notifySms}
+                  onChange={(e) => set("notifySms", e.target.checked)} /> Text message</label>
+            </div>
+            <p className="wl-fine">Job offers and document reminders only. One-way messages — you
+              reply inside your account, not to the text.</p>
+            <div className="wl-summary">
+              <div><span>Company</span><b>{f.company || "—"}</b></div>
+              <div><span>Trades</span><b>{f.categories.length
+                ? f.categories.map((c) => catMeta(c).label).join(", ") : "—"}</b></div>
+              <div><span>License</span><b>{f.license || "Not provided"}</b></div>
+            </div>
+          </>
+        )}
+
+        {err && <p className="wl-err">{err}</p>}
+        <div className="wl-actions">
+          {step > 1
+            ? <button className="wl-btn-ghost" onClick={() => setStep(step - 1)}>Back</button>
+            : <button className="wl-btn-ghost" onClick={onBackToLogin}>I already have an account</button>}
+          {step < 3
+            ? <button className="wl-btn" disabled={!stepOk} onClick={() => setStep(step + 1)}>Continue</button>
+            : <button className="wl-btn" disabled={busy || (!f.notifyEmail && !f.notifySms)}
+                onClick={submit}>{busy ? "Submitting…" : "Submit application"}</button>}
+        </div>
+        {!stepOk && (
+          <p className="wl-err">{step === 1
+            ? "Company, your name and an email are needed."
+            : "Pick at least one trade."}</p>
+        )}
+      </div>
+      <PoweredBy className="wl-foot" height={15} />
     </div>
   );
 }
@@ -6558,6 +6893,113 @@ const CSS = `
 .login-logo-wrap{display:flex;align-items:center;justify-content:center;color:var(--ink);margin-bottom:14px;min-height:40px}
 .login-foot{display:flex;flex-direction:column;align-items:center;gap:5px}
 .login-demo-note{font-size:10.5px;opacity:.75}
+
+/* ===== white-label pages (sign-in + public signup) ===== */
+.wl-themed{background:var(--wl-bg) !important;color:var(--wl-text) !important}
+.wl-themed .login-card{background:var(--wl-surface) !important;color:var(--wl-text) !important}
+.wl-themed .login-card h1,.wl-themed .login-card h2{color:var(--wl-text) !important}
+.wl-themed .btn-solid,.wl-themed .login-btn{background:var(--wl-accent) !important;color:var(--wl-btn-text) !important}
+.login-signup{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;
+  margin-top:16px;padding:14px 16px;border-radius:10px;border:1px solid var(--line);
+  background:var(--paper);font-family:inherit;cursor:pointer;text-align:left}
+.login-signup > span{font-size:12px;color:var(--ink-soft)}
+.login-signup b{font-size:14.5px;font-weight:700;color:var(--wl-accent,var(--brand))}
+.login-signup:hover{border-color:var(--wl-accent,var(--brand));background:var(--card)}
+.wl-themed .login-signup{background:transparent;border-color:rgba(128,128,128,.32)}
+.wl-themed .login-signup > span{color:var(--wl-text);opacity:.65}
+.wl-themed .login-signup b{color:var(--wl-accent)}
+
+.wl-page{min-height:100vh;background:var(--wl-bg);color:var(--wl-text);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:40px 20px;font-family:inherit}
+.wl-card{width:100%;max-width:560px;background:var(--wl-surface);border-radius:14px;
+  padding:34px;box-shadow:0 18px 50px rgba(0,0,0,.12)}
+.wl-brand{display:flex;align-items:center;gap:11px;margin-bottom:22px}
+.wl-brand-name{font-size:17px;font-weight:700;letter-spacing:-.02em;color:var(--wl-text)}
+.wl-card h1{font-size:25px;letter-spacing:-.03em;margin:0;color:var(--wl-text)}
+.wl-lede{font-size:15px;opacity:.72;margin-top:9px;line-height:1.5}
+.wl-steps{display:flex;gap:7px;margin:22px 0 20px;flex-wrap:wrap}
+.wl-step{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;
+  padding:6px 11px;border-radius:20px;border:1px solid currentColor;opacity:.45}
+.wl-step.on{opacity:1;background:var(--wl-accent);color:var(--wl-btn-text);border-color:var(--wl-accent)}
+.wl-step.done{opacity:.85}
+.wl-fld{display:block;margin-bottom:14px;font-size:13.5px;font-weight:600}
+.wl-fld input,.wl-fld select{display:block;width:100%;margin-top:6px;padding:13px 14px;
+  border:1px solid rgba(128,128,128,.35);border-radius:9px;font:400 16px inherit;
+  background:var(--wl-surface);color:var(--wl-text)}
+.wl-fld input:focus,.wl-fld select:focus{outline:2px solid var(--wl-accent);outline-offset:-1px}
+.wl-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.wl-label{font-size:13.5px;font-weight:600;margin:4px 0 9px}
+.wl-picks{display:flex;flex-wrap:wrap;gap:7px}
+.wl-pick{border:1px solid rgba(128,128,128,.35);background:none;color:var(--wl-text);
+  border-radius:20px;padding:8px 13px;font:500 13px inherit;cursor:pointer}
+.wl-pick.on{background:var(--wl-accent);color:var(--wl-btn-text);border-color:var(--wl-accent);font-weight:600}
+.wl-checks{display:flex;gap:9px;flex-wrap:wrap}
+.wl-check{display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(128,128,128,.35);
+  border-radius:9px;padding:12px 15px;font-size:14px;font-weight:600;cursor:pointer}
+.wl-check.on{border-color:var(--wl-accent)}
+.wl-check input{accent-color:var(--wl-accent);width:16px;height:16px;margin:0}
+.wl-summary{margin-top:18px;border:1px solid rgba(128,128,128,.25);border-radius:10px;overflow:hidden}
+.wl-summary div{display:flex;justify-content:space-between;gap:14px;padding:11px 14px;font-size:13.5px;
+  border-bottom:1px solid rgba(128,128,128,.18)}
+.wl-summary div:last-child{border-bottom:0}
+.wl-summary span{opacity:.65}
+.wl-summary b{text-align:right;font-weight:600}
+.wl-actions{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:24px;flex-wrap:wrap}
+.wl-btn{background:var(--wl-accent);color:var(--wl-btn-text);border:0;border-radius:9px;
+  padding:14px 22px;font:700 15px inherit;cursor:pointer}
+.wl-btn:disabled{opacity:.45;cursor:not-allowed}
+.wl-btn-ghost{background:none;border:1px solid rgba(128,128,128,.4);color:var(--wl-text);
+  border-radius:9px;padding:13px 18px;font:600 14px inherit;cursor:pointer}
+.wl-fine{font-size:12.5px;opacity:.6;line-height:1.5;margin-top:10px}
+.wl-err{font-size:12.5px;color:#b1391f;margin-top:10px;font-weight:600}
+.wl-foot{margin-top:20px;font-size:12px;opacity:.5}
+.wl-done{text-align:center}
+.wl-done .wl-brand{justify-content:center}
+.wl-tick{color:var(--wl-accent);margin:6px 0 14px;display:flex;justify-content:center}
+.wl-done p{font-size:15px;opacity:.78;line-height:1.55;margin-top:10px}
+.wl-done .wl-btn{margin-top:22px}
+@media (max-width:560px){
+  .wl-card{padding:24px 20px}
+  .wl-row{grid-template-columns:1fr}
+  .wl-actions{flex-direction:column-reverse;align-items:stretch}
+  .wl-actions button{width:100%}
+}
+
+/* ===== theme editor ===== */
+.theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
+.theme-row{display:flex;flex-direction:column;gap:6px}
+.theme-label{font-size:12.5px;font-weight:600;color:var(--ink)}
+.theme-input{display:flex;align-items:center;gap:8px;border:1px solid var(--line);
+  border-radius:8px;padding:6px 8px;background:var(--card)}
+.theme-input input[type="color"]{width:30px;height:30px;border:0;padding:0;background:none;cursor:pointer;flex:none}
+.theme-hex{border:0;background:none;font:500 13px ui-monospace,monospace;color:var(--ink);
+  width:100%;min-width:0;text-transform:uppercase;outline:none}
+.theme-preview{margin-top:16px;border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.tp-bar{background:var(--paper);border-bottom:1px solid var(--line);padding:8px 12px;
+  font-size:11.5px;color:var(--ink-soft)}
+.tp-body{background:var(--wl-bg);padding:22px}
+.tp-card{background:var(--wl-surface);color:var(--wl-text);border-radius:10px;padding:18px;
+  box-shadow:0 8px 22px rgba(0,0,0,.10)}
+.tp-brand{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;margin-bottom:12px}
+.tp-h{font-size:16px;font-weight:700;letter-spacing:-.02em}
+.tp-p{font-size:12.5px;opacity:.7;margin-top:5px;line-height:1.45}
+.tp-field{height:32px;border:1px solid rgba(128,128,128,.3);border-radius:7px;margin-top:10px}
+.tp-btn{margin-top:14px;background:var(--wl-accent);color:var(--wl-btn-text);border-radius:8px;
+  padding:11px 16px;font-size:13.5px;font-weight:700;text-align:center}
+.theme-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin-top:14px;flex-wrap:wrap}
+.theme-link{font-size:13px;font-weight:600;color:var(--brand);text-decoration:underline;text-underline-offset:2px}
+@media (max-width:640px){.theme-grid{grid-template-columns:1fr}}
+
+/* "Powered by" + SubSub logo on the white-labeled sign-in / sign-up pages */
+.powered-by{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;
+  letter-spacing:.01em;opacity:.7}
+.powered-by > span{white-space:nowrap}
+.powered-by .ss-logo{position:relative;top:.5px}
+.wl-foot.powered-by{margin-top:20px;opacity:.6;color:var(--wl-text)}
+.login-foot .powered-by{opacity:.75}
+.bp-foot .powered-by{opacity:.85;font-size:10.5px}
 
 /* contractor: who they work for */
 .dash-hello .who-bar{margin-bottom:0;flex:none}
