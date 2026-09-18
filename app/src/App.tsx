@@ -4996,7 +4996,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
       </div>
       <p className="login-foot">
         <span className="powered">Powered by <strong>SubSub</strong></span>
-        <span className="login-demo-note">Demo build · no real authentication</span>
+        {!supabaseEnabled && <span className="login-demo-note">Demo build · no real authentication</span>}
       </p>
     </div>
   );
