@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- build: v9 2026-09-17 15:31 UTC -->
+<!-- build: v10 2026-09-18 01:13 UTC -->
 <meta charset="utf-8">
-<meta name="build" content="v9 2026-09-17 15:31 UTC">
+<meta name="build" content="v10 2026-09-18 01:13 UTC">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Subcontractor Management for General Contractors | SubSub</title>
 <meta name="description" content="Match subcontractor crews to jobs by trade, distance and availability, issue a work order per trade, and verify insurance and licences before you assign.">
@@ -342,6 +342,12 @@ body.nav-open{overflow:hidden}
   .cta-row{flex-direction:column;align-items:stretch}
   .cta-row .btn{width:100%;justify-content:center}
 }
+  .all-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:26px 28px;margin-top:40px}
+  .all-item h3{font-size:17px;letter-spacing:-.02em}
+  .all-item p{margin-top:8px;font-size:14.5px;color:var(--muted);line-height:1.55}
+  .all-item{padding-top:16px;border-top:2px solid var(--forest)}
+  @media (max-width:900px){.all-grid{grid-template-columns:1fr 1fr;gap:22px 24px}}
+  @media (max-width:600px){.all-grid{grid-template-columns:1fr}}
 </style>
 <style>
   .snap{background:#fff;border-radius:12px;overflow:hidden;color:var(--ink)}
@@ -383,14 +389,10 @@ body.nav-open{overflow:hidden}
 <meta property="og:site_name" content="SubSub">
 <meta property="og:title" content="Subcontractor Management for General Contractors | SubSub">
 <meta property="og:description" content="Match subcontractor crews to jobs by trade, distance and availability, issue a work order per trade, and verify insurance and licences before you assign.">
-<meta property="og:image" content="https://subsub.work/og-image.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
 <meta property="og:url" content="https://subsub.work/for-general-contractors.html">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Subcontractor Management for General Contractors | SubSub">
 <meta name="twitter:description" content="Match subcontractor crews to jobs by trade, distance and availability, issue a work order per trade, and verify insurance and licences before you assign.">
-<meta name="twitter:image" content="https://subsub.work/og-image.png">
 <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://subsub.work/#org","name":"SubSub","legalName":"SubSub, LLC","url":"https://subsub.work/","logo":"https://subsub.work/index.html","email":"legal@subsub.work","address":{"@type":"PostalAddress","streetAddress":"4616 25th Ave NE","addressLocality":"Seattle","addressRegion":"WA","postalCode":"98105","addressCountry":"US"}},{"@type":"SoftwareApplication","@id":"https://subsub.work/#software","name":"SubSub","applicationCategory":"BusinessApplication","operatingSystem":"Web browser","description":"Contractor management software for onboarding subcontractors, verifying insurance, bonds and state licences, scheduling crews and issuing work orders.","url":"https://subsub.work/","publisher":{"@id":"https://subsub.work/#org"},"offers":[{"@type":"Offer","name":"Basic","price":"0","priceCurrency":"USD","description":"Free for up to 3 subcontractors, 1 user and 5 jobs per month."},{"@type":"Offer","name":"Scale","price":"99","priceCurrency":"USD","description":"Unlimited subcontractors, users and jobs, plus your own branding. $990 per year paid annually."}]},{"@type":"WebPage","@id":"https://subsub.work/for-general-contractors.html","url":"https://subsub.work/for-general-contractors.html","name":"Subcontractor Management for General Contractors | SubSub","description":"Match subcontractor crews to jobs by trade, distance and availability, issue a work order per trade, and verify insurance and licences before you assign.","isPartOf":{"@id":"https://subsub.work/#software"},"publisher":{"@id":"https://subsub.work/#org"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://subsub.work/"},{"@type":"ListItem","position":2,"name":"For general contractors","item":"https://subsub.work/for-general-contractors.html"}]}]}</script>
 </head>
 <body>
@@ -489,6 +491,61 @@ body.nav-open{overflow:hidden}
         <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span><b>Measurements travel with the work order.</b> Upload the takeoff once and every crew on the job has it attached to theirs.</span></li>
         <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span><b>Signed work orders come back in.</b> Upload the countersigned copy against the work order it belongs to.</span></li>
         <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span><b>Your own sign-in address.</b> Subs log in at yourcompany.subsub.work with your logo on it, not ours.</span></li></ul>
+    </div>
+  </section>
+
+
+  <section class="sec sec-bone">
+    <div class="wrap">
+      <h2 class="h-lg" style="max-width:30ch">Everything else you get, whichever trade you’re filling.</h2>
+      <p class="lede" style="max-width:60ch">The matching is what you notice first. The rest is what keeps a job from stalling — and it works the same whether you sub out one trade or nine.</p>
+      <div class="all-grid">
+        <div class="all-item">
+          <h3>Onboarding</h3>
+          <p>Invite a subcontractor and they build their own profile — trades, coverage area, crews and
+            documents. You aren't retyping anything.</p>
+        </div>
+        <div class="all-item">
+          <h3>Document approval</h3>
+          <p>Insurance, bond, signed agreement and W-9, each checked against your requirements
+            line by line. Accept a limit below requirement with a recorded reason.</p>
+        </div>
+        <div class="all-item">
+          <h3>Licence verification</h3>
+          <p>WA L&amp;I registrations checked against public state records, which also report the
+            bond and insurance the state has on file.</p>
+        </div>
+        <div class="all-item">
+          <h3>Compliance monitoring</h3>
+          <p>Expiry tracked on every policy and registration, with automatic email and SMS
+            reminders. Anyone outstanding can't be assigned.</p>
+        </div>
+        <div class="all-item">
+          <h3>Crew scheduling</h3>
+          <p>Each crew keeps its own calendar, so you see which crew is free on the day rather
+            than whether the company is.</p>
+        </div>
+        <div class="all-item">
+          <h3>Work orders</h3>
+          <p>One per trade, numbered and dated, with its own scope and value. A response deadline
+            you set, and re-matching if nobody replies.</p>
+        </div>
+        <div class="all-item">
+          <h3>Labor warranty tracking</h3>
+          <p>Each subcontractor states their warranty term — 1–10 years or lifetime — and SubSub holds
+            it against every job they finish, so you know later whether a failure is covered.</p>
+        </div>
+        <div class="all-item">
+          <h3>Callbacks &amp; returns</h3>
+          <p>Raise a callback inside 30 days or a warranty claim after. They confirm the return
+            visit from their own dashboard.</p>
+        </div>
+        <div class="all-item">
+          <h3>Ratings that compound</h3>
+          <p>Rate each crew on each job. Ratings roll up to the company and feed straight back
+            into who gets matched next time.</p>
+        </div>
+      </div>
     </div>
   </section>
 
