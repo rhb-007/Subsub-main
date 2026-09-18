@@ -1631,6 +1631,19 @@ export default function SubSub() {
   // mode, identity already comes from the Supabase session that
   // signInWithPassword() just established, so this just asks who that is.
   async function handleLogin(email) {
+    // A self-serve contractor application (see LoginPage) stashes its
+    // target account here — consume it now, before getMe(), so the
+    // membership it creates exists in time to actually land somewhere.
+    // Covers both the immediate-session and email-confirmation-required
+    // Supabase configurations, since this runs on every real sign-in.
+    if (supabaseEnabled) {
+      let pending = null;
+      try { pending = JSON.parse(localStorage.getItem("subsub.pendingSignup") || "null"); } catch {}
+      if (pending?.subdomain) {
+        localStorage.removeItem("subsub.pendingSignup");
+        await api.selfSignup(pending.subdomain, pending.name).catch((err) => console.error("[self-signup] failed:", err));
+      }
+    }
     const result = await (supabaseEnabled ? api.getMe() : api.devLogin(email))
       .catch((err) => { console.error("[login] failed:", err); return null; });
     if (!result) return;
@@ -4911,17 +4924,21 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
   };
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
+  const [name, setName] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [resetSent, setResetSent] = useState(false);
-  // "Create an account" only ever creates the LOGIN — it does not create a
-  // membership anywhere. An admin has to have already added this email via
-  // Users → Add (or this be the very first person in a brand-new org's
-  // account) for signing in afterward to actually land anywhere; see
-  // resolveSupabaseUser() in worker/index.js, which links by email on
-  // first login rather than requiring a separate provisioning step.
+  // On a company's own subdomain (outerhome.subsub.work), "Create an
+  // account" is a real self-serve contractor application: it creates the
+  // login AND a bare contractor membership in that account (see
+  // /api/self-signup in worker/index.js), so they land straight in the app.
+  // On the generic app.subsub.work (no subdomain detected), there's no
+  // account to join, so it only creates the login — an admin still has to
+  // have added this email via Users → Add for it to land anywhere;
+  // resolveSupabaseUser() links the two by email on first sign-in.
   const [mode, setMode] = useState("signin"); // "signin" | "signup"
   const [signupSent, setSignupSent] = useState(false);
+  const onSubdomain = detectSubdomain();
 
   const submit = async () => {
     if (!supabaseEnabled) {
@@ -4940,6 +4957,13 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
       const { data, error } = await supabase.auth.signUp({ email: email.trim(), password: pw });
       setBusy(false);
       if (error) { setErr(error.message); return; }
+      // Stash which account this application is for — handleLogin() reads
+      // this (and clears it) the moment a real session exists, whether
+      // that's right now or after they click an emailed confirmation link
+      // and sign in separately later.
+      if (onSubdomain) {
+        try { localStorage.setItem("subsub.pendingSignup", JSON.stringify({ subdomain: onSubdomain, name: name.trim() || email.trim() })); } catch {}
+      }
       if (data.session) { onLogin(); return; } // email confirmation disabled — straight in
       setSignupSent(true); // otherwise Supabase mailed a confirmation link
       return;
@@ -4975,6 +4999,14 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
             </div>
           ) : (
             <>
+              {mode === "signup" && onSubdomain && (
+                <label className="fld">Your name
+                  <input type="text" autoComplete="name"
+                    value={name} onChange={(e) => setName(e.target.value)}
+                    placeholder="Jane Smith"
+                    onKeyDown={(e) => e.key === "Enter" && submit()} />
+                </label>
+              )}
               <label className="fld">Email
                 <input type="email" inputMode="email" autoComplete="username"
                   value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); setResetSent(false); }}
@@ -4990,7 +5022,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
               {err && <div className="login-err"><AlertTriangle size={13} /> {err}</div>}
               {resetSent && <div className="login-err" style={{ color: "var(--forest-lift)" }}><CheckCircle2 size={13} /> Check your email for a reset link.</div>}
               <button className="btn-solid login-btn" onClick={submit} disabled={busy}>
-                <Lock size={15} /> {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
+                <Lock size={15} /> {busy ? "Please wait…" : mode === "signup" ? (onSubdomain ? "Apply" : "Create account") : "Sign in"}
               </button>
               {mode === "signin" ? (
                 <button className="login-forgot" onClick={forgotPassword}>
@@ -4999,7 +5031,8 @@ function LoginPage({ users, brand, accounts, memberships, onLogin }) {
               ) : null}
               {supabaseEnabled && (
                 <button className="login-forgot" onClick={() => { setMode(mode === "signup" ? "signin" : "signup"); setErr(""); }}>
-                  {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
+                  {mode === "signup" ? "Already have an account? Sign in"
+                    : onSubdomain ? `New here? Apply to work with ${brand.name}` : "New here? Create an account"}
                 </button>
               )}
             </>

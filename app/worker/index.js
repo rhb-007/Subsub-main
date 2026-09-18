@@ -74,13 +74,18 @@ const uid = () => crypto.randomUUID();
 // matters) and resolves it to an internal users row, linking by email on
 // first login if one exists but auth_id hasn't been set yet. Returns null
 // on any failure — every caller turns that into its own 401/403.
-async function resolveSupabaseUser(env, authHeader) {
+async function verifySupabaseToken(env, authHeader) {
   if (!authHeader?.startsWith("Bearer ")) return null;
   const supaRes = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
     headers: { Authorization: authHeader, apikey: env.SUPABASE_ANON_KEY },
   });
   if (!supaRes.ok) return null;
-  const supaUser = await supaRes.json();
+  return supaRes.json(); // { id, email, ... } — Supabase's own user object
+}
+
+async function resolveSupabaseUser(env, authHeader) {
+  const supaUser = await verifySupabaseToken(env, authHeader);
+  if (!supaUser) return null;
 
   let user = await env.DB.prepare(`SELECT * FROM users WHERE auth_id = ?`).bind(supaUser.id).first();
   if (!user && supaUser.email) {
@@ -107,7 +112,13 @@ app.use("/api/*", async (c, next) => {
   // Cron Trigger target with no user session at all — it does its own
   // CRON_SECRET bearer check inline instead (was dead code behind this
   // middleware until this exemption: every call 401'd before reaching it).
-  if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
+  // /api/self-signup is exempted for the same shape of reason as /me: a
+  // brand-new contractor signing up on a company's subdomain has a real,
+  // verified Supabase identity but by definition no membership yet — the
+  // membership row is exactly what this route creates. It does its own
+  // token verification inline (see verifySupabaseToken above).
+  if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path === "/api/self-signup"
+    || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
 
   const accountId = c.req.header("X-Account-Id");
   let userId;
@@ -181,6 +192,58 @@ app.get("/api/auth/me", async (c) => {
   const user = await resolveSupabaseUser(c.env, c.req.header("Authorization"));
   if (!user) return c.json({ error: "unauthenticated" }, 401);
   return c.json(await loginResponse(c.env.DB, user));
+});
+
+// Self-serve contractor application: someone with a fresh, verified
+// Supabase identity but no internal users/membership row yet, applying to
+// join the account behind whichever subdomain they signed up on. Creates a
+// bare company profile (documents incomplete, same starting state as an
+// admin's minimal "add a sub") + an engagement + a contractor membership,
+// so they land straight in the app afterward exactly like an invited
+// contractor would. Idempotent: re-posting for an account they're already
+// a member of just confirms rather than duplicating anything.
+app.post("/api/self-signup", async (c) => {
+  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) return c.json({ error: "auth_not_configured" }, 501);
+  const supaUser = await verifySupabaseToken(c.env, c.req.header("Authorization"));
+  if (!supaUser) return c.json({ error: "unauthenticated" }, 401);
+
+  const body = await c.req.json().catch(() => ({}));
+  const subdomain = (body.subdomain || "").trim().toLowerCase();
+  const name = (body.name || "").trim() || supaUser.email;
+  if (!subdomain) return c.json({ error: "missing_subdomain" }, 400);
+
+  const account = await c.env.DB.prepare(`SELECT id FROM accounts WHERE subdomain = ?`).bind(subdomain).first();
+  if (!account) return c.json({ error: "unknown_account" }, 404);
+
+  let user = await c.env.DB.prepare(`SELECT * FROM users WHERE auth_id = ?`).bind(supaUser.id).first();
+  if (!user && supaUser.email) {
+    user = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(supaUser.email).first();
+    if (user) await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ?`).bind(supaUser.id, user.id).run();
+  }
+  if (!user) {
+    const userId = uid();
+    await c.env.DB.prepare(`INSERT INTO users (id, auth_id, name, email) VALUES (?, ?, ?, ?)`)
+      .bind(userId, supaUser.id, name, supaUser.email).run();
+    user = { id: userId };
+  }
+
+  const existing = await c.env.DB.prepare(
+    `SELECT * FROM memberships WHERE user_id = ? AND account_id = ?`
+  ).bind(user.id, account.id).first();
+  if (existing) return c.json({ ok: true, alreadyMember: true });
+
+  const companyId = uid();
+  await c.env.DB.prepare(
+    `INSERT INTO companies (id, company, contact, email) VALUES (?, ?, ?, ?)`
+  ).bind(companyId, name, name, supaUser.email).run();
+  await c.env.DB.prepare(
+    `INSERT INTO engagements (id, account_id, company_id, status) VALUES (?, ?, ?, 'active')`
+  ).bind(uid(), account.id, companyId).run();
+  await c.env.DB.prepare(
+    `INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, 'contractor', ?)`
+  ).bind(uid(), user.id, account.id, companyId).run();
+
+  return c.json({ ok: true, alreadyMember: false });
 });
 
 // This account's members (admin/pm/contractor), composed with the person's

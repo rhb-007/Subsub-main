@@ -138,6 +138,25 @@ verified it now round-trips through the API the same as insurance/bond/contract.
      + email-invite someone directly from the Worker instead of them
      self-registering — not built, since the self-serve path above covers
      the same need without a second secret to manage.)
+   - **Each account's own subdomain is a real, self-serve contractor
+     application page**, not just a login form. Visiting
+     `outerhome.subsub.work` shows Outerhome's own name/logo (see
+     `GET /api/account-by-subdomain/:subdomain`, public, exists only to
+     supply that pre-login branding) instead of generic branding, and
+     "New here? Apply to work with Outerhome" creates a real, bare-bones
+     contractor membership in Outerhome specifically — a company profile
+     with "documents incomplete", same starting state as an admin's
+     minimal add-a-sub — via `POST /api/self-signup`, landing them straight
+     in the app afterward. This only activates when a real subdomain is
+     detected (`detectSubdomain()` in `src/App.tsx`); the generic
+     `app.subsub.work` entry point has no company to attach to, so sign-up
+     there still falls back to the invite-only behavior above. Getting a
+     real company onto its own subdomain requires two things beyond what's
+     described here: a real `accounts` row with that `subdomain` value, and
+     adding e.g. `outerhome.subsub.work` as an *additional* custom domain
+     on the same Pages project `app.subsub.work` already uses (they all
+     serve the same frontend build; the hostname alone decides the
+     branding and sign-up behavior at runtime).
    - **The demo-account picker and "Switch user" menu disappear** once
      `supabaseEnabled` is true — they were always dev-only conveniences,
      and letting anyone become anyone else with a menu click makes no
