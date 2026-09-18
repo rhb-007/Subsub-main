@@ -22,7 +22,7 @@ compatibility_date = "2026-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "subsub-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "b8874422-45db-48de-9c6b-3bc0819736cc"
 
 # Filled in after you run `wrangler r2 bucket create subsub-files`.
 [[r2_buckets]]
