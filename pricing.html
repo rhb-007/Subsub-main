@@ -319,6 +319,12 @@ body.nav-open{overflow:hidden}
   nav.top a[aria-current]{background:var(--forest-lift)}
   nav.top a.keep{margin:20px 30px 0;text-align:center;justify-content:center;
     border-bottom:0;font-size:16px;padding:15px 20px}
+  /* The outlined CTA reads fine in the desktop header, but its border is the
+     same near-invisible line color as the drawer background — so inside the
+     drawer it becomes the solid gold button every other page's drawer has.
+     Label color is left to nav.top a above, so it matches those pages. */
+  nav.top a.keep.btn-ghost-d{background:var(--gold);border-color:var(--gold)}
+  nav.top a.keep.btn-ghost-d:hover{background:var(--gold-dk);border-color:var(--gold-dk)}
 }
 
 @media (max-width:560px){
