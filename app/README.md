@@ -172,3 +172,65 @@ instead of this directory's config unless told otherwise.
 See `worker/schema.sql` for the full schema and inline comments, and
 `DEPLOYMENT.pdf` for the reasoning behind it (the identity model, WA L&I
 license verification, work-order immutability, suggested phased rollout).
+
+## Expanding license verification beyond Washington
+
+`STATE_LICENSING_APIS.md` surveys all 49 other states + DC for the same
+thing the WA integration already does: open contractor-license data, a
+public lookup tool if not, or a commercial aggregator shortcut. Short
+version — **Oregon** is the closest match to WA's pattern (one Socrata
+dataset with license + bond + insurance together); Connecticut, Iowa,
+Illinois, Texas, and DC have real open APIs but each with real scope
+caveats (wrong trade, missing fields, or no GC license in that state at
+all — read the doc before trusting any of them); most states (~30) have
+only a public lookup tool with no API; and roughly 11 states have no
+state-level GC licensing at all. Every claim in that doc is flagged
+"reported, not verified" — the research session hit the same network block
+this one does (blocked from `data.wa.gov`-equivalent hosts in every other
+state too), so it's built from search results, not live fetches.
+
+**Now actually wired up (`worker/index.js`), not just researched:**
+`POST /api/subs/:companyId/verify-license` and the nightly
+`GET /api/cron/license-sweep` both dispatch on the company's own `state`
+column (falling back to `WA`) through `verifyLicenseForState()` — WA,
+Oregon, Connecticut, Iowa, Illinois, and Texas via a shared
+`verifySocrataState()` (config-driven per state: base URL, license-number
+field, dataset ids, a response `map()`), DC via its own `verifyDC()`
+(ArcGIS, not Socrata), and anything else returns a clean
+`{status:"UNSUPPORTED_STATE", supportedStates:[...]}` rather than an error.
+Every `license_checks` row now records which `state` it checked and a
+`field_mapping_verified` flag — **`1` only for WA**, whose field names come
+from confirmed dataset knowledge; every other state's `map()` is a
+best-effort guess from search results, same caveat as the doc above. The
+full raw response is always stored alongside the mapped fields, so a wrong
+guess is recoverable without re-querying the source.
+
+**What's verified vs. not:** the dispatch logic, the per-state config
+shape, and the DB writes are all confirmed correct — end-to-end, including
+against the actual local D1 (`state` and `field_mapping_verified` columns
+populate correctly, `UNSUPPORTED_STATE` returns cleanly for an unhandled
+code, the cron sweep only flags real status changes). What's **not**
+verified is any live state dataset's actual field names beyond WA's,
+because this sandbox can't reach `data.oregon.gov`, `data.ct.gov`, or any
+other state's open-data host any more than it could reach `data.wa.gov`.
+Fixed a real bug found while confirming this: `verifySocrataState()` and
+`verifyDC()` used to call `.json()` directly on the fetch response, so any
+non-JSON reply (a block page, a rate-limit response, an outage page —
+exactly what this sandbox's own network policy returns) threw an unhandled
+`SyntaxError` and 500'd the whole request. Both now go through a shared
+`fetchJsonSafe()` and degrade to a `{status:"CHECK_FAILED", error}` result
+instead — confirmed locally by watching a real `data.wa.gov` call get
+blocked by this sandbox and come back as a clean `CHECK_FAILED` response,
+not a crash. Also fixed: `GET /api/cron/license-sweep` was unreachable
+outright — the global `/api/*` auth middleware ran before its own
+`CRON_SECRET` bearer check and always 401'd first, so the cron target has
+never actually worked. It's now exempted from that middleware like
+`/api/logo/:accountId` already was, and a local `.dev.vars`-based test with
+a real `CRON_SECRET` confirms it now correctly rejects a wrong secret and
+runs the real sweep with the right one.
+
+**Do the same WA-style sanity check** (curl each dataset's `.json`
+endpoint, confirm field names against what `map()` assumes) before
+trusting any non-WA state's `field_mapping_verified: false` result in
+production — the `raw` column on every `license_checks` row has exactly
+what you need to compare against.

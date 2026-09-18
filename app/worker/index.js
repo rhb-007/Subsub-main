@@ -100,8 +100,11 @@ app.use("/api/*", async (c, next) => {
   // /api/auth/me and /api/auth/dev-login are also exempted: both exist
   // specifically to discover which accounts a person can choose from
   // *before* any X-Account-Id is known, so they can't require one — they
-  // do their own (lighter) verification inline instead.
-  if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path.startsWith("/api/logo/")) return next();
+  // do their own (lighter) verification inline instead. /api/cron/* is a
+  // Cron Trigger target with no user session at all — it does its own
+  // CRON_SECRET bearer check inline instead (was dead code behind this
+  // middleware until this exemption: every call 401'd before reaching it).
+  if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/")) return next();
 
   const accountId = c.req.header("X-Account-Id");
   let userId;
@@ -429,66 +432,200 @@ app.patch("/api/subs/:companyId", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// License verification — WA L&I open data (data.wa.gov), no key required.
+// License verification. WA (L&I, data.wa.gov) was the original, hand-built
+// integration and its field names come from confirmed dataset knowledge.
+// The other six states below (STATE_LICENSING_APIS.md's "Tier 1") are new:
+// their dataset IDs and field names are best-effort, from search results,
+// NOT a live schema check — this sandbox's network policy blocks
+// *.state-domains the same way it blocks data.wa.gov, so none of this has
+// been exercised against a live response. Every result carries
+// `fieldMappingVerified` so callers (and the UI) can tell confirmed WA
+// parsing apart from best-effort parsing elsewhere, and the full raw
+// response is always stored — if a field name below is wrong, the raw
+// data is still there to fix it from, not lost.
+//
+// Coverage caveats worth knowing before trusting a result, from the
+// survey doc: CT/IA have no insurance or bond fields at all (registration-
+// only); IL's dataset only covers roofing (Illinois has no general
+// contractor license); TX's TDLR dataset has NO general-contractor
+// license at all (only trades like electrical/HVAC); DC's is a general
+// business-license registry, not a dedicated contractor board.
 // ---------------------------------------------------------------------------
-const LNI = "https://data.wa.gov/resource";
-const LNI_DATASETS = { general: "m8qx-ubtq", insurance: "ciwg-agsx", bond: "bzff-4fmt" };
 
-async function verifyLicenseWithLNI(licenseNumber) {
-  const q = `?contractorlicensenumber=${encodeURIComponent(licenseNumber)}`;
-  const [general, insurance, bond] = await Promise.all([
-    fetch(`${LNI}/${LNI_DATASETS.general}.json${q}`).then((r) => r.json()),
-    fetch(`${LNI}/${LNI_DATASETS.insurance}.json${q}`).then((r) => r.json()),
-    fetch(`${LNI}/${LNI_DATASETS.bond}.json${q}`).then((r) => r.json()),
-  ]);
-  const lic = general[0];
-  if (!lic) return { found: false };
+const SOCRATA_STATES = {
+  WA: {
+    base: "https://data.wa.gov/resource", licenseField: "contractorlicensenumber",
+    datasets: { general: "m8qx-ubtq", insurance: "ciwg-agsx", bond: "bzff-4fmt" },
+    fieldMappingVerified: true,
+    map: (lic, insuranceRows, bondRows) => {
+      const today = new Date().toISOString().slice(0, 10);
+      const current = (rows, endField) =>
+        rows.filter((r) => !r.cancel_date && (!r[endField] || r[endField].slice(0, 10) >= today))
+          .sort((a, b) => (b.effective_date || "").localeCompare(a.effective_date || ""))[0] || null;
+      return {
+        businessName: lic.businessname, status: lic.contractorlicensestatus,
+        licenseType: lic.contractorlicensetypecodedesc, ubi: lic.ubi,
+        effectiveDate: lic.licenseeffectivedate?.slice(0, 10),
+        expirationDate: lic.licenseexpirationdate?.slice(0, 10),
+        suspendDate: lic.contractorlicensesuspenddate?.slice(0, 10) || null,
+        principal: lic.primaryprincipalname,
+        insurance: current(insuranceRows, "insurance_expiration_date"),
+        bond: current(bondRows, "bond_expiration_date"),
+      };
+    },
+  },
+  OR: {
+    base: "https://data.oregon.gov/resource", licenseField: "ccb_number",
+    datasets: { general: "g77e-6bhs" }, fieldMappingVerified: false,
+    // Single dataset reportedly carries bond + insurance inline — no
+    // second/third fetch needed if this field mapping holds up.
+    map: (lic) => ({
+      businessName: lic.business_name || lic.dba_name, status: lic.status,
+      licenseType: lic.endorsement || lic.license_type,
+      effectiveDate: lic.issue_date?.slice(0, 10), expirationDate: lic.expiration_date?.slice(0, 10),
+      suspendDate: null, principal: lic.principal_name,
+      insurance: lic.insurance_company ? { insurance_company: lic.insurance_company, coverage_amount: lic.insurance_amount } : null,
+      bond: lic.bond_company ? { surety_company: lic.bond_company, bond_amount: lic.bond_amount } : null,
+    }),
+  },
+  CT: {
+    base: "https://data.ct.gov/resource", licenseField: "license_number",
+    datasets: { general: "5r9m-qgni" }, fieldMappingVerified: false,
+    map: (lic) => ({
+      businessName: lic.business_name, status: lic.license_status, licenseType: "Home Improvement Contractor",
+      effectiveDate: lic.issue_date?.slice(0, 10), expirationDate: lic.expiration_date?.slice(0, 10),
+      suspendDate: null, principal: null, insurance: null, bond: null, // CT dataset has no bond/insurance fields
+    }),
+  },
+  IA: {
+    base: "https://data.iowa.gov/resource", licenseField: "registration_number",
+    datasets: { general: "dpf3-iz94" }, fieldMappingVerified: false,
+    map: (lic) => ({
+      businessName: lic.business_name, status: "ACTIVE", // dataset is pre-filtered to active-only
+      licenseType: lic.primary_activity,
+      effectiveDate: lic.issue_date?.slice(0, 10), expirationDate: lic.expire_date?.slice(0, 10),
+      suspendDate: null, principal: [lic.first_name, lic.last_name].filter(Boolean).join(" ") || null,
+      insurance: null, bond: null, // registration roster only — no bond/insurance in this dataset
+    }),
+  },
+  IL: {
+    base: "https://data.illinois.gov/resource", licenseField: "license_number",
+    datasets: { general: "pzzh-kp68" }, fieldMappingVerified: false,
+    // No statewide GC license in Illinois — this only covers roofing
+    // contractors within IDFPR's combined 100+-profession dataset.
+    map: (lic) => ({
+      businessName: lic.name || lic.business_name, status: lic.license_status,
+      licenseType: lic.profession || "Roofing Contractor",
+      effectiveDate: lic.original_issue_date?.slice(0, 10), expirationDate: lic.expiration_date?.slice(0, 10),
+      suspendDate: null, principal: null, insurance: null, bond: null,
+    }),
+  },
+  TX: {
+    base: "https://data.texas.gov/resource", licenseField: "license_number",
+    datasets: { general: "7358-krk7" }, fieldMappingVerified: false,
+    // Texas has NO general-contractor license — only useful for
+    // TDLR-regulated trades (electrical, HVAC, etc).
+    map: (lic) => ({
+      businessName: lic.business_name || lic.licensee_name, status: lic.license_status,
+      licenseType: lic.license_type || lic.endorsement,
+      effectiveDate: lic.original_issue_date?.slice(0, 10), expirationDate: lic.expiration_date?.slice(0, 10),
+      suspendDate: null, principal: null, insurance: null, bond: null,
+    }),
+  },
+};
 
-  const today = new Date().toISOString().slice(0, 10);
-  const current = (rows, endField) =>
-    rows.filter((r) => !r.cancel_date && (!r[endField] || r[endField].slice(0, 10) >= today))
-      .sort((a, b) => (b.effective_date || "").localeCompare(a.effective_date || ""))[0] || null;
+// Datasets are public open-data endpoints outside our control — a block
+// page, rate-limit response, or outage can come back as non-JSON even on a
+// 200. Never let that throw past this function; surface it as a check
+// failure instead of a 500.
+async function fetchJsonSafe(url) {
+  let resp;
+  try {
+    resp = await fetch(url);
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+  const text = await resp.text();
+  if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}: ${text.slice(0, 200)}` };
+  try {
+    return { ok: true, data: JSON.parse(text) };
+  } catch {
+    return { ok: false, error: `non-JSON response: ${text.slice(0, 200)}` };
+  }
+}
 
+async function verifySocrataState(cfg, licenseNumber) {
+  const q = `?${cfg.licenseField}=${encodeURIComponent(licenseNumber)}`;
+  const rows = {};
+  for (const [key, id] of Object.entries(cfg.datasets)) {
+    const res = await fetchJsonSafe(`${cfg.base}/${id}.json${q}`);
+    if (!res.ok) return { found: false, status: "CHECK_FAILED", error: res.error, fieldMappingVerified: cfg.fieldMappingVerified };
+    rows[key] = res.data;
+  }
+  const lic = rows.general?.[0];
+  if (!lic) return { found: false, fieldMappingVerified: cfg.fieldMappingVerified };
+  return { found: true, fieldMappingVerified: cfg.fieldMappingVerified, raw: lic, ...cfg.map(lic, rows.insurance || [], rows.bond || []) };
+}
+
+// DC: ArcGIS Feature Service, not Socrata — different query shape entirely.
+async function verifyDC(licenseNumber) {
+  const url = "https://maps2.dcgis.dc.gov/dcgis/rest/services/FEEDS/DCRA/FeatureServer/0/query"
+    + `?where=${encodeURIComponent(`LICENSENUMBER='${licenseNumber.replace(/'/g, "''")}'`)}`
+    + "&outFields=*&f=json";
+  const res = await fetchJsonSafe(url);
+  if (!res.ok) return { found: false, status: "CHECK_FAILED", error: res.error, fieldMappingVerified: false };
+  const attrs = res.data?.features?.[0]?.attributes;
+  if (!attrs) return { found: false, fieldMappingVerified: false };
+  const esriDate = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : null);
   return {
-    found: true,
-    businessName: lic.businessname,
-    status: lic.contractorlicensestatus,
-    licenseType: lic.contractorlicensetypecodedesc,
-    ubi: lic.ubi,
-    effectiveDate: lic.licenseeffectivedate?.slice(0, 10),
-    expirationDate: lic.licenseexpirationdate?.slice(0, 10),
-    suspendDate: lic.contractorlicensesuspenddate?.slice(0, 10) || null,
-    principal: lic.primaryprincipalname,
-    insurance: current(insurance, "insurance_expiration_date"),
-    bond: current(bond, "bond_expiration_date"),
+    found: true, fieldMappingVerified: false, raw: attrs,
+    businessName: attrs.BUSINESSNAME || attrs.LICENSEE, status: attrs.LICENSESTATUS,
+    licenseType: attrs.LICENSECATEGORY || attrs.LICENSETYPE,
+    effectiveDate: esriDate(attrs.ISSUEDATE), expirationDate: esriDate(attrs.EXPIRATIONDATE),
+    suspendDate: null, principal: null, insurance: null, bond: null,
   };
 }
 
-app.post("/api/subs/:companyId/verify-license", requireRole("admin", "pm"), async (c) => {
-  const companyId = c.req.param("companyId");
-  const company = await c.env.DB.prepare(`SELECT license FROM companies WHERE id = ?`).bind(companyId).first();
-  if (!company?.license) return c.json({ error: "no_license_on_file" }, 400);
+async function verifyLicenseForState(state, licenseNumber) {
+  const code = (state || "").trim().toUpperCase();
+  if (code === "DC") return verifyDC(licenseNumber);
+  const cfg = SOCRATA_STATES[code];
+  if (!cfg) return { found: false, status: "UNSUPPORTED_STATE", supportedStates: [...Object.keys(SOCRATA_STATES), "DC"] };
+  return verifySocrataState(cfg, licenseNumber);
+}
 
-  const result = await verifyLicenseWithLNI(company.license);
-
-  await c.env.DB.prepare(
+async function storeLicenseCheck(db, companyId, state, result) {
+  await db.prepare(
     `INSERT INTO license_checks
-      (company_id, status, license_type, effective_date, expiration_date, suspend_date,
-       bond_amount_cents, bond_surety, insurance_coverage_cents, insurance_carrier, raw)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (company_id, state, status, license_type, effective_date, expiration_date, suspend_date,
+       bond_amount_cents, bond_surety, insurance_coverage_cents, insurance_carrier, field_mapping_verified, raw)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    companyId, result.status ?? "NOT_FOUND", result.licenseType ?? null,
+    companyId, state, result.status ?? (result.found ? null : "NOT_FOUND"), result.licenseType ?? null,
     result.effectiveDate ?? null, result.expirationDate ?? null, result.suspendDate ?? null,
     result.bond ? Math.round(Number(result.bond.bond_amount || 0) * 100) : null,
     result.bond?.surety_company ?? null,
     result.insurance ? Math.round(Number(result.insurance.coverage_amount || 0) * 100) : null,
     result.insurance?.insurance_company ?? null,
+    result.fieldMappingVerified ? 1 : 0,
     JSON.stringify(result)
   ).run();
-
-  await c.env.DB.prepare(`UPDATE companies SET license_check = ? WHERE id = ?`)
+  await db.prepare(`UPDATE companies SET license_check = ? WHERE id = ?`)
     .bind(JSON.stringify(result), companyId).run();
+}
 
+app.post("/api/subs/:companyId/verify-license", requireRole("admin", "pm"), async (c) => {
+  const companyId = c.req.param("companyId");
+  const company = await c.env.DB.prepare(`SELECT license, state FROM companies WHERE id = ?`).bind(companyId).first();
+  if (!company?.license) return c.json({ error: "no_license_on_file" }, 400);
+  // Best available proxy for "which state issued this license" — the
+  // company's own business-address state. Add a dedicated license_state
+  // column later if a company's licensing state can differ from its
+  // mailing address in practice.
+  const state = (company.state || "WA").trim().toUpperCase();
+
+  const result = await verifyLicenseForState(state, company.license);
+  await storeLicenseCheck(c.env.DB, companyId, state, result);
   return c.json(result);
 });
 
@@ -859,21 +996,16 @@ app.put("/api/uploads/:kind/:fileName", async (c) => {
 app.get("/api/cron/license-sweep", async (c) => {
   if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
   const { results: companies } = await c.env.DB.prepare(
-    `SELECT id, license, license_check FROM companies WHERE license IS NOT NULL AND license != ''`
+    `SELECT id, license, state, license_check FROM companies WHERE license IS NOT NULL AND license != ''`
   ).all();
 
   const flagged = [];
   for (const co of companies) {
     const prevStatus = parseJson(co.license_check)?.status;
-    const result = await verifyLicenseWithLNI(co.license);
+    const state = (co.state || "WA").trim().toUpperCase();
+    const result = await verifyLicenseForState(state, co.license);
     if (result.status && result.status !== prevStatus) flagged.push({ companyId: co.id, from: prevStatus, to: result.status });
-    await c.env.DB.prepare(
-      `INSERT INTO license_checks (company_id, status, license_type, effective_date, expiration_date, suspend_date, raw)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(co.id, result.status ?? "NOT_FOUND", result.licenseType ?? null, result.effectiveDate ?? null,
-      result.expirationDate ?? null, result.suspendDate ?? null, JSON.stringify(result)).run();
-    await c.env.DB.prepare(`UPDATE companies SET license_check = ? WHERE id = ?`)
-      .bind(JSON.stringify(result), co.id).run();
+    await storeLicenseCheck(c.env.DB, co.id, state, result);
   }
   return c.json({ checked: companies.length, flagged });
 });

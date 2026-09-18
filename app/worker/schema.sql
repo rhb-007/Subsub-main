@@ -163,7 +163,8 @@ CREATE INDEX idx_wo_engagement ON work_orders(engagement_id);
 CREATE TABLE license_checks (
   id                        INTEGER PRIMARY KEY AUTOINCREMENT,
   company_id                TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  status                    TEXT,      -- ACTIVE / EXPIRED / SUSPENDED / NOT_FOUND
+  state                     TEXT,      -- which state's registry this check ran against (WA, OR, CT, IA, IL, TX, DC)
+  status                    TEXT,      -- ACTIVE / EXPIRED / SUSPENDED / NOT_FOUND / UNSUPPORTED_STATE
   license_type              TEXT,
   effective_date            TEXT,
   expiration_date           TEXT,
@@ -172,7 +173,11 @@ CREATE TABLE license_checks (
   bond_surety               TEXT,
   insurance_coverage_cents  INTEGER,
   insurance_carrier         TEXT,
-  raw                       TEXT,      -- full JSON response
+  field_mapping_verified    INTEGER NOT NULL DEFAULT 0,  -- see STATE_LICENSING_APIS.md — only WA's field
+                                                          -- names come from confirmed dataset knowledge;
+                                                          -- every other state's are best-effort guesses
+                                                          -- from search results, not a live schema check
+  raw                       TEXT,      -- full JSON response — the source of truth if the mapping above is wrong
   checked_at                TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_license_checks_company ON license_checks(company_id, checked_at);
