@@ -2,6 +2,20 @@ name = "subsub-api"
 main = "worker/index.js"
 compatibility_date = "2026-01-01"
 
+# Keep variables set in the Cloudflare dashboard.
+#
+# Without this, every deploy deletes all plain-text vars and replaces them with
+# whatever this file declares -- which is none. Since the Worker rebuilds on
+# every push, dashboard-set values survived only until the next commit. That is
+# not theoretical: it silently wiped SUPABASE_URL and SUPABASE_ANON_KEY between
+# a working check and a real signup, so the signup created an account with no
+# login attached and the failure surfaced much later as "invalid login
+# credentials".
+#
+# Secrets were never affected -- Wrangler does not touch those. This makes
+# plain vars behave the same way.
+keep_vars = true
+
 # Real auth (Supabase). Deliberately NOT set here as a plain [vars] block,
 # even though both values are safe to be non-secret (the anon key is meant
 # to be public) — if they were always-on in this checked-in file, local
