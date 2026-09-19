@@ -12,4 +12,20 @@ export const supabaseEnabled = !!(url && anonKey);
 
 // Only constructed when both env vars are actually set, so local dev without
 // them falls back to the dev-stub auth (see lib/api.js) instead of crashing.
-export const supabase = supabaseEnabled ? createClient(url, anonKey) : null;
+// The session persistence options are spelled out rather than left to
+// defaults, because they are the difference between closing a tab and being
+// signed out. A session lives in localStorage and the access token refreshes
+// itself in the background; nothing here expires a session for being away
+// from the browser, which is a thing to do deliberately (and per-account) if
+// it is ever wanted, not by accident.
+export const supabase = supabaseEnabled
+  ? createClient(url, anonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        // Read the tokens Supabase leaves in the URL after a confirmation or
+        // reset link, then take them out of the address bar.
+        detectSessionInUrl: true,
+      },
+    })
+  : null;

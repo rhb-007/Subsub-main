@@ -2120,28 +2120,47 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inviteToken]);
 
-  // Resume a session across reloads — this is the whole point of Phase 1.
-  // The saved auth headers are enough for every other request; this just
-  // rebuilds the `accounts`/`users`/`memberships` state that normally comes
-  // from the dev-login response.
-  useEffect(() => {
+  // Resume a session across reloads. A signed-in person stays signed in:
+  // Supabase keeps the session in this browser and refreshes the access token
+  // itself, so closing a tab, closing the laptop or coming back tomorrow
+  // costs nothing. Nothing here ends a session for being away.
+  const [resumeFailed, setResumeFailed] = useState(false);
+
+  const resumeSession = async () => {
     const saved = getAuth();
     if (!saved?.userId || !saved?.accountId) return;
-    (async () => {
-      const acct = await api.getAccount().catch((err) => { console.error("[resume] failed:", err); return null; });
-      if (!acct) { clearAuth(); return; }
-      setAccounts((prev) => [...prev.filter((a) => a.id !== acct.id), {
-        id: acct.id, name: acct.name, subdomain: acct.subdomain, kind: acct.kind,
-        plan: acct.plan, billing: acct.billing,
-        logoData: acct.logoKey ? logoUrl(acct.id) : null, useDefaultMark: acct.useDefaultMark,
-        theme: acct.theme, trades: acct.trades,
-      }]);
-      if (acct.user) setUsers((prev) => [...prev.filter((u) => u.id !== acct.user.id), acct.user]);
-      setCurrentUserId(saved.userId);
-      setCurrentAccountId(saved.accountId);
-      setLoggedIn(true);
-      await hydrateAccount(saved.accountId, saved.userId);
-    })();
+    setResumeFailed(false);
+
+    let acct;
+    try {
+      acct = await api.getAccount();
+    } catch (err) {
+      console.error("[resume] failed:", err);
+      // Only a refusal means the session is genuinely over. A 500, a timeout
+      // or a dropped connection means the server had a bad moment, and
+      // throwing the session away over that is how somebody ends up signed
+      // out by a bug they did not cause -- with no way to tell that from
+      // having been logged out on purpose.
+      if (err?.status === 401 || err?.status === 403) clearAuth();
+      else setResumeFailed(true);
+      return;
+    }
+
+    setAccounts((prev) => [...prev.filter((a) => a.id !== acct.id), {
+      id: acct.id, name: acct.name, subdomain: acct.subdomain, kind: acct.kind,
+      plan: acct.plan, billing: acct.billing,
+      logoData: acct.logoKey ? logoUrl(acct.id) : null, useDefaultMark: acct.useDefaultMark,
+      theme: acct.theme, trades: acct.trades,
+    }]);
+    if (acct.user) setUsers((prev) => [...prev.filter((u) => u.id !== acct.user.id), acct.user]);
+    setCurrentUserId(saved.userId);
+    setCurrentAccountId(saved.accountId);
+    setLoggedIn(true);
+    await hydrateAccount(saved.accountId, saved.userId);
+  };
+
+  useEffect(() => {
+    resumeSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2151,6 +2170,26 @@ export default function SubSub() {
     if (loggedIn && tab === "properties" && !hasProperties(account)) setTab("dashboard");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account.id, account.kind, loggedIn, tab]);
+
+  if (!loggedIn && resumeFailed) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <div className="wl-page">
+          <div className="wl-card wl-done">
+            <h1>Can't reach SubSub</h1>
+            <p className="wl-lede">
+              You're still signed in — we just couldn't load your account. Check your
+              connection and try again.
+            </p>
+            <button className="wl-btn" onClick={() => resumeSession()}>Try again</button>
+            <button className="wl-btn-ghost" style={{ marginTop: 10 }}
+              onClick={() => { clearAuth(); setResumeFailed(false); }}>Sign out</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!loggedIn && inviteToken && !invite && !inviteErr) {
     return (
@@ -5437,7 +5476,7 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
       <div className="gs-head">
         <div>
           <h3>Get set up</h3>
-          <p>{doneCount} of {steps.length} done</p>
+          <p>Progress · {doneCount} of {steps.length} done</p>
         </div>
         <button className="gs-hide" onClick={dismiss} title="Hide this" aria-label="Hide this">
           <X size={15} />
