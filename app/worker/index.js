@@ -96,7 +96,7 @@ async function resolveSupabaseUser(env, authHeader) {
     // First real login for someone who already has an internal users row
     // (seeded, or added via the invite flow before they'd signed up) —
     // link it by email instead of requiring a separate provisioning step.
-    user = await env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(supaUser.email).first();
+    user = await env.DB.prepare(`SELECT * FROM users WHERE lower(email) = lower(?)`).bind(supaUser.email).first();
     if (user) await env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ?`).bind(supaUser.id, user.id).run();
   }
   return user;
@@ -212,7 +212,7 @@ app.post("/api/auth/dev-login", async (c) => {
     return c.json({ error: "not_available" }, 404);
   }
   const { email } = await c.req.json();
-  const user = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(email).first();
+  const user = await c.env.DB.prepare(`SELECT * FROM users WHERE lower(email) = lower(?)`).bind(email).first();
   if (!user) return c.json({ error: "not_found" }, 404);
   return c.json(await loginResponse(c.env.DB, user));
 });
@@ -280,7 +280,7 @@ app.post("/api/signup", async (c) => {
   // name back instead of a bare constraint violation.
   const [subTaken, emailTaken] = await Promise.all([
     c.env.DB.prepare(`SELECT id FROM accounts WHERE subdomain = ?`).bind(subdomain).first(),
-    c.env.DB.prepare(`SELECT id FROM users WHERE lower(email) = ?`).bind(email).first(),
+    c.env.DB.prepare(`SELECT id FROM users WHERE lower(email) = lower(?)`).bind(email).first(),
   ]);
   if (subTaken) return c.json({ error: "subdomain_taken" }, 409);
   if (emailTaken) return c.json({ error: "email_in_use" }, 409);
@@ -362,7 +362,7 @@ app.post("/api/apply/:subdomain", async (c) => {
     company = await c.env.DB.prepare(`SELECT * FROM companies WHERE UPPER(TRIM(license)) = ?`).bind(licenseKey).first();
   }
   if (!company && body.email) {
-    company = await c.env.DB.prepare(`SELECT * FROM companies WHERE email = ?`).bind(body.email).first();
+    company = await c.env.DB.prepare(`SELECT * FROM companies WHERE lower(email) = lower(?)`).bind(body.email).first();
   }
 
   let companyId;
@@ -399,7 +399,7 @@ app.post("/api/apply/:subdomain", async (c) => {
     });
   }
 
-  let user = await c.env.DB.prepare(`SELECT id FROM users WHERE email = ?`).bind(body.email).first();
+  let user = await c.env.DB.prepare(`SELECT id FROM users WHERE lower(email) = lower(?)`).bind(body.email).first();
   if (!user) {
     const userId = uid();
     await c.env.DB.prepare(`INSERT INTO users (id, name, email, phone) VALUES (?, ?, ?, ?)`)
@@ -449,7 +449,7 @@ app.get("/api/account-users", async (c) => {
 app.post("/api/account-users", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
   const b = await c.req.json(); // { name, email, phone, role, subId }
-  let user = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(b.email).first();
+  let user = await c.env.DB.prepare(`SELECT * FROM users WHERE lower(email) = lower(?)`).bind(b.email).first();
   const userId = user?.id ?? uid();
   if (!user) {
     await c.env.DB.prepare(`INSERT INTO users (id, name, email, phone) VALUES (?, ?, ?, ?)`)
@@ -699,7 +699,7 @@ app.post("/api/subs", requireRole("admin", "pm"), async (c) => {
     company = await c.env.DB.prepare(`SELECT * FROM companies WHERE UPPER(TRIM(license)) = ?`).bind(licenseKey).first();
   }
   if (!company && body.email) {
-    company = await c.env.DB.prepare(`SELECT * FROM companies WHERE email = ?`).bind(body.email).first();
+    company = await c.env.DB.prepare(`SELECT * FROM companies WHERE lower(email) = lower(?)`).bind(body.email).first();
   }
 
   let companyId;

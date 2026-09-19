@@ -1972,16 +1972,33 @@ export default function SubSub() {
   // `email` is only used in dev-stub mode (see LoginPage) — in real-auth
   // mode, identity already comes from the Supabase session that
   // signInWithPassword() just established, so this just asks who that is.
+  // Returns null on success, or a message to show. It used to return
+  // silently on both failure paths, which left someone who had just typed
+  // the right password sitting on the sign-in screen with no explanation and
+  // nothing to act on.
   async function handleLogin(email) {
-    const result = await (supabaseEnabled ? api.getMe() : api.devLogin(email))
-      .catch((err) => { console.error("[login] failed:", err); return null; });
-    if (!result) return;
+    let result;
+    try {
+      result = await (supabaseEnabled ? api.getMe() : api.devLogin(email));
+    } catch (err) {
+      console.error("[login] failed:", err);
+      if (err?.status === 401 || err?.status === 404) {
+        return "Your login works, but this email isn't on a SubSub account yet. "
+          + "Ask whoever runs the account to add you.";
+      }
+      if (err?.status === 501) return "This site isn't finished being set up. Tell your admin.";
+      return "Couldn't reach SubSub. Check your connection and try again.";
+    }
+    if (!result) return "Couldn't sign you in. Try again.";
     // Land in the account this subdomain belongs to, if the person has a
     // membership there — signing in on outerhome.subsub.work shouldn't drop
     // someone into a different company they also happen to belong to.
     const onSub = detectSubdomain();
     const primary = (onSub && result.memberships.find((m) => m.subdomain === onSub)) || result.memberships[0];
-    if (!primary) return;
+    if (!primary) {
+      return "Your login works, but you're not a member of any account yet. "
+        + "Ask whoever runs the account to add you.";
+    }
 
     setAuth({ userId: result.user.id, accountId: primary.accountId });
     setUsers((prev) => [...prev.filter((u) => u.id !== result.user.id), result.user]);
@@ -2003,6 +2020,7 @@ export default function SubSub() {
     setTab(ROLES[primary.role].can[0]);
     setLoggedIn(true);
     await hydrateAccount(primary.accountId, result.user.id);
+    return null;
   }
 
   // Resume a session across reloads — this is the whole point of Phase 1.
@@ -6716,7 +6734,8 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
       if (!u) { setErr("No account found for that email."); return; }
       if (!pw) { setErr("Enter your password."); return; }
       setErr("");
-      onLogin(u.email);
+      const msg = await onLogin(u.email);
+      if (msg) setErr(msg);
       return;
     }
 
@@ -6727,15 +6746,22 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
       const { data, error } = await supabase.auth.signUp({ email: email.trim(), password: pw });
       setBusy(false);
       if (error) { setErr(error.message); return; }
-      if (data.session) { onLogin(); return; } // email confirmation disabled — straight in
+      if (data.session) {                       // email confirmation disabled — straight in
+        const msg = await onLogin();
+        if (msg) setErr(msg);
+        return;
+      }
       setSignupSent(true); // otherwise Supabase mailed a confirmation link
       return;
     }
 
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pw });
+    if (error) { setBusy(false); setErr(error.message); return; }
+    // The Supabase session is only half of it — the account still has to
+    // recognise this person. Show it when it doesn't.
+    const msg = await onLogin();
     setBusy(false);
-    if (error) { setErr(error.message); return; }
-    onLogin(); // identity now comes from the Supabase session itself
+    if (msg) setErr(msg);
   };
 
   const forgotPassword = async () => {
