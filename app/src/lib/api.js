@@ -128,6 +128,15 @@ export const api = {
   getAccountBySubdomain: (subdomain) => request(`/account-by-subdomain/${encodeURIComponent(subdomain)}`),
   patchAccount: (patch) => request("/account", { method: "PATCH", body: JSON.stringify(patch) }),
 
+  // One-time subcontractor invite links. The first three need a session; the
+  // last two are how somebody holding a link uses it, before they have one.
+  listInvites: () => request("/invites"),
+  createInvite: (label) => request("/invites", { method: "POST", body: JSON.stringify({ label }) }),
+  revokeInvite: (id) => request(`/invites/${id}`, { method: "DELETE" }),
+  lookupInvite: (token) => request(`/invite/${encodeURIComponent(token)}`),
+  acceptInvite: (token, data) =>
+    request(`/invite/${encodeURIComponent(token)}`, { method: "POST", body: JSON.stringify(data) }),
+
   uploadFile,
 
   listUniformOrders: () => request("/uniform-orders"),

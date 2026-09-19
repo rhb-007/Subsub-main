@@ -122,6 +122,7 @@ app.use("/api/*", async (c, next) => {
   if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path === "/api/signup"
     || c.req.path.startsWith("/api/platform/")
     || c.req.path.startsWith("/api/apply/")
+    || c.req.path.startsWith("/api/invite/")
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
 
   const accountId = c.req.header("X-Account-Id");
@@ -355,6 +356,96 @@ app.post("/api/signup", async (c) => {
   }, 201);
 });
 
+// The body of an application, shared by the two ways one can arrive: the
+// public form at a customer's own subdomain, and a one-time link the
+// customer generated and sent themselves. Identical work either way -- only
+// how the applicant got here differs, which is what `note` records.
+async function createApplication(env, account, body, note) {
+  const licenseKey = (body.license || "").trim().toUpperCase();
+
+  let company = null;
+  if (licenseKey) {
+    company = await env.DB.prepare(`SELECT * FROM companies WHERE UPPER(TRIM(license)) = ?`).bind(licenseKey).first();
+  }
+  if (!company && body.email) {
+    company = await env.DB.prepare(`SELECT * FROM companies WHERE lower(email) = lower(?)`).bind(body.email).first();
+  }
+
+  let companyId;
+  if (company) {
+    companyId = company.id;
+  } else {
+    companyId = uid();
+    await env.DB.prepare(
+      `INSERT INTO companies (id, company, contact, phone, email, license, ubi, city, state, zip)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(companyId, body.company, body.contact, normalizePhone(body.phone), body.email,
+      body.license || null, body.ubi || null, body.city || null, body.state || null, body.zip || null).run();
+  }
+
+  let engagementId = (await env.DB.prepare(
+    `SELECT id FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(account.id, companyId).first())?.id;
+  if (!engagementId) {
+    engagementId = uid();
+    await env.DB.prepare(
+      `INSERT INTO engagements (id, account_id, company_id, status, categories, notes)
+       VALUES (?, ?, ?, 'invited', ?, ?)`
+    ).bind(engagementId, account.id, companyId, JSON.stringify(body.categories || []), note).run();
+  }
+
+  // Only for a genuinely new company — an existing (deduped) one keeps its
+  // established profile, same rule POST /api/subs follows.
+  if (!company) {
+    await applySubPatch(env.DB, companyId, engagementId, {
+      crews: [],
+      coverage: { mode: "cities", cities: body.city ? [body.city] : [] },
+      warranty: body.warranty || null,
+      notify: { email: !!body.notifyEmail, sms: !!body.notifySms },
+    });
+  }
+
+  let user = await env.DB.prepare(`SELECT id FROM users WHERE lower(email) = lower(?)`).bind(body.email).first();
+  if (!user) {
+    const userId = uid();
+    await env.DB.prepare(`INSERT INTO users (id, name, email, phone) VALUES (?, ?, ?, ?)`)
+      .bind(userId, body.contact, body.email, normalizePhone(body.phone)).run();
+    user = { id: userId };
+  }
+  const existingMembership = await env.DB.prepare(
+    `SELECT id FROM memberships WHERE user_id = ? AND account_id = ?`
+  ).bind(user.id, account.id).first();
+  if (!existingMembership) {
+    await env.DB.prepare(
+      `INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, 'contractor', ?)`
+    ).bind(uid(), user.id, account.id, companyId).run();
+  }
+
+  await logEvent(env, account.id, user.id, "engagement.applied", engagementId, { companyId, reused: !!company });
+
+  // Confirm it landed, and say what happens next. Public entry point, so a
+  // failure here must never turn a successful application into an error.
+  if (body.email) {
+    const mail = applicationReceivedEmail({
+      companyName: body.company, contact: body.contact, account,
+    });
+    const result = await sendEmail(env, { to: body.email, subject: mail.subject,
+      text: mail.text, html: mail.html });
+    await logMail(env, { accountId: account.id, companyId, to: body.email,
+      kind: "application_received", subject: mail.subject, result, sentBy: null });
+  }
+  return { companyId, engagementId, userId: user.id };
+}
+
+// Requires the three fields nothing downstream can do without. Returns an
+// error code, or null when the body is usable.
+function applicationProblem(body) {
+  if (!body.company?.trim() || !body.contact?.trim() || !body.email?.trim()) return "missing_fields";
+  if (!EMAIL_RE.test(String(body.email).trim())) return "invalid_email";
+  if (String(body.phone || "").trim() && !normalizePhone(body.phone)) return "invalid_phone";
+  return null;
+}
+
 app.post("/api/apply/:subdomain", async (c) => {
   const rl = await rateLimit(c.env, "apply", clientIp(c), { limit: 10, windowMinutes: 60 });
   if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
@@ -366,82 +457,145 @@ app.post("/api/apply/:subdomain", async (c) => {
   if (!account) return c.json({ error: "unknown_account" }, 404);
 
   const body = await c.req.json().catch(() => ({}));
-  if (!body.company?.trim() || !body.contact?.trim() || !body.email?.trim()) {
-    return c.json({ error: "missing_fields" }, 400);
-  }
-  const licenseKey = (body.license || "").trim().toUpperCase();
+  const problem = applicationProblem(body);
+  if (problem) return c.json({ error: problem }, 400);
 
-  let company = null;
-  if (licenseKey) {
-    company = await c.env.DB.prepare(`SELECT * FROM companies WHERE UPPER(TRIM(license)) = ?`).bind(licenseKey).first();
-  }
-  if (!company && body.email) {
-    company = await c.env.DB.prepare(`SELECT * FROM companies WHERE lower(email) = lower(?)`).bind(body.email).first();
-  }
+  await createApplication(c.env, account, body, "Applied through the public application form.");
+  return c.json({ ok: true });
+});
 
-  let companyId;
-  if (company) {
-    companyId = company.id;
-  } else {
-    companyId = uid();
-    await c.env.DB.prepare(
-      `INSERT INTO companies (id, company, contact, phone, email, license, ubi, city, state, zip)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(companyId, body.company, body.contact, body.phone || null, body.email,
-      body.license || null, body.ubi || null, body.city || null, body.state || null, body.zip || null).run();
-  }
+// ---------------------------------------------------------------------------
+// Subcontractor invite links
+// ---------------------------------------------------------------------------
+// The token is the credential: whoever holds the link can file an
+// application against this account. So it is 32 bytes of CSPRNG output, it
+// expires, and it is spent on first use. Nothing about the account is
+// guessable from it and nothing else is needed to use it, which is the whole
+// point -- a contractor with a phone and a text message should not have to
+// be told a subdomain, an email address or a password first.
+const INVITE_TTL_DAYS = 30;
 
-  let engagementId = (await c.env.DB.prepare(
-    `SELECT id FROM engagements WHERE account_id = ? AND company_id = ?`
-  ).bind(account.id, companyId).first())?.id;
-  if (!engagementId) {
-    engagementId = uid();
-    await c.env.DB.prepare(
-      `INSERT INTO engagements (id, account_id, company_id, status, categories, notes)
-       VALUES (?, ?, ?, 'invited', ?, 'Applied through the public application form.')`
-    ).bind(engagementId, account.id, companyId, JSON.stringify(body.categories || [])).run();
-  }
+function newInviteToken() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
-  // Only for a genuinely new company — an existing (deduped) one keeps its
-  // established profile, same rule POST /api/subs follows.
-  if (!company) {
-    await applySubPatch(c.env.DB, companyId, engagementId, {
-      crews: [],
-      coverage: { mode: "cities", cities: body.city ? [body.city] : [] },
-      warranty: body.warranty || null,
-      notify: { email: !!body.notifyEmail, sms: !!body.notifySms },
-    });
-  }
+// Where a holder of this token should be sent. A query string rather than a
+// path, because the app is a single page served by Pages: an unknown path
+// depends on SPA-fallback configuration to resolve, and a query string
+// always does.
+const inviteUrl = (token) => `https://app.subsub.work/?invite=${token}`;
 
-  let user = await c.env.DB.prepare(`SELECT id FROM users WHERE lower(email) = lower(?)`).bind(body.email).first();
-  if (!user) {
-    const userId = uid();
-    await c.env.DB.prepare(`INSERT INTO users (id, name, email, phone) VALUES (?, ?, ?, ?)`)
-      .bind(userId, body.contact, body.email, body.phone || null).run();
-    user = { id: userId };
-  }
-  const existingMembership = await c.env.DB.prepare(
-    `SELECT id FROM memberships WHERE user_id = ? AND account_id = ?`
-  ).bind(user.id, account.id).first();
-  if (!existingMembership) {
-    await c.env.DB.prepare(
-      `INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, 'contractor', ?)`
-    ).bind(uid(), user.id, account.id, companyId).run();
-  }
+const inviteRowToJs = (r) => ({
+  id: r.id, label: r.label, createdAt: r.created_at, expiresAt: r.expires_at,
+  usedAt: r.used_at, revokedAt: r.revoked_at, companyId: r.company_id,
+  url: inviteUrl(r.token),
+  status: r.revoked_at ? "revoked"
+    : r.used_at ? "accepted"
+    : new Date(r.expires_at) < new Date() ? "expired"
+    : "open",
+});
 
-  await logEvent(c.env, account.id, user.id, "engagement.applied", engagementId, { companyId, reused: !!company });
+// A PM can hand out links; only an admin should be able to revoke one, same
+// split as everywhere else in the account.
+app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const label = String(b.label || "").trim().slice(0, 120) || null;
 
-  // Confirm it landed, and say what happens next. Public form, so a failure
-  // here must never turn a successful application into an error.
-  if (body.email) {
-    const mail = applicationReceivedEmail({
-      companyName: body.company, contact: body.contact, account,
-    });
-    const result = await sendEmail(c.env, { to: body.email, subject: mail.subject,
-      text: mail.text, html: mail.html });
-    await logMail(c.env, { accountId: account.id, companyId, to: body.email,
-      kind: "application_received", subject: mail.subject, result, sentBy: null });
-  }
+  const id = uid(), token = newInviteToken();
+  const expires = new Date(Date.now() + INVITE_TTL_DAYS * 86400_000).toISOString();
+  await c.env.DB.prepare(
+    `INSERT INTO sub_invites (id, account_id, token, label, created_by, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(id, accountId, token, label, userId, expires).run();
+
+  await logActivity(c.env, accountId, userId, "invite_created",
+    label ? `Invite link created for ${label}` : "Invite link created");
+
+  const row = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(id).first();
+  return c.json(inviteRowToJs(row), 201);
+});
+
+app.get("/api/invites", async (c) => {
+  const { accountId } = c.get("auth");
+  const { results } = await c.env.DB.prepare(
+    `SELECT * FROM sub_invites WHERE account_id = ? ORDER BY created_at DESC LIMIT 100`
+  ).bind(accountId).all();
+  return c.json(results.map(inviteRowToJs));
+});
+
+app.delete("/api/invites/:id", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  // Scoped by account, so an id from another account is a miss rather than a
+  // revocation of somebody else's link.
+  const res = await c.env.DB.prepare(
+    `UPDATE sub_invites SET revoked_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND account_id = ? AND used_at IS NULL AND revoked_at IS NULL`
+  ).bind(c.req.param("id"), accountId).run();
+  if (!res.meta?.changes) return c.json({ error: "not_found" }, 404);
+  return c.json({ ok: true });
+});
+
+// Public. Looks a token up so the application form can name who it is for and
+// carry their branding, before the applicant has typed anything.
+async function lookupInvite(env, token) {
+  if (!token || !/^[0-9a-f]{64}$/.test(token)) return { error: "invalid" };
+  const row = await env.DB.prepare(`SELECT * FROM sub_invites WHERE token = ?`).bind(token).first();
+  if (!row) return { error: "invalid" };
+  if (row.revoked_at) return { error: "revoked" };
+  if (row.used_at) return { error: "used" };
+  if (new Date(row.expires_at) < new Date()) return { error: "expired" };
+  const account = await env.DB.prepare(
+    `SELECT id, name, subdomain, theme, logo_key, use_default_mark FROM accounts WHERE id = ?`
+  ).bind(row.account_id).first();
+  if (!account) return { error: "invalid" };
+  return { invite: row, account };
+}
+
+app.get("/api/invite/:token", async (c) => {
+  const { error, invite, account } = await lookupInvite(c.env, c.req.param("token"));
+  // Every failure reads the same from outside: a token that was never valid
+  // and one that was spent an hour ago are not worth telling apart for
+  // somebody probing, and the person holding a real dead link needs the same
+  // instruction either way -- ask for a new one.
+  if (error) return c.json({ error }, error === "invalid" ? 404 : 410);
+  return c.json({
+    label: invite.label,
+    account: {
+      name: account.name, subdomain: account.subdomain,
+      theme: parseJson(account.theme),
+      logoKey: account.logo_key, useDefaultMark: !!account.use_default_mark,
+      id: account.id,
+    },
+  });
+});
+
+app.post("/api/invite/:token", async (c) => {
+  const rl = await rateLimit(c.env, "apply", clientIp(c), { limit: 10, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+
+  const { error, invite, account } = await lookupInvite(c.env, c.req.param("token"));
+  if (error) return c.json({ error }, error === "invalid" ? 404 : 410);
+
+  const body = await c.req.json().catch(() => ({}));
+  const problem = applicationProblem(body);
+  if (problem) return c.json({ error: problem }, 400);
+
+  const { companyId } = await createApplication(c.env, account, body,
+    invite.label ? `Applied through an invite link sent to ${invite.label}.`
+      : "Applied through an invite link.");
+
+  // Spent, and only now -- an application that failed halfway should leave
+  // the link usable rather than stranding somebody with a dead one.
+  await c.env.DB.prepare(
+    `UPDATE sub_invites SET used_at = CURRENT_TIMESTAMP, company_id = ? WHERE id = ?`
+  ).bind(companyId, invite.id).run();
+
+  await logActivity(c.env, account.id, null, "invite_accepted",
+    `${body.company} joined through an invite link`);
+
   return c.json({ ok: true });
 });
 

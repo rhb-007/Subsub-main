@@ -24,7 +24,7 @@ import {
   Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
-  DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity,
+  DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, logoUrl } from "./lib/api";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
@@ -1254,6 +1254,17 @@ export default function SubSub() {
   const [loading, setLoading] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
   const [publicView, setPublicView] = useState(BUILD === "platform" ? "superadmin" : "login"); // login | signup | superadmin
+
+  // Somebody arriving on a link their general contractor sent them. Read once
+  // on mount; the token is a query string rather than a path because this is
+  // a single page served by Pages, where an unknown path depends on
+  // SPA-fallback configuration to resolve and a query string always does.
+  const [inviteToken, setInviteToken] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("invite");
+  });
+  const [invite, setInvite] = useState(null);
+  const [inviteErr, setInviteErr] = useState("");
   const [superadminView, setSuperadminView] = useState(false);   // SubSub staff console
   // What the SERVER says this staff user may do. Never derived in the browser:
   // the same flags are re-checked on every platform request.
@@ -1319,6 +1330,7 @@ export default function SubSub() {
   const [assignSub, setAssignSub] = useState(null);       // { sub } -> pick job+trade
   const [notifying, setNotifying] = useState(null); // one-way system notification
   const [adding, setAdding] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [addMenu, setAddMenu] = useState(false);
   const [editing, setEditing] = useState(null); // sub being edited
   const [tab, setTab] = useState("dashboard");
@@ -1363,8 +1375,16 @@ export default function SubSub() {
   // generic address was greeted by some unrelated customer's name and logo.
   const GENERIC_BRAND = { id: null, name: "SubSub", subdomain: "app",
     logoData: null, useDefaultMark: true, theme: null, isSubSub: true };
+  // An invite link names the account itself, so it beats whatever the
+  // hostname would otherwise imply — the whole point is that a contractor can
+  // use it without being told a subdomain first.
+  const inviteBrand = invite?.account
+    ? { id: invite.account.id, name: invite.account.name, subdomain: invite.account.subdomain,
+        logoData: invite.account.logoKey ? logoUrl(invite.account.id) : null,
+        useDefaultMark: invite.account.useDefaultMark, theme: invite.account.theme }
+    : null;
   const brand = !loggedIn
-    ? (subdomainBrand || GENERIC_BRAND)
+    ? (inviteBrand || subdomainBrand || GENERIC_BRAND)
     : account;
   // What this person is, in the words the customer uses. A subcontractor signing
   // into someone else's portal is a contractor, not "a general contractor" — the
@@ -2069,6 +2089,26 @@ export default function SubSub() {
     return null;
   }
 
+  useEffect(() => {
+    if (!inviteToken) return;
+    let live = true;
+    api.lookupInvite(inviteToken).then((res) => {
+      if (!live) return;
+      setInvite(res);
+      setPublicView("signup");
+    }).catch((err) => {
+      if (!live) return;
+      console.error("[invite] lookup failed:", err);
+      // A spent link and a forged one are not worth telling apart on screen;
+      // both need the same instruction, which is to ask for another.
+      setInviteErr(err?.status === 410
+        ? "That invite link has already been used, or it has expired. Ask whoever sent it for a new one."
+        : "That invite link isn't valid. Check you copied all of it, or ask whoever sent it for a new one.");
+    });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inviteToken]);
+
   // Resume a session across reloads — this is the whole point of Phase 1.
   // The saved auth headers are enough for every other request; this just
   // rebuilds the `accounts`/`users`/`memberships` state that normally comes
@@ -2101,6 +2141,42 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account.id, account.kind, loggedIn, tab]);
 
+  if (!loggedIn && inviteToken && !invite && !inviteErr) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: "var(--muted)" }}>
+          Checking your invite…
+        </div>
+      </div>
+    );
+  }
+
+  if (!loggedIn && inviteErr) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <div className="wl-page">
+          <div className="wl-card wl-done">
+            <h1>This link doesn't work</h1>
+            <p className="wl-lede">{inviteErr}</p>
+            <button className="wl-btn-ghost" onClick={() => {
+              // Drop the token as well as the message, or the render above
+              // sees a token with nothing resolved and waits for a lookup
+              // that already failed. Take it out of the address bar too, so
+              // a reload does not land back here.
+              setInviteErr("");
+              setInviteToken(null);
+              window.history.replaceState(null, "", window.location.pathname);
+            }}>
+              Go to sign-in
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!loggedIn) {
     return (
       <div className="ss-root">
@@ -2110,7 +2186,9 @@ export default function SubSub() {
             onLogin={(me) => { setStaff(me); setCurrentUserId(me.userId); setSuperadminView(true); setLoggedIn(true); }} />
         ) : publicView === "signup" ? (
           <SubSignup brand={brand}
-            onSubmit={(data) => api.applyToAccount(brand.subdomain, data)}
+            onSubmit={(data) => inviteToken
+              ? api.acceptInvite(inviteToken, data)
+              : api.applyToAccount(brand.subdomain, data)}
             onBackToLogin={() => setPublicView("login")} />
         ) : (
           <LoginPage users={users} brand={brand} accounts={accounts} memberships={memberships}
@@ -2232,6 +2310,7 @@ export default function SubSub() {
                     <div className="add-scrim" onClick={() => setAddMenu(false)} />
                     <div className="add-menu">
                       <button onClick={() => { setAddMenu(false); tryAddContractor(); }}><Hammer size={14} /> Contractor</button>
+                      <button onClick={() => { setAddMenu(false); setInviteOpen(true); }}><Link2 size={14} /> Invite link</button>
                         <button onClick={() => { setAddMenu(false); tryAddJob(); }}><Calendar size={14} /> Job</button>
                       {can("users") && <button onClick={() => { setAddMenu(false); tryAddUser(); }}><Users size={14} /> User</button>}
                     </div>
@@ -2909,6 +2988,9 @@ export default function SubSub() {
           onSubmit={updateUser} onCancel={() => setEditUser(null)} /></Modal>}
       {adding && <Modal onClose={() => setAdding(false)} wide>
         <SubForm properties={accountProperties} onSubmit={addSub} onCancel={() => setAdding(false)} /></Modal>}
+
+      {inviteOpen && <Modal onClose={() => setInviteOpen(false)}>
+        <InviteLinks canRevoke={role === "admin"} onClose={() => setInviteOpen(false)} /></Modal>}
       {editing && <Modal onClose={() => setEditing(null)} wide>
         <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub} onCancel={() => setEditing(null)} /></Modal>}
 
@@ -4502,6 +4584,125 @@ const UNIFORM_CATALOG = [
 const SIZES = ["S", "M", "L", "XL", "2XL", "3XL"];
 
 // ---- Account (profile, company, users, subscription) --------------------
+// One-time links a customer hands out themselves, one contractor at a time.
+// Deliberately weaker than the public application page that comes with Scale,
+// which is always on and can be found unprompted -- the difference between
+// the plans has to stay real.
+function InviteLinks({ canRevoke, onClose }) {
+  const [rows, setRows] = useState(null);   // null = still loading
+  const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(null);
+
+  const load = async () => {
+    try { setRows(await api.listInvites()); }
+    catch (e) { console.error("[invites] load failed:", e); setRows([]); setErr("Could not load your links."); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const create = async () => {
+    setBusy(true); setErr("");
+    try {
+      const made = await api.createInvite(label.trim() || null);
+      setRows((cur) => [made, ...(cur || [])]);
+      setLabel("");
+      copy(made.url, made.id);
+    } catch (e) {
+      console.error("[invites] create failed:", e);
+      setErr("Could not create a link. Try again.");
+    } finally { setBusy(false); }
+  };
+
+  // Clipboard access is refused often enough -- an insecure origin, a browser
+  // that wants a user gesture it did not see -- that the link has to stay
+  // readable and selectable on screen regardless.
+  const copy = async (url, id) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(id);
+      setTimeout(() => setCopied((c) => c === id ? null : c), 2000);
+    } catch { setCopied(null); }
+  };
+
+  const revoke = async (id) => {
+    try {
+      await api.revokeInvite(id);
+      setRows((cur) => cur.map((r) => r.id === id ? { ...r, status: "revoked" } : r));
+    } catch (e) { console.error("[invites] revoke failed:", e); setErr("Could not revoke that link."); }
+  };
+
+  const open = (rows || []).filter((r) => r.status === "open");
+  const past = (rows || []).filter((r) => r.status !== "open");
+
+  return (
+    <div className="inv-panel">
+      <h2>Invite a subcontractor</h2>
+      <p className="panel-note">
+        Creates a link you send them yourself — text, email, however you already
+        talk to them. They fill in their own profile and documents, then you approve.
+        Each link works once and expires after 30 days.
+      </p>
+
+      <div className="inv-make">
+        <label className="fld">Who is it for? <span className="fld-note">optional, so you can tell your links apart</span>
+          <input value={label} maxLength={120} placeholder="Cascade Roofworks — Miguel"
+            onChange={(e) => setLabel(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !busy) create(); }} />
+        </label>
+        <button className="btn-solid" disabled={busy} onClick={create}>
+          <Link2 size={15} /> {busy ? "Creating…" : "Create link"}
+        </button>
+      </div>
+
+      {err && <p className="cov-hint">{err}</p>}
+
+      {rows === null ? <p className="cov-hint">Loading…</p> : (
+        <>
+          {open.length === 0 && <p className="cov-hint">No open links yet.</p>}
+          {open.map((r) => (
+            <div key={r.id} className="inv-row-out">
+              <div className="inv-main">
+                <b>{r.label || "Unnamed link"}</b>
+                <code className="inv-url">{r.url}</code>
+              </div>
+              <div className="inv-acts">
+                <button className="pick" onClick={() => copy(r.url, r.id)}>
+                  <Copy size={13} /> {copied === r.id ? "Copied" : "Copy"}
+                </button>
+                {canRevoke && <button className="pick" onClick={() => revoke(r.id)}>
+                  <Trash2 size={13} /> Revoke
+                </button>}
+              </div>
+            </div>
+          ))}
+
+          {past.length > 0 && (
+            <>
+              <h5 className="inv-past">Previously</h5>
+              {past.map((r) => (
+                <div key={r.id} className="inv-row-out spent">
+                  <div className="inv-main">
+                    <b>{r.label || "Unnamed link"}</b>
+                    <span className="cov-hint">{
+                      r.status === "accepted" ? "Accepted"
+                        : r.status === "revoked" ? "Revoked" : "Expired"
+                    }</span>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </>
+      )}
+
+      <div className="panel-actions">
+        <button className="btn-ghost" onClick={onClose}>Done</button>
+      </div>
+    </div>
+  );
+}
+
 // The trades an account hires out. Chosen at signup and edited here; a null
 // list means nobody has chosen yet, which is worth saying out loud rather
 // than rendering as thirty unselected chips that look like a deliberate "none".
@@ -7883,6 +8084,22 @@ const CSS = `
 .radius-toggle{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ink);margin-top:2px}
 .radius-toggle input{accent-color:var(--brand)}
 .cov-hint{font-size:11.5px;color:var(--ink-soft);margin:8px 0 0;font-weight:400;font-style:italic}
+
+/* Invite links. The URL stays visible and selectable: clipboard access gets
+   refused often enough that "Copy" cannot be the only way to get at it. */
+.inv-panel{max-width:560px}
+.inv-make{display:flex;gap:10px;align-items:flex-end;margin:16px 0 14px}
+.inv-make .fld{flex:1;margin:0}
+.inv-row-out{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;
+  border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin-top:9px;background:var(--card)}
+.inv-row-out.spent{opacity:.6}
+.inv-main{min-width:0;display:flex;flex-direction:column;gap:4px}
+.inv-main b{font-size:13.5px}
+.inv-url{font-size:11.5px;color:var(--ink-soft);word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.inv-acts{display:flex;gap:7px;flex:none}
+.inv-acts .pick{display:flex;align-items:center;gap:5px}
+.inv-past{margin:20px 0 0;font-size:11.5px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-soft)}
 
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;box-shadow:var(--shadow);transition:border-color .15s,transform .15s}
