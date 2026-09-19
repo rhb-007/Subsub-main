@@ -1415,9 +1415,41 @@ export default function SubSub() {
     }));
     setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, ...resolved } : a));
   };
-  const setPlan = (p) => {
-    persist("patchAccount.plan", api.patchAccount({ plan: p }));
-    setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, plan: p } : a));
+  // Upgrading is a payment, so it leaves for Stripe rather than flipping a
+  // column. Nothing in this app decides that somebody is on Scale -- Stripe
+  // says so, its webhook records it, and the account reflects that.
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingErr, setBillingErr] = useState("");
+
+  const startCheckout = async (cycle) => {
+    setBillingBusy(true); setBillingErr("");
+    try {
+      const { url } = await api.startCheckout(cycle || billing);
+      window.location.href = url;
+    } catch (err) {
+      console.error("[billing] checkout failed:", err);
+      setBillingBusy(false);
+      setBillingErr(err?.status === 501
+        ? "Billing isn't switched on yet, so nothing can be charged. Nobody can upgrade until it is."
+        : "Couldn't start checkout. Try again in a moment.");
+    }
+  };
+
+  // Cards, invoices and cancellation all live in Stripe's own portal. Building
+  // any of it here would mean handling card details, which is the one thing
+  // worth never touching.
+  const openBillingPortal = async () => {
+    setBillingBusy(true); setBillingErr("");
+    try {
+      const { url } = await api.billingPortal();
+      window.location.href = url;
+    } catch (err) {
+      console.error("[billing] portal failed:", err);
+      setBillingBusy(false);
+      setBillingErr(err?.status === 409
+        ? "There's no subscription to manage yet."
+        : "Couldn't open billing. Try again in a moment.");
+    }
   };
   const setAccountKind = (kind) => {
     if (!ACCOUNT_KINDS[kind]) return;
@@ -2164,6 +2196,23 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Coming back from Stripe. The plan does not change here -- it changes when
+  // Stripe's webhook arrives, which is usually a second or two behind the
+  // browser. So say what happened, take the marker out of the address bar,
+  // and re-read the account shortly after rather than leaving somebody who
+  // has just paid looking at their old plan with no acknowledgement.
+  const [billingNote, setBillingNote] = useState("");
+  useEffect(() => {
+    const outcome = new URLSearchParams(window.location.search).get("billing");
+    if (!outcome) return;
+    window.history.replaceState(null, "", window.location.pathname);
+    if (outcome === "cancelled") { setBillingNote("Checkout cancelled — nothing was charged."); return; }
+    setBillingNote("Payment received. Your plan updates in a moment.");
+    const t = setTimeout(() => { resumeSession(); setBillingNote(""); }, 4000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Switching accounts, or an admin changing the account type, can leave the
   // current tab unreachable. Fall back rather than render an empty page.
   useEffect(() => {
@@ -2904,7 +2953,9 @@ export default function SubSub() {
           accountKind={kindOf(account)} onSetAccountKind={setAccountKind}
           accountTrades={account.trades} onSetAccountTrades={setAccountTrades}
           canManage={can("account") && role === "admin"} mySub={mySub}
-          onSaveUser={updateUser} onSaveBrand={setBrand} onSetPlan={setPlan}
+          onSaveUser={updateUser} onSaveBrand={setBrand}
+          onUpgrade={startCheckout} onManageBilling={openBillingPortal}
+          billingBusy={billingBusy} billingErr={billingErr}
           onAddUser={addUser} onRemoveUser={removeUser} onEditUser={setEditUser}
           onLoginAs={(id) => {
             const m = memberships.find((x) => x.userId === id && x.accountId === account.id);
@@ -3027,12 +3078,11 @@ export default function SubSub() {
         <UpgradePrompt kind={upgradePrompt.kind} plan={plan} billing={billing} onSetBilling={setBilling}
           count={upgradePrompt.kind === "contractor" ? subs.length
             : upgradePrompt.kind === "job" ? jobsThisMonth : seatCount}
-          onUpgrade={() => {
-            setPlan("scale"); setUpgradePrompt(null);
-            if (upgradePrompt.kind === "contractor") setAdding(true);
-            else if (upgradePrompt.kind === "job") setJobForm({});
-            else setUserForm(true);
-          }}
+          // No optimistic switch and no queued follow-up action: the browser
+          // is about to leave for Stripe, and whether they come back on Scale
+          // is Stripe's answer to give, not ours to assume.
+          busy={billingBusy} err={billingErr}
+          onUpgrade={() => startCheckout(billing)}
           onDecline={() => setUpgradePrompt(null)} /></Modal>}
       {userForm && <Modal onClose={() => setUserForm(false)}>
         <UserForm subs={subs} onSubmit={addUser} onCancel={() => setUserForm(false)} /></Modal>}
@@ -3047,6 +3097,13 @@ export default function SubSub() {
         <InviteLinks canRevoke={role === "admin"} onClose={() => setInviteOpen(false)} /></Modal>}
       {editing && <Modal onClose={() => setEditing(null)} wide>
         <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub} onCancel={() => setEditing(null)} /></Modal>}
+
+      {billingNote && (
+        <div className="billing-note" role="status">
+          {billingNote}
+          <button onClick={() => setBillingNote("")} aria-label="Dismiss"><X size={14} /></button>
+        </div>
+      )}
 
       <footer className="ss-footer">
         <span>{brand.name} · {portalUrl(brand)}</span>
@@ -4523,7 +4580,7 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
 }
 
 // ---- Upgrade gate (shown instead of the add form when a plan is maxed) ---
-function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, onDecline }) {
+function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, onDecline, busy, err }) {
   const cur = PLANS[plan];
   const next = PLANS.scale;
   const [cycle, setCycle] = useState(billing === "annual" ? "annual" : "monthly");
@@ -4570,7 +4627,9 @@ function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, on
               : "Billed monthly · cancel any time"}
           </span>
         </div>
-        <button className="btn-solid up-go" onClick={onUpgrade}>Upgrade to Scale</button>
+        <button className="btn-solid up-go" onClick={onUpgrade} disabled={busy}>
+          {busy ? "Opening checkout…" : "Upgrade to Scale"}
+        </button>
       </div>
 
       <button className="up-stay" onClick={onDecline}>Not now — keep {keep}</button>
@@ -4812,7 +4871,8 @@ function TradesPanel({ trades, onSave }) {
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
   accountTrades, onSetAccountTrades,
-  onSaveUser, onSaveBrand, onSetPlan, onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
+  onSaveUser, onSaveBrand, onUpgrade, onManageBilling, billingBusy, billingErr,
+  onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup }) {
   const panes = [["profile", "Profile"]]
     .concat(canManage ? [["company", "Company"], ["users", "Users"], ["billing", "Subscription"]] : []);
@@ -5018,7 +5078,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             <div><strong>Branding comes with Scale.</strong> On Basic your contractors sign in
               through SubSub. Upgrade to use your own logo and your own sign-in address —
               nothing needs re-entering.</div>
-            <button className="btn-notify" onClick={() => onSetPlan("scale")}><Zap size={14} /> Upgrade to Scale</button>
+            <button className="btn-notify" disabled={billingBusy} onClick={() => onUpgrade()}>
+              <Zap size={14} /> Upgrade to Scale</button>
           </div>
           <p className="cov-hint">Everything else about your company is set when you add contractors and create jobs.</p>
         </div>
@@ -5199,6 +5260,20 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
 
       {pane === "billing" && canManage && (
         <>
+          {billingErr && <p className="billing-err" role="alert">{billingErr}</p>}
+          {/* Cards, invoices and cancellation live in Stripe's portal. This
+              is the door to it, shown only once there is a customer there. */}
+          {plan === "scale" && (
+            <div className="billing-manage">
+              <div>
+                <b>Payment and invoices</b>
+                <p>Change the card on file, download invoices, or cancel.</p>
+              </div>
+              <button className="btn-ghost" disabled={billingBusy} onClick={onManageBilling}>
+                {billingBusy ? "Opening…" : "Manage billing"}
+              </button>
+            </div>
+          )}
           <div className="plan-current">
             <div>
               <span className="pc-label">Current plan</span>
@@ -5257,9 +5332,16 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 </ul>
                 {plan === pl.id
                   ? <button className="btn-ghost plan-btn" disabled>Current plan</button>
-                  : <button className="btn-solid plan-btn" onClick={() => onSetPlan(pl.id)}>
-                      {pl.id === "scale" ? <><Zap size={15} /> Upgrade</> : "Downgrade"}
-                    </button>}
+                  : pl.id === "scale"
+                    ? <button className="btn-solid plan-btn" disabled={billingBusy}
+                        onClick={() => onUpgrade()}>
+                        <Zap size={15} /> {billingBusy ? "Opening checkout…" : "Upgrade"}
+                      </button>
+                    // Downgrading means cancelling a subscription, which
+                    // belongs in Stripe's portal: it is where the customer
+                    // can see what they are giving up and when it ends.
+                    : <button className="btn-ghost plan-btn" disabled={billingBusy}
+                        onClick={onManageBilling}>Cancel in billing</button>}
               </div>
             ))}
           </div>
@@ -8755,6 +8837,22 @@ const CSS = `
 .gs-body p{margin:5px 0 0;font-size:12.5px;color:var(--ink-soft);line-height:1.5;max-width:56ch}
 .gs-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}
 .gs-acts button{padding:8px 14px;font-size:12.5px;border-radius:9px}
+
+.billing-note{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:60;
+  display:flex;align-items:center;gap:12px;background:var(--ink);color:#fff;
+  padding:12px 14px 12px 18px;border-radius:12px;font-size:13.5px;box-shadow:var(--shadow);
+  max-width:calc(100vw - 32px)}
+.billing-note button{border:0;background:none;color:inherit;opacity:.65;cursor:pointer;
+  padding:0;line-height:0}
+.billing-note button:hover{opacity:1}
+
+.billing-err{margin:0 0 14px;padding:11px 13px;border-radius:10px;background:#fdf1ef;
+  border:1px solid #e9c4bd;color:#8a2f1c;font-size:13px}
+.billing-manage{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+  margin-bottom:14px;background:var(--card)}
+.billing-manage b{font-size:13.5px}
+.billing-manage p{margin:3px 0 0;font-size:12px;color:var(--ink-soft)}
 
 .dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-bottom:18px}
 .dash-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px;box-shadow:var(--shadow);

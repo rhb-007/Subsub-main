@@ -128,6 +128,12 @@ export const api = {
   getAccountBySubdomain: (subdomain) => request(`/account-by-subdomain/${encodeURIComponent(subdomain)}`),
   patchAccount: (patch) => request("/account", { method: "PATCH", body: JSON.stringify(patch) }),
 
+  // Billing. Checkout and portal both answer with a Stripe URL for the
+  // browser to follow — card details never touch this app.
+  getBilling: () => request("/billing"),
+  startCheckout: (cycle) => request("/billing/checkout", { method: "POST", body: JSON.stringify({ cycle }) }),
+  billingPortal: () => request("/billing/portal", { method: "POST" }),
+
   // One-time subcontractor invite links. The first three need a session; the
   // last two are how somebody holding a link uses it, before they have one.
   listInvites: () => request("/invites"),

@@ -25,6 +25,14 @@ CREATE TABLE accounts (
   use_default_mark  INTEGER NOT NULL DEFAULT 1,
   trades            TEXT,               -- JSON array of category ids the account hires out;
                                          -- NULL = never chosen, which is not the same as none
+  -- Stripe linkage. Stripe stays the source of truth for money; these are a
+  -- local cache of what it last told us. subscription_status is Stripe's own
+  -- vocabulary kept verbatim; NULL means nobody ever subscribed, which is not
+  -- the same as canceled.
+  stripe_customer_id     TEXT,
+  stripe_subscription_id TEXT,
+  subscription_status    TEXT,
+  current_period_end     TEXT,
   theme             TEXT,               -- JSON: {bg,surface,text,accent,btnText} — the two
                                          -- pages a subcontractor sees before signing in
                                          -- (sign-in + public application form); NULL = defaults
@@ -443,3 +451,14 @@ CREATE TABLE sub_invites (
   revoked_at  TEXT
 );
 CREATE INDEX idx_sub_invites_account ON sub_invites(account_id, created_at DESC);
+
+-- Stripe retries a webhook until it gets a 2xx, and will deliver the same
+-- event twice on its own. Every handler writes something, so "have I seen
+-- this event id" is the difference between one upgrade and three rows saying
+-- so.
+CREATE TABLE stripe_events (
+  id           TEXT PRIMARY KEY,
+  type         TEXT NOT NULL,
+  received_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_accounts_stripe_customer ON accounts(stripe_customer_id);

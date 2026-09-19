@@ -9,6 +9,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail } from "./mail.js";
+import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 
 const app = new Hono();
 app.use("/api/*", cors());
@@ -141,6 +142,7 @@ app.use("/api/*", async (c, next) => {
     || c.req.path.startsWith("/api/platform/")
     || c.req.path.startsWith("/api/apply/")
     || c.req.path.startsWith("/api/invite/")
+    || c.req.path === "/api/stripe/webhook"
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
 
   const accountId = c.req.header("X-Account-Id");
@@ -479,6 +481,245 @@ app.post("/api/apply/:subdomain", async (c) => {
   if (problem) return c.json({ error: problem }, 400);
 
   await createApplication(c.env, account, body, "Applied through the public application form.");
+  return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Billing (Stripe)
+// ---------------------------------------------------------------------------
+// Two doors out to Stripe and one door back in. Nothing here decides what a
+// customer owes or whether they have paid -- Stripe decides, and the webhook
+// records the answer. The accounts table is a cache of Stripe's last word,
+// never an independent opinion about money.
+
+const APP_ORIGIN = "https://app.subsub.work";
+
+// Start an upgrade. Returns a Stripe Checkout URL for the browser to follow.
+app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+
+  const b = await c.req.json().catch(() => ({}));
+  const cycle = b.cycle === "annual" ? "annual" : "monthly";
+  const price = priceFor(c.env, cycle);
+  if (!price) return c.json({ error: "billing_not_configured" }, 501);
+
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!account) return c.json({ error: "not_found" }, 404);
+  const user = await c.env.DB.prepare(`SELECT email FROM users WHERE id = ?`).bind(userId).first();
+
+  try {
+    const session = await stripeCall(c.env, "/checkout/sessions", {
+      params: {
+        mode: "subscription",
+        line_items: [{ price, quantity: 1 }],
+        success_url: `${APP_ORIGIN}/?billing=done`,
+        cancel_url: `${APP_ORIGIN}/?billing=cancelled`,
+        client_reference_id: accountId,
+        allow_promotion_codes: true,
+        // Reuse the customer if this account has ever paid, so a second
+        // subscription does not arrive under a second customer with the same
+        // email and split their billing history in two.
+        ...(account.stripe_customer_id
+          ? { customer: account.stripe_customer_id }
+          : { customer_email: user?.email || undefined }),
+        // Stamped in two places because the webhook may see either object
+        // first, depending on which event arrives.
+        metadata: { account_id: accountId },
+        subscription_data: { metadata: { account_id: accountId } },
+      },
+      // A double-tapped button within the same minute is one checkout, not two.
+      idempotencyKey: `checkout:${accountId}:${cycle}:${Math.floor(Date.now() / 60000)}`,
+    });
+    return c.json({ url: session.url });
+  } catch (err) {
+    console.error("[billing] checkout failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// Stripe's own billing portal: card changes, invoices, cancellation. Building
+// any of that ourselves would mean handling card details, which is the one
+// thing worth never touching.
+app.post("/api/billing/portal", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+
+  const account = await c.env.DB.prepare(
+    `SELECT stripe_customer_id FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!account?.stripe_customer_id) return c.json({ error: "no_subscription" }, 409);
+
+  try {
+    const session = await stripeCall(c.env, "/billing_portal/sessions", {
+      params: { customer: account.stripe_customer_id, return_url: `${APP_ORIGIN}/` },
+    });
+    return c.json({ url: session.url });
+  } catch (err) {
+    console.error("[billing] portal failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// What the app shows on the billing panel. Read from our own cache rather
+// than Stripe, so opening a settings page is not an API call to a third party.
+app.get("/api/billing", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const a = await c.env.DB.prepare(
+    `SELECT plan, billing, subscription_status, current_period_end, stripe_customer_id
+     FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!a) return c.json({ error: "not_found" }, 404);
+
+  const { results: invoices } = await c.env.DB.prepare(
+    `SELECT id, amount_cents, status, period_start, period_end, paid_at, attempt_count
+     FROM invoices WHERE account_id = ? ORDER BY period_start DESC LIMIT 12`
+  ).bind(accountId).all();
+
+  return c.json({
+    plan: a.plan, cycle: a.billing,
+    status: a.subscription_status,
+    currentPeriodEnd: a.current_period_end,
+    hasCustomer: !!a.stripe_customer_id,
+    configured: !!c.env.STRIPE_SECRET_KEY,
+    invoices: invoices.map((i) => ({
+      id: i.id, amountCents: i.amount_cents, status: i.status,
+      periodStart: i.period_start, periodEnd: i.period_end,
+      paidAt: i.paid_at, attemptCount: i.attempt_count,
+    })),
+  });
+});
+
+// Find the account a Stripe object belongs to. The metadata is stamped at
+// checkout, but a subscription changed from Stripe's own dashboard may
+// arrive without it, so the customer id is the fallback.
+async function accountForStripe(env, { accountId, customerId }) {
+  if (accountId) {
+    const a = await env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+    if (a) return a;
+  }
+  if (customerId) {
+    return env.DB.prepare(`SELECT * FROM accounts WHERE stripe_customer_id = ?`).bind(customerId).first();
+  }
+  return null;
+}
+
+// Write the plan change and the row that explains it. mrr_delta is signed, so
+// the platform console can sum a month without re-deriving who moved where.
+async function applySubscription(env, account, sub) {
+  const status = sub.status;
+  const entitled = ENTITLED.has(status);
+  const cycle = sub.items?.data?.[0]?.price?.recurring?.interval === "year" ? "annual" : "monthly";
+  const plan = entitled ? "scale" : "basic";
+  const periodEnd = stripeTime(sub.current_period_end);
+
+  const was = account.plan;
+  await env.DB.prepare(
+    `UPDATE accounts SET plan = ?, billing = ?, stripe_subscription_id = ?,
+            stripe_customer_id = COALESCE(stripe_customer_id, ?),
+            subscription_status = ?, current_period_end = ?
+     WHERE id = ?`
+  ).bind(plan, cycle, sub.id, sub.customer, status, periodEnd, account.id).run();
+
+  if (was !== plan) {
+    const monthly = cycle === "annual" ? 8250 : 9900;   // $990/yr and $99/mo, in cents
+    const kind = plan === "scale" ? "upgraded" : (status === "canceled" ? "canceled" : "downgraded");
+    await env.DB.prepare(
+      `INSERT INTO subscription_events (id, account_id, at, kind, from_plan, to_plan, cycle, mrr_delta_cents, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'stripe')`
+    ).bind(uid(), account.id, new Date().toISOString(), kind, was, plan, cycle,
+      plan === "scale" ? monthly : -monthly).run();
+
+    await logActivity(env, account.id, null, "plan_changed",
+      plan === "scale" ? `Upgraded to Scale (${cycle})` : "Moved to Basic");
+  }
+}
+
+// Stripe's way in. Unauthenticated by necessity -- Stripe has no session --
+// so the signature is the only thing establishing that this is real, and a
+// failed check must stop everything.
+app.post("/api/stripe/webhook", async (c) => {
+  const secret = c.env.STRIPE_WEBHOOK_SECRET;
+  if (!secret) return c.json({ error: "billing_not_configured" }, 501);
+
+  // The raw bytes, before any parsing: the signature is over exactly what
+  // Stripe sent, and re-serialising JSON would not reproduce it.
+  const raw = await c.req.text();
+  const event = await verifyStripeWebhook(raw, c.req.header("stripe-signature"), secret);
+  if (!event) {
+    console.error("[stripe] rejected an unsigned or stale webhook");
+    return c.json({ error: "bad_signature" }, 400);
+  }
+
+  // Stripe retries until it gets a 2xx and can deliver the same event twice
+  // on its own, so every handler below runs at most once per event id.
+  try {
+    await c.env.DB.prepare(`INSERT INTO stripe_events (id, type) VALUES (?, ?)`)
+      .bind(event.id, event.type).run();
+  } catch {
+    return c.json({ ok: true, duplicate: true });
+  }
+
+  try {
+    const obj = event.data?.object || {};
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const account = await accountForStripe(c.env, {
+          accountId: obj.client_reference_id || obj.metadata?.account_id,
+          customerId: obj.customer,
+        });
+        if (!account) break;
+        // Record the customer immediately, so the portal works even if the
+        // subscription events arrive late or out of order.
+        await c.env.DB.prepare(`UPDATE accounts SET stripe_customer_id = ? WHERE id = ?`)
+          .bind(obj.customer, account.id).run();
+        if (obj.subscription) {
+          const sub = await stripeCall(c.env, `/subscriptions/${obj.subscription}`, { method: "GET" });
+          await applySubscription(c.env, account, sub);
+        }
+        break;
+      }
+
+      case "customer.subscription.created":
+      case "customer.subscription.updated":
+      case "customer.subscription.deleted": {
+        const account = await accountForStripe(c.env, {
+          accountId: obj.metadata?.account_id, customerId: obj.customer,
+        });
+        if (!account) break;
+        await applySubscription(c.env, account, obj);
+        break;
+      }
+
+      case "invoice.paid":
+      case "invoice.payment_failed": {
+        const account = await accountForStripe(c.env, {
+          accountId: obj.subscription_details?.metadata?.account_id, customerId: obj.customer,
+        });
+        if (!account) break;
+        // Keyed by Stripe's invoice id, so a retry overwrites rather than
+        // duplicating, and a failed invoice later paid updates in place.
+        await c.env.DB.prepare(
+          `INSERT OR REPLACE INTO invoices
+             (id, account_id, amount_cents, status, period_start, period_end, paid_at, attempt_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(obj.id, account.id, obj.amount_due ?? obj.amount_paid ?? 0, obj.status,
+          stripeTime(obj.period_start) || new Date().toISOString(),
+          stripeTime(obj.period_end) || new Date().toISOString(),
+          obj.status === "paid" ? stripeTime(obj.status_transitions?.paid_at) : null,
+          obj.attempt_count ?? 0).run();
+        break;
+      }
+
+      default:
+        break;   // Stripe sends a great deal we have no opinion about.
+    }
+  } catch (err) {
+    // Forget the event so Stripe's retry gets a real second attempt rather
+    // than being deduplicated against a run that failed halfway.
+    console.error("[stripe] handler failed:", event.type, err?.message || err);
+    await c.env.DB.prepare(`DELETE FROM stripe_events WHERE id = ?`).bind(event.id).run().catch(() => {});
+    return c.json({ error: "handler_failed" }, 500);
+  }
+
   return c.json({ ok: true });
 });
 
