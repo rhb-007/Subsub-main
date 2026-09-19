@@ -3417,11 +3417,20 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
 // ---- Superadmin sign-in — SubSub's own, never the customer's white label ----
 // In production this lives on its own hostname (admin.subsub.work). Here it's
 // reached with #superadmin on the URL.
+const STAFF_DOMAIN = import.meta.env.VITE_STAFF_EMAIL_DOMAIN || "";
+const STAFF_ERRORS = {
+  sso_required: "Staff sign-in goes through Google Workspace. Use the Google button.",
+  wrong_domain: "That Google account is outside the SubSub Workspace.",
+  forbidden: "That account is not a SubSub staff account.",
+  auth_not_configured: "This console has no authentication configured.",
+};
+
 function SuperadminLogin({ users, onLogin }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
   const staff = users.filter((u) => u.platform);
 
   // The seeded staff picker is a development convenience and nothing else. It
@@ -3429,6 +3438,55 @@ function SuperadminLogin({ users, onLogin }) {
   // so it cannot ship to a real hostname by accident.
   const devPicker = import.meta.env.DEV && !supabaseEnabled;
 
+  // A valid session is not staff membership. The server re-reads the
+  // superadmins table, and refuses anything that did not come through Google
+  // Workspace or is outside the staff domain.
+  const finish = async () => {
+    try {
+      const me = await api.platform.me();
+      setBusy(false);
+      onLogin(me);
+    } catch (e2) {
+      await supabase.auth.signOut();
+      setBusy(false);
+      setErr(STAFF_ERRORS[e2?.body?.error] || STAFF_ERRORS[e2?.message]
+        || "Could not verify staff access. Try again.");
+    }
+  };
+
+  const signInWithGoogle = async () => {
+    if (!supabaseEnabled) {
+      setErr("This build has no authentication configured, so nobody can sign in.");
+      return;
+    }
+    setErr(""); setBusy(true);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: window.location.origin,
+        // A hint to Google's account chooser, not a control: the Workspace
+        // domain is enforced by the API, which is where it cannot be skipped.
+        ...(STAFF_DOMAIN ? { queryParams: { hd: STAFF_DOMAIN } } : {}),
+      },
+    });
+    if (error) { setBusy(false); setErr("Could not start Google sign-in."); }
+    // On success the browser leaves for Google and comes back to this origin,
+    // where the effect below picks the session up.
+  };
+
+  // Returning from Google: the session is already in place, so go straight to
+  // the staff check rather than showing the sign-in screen again.
+  useEffect(() => {
+    if (!supabaseEnabled) return;
+    let live = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (live && data?.session) { setBusy(true); finish(); }
+    });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Break-glass only, and refused by the API unless STAFF_ALLOW_PASSWORD is set.
   const submit = async (e) => {
     e.preventDefault();
     if (!supabaseEnabled) {
@@ -3438,19 +3496,7 @@ function SuperadminLogin({ users, onLogin }) {
     setErr(""); setBusy(true);
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pw });
     if (error) { setBusy(false); setErr("Wrong email or password."); return; }
-    // A valid session is not staff membership. The server re-reads the
-    // superadmins table and refuses a customer login outright.
-    try {
-      const me = await api.platform.me();
-      setBusy(false);
-      onLogin(me);
-    } catch (e2) {
-      await supabase.auth.signOut();
-      setBusy(false);
-      setErr(e2?.status === 403
-        ? "That account is not a SubSub staff account."
-        : "Could not verify staff access. Try again.");
-    }
+    await finish();
   };
 
   // Refuse outright rather than presenting a form that cannot work. Without
@@ -3476,8 +3522,31 @@ function SuperadminLogin({ users, onLogin }) {
       <div className="sa-card">
         <div className="sa-brand"><SubSubLogo height={26} /><span className="pf-tag">Platform</span></div>
         <h1>Sign in</h1>
-        <p className="sa-lede">SubSub internal console.</p>
+        <p className="sa-lede">
+          SubSub internal console{STAFF_DOMAIN ? ` — ${STAFF_DOMAIN} accounts only` : ""}.
+        </p>
+
+        <button className="sa-btn sa-google" type="button" onClick={signInWithGoogle} disabled={busy}>
+          <svg width="17" height="17" viewBox="0 0 48 48" aria-hidden="true">
+            <path fill="#4285F4" d="M45 24c0-1.6-.1-2.7-.4-3.9H24v7.1h12c-.2 1.9-1.5 4.7-4.4 6.6l6.7 5.2C42.2 35.5 45 30.3 45 24z"/>
+            <path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-6.9-5.4c-1.9 1.3-4.3 2.2-7.6 2.2-5.8 0-10.7-3.8-12.4-9.1l-7.1 5.5C8.1 41.1 15.4 46 24 46z"/>
+            <path fill="#FBBC05" d="M11.6 28.4c-.5-1.3-.7-2.8-.7-4.4s.3-3 .7-4.4l-7.1-5.5C2.9 17 2 20.4 2 24s.9 7 2.5 9.9l7.1-5.5z"/>
+            <path fill="#EA4335" d="M24 10.6c4.1 0 6.9 1.8 8.5 3.3l6.2-6C34.9 4.4 29.9 2 24 2 15.4 2 8.1 6.9 4.5 14.1l7.1 5.5C13.3 14.4 18.2 10.6 24 10.6z"/>
+          </svg>
+          {busy ? "Checking…" : "Continue with Google"}
+        </button>
+        {err && <p className="wl-err">{err}</p>}
+
+        <button className="sa-alt" type="button" onClick={() => setPwOpen((v) => !v)}>
+          {pwOpen ? "Hide password sign-in" : "Use a password instead"}
+        </button>
+
+        {pwOpen && (
         <form onSubmit={submit}>
+          <p className="sa-note">
+            Break-glass only. The API refuses a password unless it has been
+            deliberately re-enabled.
+          </p>
           <label className="wl-fld">Email
             <input type="email" autoComplete="username" value={email}
               onChange={(e) => { setEmail(e.target.value); setErr(""); }} placeholder="you@subsub.work" />
@@ -3486,11 +3555,11 @@ function SuperadminLogin({ users, onLogin }) {
             <input type="password" autoComplete="current-password" value={pw}
               onChange={(e) => { setPw(e.target.value); setErr(""); }} />
           </label>
-          {err && <p className="wl-err">{err}</p>}
           <button className="sa-btn" type="submit" disabled={busy}>
             <LogIn size={15} /> {busy ? "Checking…" : "Sign in"}
           </button>
         </form>
+        )}
         {devPicker && (
         <div className="sa-staff">
           <div className="ld-label">Development only — no authentication configured</div>
@@ -9225,6 +9294,17 @@ const CSS = `
 .sa-card .wl-fld input:focus{outline-color:var(--amber)}
 .sa-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;background:var(--amber);
   color:#1a1207;border:0;border-radius:9px;padding:13px;font:700 15px Inter,sans-serif;cursor:pointer;margin-top:4px}
+/* Google's own button is white by convention, and it has to override .sa-btn
+   above, so it is declared after it rather than before. */
+.sa-google{background:#fff;color:#1f2328;border:1px solid #d5dbd7}
+.sa-google:hover:not(:disabled){background:#f1f3f4}
+.sa-google:disabled{opacity:.65;cursor:default}
+/* The card is dark, so this link has to be light or it disappears. */
+.sa-alt{display:block;width:100%;margin-top:14px;background:none;border:0;
+  color:rgba(255,255,255,.62);font:600 12.5px Inter,sans-serif;cursor:pointer;
+  text-decoration:underline;text-underline-offset:3px}
+.sa-alt:hover{color:rgba(255,255,255,.88)}
+.sa-note{margin:2px 0 12px;font-size:12px;color:rgba(255,255,255,.55);line-height:1.5}
 .sa-staff{margin-top:22px;padding-top:18px;border-top:1px solid rgba(255,255,255,.1)}
 .sa-staff .ld-label{color:rgba(255,255,255,.5)}
 .sa-staff .ld-row{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.12)}

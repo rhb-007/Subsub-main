@@ -1673,12 +1673,71 @@ app.get("/api/work-orders/:id/revised", async (c) => {
 //
 // Still missing before admin.subsub.work should exist: SSO or hardware keys in
 // front of this, since it is the one login that can reach every account.
+// The access token has already been proven valid by Supabase before this is
+// called, so reading its claims without re-verifying the signature is safe.
+function decodeJwtClaims(authHeader) {
+  try {
+    const token = String(authHeader || "").replace(/^Bearer /, "");
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(part.length / 4) * 4, "=");
+    return JSON.parse(atob(b64));
+  } catch { return null; }
+}
+
+// Did THIS session authenticate through the identity provider, or is it just an
+// account that happens to have a Google identity linked?
+//
+// The distinction matters for offboarding. If a password on the Supabase user
+// is also accepted, suspending someone in Google Workspace does not actually
+// revoke their access to the console. `amr` is session-scoped and is the right
+// answer; `app_metadata.providers` is account-scoped and only a fallback for
+// tokens issued without it.
+function sessionUsedFederatedLogin(claims, supaUser) {
+  const amr = Array.isArray(claims?.amr) ? claims.amr : [];
+  if (amr.length) {
+    return amr.some((entry) => {
+      const m = String(entry?.method || "").toLowerCase();
+      if (m.includes("google") || m.startsWith("sso/") || m === "sso") return true;
+      // A bare "oauth" only counts if Google is the linked provider, so another
+      // enabled provider cannot stand in for the Workspace login.
+      return m === "oauth" && linkedProviders(supaUser).includes("google");
+    });
+  }
+  return linkedProviders(supaUser).includes("google");
+}
+
+function linkedProviders(supaUser) {
+  const meta = supaUser?.app_metadata || {};
+  return Array.isArray(meta.providers) ? meta.providers
+    : [meta.provider].filter(Boolean);
+}
+
 async function requireStaff(c) {
   if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) {
     return { error: c.json({ error: "auth_not_configured" }, 501) };
   }
-  const supaUser = await verifySupabaseToken(c.env, c.req.header("Authorization"));
+  const authHeader = c.req.header("Authorization");
+  const supaUser = await verifySupabaseToken(c.env, authHeader);
   if (!supaUser) return { error: c.json({ error: "unauthorized" }, 401) };
+
+  // Staff sign in through Google Workspace. A password on the same address is
+  // refused, so disabling someone in Workspace actually locks them out here.
+  // STAFF_ALLOW_PASSWORD exists for break-glass and should not be set in
+  // normal operation — see app/README.md.
+  const breakGlass = String(c.env.STAFF_ALLOW_PASSWORD || "") === "1";
+  if (!breakGlass && !sessionUsedFederatedLogin(decodeJwtClaims(authHeader), supaUser)) {
+    return { error: c.json({ error: "sso_required" }, 403) };
+  }
+
+  // Anyone with any Google account can complete a Google sign-in, so the
+  // Workspace domain is checked here rather than trusted from the `hd` hint
+  // sent to Google, which is advisory only.
+  const domain = String(c.env.STAFF_EMAIL_DOMAIN || "").trim().toLowerCase();
+  const email = String(supaUser.email || "").toLowerCase();
+  if (domain && !email.endsWith("@" + domain)) {
+    return { error: c.json({ error: "wrong_domain" }, 403) };
+  }
 
   const row = await c.env.DB.prepare(
     `SELECT u.id, u.name, u.email, s.role, s.finance, s.impersonate

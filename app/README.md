@@ -400,10 +400,56 @@ whole platform, which is fine now and will not be: past a few thousand
 accounts it needs pagination, and the per-account rollups belong in
 `platform_daily_stats` rather than being recomputed in the browser.
 
+### Staff sign-in: Google Workspace
+
+Staff sign in with Google, and the API enforces it. A password on the same
+address is refused with `sso_required`, so suspending someone in Workspace
+actually locks them out of the console rather than leaving a second door open.
+
+`amr` in the access token is what gets checked, because it is scoped to the
+session. `app_metadata.providers` is scoped to the account and only says a
+Google identity is linked, not that this session used it; it is a fallback for
+tokens issued without `amr`.
+
+The Workspace domain is checked server-side too. The `hd` parameter sent to
+Google is an account-chooser hint and nothing more — anyone with any Google
+account can complete the flow, so `STAFF_EMAIL_DOMAIN` is what actually holds.
+
+**Setting it up:**
+
+1. **Google Cloud Console** — create an OAuth 2.0 Client ID (Web application)
+   in the project for your Workspace. Authorised redirect URI:
+   `https://<your-project>.supabase.co/auth/v1/callback`.
+2. **Supabase** — Authentication → Providers → Google, on, with that client ID
+   and secret. Add the console's own origin to the allowed redirect URLs.
+3. **Worker variables** (Cloudflare dashboard, or `wrangler secret put`):
+
+   | Variable | Value |
+   |---|---|
+   | `STAFF_EMAIL_DOMAIN` | `subsub.work` |
+   | `STAFF_ALLOW_PASSWORD` | unset, except for break-glass |
+
+4. **Console build**: `VITE_BUILD=platform VITE_STAFF_EMAIL_DOMAIN=subsub.work npm run build`.
+5. **Add the first staff row by hand**, since nothing in the interface can
+   create one:
+
+   ```sql
+   INSERT INTO users (id, name, email) VALUES ('sa1', 'Your Name', 'you@subsub.work');
+   INSERT INTO superadmins (user_id, role, finance, impersonate)
+     VALUES ('sa1', 'superadmin', 1, 1);
+   ```
+
+   The `users` row is matched on `auth_id` or, on first sign-in, on email.
+
+**Break-glass.** Setting `STAFF_ALLOW_PASSWORD=1` re-enables password sign-in
+for staff. It does not relax the domain check. Use it only if Google is down
+and you need in, and unset it afterwards. The console's password form is
+hidden behind a toggle for exactly this and nothing else.
+
 **Still to do before `admin.subsub.work` exists:**
 
-- **SSO or hardware keys in front of staff sign-in.** The gate is real, but
-  it is still a password. This is the one login that can reach every account.
+- **Consider a second factor.** Google carries it if Workspace enforces 2FA,
+  which is worth confirming rather than assuming.
 - **Revenue is derived from plan state, not from money collected.** Stripe
   has to be the source of truth: mirror invoices from webhooks, reconcile
   nightly, alert on drift. Comped, dunning and failed payments all break a
