@@ -202,6 +202,14 @@ async function loginResponse(db, user) {
 }
 
 app.post("/api/auth/dev-login", async (c) => {
+  // Local development only. With real auth configured this must be closed:
+  // it takes an email in the request body and hands back that user's identity
+  // and every account they belong to, with no credential at all. Harmless
+  // against a local seed database, an unauthenticated disclosure endpoint
+  // against a real one.
+  if (c.env.SUPABASE_URL && c.env.SUPABASE_ANON_KEY) {
+    return c.json({ error: "not_available" }, 404);
+  }
   const { email } = await c.req.json();
   const user = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ?`).bind(email).first();
   if (!user) return c.json({ error: "not_found" }, 404);

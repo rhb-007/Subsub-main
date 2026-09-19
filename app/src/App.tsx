@@ -503,13 +503,9 @@ const ACTIVITY_LABEL = {
 // ---- Superadmins ----------------------------------------------------------
 // SubSub's own staff. Deliberately NOT a role in ROLES — that would touch
 // every can() check and every tab. Instead they get a separate console.
-// "finance" gates revenue; "impersonate" gates sign-in-as. Both audited.
-// role: "superadmin" sees everything. "standard" runs support — accounts,
-// users, companies — with no financial numbers and no platform-wide metrics.
-const seedSuperadmins = [
-  { userId: "u9",  role: "superadmin", finance: true,  impersonate: true  },
-  { userId: "u10", role: "standard",   finance: false, impersonate: false },
-];
+// "finance" gates revenue; "impersonate" gates sign-in-as. Both audited and
+// both answered by the server, which re-reads the `superadmins` table on
+// every request — there is no seeded staff list any more.
 const STAFF_ROLE_LABEL = { superadmin: "Superadmin", standard: "Standard" };
 // Subscription history, append-only. Current account state can't tell you
 // what expansion or churn happened in a given month; this can.
@@ -2074,7 +2070,7 @@ export default function SubSub() {
       <div className="ss-root">
         <style>{CSS}</style>
         {BUILD === "platform" && publicView === "superadmin" ? (
-          <SuperadminLogin users={users}
+          <SuperadminLogin
             onLogin={(me) => { setStaff(me); setCurrentUserId(me.userId); setSuperadminView(true); setLoggedIn(true); }} />
         ) : publicView === "signup" ? (
           <SubSignup brand={brand}
@@ -2175,8 +2171,10 @@ export default function SubSub() {
           <Shield size={14} />
           <span>Viewing <b>{impersonating.account.name}</b> as superadmin ({impersonating.by}). Actions are recorded.</span>
           <button onClick={() => {
+            // Return to whoever the server said this staff user is. There is no
+            // seeded staff list to fall back to any more.
             setImpersonating(null); setSuperadminView(true);
-            const staff = users.find((u) => u.platform); if (staff) setCurrentUserId(staff.id);
+            if (staff?.userId) setCurrentUserId(staff.userId);
           }}>Back to console</button>
         </div>
       )}
@@ -3425,18 +3423,12 @@ const STAFF_ERRORS = {
   auth_not_configured: "This console has no authentication configured.",
 };
 
-function SuperadminLogin({ users, onLogin }) {
+function SuperadminLogin({ onLogin }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
-  const staff = users.filter((u) => u.platform);
-
-  // The seeded staff picker is a development convenience and nothing else. It
-  // exists only when Vite is serving from source; a built bundle never has it,
-  // so it cannot ship to a real hostname by accident.
-  const devPicker = import.meta.env.DEV && !supabaseEnabled;
 
   // A valid session is not staff membership. The server re-reads the
   // superadmins table, and refuses anything that did not come through Google
@@ -3502,7 +3494,7 @@ function SuperadminLogin({ users, onLogin }) {
   // Refuse outright rather than presenting a form that cannot work. Without
   // this, a console built without Supabase would sign anyone in who typed a
   // seeded address and any password at all.
-  if (!supabaseEnabled && !devPicker) {
+  if (!supabaseEnabled) {
     return (
       <div className="sa-page">
         <div className="sa-card">
@@ -3559,25 +3551,6 @@ function SuperadminLogin({ users, onLogin }) {
             <LogIn size={15} /> {busy ? "Checking…" : "Sign in"}
           </button>
         </form>
-        )}
-        {devPicker && (
-        <div className="sa-staff">
-          <div className="ld-label">Development only — no authentication configured</div>
-          {staff.map((u) => {
-            const sa = seedSuperadmins.find((p) => p.userId === u.id);
-            return (
-              <button key={u.id} type="button" className="ld-row"
-                onClick={() => onLogin({ userId: u.id, name: u.name, email: u.email,
-                  role: sa?.role || "standard",
-                  finance: sa?.role === "superadmin" && !!sa?.finance,
-                  impersonate: sa?.role === "superadmin" && !!sa?.impersonate })}>
-                <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
-                <span className="ld-main"><span className="ld-name">{u.name}</span><span className="ld-email">{u.email}</span></span>
-                <span className={`pf-tag ${sa?.role === "standard" ? "std" : ""}`}>{STAFF_ROLE_LABEL[sa?.role] || "Standard"}</span>
-              </button>
-            );
-          })}
-        </div>
         )}
       </div>
       <p className="sa-foot">SubSub, LLC · internal use only · every action is recorded</p>
@@ -6840,32 +6813,9 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
           </button>
         )}
 
-        {!supabaseEnabled && (
-          <div className="login-demo">
-            <div className="ld-label">Demo accounts — tap to sign in</div>
-            {users.filter((u) => !u.platform).map((u) => (
-              <button key={u.id} className="ld-row" onClick={() => onLogin(u.email)}>
-                <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
-                <span className="ld-main">
-                  <span className="ld-name">{u.name}</span>
-                  <span className="ld-email">{u.email}</span>
-                </span>
-                <span className="ld-badges">
-                  <span className={`role-badge r-${u.role}`}>{ROLES[u.role].label}</span>
-                  {roleOf(u) !== "contractor" && (
-                    <span className={`plan-pill ${acctOf(u) && acctOf(u).plan === "scale" ? "scale" : ""}`}>
-                      {acctOf(u) ? acctOf(u).name : "—"}
-                    </span>
-                  )}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
       </div>
       <p className="login-foot">
         <PoweredBy height={13} />
-        {!supabaseEnabled && <span className="login-demo-note">Demo build · no real authentication</span>}
       </p>
     </div>
   );
@@ -8200,13 +8150,6 @@ const CSS = `
 .login-err{display:flex;align-items:center;gap:7px;background:#faece7;border:1px solid #f0d1c8;color:var(--red);font-size:12.5px;font-weight:600;padding:9px 11px;border-radius:9px;margin-bottom:12px}
 .login-forgot{display:block;width:100%;border:0;background:none;color:var(--ink-soft);font-size:12.5px;font-weight:600;padding:11px 0 0;cursor:pointer;text-align:center}
 .login-forgot:hover{color:var(--brand)}
-.login-demo{margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}
-.ld-label{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);margin-bottom:10px;text-align:center}
-.ld-row{display:flex;align-items:center;gap:11px;width:100%;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:9px 11px;margin-bottom:7px;cursor:pointer;text-align:left}
-.ld-row:hover{border-color:var(--brand);background:#f7faf8}
-.ld-main{flex:1;min-width:0;display:flex;flex-direction:column}
-.ld-name{font-size:13px;font-weight:700;color:var(--ink)}
-.ld-email{font-size:11px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .login-foot{font-size:11.5px;color:var(--ink-soft);margin-top:18px;text-align:center}
 .um-signout{border-top:1px solid var(--line);border-radius:0 0 8px 8px !important;margin-top:3px;color:var(--red) !important;font-weight:700 !important}
 
@@ -8394,7 +8337,6 @@ const CSS = `
 .powered strong{color:var(--brand);font-weight:800;letter-spacing:-.01em}
 .login-logo-wrap{display:flex;align-items:center;justify-content:center;color:var(--ink);margin-bottom:14px;min-height:40px}
 .login-foot{display:flex;flex-direction:column;align-items:center;gap:5px}
-.login-demo-note{font-size:10.5px;opacity:.75}
 
 /* ===== white-label pages (sign-in + public signup) ===== */
 .wl-themed{background:var(--wl-bg) !important;color:var(--wl-text) !important}
@@ -9305,12 +9247,6 @@ const CSS = `
   text-decoration:underline;text-underline-offset:3px}
 .sa-alt:hover{color:rgba(255,255,255,.88)}
 .sa-note{margin:2px 0 12px;font-size:12px;color:rgba(255,255,255,.55);line-height:1.5}
-.sa-staff{margin-top:22px;padding-top:18px;border-top:1px solid rgba(255,255,255,.1)}
-.sa-staff .ld-label{color:rgba(255,255,255,.5)}
-.sa-staff .ld-row{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.12)}
-.sa-staff .ld-row:hover{border-color:var(--amber);background:rgba(255,255,255,.08)}
-.sa-staff .ld-name{color:#fff}
-.sa-staff .ld-email{color:rgba(255,255,255,.55)}
 .sa-back{margin-top:16px;background:none;border:0;color:rgba(255,255,255,.55);font:600 13px Inter,sans-serif;cursor:pointer;padding:0}
 .sa-back:hover{color:#fff}
 .sa-foot{margin-top:18px;font-size:11.5px;color:rgba(255,255,255,.35)}
@@ -9618,7 +9554,6 @@ const CSS = `
   .up-buy{flex-direction:column;align-items:stretch;gap:12px}
   .up-go{width:100%;justify-content:center}
   .up-form h2{font-size:20px}
-  .ld-badges{flex-wrap:wrap;justify-content:flex-end}
 
   /* plans + uniforms on phones */
   .plan-grid{grid-template-columns:1fr}

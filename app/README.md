@@ -157,11 +157,10 @@ verified it now round-trips through the API the same as insurance/bond/contract.
      on the same Pages project `app.subsub.work` already uses (they all
      serve the same frontend build; the hostname alone decides the
      branding and sign-up behavior at runtime).
-   - **The demo-account picker and "Switch user" menu disappear** once
-     `supabaseEnabled` is true — they were always dev-only conveniences,
-     and letting anyone become anyone else with a menu click makes no
-     sense next to a real auth system, so the code hides both rather than
-     leaving them reachable.
+   - **The "Switch user" menu disappears** once `supabaseEnabled` is true.
+     Letting anyone become anyone else with a menu click makes no sense
+     next to a real auth system, so the code hides it rather than leaving
+     it reachable.
 3. **Set `CRON_SECRET`** (`wrangler secret put CRON_SECRET`) before the
    nightly license-sweep endpoint (`/api/cron/license-sweep`) is usable.
 4. **Connect this repo to a new Cloudflare Pages/Workers project** for
@@ -499,3 +498,22 @@ default.
 Apply `worker/migrations/003_account_kind.sql` to a live database. SQLite
 cannot make `ADD COLUMN` conditional, so a second run stops with
 `duplicate column name: kind`, which is safe to ignore.
+
+## Signing in
+
+Both sign-in screens are real and only real. There is no demo account list on
+either, in any build: the customer app takes an email and password through
+Supabase, and the console takes Google Workspace.
+
+`POST /api/auth/dev-login` still exists for local work, where it takes an email
+and returns that user's identity with no credential. **It refuses with 404
+whenever `SUPABASE_URL` and `SUPABASE_ANON_KEY` are set**, which is every
+deployed environment. Without that guard it would be an unauthenticated
+disclosure endpoint: hand it a guessed address and it returns the person's
+name, phone, and every account they belong to with its plan and subdomain.
+
+**This means local development needs Supabase env vars**, the same as
+production. Put them in `app/.env` for the frontend and `app/.dev.vars` for the
+worker; both are gitignored. Running without them leaves you with a sign-in
+form that has nothing to talk to, which is the correct behavior rather than a
+gap to fill with a shortcut.
