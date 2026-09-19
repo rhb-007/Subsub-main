@@ -1003,25 +1003,25 @@ body.nav-open{overflow:hidden}
       // Use the address the server chose. Rebuilding it here from the
       // subdomain ignored the plan and sent Basic customers to a hostname
       // that does not exist yet.
+      // Use the address the server chose, and send them to it signed out.
+      // Signup deliberately does not carry the new session across: the
+      // address has not been proved yet, and an account that can be used
+      // before anyone has opened the mailbox it belongs to is an account
+      // that can be opened on somebody else's address.
       if(res.body.signInUrl){
-        var dest = res.body.signInUrl;
-        // Carry the session over so "Open SubSub" lands in the dashboard
-        // rather than on a sign-in form. It rides in the fragment because a
-        // fragment is never sent to a server and never appears in a Referer
-        // header; the app consumes it and strips it from the address bar on
-        // arrival. Absent when the Supabase project requires an email
-        // confirmation, in which case there is no session to carry yet.
-        var sess = res.body.session;
-        if(sess && sess.access_token && sess.refresh_token){
-          dest += '#ss_at=' + encodeURIComponent(sess.access_token)
-                + '&ss_rt=' + encodeURIComponent(sess.refresh_token);
-        }
-        document.getElementById('goApp').setAttribute('href', dest);
+        document.getElementById('goApp').setAttribute('href', res.body.signInUrl);
       }
+      var dl = document.getElementById('doneLine');
       if(res.body.needsConfirmation){
-        var dl = document.getElementById('doneLine');
         if(dl){ dl.textContent = 'Check ' + payload.email + ' for a confirmation link, '
           + 'then sign in. Your subcontractor invites are on their way too.'; }
+        var btn = document.getElementById('goApp');
+        if(btn) btn.textContent = 'Go to sign-in';
+      } else if(dl){
+        // Confirmation is off on the auth project, so there is nothing to
+        // wait for -- but they still sign in themselves.
+        dl.textContent = 'Your account is ready. Sign in with ' + payload.email
+          + ' and the password you just chose.';
       }
       done();
     }).catch(function(){
