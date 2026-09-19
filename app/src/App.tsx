@@ -2472,6 +2472,10 @@ export default function SubSub() {
 
       {tab === "dashboard" && can("dashboard") && (
         <AdminDashboard subs={subs} jobs={jobs} role={role} me={me} now={now}
+          accountId={account.id} trades={account.trades} subLimit={PLANS[plan].limit}
+          onGoAccount={() => setTab("account")}
+          onInvite={() => setInviteOpen(true)}
+          onAddSub={() => tryAddContractor()}
           onGoJobs={() => setTab("jobs")} onGoContractors={() => setTab("network")}
           onNewJob={() => tryAddJob()}
           onAssign={(job, trade, replacing) => setAssigning({ job, trade, replacing })}
@@ -5370,7 +5374,105 @@ function UniformAdmin({ orders, subs, onDecide }) {
 }
 
 // ---- Admin / PM dashboard ----------------------------------------------
-function AdminDashboard({ subs, jobs, role, me, now, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense }) {
+// The first hour decides whether an account is ever used again. A new one is
+// a set of empty panels that each look like somebody else's job, so this says
+// what to do next -- and stops as soon as it is no longer needed. A runway,
+// not furniture.
+//
+// The order is the dependency order: trades decide which documents get asked
+// for, documents decide who can be assigned, so a job created before either
+// is a job with nobody to give it to.
+function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, onInvite, onAddSub, onNewJob, onGoContractors }) {
+  const key = `subsub.gs.${accountId}`;
+  const [hidden, setHidden] = useState(() => {
+    try { return localStorage.getItem(key) === "1"; } catch { return false; }
+  });
+
+  const approved = subs.filter((s) => DOC_KINDS.every((k) => s[k]));
+  const steps = [
+    {
+      id: "trades", done: Array.isArray(trades) && trades.length > 0,
+      title: "Tell us what you hire out",
+      note: "Your trades decide what SubSub asks each subcontractor to prove.",
+      actions: [{ label: "Pick trades", onClick: onGoAccount, solid: true }],
+    },
+    {
+      id: "subs", done: subs.length > 0,
+      title: subLimit === Infinity
+        ? "Bring your subcontractors in"
+        : `Bring your subcontractors in — ${subs.length} of ${subLimit}`,
+      note: "Send them a link and they build their own profile and upload their own "
+        + "documents. Faster than chasing paperwork, and it stays theirs to keep current.",
+      actions: [
+        { label: "Send an invite link", onClick: onInvite, solid: true },
+        { label: "Add one myself", onClick: onAddSub },
+      ],
+    },
+    {
+      id: "docs", done: approved.length > 0,
+      title: "Approve their documents",
+      note: "Insurance, bond, contract and W-9. Nobody can be assigned a job until theirs clear.",
+      actions: [{ label: "Review documents", onClick: onGoContractors, solid: true }],
+    },
+    {
+      id: "job", done: jobs.length > 0,
+      title: "Create your first job",
+      note: "Pick the trades it needs and SubSub shows you who can take it.",
+      actions: [{ label: "New job", onClick: onNewJob, solid: true }],
+    },
+  ];
+
+  const doneCount = steps.filter((x) => x.done).length;
+  // Gone for good once it is finished -- the whole point was to get out of the way.
+  if (hidden || doneCount === steps.length) return null;
+  const current = steps.find((x) => !x.done);
+
+  const dismiss = () => {
+    setHidden(true);
+    try { localStorage.setItem(key, "1"); } catch { /* private window; it just comes back */ }
+  };
+
+  return (
+    <div className="gs-card">
+      <div className="gs-head">
+        <div>
+          <h3>Get set up</h3>
+          <p>{doneCount} of {steps.length} done</p>
+        </div>
+        <button className="gs-hide" onClick={dismiss} title="Hide this" aria-label="Hide this">
+          <X size={15} />
+        </button>
+      </div>
+
+      <div className="gs-bar"><span style={{ width: `${(doneCount / steps.length) * 100}%` }} /></div>
+
+      <ol className="gs-steps">
+        {steps.map((step) => (
+          <li key={step.id} className={`gs-step ${step.done ? "done" : step.id === current.id ? "now" : "later"}`}>
+            <span className="gs-tick">{step.done ? <Check size={13} /> : null}</span>
+            <div className="gs-body">
+              <b>{step.title}</b>
+              {step.id === current.id && (
+                <>
+                  <p>{step.note}</p>
+                  <div className="gs-acts">
+                    {step.actions.map((a) => (
+                      <button key={a.label} className={a.solid ? "btn-solid" : "btn-ghost"} onClick={a.onClick}>
+                        {a.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense }) {
   const today = new Date().toISOString().slice(0, 10);
   const slots = jobs.flatMap((j) => j.trades.map((t) => ({ job: j, trade: t, a: j.assignments[t] })));
   const open = slots.filter((s) => !s.a);
@@ -5409,6 +5511,10 @@ function AdminDashboard({ subs, jobs, role, me, now, onGoJobs, onGoContractors, 
           <button className="btn-ghost" onClick={onGoJobs}><ClipboardList size={15} /> All jobs</button>
         </div>
       </div>
+
+      <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
+        subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
+        onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors} />
 
       <div className="dash-grid">
         <button className={`dash-card ${open.length ? "accent" : ""}`} onClick={onGoJobs}>
@@ -8584,6 +8690,33 @@ const CSS = `
 .count.amber{background:var(--amber) !important;color:#fff !important}
 
 /* contractor dashboard */
+/* Getting started. Reads as a runway, so only the current step carries its
+   explanation and its buttons -- the rest are a list of what is coming, and
+   what is behind. */
+.gs-card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:18px 20px 8px;box-shadow:var(--shadow);margin-bottom:18px}
+.gs-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.gs-head h3{margin:0;font-size:15.5px}
+.gs-head p{margin:3px 0 0;font-size:12px;color:var(--ink-soft)}
+.gs-hide{border:0;background:none;color:var(--ink-soft);cursor:pointer;padding:2px;line-height:0;flex:none}
+.gs-hide:hover{color:var(--ink)}
+.gs-bar{height:4px;border-radius:3px;background:var(--line);margin:13px 0 4px;overflow:hidden}
+.gs-bar > span{display:block;height:100%;background:var(--brand);border-radius:3px;
+  transition:width .35s ease}
+.gs-steps{list-style:none;margin:0;padding:0}
+.gs-step{display:flex;gap:11px;padding:11px 0;border-bottom:1px solid var(--line)}
+.gs-step:last-child{border-bottom:0}
+.gs-tick{flex:none;width:19px;height:19px;border-radius:50%;border:1.5px solid var(--line);
+  display:flex;align-items:center;justify-content:center;margin-top:1px;color:#fff}
+.gs-step.done .gs-tick{background:var(--brand);border-color:var(--brand)}
+.gs-step.done b{color:var(--ink-soft);text-decoration:line-through;font-weight:500}
+.gs-step.later b{color:var(--ink-soft)}
+.gs-body{min-width:0}
+.gs-body b{font-size:13.5px;display:block}
+.gs-body p{margin:5px 0 0;font-size:12.5px;color:var(--ink-soft);line-height:1.5;max-width:56ch}
+.gs-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}
+.gs-acts button{padding:8px 14px;font-size:12.5px;border-radius:9px}
+
 .dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-bottom:18px}
 .dash-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px;box-shadow:var(--shadow);
   display:flex;flex-direction:column;gap:4px}
