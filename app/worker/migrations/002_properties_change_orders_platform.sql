@@ -8,12 +8,11 @@
 --   npx wrangler d1 execute subsub-db --config=wrangler.toml \
 --     --file=./worker/migrations/002_properties_change_orders_platform.sql
 --
--- Every statement is guarded, so running it twice is harmless. The one
--- exception is the ALTER on jobs: SQLite has no ADD COLUMN IF NOT EXISTS, so
--- it errors the second time with "duplicate column name: property_id". That
--- error is safe to ignore; nothing after it depends on the ALTER succeeding.
+-- Every statement is guarded except the final ALTER, which is why it is final:
+-- SQLite has no ADD COLUMN IF NOT EXISTS, so on a second run it errors with
+-- "duplicate column name: property_id". Nothing follows it, so nothing is lost.
+-- Running this file twice is otherwise harmless.
 
-ALTER TABLE jobs ADD COLUMN property_id TEXT;
 
 CREATE TABLE IF NOT EXISTS properties (
   id          TEXT PRIMARY KEY,
@@ -125,3 +124,10 @@ CREATE TABLE IF NOT EXISTS platform_daily_stats (
   gmv_accepted_cents  INTEGER NOT NULL,
   basic_at_limit      INTEGER NOT NULL
 );
+
+-- Last on purpose. SQLite has no ADD COLUMN IF NOT EXISTS, so this is the one
+-- statement here that can fail, and a console that aborts a batch on error
+-- would take everything after it down with it. At the end, a re-run creates
+-- whatever is missing above and only trips on this line, which is safe to
+-- ignore: "duplicate column name: property_id" means it is already there.
+ALTER TABLE jobs ADD COLUMN property_id TEXT;
