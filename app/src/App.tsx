@@ -368,6 +368,25 @@ const seedSubs = [
 ];
 
 // ---- Users & roles -------------------------------------------------------
+// ---- Account type ---------------------------------------------------------
+// Who the account is, as opposed to what a given user may do inside it. The
+// four match the audiences the marketing site sells to.
+//
+// `properties` is the real distinction: a general contractor subs out trades
+// job by job and has no building list, so the Properties tab is theirs to not
+// have. The other three manage a standing portfolio and scope vendors to
+// specific buildings.
+const ACCOUNT_KINDS = {
+  general_contractor: { label: "General contractor", properties: false },
+  property_manager:   { label: "Property manager", properties: true },
+  building_owner:     { label: "Building owner", properties: true },
+  portfolio_manager:  { label: "Commercial portfolio manager", properties: true },
+};
+const DEFAULT_ACCOUNT_KIND = "general_contractor";
+const kindOf = (account) =>
+  (account && ACCOUNT_KINDS[account.kind]) ? account.kind : DEFAULT_ACCOUNT_KIND;
+const hasProperties = (account) => ACCOUNT_KINDS[kindOf(account)].properties;
+
 const ROLES = {
   admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
   pm: { label: "Project Manager", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
@@ -517,9 +536,9 @@ const mrrOf = (acct) => {
 // buildings. A property belongs to an account; an engagement can be scoped to
 // specific properties, or left open to all of them (how a GC would use it).
 const seedProperties = [
-  { id: "p1", accountId: "a1", name: "Riverside Apartments", address: "1420 Riverside Dr",
+  { id: "p1", accountId: "a3", name: "Riverside Apartments", address: "1420 Riverside Dr",
     city: "Seattle", state: "WA", zip: "98101", units: 84, notes: "" },
-  { id: "p2", accountId: "a1", name: "Cedar Court Townhomes", address: "88 Cedar Ave",
+  { id: "p2", accountId: "a3", name: "Cedar Court Townhomes", address: "88 Cedar Ave",
     city: "Seattle", state: "WA", zip: "98103", units: 32, notes: "" },
   { id: "p3", accountId: "a2", name: "Harbor Point Tower", address: "700 Harbor Way",
     city: "Bellevue", state: "WA", zip: "98004", units: 210, notes: "Class A office" },
@@ -529,17 +548,22 @@ const seedProperties = [
 
 // Two hiring accounts, so the same subcontractor can be seen in both.
 const seedAccounts = [
-  { id: "a1", name: "Outerhome", subdomain: "outerhome", plan: "basic", billing: "monthly",
+  { id: "a1", name: "Outerhome", subdomain: "outerhome", kind: "general_contractor",
+    plan: "basic", billing: "monthly",
     createdAt: "2026-07-22", lastActive: "2026-09-18",
     theme: { bg: "#F4F6F4", surface: "#FFFFFF", text: "#12211C", accent: "#1F6B4A", btnText: "#FFFFFF" },
     logoData: OUTERHOME_MARK, useDefaultMark: false },
-  { id: "a3", name: "Meridian Property Group", subdomain: "meridian", plan: "scale", billing: "monthly",
+  { id: "a3", name: "Meridian Property Group", subdomain: "meridian", kind: "property_manager",
+    plan: "scale", billing: "monthly",
     createdAt: "2026-08-02", lastActive: "2026-09-17", theme: null },
-  { id: "a4", name: "Northline Homes", subdomain: "northline", plan: "basic", billing: "monthly",
+  { id: "a4", name: "Northline Homes", subdomain: "northline", kind: "general_contractor",
+    plan: "basic", billing: "monthly",
     createdAt: "2026-08-20", lastActive: "2026-09-18", theme: null },
-  { id: "a5", name: "Riverside Renovations", subdomain: "riverside", plan: "scale", billing: "monthly",
+  { id: "a5", name: "Riverside Renovations", subdomain: "riverside", kind: "general_contractor",
+    plan: "scale", billing: "monthly",
     status: "canceled", createdAt: "2026-05-11", lastActive: "2026-08-30", theme: null },
-  { id: "a2", name: "Harbor Point Builders", subdomain: "harborpoint", plan: "scale", billing: "annual",
+  { id: "a2", name: "Harbor Point Builders", subdomain: "harborpoint", kind: "portfolio_manager",
+    plan: "scale", billing: "annual",
     createdAt: "2026-03-04", lastActive: "2026-09-18",
     theme: { bg: "#0E1B2A", surface: "#16263B", text: "#EAF1F8", accent: "#E0913C", btnText: "#1A1207" },
     logoData: null, useDefaultMark: false },
@@ -1232,7 +1256,7 @@ export default function SubSub() {
     const sub = detectSubdomain();
     if (!sub) return;
     api.getAccountBySubdomain(sub).then((a) => {
-      setSubdomainBrand({ id: a.id, name: a.name, subdomain: a.subdomain, plan: a.plan, billing: a.billing,
+      setSubdomainBrand({ id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: a.billing,
         logoData: a.logoKey ? `/api/logo/${a.id}` : null, useDefaultMark: a.useDefaultMark, theme: a.theme });
     }).catch(() => {}); // no account on this subdomain — fall through to generic branding
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1311,7 +1335,14 @@ export default function SubSub() {
   const membership = myMemberships.find((m) => m.accountId === currentAccountId)
     || myMemberships[0] || { role: "contractor", accountId: currentAccountId };
   const role = membership.role;
-  const can = (view) => ROLES[role].can.includes(view);
+  // Two gates, not one: the role says what this person may do, the account type
+  // says what this account has at all. A general contractor has no building
+  // list, so Properties is not theirs to see whatever their role is.
+  const can = (view) => {
+    if (!ROLES[role].can.includes(view)) return false;
+    if (view === "properties") return hasProperties(account);
+    return true;
+  };
   const canRate = role === "admin" || role === "pm";
   const canComplete = role === "admin" || role === "pm";
 
@@ -1321,6 +1352,12 @@ export default function SubSub() {
   // branding on its login screen.
   const account = accounts.find((a) => a.id === membership.accountId) || accounts[0];
   const brand = (!loggedIn && subdomainBrand) ? subdomainBrand : account;
+  // What this person is, in the words the customer uses. A subcontractor signing
+  // into someone else's portal is a contractor, not "a general contractor" — the
+  // account type is the hiring side's identity, not theirs.
+  const roleLabel = role === "contractor"
+    ? ROLES.contractor.label
+    : `${ACCOUNT_KINDS[kindOf(account)].label} (${ROLES[role].label.toLowerCase()})`;
   const plan = account.plan;
   const billing = account.billing || "monthly";
   const setBilling = (c) => {
@@ -1339,6 +1376,11 @@ export default function SubSub() {
   const setPlan = (p) => {
     persist("patchAccount.plan", api.patchAccount({ plan: p }));
     setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, plan: p } : a));
+  };
+  const setAccountKind = (kind) => {
+    if (!ACCOUNT_KINDS[kind]) return;
+    persist("patchAccount.kind", api.patchAccount({ kind }));
+    setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, kind } : a));
   };
 
   // Flatten company + engagement into the "sub" shape the UI consumes.
@@ -1968,7 +2010,7 @@ export default function SubSub() {
       const byId = Object.fromEntries(prev.map((a) => [a.id, a]));
       result.memberships.forEach((m) => {
         byId[m.accountId] = { id: m.accountId, name: m.accountName, subdomain: m.subdomain,
-          plan: m.plan, billing: m.billing, theme: m.theme,
+          kind: m.kind, plan: m.plan, billing: m.billing, theme: m.theme,
           logoData: m.logoKey ? `/api/logo/${m.accountId}` : null, useDefaultMark: m.useDefaultMark };
       });
       return Object.values(byId);
@@ -1991,7 +2033,8 @@ export default function SubSub() {
       const acct = await api.getAccount().catch((err) => { console.error("[resume] failed:", err); return null; });
       if (!acct) { clearAuth(); return; }
       setAccounts((prev) => [...prev.filter((a) => a.id !== acct.id), {
-        id: acct.id, name: acct.name, subdomain: acct.subdomain, plan: acct.plan, billing: acct.billing,
+        id: acct.id, name: acct.name, subdomain: acct.subdomain, kind: acct.kind,
+        plan: acct.plan, billing: acct.billing,
         logoData: acct.logoKey ? `/api/logo/${acct.id}` : null, useDefaultMark: acct.useDefaultMark,
         theme: acct.theme,
       }]);
@@ -2003,6 +2046,13 @@ export default function SubSub() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Switching accounts, or an admin changing the account type, can leave the
+  // current tab unreachable. Fall back rather than render an empty page.
+  useEffect(() => {
+    if (loggedIn && tab === "properties" && !hasProperties(account)) setTab("dashboard");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account.id, account.kind, loggedIn, tab]);
 
   if (!loggedIn) {
     return (
@@ -2113,7 +2163,7 @@ export default function SubSub() {
                 <span className="user-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
                 <span className="user-meta">
                   <span className="user-name">{me.name}</span>
-                  <span className="user-role">{ROLES[role].label}</span>
+                  <span className="user-role">{roleLabel}</span>
                 </span>
                 <ChevronDown size={13} />
               </button>
@@ -2186,7 +2236,7 @@ export default function SubSub() {
         <nav className={`tabs ${mobileNav ? "open" : ""}`} onClick={(e) => { if (e.target.closest("button")) setMobileNav(false); }}>
           <div className="drawer-user">
             <span className="user-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
-            <span className="drawer-user-txt"><b>{me.name}</b><span>{ROLES[role].label} · {account.name}</span></span>
+            <span className="drawer-user-txt"><b>{me.name}</b><span>{roleLabel} · {account.name}</span></span>
           </div>
           {can("dashboard") && (
             <button className={tab === "dashboard" ? "on" : ""} onClick={() => setTab("dashboard")}>
@@ -2396,6 +2446,11 @@ export default function SubSub() {
 
       {tab === "properties" && can("properties") && (
         <PropertiesView properties={accountProperties} subs={subs} jobs={jobs}
+          onScopeVendor={(sub, propertyId, on) => patchSub(sub.id, {
+            propertyIds: on
+              ? [...new Set([...(sub.propertyIds || []), propertyId])]
+              : (sub.propertyIds || []).filter((x) => x !== propertyId),
+          })}
           onAdd={addProperty} onPatch={patchProperty} onRemove={removeProperty}
           onOpenSub={(s) => { setSelected(s); setTab("contractors"); }}
           onNewJob={(p) => tryAddJob(null, p)} />
@@ -2630,6 +2685,7 @@ export default function SubSub() {
           seatCount={seatCount} atSeatLimit={atSeatLimit}
           jobsThisMonth={jobsThisMonth} canBrand={canBrand}
           billing={billing} onSetBilling={setBilling}
+          accountKind={kindOf(account)} onSetAccountKind={setAccountKind}
           canManage={can("account") && role === "admin"} mySub={mySub}
           onSaveUser={updateUser} onSaveBrand={setBrand} onSetPlan={setPlan}
           onAddUser={addUser} onRemoveUser={removeUser} onEditUser={setEditUser}
@@ -3803,8 +3859,9 @@ function Kpi({ label, value, sub, accent, warn }) {
 // ---- Properties (portfolio / property managers) -------------------------
 // Vendors can be scoped to specific properties. A vendor with none listed is
 // treated as available across the whole account, which is how a GC uses it.
-function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob }) {
+function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor }) {
   const [form, setForm] = useState(null);   // null | {} | property
+  const [assigning, setAssigning] = useState(null);   // the property whose vendor list is open
   const vendorsFor = (pid) => subs.filter((s) => (s.propertyIds || []).includes(pid));
   const unscoped = subs.filter((s) => !(s.propertyIds || []).length);
   const jobsFor = (pid) => jobs.filter((j) => j.propertyId === pid);
@@ -3816,6 +3873,47 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
         onCancel={() => setForm(null)} />
     </main>
   );
+
+  // Attach vendors from the building's side. The same scoping is editable from
+  // a vendor's own record; this is the direction someone running a portfolio
+  // actually thinks in — "who works this building?"
+  if (assigning) {
+    const here = (s) => (s.propertyIds || []).includes(assigning.id);
+    return (
+      <main className="ss-main">
+        <div className="portal-panel settings-panel">
+          <h4>Vendors at {assigning.name}</h4>
+          <p className="panel-note">
+            Tick the vendors who work this building. A vendor scoped to nothing is
+            available at every property on the account, so leaving everyone
+            unticked is the same as leaving it open.
+          </p>
+          {subs.length === 0 ? (
+            <p className="prop-none">No vendors on this account yet.</p>
+          ) : (
+            <div className="picks">
+              {subs.map((s) => (
+                <button key={s.id} type="button"
+                  className={`pick ${here(s) ? "on" : ""}`}
+                  onClick={() => onScopeVendor(s, assigning.id, !here(s))}>
+                  {s.company}
+                  {!docsComplete(s) && <AlertTriangle size={11} />}
+                </button>
+              ))}
+            </div>
+          )}
+          <p className="cov-hint">
+            {subs.filter(here).length} of {subs.length} scoped here.
+          </p>
+          <div className="form-actions">
+            <button className="btn-solid" onClick={() => setAssigning(null)}>
+              <Check size={15} /> Done
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="ss-main">
@@ -3834,8 +3932,9 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
 
       {unscoped.length > 0 && properties.length > 0 && (
         <p className="rollup-note">
-          {unscoped.length} vendor{unscoped.length === 1 ? "" : "s"} aren't scoped to a property,
-          so they're available at all of them.
+          {unscoped.length === 1
+            ? "1 vendor isn't scoped to a property, so they're available at all of them."
+            : `${unscoped.length} vendors aren't scoped to a property, so they're available at all of them.`}
         </p>
       )}
 
@@ -3889,9 +3988,14 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                 )}
 
                 {p.notes && <p className="prop-notes">{p.notes}</p>}
-                <button className="prop-job" onClick={() => onNewJob(p)}>
-                  <Plus size={12} /> New job at this property
-                </button>
+                <div className="prop-cta">
+                  <button className="prop-job" onClick={() => setAssigning(p)}>
+                    <Users size={12} /> Assign vendors
+                  </button>
+                  <button className="prop-job" onClick={() => onNewJob(p)}>
+                    <Plus size={12} /> New job here
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -4213,7 +4317,7 @@ const SIZES = ["S", "M", "L", "XL", "2XL", "3XL"];
 
 // ---- Account (profile, company, users, subscription) --------------------
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
-  jobsThisMonth, canBrand, billing, onSetBilling,
+  jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
   onSaveUser, onSaveBrand, onSetPlan, onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup }) {
   const panes = [["profile", "Profile"]]
@@ -4383,6 +4487,29 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             </div>
           )}
         </>
+      )}
+
+      {pane === "company" && canManage && (
+        <div className="portal-panel settings-panel">
+          <h4>Account type</h4>
+          <p className="panel-note">
+            What this account is. It decides whether you keep a building list:
+            a general contractor subs out trades job by job, the others manage a
+            standing portfolio and scope vendors to specific buildings.
+          </p>
+          <div className="picks">
+            {Object.entries(ACCOUNT_KINDS).map(([id, k]) => (
+              <button key={id} type="button"
+                className={`pick ${accountKind === id ? "on" : ""}`}
+                onClick={() => onSetAccountKind(id)}>{k.label}</button>
+            ))}
+          </div>
+          <p className="cov-hint">
+            {ACCOUNT_KINDS[accountKind].properties
+              ? "Properties is on. Add your buildings there, then scope vendors to them."
+              : "No Properties tab. Vendors are matched by trade and coverage area, per job."}
+          </p>
+        </div>
       )}
 
       {pane === "company" && canManage && !canBrand && (
@@ -8803,6 +8930,8 @@ const CSS = `
   border:1px dashed var(--line);background:none;border-radius:8px;padding:9px 13px;
   font:600 12.5px Inter,sans-serif;color:var(--brand);cursor:pointer}
 .prop-job:hover{border-color:var(--brand);background:#f2f8f4}
+.prop-cta{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.prop-cta .prop-job{margin-top:0}
 @media (max-width:560px){
   .prop-grid{grid-template-columns:1fr}
   .prop-stats{gap:12px}

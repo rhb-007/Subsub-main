@@ -395,3 +395,46 @@ there are no `/api/platform/*` routes. In particular:
 `/api/apply/:subdomain` still has no rate limiting and no CAPTCHA, as noted
 above, and that remains true now that the application form is reachable
 from more places.
+
+## Account type
+
+An account is now one of four kinds, matching the four audiences the marketing
+site sells to:
+
+| Type | Properties tab |
+|---|---|
+| General contractor | no |
+| Property manager | yes |
+| Building owner | yes |
+| Commercial portfolio manager | yes |
+
+The distinction is the building list. A general contractor subs out trades job
+by job and has no standing portfolio, so Properties is theirs to not have. The
+other three keep a portfolio and scope vendors to specific buildings.
+
+`accounts.kind` defaults to `general_contractor`, so every existing account
+keeps exactly the shape it had. An admin changes it under **My account →
+Company → Account type**; the server validates the value and returns 400
+`invalid_kind` for anything else, and only an admin may set it.
+
+Gating is two checks, not one: `ROLES[role].can` says what a user may do, and
+the account type says what the account has at all. `can("properties")` requires
+both. If an account changes type while someone is sitting on the Properties
+tab, they fall back to the dashboard rather than seeing an empty page.
+
+The header badge now reads the account type with the role after it —
+"General contractor (admin)", "Commercial portfolio manager (admin)" — rather
+than a bare "Admin". A subcontractor signing into someone else's portal still
+reads "Contractor", because the account type is the hiring side's identity,
+not theirs.
+
+Vendors attach to a property from either direction: from the vendor's own
+record ("Properties they cover" on the contractor form), or from the building
+via **Assign vendors** on the property card. Both write the same
+`engagement_properties` rows. A vendor scoped to nothing is available at every
+property on the account, which is how a general contractor's vendors behave by
+default.
+
+Apply `worker/migrations/003_account_kind.sql` to a live database. SQLite
+cannot make `ADD COLUMN` conditional, so a second run stops with
+`duplicate column name: kind`, which is safe to ignore.

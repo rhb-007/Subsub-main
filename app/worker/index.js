@@ -164,7 +164,7 @@ async function logEvent(env, accountId, actorId, kind, subjectId, payload) {
 // ---------------------------------------------------------------------------
 async function loginResponse(db, user) {
   const { results: memberships } = await db.prepare(
-    `SELECT m.*, a.name as account_name, a.subdomain, a.plan, a.billing, a.logo_key, a.use_default_mark, a.theme
+    `SELECT m.*, a.name as account_name, a.subdomain, a.kind, a.plan, a.billing, a.logo_key, a.use_default_mark, a.theme
      FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
   ).bind(user.id).all();
   return {
@@ -172,7 +172,7 @@ async function loginResponse(db, user) {
     memberships: memberships.map((m) => ({
       accountId: m.account_id, accountName: m.account_name, subdomain: m.subdomain,
       role: m.role, companyId: m.company_id,
-      plan: m.plan, billing: m.billing, logoKey: m.logo_key, useDefaultMark: !!m.use_default_mark,
+      kind: m.kind, plan: m.plan, billing: m.billing, logoKey: m.logo_key, useDefaultMark: !!m.use_default_mark,
       theme: parseJson(m.theme),
     })),
   };
@@ -348,7 +348,7 @@ app.get("/api/account", async (c) => {
   if (!a) return c.json({ error: "not_found" }, 404);
   const user = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(userId).first();
   return c.json({
-    id: a.id, name: a.name, subdomain: a.subdomain, plan: a.plan, billing: a.billing,
+    id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: a.billing,
     logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark, theme: parseJson(a.theme),
     user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone } : null,
   });
@@ -379,7 +379,7 @@ app.get("/api/account-by-subdomain/:subdomain", async (c) => {
   ).bind(c.req.param("subdomain").toLowerCase()).first();
   if (!a) return c.notFound();
   return c.json({
-    id: a.id, name: a.name, subdomain: a.subdomain, plan: a.plan, billing: a.billing,
+    id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: a.billing,
     logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark, theme: parseJson(a.theme),
   });
 });
@@ -390,6 +390,8 @@ app.get("/api/account-by-subdomain/:subdomain", async (c) => {
 // a stylesheet-injection vector — reject anything that isn't exactly this
 // shape rather than trying to sanitize it.
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+const ACCOUNT_KINDS = ["general_contractor", "property_manager", "building_owner", "portfolio_manager"];
+
 function validTheme(theme) {
   if (!theme || typeof theme !== "object") return null;
   const out = {};
@@ -403,9 +405,13 @@ function validTheme(theme) {
 // Branding/plan/billing for the current account.
 app.patch("/api/account", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
-  const b = await c.req.json(); // { name, plan, billing, logoKey, useDefaultMark, theme }
+  const b = await c.req.json(); // { name, kind, plan, billing, logoKey, useDefaultMark, theme }
   const sets = [], vals = [];
   if (b.name != null) { sets.push("name = ?"); vals.push(b.name); }
+  if (b.kind != null) {
+    if (!ACCOUNT_KINDS.includes(b.kind)) return c.json({ error: "invalid_kind" }, 400);
+    sets.push("kind = ?"); vals.push(b.kind);
+  }
   if (b.plan != null) { sets.push("plan = ?"); vals.push(b.plan); }
   if (b.billing != null) { sets.push("billing = ?"); vals.push(b.billing); }
   if (b.logoKey !== undefined) { sets.push("logo_key = ?"); vals.push(b.logoKey); }

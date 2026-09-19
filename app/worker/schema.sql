@@ -14,6 +14,11 @@ CREATE TABLE accounts (
   id                TEXT PRIMARY KEY,
   name              TEXT NOT NULL,
   subdomain         TEXT UNIQUE NOT NULL,
+  -- Who the account is. A general contractor has no building list; the other
+  -- three manage a standing portfolio and scope vendors to specific properties.
+  kind              TEXT NOT NULL DEFAULT 'general_contractor'
+                      CHECK (kind IN ('general_contractor','property_manager',
+                                      'building_owner','portfolio_manager')),
   plan              TEXT NOT NULL DEFAULT 'basic' CHECK (plan IN ('basic','scale')),
   billing           TEXT NOT NULL DEFAULT 'monthly' CHECK (billing IN ('monthly','annual')),
   logo_key          TEXT,               -- R2 object key; NULL = default mark
