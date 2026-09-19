@@ -26,7 +26,7 @@ import {
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity,
 } from "lucide-react";
-import { api, getAuth, setAuth, clearAuth } from "./lib/api";
+import { api, getAuth, setAuth, clearAuth, logoUrl } from "./lib/api";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
 
 // ---- Persistence bridge ---------------------------------------------------
@@ -1216,7 +1216,7 @@ export default function SubSub() {
     if (!sub) return;
     api.getAccountBySubdomain(sub).then((a) => {
       setSubdomainBrand({ id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: a.billing,
-        logoData: a.logoKey ? `/api/logo/${a.id}` : null, useDefaultMark: a.useDefaultMark, theme: a.theme });
+        logoData: a.logoKey ? logoUrl(a.id) : null, useDefaultMark: a.useDefaultMark, theme: a.theme });
     }).catch(() => {}); // no account on this subdomain — fall through to generic branding
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1985,7 +1985,7 @@ export default function SubSub() {
       result.memberships.forEach((m) => {
         byId[m.accountId] = { id: m.accountId, name: m.accountName, subdomain: m.subdomain,
           kind: m.kind, plan: m.plan, billing: m.billing, theme: m.theme,
-          logoData: m.logoKey ? `/api/logo/${m.accountId}` : null, useDefaultMark: m.useDefaultMark };
+          logoData: m.logoKey ? logoUrl(m.accountId) : null, useDefaultMark: m.useDefaultMark };
       });
       return Object.values(byId);
     });
@@ -2009,7 +2009,7 @@ export default function SubSub() {
       setAccounts((prev) => [...prev.filter((a) => a.id !== acct.id), {
         id: acct.id, name: acct.name, subdomain: acct.subdomain, kind: acct.kind,
         plan: acct.plan, billing: acct.billing,
-        logoData: acct.logoKey ? `/api/logo/${acct.id}` : null, useDefaultMark: acct.useDefaultMark,
+        logoData: acct.logoKey ? logoUrl(acct.id) : null, useDefaultMark: acct.useDefaultMark,
         theme: acct.theme,
       }]);
       if (acct.user) setUsers((prev) => [...prev.filter((u) => u.id !== acct.user.id), acct.user]);

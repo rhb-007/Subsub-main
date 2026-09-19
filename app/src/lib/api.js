@@ -13,6 +13,20 @@
 // in; the server always re-checks that a real membership backs it up.
 import { supabase, supabaseEnabled } from "./supabaseClient";
 
+// Where the API lives.
+//
+// Locally this stays relative and Vite proxies /api to the worker (see
+// vite.config.js). In production the app is served by Pages and the API is a
+// Worker on its own hostname, so a relative path would hit the static site and
+// 404 — every deployed build must set VITE_API_BASE. The worker sends CORS
+// headers for /api/*, and identity travels in an Authorization header rather
+// than a cookie, so a cross-origin base is fine.
+//
+//   VITE_API_BASE=https://api.subsub.work/api
+export const API_BASE = (import.meta.env.VITE_API_BASE || "/api").replace(/\/+$/, "");
+// A logo is an <img src>, so it needs the same base as every other call.
+export const logoUrl = (accountId) => `${API_BASE}/logo/${accountId}`;
+
 const AUTH_KEY = "subsub.auth";
 
 export function getAuth() {
@@ -43,7 +57,7 @@ async function authHeaders() {
 async function request(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(await authHeaders()), ...(options.headers || {}) };
 
-  const res = await fetch(`/api${path}`, { ...options, headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const err = new Error(body.error || `request_failed_${res.status}`);
@@ -60,7 +74,7 @@ async function request(path, options = {}) {
 async function uploadFile(kind, file) {
   const headers = { "Content-Type": file.type || "application/octet-stream", ...(await authHeaders()) };
 
-  const res = await fetch(`/api/uploads/${encodeURIComponent(kind)}/${encodeURIComponent(file.name)}`, {
+  const res = await fetch(`${API_BASE}/uploads/${encodeURIComponent(kind)}/${encodeURIComponent(file.name)}`, {
     method: "PUT", headers, body: file,
   });
   if (!res.ok) throw new Error(`upload_failed_${res.status}`);

@@ -571,3 +571,18 @@ against a local stand-in. Leave it unset in production.
 **SMS is still not wired.** The text-message option composes a preview and
 sends nothing, and the interface now says so instead of claiming it sent.
 Twilio is the intended provider.
+
+## Where the app finds the API
+
+Locally the app fetches `/api/...` relatively and Vite proxies it to the
+worker. In production the app is served by Pages and the API is a Worker on its
+own hostname, so a relative path would hit the static site and 404.
+
+**Every deployed build must set `VITE_API_BASE`**, for example
+`https://api.subsub.work/api`. Unset, it falls back to `/api`, which is correct
+for local development and wrong everywhere else. The worker already sends CORS
+headers for `/api/*`, and identity travels in an Authorization header rather
+than a cookie, so a cross-origin base needs nothing further.
+
+This covers logo images too, which are `<img src>` values pointing at
+`/api/logo/:accountId` and would have 404'd the same way.
