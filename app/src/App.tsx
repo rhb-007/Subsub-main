@@ -2043,6 +2043,42 @@ export default function SubSub() {
     return null;
   }
 
+  // Arriving straight from the marketing site's signup, which hands the new
+  // session over in the URL fragment. Without this, somebody finishes signing
+  // up, clicks through, and is immediately asked to sign in again — which
+  // reads as though the signup failed. Checked synchronously so the sign-in
+  // form never flashes on screen first.
+  const [handingOff, setHandingOff] = useState(
+    () => typeof window !== "undefined" && window.location.hash.indexOf("ss_at=") !== -1
+  );
+
+  useEffect(() => {
+    if (!handingOff) return;
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const access_token = params.get("ss_at");
+    const refresh_token = params.get("ss_rt");
+    // Strip it before anything else runs, so the tokens don't sit in the
+    // address bar or get copied out of it by accident.
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+
+    if (!supabaseEnabled || !access_token || !refresh_token) { setHandingOff(false); return; }
+    (async () => {
+      try {
+        const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+        if (error) throw error;
+        const msg = await handleLogin("");
+        // Falling through to the sign-in form is the right failure: the
+        // account exists and the password they just chose still works.
+        if (msg) console.error("[handoff] could not open the account:", msg);
+      } catch (err) {
+        console.error("[handoff] failed:", err);
+      } finally {
+        setHandingOff(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Resume a session across reloads — this is the whole point of Phase 1.
   // The saved auth headers are enough for every other request; this just
   // rebuilds the `accounts`/`users`/`memberships` state that normally comes
@@ -2074,6 +2110,17 @@ export default function SubSub() {
     if (loggedIn && tab === "properties" && !hasProperties(account)) setTab("dashboard");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account.id, account.kind, loggedIn, tab]);
+
+  if (!loggedIn && handingOff) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: "var(--muted)" }}>
+          Opening your account…
+        </div>
+      </div>
+    );
+  }
 
   if (!loggedIn) {
     return (

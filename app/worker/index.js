@@ -289,7 +289,7 @@ app.post("/api/signup", async (c) => {
   if (subTaken) return c.json({ error: "subdomain_taken" }, 409);
   if (emailTaken) return c.json({ error: "email_in_use" }, 409);
 
-  let authId = null, needsConfirmation = false;
+  let authId = null, needsConfirmation = false, session = null;
   if (realAuth) {
     const signed = await supabaseSignUp(c.env, email, b.password);
     if (!signed.ok) {
@@ -298,6 +298,7 @@ app.post("/api/signup", async (c) => {
       return c.json({ error: signed.error, detail: signed.detail }, status);
     }
     authId = signed.authId;
+    session = signed.session;
     needsConfirmation = !signed.session;
   }
 
@@ -342,6 +343,13 @@ app.post("/api/signup", async (c) => {
       ? `https://${subdomain}.subsub.work`
       : "https://app.subsub.work",
     needsConfirmation,
+    // Present only when the project has email confirmation off, in which
+    // case Supabase already issued a session for the password we just sent
+    // it. Handing it back lets the signup page carry the person into the app
+    // signed in. This is the same pair of tokens Supabase would have handed
+    // straight to the browser had it called /auth/v1/signup itself, so it
+    // exposes nothing new -- it just travels via our API instead.
+    session,
   }, 201);
 });
 
@@ -632,8 +640,14 @@ async function supabaseSignUp(env, email, password) {
     if (/password/i.test(msg)) return { ok: false, error: "weak_password", detail: msg };
     return { ok: false, error: "auth_failed", detail: msg };
   }
-  // A project with email confirmation on returns a user but no session.
-  return { ok: true, authId: body?.user?.id || body?.id || null, session: !!body?.access_token };
+  // A project with email confirmation on returns a user but no session. When
+  // it does return one, hand the tokens back so the caller can sign the
+  // person straight in rather than bouncing them to a login form seconds
+  // after they typed the password that created the account.
+  const session = body?.access_token && body?.refresh_token
+    ? { access_token: body.access_token, refresh_token: body.refresh_token }
+    : null;
+  return { ok: true, authId: body?.user?.id || body?.id || null, session };
 }
 
 const ACCOUNT_KINDS = ["general_contractor", "property_manager", "building_owner", "portfolio_manager"];
