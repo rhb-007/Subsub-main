@@ -376,12 +376,6 @@ body.nav-open{overflow:hidden}
   .logo-drop label{font:600 14.5px Inter;color:var(--forest-lift);cursor:pointer;text-decoration:underline;
     text-underline-offset:2px}
   .logo-drop p{font-size:13px;color:var(--muted);margin-top:3px}
-  .summary{border:1px solid var(--rule);border-radius:var(--r);overflow:hidden;margin-top:22px}
-  .summary div{display:flex;justify-content:space-between;gap:16px;padding:13px 16px;
-    border-bottom:1px solid var(--rule);font-size:15px}
-  .summary div:last-child{border-bottom:0}
-  .summary span{color:var(--muted)}
-  .summary b{font-weight:600;text-align:right}
 </style>
 <link rel="canonical" href="https://subsub.work/get-started.html">
 <meta name="robots" content="noindex,nofollow">
@@ -585,11 +579,9 @@ body.nav-open{overflow:hidden}
 
     <!-- STEP 4 -->
     <section class="step" data-step="4">
-      <h2>You're set up.</h2>
+      <h2 id="doneTitle">You're set up.</h2>
       <p class="sl" id="doneLine">We've emailed your subcontractors an invite. They'll build their
         own profiles and upload their own documents, then you approve them.</p>
-
-      <div class="summary" id="summary"></div>
 
       <ul class="ticks" style="margin-top:26px">
         <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span><b>Next:</b> approve their documents as they come in — nobody can be assigned a job until theirs clear.</span></li>
@@ -879,30 +871,13 @@ body.nav-open{overflow:hidden}
     b.setAttribute('aria-pressed', b.getAttribute('aria-pressed')==='true' ? 'false' : 'true');
   });
 
+  // How many subcontractors were invited, kept for the closing copy. The
+  // copy itself is written once the API has answered, since what to say
+  // depends on whether a confirmation link is waiting.
+  var invitedCount = 0;
+
   function finishUp(skipped){
-    var n = filled();
-    var picked = Array.prototype.slice.call(document.querySelectorAll('#trades button'))
-      .filter(function(b){ return b.getAttribute('aria-pressed')==='true'; })
-      .map(function(b){ return b.textContent.trim(); });
-    document.getElementById('doneLine').textContent = skipped || n===0
-      ? 'Your account is ready. Invite your subcontractors whenever you like — they build their own profiles and upload their own documents, then you approve them.'
-      : 'We\u2019ve emailed ' + n + ' subcontractor' + (n===1?'':'s') + ' an invite. They\u2019ll build their own profiles and upload their own documents, then you approve them.';
-    var s = document.getElementById('summary');
-    s.innerHTML =
-      '<div><span>Plan</span><b>' + PLANS[plan].name +
-        (plan === 'scale' ? (billing === 'annual' ? ' — $990/yr' : ' — $99/mo') : ' — free') +
-        '</b></div>' +
-      '<div><span>Company</span><b>' + (company.value.trim() || '—') + '</b></div>' +
-      '<div><span>Sign-in address</span><b>' + (PLANS[plan].branding
-        ? (sub.value.trim() || 'yourcompany') + '.subsub.work'
-        : 'app.subsub.work (SubSub branded)') + '</b></div>' +
-      '<div><span>Jobs per month</span><b>' + (plan==='basic' ? '5' : 'Unlimited') + '</b></div>' +
-      '<div><span>Admin</span><b>' + (document.getElementById('email').value.trim() || '—') + '</b></div>' +
-      '<div><span>Subcontractors invited</span><b>' + n + '</b></div>' +
-      '<div><span>Trades</span><b>' + (picked.join(', ') || '—') + '</b></div>';
-    document.getElementById('goApp').setAttribute('href', PLANS[plan].branding
-      ? 'https://' + (sub.value.trim() || 'yourcompany') + '.subsub.work'
-      : 'https://app.subsub.work');
+    invitedCount = skipped ? 0 : filled();
     createAccount(function(){ go(4); });
   }
 
@@ -1022,18 +997,32 @@ body.nav-open{overflow:hidden}
       if(res.body.signInUrl){
         document.getElementById('goApp').setAttribute('href', res.body.signInUrl);
       }
+
+      // Say their name and their company back to them. Somebody has just
+      // spent three steps typing; the last screen should read like an
+      // arrival, not a receipt for what they already know they entered.
+      var first = (document.getElementById('name').value.trim().split(/\s+/)[0] || '');
+      var co = company.value.trim();
+      var title = document.getElementById('doneTitle');
       var dl = document.getElementById('doneLine');
-      if(res.body.needsConfirmation){
-        if(dl){ dl.textContent = 'Check ' + payload.email + ' for a confirmation link, '
-          + 'then sign in. Your subcontractor invites are on their way too.'; }
-        var btn = document.getElementById('goApp');
-        if(btn) btn.textContent = 'Go to sign-in';
-      } else if(dl){
-        // Confirmation is off on the auth project, so there is nothing to
-        // wait for -- but they still sign in themselves.
-        dl.textContent = 'Your account is ready. Sign in with ' + payload.email
-          + ' and the password you just chose.';
+      var btn = document.getElementById('goApp');
+
+      if(title){ title.textContent = first ? 'Welcome aboard, ' + first + '.' : 'Welcome aboard.'; }
+
+      var invites = invitedCount === 0 ? ''
+        : ' Your ' + invitedCount + ' subcontractor invite'
+          + (invitedCount === 1 ? ' is' : 's are') + ' on the way.';
+
+      if(dl){
+        dl.textContent = res.body.needsConfirmation
+          // One thing left, and it is the only thing on the screen that
+          // matters -- so it leads, rather than trailing a list of details.
+          ? co + ' is on SubSub. One last step: open the confirmation link we just '
+            + 'sent to ' + payload.email + ', and you can sign in.' + invites
+          : co + ' is on SubSub. Sign in with ' + payload.email + ' and the password '
+            + 'you just chose.' + invites;
       }
+      if(btn && res.body.needsConfirmation){ btn.textContent = 'Go to sign-in'; }
       done();
     }).catch(function(){
       Array.prototype.forEach.call(btns, function(b){ b.disabled = false; });
