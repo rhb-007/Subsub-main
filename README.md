@@ -35,11 +35,15 @@ a black mark all but disappears on a dark tab bar.
 
 Drop the whole folder in as the publish directory.
 
-- **Cloudflare Workers (Static Assets)** — this repo ships a `wrangler.jsonc` pointing
-  `assets.directory` at `./`, deployed with `npx wrangler deploy`. `_redirects` is read
+- **Cloudflare Workers (Static Assets)** — how this repo actually ships. `wrangler.jsonc`
+  points `assets.directory` at `./` and deploys on push. `_redirects` is read
   automatically, same as Pages.
-- **Cloudflare Pages / Netlify** — `_redirects` is read automatically. It gives you
-  extensionless URLs (`/pricing` → `pricing.html`) and 301s from the older draft filenames.
+  **Do not add extensionless rewrites (`/pricing /pricing.html 200`) to `_redirects`
+  here.** Workers static assets already serve clean URLs via `html_handling`
+  (`auto-trailing-slash`), so those rules redirect onto themselves and every sub-page
+  dies with "too many redirections". This took the site down once already.
+- **Cloudflare Pages / Netlify** — `_redirects` is read automatically. There the
+  extensionless block is safe, and it 301s the older draft filenames.
 - **Vercel** — translate `_redirects` into `vercel.json` rewrites, or leave the `.html`
   URLs as they are.
 - **S3 + CloudFront** — set the index document to `index.html` and the error document to
@@ -54,33 +58,16 @@ Drop the whole folder in as the publish directory.
    extensionless URLs and you'd rather canonicalise to those, strip `.html` from the
    `<link rel="canonical">` and `og:url` tags and from `sitemap.xml` — but change both
    together, or you'll split signals.
-3. **OG image** — `og-image.png` (1200×630) is referenced as `og:image`/`twitter:image`
-   on every page.
+3. **OG image** — `og-image.png` (1200×630) ships at the site root and is referenced as
+   `og:image`/`twitter:image` on all ten content pages. `404.html` has no Open Graph
+   block and is deliberately left out. (Favicons and app icons are done.)
 4. **Wire up the forms.** The demo booking and the signup flow are front-end only —
    they validate and show a confirmation but post nothing. Point them at your backend,
    or at Formspree / Netlify Forms / Cal.com for the booking calendar.
 5. **Sign-in links** point at `https://app.subsub.work`. Change if the app lives elsewhere.
 6. **Submit the sitemap** in Google Search Console and Bing Webmaster Tools.
 
-## SEO / AEO notes
-
-- Unique title and meta description per page, all within display limits.
-- Canonical, robots, Open Graph and Twitter Card tags on every page.
-- JSON-LD on every page: `Organization` and `SoftwareApplication` (with both plan
-  offers) sitewide, `WebPage` per page, `BreadcrumbList` on the audience and legal
-  pages, and `FAQPage` on the home and pricing pages.
-- The FAQ entries are written as direct question-and-answer pairs so answer engines can
-  quote them: what SubSub does, whether subs pay, which documents are tracked, licence
-  verification, pricing, the free plan, the annual discount, what counts as a user.
-- `robots.txt` explicitly allows GPTBot, ClaudeBot, PerplexityBot and Google-Extended,
-  and disallows the signup flow.
-
-## Build stamp
-
-Each page carries `<meta name="build" content="...">` and an HTML comment at the top of
-`<head>`. View source on a published page to confirm which version is live.
-
-## Responsive behaviour
+## Responsive behavior
 
 Breakpoints at 1000px (tablet), 900px (mobile nav), 760px, 560px and 400px.
 
@@ -90,3 +77,21 @@ Breakpoints at 1000px (tablet), 900px (mobile nav), 760px, 560px and 400px.
   horizontally rather than clipping.
 - Buttons and nav links are at least 44px tall for touch.
 - Below 400px the side gutters tighten and stacked CTAs go full width.
+
+## SEO / AEO notes
+
+- Unique title and meta description per page, all within display limits.
+- Canonical, robots, Open Graph and Twitter Card tags on every page.
+- JSON-LD on every page: `Organization` and `SoftwareApplication` (with both plan
+  offers) sitewide, `WebPage` per page, `BreadcrumbList` on the audience and legal
+  pages, and `FAQPage` on the home and pricing pages.
+- The FAQ entries are written as direct question-and-answer pairs so answer engines can
+  quote them: what SubSub does, whether subs pay, which documents are tracked, license
+  verification, pricing, the free plan, the annual discount, what counts as a user.
+- `robots.txt` explicitly allows GPTBot, ClaudeBot, PerplexityBot and Google-Extended,
+  and disallows the signup flow.
+
+## Build stamp
+
+Each page carries `<meta name="build" content="...">` and an HTML comment at the top of
+`<head>`. View source on a published page to confirm which version is live.
