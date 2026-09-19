@@ -1,4 +1,22 @@
 import React, { useState, useMemo, useEffect } from "react";
+
+// ---- Build target ----------------------------------------------------------
+// "tenant"   → the customer app (app.subsub.work and each GC's own subdomain).
+//              No route to the internal console exists.
+// "platform" → SubSub's internal console (admin.subsub.work). Boots straight
+//              into the staff login and never shows a customer's branding.
+//
+// Set at BUILD time, not run time: Vite substitutes the literal, so in a tenant
+// build every `BUILD === "platform"` branch folds to false and the console code
+// is dropped by the minifier. That is what keeps the console bundle off the
+// customer domain — deploy the two hostnames as two builds of this one repo:
+//
+//   VITE_BUILD=tenant   npm run build     # app.subsub.work, *.subsub.work
+//   VITE_BUILD=platform npm run build     # admin.subsub.work
+//
+// Anything the console must not expose is still enforced server-side; this
+// flag only decides what ships to the browser.
+const BUILD = import.meta.env.VITE_BUILD === "platform" ? "platform" : "tenant";
 import {
   Search, Phone, Mail, MapPin, FileText, Shield, ScrollText, Calendar,
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
@@ -6,7 +24,7 @@ import {
   Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
-  DoorOpen, Droplets, SprayCan,
+  DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth } from "./lib/api";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
@@ -351,8 +369,8 @@ const seedSubs = [
 
 // ---- Users & roles -------------------------------------------------------
 const ROLES = {
-  admin: { label: "Admin", can: ["dashboard", "contractors", "calendar", "jobs", "uniforms", "account"] },
-  pm: { label: "Project Manager", can: ["dashboard", "contractors", "calendar", "jobs", "uniforms", "account"] },
+  admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
+  pm: { label: "Project Manager", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
   contractor: { label: "Contractor", can: ["portal", "account"] },
 };
 const seedUsers = [
@@ -360,6 +378,8 @@ const seedUsers = [
   { id: "u2", name: "Alicia Gomez", email: "alicia@outerhome.com", role: "pm" },
   // Demo: a second admin whose account sits on the Scale plan, so the two
   // plans can be compared side by side without changing billing.
+  { id: "u9", name: "Sam Okafor", email: "sam@subsub.work", role: "admin", platform: true },
+  { id: "u10", name: "Priya Raman", email: "priya@subsub.work", role: "admin", platform: true },
   { id: "u5", name: "Ross Mather", email: "ross@outerhome.com", role: "admin" },
   { id: "u3", name: "Miguel Alvarez", email: "miguel@cascaderoof.com", role: "contractor", subId: 1 },
   { id: "u4", name: "Dana Cho", email: "dana@emeraldext.com", role: "contractor", subId: 2 },
@@ -370,7 +390,7 @@ const seedUsers = [
 // ===========================================================================
 // A subcontractor is NOT owned by the company that hires them. Three concepts:
 //
-//   companies    a business in the world. Global. Deduped on WA L&I licence.
+//   companies    a business in the world. Global. Deduped on WA L&I license.
 //   accounts     a hiring company's workspace (plan, branding, users, jobs).
 //   engagements  the account <-> company relationship. Per-GC data lives here.
 //
@@ -400,7 +420,7 @@ const ENGAGEMENT_FIELDS = [
   "categories", "caps",
   // your experience of them
   "rating", "ratedJobs", "accepted", "declined", "autoSchedule", "notes",
-  "status",
+  "status", "propertyIds",
 ];
 
 // Split one flat seed record into its company half and engagement half.
@@ -433,15 +453,95 @@ function composeSub(co, en) {
 
 const seedCompanies = seedSubs.map((s) => splitSeed(s).co);
 
-// Outerhome's actual logo mark (their file, not a recolour), used as the
+// Outerhome's actual logo mark (their file, not a recolor), used as the
 // logo for their own account only.
 const OUTERHOME_MARK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjY2IDI0MiAxMjQgMTExIj48cG9seWdvbiBmaWxsPSIjMTgxNzE2IiBwb2ludHM9IjE4NC45OSwyNzcuNDggMTg0Ljk5LDM0Ny42NyAxNjMuMzMsMzQ3LjY3IDE2My4zMywyOTAuMTggMTI4LjI0LDI3MS41MSA5My4xNCwyOTAuMTggOTMuMTQsMzMyLjc0IDkzLjE2LDMzMi43MyAxMjguMzIsMzExLjM5IDEyOC4yNCwzNDcuNjcgNzEuNDksMzQ3LjY3IDcxLjQ5LDI3Ny40OCAxMjguMjQsMjQ3LjYxIi8+PC9zdmc+";
+
+// ---- Activity log -----------------------------------------------------------
+// One append-only stream per account: who did what, when. Read in the
+// superadmin console; written by the tenant app on the actions that matter.
+const seedActivity = [
+  { id: "ev1",  accountId: "a2", at: "2026-09-18T08:12:00Z", userId: "u5", kind: "login",        text: "Signed in" },
+  { id: "ev2",  accountId: "a2", at: "2026-09-18T08:20:00Z", userId: "u5", kind: "doc_verified", text: "Verified insurance for Cascade Roofworks" },
+  { id: "ev3",  accountId: "a2", at: "2026-09-17T15:41:00Z", userId: "u5", kind: "wo_issued",    text: "Issued WO-4417 to Cascade Roofworks · roofing · $12,400" },
+  { id: "ev4",  accountId: "a2", at: "2026-09-16T10:03:00Z", userId: "u5", kind: "job_created",  text: "Created job 1420 Maple St — re-roof" },
+  { id: "ev5",  accountId: "a2", at: "2026-09-15T09:30:00Z", userId: "u5", kind: "sub_added",    text: "Added Summit Roofing LLC" },
+  { id: "ev6",  accountId: "a1", at: "2026-09-18T07:55:00Z", userId: "u1", kind: "login",        text: "Signed in" },
+  { id: "ev7",  accountId: "a1", at: "2026-09-18T08:02:00Z", userId: "u2", kind: "login",        text: "Signed in" },
+  { id: "ev8",  accountId: "a1", at: "2026-09-17T16:22:00Z", userId: "u1", kind: "doc_rejected", text: "Rejected bond for Emerald Exteriors · below $30,000 minimum" },
+  { id: "ev9",  accountId: "a1", at: "2026-09-17T11:10:00Z", userId: "u2", kind: "job_completed",text: "Completed 88 Cedar Ave — gutters" },
+  { id: "ev10", accountId: "a1", at: "2026-09-12T14:00:00Z", userId: "u1", kind: "license_check",text: "Ran L&I license check on Stoneline Hardscapes · active" },
+  { id: "ev11", accountId: "a3", at: "2026-09-17T13:05:00Z", userId: null, kind: "plan_changed", text: "Upgraded to Scale (monthly)" },
+  { id: "ev12", accountId: "a4", at: "2026-09-18T09:14:00Z", userId: null, kind: "limit_hit",    text: "Hit the 3-subcontractor limit on Basic" },
+];
+const ACTIVITY_LABEL = {
+  login: "Sign-in", doc_verified: "Document", doc_rejected: "Document", wo_issued: "Work order",
+  job_created: "Job", job_completed: "Job", sub_added: "Subcontractor", license_check: "License",
+  plan_changed: "Plan", limit_hit: "Plan", impersonation: "Platform", user_added: "Platform", change_order: "Change order",
+  service_call: "Callback",
+};
+
+// ---- Superadmins ----------------------------------------------------------
+// SubSub's own staff. Deliberately NOT a role in ROLES — that would touch
+// every can() check and every tab. Instead they get a separate console.
+// "finance" gates revenue; "impersonate" gates sign-in-as. Both audited.
+// role: "superadmin" sees everything. "standard" runs support — accounts,
+// users, companies — with no financial numbers and no platform-wide metrics.
+const seedSuperadmins = [
+  { userId: "u9",  role: "superadmin", finance: true,  impersonate: true  },
+  { userId: "u10", role: "standard",   finance: false, impersonate: false },
+];
+const STAFF_ROLE_LABEL = { superadmin: "Superadmin", standard: "Standard" };
+// Subscription history, append-only. Current account state can't tell you
+// what expansion or churn happened in a given month; this can.
+const seedSubscriptionEvents = [
+  { id: "se1", accountId: "a2", at: "2026-03-04", kind: "created",   fromPlan: null,    toPlan: "basic", cycle: "monthly", mrrDelta: 0 },
+  { id: "se2", accountId: "a2", at: "2026-03-19", kind: "upgraded",  fromPlan: "basic", toPlan: "scale", cycle: "monthly", mrrDelta: 9900 },
+  { id: "se3", accountId: "a2", at: "2026-06-01", kind: "cycle",     fromPlan: "scale", toPlan: "scale", cycle: "annual",  mrrDelta: -1650 },
+  { id: "se4", accountId: "a1", at: "2026-07-22", kind: "created",   fromPlan: null,    toPlan: "basic", cycle: "monthly", mrrDelta: 0 },
+  { id: "se5", accountId: "a3", at: "2026-08-02", kind: "created",   fromPlan: null,    toPlan: "basic", cycle: "monthly", mrrDelta: 0 },
+  { id: "se6", accountId: "a3", at: "2026-08-14", kind: "upgraded",  fromPlan: "basic", toPlan: "scale", cycle: "monthly", mrrDelta: 9900 },
+  { id: "se7", accountId: "a4", at: "2026-08-20", kind: "created",   fromPlan: null,    toPlan: "basic", cycle: "monthly", mrrDelta: 0 },
+  { id: "se8", accountId: "a5", at: "2026-05-11", kind: "created",   fromPlan: null,    toPlan: "basic", cycle: "monthly", mrrDelta: 0 },
+  { id: "se9", accountId: "a5", at: "2026-05-30", kind: "upgraded",  fromPlan: "basic", toPlan: "scale", cycle: "monthly", mrrDelta: 9900 },
+  { id: "se10", accountId: "a5", at: "2026-09-02", kind: "canceled", fromPlan: "scale", toPlan: null,    cycle: "monthly", mrrDelta: -9900 },
+];
+// Normalized MRR in cents: annual ÷ 12, so a $990/yr account is $82.50/mo.
+const mrrOf = (acct) => {
+  if (!acct || acct.status === "canceled" || acct.plan !== "scale") return 0;
+  return acct.billing === "annual" ? Math.round(99000 / 12) : 9900;
+};
+
+// ---- Properties ---------------------------------------------------------
+// Property and portfolio managers run different vendors at different
+// buildings. A property belongs to an account; an engagement can be scoped to
+// specific properties, or left open to all of them (how a GC would use it).
+const seedProperties = [
+  { id: "p1", accountId: "a1", name: "Riverside Apartments", address: "1420 Riverside Dr",
+    city: "Seattle", state: "WA", zip: "98101", units: 84, notes: "" },
+  { id: "p2", accountId: "a1", name: "Cedar Court Townhomes", address: "88 Cedar Ave",
+    city: "Seattle", state: "WA", zip: "98103", units: 32, notes: "" },
+  { id: "p3", accountId: "a2", name: "Harbor Point Tower", address: "700 Harbor Way",
+    city: "Bellevue", state: "WA", zip: "98004", units: 210, notes: "Class A office" },
+  { id: "p4", accountId: "a2", name: "Northgate Retail Center", address: "9200 1st Ave NE",
+    city: "Seattle", state: "WA", zip: "98115", units: 18, notes: "14 tenant spaces" },
+];
 
 // Two hiring accounts, so the same subcontractor can be seen in both.
 const seedAccounts = [
   { id: "a1", name: "Outerhome", subdomain: "outerhome", plan: "basic", billing: "monthly",
+    createdAt: "2026-07-22", lastActive: "2026-09-18",
+    theme: { bg: "#F4F6F4", surface: "#FFFFFF", text: "#12211C", accent: "#1F6B4A", btnText: "#FFFFFF" },
     logoData: OUTERHOME_MARK, useDefaultMark: false },
+  { id: "a3", name: "Meridian Property Group", subdomain: "meridian", plan: "scale", billing: "monthly",
+    createdAt: "2026-08-02", lastActive: "2026-09-17", theme: null },
+  { id: "a4", name: "Northline Homes", subdomain: "northline", plan: "basic", billing: "monthly",
+    createdAt: "2026-08-20", lastActive: "2026-09-18", theme: null },
+  { id: "a5", name: "Riverside Renovations", subdomain: "riverside", plan: "scale", billing: "monthly",
+    status: "canceled", createdAt: "2026-05-11", lastActive: "2026-08-30", theme: null },
   { id: "a2", name: "Harbor Point Builders", subdomain: "harborpoint", plan: "scale", billing: "annual",
+    createdAt: "2026-03-04", lastActive: "2026-09-18",
+    theme: { bg: "#0E1B2A", surface: "#16263B", text: "#EAF1F8", accent: "#E0913C", btnText: "#1A1207" },
     logoData: null, useDefaultMark: false },
 ];
 
@@ -458,13 +558,13 @@ const seedEngagements = (function () {
     { companyId: 1, rating: 4.4, ratedJobs: 6,  autoSchedule: false,
       notes: "Roofing only for us. Good on tear-offs.",
       docReview: { insurance: { status: "pending" } } },
-    { companyId: 4, rating: 5.0, ratedJobs: 11, autoSchedule: true,
+    { companyId: 4, rating: 5.0, ratedJobs: 11, autoSchedule: true, propertyIds: ["p3"],
       notes: "Our go-to for window packages.",
       docReview: {
         insurance: { status: "verified", limits: { cgl_occ: "2000000", cgl_agg: "4000000", prod_comp: "4000000", auto: "1000000", empl: "1000000" }, expires: _d(180), checks: { named: true, primary: true, wc: true, current: true, carrier: true }, verifiedBy: "Ross Mather", verifiedAt: _d(-14) },
         bond: { status: "verified", amount: "60000", checks: { active: true, amount: true, principal: true, surety: true }, verifiedBy: "Ross Mather", verifiedAt: _d(-14) },
         contract: { status: "verified", checks: { signed: true, counter: true, version: true }, verifiedBy: "Ross Mather", verifiedAt: _d(-14) } } },
-    { companyId: 7, rating: 0, ratedJobs: 0, autoSchedule: false,
+    { companyId: 7, rating: 0, ratedJobs: 0, autoSchedule: false, propertyIds: ["p4"],
       notes: "Just invited — no jobs yet.",
       docReview: {} },
   ].forEach((e, i) => {
@@ -685,8 +785,34 @@ const INSURANCE_ATTEST = [
 ];
 const BOND_MIN = 30000;
 
+// ---- Change orders --------------------------------------------------------
+// A work order is immutable once accepted: it records what was agreed. Any
+// change after that is a numbered change order the other side has to accept.
+// The revised value is derived — original plus every accepted delta — never
+// written back onto the work order.
+const CO_KINDS = [
+  { id: "add",    label: "Added scope",   hint: "extra work, extra money" },
+  { id: "deduct", label: "Deducted scope", hint: "work removed, money back" },
+  { id: "nocost", label: "No-cost change", hint: "date, sequence or clarification only" },
+];
+const coSeq = (n) => "CO-" + String(n).padStart(2, "0");
+// Change orders live against a work order, identified by job + trade.
+const cosFor = (cos, jobId, trade) =>
+  (cos || []).filter((c) => c.jobId === jobId && c.trade === trade)
+    .sort((a, b) => a.seq - b.seq);
+const acceptedDelta = (cos, jobId, trade) =>
+  cosFor(cos, jobId, trade).filter((c) => c.status === "accepted")
+    .reduce((n, c) => n + Number(c.valueDelta || 0), 0);
+const revisedValue = (a, cos, jobId, trade) =>
+  Number(moneyRaw(a?.value) || 0) + acceptedDelta(cos, jobId, trade);
+// GC-raised COs carry a response deadline just like the original offer.
+// Sub-raised ones wait on the GC, who is in the app anyway, so no clock.
+const coAwaiting = (c) => c.status === "pending";
+const coExpired = (c, now) => c.origin === "gc" && c.status === "pending"
+  && c.respondBy && new Date(c.respondBy).getTime() <= now;
+
 // ---- Warranties and callbacks -------------------------------------------
-// Each subcontractor states how long they warranty their labour: 1–10 years
+// Each subcontractor states how long they warranty their labor: 1–10 years
 // in one-year steps, or lifetime. A callback is a defect reported soon after
 // the job (industry norm is 30 days); a warranty claim is anything later that
 // still falls inside their stated window.
@@ -705,7 +831,7 @@ const warrantyYears = (s) => {
 const warrantyLabel = (s) => {
   const y = warrantyYears(s);
   if (y === null) return "No warranty on file";
-  return y === Infinity ? "Lifetime labour warranty" : `${y} year${y > 1 ? "s" : ""} labour warranty`;
+  return y === Infinity ? "Lifetime labor warranty" : `${y} year${y > 1 ? "s" : ""} labor warranty`;
 };
 const daysSince = (iso, now) => iso ? Math.floor((now - new Date(iso).getTime()) / 86400000) : null;
 // Which remedy applies to a completed job right now.
@@ -746,7 +872,7 @@ const lniPublicLookup = (lic) =>
 function lookupLicense(sub) {
   const lic = (sub.license || "").trim();
   if (!lic) return { found: false, error: "No license number on file" };
-  // Demo behaviour: a license ending in "X" simulates an expired registration.
+  // Demo behavior: a license ending in "X" simulates an expired registration.
   const expired = /X$/i.test(lic);
   const today = new Date();
   const exp = new Date(today); exp.setDate(today.getDate() + (expired ? -40 : 400));
@@ -1090,11 +1216,11 @@ export default function SubSub() {
   const [engagements, setEngagements] = useState(seedEngagements);
   const [accounts, setAccounts] = useState(seedAccounts);
   const [memberships, setMemberships] = useState(seedMemberships);
-  const [users, setUsers] = useState(seedUsers);
+  const [properties, setProperties] = useState(seedProperties);
+  const [users, setUsers] = useState(BUILD === "platform" ? seedUsers : seedUsers.filter((u) => !u.platform));
   const [currentUserId, setCurrentUserId] = useState("u1");
   const [currentAccountId, setCurrentAccountId] = useState("a1");
   const now = useNow();
-
   // Which account's own subdomain (e.g. outerhome.subsub.work) this browser
   // is on, if any — fetched once, publicly, so the login screen can show
   // that account's real branding instead of generic/demo branding before
@@ -1111,13 +1237,24 @@ export default function SubSub() {
     }).catch(() => {}); // no account on this subdomain — fall through to generic branding
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [publicView, setPublicView] = useState("login"); // login | signup — the public application form
   const [loading, setLoading] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [publicView, setPublicView] = useState(BUILD === "platform" ? "superadmin" : "login"); // login | signup | superadmin
+  const [superadminView, setSuperadminView] = useState(false);   // SubSub staff console
+  const [impersonating, setImpersonating] = useState(null);  // { by, account }
+  const [subEvents] = useState(seedSubscriptionEvents);
+  const [activity, setActivity] = useState(seedActivity);
+  // Append to the account's activity stream. Cheap to call; the console reads it.
+  const logEvent = (kind, text, extra = {}) => setActivity((ev) => [{
+    id: "ev" + Date.now() + Math.random().toString(36).slice(2, 6),
+    accountId: extra.accountId || account.id, at: new Date().toISOString(),
+    userId: extra.userId === undefined ? me.id : extra.userId, kind, text,
+  }, ...ev]);
   // White-label tenant branding — one GC per instance (outerhome.subsub.work)
 
   const [pane, setPane] = useState("jobs"); // contractor portal pane
   const [userMenu, setUserMenu] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false);
   const [userForm, setUserForm] = useState(false);
   const [editUser, setEditUser] = useState(null);
   const [allJobs, setJobs] = useState([]);   // global; a crew can only be in one place
@@ -1138,6 +1275,8 @@ export default function SubSub() {
   // Callbacks and warranty claims raised against a completed job.
   const [serviceCalls, setServiceCalls] = useState([]);
   const [raising, setRaising] = useState(null);   // { job, trade, a, kind }
+  const [changeOrders, setChangeOrders] = useState([]);
+  const [coForm, setCoForm] = useState(null);     // { job, trade, a, origin }
   const [fEarn, setFEarn] = useState([]);
   const [fDone, setFDone] = useState([]);
   const [sortBy, setSortBy] = useState("match");
@@ -1210,6 +1349,14 @@ export default function SubSub() {
       return co ? composeSub(co, e) : null;
     })
     .filter(Boolean), [engagements, companies, account.id]);
+
+  // Properties belong to the account you're viewing.
+  const accountProperties = useMemo(
+    () => properties.filter((p) => p.accountId === account.id), [properties, account.id]);
+  const propName = (id) => (properties.find((p) => p.id === id) || {}).name || "—";
+  // A vendor with no properties listed is available everywhere in the account.
+  const servesProperty = (sub, propertyId) =>
+    !propertyId || !(sub.propertyIds || []).length || sub.propertyIds.includes(propertyId);
 
   // Jobs you can see are your account's. But crew AVAILABILITY is computed from
   // allJobs — a crew booked by another GC genuinely cannot work for you that day.
@@ -1298,13 +1445,11 @@ export default function SubSub() {
     (jobZip ? 1 : 0) + (inRangeOnly ? 1 : 0);
 
   // --- Jobs: a job has multiple trades, each trade gets its own contractor ---
-  // Persists first (so the id is real), then applies the same local
-  // optimistic shape the UI already expects. Falls back to a local-only id
-  // if the write fails, so the UI never just freezes on a network hiccup.
   const createJob = async (job, forSub) => {
     let id;
     try { ({ id } = await api.createJob(job)); }
     catch (err) { console.error("[persist] createJob failed:", err); id = Date.now(); }
+    logEvent("job_created", `Created job ${job.title}`);
 
     const assignments = {};
     if (forSub && docsComplete(forSub)) {
@@ -1326,10 +1471,15 @@ export default function SubSub() {
 
   // Mark a job complete — this is what unlocks rating and notes.
   const completeJob = (id) => {
+    const jb = allJobs.find((j) => j.id === id);
+    if (jb) logEvent("job_completed", `Completed ${jb.title}`);
     persist("completeJob", api.completeJob(id));
     setJobs((js) => js.map((j) => j.id === id ? {
       ...j, status: "completed", completedAt: new Date().toISOString().slice(0, 10) } : j));
   };
+  const completeJobInner = (id) =>
+    setJobs((js) => js.map((j) => j.id === id ? {
+      ...j, status: "completed", completedAt: new Date().toISOString().slice(0, 10) } : j));
   const reopenJob = (id) => {
     persist("reopenJob", api.reopenJob(id));
     setJobs((js) => js.map((j) => j.id === id ? { ...j, status: "active", completedAt: null } : j));
@@ -1363,6 +1513,9 @@ export default function SubSub() {
         crewName: details.crewName, responseWindow: details.responseWindow,
       }));
     });
+    { const jb = allJobs.find((j) => j.id === jobId);
+      const n = (details.trades && details.trades.length) || 1;
+      if (jb) logEvent("wo_issued", `Issued ${n > 1 ? n + " work orders" : "a work order"} to ${sub.company} on ${jb.title}`); }
     setJobs((js) => js.map((j) => {
       if (j.id !== jobId) return j;
       const next = { ...j.assignments };
@@ -1463,7 +1616,8 @@ export default function SubSub() {
   const seatCount = users.filter((u) => u.role !== "contractor").length;
   const atSeatLimit = seatCount >= PLANS[plan].userLimit;
   const addSub = (sub) => {
-    // Dedupe on WA L&I licence: if this business is already on SubSub for
+    logEvent("sub_added", `Added ${sub.company}`);
+    // Dedupe on WA L&I license: if this business is already on SubSub for
     // another account, reuse the company record and only add the relationship.
     // Their profile, crews and documents come across immediately.
     const lic = (sub.license || "").trim().toUpperCase();
@@ -1481,9 +1635,19 @@ export default function SubSub() {
     setAdding(false);
   };
   // Called instead of opening the form when the plan is maxed out.
-  const tryAddJob = (forSub) => {
+  const addProperty = (p) => setProperties((ps) => [
+    { ...p, id: "p" + Date.now(), accountId: account.id }, ...ps]);
+  const patchProperty = (id, patch) =>
+    setProperties((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  const removeProperty = (id) => {
+    setProperties((ps) => ps.filter((p) => p.id !== id));
+    // drop it from any vendor scoped to it, so nothing points at a dead property
+    setEngagements((es) => es.map((e) => (e.propertyIds || []).includes(id)
+      ? { ...e, propertyIds: e.propertyIds.filter((x) => x !== id) } : e));
+  };
+  const tryAddJob = (forSub, forProperty) => {
     if (atJobLimit) { setAddMenu(false); setUpgradePrompt({ kind: "job" }); return; }
-    setJobForm(forSub ? { forSub } : {});
+    setJobForm({ ...(forSub ? { forSub } : {}), ...(forProperty ? { forProperty } : {}) });
   };
   const tryAddContractor = () => {
     if (atContractorLimit) { setAddMenu(false); setUpgradePrompt({ kind: "contractor" }); return; }
@@ -1572,6 +1736,7 @@ export default function SubSub() {
   // --- contractor self-service ---
   // Verification: a document only counts once a human has checked it.
   const verifySubDoc = (id, kind, data) => {
+    { const sb = subs.find((x) => x.id === id); if (sb) logEvent("doc_verified", `Verified ${DOC_LABELS_INLINE[kind]} for ${sb.company}`); }
     patchDocReview(id, kind, {
       status: "verified", ...data,
       verifiedBy: me.name, verifiedAt: new Date().toISOString().slice(0, 10),
@@ -1579,6 +1744,7 @@ export default function SubSub() {
     setReviewing(null);
   };
   const rejectSubDoc = (id, kind, data) => {
+    { const sb = subs.find((x) => x.id === id); if (sb) logEvent("doc_rejected", `Rejected ${DOC_LABELS_INLINE[kind]} for ${sb.company}`); }
     patchDocReview(id, kind, {
       status: "rejected", ...data,
       verifiedBy: me.name, verifiedAt: new Date().toISOString().slice(0, 10),
@@ -1589,12 +1755,10 @@ export default function SubSub() {
   };
 
   // Runs the L&I lookup and stores the result on the contractor record.
-  // The state registry's answer is the same for every GC, so it lives on the
-  // company. Calls the real data.wa.gov lookup server-side; falls back to the
-  // local simulation if that fails (e.g. no network from this environment).
   const verifyLicense = async (id) => {
     const co = companies.find((c) => c.id === id);
     if (!co) return;
+    { const sb = subs.find((x) => x.id === id); if (sb) logEvent("license_check", `Ran L&I license check on ${sb.company}`); }
     try {
       const result = await api.verifyLicense(id);
       patchCompany(id, { licenseCheck: result });
@@ -1610,6 +1774,7 @@ export default function SubSub() {
   // Raise a callback or warranty claim. The sub has to confirm the return
   // visit from their own dashboard before it counts as scheduled.
   const raiseServiceCall = (job, trade, a, data) => {
+    logEvent("service_call", `Raised a ${data.kind === "warranty" ? "warranty claim" : "callback"} on ${job.title} · ${a.company}`);
     persist("raiseServiceCall", api.raiseServiceCall({
       jobId: job.id, trade, subId: a.subId, crewName: a.crewName,
       kind: data.kind, issue: data.issue, returnDate: data.returnDate || null, raisedBy: me.name,
@@ -1628,6 +1793,45 @@ export default function SubSub() {
     }, ...cs]);
     setRaising(null);
   };
+  // Raise a change order against an accepted work order. The other side has
+  // to accept it before it counts toward the revised value.
+  const raiseChangeOrder = (job, trade, a, data) => {
+    const existing = cosFor(changeOrders, job.id, trade);
+    logEvent("change_order", `${data.origin === "sub" ? "Subcontractor requested" : "Issued"} ${coSeq(existing.length + 1)} on ${a.wo} · ${data.kind}`);
+    const origin = data.origin || "gc";
+    setChangeOrders((cs) => [{
+      id: "co" + Date.now(),
+      accountId: account.id, jobId: job.id, trade, wo: a.wo,
+      subId: a.subId, company: a.company,
+      seq: existing.length + 1,
+      origin,                                  // "gc" | "sub"
+      kind: data.kind,                         // add | deduct | nocost
+      scope: data.scope,
+      valueDelta: data.kind === "nocost" ? 0
+        : (data.kind === "deduct" ? -1 : 1) * Math.abs(Number(moneyRaw(data.value) || 0)),
+      status: "pending",
+      responseWindow: origin === "gc" ? (data.responseWindow || DEFAULT_WINDOW) : null,
+      respondBy: origin === "gc"
+        ? new Date(Date.now() + windowMins(data.responseWindow || DEFAULT_WINDOW) * 60000).toISOString()
+        : null,
+      raisedBy: data.raisedBy || me.name,
+      raisedAt: new Date().toISOString(),
+      respondedAt: null, note: "",
+    }, ...cs]);
+    setCoForm(null);
+  };
+  // Either side responds. A late accept on a GC-raised CO is refused here as
+  // well as in the UI, same as the original offer.
+  const respondChangeOrder = (id, status, note = "") =>
+    setChangeOrders((cs) => cs.map((c) => {
+      if (c.id !== id) return c;
+      if (coExpired(c, Date.now())) return c;
+      return { ...c, status, note, respondedAt: new Date().toISOString() };
+    }));
+  const voidChangeOrder = (id) =>
+    setChangeOrders((cs) => cs.map((c) => c.id === id && c.status === "pending"
+      ? { ...c, status: "void", respondedAt: new Date().toISOString() } : c));
+
   // Sub confirms (or proposes a different date) from their portal.
   const confirmServiceCall = (id, patch = {}) => {
     persist("confirmServiceCall", api.confirmServiceCall(id, patch));
@@ -1640,11 +1844,6 @@ export default function SubSub() {
       ...c, status: "resolved", resolvedAt: new Date().toISOString() }));
   };
 
-  // Real upload: PUT the file to R2 (via the Worker, see api.uploadFile),
-  // then tell the API the real key. That second call is what reopens review
-  // on every OTHER account that engages this company, not just this one.
-  // The local state
-  // update happens immediately so the UI doesn't wait on the network.
   const uploadSubDoc = (id, key, file) => {
     const filename = file.name;
     const co = companies.find((c) => c.id === id);
@@ -1787,7 +1986,10 @@ export default function SubSub() {
     return (
       <div className="ss-root">
         <style>{CSS}</style>
-        {publicView === "signup" ? (
+        {BUILD === "platform" && publicView === "superadmin" ? (
+          <SuperadminLogin users={users}
+            onLogin={(uid) => { setCurrentUserId(uid); setSuperadminView(true); setLoggedIn(true); }} />
+        ) : publicView === "signup" ? (
           <SubSignup brand={brand}
             onSubmit={(data) => api.applyToAccount(brand.subdomain, data)}
             onBackToLogin={() => setPublicView("login")} />
@@ -1811,9 +2013,52 @@ export default function SubSub() {
     );
   }
 
+  if (superadminView && BUILD === "platform") {
+    const admin = seedSuperadmins.find((p) => p.userId === currentUserId) || { finance: false, impersonate: false };
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <SuperadminConsole me={me} admin={admin} accounts={accounts} users={users} memberships={memberships}
+          companies={companies} engagements={engagements} jobs={allJobs} subEvents={subEvents}
+          activity={activity}
+          onAddUser={(accountId, u) => {
+            const id = "u" + Date.now();
+            setUsers((us) => [...us, { id, name: u.name.trim(), email: u.email.trim(), role: u.role }]);
+            setMemberships((ms) => [...ms, { userId: id, accountId, role: u.role }]);
+            logEvent("user_added", `Superadmin ${me.name} added ${u.name.trim()} as ${ROLES[u.role].label}`, { accountId, userId: null });
+          }}
+          onPatchAccount={(id, patch) => {
+            setAccounts((as) => as.map((a) => a.id === id ? { ...a, ...patch } : a));
+            const what = Object.entries(patch).map(([k, v]) => `${k} → ${v}`).join(", ");
+            logEvent("plan_changed", `Superadmin ${me.name} changed ${what}`, { accountId: id, userId: null });
+          }}
+          onImpersonate={(acct) => {
+            // land as that account's first admin, read-only banner up, audited in production
+            const mem = memberships.find((m) => m.accountId === acct.id && m.role === "admin");
+            if (!mem) return;
+            setImpersonating({ by: me.name, account: acct });
+            logEvent("impersonation", `${me.name} signed in as this account`, { accountId: acct.id, userId: null });
+            setCurrentAccountId(acct.id); setCurrentUserId(mem.userId);
+            setTab("dashboard"); setSuperadminView(false);
+          }}
+          onSignOut={() => { setSuperadminView(false); setLoggedIn(false); setPublicView("superadmin"); }} />
+      </div>
+    );
+  }
+
   return (
     <div className="ss-root">
       <style>{CSS}</style>
+      {impersonating && (
+        <div className="imp-banner">
+          <Shield size={14} />
+          <span>Viewing <b>{impersonating.account.name}</b> as superadmin ({impersonating.by}). Actions are recorded.</span>
+          <button onClick={() => {
+            setImpersonating(null); setSuperadminView(true);
+            const staff = users.find((u) => u.platform); if (staff) setCurrentUserId(staff.id);
+          }}>Back to console</button>
+        </div>
+      )}
       <header className="ss-header">
         <div className="header-top">
           <div className="brand">
@@ -1839,6 +2084,8 @@ export default function SubSub() {
                 )}
               </div>
             )}
+            <button className="nav-burger" aria-expanded={mobileNav} aria-label="Menu"
+              onClick={() => setMobileNav((v) => !v)}><span /></button>
             <div className="user-wrap">
               <button className="user-btn" onClick={() => setUserMenu((v) => !v)}>
                 <span className="user-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
@@ -1913,7 +2160,12 @@ export default function SubSub() {
             </div>
           </div>
         </div>
-        <nav className="tabs">
+        {mobileNav && <div className="nav-scrim" onClick={() => setMobileNav(false)} />}
+        <nav className={`tabs ${mobileNav ? "open" : ""}`} onClick={(e) => { if (e.target.closest("button")) setMobileNav(false); }}>
+          <div className="drawer-user">
+            <span className="user-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+            <span className="drawer-user-txt"><b>{me.name}</b><span>{ROLES[role].label} · {account.name}</span></span>
+          </div>
           {can("dashboard") && (
             <button className={tab === "dashboard" ? "on" : ""} onClick={() => setTab("dashboard")}>
               Dashboard
@@ -1932,6 +2184,11 @@ export default function SubSub() {
           {can("jobs") && (
             <button className={tab === "jobs" ? "on" : ""} onClick={() => setTab("jobs")}>
               Jobs <span className="count">{jobs.length}</span>
+            </button>
+          )}
+          {can("properties") && accountProperties.length >= 0 && (
+            <button className={tab === "properties" ? "on" : ""} onClick={() => setTab("properties")}>
+              Properties{accountProperties.length > 0 && <span className="count">{accountProperties.length}</span>}
             </button>
           )}
           {can("uniforms") && (
@@ -1953,6 +2210,18 @@ export default function SubSub() {
               )}
             </button>
           ))}
+          <div className="drawer-actions">
+            <button onClick={() => setTab("account")}><UserCog size={15} /> My account</button>
+            {myMemberships.length > 1 && myMemberships.filter((m) => m.accountId !== account.id).map((m) => {
+              const a = accounts.find((x) => x.id === m.accountId);
+              return a ? (
+                <button key={m.accountId} onClick={() => { setCurrentAccountId(m.accountId); setSelected(null); setPane("jobs"); }}>
+                  <ArrowUpDown size={15} /> Switch to {a.name}
+                </button>
+              ) : null;
+            })}
+            <button className="drawer-out" onClick={() => setLoggedIn(false)}><LogOut size={15} /> Sign out</button>
+          </div>
         </nav>
       </header>
 
@@ -2103,6 +2372,13 @@ export default function SubSub() {
         </main>
       )}
 
+      {tab === "properties" && can("properties") && (
+        <PropertiesView properties={accountProperties} subs={subs} jobs={jobs}
+          onAdd={addProperty} onPatch={patchProperty} onRemove={removeProperty}
+          onOpenSub={(s) => { setSelected(s); setTab("contractors"); }}
+          onNewJob={(p) => tryAddJob(null, p)} />
+      )}
+
       {tab === "calendar" && can("calendar") && (
         <AvailabilityView subs={subs} jobs={jobs} allJobs={allJobs} accountId={account.id}
           onSchedule={(sub, date) => {
@@ -2190,7 +2466,8 @@ export default function SubSub() {
                                       })}
                                     </select>
                                   ) : a.crewName ? <span className="ta-crew-flat"><Users size={11} /> {a.crewName}</span> : null}
-                                  {a.value && <span className="ta-val">{formatMoney(a.value)}</span>}
+                                  {a.value && <span className="ta-val">{formatMoney(a.value)}
+                                    <RevisedValue a={a} cos={changeOrders} jobId={j.id} trade={t} /></span>}
                                   <button className="ta-wo-link" onClick={() => setViewWO({ job: j, trade: t, a })}>
                                     <ScrollText size={11} /> {a.wo}
                                   </button>
@@ -2235,6 +2512,11 @@ export default function SubSub() {
                                   <StarRate value={a.rating} onRate={(n) => rateAssignment(j.id, t, n)}
                                     label={a.crewName ? `Rate ${a.crewName}` : "Rate crew"} />
                                 )}
+                                {(a.status === "accepted" || a.auto) && (
+                                  <button className="trade-issue" onClick={() => setCoForm({ job: j, trade: t, a, origin: "gc" })}>
+                                    <FilePlus2 size={12} /> Change order
+                                  </button>
+                                )}
                                 {done && a.status !== "declined" && (() => {
                                   const sb = subs.find((x) => x.id === a.subId);
                                   const cov = coverageFor(sb, j, now);
@@ -2263,6 +2545,17 @@ export default function SubSub() {
                       })}
                     </div>
 
+                    {changeOrders.filter((c) => c.jobId === j.id).length > 0 && (
+                      <div className="sc-block">
+                        <div className="form-sec">Change orders</div>
+                        {changeOrders.filter((c) => c.jobId === j.id)
+                          .sort((x, y) => x.trade.localeCompare(y.trade) || x.seq - y.seq)
+                          .map((c) => (
+                            <ChangeOrderRow key={c.id} c={c} now={now} side="gc"
+                              onRespond={respondChangeOrder} onVoid={voidChangeOrder} />
+                          ))}
+                      </div>
+                    )}
                     {serviceCalls.filter((c) => c.jobId === j.id).length > 0 && (
                       <div className="sc-block">
                         <div className="form-sec">Callbacks &amp; warranty claims</div>
@@ -2342,6 +2635,9 @@ export default function SubSub() {
           <ContractorPortal sub={mySub} jobs={jobs} pane={pane} mine={myAssignments} brand={brand} me={me} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
             serviceCalls={serviceCalls.filter((c) => c.subId === mySub.id && c.accountId === account.id)}
             onConfirmCall={confirmServiceCall}
+            changeOrders={changeOrders.filter((c) => c.subId === mySub.id && c.accountId === account.id)}
+            onRespondCO={respondChangeOrder} onVoidCO={voidChangeOrder}
+            onRequestChange={(job, trade, a) => setCoForm({ job, trade, a, origin: "sub" })}
             orders={uniformOrders.filter((o) => o.subId === mySub.id)}
             onOrderUniform={(order) => {
               persist("createUniformOrder", api.createUniformOrder(order));
@@ -2391,7 +2687,7 @@ export default function SubSub() {
         </Modal>
       )}
       {jobForm && <Modal onClose={() => setJobForm(null)} wide>
-        <JobForm allJobs={allJobs} accountId={account.id} forSub={jobForm.forSub} jobs={jobs}
+        <JobForm allJobs={allJobs} accountId={account.id} properties={accountProperties} forProperty={jobForm.forProperty} forSub={jobForm.forSub} jobs={jobs}
           onSubmit={(job) => createJob(job, jobForm.forSub)}
           onCancel={() => setJobForm(null)} /></Modal>}
       {assigning && <Modal onClose={() => setAssigning(null)} wide>
@@ -2408,13 +2704,19 @@ export default function SubSub() {
           onRequestDocs={requestDocs}
           onCancel={() => setAssignSub(null)} /></Modal>}
       {viewWO && <Modal onClose={() => setViewWO(null)} wide>
-        <WorkOrderDoc job={viewWO.job} trade={viewWO.trade}
+        <WorkOrderDoc job={viewWO.job} trade={viewWO.trade} cos={cosFor(changeOrders, viewWO.job.id, viewWO.trade)}
           a={(jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a}
           canUpload={role !== "contractor"} brand={brand}
           onUploadSigned={(file) => uploadSignedWO(viewWO.job.id, viewWO.trade, file)}
           onClose={() => setViewWO(null)} /></Modal>}
       {notifying && <Modal onClose={() => setNotifying(null)} wide>
         <NotifyForm data={notifying} brand={brand} onClose={() => setNotifying(null)} /></Modal>}
+      {coForm && <Modal onClose={() => setCoForm(null)}>
+        <ChangeOrderForm job={coForm.job} trade={coForm.trade} a={coForm.a} origin={coForm.origin}
+          existing={cosFor(changeOrders, coForm.job.id, coForm.trade)}
+          onSubmit={(data) => raiseChangeOrder(coForm.job, coForm.trade, coForm.a,
+            { ...data, origin: coForm.origin, raisedBy: coForm.origin === "sub" ? (mySub?.contact || me.name) : me.name })}
+          onCancel={() => setCoForm(null)} /></Modal>}
       {raising && <Modal onClose={() => setRaising(null)}>
         <ServiceCallForm job={raising.job} trade={raising.trade} a={raising.a}
           sub={subs.find((x) => x.id === raising.a.subId)} now={now}
@@ -2444,15 +2746,170 @@ export default function SubSub() {
           canChangeRole={can("users") && editUser.id !== currentUserId}
           onSubmit={updateUser} onCancel={() => setEditUser(null)} /></Modal>}
       {adding && <Modal onClose={() => setAdding(false)} wide>
-        <SubForm onSubmit={addSub} onCancel={() => setAdding(false)} /></Modal>}
+        <SubForm properties={accountProperties} onSubmit={addSub} onCancel={() => setAdding(false)} /></Modal>}
       {editing && <Modal onClose={() => setEditing(null)} wide>
-        <SubForm existing={editing} onSubmit={updateSub} onCancel={() => setEditing(null)} /></Modal>}
+        <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub} onCancel={() => setEditing(null)} /></Modal>}
 
       <footer className="ss-footer">
         <span>{brand.name} · {brand.subdomain}.subsub.work</span>
         <span className="powered">Powered by <strong>SubSub</strong></span>
       </footer>
     </div>
+  );
+}
+
+// ---- Change order form (either side can raise one) ----------------------
+function ChangeOrderForm({ job, trade, a, origin, existing, onSubmit, onCancel }) {
+  const M = catMeta(trade);
+  const [kind, setKind] = useState("add");
+  const [scope, setScope] = useState("");
+  const [value, setValue] = useState("");
+  const [respWindow, setRespWindow] = useState(DEFAULT_WINDOW);
+  const isGC = origin === "gc";
+  const base = Number(moneyRaw(a.value) || 0);
+  const accepted = existing.filter((c) => c.status === "accepted")
+    .reduce((n, c) => n + c.valueDelta, 0);
+  const current = base + accepted;
+  const delta = kind === "nocost" ? 0
+    : (kind === "deduct" ? -1 : 1) * Math.abs(Number(moneyRaw(value) || 0));
+  const ok = scope.trim() && (kind === "nocost" || Number(moneyRaw(value) || 0) > 0);
+
+  return (
+    <div className="form">
+      <h2>{isGC ? "Issue a change order" : "Request a change"}</h2>
+      <p className="form-sub">{a.wo} · {M.label} · {job.title}</p>
+
+      <div className="co-context">
+        <div><span>Original</span><b>{formatMoney(base)}</b></div>
+        {accepted !== 0 && (
+          <div><span>{existing.filter((c) => c.status === "accepted").length} accepted change order{existing.filter((c) => c.status === "accepted").length === 1 ? "" : "s"}</span>
+            <b>{accepted > 0 ? "+" : "−"}{formatMoney(Math.abs(accepted))}</b></div>
+        )}
+        <div className="co-cur"><span>Current value</span><b>{formatMoney(current)}</b></div>
+      </div>
+
+      <div className="form-sec">What's changing?</div>
+      <div className="roles">
+        {CO_KINDS.map((k) => (
+          <label key={k.id} className={`role ${kind === k.id ? "on" : ""}`}>
+            <input type="radio" name="cokind" checked={kind === k.id} onChange={() => setKind(k.id)} />
+            <span>{k.label}<em>{k.hint}</em></span>
+          </label>
+        ))}
+      </div>
+
+      <label className="fld">Describe the change
+        <span className="fld-note">this becomes {coSeq(existing.length + 1)} on the work order</span>
+        <textarea rows={3} value={scope} onChange={(e) => setScope(e.target.value)}
+          placeholder={kind === "add" ? "e.g. replace 6 sheets of rotten sheathing found on tear-off, north slope"
+            : kind === "deduct" ? "e.g. skylight replacement removed from scope at homeowner's request"
+            : "e.g. start moved from Mon 21st to Wed 23rd, homeowner travel"} />
+      </label>
+
+      {kind !== "nocost" && (
+        <label className="fld">{kind === "add" ? "Added value" : "Deducted value"}
+          <span className="fld-note">the change only, not the new total</span>
+          <MoneyInput value={value} onChange={setValue} />
+        </label>
+      )}
+
+      {isGC && (
+        <label className="fld">Response deadline
+          <span className="fld-note">{a.company} has this long to accept</span>
+          <select value={respWindow} onChange={(e) => setRespWindow(e.target.value)}>
+            {RESPONSE_WINDOWS.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
+          </select>
+        </label>
+      )}
+
+      <div className="co-preview">
+        <span>Revised value if accepted</span>
+        <b>{formatMoney(current + delta)}</b>
+        {delta !== 0 && <em>{delta > 0 ? "+" : "−"}{formatMoney(Math.abs(delta))}</em>}
+      </div>
+
+      <p className="cov-hint">
+        {isGC
+          ? `${a.company} is notified by ${notifyLabel({ notify: a.notify || { email: true } }).toLowerCase()} and accepts or declines from their dashboard. The original work order is unchanged either way.`
+          : "Your project manager reviews this and accepts or declines. Don't start the extra work until it's accepted."}
+      </p>
+
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-solid" disabled={!ok}
+          onClick={() => onSubmit({ kind, scope: scope.trim(), value, responseWindow: respWindow })}>
+          <Send size={15} /> {isGC ? `Send ${coSeq(existing.length + 1)}` : "Send request"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---- One change order as a row ------------------------------------------
+function ChangeOrderRow({ c, now, side, onRespond, onVoid }) {
+  // side: "gc" | "sub" — who is looking at it
+  const expired = coExpired(c, now);
+  const left = c.origin === "gc" && c.status === "pending" && c.respondBy
+    ? new Date(c.respondBy).getTime() - now : null;
+  const mine = c.origin === side;                 // I raised it
+  const canRespond = c.status === "pending" && !mine && !expired;
+  const [note, setNote] = useState("");
+  const [declining, setDeclining] = useState(false);
+  return (
+    <div className={`co-row co-${c.status} ${expired ? "co-expired" : ""}`}>
+      <span className="co-seq">{coSeq(c.seq)}</span>
+      <div className="co-main">
+        <span className="co-scope">{c.scope}</span>
+        <span className="co-meta">
+          {CO_KINDS.find((k) => k.id === c.kind)?.label} · raised by {c.raisedBy}
+          {c.origin === "sub" ? " (subcontractor)" : ""} · {c.raisedAt.slice(0, 10)}
+          {c.status === "pending" && c.origin === "gc" && left !== null && !expired &&
+            <> · <Clock size={11} /> {countdown(left)} to respond</>}
+        </span>
+        {c.note && <span className="co-note">“{c.note}”</span>}
+      </div>
+      <div className="co-side">
+        <b className={`co-delta ${c.valueDelta > 0 ? "up" : c.valueDelta < 0 ? "down" : ""}`}>
+          {c.valueDelta === 0 ? "No cost" : (c.valueDelta > 0 ? "+" : "−") + formatMoney(Math.abs(c.valueDelta))}
+        </b>
+        <span className={`co-status s-${expired ? "expired" : c.status}`}>
+          {expired ? "Expired" : c.status === "pending"
+            ? (mine ? `Awaiting ${side === "gc" ? "subcontractor" : "approval"}` : "Needs your response")
+            : c.status === "accepted" ? "Accepted" : c.status === "declined" ? "Declined" : "Void"}
+        </span>
+        {canRespond && !declining && (
+          <div className="trade-actions">
+            <button className="resp accept" onClick={() => onRespond(c.id, "accepted")}><Check size={12} /> Accept</button>
+            <button className="resp decline" onClick={() => setDeclining(true)}><X size={12} /> Decline</button>
+          </div>
+        )}
+        {canRespond && declining && (
+          <div className="sc-propose">
+            <input placeholder="Reason (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+            <button className="resp decline" onClick={() => { onRespond(c.id, "declined", note); setDeclining(false); }}>Confirm</button>
+          </div>
+        )}
+        {mine && c.status === "pending" && onVoid && (
+          <button className="trade-swap" onClick={() => onVoid(c.id)}>Withdraw</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- The revised total, shown under a work order that has change orders --
+function RevisedValue({ a, cos, jobId, trade }) {
+  const list = cosFor(cos, jobId, trade);
+  const accepted = list.filter((c) => c.status === "accepted");
+  const pending = list.filter((c) => c.status === "pending");
+  if (!list.length) return null;
+  const rev = revisedValue(a, cos, jobId, trade);
+  return (
+    <span className="co-revised">
+      <b>{formatMoney(rev)}</b> revised
+      {accepted.length > 0 && <> · {accepted.length} CO{accepted.length === 1 ? "" : "s"} accepted</>}
+      {pending.length > 0 && <> · <em>{pending.length} pending</em></>}
+    </span>
   );
 }
 
@@ -2506,7 +2963,7 @@ function ServiceCallForm({ job, trade, a, sub, now, onSubmit, onCancel }) {
             <label className={`role ${kind === "warranty" ? "on" : ""} ${cov.kind !== "warranty" ? "dim" : ""}`}>
               <input type="radio" name="sckind" checked={kind === "warranty"}
                 onChange={() => setKind("warranty")} />
-              <span>Warranty claim<em>Failure covered by their labour warranty</em></span>
+              <span>Warranty claim<em>Failure covered by their labor warranty</em></span>
             </label>
           </div>
 
@@ -2830,6 +3287,793 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
   );
 }
 
+// ---- Superadmin sign-in — SubSub's own, never the customer's white label ----
+// In production this lives on its own hostname (admin.subsub.work). Here it's
+// reached with #superadmin on the URL.
+function SuperadminLogin({ users, onLogin }) {
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const staff = users.filter((u) => u.platform);
+  const submit = (e) => {
+    e.preventDefault();
+    const u = staff.find((x) => x.email.toLowerCase() === email.trim().toLowerCase());
+    if (!u || !pw) { setErr("Wrong email or password."); return; }
+    onLogin(u.id);
+  };
+  return (
+    <div className="sa-page">
+      <div className="sa-card">
+        <div className="sa-brand"><SubSubLogo height={26} /><span className="pf-tag">Platform</span></div>
+        <h1>Sign in</h1>
+        <p className="sa-lede">SubSub internal console.</p>
+        <form onSubmit={submit}>
+          <label className="wl-fld">Email
+            <input type="email" autoComplete="username" value={email}
+              onChange={(e) => { setEmail(e.target.value); setErr(""); }} placeholder="you@subsub.work" />
+          </label>
+          <label className="wl-fld">Password
+            <input type="password" autoComplete="current-password" value={pw}
+              onChange={(e) => { setPw(e.target.value); setErr(""); }} />
+          </label>
+          {err && <p className="wl-err">{err}</p>}
+          <button className="sa-btn" type="submit"><LogIn size={15} /> Sign in</button>
+        </form>
+        <div className="sa-staff">
+          <div className="ld-label">Accounts — tap to sign in</div>
+          {staff.map((u) => {
+            const sa = seedSuperadmins.find((p) => p.userId === u.id);
+            return (
+              <button key={u.id} type="button" className="ld-row" onClick={() => onLogin(u.id)}>
+                <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+                <span className="ld-main"><span className="ld-name">{u.name}</span><span className="ld-email">{u.email}</span></span>
+                <span className={`pf-tag ${sa?.role === "standard" ? "std" : ""}`}>{STAFF_ROLE_LABEL[sa?.role] || "Standard"}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <p className="sa-foot">SubSub, LLC · internal use only · every action is recorded</p>
+    </div>
+  );
+}
+
+// ---- Superadmin console (SubSub staff only) --------------------------------
+// A separate surface, not a role inside the tenant app. Five screens:
+// Accounts, Account detail, Companies, Revenue, Health.
+const fmtC = (cents) => "$" + (Math.round(cents) / 100).toLocaleString("en-US", { maximumFractionDigits: 0 });
+const monthKey = (iso) => (iso || "").slice(0, 7);
+
+function SuperadminConsole({ me, admin, accounts, users, memberships, companies, engagements,
+  jobs, subEvents, activity, onPatchAccount, onAddUser, onImpersonate, onSignOut }) {
+  const [screen, setScreen] = useState("accounts");
+  const [openId, setOpenId] = useState(null);
+  const [menu, setMenu] = useState(false);
+  const [actFilter, setActFilter] = useState("all");
+  const [addUser, setAddUser] = useState(null);
+  const now = new Date();
+  const thisMonth = now.toISOString().slice(0, 7);
+
+  // ---- derived, per account ----
+  const rows = accounts.map((a) => {
+    const mems = memberships.filter((m) => m.accountId === a.id && m.role !== "contractor");
+    const engs = engagements.filter((e) => e.accountId === a.id);
+    const js = jobs.filter((j) => j.accountId === a.id);
+    const jobsMo = js.filter((j) => monthKey(j.createdAt) === thisMonth).length;
+    const gmv = js.reduce((n, j) => n + Object.values(j.assignments || {})
+      .filter((x) => x.status === "accepted" || x.auto)
+      .reduce((m, x) => m + Number(moneyRaw(x.value) || 0) * 100, 0), 0);
+    const cur = PLANS[a.plan] || PLANS.basic;
+    const atLimit = a.plan === "basic" && (engs.length >= cur.limit || jobsMo >= cur.jobsPerMonth);
+    return { a, users: mems.length, subs: engs.length, jobsMo, gmv, mrr: mrrOf(a), atLimit,
+      pendingDocs: engs.reduce((n, e) => n + DOC_KINDS.filter((k) =>
+        e.docReview?.[k]?.status === "pending").length, 0) };
+  });
+  const live = rows.filter((r) => r.a.status !== "canceled");
+  const mrr = live.reduce((n, r) => n + r.mrr, 0);
+  const gmvTotal = rows.reduce((n, r) => n + r.gmv, 0);
+
+  // ---- revenue movement by month, from the append-only event log ----
+  const months = [...new Set(subEvents.map((e) => monthKey(e.at)))].sort();
+  const movement = months.map((m) => {
+    const ev = subEvents.filter((e) => monthKey(e.at) === m);
+    const sum = (f) => ev.filter(f).reduce((n, e) => n + e.mrrDelta, 0);
+    return {
+      m,
+      newMrr: sum((e) => e.kind === "upgraded" && e.fromPlan === "basic"),
+      churn: sum((e) => e.kind === "canceled"),
+      contraction: sum((e) => e.kind === "cycle" && e.mrrDelta < 0),
+      expansion: sum((e) => e.kind === "cycle" && e.mrrDelta > 0),
+      signups: ev.filter((e) => e.kind === "created").length,
+      conversions: ev.filter((e) => e.kind === "upgraded").length,
+    };
+  });
+  const running = movement.reduce((acc, r) => {
+    const prev = acc.length ? acc[acc.length - 1].mrr : 0;
+    return [...acc, { ...r, mrr: prev + r.newMrr + r.expansion + r.contraction + r.churn }];
+  }, []);
+  const conv = subEvents.filter((e) => e.kind === "created").length
+    ? Math.round(subEvents.filter((e) => e.kind === "upgraded").length /
+        subEvents.filter((e) => e.kind === "created").length * 100) : 0;
+  const daysToConvert = (() => {
+    const pairs = subEvents.filter((e) => e.kind === "upgraded").map((u) => {
+      const c = subEvents.find((e) => e.accountId === u.accountId && e.kind === "created");
+      return c ? daysSince(c.at, new Date(u.at).getTime()) : null;
+    }).filter((x) => x !== null).sort((x, y) => x - y);
+    return pairs.length ? pairs[Math.floor(pairs.length / 2)] : null;
+  })();
+
+  // ---- companies across the whole platform ----
+  const compRows = companies.map((c) => {
+    const engs = engagements.filter((e) => e.companyId === c.id);
+    const accts = engs.map((e) => accounts.find((a) => a.id === e.accountId)).filter(Boolean);
+    const lic = c.licenseCheck;
+    return { c, accts, lic, licOk: !lic || lic.status === "active",
+      dup: companies.filter((x) => x.license && x.license.toUpperCase().trim() === (c.license || "").toUpperCase().trim()).length > 1 };
+  });
+
+  // ---- health counters ----
+  const weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+  const health = {
+    signups7d: accounts.filter((a) => (a.createdAt || "") >= weekAgo).length,
+    atLimit: live.filter((r) => r.atLimit).length,
+    docsStale: rows.reduce((n, r) => n + r.pendingDocs, 0),
+    expired: jobs.reduce((n, j) => n + Object.values(j.assignments || {})
+      .filter((a) => isExpired(a, now.getTime())).length, 0),
+    licFail: compRows.filter((r) => !r.licOk).length,
+    dups: compRows.filter((r) => r.dup).length,
+    inactive14: live.filter((r) => daysSince(r.a.lastActive, now.getTime()) > 14).length,
+  };
+
+  const open = rows.find((r) => r.a.id === openId);
+
+  const isSuper = admin.role === "superadmin";
+  const NAV = [
+    ["accounts", "Accounts", Building2],
+    ["companies", "Companies", Users],
+    ...(admin.finance ? [["revenue", "Revenue", TrendingUp]] : []),
+    ...(isSuper ? [["health", "Health", Activity]] : []),
+  ];
+  const [navOpen, setNavOpen] = useState(false);
+  const go = (id) => { setScreen(id); setOpenId(null); setNavOpen(false); setMenu(false); };
+
+  return (
+    <div className="pf-root">
+      <header className="pf-top">
+        <div className="pf-brand"><SubSubLogo height={20} /><span className="pf-tag">Platform</span></div>
+        <button className="pf-burger" aria-expanded={navOpen} aria-label="Menu"
+          onClick={() => setNavOpen((o) => !o)}><span /></button>
+        {navOpen && <div className="nav-scrim" onClick={() => setNavOpen(false)} />}
+        <nav className={`pf-nav ${navOpen ? "open" : ""}`}>
+          <div className="pf-drawer-user">
+            <span className="user-avatar pf-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+            <span className="pf-drawer-txt"><b>{me.name}</b><span>{STAFF_ROLE_LABEL[admin.role] || "Standard"} · {me.email}</span></span>
+          </div>
+          {NAV.map(([id, label, Icon]) => (
+            <button key={id} className={screen === id && !openId ? "on" : ""} onClick={() => go(id)}>
+              <Icon size={14} /> {label}
+            </button>
+          ))}
+          <div className="pf-drawer-actions">
+            {admin.impersonate && <button onClick={() => go("accounts")}><LogIn size={14} /> Sign in as an account…</button>}
+            <button className="pf-drawer-out" onClick={onSignOut}><LogOut size={14} /> Sign out</button>
+          </div>
+        </nav>
+        <div className="pf-me">
+          <button className="pf-user" onClick={() => setMenu((m) => !m)} aria-expanded={menu}>
+            <span className="user-avatar pf-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+            <span className="pf-user-txt"><b>{me.name}</b><span>{STAFF_ROLE_LABEL[admin.role] || "Standard"}</span></span>
+            <ChevronDown size={14} />
+          </button>
+          {menu && (
+            <div className="pf-menu">
+              <div className="pf-menu-hd">
+                <b>{me.name}</b><span>{me.email}</span>
+                <em>{STAFF_ROLE_LABEL[admin.role] || "Standard"}{isSuper ? " · full access" : " · support"}</em>
+              </div>
+              <button onClick={() => go("accounts")}><Building2 size={14} /> Accounts</button>
+              <button onClick={() => go("companies")}><Users size={14} /> Companies</button>
+              {admin.finance && <button onClick={() => go("revenue")}><TrendingUp size={14} /> Revenue</button>}
+              {isSuper && <button onClick={() => go("health")}><Activity size={14} /> Health</button>}
+              {admin.impersonate && (
+                <button onClick={() => go("accounts")}><LogIn size={14} /> Sign in as an account…</button>
+              )}
+              <button className="pf-menu-out" onClick={onSignOut}><LogOut size={14} /> Sign out</button>
+            </div>
+          )}
+        </div>
+      </header>
+
+      <main className="pf-main">
+        {/* ===== ACCOUNTS ===== */}
+        {screen === "accounts" && !openId && (
+          <>
+            <div className="pf-head">
+              <h2>Accounts</h2>
+              <div className="pf-kpis">
+                <Kpi label="Live accounts" value={live.length} />
+                <Kpi label="Scale" value={live.filter((r) => r.a.plan === "scale").length} />
+                <Kpi label="Basic" value={live.filter((r) => r.a.plan === "basic").length} />
+                {admin.finance && <Kpi label="MRR" value={fmtC(mrr)} accent />}
+                {isSuper && <Kpi label="Subs on platform" value={companies.length} />}
+              </div>
+            </div>
+            <div className="pf-table-wrap">
+              <table className="pf-table">
+                <thead><tr>
+                  <th>Account</th><th>Plan</th><th>Users</th><th>Subs</th><th>Jobs / mo</th>
+                  {admin.finance && <th>MRR</th>}{admin.finance && <th>GMV</th>}<th>Last active</th><th>Status</th>
+                </tr></thead>
+                <tbody>
+                  {rows.sort((x, y) => y.mrr - x.mrr || y.gmv - x.gmv).map((r) => (
+                    <tr key={r.a.id} className={r.a.status === "canceled" ? "muted" : ""}
+                      onClick={() => { setOpenId(r.a.id); }}>
+                      <td><b>{r.a.name}</b><span className="pf-sub">{r.a.subdomain}.subsub.work</span></td>
+                      <td><span className={`plan-pill ${r.a.plan}`}>{PLANS[r.a.plan].name}</span>
+                        <span className="pf-sub">{r.a.billing}</span></td>
+                      <td>{r.users}</td>
+                      <td>{r.subs}{r.atLimit && <span className="pf-flag" title="At a Basic plan limit"> ●</span>}</td>
+                      <td>{r.jobsMo}</td>
+                      {admin.finance && <td>{r.mrr ? fmtC(r.mrr) : "—"}</td>}
+                      {admin.finance && <td>{r.gmv ? fmtC(r.gmv) : "—"}</td>}
+                      <td>{r.a.lastActive || "—"}</td>
+                      <td><span className={`pf-status ${r.a.status || "active"}`}>{r.a.status || "active"}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="pf-note">● = Basic account at its subcontractor or monthly-job limit. That's an upgrade conversation.</p>
+          </>
+        )}
+
+        {/* ===== ACCOUNT DETAIL ===== */}
+        {open && (
+          <>
+            <button className="pf-back" onClick={() => setOpenId(null)}>‹ All accounts</button>
+            <div className="pf-head">
+              <div>
+                <h2>{open.a.name}</h2>
+                <p className="pf-sub">{open.a.subdomain}.subsub.work · created {open.a.createdAt || "—"} · last active {open.a.lastActive || "—"}</p>
+              </div>
+              {admin.impersonate && open.a.status !== "canceled" && (
+                <button className="btn-solid" onClick={() => onImpersonate(open.a)}>
+                  <LogIn size={14} /> Sign in as this account
+                </button>
+              )}
+            </div>
+            <div className="pf-kpis">
+              <Kpi label="Plan" value={`${PLANS[open.a.plan].name} · ${open.a.billing}`} />
+              {admin.finance && <Kpi label="MRR" value={open.mrr ? fmtC(open.mrr) : "—"} accent />}
+              <Kpi label="Team users" value={open.users} />
+              <Kpi label="Subcontractors" value={open.subs} />
+              <Kpi label="Jobs this month" value={open.jobsMo} />
+              {admin.finance && <Kpi label="GMV to date" value={open.gmv ? fmtC(open.gmv) : "—"} />}
+              <Kpi label="Docs pending review" value={open.pendingDocs} warn={open.pendingDocs > 0} />
+            </div>
+
+            <div className="pf-panel">
+              <h3>Plan</h3>
+              <div className="pf-plan-row">
+                <label>Plan
+                  <select value={open.a.plan} onChange={(e) => onPatchAccount(open.a.id, { plan: e.target.value })}>
+                    <option value="basic">Basic</option><option value="scale">Scale</option>
+                  </select></label>
+                <label>Billing
+                  <select value={open.a.billing} onChange={(e) => onPatchAccount(open.a.id, { billing: e.target.value })}>
+                    <option value="monthly">Monthly</option><option value="annual">Annual</option>
+                  </select></label>
+                <label>Status
+                  <select value={open.a.status || "active"} onChange={(e) => onPatchAccount(open.a.id, { status: e.target.value })}>
+                    <option value="active">Active</option><option value="comped">Comped</option>
+                    <option value="suspended">Suspended</option><option value="canceled">Canceled</option>
+                  </select></label>
+              </div>
+              <p className="pf-note">Plan and cycle changes here should go through the billing provider in production — this writes account state only.</p>
+            </div>
+
+            <div className="pf-panel">
+              <div className="pf-panel-hd">
+                <h3>Team</h3>
+                <button className="pf-mini" onClick={() => setAddUser(addUser ? null : { name: "", email: "", role: "pm" })}>
+                  <Plus size={13} /> Add user
+                </button>
+              </div>
+              {addUser && (
+                <div className="pf-adduser">
+                  <input placeholder="Full name" value={addUser.name} onChange={(e) => setAddUser({ ...addUser, name: e.target.value })} />
+                  <input placeholder="Work email" type="email" value={addUser.email} onChange={(e) => setAddUser({ ...addUser, email: e.target.value })} />
+                  <select value={addUser.role} onChange={(e) => setAddUser({ ...addUser, role: e.target.value })}>
+                    <option value="admin">Admin</option><option value="pm">Project Manager</option>
+                  </select>
+                  <button className="btn-solid small" disabled={!addUser.name.trim() || !addUser.email.trim()}
+                    onClick={() => { onAddUser(open.a.id, addUser); setAddUser(null); }}>Add</button>
+                  <button className="pf-mini" onClick={() => setAddUser(null)}>Cancel</button>
+                </div>
+              )}
+              {memberships.filter((m) => m.accountId === open.a.id && m.role !== "contractor").map((m) => {
+                const u = users.find((x) => x.id === m.userId);
+                return u ? (
+                  <div key={m.userId} className="pf-line">
+                    <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+                    <span className="pf-line-main"><b>{u.name}</b><span className="pf-sub">{u.email}</span></span>
+                    <span className={`role-badge r-${m.role}`}>{ROLES[m.role].label}</span>
+                  </div>
+                ) : null;
+              })}
+            </div>
+
+            <div className="pf-panel">
+              <div className="pf-panel-hd">
+                <h3>User activity</h3>
+                <select value={actFilter} onChange={(e) => setActFilter(e.target.value)}>
+                  <option value="all">Everyone</option>
+                  {memberships.filter((m) => m.accountId === open.a.id).map((m) => {
+                    const u = users.find((x) => x.id === m.userId);
+                    return u ? <option key={u.id} value={u.id}>{u.name}</option> : null;
+                  })}
+                  <option value="system">System</option>
+                </select>
+              </div>
+              {(() => {
+                const list = (activity || [])
+                  .filter((e) => e.accountId === open.a.id)
+                  .filter((e) => actFilter === "all" ? true : actFilter === "system" ? !e.userId : e.userId === actFilter)
+                  .sort((x, y) => y.at.localeCompare(x.at));
+                if (!list.length) return <p className="pf-note">No activity recorded{actFilter !== "all" ? " for this filter" : ""}.</p>;
+                return list.slice(0, 40).map((e) => {
+                  const u = e.userId ? users.find((x) => x.id === e.userId) : null;
+                  return (
+                    <div key={e.id} className="pf-act-row">
+                      <span className="pf-act-when">{e.at.slice(0, 10)}<em>{e.at.slice(11, 16)}</em></span>
+                      <span className={`pf-act-kind k-${e.kind}`}>{ACTIVITY_LABEL[e.kind] || e.kind}</span>
+                      <span className="pf-act-txt">{e.text}</span>
+                      <span className="pf-act-who">{u ? u.name : "System"}</span>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+
+            <div className="pf-panel">
+              <h3>Subscription history</h3>
+              {subEvents.filter((e) => e.accountId === open.a.id).sort((x, y) => x.at.localeCompare(y.at)).map((e) => (
+                <div key={e.id} className="pf-line">
+                  <span className="pf-date">{e.at}</span>
+                  <span className="pf-line-main">
+                    {e.kind === "created" ? "Signed up on Basic"
+                      : e.kind === "upgraded" ? `Upgraded ${e.fromPlan} → ${e.toPlan}`
+                      : e.kind === "cycle" ? `Switched to ${e.cycle} billing`
+                      : e.kind === "canceled" ? "Canceled" : e.kind}
+                  </span>
+                  {admin.finance && e.mrrDelta !== 0 && (
+                    <b className={e.mrrDelta > 0 ? "up" : "down"}>{e.mrrDelta > 0 ? "+" : "−"}{fmtC(Math.abs(e.mrrDelta))}/mo</b>
+                  )}
+                </div>
+              ))}
+              {!subEvents.some((e) => e.accountId === open.a.id) && <p className="pf-note">No events recorded.</p>}
+            </div>
+          </>
+        )}
+
+        {/* ===== COMPANIES ===== */}
+        {screen === "companies" && !openId && (
+          <>
+            <div className="pf-head">
+              <h2>Companies</h2>
+              <div className="pf-kpis">
+                <Kpi label="Subcontractor companies" value={companies.length} />
+                <Kpi label="Serving 2+ accounts" value={compRows.filter((r) => r.accts.length > 1).length} accent />
+                <Kpi label="License issues" value={health.licFail} warn={health.licFail > 0} />
+                <Kpi label="Possible duplicates" value={health.dups} warn={health.dups > 0} />
+              </div>
+            </div>
+            <p className="pf-note">One company can serve many hiring accounts. A lapsed license here affects every account engaging them — this is the only place that's visible.</p>
+            <div className="pf-table-wrap">
+              <table className="pf-table">
+                <thead><tr><th>Company</th><th>License</th><th>State status</th><th>Engaged by</th><th>Warranty</th></tr></thead>
+                <tbody>
+                  {compRows.sort((x, y) => y.accts.length - x.accts.length).map((r) => (
+                    <tr key={r.c.id} className={r.licOk ? "" : "warn"}>
+                      <td><b>{r.c.company}</b><span className="pf-sub">{r.c.contact} · {r.c.city}, {r.c.state}</span></td>
+                      <td><code>{r.c.license || "—"}</code>{r.dup && <span className="pf-flag" title="Same license number on another record"> dup</span>}</td>
+                      <td>{r.lic ? <span className={`pf-status ${r.lic.status === "active" ? "active" : "suspended"}`}>{r.lic.status}</span> : <span className="pf-sub">not checked</span>}</td>
+                      <td>{r.accts.map((a) => a.name).join(", ") || "—"}
+                        {r.accts.length > 1 && <span className="pf-multi"> ×{r.accts.length}</span>}</td>
+                      <td>{warrantyLabel(r.c).replace(" labor warranty", "")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {/* ===== REVENUE ===== */}
+        {screen === "revenue" && !openId && admin.finance && (
+          <>
+            <div className="pf-head">
+              <h2>Revenue</h2>
+              <div className="pf-kpis">
+                <Kpi label="MRR (normalized)" value={fmtC(mrr)} accent />
+                <Kpi label="ARR" value={fmtC(mrr * 12)} />
+                <Kpi label="Paying accounts" value={live.filter((r) => r.mrr > 0).length} />
+                <Kpi label="Free → paid" value={`${conv}%`} sub={daysToConvert !== null ? `median ${daysToConvert}d` : ""} />
+                <Kpi label="Annual mix" value={`${live.filter((r) => r.mrr > 0).length
+                  ? Math.round(live.filter((r) => r.mrr > 0 && r.a.billing === "annual").length / live.filter((r) => r.mrr > 0).length * 100) : 0}%`} />
+              </div>
+            </div>
+
+            <div className="pf-panel">
+              <h3>MRR movement by month</h3>
+              <p className="pf-note">From the append-only subscription log, not current account state — which is why months don't drift.</p>
+              <div className="pf-table-wrap">
+                <table className="pf-table pf-num">
+                  <thead><tr><th>Month</th><th>Signups</th><th>Conversions</th><th>New</th><th>Expansion</th><th>Contraction</th><th>Churn</th><th>Net new</th><th>Ending MRR</th></tr></thead>
+                  <tbody>
+                    {running.map((r) => (
+                      <tr key={r.m}>
+                        <td><b>{r.m}</b></td>
+                        <td>{r.signups}</td><td>{r.conversions}</td>
+                        <td className="up">{r.newMrr ? "+" + fmtC(r.newMrr) : "—"}</td>
+                        <td className="up">{r.expansion ? "+" + fmtC(r.expansion) : "—"}</td>
+                        <td className="down">{r.contraction ? "−" + fmtC(Math.abs(r.contraction)) : "—"}</td>
+                        <td className="down">{r.churn ? "−" + fmtC(Math.abs(r.churn)) : "—"}</td>
+                        <td><b className={(r.newMrr + r.expansion + r.contraction + r.churn) >= 0 ? "up" : "down"}>
+                          {(r.newMrr + r.expansion + r.contraction + r.churn) >= 0 ? "+" : "−"}{fmtC(Math.abs(r.newMrr + r.expansion + r.contraction + r.churn))}</b></td>
+                        <td><b>{fmtC(r.mrr)}</b></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="pf-panel">
+              <h3>GMV through the platform</h3>
+              <p className="pf-note">Work-order value accepted across all accounts. Not revenue — the denominator for a future take rate, and an early signal of account health.</p>
+              <div className="pf-kpis">
+                <Kpi label="Accepted work-order value" value={fmtC(gmvTotal)} />
+                <Kpi label="Per paying account" value={live.filter((r) => r.mrr > 0).length ? fmtC(gmvTotal / live.filter((r) => r.mrr > 0).length) : "—"} />
+                <Kpi label="Upgrade pipeline" value={health.atLimit} sub="Basic at limit" warn={health.atLimit > 0} />
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ===== HEALTH ===== */}
+        {screen === "health" && !openId && isSuper && (
+          <>
+            <div className="pf-head"><h2>Health</h2></div>
+            <div className="pf-kpis pf-kpis-wrap">
+              <Kpi label="Signups, last 7 days" value={health.signups7d} />
+              <Kpi label="Basic at a limit" value={health.atLimit} warn={health.atLimit > 0} sub="upgrade candidates" />
+              <Kpi label="Docs pending review" value={health.docsStale} warn={health.docsStale > 5} />
+              <Kpi label="Expired offers" value={health.expired} warn={health.expired > 0} sub="no reply by deadline" />
+              <Kpi label="License checks failing" value={health.licFail} warn={health.licFail > 0} />
+              <Kpi label="Duplicate companies" value={health.dups} warn={health.dups > 0} />
+              <Kpi label="Inactive 14+ days" value={health.inactive14} warn={health.inactive14 > 0} sub="churn risk" />
+            </div>
+            <div className="pf-panel">
+              <h3>What to act on</h3>
+              {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} sitting at a plan limit — they've hit the wall and haven't upgraded. Worth a call.</p>}
+              {health.licFail > 0 && <p className="pf-act">▸ {health.licFail} compan{health.licFail === 1 ? "y" : "ies"} with a failing state license check, affecting every account that engages them.</p>}
+              {health.inactive14 > 0 && <p className="pf-act">▸ {health.inactive14} live account{health.inactive14 === 1 ? "" : "s"} with no activity in two weeks.</p>}
+              {health.dups > 0 && <p className="pf-act">▸ {health.dups} company record{health.dups === 1 ? "" : "s"} sharing a license number — merge before documents attach to both.</p>}
+              {!health.atLimit && !health.licFail && !health.inactive14 && !health.dups && <p className="pf-note">Nothing needs attention.</p>}
+            </div>
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function Kpi({ label, value, sub, accent, warn }) {
+  return (
+    <div className={`kpi ${accent ? "accent" : ""} ${warn ? "warn" : ""}`}>
+      <span className="kpi-v">{value}</span>
+      <span className="kpi-l">{label}{sub ? <em> · {sub}</em> : null}</span>
+    </div>
+  );
+}
+
+// ---- Properties (portfolio / property managers) -------------------------
+// Vendors can be scoped to specific properties. A vendor with none listed is
+// treated as available across the whole account, which is how a GC uses it.
+function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob }) {
+  const [form, setForm] = useState(null);   // null | {} | property
+  const vendorsFor = (pid) => subs.filter((s) => (s.propertyIds || []).includes(pid));
+  const unscoped = subs.filter((s) => !(s.propertyIds || []).length);
+  const jobsFor = (pid) => jobs.filter((j) => j.propertyId === pid);
+
+  if (form) return (
+    <main className="ss-main">
+      <PropertyForm existing={form.id ? form : null}
+        onSubmit={(p) => { form.id ? onPatch(form.id, p) : onAdd(p); setForm(null); }}
+        onCancel={() => setForm(null)} />
+    </main>
+  );
+
+  return (
+    <main className="ss-main">
+      <div className="dash-hello">
+        <div>
+          <h2>Properties</h2>
+          <p>{properties.length === 0
+            ? "Add the buildings you manage, then scope vendors to them."
+            : `${properties.length} propert${properties.length === 1 ? "y" : "ies"} · ${
+                properties.reduce((n, p) => n + (Number(p.units) || 0), 0)} units`}</p>
+        </div>
+        <button className="add-btn small" onClick={() => setForm({})}>
+          <Plus size={14} /> New property
+        </button>
+      </div>
+
+      {unscoped.length > 0 && properties.length > 0 && (
+        <p className="rollup-note">
+          {unscoped.length} vendor{unscoped.length === 1 ? "" : "s"} aren't scoped to a property,
+          so they're available at all of them.
+        </p>
+      )}
+
+      {properties.length === 0 ? (
+        <div className="dash-empty"><Building2 size={24} />
+          <p>No properties yet. Add one and you can give it its own vendor list.</p>
+          <button className="btn-solid" onClick={() => setForm({})}>Add a property</button>
+        </div>
+      ) : (
+        <div className="prop-grid">
+          {properties.map((p) => {
+            const vs = vendorsFor(p.id);
+            const js = jobsFor(p.id);
+            const open = js.filter((j) => j.status !== "completed").length;
+            return (
+              <div key={p.id} className="prop-card">
+                <div className="prop-top">
+                  <div>
+                    <h3>{p.name}</h3>
+                    <span className="prop-addr">
+                      {[p.address, p.city, p.state, p.zip].filter(Boolean).join(", ")}
+                    </span>
+                  </div>
+                  <div className="prop-actions">
+                    <button className="edit-btn" onClick={() => setForm(p)}><Pencil size={13} /> Edit</button>
+                    <button className="icon-x" title="Remove property"
+                      onClick={() => onRemove(p.id)}><Trash2 size={13} /></button>
+                  </div>
+                </div>
+
+                <div className="prop-stats">
+                  <span><strong>{p.units || "—"}</strong> units</span>
+                  <span><strong>{vs.length}</strong> assigned vendor{vs.length === 1 ? "" : "s"}</span>
+                  <span><strong>{open}</strong> open job{open === 1 ? "" : "s"}</span>
+                </div>
+
+                {vs.length > 0 ? (
+                  <div className="prop-vendors">
+                    {vs.slice(0, 6).map((v) => (
+                      <button key={v.id} className="prop-vendor" onClick={() => onOpenSub(v)}>
+                        {v.company}
+                        {!docsComplete(v) && <AlertTriangle size={11} />}
+                      </button>
+                    ))}
+                    {vs.length > 6 && <span className="prop-more">+{vs.length - 6} more</span>}
+                  </div>
+                ) : (
+                  <p className="prop-none">
+                    No vendors scoped here yet — every vendor on the account can work it.
+                  </p>
+                )}
+
+                {p.notes && <p className="prop-notes">{p.notes}</p>}
+                <button className="prop-job" onClick={() => onNewJob(p)}>
+                  <Plus size={12} /> New job at this property
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </main>
+  );
+}
+
+function PropertyForm({ existing, onSubmit, onCancel }) {
+  const [f, setF] = useState(existing || {
+    name: "", address: "", city: "", state: "WA", zip: "", units: "", notes: "",
+  });
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const ok = f.name.trim() && f.address.trim();
+  return (
+    <div className="portal-panel settings-panel">
+      <h4>{existing ? "Edit property" : "New property"}</h4>
+      <label className="fld">Property name
+        <input value={f.name} onChange={(e) => set("name", e.target.value)}
+          placeholder="Riverside Apartments" /></label>
+      <label className="fld">Street address
+        <input value={f.address} onChange={(e) => set("address", e.target.value)}
+          placeholder="1420 Riverside Dr" /></label>
+      <div className="three">
+        <label className="fld">City<input value={f.city} onChange={(e) => set("city", e.target.value)} /></label>
+        <label className="fld">State<input value={f.state} maxLength={2}
+          onChange={(e) => set("state", e.target.value.toUpperCase().slice(0, 2))} /></label>
+        <label className="fld">ZIP<input inputMode="numeric" value={f.zip}
+          onChange={(e) => set("zip", e.target.value)} /></label>
+      </div>
+      <label className="fld">Units or spaces <span className="fld-note">optional</span>
+        <input inputMode="numeric" value={f.units} onChange={(e) => set("units", e.target.value)}
+          placeholder="84" /></label>
+      <label className="fld">Notes <span className="fld-note">access, gate codes, anything site-specific</span>
+        <textarea rows={2} value={f.notes} onChange={(e) => set("notes", e.target.value)} /></label>
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-solid" disabled={!ok} onClick={() => onSubmit(f)}>
+          {existing ? <><Check size={15} /> Save property</> : <><Plus size={15} /> Add property</>}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---- Public subcontractor signup (white-labeled, linked from the GC's site) ----
+// The GC drops this URL on their "work with us" page. A sub fills it in, and
+// lands in that GC's account as an invited engagement awaiting approval.
+function SubSignup({ brand, onSubmit, onBackToLogin }) {
+  const t = themeOf(brand);
+  const [step, setStep] = useState(1);
+  const [f, setF] = useState({
+    company: "", contact: "", email: "", phone: "", license: "", ubi: "",
+    city: "", state: "WA", zip: "",
+    categories: [], warranty: "", crewCount: "1",
+    notifyEmail: true, notifySms: false,
+  });
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const toggleCat = (id) => setF((x) => ({
+    ...x,
+    categories: x.categories.includes(id)
+      ? x.categories.filter((c) => c !== id)
+      : [...x.categories, id],
+  }));
+  const [sent, setSent] = useState(false);
+
+  const ok1 = f.company.trim() && f.contact.trim() && f.email.trim();
+  const ok2 = f.categories.length > 0;
+  const stepOk = step === 1 ? ok1 : step === 2 ? ok2 : true;
+
+  if (sent) return (
+    <div className="wl-page" style={themeVars(t)}>
+      <div className="wl-card wl-done">
+        <div className="wl-brand"><BrandMark brand={brand} height={30} />
+          <span className="wl-brand-name">{brand.name}</span></div>
+        <div className="wl-tick"><CheckCircle2 size={34} /></div>
+        <h1>Thanks — we've got it.</h1>
+        <p>{brand.name} will review your details. You'll get an email at <b>{f.email}</b> with a
+          link to set a password, then you can upload your insurance, bond, W-9 and signed
+          agreement.</p>
+        <p className="wl-fine">Nothing gets assigned to you until those are approved, so there's
+          no rush today — but the sooner they're in, the sooner you can be scheduled.</p>
+        <button className="wl-btn" onClick={onBackToLogin}>Go to sign in</button>
+      </div>
+      <PoweredBy className="wl-foot" height={15} />
+    </div>
+  );
+
+  return (
+    <div className="wl-page" style={themeVars(t)}>
+      <div className="wl-card">
+        <div className="wl-brand"><BrandMark brand={brand} height={30} />
+          <span className="wl-brand-name">{brand.name}</span></div>
+
+        <h1>Work with {brand.name}</h1>
+        <p className="wl-lede">Tell us about your company and we'll add you to our
+          subcontractor list. Takes about two minutes.</p>
+
+        <div className="wl-steps">
+          {[[1, "Your company"], [2, "Trades"], [3, "Finish"]].map(([n, l]) => (
+            <span key={n} className={`wl-step ${step === n ? "on" : ""} ${step > n ? "done" : ""}`}>
+              {step > n ? <Check size={12} /> : n} {l}
+            </span>
+          ))}
+        </div>
+
+        {step === 1 && (
+          <>
+            <label className="wl-fld">Company name
+              <input value={f.company} onChange={(e) => set("company", e.target.value)} /></label>
+            <label className="wl-fld">Your name
+              <input value={f.contact} onChange={(e) => set("contact", e.target.value)} /></label>
+            <div className="wl-row">
+              <label className="wl-fld">Email
+                <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)} /></label>
+              <label className="wl-fld">Mobile
+                <input type="tel" value={f.phone} onChange={(e) => set("phone", e.target.value)}
+                  placeholder="206-555-0100" /></label>
+            </div>
+            <div className="wl-row">
+              <label className="wl-fld">WA L&amp;I license #
+                <input value={f.license} onChange={(e) => set("license", e.target.value.toUpperCase())}
+                  placeholder="ABCDEF123GH" /></label>
+              <label className="wl-fld">UBI
+                <input inputMode="numeric" value={f.ubi} onChange={(e) => set("ubi", e.target.value)} /></label>
+            </div>
+            <p className="wl-fine">We check your license against the state registry — it speeds
+              up approval.</p>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <div className="wl-label">What trades do you cover?</div>
+            <div className="wl-picks">
+              {CATEGORIES.map((c) => (
+                <button key={c.id} type="button"
+                  className={`wl-pick ${f.categories.includes(c.id) ? "on" : ""}`}
+                  onClick={() => toggleCat(c.id)}>{c.label}</button>
+              ))}
+            </div>
+            <div className="wl-row" style={{ marginTop: 18 }}>
+              <label className="wl-fld">City
+                <input value={f.city} onChange={(e) => set("city", e.target.value)} /></label>
+              <label className="wl-fld">ZIP
+                <input inputMode="numeric" value={f.zip} onChange={(e) => set("zip", e.target.value)} /></label>
+            </div>
+            <label className="wl-fld">How many crews do you run?
+              <select value={f.crewCount} onChange={(e) => set("crewCount", e.target.value)}>
+                {["1", "2", "3", "4", "5+"].map((n) => <option key={n}>{n}</option>)}
+              </select>
+            </label>
+          </>
+        )}
+
+        {step === 3 && (
+          <>
+            <label className="wl-fld">How long do you warranty your labor?
+              <select value={f.warranty} onChange={(e) => set("warranty", e.target.value)}>
+                <option value="">Select…</option>
+                {WARRANTY_OPTIONS.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
+              </select>
+            </label>
+            <div className="wl-label">How should we reach you?</div>
+            <div className="wl-checks">
+              <label className={`wl-check ${f.notifyEmail ? "on" : ""}`}>
+                <input type="checkbox" checked={f.notifyEmail}
+                  onChange={(e) => set("notifyEmail", e.target.checked)} /> Email</label>
+              <label className={`wl-check ${f.notifySms ? "on" : ""}`}>
+                <input type="checkbox" checked={f.notifySms}
+                  onChange={(e) => set("notifySms", e.target.checked)} /> Text message</label>
+            </div>
+            <p className="wl-fine">Job offers and document reminders only. One-way messages — you
+              reply inside your account, not to the text.</p>
+            <div className="wl-summary">
+              <div><span>Company</span><b>{f.company || "—"}</b></div>
+              <div><span>Trades</span><b>{f.categories.length
+                ? f.categories.map((c) => catMeta(c).label).join(", ") : "—"}</b></div>
+              <div><span>License</span><b>{f.license || "Not provided"}</b></div>
+            </div>
+          </>
+        )}
+
+        <div className="wl-actions">
+          {step > 1
+            ? <button className="wl-btn-ghost" onClick={() => setStep(step - 1)}>Back</button>
+            : <button className="wl-btn-ghost" onClick={onBackToLogin}>I already have an account</button>}
+          {step < 3
+            ? <button className="wl-btn" disabled={!stepOk} onClick={() => setStep(step + 1)}>Continue</button>
+            : <button className="wl-btn" disabled={!f.notifyEmail && !f.notifySms}
+                onClick={() => { onSubmit(f); setSent(true); }}>Submit application</button>}
+        </div>
+        {!stepOk && (
+          <p className="wl-err">{step === 1
+            ? "Company, your name and an email are needed."
+            : "Pick at least one trade."}</p>
+        )}
+      </div>
+      <PoweredBy className="wl-foot" height={15} />
+    </div>
+  );
+}
+
 // ---- Upgrade gate (shown instead of the add form when a plan is maxed) ---
 function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, onDecline }) {
   const cur = PLANS[plan];
@@ -2887,6 +4131,12 @@ function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, on
 }
 
 // ---- Subscription plans -------------------------------------------------
+// PROPERTIES: property and portfolio managers run different vendors at
+// different buildings, so an engagement can be scoped to specific properties.
+// Empty propertyIds = available across the whole account, which is how a
+// general contractor uses it. Jobs carry a propertyId, and matching filters
+// out vendors scoped elsewhere.
+//
 // ARCHITECTURE: one contractor, many hiring companies (see DEPLOYMENT.md)
 // ---------------------------------------------------------------------------
 // Implemented, not stubbed. The three tables are companies / accounts /
@@ -3837,15 +5087,26 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
 
 // ---- Create job ----------------------------------------------------------
 // The job holds every project fact. Work orders are derived from it on assign.
-function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId }) {
+function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, properties, forProperty }) {
   const [f, setF] = useState({
-    title: "", client: "", address: "", area: "", zip: "",
+    title: forProperty ? `${forProperty.name} — ` : "",
+    client: "", propertyId: forProperty ? forProperty.id : "",
+    address: forProperty ? forProperty.address || "" : "",
+    area: forProperty ? forProperty.city || "" : "",
+    zip: forProperty ? forProperty.zip || "" : "",
     sqft: "", stories: "",
     date: "", time: "07:00",
     trades: forSub ? [...forSub.categories] : [],
     scope: "", materialSource: "", materialsPaidBy: "Outerhome",
     measurementDocs: [],
   });
+  // Picking a property fills the address, so it isn't retyped per job.
+  const pickProperty = (id) => {
+    const p = (properties || []).find((x) => x.id === id);
+    setF((s) => ({ ...s, propertyId: id,
+      ...(p ? { address: p.address || "", area: p.city || "", zip: p.zip || "",
+                title: s.title || `${p.name} — ` } : {}) }));
+  };
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const toggleTrade = (id) => setF((s) => ({ ...s, trades: s.trades.includes(id) ? s.trades.filter((x) => x !== id) : [...s.trades, id] }));
   const when = formatWhen(f.date, f.time);
@@ -3864,6 +5125,15 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId }) {
       )}
 
       <div className="form-sec">1 · Project</div>
+      {(properties || []).length > 0 && (
+        <label className="fld">Property <span className="fld-note">fills the address and scopes vendor matching</span>
+          <select value={f.propertyId} onChange={(e) => pickProperty(e.target.value)}>
+            <option value="">Not at a managed property</option>
+            {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </label>
+      )}
+
       <label className="fld">Job name<input value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. 1420 Maple St — full exterior" /></label>
       <label className="fld">Homeowner / client<input value={f.client} onChange={(e) => set("client", e.target.value)} placeholder="Client name" /></label>
       <label className="fld">Service address<input value={f.address} onChange={(e) => set("address", e.target.value)} placeholder="1420 Maple St" /></label>
@@ -3987,20 +5257,25 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
       const docs = s.bond && s.insurance && s.contract;
       const day = dayStatus(s, allJobs || jobs, job.date, job.id, accountId);
       // Bundling bonus: one sub covering several of this job's open trades
-      // means one crew, one mobilisation and one point of contact, so rank
+      // means one crew, one mobilization and one point of contact, so rank
       // them ahead of a single-trade sub of similar standing.
       const covers = (job.trades || []).filter((t) =>
         !job.assignments?.[t] && s.categories.includes(t));
+      // A vendor scoped to other properties shouldn't surface for this job.
+      const onProperty = !job.propertyId || !(s.propertyIds || []).length
+        || s.propertyIds.includes(job.propertyId);
       let score = s.rating * 4 + (docs ? 25 : 0) + (s.available ? 15 : 0) + (s.autoSchedule ? 30 : 0);
       score += Math.max(0, covers.length - 1) * 35;
+      score += onProperty ? 0 : -1000;   // effectively removes off-property vendors
       if (prox?.inRange) score += 20;
       if (prox?.distance != null) score -= Math.min(prox.distance, 40) * 0.5;
       // day-level availability against this job's date
       if (day?.kind === "free") score += 25;
       if (day?.kind === "booked") score -= 40;
       if (day?.kind === "off") score -= 60;
-      return { sub: s, prox, docs, day, score, covers, dup: alreadyOn.includes(s.id) };
+      return { sub: s, prox, docs, day, score, covers, onProperty, dup: alreadyOn.includes(s.id) };
     })
+    .filter((r) => r.onProperty)
     .sort((a, b) => b.score - a.score), [pool, trade, job, jobs, allJobs, accountId]);
 
   // Step 2: the only details a work order adds on top of the job
@@ -4321,7 +5596,7 @@ function PickJobSlot({ sub, jobs, allJobs, accountId, onPick, onNewJob, onNotify
   );
 }
 // ---- Contractor portal (contractor role) ---------------------------------
-function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, serviceCalls, onConfirmCall, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage }) {
+function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage }) {
   const [sub2, setSub2] = useState("trades");
   const caps = [...new Set(sub.categories.flatMap((c) => CAP_LIBRARY[c] || []))];
   const miss = missingDocs(sub);
@@ -4350,6 +5625,23 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, servi
 
       {pane === "jobs" && (
         <>
+          {(changeOrders || []).filter((c) => c.status === "pending").length > 0 && (
+            <section className="portal-sec">
+              <h3><FilePlus2 size={15} /> Change orders
+                <span className="sec-count amber">
+                  {(changeOrders || []).filter((c) => c.status === "pending" && c.origin === "gc").length}
+                </span>
+              </h3>
+              <p className="portal-sec-note">
+                A change to a work order you already accepted. Accepting updates your pay for that
+                job; the original work order stays as it was.
+              </p>
+              {(changeOrders || []).filter((c) => c.status === "pending").map((c) => (
+                <ChangeOrderRow key={c.id} c={c} now={now} side="sub"
+                  onRespond={onRespondCO} onVoid={onVoidCO} />
+              ))}
+            </section>
+          )}
           {(serviceCalls || []).filter((c) => c.status !== "resolved").length > 0 && (
             <section className="portal-sec">
               <h3><Wrench size={15} /> Return visits
@@ -4413,7 +5705,7 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, servi
           {pending.length > 0 && (
             <section className="dash-sec">
               <h3><Clock size={15} /> Job requests <span className="sec-count amber">{pending.length}</span></h3>
-              {pending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} showActions />)}
+              {pending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} showActions />)}
             </section>
           )}
 
@@ -4421,20 +5713,20 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, servi
             <h3><Calendar size={15} /> Current &amp; upcoming {upcoming.length > 0 && <span className="sec-count">{upcoming.length}</span>}</h3>
             {upcoming.length === 0
               ? <div className="dash-empty"><ClipboardList size={24} /><p>No upcoming jobs booked.</p></div>
-              : upcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} />)}
+              : upcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} />)}
           </section>
 
           {past.length > 0 && (
             <section className="dash-sec">
               <h3><CheckCircle2 size={15} /> Completed <span className="sec-count">{past.length}</span></h3>
-              {past.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} past />)}
+              {past.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} past />)}
             </section>
           )}
 
           {declined.length > 0 && (
             <section className="dash-sec">
               <h3><XCircle size={15} /> Declined <span className="sec-count">{declined.length}</span></h3>
-              {declined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} />)}
+              {declined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} />)}
             </section>
           )}
         </>
@@ -4456,7 +5748,7 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, servi
 
           {sub2 === "trades" && (
             <div className="portal-panel" style={{ marginBottom: 16 }}>
-              <h4>Your labour warranty</h4>
+              <h4>Your labor warranty</h4>
               <p className="panel-note">How long you stand behind your workmanship. {brand.name}
                 uses this to decide whether a later issue is a warranty claim or chargeable work.</p>
               <div className="pick-grid warranty-grid">
@@ -4620,7 +5912,7 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, servi
 }
 
 // ---- Contractor dashboard job card -------------------------------------
-function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO, now }) {
+function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO, now, changeOrders, onRequestChange }) {
   const M = catMeta(trade);
   const left = msLeft(a, now);
   const expired = isExpired(a, now);
@@ -4634,7 +5926,11 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
             <span><Calendar size={12} /> {formatWhen(job.date, job.time) || job.date || "No date"}</span>
             <span><MapPin size={12} /> {[job.address, job.area, job.zip].filter(Boolean).join(", ") || "No address"}</span>
             {job.sqft && <span><Ruler size={12} /> {Number(job.sqft).toLocaleString()} sq ft</span>}
-            {a.value && <span className="job-val">{formatMoney(a.value)} your pay</span>}
+            {a.value && <span className="job-val">
+              {formatMoney(revisedValue(a, changeOrders, job.id, trade))} your pay
+              {cosFor(changeOrders, job.id, trade).some((c) => c.status === "accepted") &&
+                <em className="job-val-note"> · incl. change orders</em>}
+            </span>}
           </div>
         </div>
         <span className={`cat-badge cat-${trade}`}><M.icon size={12} /> {M.label}</span>
@@ -4646,6 +5942,11 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
         <ScrollText size={13} /> View work order {a.wo}
         {(job.measurementDocs || []).length > 0 && <span className="wo-open-meas">+{job.measurementDocs.length} measurement doc{job.measurementDocs.length > 1 ? "s" : ""}</span>}
       </button>
+      {!past && (a.status === "accepted" || a.auto) && onRequestChange && (
+        <button className="wo-open-btn wo-change-btn" onClick={() => onRequestChange(job, trade, a)}>
+          <FilePlus2 size={13} /> Request a change to this work order
+        </button>
+      )}
       {a.rating ? (
         <p className="portal-crew"><Star size={12} fill="currentColor" /> Rated {a.rating}.0 by the GC</p>
       ) : null}
@@ -5224,7 +6525,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
         {!supabaseEnabled && (
           <div className="login-demo">
             <div className="ld-label">Demo accounts — tap to sign in</div>
-            {users.map((u) => (
+            {users.filter((u) => !u.platform).map((u) => (
               <button key={u.id} className="ld-row" onClick={() => onLogin(u.email)}>
                 <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
                 <span className="ld-main">
@@ -5252,184 +6553,11 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
   );
 }
 
-// ---- Public subcontractor signup (white-labeled, linked from the GC's site) ----
-// No password here — this is an application, not an account. It creates a
-// bare company + an 'invited' engagement (and an internal users row, so
-// "Already invited? Create your password" on the sign-in page links up by
-// email later) via POST /api/apply/:subdomain — a public, unauthenticated
-// endpoint, since the applicant has no session yet.
-function SubSignup({ brand, onSubmit, onBackToLogin }) {
-  const t = themeOf(brand);
-  const [step, setStep] = useState(1);
-  const [f, setF] = useState({
-    company: "", contact: "", email: "", phone: "", license: "", ubi: "",
-    city: "", state: "WA", zip: "",
-    categories: [], warranty: "", crewCount: "1",
-    notifyEmail: true, notifySms: false,
-  });
-  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
-  const toggleCat = (id) => setF((x) => ({
-    ...x,
-    categories: x.categories.includes(id)
-      ? x.categories.filter((c) => c !== id)
-      : [...x.categories, id],
-  }));
-  const [sent, setSent] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  const ok1 = f.company.trim() && f.contact.trim() && f.email.trim();
-  const ok2 = f.categories.length > 0;
-  const stepOk = step === 1 ? ok1 : step === 2 ? ok2 : true;
-
-  const submit = async () => {
-    setBusy(true); setErr("");
-    try {
-      await onSubmit(f);
-      setSent(true);
-    } catch (e) {
-      setErr(e?.message || "Something went wrong — please try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (sent) return (
-    <div className="wl-page" style={themeVars(t)}>
-      <div className="wl-card wl-done">
-        <div className="wl-brand"><BrandMark brand={brand} height={30} />
-          <span className="wl-brand-name">{brand.name}</span></div>
-        <div className="wl-tick"><CheckCircle2 size={34} /></div>
-        <h1>Thanks — we've got it.</h1>
-        <p>{brand.name} will review your details. You'll get an email at <b>{f.email}</b> with a
-          link to set a password, then you can upload your insurance, bond, W-9 and signed
-          agreement.</p>
-        <p className="wl-fine">Nothing gets assigned to you until those are approved, so there's
-          no rush today — but the sooner they're in, the sooner you can be scheduled.</p>
-        <button className="wl-btn" onClick={onBackToLogin}>Go to sign in</button>
-      </div>
-      <PoweredBy className="wl-foot" height={15} />
-    </div>
-  );
-
-  return (
-    <div className="wl-page" style={themeVars(t)}>
-      <div className="wl-card">
-        <div className="wl-brand"><BrandMark brand={brand} height={30} />
-          <span className="wl-brand-name">{brand.name}</span></div>
-
-        <h1>Work with {brand.name}</h1>
-        <p className="wl-lede">Tell us about your company and we'll add you to our
-          subcontractor list. Takes about two minutes.</p>
-
-        <div className="wl-steps">
-          {[[1, "Your company"], [2, "Trades"], [3, "Finish"]].map(([n, l]) => (
-            <span key={n} className={`wl-step ${step === n ? "on" : ""} ${step > n ? "done" : ""}`}>
-              {step > n ? <Check size={12} /> : n} {l}
-            </span>
-          ))}
-        </div>
-
-        {step === 1 && (
-          <>
-            <label className="wl-fld">Company name
-              <input value={f.company} onChange={(e) => set("company", e.target.value)} /></label>
-            <label className="wl-fld">Your name
-              <input value={f.contact} onChange={(e) => set("contact", e.target.value)} /></label>
-            <div className="wl-row">
-              <label className="wl-fld">Email
-                <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)} /></label>
-              <label className="wl-fld">Mobile
-                <input type="tel" value={f.phone} onChange={(e) => set("phone", e.target.value)}
-                  placeholder="206-555-0100" /></label>
-            </div>
-            <div className="wl-row">
-              <label className="wl-fld">WA L&amp;I license #
-                <input value={f.license} onChange={(e) => set("license", e.target.value.toUpperCase())}
-                  placeholder="ABCDEF123GH" /></label>
-              <label className="wl-fld">UBI
-                <input inputMode="numeric" value={f.ubi} onChange={(e) => set("ubi", e.target.value)} /></label>
-            </div>
-            <p className="wl-fine">We check your license against the state registry — it speeds
-              up approval.</p>
-          </>
-        )}
-
-        {step === 2 && (
-          <>
-            <div className="wl-label">What trades do you cover?</div>
-            <div className="wl-picks">
-              {CATEGORIES.map((c) => (
-                <button key={c.id} type="button"
-                  className={`wl-pick ${f.categories.includes(c.id) ? "on" : ""}`}
-                  onClick={() => toggleCat(c.id)}>{c.label}</button>
-              ))}
-            </div>
-            <div className="wl-row" style={{ marginTop: 18 }}>
-              <label className="wl-fld">City
-                <input value={f.city} onChange={(e) => set("city", e.target.value)} /></label>
-              <label className="wl-fld">ZIP
-                <input inputMode="numeric" value={f.zip} onChange={(e) => set("zip", e.target.value)} /></label>
-            </div>
-            <label className="wl-fld">How many crews do you run?
-              <select value={f.crewCount} onChange={(e) => set("crewCount", e.target.value)}>
-                {["1", "2", "3", "4", "5+"].map((n) => <option key={n}>{n}</option>)}
-              </select>
-            </label>
-          </>
-        )}
-
-        {step === 3 && (
-          <>
-            <label className="wl-fld">How long do you warranty your labor?
-              <select value={f.warranty} onChange={(e) => set("warranty", e.target.value)}>
-                <option value="">Select…</option>
-                {WARRANTY_OPTIONS.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
-              </select>
-            </label>
-            <div className="wl-label">How should we reach you?</div>
-            <div className="wl-checks">
-              <label className={`wl-check ${f.notifyEmail ? "on" : ""}`}>
-                <input type="checkbox" checked={f.notifyEmail}
-                  onChange={(e) => set("notifyEmail", e.target.checked)} /> Email</label>
-              <label className={`wl-check ${f.notifySms ? "on" : ""}`}>
-                <input type="checkbox" checked={f.notifySms}
-                  onChange={(e) => set("notifySms", e.target.checked)} /> Text message</label>
-            </div>
-            <p className="wl-fine">Job offers and document reminders only. One-way messages — you
-              reply inside your account, not to the text.</p>
-            <div className="wl-summary">
-              <div><span>Company</span><b>{f.company || "—"}</b></div>
-              <div><span>Trades</span><b>{f.categories.length
-                ? f.categories.map((c) => catMeta(c).label).join(", ") : "—"}</b></div>
-              <div><span>License</span><b>{f.license || "Not provided"}</b></div>
-            </div>
-          </>
-        )}
-
-        {err && <p className="wl-err">{err}</p>}
-        <div className="wl-actions">
-          {step > 1
-            ? <button className="wl-btn-ghost" onClick={() => setStep(step - 1)}>Back</button>
-            : <button className="wl-btn-ghost" onClick={onBackToLogin}>I already have an account</button>}
-          {step < 3
-            ? <button className="wl-btn" disabled={!stepOk} onClick={() => setStep(step + 1)}>Continue</button>
-            : <button className="wl-btn" disabled={busy || (!f.notifyEmail && !f.notifySms)}
-                onClick={submit}>{busy ? "Submitting…" : "Submit application"}</button>}
-        </div>
-        {!stepOk && (
-          <p className="wl-err">{step === 1
-            ? "Company, your name and an email are needed."
-            : "Pick at least one trade."}</p>
-        )}
-      </div>
-      <PoweredBy className="wl-foot" height={15} />
-    </div>
-  );
-}
-
 // ---- Work order document (derived view, downloadable) -------------------
-function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand }) {
+function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand, cos }) {
+  const coList = (cos || []).filter((c) => c.status === "accepted").sort((x, y) => x.seq - y.seq);
+  const coPending = (cos || []).filter((c) => c.status === "pending").length;
+  const revised = Number(moneyRaw(a.value) || 0) + coList.reduce((n, c) => n + c.valueDelta, 0);
   const M = catMeta(trade);
   const download = () => {
     const lines = [
@@ -5454,6 +6582,13 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
       a.tradeScope || job.scope || "—",
       "",
       `Subcontractor value: ${a.value ? formatMoney(a.value) : "—"}`,
+      ...(coList.length ? [
+        "",
+        "CHANGE ORDERS (accepted)",
+        ...coList.map((c) => `  ${coSeq(c.seq)}  ${c.valueDelta === 0 ? "No cost   " : (c.valueDelta > 0 ? "+" : "-") + formatMoney(Math.abs(c.valueDelta)).padEnd(10)}  ${c.scope}`),
+        `  Revised subcontractor value: ${formatMoney(revised)}`,
+      ] : []),
+      ...(coPending ? [`  (${coPending} change order${coPending === 1 ? "" : "s"} pending — not included)`] : []),
       "",
       (job.measurementDocs || []).length
         ? `Measurement documents: ${job.measurementDocs.join(", ")}` : "",
@@ -5508,6 +6643,21 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
 
       <div className="wo-doc-sec">Compensation</div>
       <div className="wo-value">{a.value ? formatMoney(a.value) : "—"}<span> subcontractor value</span></div>
+      {coList.length > 0 && (
+        <div className="wo-co-sched">
+          <div className="wo-co-hd">Change orders</div>
+          {coList.map((c) => (
+            <div key={c.id} className="wo-co-line">
+              <span className="wo-co-seq">{coSeq(c.seq)}</span>
+              <span className="wo-co-scope">{c.scope}</span>
+              <span className={`wo-co-delta ${c.valueDelta > 0 ? "up" : c.valueDelta < 0 ? "down" : ""}`}>
+                {c.valueDelta === 0 ? "No cost" : (c.valueDelta > 0 ? "+" : "−") + formatMoney(Math.abs(c.valueDelta))}
+              </span>
+            </div>
+          ))}
+          <div className="wo-co-total"><span>Revised subcontractor value</span><b>{formatMoney(revised)}</b></div>
+        </div>
+      )}
 
       <div className="wo-doc-sec">Measurement documents</div>
       {(job.measurementDocs || []).length === 0 ? (
@@ -5582,7 +6732,12 @@ function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, 
       <div className="detail-contact">
         <a href={`tel:${sub.phone}`}><Phone size={14} /> {sub.phone}</a>
         <a href={`mailto:${sub.email}`}><Mail size={14} /> {sub.email}</a>
-        <span className="notify-chip" title="How long they warranty their labour">
+        {(sub.propertyIds || []).length > 0 && (
+          <span className="notify-chip" title="Properties this vendor is scoped to">
+            <Building2 size={12} /> {sub.propertyIds.length} propert{sub.propertyIds.length === 1 ? "y" : "ies"}
+          </span>
+        )}
+        <span className="notify-chip" title="How long they warranty their labor">
           <ShieldCheck size={12} /> {warrantyLabel(sub)}
         </span>
         <span className="notify-chip" title="How this contractor receives automated notifications">
@@ -5894,12 +7049,13 @@ function NotifyForm({ data, brand, onClose }) {
 }
 
 // ---- Add / edit sub form -------------------------------------------------
-function SubForm({ onSubmit, onCancel, existing }) {
+function SubForm({ onSubmit, onCancel, existing, properties }) {
   const init = existing ? {
     company: existing.company, contact: existing.contact, phone: existing.phone, email: existing.email,
     categories: existing.categories, caps: existing.caps,
     city: existing.city || "", state: existing.state || "", zip2: existing.zip || "",
     license: existing.license || "", ubi: existing.ubi || "",
+    propertyIds: existing.propertyIds || [],
     notifyEmail: notifyPrefs(existing).email, notifySms: notifyPrefs(existing).sms,
     mailStreet: existing.mailStreet || "", mailCity: existing.mailCity || "",
     mailState: existing.mailState || "", mailZip: existing.mailZip || "",
@@ -5915,6 +7071,7 @@ function SubForm({ onSubmit, onCancel, existing }) {
     company: "", contact: "", phone: "", email: "", categories: [], caps: [],
     city: "", state: "", zip2: "",
     license: "", ubi: "",
+    propertyIds: [],
     notifyEmail: true, notifySms: false,
     mailStreet: "", mailCity: "", mailState: "", mailZip: "",
     crews: [{ id: "c1", name: "Crew 1", available: true, unavailableDays: [], members: [{ name: "", role: "" }] }],
@@ -5958,7 +7115,7 @@ function SubForm({ onSubmit, onCancel, existing }) {
     ...(existing ? { id: existing.id } : {}),
     company: f.company, contact: f.contact, phone: f.phone, email: f.email,
     city: f.city, state: f.state, zip: f.zip2,
-    license: f.license, ubi: f.ubi,
+    license: f.license, ubi: f.ubi, propertyIds: f.propertyIds,
     notify: { email: f.notifyEmail, sms: f.notifySms },
     mailStreet: f.mailStreet, mailCity: f.mailCity, mailState: f.mailState, mailZip: f.mailZip,
     categories: f.categories, caps: f.caps, crews: cleanCrews,
@@ -6088,6 +7245,27 @@ function SubForm({ onSubmit, onCancel, existing }) {
       </>)}
 
       {step === 2 && (<>
+      {(properties || []).length > 0 && (
+        <div className="fld">Properties they cover
+          <p className="fine">Leave all unticked and they're available at every property on the
+            account — which is how a general contractor would use it.</p>
+          <div className="pick-grid">
+            {properties.map((p) => (
+              <button key={p.id} type="button"
+                className={`pick ${(f.propertyIds || []).includes(p.id) ? "on" : ""}`}
+                onClick={() => set("propertyIds", (f.propertyIds || []).includes(p.id)
+                  ? f.propertyIds.filter((x) => x !== p.id)
+                  : [...(f.propertyIds || []), p.id])}>{p.name}</button>
+            ))}
+          </div>
+          <p className="cov-hint">
+            {(f.propertyIds || []).length
+              ? `Scoped to ${f.propertyIds.length} propert${f.propertyIds.length === 1 ? "y" : "ies"}.`
+              : "Available at all properties."}
+          </p>
+        </div>
+      )}
+
       <div className="fld">Categories (choose one or more)
         <div className="pick-grid">{CATEGORIES.map((c) => (
           <button key={c.id} type="button" className={`pick ${f.categories.includes(c.id) ? "on" : ""}`}
@@ -6212,9 +7390,15 @@ const CSS = `
 .add-btn:hover{background:var(--brand-dk)}
 .add-wrap{position:relative;flex:none}
 .add-scrim{position:fixed;inset:0;z-index:30}
-.add-menu{position:absolute;top:100%;right:0;margin-top:6px;background:var(--card);border:1px solid var(--line);border-radius:11px;box-shadow:0 8px 24px rgba(26,43,35,.15);z-index:31;min-width:180px;padding:5px;display:flex;flex-direction:column}
-.add-menu button{display:flex;align-items:center;gap:9px;border:0;background:none;padding:10px 12px;font-size:13.5px;font-weight:600;color:var(--ink);cursor:pointer;border-radius:8px;text-align:left}
-.add-menu button:hover{background:var(--paper);color:var(--brand)}
+.add-menu{position:absolute;top:100%;right:0;margin-top:6px;background:#ffffff;color:#12211c;border:1px solid #cfd8d2;
+  border-radius:11px;box-shadow:0 14px 36px rgba(26,43,35,.22);z-index:60;min-width:200px;padding:5px;display:flex;flex-direction:column}
+.add-menu button{display:flex;align-items:center;gap:9px;border:0;background:transparent;padding:10px 12px;font-size:13.5px;
+  font-weight:600;color:#12211c;cursor:pointer;border-radius:8px;text-align:left}
+.add-menu button svg{color:#1f6b4a;flex:none}
+.add-menu button:hover{background:#f2f8f4;color:#1f6b4a}
+.add-menu .um-name{color:#12211c}
+.add-menu .um-role{color:#5d6f67}
+.add-menu .user-menu-label{color:#5d6f67}
 
 .filters{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
 .ms{position:relative;display:flex;flex-direction:column;gap:5px}
@@ -7472,6 +8656,445 @@ const CSS = `
 .sf-steps button[data-state="now"] .sb-n{background:var(--brand);border-color:var(--brand);color:#fff}
 .sf-steps button[data-state="done"] .sb-n{background:var(--brand);border-color:var(--brand);color:#fff}
 
+
+/* ===== white-label pages (sign-in + public signup) ===== */
+.wl-themed{background:var(--wl-bg) !important;color:var(--wl-text) !important}
+.wl-themed .login-card{background:var(--wl-surface) !important;color:var(--wl-text) !important}
+.wl-themed .login-card h1,.wl-themed .login-card h2{color:var(--wl-text) !important}
+.wl-themed .btn-solid,.wl-themed .login-btn{background:var(--wl-accent) !important;color:var(--wl-btn-text) !important}
+.login-signup{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;
+  margin-top:16px;padding:14px 16px;border-radius:10px;border:1px solid var(--line);
+  background:var(--paper);font-family:inherit;cursor:pointer;text-align:left}
+.login-signup > span{font-size:12px;color:var(--ink-soft)}
+.login-signup b{font-size:14.5px;font-weight:700;color:var(--wl-accent,var(--brand))}
+.login-signup:hover{border-color:var(--wl-accent,var(--brand));background:var(--card)}
+.wl-themed .login-signup{background:transparent;border-color:rgba(128,128,128,.32)}
+.wl-themed .login-signup > span{color:var(--wl-text);opacity:.65}
+.wl-themed .login-signup b{color:var(--wl-accent)}
+
+.wl-page{min-height:100vh;background:var(--wl-bg);color:var(--wl-text);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:40px 20px;font-family:inherit}
+.wl-card{width:100%;max-width:560px;background:var(--wl-surface);border-radius:14px;
+  padding:34px;box-shadow:0 18px 50px rgba(0,0,0,.12)}
+.wl-brand{display:flex;align-items:center;gap:11px;margin-bottom:22px}
+.wl-brand-name{font-size:17px;font-weight:700;letter-spacing:-.02em;color:var(--wl-text)}
+.wl-card h1{font-size:25px;letter-spacing:-.03em;margin:0;color:var(--wl-text)}
+.wl-lede{font-size:15px;opacity:.72;margin-top:9px;line-height:1.5}
+.wl-steps{display:flex;gap:7px;margin:22px 0 20px;flex-wrap:wrap}
+.wl-step{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;
+  padding:6px 11px;border-radius:20px;border:1px solid currentColor;opacity:.45}
+.wl-step.on{opacity:1;background:var(--wl-accent);color:var(--wl-btn-text);border-color:var(--wl-accent)}
+.wl-step.done{opacity:.85}
+.wl-fld{display:block;margin-bottom:14px;font-size:13.5px;font-weight:600}
+.wl-fld input,.wl-fld select{display:block;width:100%;margin-top:6px;padding:13px 14px;
+  border:1px solid rgba(128,128,128,.35);border-radius:9px;font:400 16px inherit;
+  background:var(--wl-surface);color:var(--wl-text)}
+.wl-fld input:focus,.wl-fld select:focus{outline:2px solid var(--wl-accent);outline-offset:-1px}
+.wl-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.wl-label{font-size:13.5px;font-weight:600;margin:4px 0 9px}
+.wl-picks{display:flex;flex-wrap:wrap;gap:7px}
+.wl-pick{border:1px solid rgba(128,128,128,.35);background:none;color:var(--wl-text);
+  border-radius:20px;padding:8px 13px;font:500 13px inherit;cursor:pointer}
+.wl-pick.on{background:var(--wl-accent);color:var(--wl-btn-text);border-color:var(--wl-accent);font-weight:600}
+.wl-checks{display:flex;gap:9px;flex-wrap:wrap}
+.wl-check{display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(128,128,128,.35);
+  border-radius:9px;padding:12px 15px;font-size:14px;font-weight:600;cursor:pointer}
+.wl-check.on{border-color:var(--wl-accent)}
+.wl-check input{accent-color:var(--wl-accent);width:16px;height:16px;margin:0}
+.wl-summary{margin-top:18px;border:1px solid rgba(128,128,128,.25);border-radius:10px;overflow:hidden}
+.wl-summary div{display:flex;justify-content:space-between;gap:14px;padding:11px 14px;font-size:13.5px;
+  border-bottom:1px solid rgba(128,128,128,.18)}
+.wl-summary div:last-child{border-bottom:0}
+.wl-summary span{opacity:.65}
+.wl-summary b{text-align:right;font-weight:600}
+.wl-actions{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:24px;flex-wrap:wrap}
+.wl-btn{background:var(--wl-accent);color:var(--wl-btn-text);border:0;border-radius:9px;
+  padding:14px 22px;font:700 15px inherit;cursor:pointer}
+.wl-btn:disabled{opacity:.45;cursor:not-allowed}
+.wl-btn-ghost{background:none;border:1px solid rgba(128,128,128,.4);color:var(--wl-text);
+  border-radius:9px;padding:13px 18px;font:600 14px inherit;cursor:pointer}
+.wl-fine{font-size:12.5px;opacity:.6;line-height:1.5;margin-top:10px}
+.wl-err{font-size:12.5px;color:#b1391f;margin-top:10px;font-weight:600}
+.wl-foot{margin-top:20px;font-size:12px;opacity:.5}
+.wl-done{text-align:center}
+.wl-done .wl-brand{justify-content:center}
+.wl-tick{color:var(--wl-accent);margin:6px 0 14px;display:flex;justify-content:center}
+.wl-done p{font-size:15px;opacity:.78;line-height:1.55;margin-top:10px}
+.wl-done .wl-btn{margin-top:22px}
+@media (max-width:560px){
+  .wl-card{padding:24px 20px}
+  .wl-row{grid-template-columns:1fr}
+  .wl-actions{flex-direction:column-reverse;align-items:stretch}
+  .wl-actions button{width:100%}
+}
+
+/* ===== theme editor ===== */
+.theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
+.theme-row{display:flex;flex-direction:column;gap:6px}
+.theme-label{font-size:12.5px;font-weight:600;color:var(--ink)}
+.theme-input{display:flex;align-items:center;gap:8px;border:1px solid var(--line);
+  border-radius:8px;padding:6px 8px;background:var(--card)}
+.theme-input input[type="color"]{width:30px;height:30px;border:0;padding:0;background:none;cursor:pointer;flex:none}
+.theme-hex{border:0;background:none;font:500 13px ui-monospace,monospace;color:var(--ink);
+  width:100%;min-width:0;text-transform:uppercase;outline:none}
+.theme-preview{margin-top:16px;border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.tp-bar{background:var(--paper);border-bottom:1px solid var(--line);padding:8px 12px;
+  font-size:11.5px;color:var(--ink-soft)}
+.tp-body{background:var(--wl-bg);padding:22px}
+.tp-card{background:var(--wl-surface);color:var(--wl-text);border-radius:10px;padding:18px;
+  box-shadow:0 8px 22px rgba(0,0,0,.10)}
+.tp-brand{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;margin-bottom:12px}
+.tp-h{font-size:16px;font-weight:700;letter-spacing:-.02em}
+.tp-p{font-size:12.5px;opacity:.7;margin-top:5px;line-height:1.45}
+.tp-field{height:32px;border:1px solid rgba(128,128,128,.3);border-radius:7px;margin-top:10px}
+.tp-btn{margin-top:14px;background:var(--wl-accent);color:var(--wl-btn-text);border-radius:8px;
+  padding:11px 16px;font-size:13.5px;font-weight:700;text-align:center}
+.theme-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin-top:14px;flex-wrap:wrap}
+.theme-link{font-size:13px;font-weight:600;color:var(--brand);text-decoration:underline;text-underline-offset:2px}
+@media (max-width:640px){.theme-grid{grid-template-columns:1fr}}
+
+
+/* properties (portfolio / property managers) */
+.prop-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.prop-card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:18px 20px;display:flex;flex-direction:column;box-shadow:var(--shadow)}
+.prop-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.prop-card h3{font-size:17px;letter-spacing:-.02em;margin:0}
+.prop-addr{display:block;font-size:12.5px;color:var(--ink-soft);margin-top:3px}
+.prop-actions{display:flex;align-items:center;gap:6px;flex:none}
+.prop-stats{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;padding:11px 0;
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  font-size:12.5px;color:var(--ink-soft)}
+.prop-stats strong{font-size:15px;color:var(--ink);font-weight:700}
+.prop-vendors{display:flex;flex-wrap:wrap;gap:6px;margin-top:13px}
+.prop-vendor{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
+  background:var(--paper);border-radius:20px;padding:5px 11px;font:600 12px Inter,sans-serif;
+  color:var(--ink);cursor:pointer}
+.prop-vendor:hover{border-color:var(--brand);color:var(--brand)}
+.prop-vendor svg{color:var(--amber)}
+.prop-more{font-size:11.5px;color:var(--ink-soft);align-self:center}
+.prop-none{font-size:12.5px;color:var(--ink-soft);margin-top:13px;line-height:1.45}
+.prop-notes{font-size:12.5px;color:var(--ink-soft);margin-top:10px;font-style:italic}
+.prop-job{margin-top:14px;align-self:flex-start;display:inline-flex;align-items:center;gap:6px;
+  border:1px dashed var(--line);background:none;border-radius:8px;padding:9px 13px;
+  font:600 12.5px Inter,sans-serif;color:var(--brand);cursor:pointer}
+.prop-job:hover{border-color:var(--brand);background:#f2f8f4}
+@media (max-width:560px){
+  .prop-grid{grid-template-columns:1fr}
+  .prop-stats{gap:12px}
+}
+
+
+/* "Powered by" + SubSub logo on the white-labeled sign-in / sign-up pages */
+.powered-by{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;
+  letter-spacing:.01em;opacity:.7}
+.powered-by > span{white-space:nowrap}
+.powered-by .ss-logo{position:relative;top:.5px}
+.wl-foot.powered-by{margin-top:20px;opacity:.6;color:var(--wl-text)}
+.login-foot .powered-by{opacity:.75}
+.bp-foot .powered-by{opacity:.85;font-size:10.5px}
+
+
+/* change orders */
+.co-context{display:grid;grid-template-columns:1fr;gap:0;border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;margin-bottom:16px}
+.co-context div{display:flex;justify-content:space-between;padding:10px 14px;font-size:13.5px;
+  border-bottom:1px solid var(--line)}
+.co-context div:last-child{border-bottom:0}
+.co-context span{color:var(--ink-soft)}
+.co-context b{font-variant-numeric:tabular-nums}
+.co-context .co-cur{background:var(--paper)}
+.co-context .co-cur b{font-size:15px}
+.co-preview{display:flex;align-items:baseline;gap:10px;background:#f2f8f4;border:1px solid #d4e7db;
+  border-radius:10px;padding:13px 15px;margin-top:4px}
+.co-preview span{font-size:13px;color:var(--ink-soft);flex:1}
+.co-preview b{font-size:19px;font-weight:800;letter-spacing:-.02em}
+.co-preview em{font-style:normal;font-size:12.5px;font-weight:700;color:var(--brand)}
+.co-row{display:flex;align-items:flex-start;gap:12px;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;padding:12px 14px;margin-bottom:8px;flex-wrap:wrap}
+.co-row.co-declined,.co-row.co-void,.co-row.co-expired{opacity:.65}
+.co-seq{font:800 11px ui-monospace,monospace;background:var(--ink);color:#fff;padding:4px 8px;
+  border-radius:6px;flex:none;letter-spacing:.03em}
+.co-main{flex:1;min-width:180px;display:flex;flex-direction:column;gap:3px}
+.co-scope{font-size:13.5px;color:var(--ink)}
+.co-meta{font-size:11px;color:var(--ink-soft);display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.co-note{font-size:11.5px;color:var(--ink-soft);font-style:italic}
+.co-side{display:flex;flex-direction:column;align-items:flex-end;gap:7px;flex:none}
+.co-delta{font-size:15px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.co-delta.up{color:var(--brand)}
+.co-delta.down{color:var(--red)}
+.co-status{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px}
+.co-status.s-pending{background:#fbf0dd;color:#8a5a12}
+.co-status.s-accepted{background:#e8f2ea;color:#1f6b4a}
+.co-status.s-declined,.co-status.s-expired{background:#faece7;color:var(--red)}
+.co-status.s-void{background:var(--line);color:var(--ink-soft)}
+.co-revised{display:block;font-size:11px;color:var(--ink-soft);margin-top:2px;font-weight:500}
+.co-revised b{color:var(--ink);font-weight:700}
+.co-revised em{font-style:normal;color:#8a5a12;font-weight:600}
+.job-val-note{font-style:normal;font-weight:500;opacity:.75}
+.wo-change-btn{margin-top:6px;border-style:dashed}
+.wo-co-sched{margin:14px 0 4px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.wo-co-hd{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--ink-soft);padding:8px 14px;background:var(--paper);border-bottom:1px solid var(--line)}
+.wo-co-line{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:baseline;
+  padding:9px 14px;border-bottom:1px solid var(--line);font-size:13px}
+.wo-co-seq{font:800 10.5px ui-monospace,monospace;color:var(--ink-soft)}
+.wo-co-delta{font-weight:700;font-variant-numeric:tabular-nums}
+.wo-co-delta.up{color:var(--brand)}
+.wo-co-delta.down{color:var(--red)}
+.wo-co-total{display:flex;justify-content:space-between;padding:11px 14px;font-size:13.5px;background:#f2f8f4}
+.wo-co-total b{font-size:15px}
+@media (max-width:560px){
+  .co-row{flex-direction:column}
+  .co-side{align-items:stretch;width:100%}
+  .wo-co-line{grid-template-columns:auto 1fr;}
+  .wo-co-delta{grid-column:2;text-align:right}
+}
+
+
+/* ===== platform console ===== */
+.pf-root{min-height:100vh;background:var(--paper);color:var(--ink)}
+.pf-top{display:flex;align-items:center;gap:22px;padding:0 22px;height:56px;background:#0f1a15;color:#fff;
+  position:sticky;top:0;z-index:20}
+.pf-brand{display:flex;align-items:center;gap:10px;color:#fff}
+.pf-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;
+  background:var(--amber);color:#1a1207;padding:3px 8px;border-radius:20px}
+.pf-nav{display:flex;gap:2px;flex:1}
+.pf-nav button{display:inline-flex;align-items:center;gap:7px;background:none;border:0;color:rgba(255,255,255,.7);
+  font:600 13.5px Inter,sans-serif;padding:9px 13px;border-radius:8px;cursor:pointer}
+.pf-nav button:hover{color:#fff;background:rgba(255,255,255,.07)}
+.pf-nav button.on{color:#fff;background:rgba(255,255,255,.12)}
+.pf-me{position:relative;margin-left:auto;flex:none}
+.pf-user{display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);
+  color:#fff;border-radius:10px;padding:5px 10px 5px 5px;cursor:pointer;font-family:inherit}
+.pf-user:hover,.pf-user[aria-expanded="true"]{background:rgba(255,255,255,.16)}
+.pf-avatar{background:var(--amber);color:#1a1207;width:28px;height:28px;font-size:11px}
+.pf-user-txt{display:flex;flex-direction:column;align-items:flex-start;line-height:1.15;text-align:left}
+.pf-user-txt b{font-size:13px;color:#fff}
+.pf-user-txt span{font-size:10.5px;color:rgba(255,255,255,.65)}
+/* the menu is a light surface on a dark bar: every color set explicitly, nothing inherited */
+.pf-menu{position:absolute;right:0;top:calc(100% + 8px);width:250px;background:#ffffff;color:#12211c;
+  border:1px solid #cfd8d2;border-radius:12px;box-shadow:0 18px 44px rgba(0,0,0,.28);padding:6px;z-index:60;
+  display:flex;flex-direction:column}
+.pf-menu-hd{padding:9px 10px 10px;border-bottom:1px solid #e3e8e5;display:flex;flex-direction:column;margin-bottom:4px}
+.pf-menu-hd b{font-size:13.5px;color:#12211c}
+.pf-menu-hd span{font-size:12px;color:#5d6f67}
+.pf-menu-hd em{font-style:normal;font-size:10.5px;font-weight:700;color:#8a5a12;background:#fbf0dd;
+  padding:2px 7px;border-radius:20px;align-self:flex-start;margin-top:6px}
+.pf-menu > button{display:flex;align-items:center;gap:9px;width:100%;background:transparent;border:0;padding:10px 11px;
+  border-radius:8px;font:600 13.5px Inter,sans-serif;color:#12211c;cursor:pointer;text-align:left}
+.pf-menu > button svg{color:#1f6b4a;flex:none}
+.pf-menu > button:hover{background:#f2f8f4;color:#1f6b4a}
+.pf-menu > button.pf-menu-out{border-top:1px solid #e3e8e5;border-radius:0 0 8px 8px;margin-top:4px;color:#b1391f}
+.pf-menu > button.pf-menu-out svg{color:#b1391f}
+.pf-menu > button.pf-menu-out:hover{background:#faece7}
+.pf-burger{display:none;margin-left:auto;width:40px;height:40px;border:1px solid rgba(255,255,255,.2);border-radius:9px;
+  background:transparent;cursor:pointer;align-items:center;justify-content:center;padding:0;flex:none}
+.pf-burger span{display:block;width:18px;height:2px;background:#fff;border-radius:2px;position:relative;transition:background .15s}
+.pf-burger span::before,.pf-burger span::after{content:"";position:absolute;left:0;width:18px;height:2px;background:#fff;border-radius:2px;transition:transform .18s,top .18s}
+.pf-burger span::before{top:-6px}
+.pf-burger span::after{top:6px}
+.pf-burger[aria-expanded="true"] span{background:transparent}
+.pf-burger[aria-expanded="true"] span::before{top:0;transform:rotate(45deg)}
+.pf-burger[aria-expanded="true"] span::after{top:0;transform:rotate(-45deg)}
+.pf-tag.std{background:#cfd8d2;color:#12211c}
+.pf-mini{display:inline-flex;align-items:center;gap:5px;background:var(--card);border:1px solid var(--line);
+  color:var(--ink);border-radius:8px;padding:7px 11px;font:600 12.5px Inter,sans-serif;cursor:pointer}
+.pf-mini:hover{border-color:var(--brand);color:var(--brand)}
+.pf-adduser{display:grid;grid-template-columns:1.2fr 1.4fr auto auto auto;gap:8px;align-items:center;
+  padding:10px;background:var(--paper);border:1px solid var(--line);border-radius:10px;margin-bottom:10px}
+.pf-adduser input,.pf-adduser select{border:1px solid var(--line);border-radius:8px;padding:9px 11px;
+  font:500 13.5px Inter,sans-serif;background:var(--card);min-width:0}
+.pf-main{max-width:1180px;margin:0 auto;padding:26px 22px 60px}
+.pf-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:18px}
+.pf-head h2{font-size:22px;letter-spacing:-.03em;margin:0}
+.pf-sub{display:block;font-size:12px;color:var(--ink-soft);font-weight:400;margin-top:2px}
+.pf-back{background:none;border:0;color:var(--brand);font:600 13.5px Inter,sans-serif;padding:0 0 14px;cursor:pointer}
+.pf-kpis{display:flex;gap:10px;flex-wrap:wrap}
+.pf-kpis-wrap{margin-bottom:18px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:130px;
+  display:flex;flex-direction:column;gap:3px}
+.kpi.accent{border-color:var(--brand);background:#f2f8f4}
+.kpi.warn{border-color:#e6c98f;background:#fffdf6}
+.kpi-v{font-size:22px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.1}
+.kpi-l{font-size:11.5px;color:var(--ink-soft);font-weight:600}
+.kpi-l em{font-style:normal;font-weight:500;opacity:.8}
+.pf-table-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:11px}
+.pf-table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:760px}
+.pf-table th{text-align:left;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--ink-soft);padding:11px 14px;border-bottom:1px solid var(--line);background:var(--paper);white-space:nowrap}
+.pf-table td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+.pf-table tbody tr{cursor:pointer}
+.pf-table tbody tr:hover{background:var(--paper)}
+.pf-table tbody tr:last-child td{border-bottom:0}
+.pf-table tr.muted td{opacity:.55}
+.pf-table tr.warn td:first-child{border-left:3px solid var(--red)}
+.pf-table code{font:600 12px ui-monospace,monospace;background:var(--paper);padding:2px 6px;border-radius:5px}
+.pf-num td{font-variant-numeric:tabular-nums;text-align:right}
+.pf-num td:first-child,.pf-num th:first-child{text-align:left}
+.pf-num th{text-align:right}
+.pf-flag{color:var(--amber);font-weight:800;font-size:11px}
+.pf-multi{color:var(--brand);font-weight:800;font-size:12px}
+.pf-status{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px;text-transform:capitalize}
+.pf-status.active{background:#e8f2ea;color:#1f6b4a}
+.pf-status.comped{background:#eaf0f6;color:#2b5c85}
+.pf-status.suspended,.pf-status.expired{background:#faece7;color:var(--red)}
+.pf-status.canceled{background:var(--line);color:var(--ink-soft)}
+.pf-note{font-size:12.5px;color:var(--ink-soft);margin:10px 0 0;line-height:1.5}
+.pf-act{font-size:13.5px;margin:6px 0;line-height:1.5}
+.pf-panel{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:18px 20px;margin-top:16px}
+.pf-panel h3{font-size:15px;letter-spacing:-.02em;margin:0 0 10px}
+.pf-plan-row{display:flex;gap:14px;flex-wrap:wrap}
+.pf-plan-row label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600;color:var(--ink-soft)}
+.pf-plan-row select{border:1px solid var(--line);border-radius:8px;padding:9px 12px;font:500 13.5px Inter,sans-serif;min-width:150px;background:var(--card)}
+.pf-line{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+.pf-line:last-child{border-bottom:0}
+.pf-line-main{flex:1;display:flex;flex-direction:column}
+.pf-date{font:600 12px ui-monospace,monospace;color:var(--ink-soft);width:86px;flex:none}
+.pf-line b.up,.pf-table .up{color:var(--brand)}
+.pf-line b.down,.pf-table .down{color:var(--red)}
+.imp-banner{display:flex;align-items:center;gap:10px;background:var(--amber);color:#1a1207;padding:9px 18px;
+  font-size:13px;font-weight:600}
+.imp-banner span{flex:1}
+.imp-banner button{background:#1a1207;color:#fff;border:0;border-radius:7px;padding:7px 12px;
+  font:700 12.5px Inter,sans-serif;cursor:pointer}
+
+
+/* superadmin sign-in */
+.sa-page{min-height:100vh;background:#0f1a15;color:#fff;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;padding:40px 20px}
+.sa-card{width:100%;max-width:440px;background:#16241d;border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:30px}
+.sa-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px;color:#fff}
+.sa-card h1{font-size:23px;letter-spacing:-.03em;margin:0}
+.sa-lede{font-size:13.5px;color:rgba(255,255,255,.6);margin:6px 0 20px;line-height:1.5}
+.sa-card .wl-fld{color:rgba(255,255,255,.85)}
+.sa-card .wl-fld input{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.18);color:#fff}
+.sa-card .wl-fld input:focus{outline-color:var(--amber)}
+.sa-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;background:var(--amber);
+  color:#1a1207;border:0;border-radius:9px;padding:13px;font:700 15px Inter,sans-serif;cursor:pointer;margin-top:4px}
+.sa-staff{margin-top:22px;padding-top:18px;border-top:1px solid rgba(255,255,255,.1)}
+.sa-staff .ld-label{color:rgba(255,255,255,.5)}
+.sa-staff .ld-row{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.12)}
+.sa-staff .ld-row:hover{border-color:var(--amber);background:rgba(255,255,255,.08)}
+.sa-staff .ld-name{color:#fff}
+.sa-staff .ld-email{color:rgba(255,255,255,.55)}
+.sa-back{margin-top:16px;background:none;border:0;color:rgba(255,255,255,.55);font:600 13px Inter,sans-serif;cursor:pointer;padding:0}
+.sa-back:hover{color:#fff}
+.sa-foot{margin-top:18px;font-size:11.5px;color:rgba(255,255,255,.35)}
+
+/* activity log */
+.pf-panel-hd{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+.pf-panel-hd h3{margin:0}
+.pf-panel-hd select{border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:500 13px Inter,sans-serif;background:var(--card)}
+.pf-act-row{display:grid;grid-template-columns:96px 104px 1fr auto;gap:12px;align-items:baseline;
+  padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}
+.pf-act-row:last-child{border-bottom:0}
+.pf-act-when{font:600 11.5px ui-monospace,monospace;color:var(--ink-soft);display:flex;flex-direction:column}
+.pf-act-when em{font-style:normal;opacity:.7;font-size:10.5px}
+.pf-act-kind{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:3px 8px;
+  border-radius:20px;background:var(--paper);color:var(--ink-soft);white-space:nowrap;justify-self:start}
+.pf-act-kind.k-doc_verified,.pf-act-kind.k-job_completed{background:#e8f2ea;color:#1f6b4a}
+.pf-act-kind.k-doc_rejected{background:#faece7;color:var(--red)}
+.pf-act-kind.k-impersonation,.pf-act-kind.k-limit_hit{background:#fbf0dd;color:#8a5a12}
+.pf-act-kind.k-wo_issued,.pf-act-kind.k-change_order{background:#eaf0f6;color:#2b5c85}
+.pf-act-txt{color:var(--ink);line-height:1.4}
+.pf-act-who{font-size:12px;color:var(--ink-soft);white-space:nowrap}
+
+/* console — tablet and phone */
+@media (max-width:1000px){
+  .pf-main{padding:20px 18px 50px}
+  .pf-act-row{grid-template-columns:90px 1fr auto}
+  .pf-act-kind{display:none}
+}
+@media (max-width:1000px){
+  .pf-burger{display:flex}
+  .pf-nav{position:fixed;inset:0 0 0 auto;width:min(86vw,340px);height:100vh;background:#0f1a15;flex-direction:column;
+    gap:0;z-index:55;transform:translateX(100%);transition:transform .2s;overflow-y:auto;box-shadow:-12px 0 40px rgba(0,0,0,.4)}
+  .pf-nav.open{transform:none}
+  .pf-nav button{width:100%;justify-content:flex-start;padding:16px 22px;border-radius:0;font-size:16px;
+    border-bottom:1px solid rgba(255,255,255,.08);color:#fff}
+  .pf-nav button.on{background:rgba(255,255,255,.1)}
+}
+@media (max-width:760px){
+  .pf-top{gap:10px;padding:0 14px}
+  .pf-adduser{grid-template-columns:1fr 1fr}
+  .pf-adduser select,.pf-adduser .btn-solid,.pf-adduser .pf-mini{grid-column:span 1}
+  .pf-main{padding:16px 14px 44px}
+  .pf-head h2{font-size:19px}
+  .pf-kpis{gap:8px}
+  .kpi{min-width:calc(50% - 4px);flex:1 1 calc(50% - 4px);padding:10px 12px}
+  .kpi-v{font-size:19px}
+  .pf-panel{padding:14px 14px}
+  .pf-plan-row{flex-direction:column;gap:10px}
+  .pf-plan-row select{min-width:0;width:100%}
+  .pf-act-row{grid-template-columns:1fr;gap:3px;padding:10px 0}
+  .pf-act-when{flex-direction:row;gap:6px}
+  .pf-act-who{white-space:normal;font-size:11.5px}
+  .pf-menu{width:calc(100vw - 28px);right:-4px}
+  .imp-banner{flex-wrap:wrap;padding:9px 14px;font-size:12.5px}
+  .imp-banner button{width:100%}
+  .sa-card{padding:22px 18px}
+}
+@media (max-width:400px){
+  .kpi{min-width:100%;flex-basis:100%}
+  .pf-nav button svg{display:none}
+}
+
+
+/* ===== one menu on mobile/tablet: nav + user in the same drawer ===== */
+.nav-burger{display:none;width:40px;height:40px;border:1px solid var(--line);border-radius:9px;background:var(--card);
+  cursor:pointer;align-items:center;justify-content:center;padding:0;flex:none}
+.nav-burger span{display:block;width:18px;height:2px;background:var(--ink);border-radius:2px;position:relative;transition:background .15s}
+.nav-burger span::before,.nav-burger span::after{content:"";position:absolute;left:0;width:18px;height:2px;background:var(--ink);border-radius:2px;transition:transform .18s,top .18s}
+.nav-burger span::before{top:-6px}
+.nav-burger span::after{top:6px}
+.nav-burger[aria-expanded="true"] span{background:transparent}
+.nav-burger[aria-expanded="true"] span::before{top:0;transform:rotate(45deg)}
+.nav-burger[aria-expanded="true"] span::after{top:0;transform:rotate(-45deg)}
+.nav-scrim{position:fixed;inset:0;background:rgba(18,33,28,.45);z-index:54}
+/* drawer-only blocks are hidden on desktop, where the user chip does this job */
+.drawer-user,.drawer-actions,.pf-drawer-user,.pf-drawer-actions{display:none}
+
+@media (max-width:1000px){
+  /* tenant app */
+  .nav-burger{display:flex}
+  .user-wrap{display:none}
+  .ss-header .tabs{position:fixed;inset:0 0 0 auto;width:min(86vw,340px);height:100vh;background:var(--card);
+    flex-direction:column;align-items:stretch;gap:0;padding:0 0 24px;border-radius:0;z-index:55;overflow-y:auto;
+    transform:translateX(100%);transition:transform .2s;box-shadow:-12px 0 40px rgba(0,0,0,.18)}
+  .ss-header .tabs.open{transform:none}
+  .ss-header .tabs > button{width:100%;justify-content:flex-start;padding:15px 20px;border-radius:0;
+    border-bottom:1px solid var(--line);font-size:15.5px;color:var(--ink);white-space:normal;flex:none}
+  .ss-header .tabs > button.on{background:#f2f8f4;color:var(--brand)}
+  .drawer-user{display:flex;align-items:center;gap:11px;padding:18px 20px;border-bottom:1px solid var(--line);background:var(--paper)}
+  .drawer-user .user-avatar{width:36px;height:36px;font-size:13px}
+  .drawer-user-txt{display:flex;flex-direction:column;line-height:1.2;min-width:0}
+  .drawer-user-txt b{font-size:15px}
+  .drawer-user-txt span{font-size:12px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .drawer-actions{display:flex;flex-direction:column;margin-top:auto;padding-top:8px;border-top:1px solid var(--line)}
+  .drawer-actions button{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:14px 20px;
+    font:600 14.5px Inter,sans-serif;color:var(--ink);cursor:pointer;text-align:left}
+  .drawer-actions button svg{color:var(--brand)}
+  .drawer-actions button:hover{background:var(--paper)}
+  .drawer-actions .drawer-out,.drawer-actions .drawer-out svg{color:var(--red)}
+
+  /* platform console */
+  .pf-me{display:none}
+  .pf-nav{padding:0 0 24px}
+  .pf-drawer-user{display:flex;align-items:center;gap:11px;padding:18px 20px;border-bottom:1px solid rgba(255,255,255,.1)}
+  .pf-drawer-user .pf-avatar{width:36px;height:36px;font-size:13px}
+  .pf-drawer-txt{display:flex;flex-direction:column;line-height:1.2;min-width:0;color:#fff}
+  .pf-drawer-txt b{font-size:15px}
+  .pf-drawer-txt span{font-size:12px;color:rgba(255,255,255,.6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pf-drawer-actions{display:flex;flex-direction:column;margin-top:auto;padding-top:8px;border-top:1px solid rgba(255,255,255,.1)}
+  .pf-drawer-actions button{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:14px 22px;
+    font:600 14.5px Inter,sans-serif;color:#fff;cursor:pointer;text-align:left}
+  .pf-drawer-actions button:hover{background:rgba(255,255,255,.08)}
+  .pf-drawer-actions .pf-drawer-out{color:#f5b8a6}
+}
+
 /* ============ RESPONSIVE ============ */
 /* Base: allow horizontal safety everywhere */
 .ss-root{overflow-x:hidden}
@@ -7489,9 +9112,8 @@ const CSS = `
 
 /* ---- Small tablet / large phone (<=820px) ---- */
 @media (max-width:820px){
-  .tabs{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
-  .tabs::-webkit-scrollbar{display:none}
-  .tabs button{white-space:nowrap;flex:none}
+
+
   .filters{gap:8px}
   .ms,.ms-btn{min-width:0}
   .ms-btn{min-width:118px}
