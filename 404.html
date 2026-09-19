@@ -80,6 +80,12 @@ nav.top{margin-left:auto;display:flex;align-items:center;gap:26px;font-size:15px
 nav.top a{text-decoration:none;color:#C6D6CC}
 nav.top a:hover{color:#fff}
 nav.top a[aria-current]{color:#fff}
+/* The gold CTA is a button, not a nav link: nav.top a (0,1,2) outranks
+   .btn-gold (0,1,0), so without this the label inherits the pale link
+   color on desktop and #fff in the drawer — 1.54:1 and 2.33:1 on gold.
+   This restores the button's own dark ink at every width: 7.62:1. */
+nav.top a.btn-gold{color:#20160A}
+nav.top a.btn-gold:hover{color:#20160A}
 
 /* ---------- generic sections ---------- */
 .sec{padding:86px 0}

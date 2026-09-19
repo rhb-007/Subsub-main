@@ -73,6 +73,12 @@ nav.top{margin-left:auto;display:flex;align-items:center;gap:26px;font-size:15px
 nav.top a{text-decoration:none;color:#C6D6CC}
 nav.top a:hover{color:#fff}
 nav.top a[aria-current]{color:#fff}
+/* The gold CTA is a button, not a nav link: nav.top a (0,1,2) outranks
+   .btn-gold (0,1,0), so without this the label inherits the pale link
+   color on desktop and #fff in the drawer — 1.54:1 and 2.33:1 on gold.
+   This restores the button's own dark ink at every width: 7.62:1. */
+nav.top a.btn-gold{color:#20160A}
+nav.top a.btn-gold:hover{color:#20160A}
 
 /* ---------- generic sections ---------- */
 .sec{padding:86px 0}
@@ -319,12 +325,6 @@ body.nav-open{overflow:hidden}
   nav.top a[aria-current]{background:var(--forest-lift)}
   nav.top a.keep{margin:20px 30px 0;text-align:center;justify-content:center;
     border-bottom:0;font-size:16px;padding:15px 20px}
-  /* The outlined CTA reads fine in the desktop header, but its border is the
-     same near-invisible line color as the drawer background — so inside the
-     drawer it becomes the solid gold button every other page's drawer has.
-     Label color is left to nav.top a above, so it matches those pages. */
-  nav.top a.keep.btn-ghost-d{background:var(--gold);border-color:var(--gold)}
-  nav.top a.keep.btn-ghost-d:hover{background:var(--gold-dk);border-color:var(--gold-dk)}
 }
 
 @media (max-width:560px){
@@ -386,7 +386,8 @@ body.nav-open{overflow:hidden}
       <a href="index.html#lifecycle">Platform</a>
       <a href="index.html#who">Who it's for</a>
       <a href="pricing.html" aria-current="page">Pricing</a>
-      <a href="book-a-demo.html" class="keep btn btn-ghost-d btn-sm">Book a demo</a>
+      <a href="book-a-demo.html">Book a demo</a>
+      <a href="get-started.html" class="keep btn btn-gold btn-sm">Get started</a>
     </nav>
   </div>
 </header>
