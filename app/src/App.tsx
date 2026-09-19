@@ -2998,8 +2998,12 @@ export default function SubSub() {
         <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub} onCancel={() => setEditing(null)} /></Modal>}
 
       <footer className="ss-footer">
-        <span>{brand.name} · {brand.subdomain}.subsub.work</span>
-        <span className="powered">Powered by <strong>SubSub</strong></span>
+        {/* Where this account actually signs in. Its own subdomain is a Scale
+            feature: printing it on Basic contradicts the upgrade notice two
+            panels up, and sends anyone who types it to a hostname with no
+            certificate. */}
+        <span>{brand.name} · {canBrand ? `${brand.subdomain}.subsub.work` : "app.subsub.work"}</span>
+        <PoweredBy className="ss-foot-by" height={13} />
       </footer>
     </div>
   );
@@ -8741,8 +8745,7 @@ const CSS = `
 .ss-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
   max-width:1160px;margin:0 auto;padding:18px 24px 28px;font-size:11.5px;color:var(--ink-soft);
   border-top:1px solid var(--line)}
-.powered{font-weight:600}
-.powered strong{color:var(--brand);font-weight:800;letter-spacing:-.01em}
+.ss-foot-by{opacity:.75}
 .login-logo-wrap{display:flex;align-items:center;justify-content:center;color:var(--ink);margin-bottom:14px;min-height:40px}
 .login-foot{display:flex;flex-direction:column;align-items:center;gap:5px}
 
