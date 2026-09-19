@@ -934,7 +934,15 @@ body.nav-open{overflow:hidden}
     company_required: 'Enter your company name.',
     name_required: 'Enter your name.',
     rate_limited: 'Too many attempts from this connection. Try again in an hour.',
-    auth_unreachable: 'We could not reach the sign-in service. Try again in a moment.'
+    auth_unreachable: 'We could not reach the sign-in service. Try again in a moment.',
+    // Ours to fix, not theirs -- say so rather than inviting them to retype a
+    // form that was never the problem.
+    auth_email_failed: 'Your details are fine, but we could not send the confirmation '
+      + 'email, so the account was not created. This is a fault on our side. Email '
+      + 'support@subsub.work and we will sort it out.',
+    auth_failed: 'We could not set up your login. Your details are fine — this is a '
+      + 'fault on our side. Email support@subsub.work and we will sort it out.',
+    signup_conflict: 'That company name or email was claimed a moment ago. Try again.'
   };
 
   // The message has to live on whichever step the person is sent back to,
@@ -993,6 +1001,9 @@ body.nav-open{overflow:hidden}
       creating = false;
       if(!res.ok){
         var code = res.body && res.body.error;
+        if(res.body && res.body.detail){
+          console.error('[signup] ' + code + ': ' + res.body.detail);
+        }
         if(code === 'subdomain_taken' || code === 'invalid_subdomain'){ go(2); }
         else if(code === 'email_in_use' || code === 'invalid_email' || code === 'invalid_phone'
           || code === 'weak_password'){ go(1); }

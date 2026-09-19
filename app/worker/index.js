@@ -635,6 +635,13 @@ async function supabaseSignUp(env, email, password) {
       return { ok: false, error: "email_in_use" };
     }
     if (/password/i.test(msg)) return { ok: false, error: "weak_password", detail: msg };
+    // Confirmation is on but the mail could not go out, so Supabase refuses
+    // the whole signup. Worth its own code: it is a configuration fault on
+    // our side, not anything the person filling in the form can fix, and it
+    // is the single most likely way a correctly filled form still fails.
+    if (/sending confirmation|error sending|smtp|mail/i.test(msg)) {
+      return { ok: false, error: "auth_email_failed", detail: msg };
+    }
     return { ok: false, error: "auth_failed", detail: msg };
   }
   // A project with email confirmation on returns a user but no session.
