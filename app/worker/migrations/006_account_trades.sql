@@ -1,0 +1,11 @@
+-- The trades a customer hires out, chosen at signup and editable afterwards.
+--
+-- Stored as a JSON array of category ids (the same ids the app's CATEGORIES
+-- list uses), because it is always read and written whole -- there is no
+-- query that wants "every account that hires roofers" today, and a join
+-- table would be three objects to keep in step for a list of thirty
+-- strings. Revisit if that query ever appears.
+--
+-- Existing accounts get NULL, which reads as "not chosen yet" rather than
+-- "hires nobody" -- the difference matters for whether the app should ask.
+ALTER TABLE accounts ADD COLUMN trades TEXT;

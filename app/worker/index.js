@@ -188,7 +188,8 @@ async function logEvent(env, accountId, actorId, kind, subjectId, payload) {
 // ---------------------------------------------------------------------------
 async function loginResponse(db, user) {
   const { results: memberships } = await db.prepare(
-    `SELECT m.*, a.name as account_name, a.subdomain, a.kind, a.plan, a.billing, a.logo_key, a.use_default_mark, a.theme
+    `SELECT m.*, a.name as account_name, a.subdomain, a.kind, a.plan, a.billing, a.logo_key,
+            a.use_default_mark, a.theme, a.trades
      FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
   ).bind(user.id).all();
   return {
@@ -197,7 +198,7 @@ async function loginResponse(db, user) {
       accountId: m.account_id, accountName: m.account_name, subdomain: m.subdomain,
       role: m.role, companyId: m.company_id,
       kind: m.kind, plan: m.plan, billing: m.billing, logoKey: m.logo_key, useDefaultMark: !!m.use_default_mark,
-      theme: parseJson(m.theme),
+      theme: parseJson(m.theme), trades: parseJson(m.trades),
     })),
   };
 }
@@ -266,6 +267,9 @@ app.post("/api/signup", async (c) => {
   const subdomain = validSubdomain(b.subdomain);
   const plan = b.plan === "scale" ? "scale" : "basic";
   const billing = b.billing === "annual" ? "annual" : "monthly";
+  // Absent is fine (an older page, or a caller that does not collect them);
+  // present but wrong is not, because it would store ids nothing can render.
+  const trades = b.trades === undefined ? [] : validTrades(b.trades);
 
   if (!company) return c.json({ error: "company_required" }, 400);
   if (!personName) return c.json({ error: "name_required" }, 400);
@@ -273,6 +277,7 @@ app.post("/api/signup", async (c) => {
   // Mobile stays optional, but a half-typed one is worse than none: it reads
   // as reachable and never is.
   if (phoneRaw && !phone) return c.json({ error: "invalid_phone" }, 400);
+  if (trades === null) return c.json({ error: "invalid_trades" }, 400);
   if (!subdomain) return c.json({ error: "invalid_subdomain" }, 400);
 
   const realAuth = !!(c.env.SUPABASE_URL && c.env.SUPABASE_ANON_KEY);
@@ -308,9 +313,9 @@ app.post("/api/signup", async (c) => {
   try {
     await c.env.DB.batch([
       c.env.DB.prepare(
-        `INSERT INTO accounts (id, name, subdomain, kind, plan, billing, use_default_mark)
-         VALUES (?, ?, ?, ?, ?, ?, 1)`
-      ).bind(accountId, company, subdomain, kind, plan, billing),
+        `INSERT INTO accounts (id, name, subdomain, kind, plan, billing, trades, use_default_mark)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+      ).bind(accountId, company, subdomain, kind, plan, billing, JSON.stringify(trades)),
       c.env.DB.prepare(
         `INSERT INTO users (id, auth_id, name, email, phone) VALUES (?, ?, ?, ?, ?)`
       ).bind(userId, authId, personName, email, phone),
@@ -510,6 +515,9 @@ app.get("/api/account", async (c) => {
   return c.json({
     id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: a.billing,
     logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark, theme: parseJson(a.theme),
+    // null when nobody has chosen yet -- which is the cue to ask, and is not
+    // the same answer as an empty list.
+    trades: parseJson(a.trades),
     user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone } : null,
   });
 });
@@ -653,6 +661,33 @@ async function supabaseSignUp(env, email, password) {
 
 const ACCOUNT_KINDS = ["general_contractor", "property_manager", "building_owner", "portfolio_manager"];
 
+// The trade categories an account can hire out -- the same thirty ids the app
+// renders from. Kept here too because the browser's copy is a convenience and
+// this is the one that decides what is storable: an id the app cannot render
+// is worse stored than rejected.
+const TRADE_IDS = new Set([
+  "roofing", "siding", "windows_doors", "gutters", "soffit_fascia", "coping", "masonry", "solar",
+  "framing", "concrete", "foundation", "excavation", "demolition",
+  "electrical", "plumbing", "hvac", "insulation",
+  "drywall", "painting", "flooring", "tile_stone", "cabinets_counters", "trim_carpentry",
+  "deck_fence", "hardscaping", "landscaping",
+  "garage_doors", "restoration", "cleaning",
+]);
+
+// Returns the cleaned list, or null if anything in it is not a trade we know.
+// Order is not meaningful, but duplicates are dropped so the stored value is
+// the set it is meant to be.
+function validTrades(v) {
+  if (!Array.isArray(v)) return null;
+  const out = [];
+  for (const raw of v) {
+    const id = String(raw ?? "").trim();
+    if (!TRADE_IDS.has(id)) return null;
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
 function validTheme(theme) {
   if (!theme || typeof theme !== "object") return null;
   const out = {};
@@ -666,7 +701,7 @@ function validTheme(theme) {
 // Branding/plan/billing for the current account.
 app.patch("/api/account", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
-  const b = await c.req.json(); // { name, kind, plan, billing, logoKey, useDefaultMark, theme }
+  const b = await c.req.json(); // { name, kind, plan, billing, logoKey, useDefaultMark, theme, trades }
   const sets = [], vals = [];
   if (b.name != null) { sets.push("name = ?"); vals.push(b.name); }
   if (b.kind != null) {
@@ -681,6 +716,11 @@ app.patch("/api/account", requireRole("admin"), async (c) => {
     const theme = validTheme(b.theme);
     if (b.theme != null && !theme) return c.json({ error: "invalid_theme" }, 400);
     sets.push("theme = ?"); vals.push(theme ? JSON.stringify(theme) : null);
+  }
+  if (b.trades !== undefined) {
+    const trades = validTrades(b.trades);
+    if (!trades) return c.json({ error: "invalid_trades" }, 400);
+    sets.push("trades = ?"); vals.push(JSON.stringify(trades));
   }
   if (sets.length) {
     vals.push(accountId);

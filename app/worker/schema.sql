@@ -23,6 +23,8 @@ CREATE TABLE accounts (
   billing           TEXT NOT NULL DEFAULT 'monthly' CHECK (billing IN ('monthly','annual')),
   logo_key          TEXT,               -- R2 object key; NULL = default mark
   use_default_mark  INTEGER NOT NULL DEFAULT 1,
+  trades            TEXT,               -- JSON array of category ids the account hires out;
+                                         -- NULL = never chosen, which is not the same as none
   theme             TEXT,               -- JSON: {bg,surface,text,accent,btnText} — the two
                                          -- pages a subcontractor sees before signing in
                                          -- (sign-in + public application form); NULL = defaults

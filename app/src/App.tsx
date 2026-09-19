@@ -80,6 +80,17 @@ const CATEGORIES = [
   { id: "cleaning", label: "Final Clean", icon: SprayCan },
 ];
 
+// The same six groups the signup page shows, in the same order. Ids only --
+// labels come from CATEGORIES, so a rename happens in one place.
+const TRADE_GROUPS = [
+  ["Exterior", ["roofing", "siding", "windows_doors", "gutters", "soffit_fascia", "coping", "masonry", "solar"]],
+  ["Structure & site", ["framing", "concrete", "foundation", "excavation", "demolition"]],
+  ["Mechanical, electrical, plumbing", ["electrical", "plumbing", "hvac", "insulation"]],
+  ["Interior finishes", ["drywall", "painting", "flooring", "tile_stone", "cabinets_counters", "trim_carpentry"]],
+  ["Outdoor", ["deck_fence", "hardscaping", "landscaping"]],
+  ["Specialty", ["garage_doors", "restoration", "cleaning"]],
+];
+
 const CAP_LIBRARY = {
   roofing: ["Asphalt shingle", "Metal roof", "Cedar shake", "Flat / TPO", "Tear-off", "Repair / leak", "Skylight"],
   siding: ["Fiber cement", "Vinyl", "LP SmartSide", "Cedar", "Stucco", "Board & batten"],
@@ -1385,6 +1396,10 @@ export default function SubSub() {
     persist("patchAccount.kind", api.patchAccount({ kind }));
     setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, kind } : a));
   };
+  const setAccountTrades = (trades) => {
+    persist("patchAccount.trades", api.patchAccount({ trades }));
+    setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, trades } : a));
+  };
 
   // Flatten company + engagement into the "sub" shape the UI consumes.
   const subs = useMemo(() => engagements
@@ -2041,7 +2056,7 @@ export default function SubSub() {
       const byId = Object.fromEntries(prev.map((a) => [a.id, a]));
       result.memberships.forEach((m) => {
         byId[m.accountId] = { id: m.accountId, name: m.accountName, subdomain: m.subdomain,
-          kind: m.kind, plan: m.plan, billing: m.billing, theme: m.theme,
+          kind: m.kind, plan: m.plan, billing: m.billing, theme: m.theme, trades: m.trades,
           logoData: m.logoKey ? logoUrl(m.accountId) : null, useDefaultMark: m.useDefaultMark };
       });
       return Object.values(byId);
@@ -2068,7 +2083,7 @@ export default function SubSub() {
         id: acct.id, name: acct.name, subdomain: acct.subdomain, kind: acct.kind,
         plan: acct.plan, billing: acct.billing,
         logoData: acct.logoKey ? logoUrl(acct.id) : null, useDefaultMark: acct.useDefaultMark,
-        theme: acct.theme,
+        theme: acct.theme, trades: acct.trades,
       }]);
       if (acct.user) setUsers((prev) => [...prev.filter((u) => u.id !== acct.user.id), acct.user]);
       setCurrentUserId(saved.userId);
@@ -2754,6 +2769,7 @@ export default function SubSub() {
           jobsThisMonth={jobsThisMonth} canBrand={canBrand}
           billing={billing} onSetBilling={setBilling}
           accountKind={kindOf(account)} onSetAccountKind={setAccountKind}
+          accountTrades={account.trades} onSetAccountTrades={setAccountTrades}
           canManage={can("account") && role === "admin"} mySub={mySub}
           onSaveUser={updateUser} onSaveBrand={setBrand} onSetPlan={setPlan}
           onAddUser={addUser} onRemoveUser={removeUser} onEditUser={setEditUser}
@@ -4486,8 +4502,61 @@ const UNIFORM_CATALOG = [
 const SIZES = ["S", "M", "L", "XL", "2XL", "3XL"];
 
 // ---- Account (profile, company, users, subscription) --------------------
+// The trades an account hires out. Chosen at signup and edited here; a null
+// list means nobody has chosen yet, which is worth saying out loud rather
+// than rendering as thirty unselected chips that look like a deliberate "none".
+function TradesPanel({ trades, onSave }) {
+  const saved = useMemo(() => (Array.isArray(trades) ? trades : []), [trades]);
+  const [sel, setSel] = useState(saved);
+  const [justSaved, setJustSaved] = useState(false);
+
+  // Another device, or an admin in the next room, can change this underneath
+  // us; take their list as the new baseline rather than silently keeping ours.
+  useEffect(() => { setSel(saved); setJustSaved(false); }, [saved]);
+
+  const toggle = (id) => {
+    setJustSaved(false);
+    setSel((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]);
+  };
+  const dirty = sel.length !== saved.length || sel.some((id) => !saved.includes(id));
+
+  return (
+    <div className="portal-panel settings-panel">
+      <h4>Trades you work with</h4>
+      <p className="panel-note">
+        {trades == null
+          ? "Not set yet. Pick everything you hire out — it decides what SubSub asks your subcontractors to prove."
+          : "Everything you hire out. It decides what SubSub asks your subcontractors to prove."}
+      </p>
+
+      {TRADE_GROUPS.map(([heading, ids]) => (
+        <div key={heading} className="trade-group">
+          <h5>{heading}</h5>
+          <div className="picks">
+            {ids.map((id) => (
+              <button key={id} type="button"
+                className={`pick ${sel.includes(id) ? "on" : ""}`}
+                onClick={() => toggle(id)}>{catMeta(id).label}</button>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      <div className="panel-actions">
+        <button className="btn-solid" disabled={!dirty}
+          onClick={() => { onSave(sel); setJustSaved(true); }}>
+          <Check size={15} /> Save trades
+        </button>
+        {justSaved && !dirty && <span className="cov-hint">Saved.</span>}
+        {dirty && <span className="cov-hint">{sel.length} selected</span>}
+      </div>
+    </div>
+  );
+}
+
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
+  accountTrades, onSetAccountTrades,
   onSaveUser, onSaveBrand, onSetPlan, onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup }) {
   const panes = [["profile", "Profile"]]
@@ -4680,6 +4749,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               : "No Properties tab. Vendors are matched by trade and coverage area, per job."}
           </p>
         </div>
+      )}
+
+      {pane === "company" && canManage && (
+        <TradesPanel trades={accountTrades} onSave={onSetAccountTrades} />
       )}
 
       {pane === "company" && canManage && !canBrand && (
@@ -7945,6 +8018,12 @@ const CSS = `
 .pick-grid{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
 .pick{border:1px solid var(--line);background:var(--card);font-size:12.5px;padding:6px 11px;border-radius:7px;cursor:pointer;color:var(--ink-soft);font-weight:600}
 .pick.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+/* Used by the account-type picker and the trades panel. Thirty chips need to
+   wrap; six short groups read better than one block of them. */
+.picks{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
+.trade-group{margin-top:15px}
+.trade-group h5{margin:0 0 8px;font-size:11.5px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-soft)}
 .cov-toggle{display:flex;gap:6px;margin-top:8px;margin-bottom:4px}
 .cov-toggle button{flex:1;border:1px solid var(--line);background:var(--card);padding:8px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);cursor:pointer}
 .cov-toggle button.on{background:var(--brand);color:#fff;border-color:var(--brand)}

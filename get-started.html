@@ -356,6 +356,10 @@ body.nav-open{overflow:hidden}
   .step h2{font-size:27px;letter-spacing:-.03em}
   .step .sl{margin-top:12px;font-size:16.5px;color:var(--muted);max-width:56ch}
   .step form{margin-top:26px}
+  .trade-group{margin-top:14px}
+  .trade-group:first-child{margin-top:10px}
+  .trade-group h4{font:600 12.5px/1 Inter;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 9px}
   .tradechips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
   .tradechips button{border:1.5px solid var(--rule);background:#fff;border-radius:20px;padding:9px 14px;
     font:500 14px Inter;cursor:pointer;color:var(--muted)}
@@ -510,6 +514,13 @@ body.nav-open{overflow:hidden}
             nothing needs re-entering. <a href="pricing.html" style="color:#5E3E08;font-weight:600">See Scale</a></div>
         </div>
 
+        <div class="field" style="margin-top:6px">
+          <label id="tradesLabel">Trades you work with</label>
+          <p class="fine">Pick everything you hire out. It sets what SubSub asks your
+            subcontractors to prove, and you can change it any time.</p>
+          <div id="trades"></div>
+        </div>
+
         <div class="field"><label for="city">Where you're based</label>
           <div class="three">
             <input id="city" placeholder="City" autocomplete="address-level2">
@@ -549,21 +560,6 @@ body.nav-open{overflow:hidden}
           <div class="up-actions">
             <button class="btn btn-gold" type="button" id="doUpgrade">Upgrade to Scale</button>
             <button class="btn btn-ghost" type="button" id="stayBasic">Stay on Basic</button>
-          </div>
-        </div>
-
-        <div class="field" style="margin-top:6px">
-          <label>Trades you'll need covered</label>
-          <p class="fine">Sets your default requirements. Subcontractors pick their own from this list.</p>
-          <div class="tradechips" id="trades">
-            <button type="button" aria-pressed="true">Roofing</button>
-            <button type="button" aria-pressed="true">Siding</button>
-            <button type="button" aria-pressed="false">Windows &amp; doors</button>
-            <button type="button" aria-pressed="true">Gutters</button>
-            <button type="button" aria-pressed="false">Soffit &amp; fascia</button>
-            <button type="button" aria-pressed="false">Coping</button>
-            <button type="button" aria-pressed="false">Decks &amp; fences</button>
-            <button type="button" aria-pressed="false">Hardscaping</button>
           </div>
         </div>
 
@@ -770,6 +766,84 @@ body.nav-open{overflow:hidden}
     go(2);
   });
 
+  /* ---- trades ----
+     The same thirty categories the app uses, in the same order and the same
+     groups, so a customer does not meet one list here and a different one
+     the first time they open their account. Ids are what travel to the API;
+     the labels are only ever shown. */
+  var TRADE_GROUPS = [
+    ['Exterior', [
+      ['roofing','Roofing'], ['siding','Siding'], ['windows_doors','Windows / Doors'],
+      ['gutters','Gutters'], ['soffit_fascia','Soffit / Fascia'], ['coping','Coping'],
+      ['masonry','Masonry / Brick'], ['solar','Solar']]],
+    ['Structure & site', [
+      ['framing','Framing'], ['concrete','Concrete'], ['foundation','Foundation'],
+      ['excavation','Excavation / Grading'], ['demolition','Demolition']]],
+    ['Mechanical, electrical, plumbing', [
+      ['electrical','Electrical'], ['plumbing','Plumbing'], ['hvac','HVAC'],
+      ['insulation','Insulation']]],
+    ['Interior finishes', [
+      ['drywall','Drywall / Sheetrock'], ['painting','Painting'],
+      ['flooring','Flooring / Carpet'], ['tile_stone','Tile / Stone'],
+      ['cabinets_counters','Cabinets / Countertops'], ['trim_carpentry','Finish Carpentry']]],
+    ['Outdoor', [
+      ['deck_fence','Deck / Fence'], ['hardscaping','Hardscaping'], ['landscaping','Landscaping']]],
+    ['Specialty', [
+      ['garage_doors','Garage Doors'], ['restoration','Water / Fire Restoration'],
+      ['cleaning','Final Clean']]]
+  ];
+
+  var tradesBox = document.getElementById('trades');
+  TRADE_GROUPS.forEach(function(group){
+    var wrap = document.createElement('div');
+    wrap.className = 'trade-group';
+
+    var h = document.createElement('h4');
+    h.textContent = group[0];
+    wrap.appendChild(h);
+
+    var chips = document.createElement('div');
+    chips.className = 'tradechips';
+    group[1].forEach(function(t){
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('aria-pressed', 'false');
+      b.setAttribute('data-trade', t[0]);
+      b.textContent = t[1];
+      b.addEventListener('click', function(){
+        b.setAttribute('aria-pressed',
+          b.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
+        clearTradesError();
+      });
+      chips.appendChild(b);
+    });
+    wrap.appendChild(chips);
+    tradesBox.appendChild(wrap);
+  });
+
+  // The chips are not an <input>, so markField's "append under the field"
+  // trick does not apply cleanly -- the message goes above the groups, where
+  // it is next to the label somebody just failed to satisfy.
+  function clearTradesError(){
+    var prior = document.getElementById('tradesErr');
+    if(prior) prior.remove();
+  }
+  function markTradesError(msg){
+    clearTradesError();
+    var p = document.createElement('p');
+    p.id = 'tradesErr';
+    p.className = 'field-err';
+    p.setAttribute('role','alert');
+    p.textContent = msg;
+    tradesBox.parentNode.insertBefore(p, tradesBox);
+  }
+
+  function pickedTrades(){
+    return Array.prototype.slice
+      .call(tradesBox.querySelectorAll('button[aria-pressed="true"]'))
+      .map(function(b){ return b.getAttribute('data-trade'); });
+  }
+
   /* ---- step 2 ---- */
   var company = document.getElementById('company');
   var sub = document.getElementById('sub');
@@ -801,8 +875,17 @@ body.nav-open{overflow:hidden}
   });
   document.getElementById('f2').addEventListener('submit', function(e){
     e.preventDefault();
-    if(!company.value.trim()){ company.focus(); return; }
-    if(PLANS[plan].branding && !sub.value.trim()){ sub.focus(); return; }
+    clearFieldError(company); clearFieldError(sub); clearTradesError();
+    if(!company.value.trim()){ markField(company, 'Enter your company name.'); company.focus(); return; }
+    if(PLANS[plan].branding && !sub.value.trim()){
+      markField(sub, 'Pick the address your team will sign in at.'); sub.focus(); return;
+    }
+    // Asked for here rather than on step 3, which can be skipped outright.
+    if(pickedTrades().length === 0){
+      markTradesError('Pick at least one trade.');
+      document.getElementById('tradesErr').scrollIntoView({behavior:'smooth', block:'center'});
+      return;
+    }
     go(3);
   });
 
@@ -917,7 +1000,8 @@ body.nav-open{overflow:hidden}
       + 'support@subsub.work and we will sort it out.',
     auth_failed: 'We could not set up your login. Your details are fine — this is a '
       + 'fault on our side. Email support@subsub.work and we will sort it out.',
-    signup_conflict: 'That company name or email was claimed a moment ago. Try again.'
+    signup_conflict: 'That company name or email was claimed a moment ago. Try again.',
+    invalid_trades: 'One of those trades was not recognised. Reload the page and pick again.'
   };
 
   // The message has to live on whichever step the person is sent back to,
@@ -959,6 +1043,7 @@ body.nav-open{overflow:hidden}
       password: document.getElementById('pw').value,
       company: company.value.trim(),
       subdomain: (sub.value.trim() || company.value.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,20)),
+      trades: pickedTrades(),
       plan: plan,
       billing: billing
     };
