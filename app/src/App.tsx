@@ -1383,9 +1383,17 @@ export default function SubSub() {
         logoData: invite.account.logoKey ? logoUrl(invite.account.id) : null,
         useDefaultMark: invite.account.useDefaultMark, theme: invite.account.theme }
     : null;
+  // Signed in, `brand` is this account -- but only Scale has branding to
+  // apply. On Basic there is no logo, no palette and no hostname of their
+  // own, so strip all three here rather than guarding each render site: a
+  // downgrade must not leave a logo on the sign-in page or print an address
+  // that has no certificate. The account row keeps its reserved subdomain
+  // either way; this is only what gets shown.
   const brand = !loggedIn
     ? (inviteBrand || subdomainBrand || GENERIC_BRAND)
-    : account;
+    : (PLANS[account.plan]?.branding
+        ? account
+        : { ...account, logoData: null, theme: null, useDefaultMark: true, subdomain: "app" });
   // What this person is, in the words the customer uses. A subcontractor signing
   // into someone else's portal is a contractor, not "a general contractor" — the
   // account type is the hiring side's identity, not theirs.
@@ -2301,7 +2309,7 @@ export default function SubSub() {
             <div className="brand-logo"><BrandMark brand={brand} height={26} /></div>
             <div className="brand-txt">
               <h1>{brand.name}</h1>
-              <p>{brand.subdomain}.subsub.work</p>
+              <p>{portalUrl(brand)}</p>
             </div>
           </div>
           <div className="header-right">
@@ -2998,11 +3006,7 @@ export default function SubSub() {
         <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub} onCancel={() => setEditing(null)} /></Modal>}
 
       <footer className="ss-footer">
-        {/* Where this account actually signs in. Its own subdomain is a Scale
-            feature: printing it on Basic contradicts the upgrade notice two
-            panels up, and sends anyone who types it to a hostname with no
-            certificate. */}
-        <span>{brand.name} · {canBrand ? `${brand.subdomain}.subsub.work` : "app.subsub.work"}</span>
+        <span>{brand.name} · {portalUrl(brand)}</span>
         <PoweredBy className="ss-foot-by" height={13} />
       </footer>
     </div>
