@@ -376,6 +376,21 @@ CREATE TABLE platform_daily_stats (
 );
 
 -- ---------------------------------------------------------------------------
+-- Public-endpoint rate limiting
+-- ---------------------------------------------------------------------------
+-- A Worker keeps no state between requests, so the ceiling on the two
+-- unauthenticated endpoints (signup and apply) lives here. One row per
+-- (bucket, window); the window is a truncated timestamp, so rows age out on
+-- their own and a sweep is optional rather than required.
+CREATE TABLE rate_limits (
+  bucket   TEXT NOT NULL,
+  window   TEXT NOT NULL,
+  hits     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket, window)
+);
+CREATE INDEX idx_rate_limits_window ON rate_limits(window);
+
+-- ---------------------------------------------------------------------------
 -- Outbound email
 -- ---------------------------------------------------------------------------
 -- What was actually sent, from the app's own side. Bodies are not stored: they
