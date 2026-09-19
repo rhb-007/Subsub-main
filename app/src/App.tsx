@@ -1028,47 +1028,10 @@ const contrastRatio = (a, b) => {
 // A contractor signs in with their email address — show it so they don't guess.
 const usernameOf = (sub) => sub.email || "(no email on file)";
 
-function buildDocEmail(sub, job, trade, brand) {
-  const miss = missingDocs(sub).map((k) => `  \u2022 ${DOC_LABELS[k]}`).join("\n");
-  const company = brand ? brand.name : "our team";
-  const lead = job
-    ? `You've been matched to a job, but we can't release the work order until your compliance documents are on file.`
-    : `Your ${company} contractor account is set up, but we can't send you work until your compliance documents are on file.`;
-  const jobBlock = job ? `\nTHE JOB\n  ${job.title || "New job"}\n  Trade: ${trade ? catMeta(trade).label : "—"}${
-    job.address ? `\n  Where: ${[job.address, job.area, job.zip].filter(Boolean).join(", ")}` : ""}${
-    job.date ? `\n  Starts: ${formatWhen(job.date, job.time) || job.date}` : ""}\n` : "";
-
-  return `Hi ${sub.contact},
-
-${lead}
-${jobBlock}
-WHAT WE NEED
-${miss}
-${missingDocs(sub).includes("insurance") ? `
-INSURANCE REQUIREMENTS
-${INSURANCE_LINES.map((l) => `  ${l.label}${l.sub ? ` (${l.sub})` : ""}: ${formatMoney(l.min)}${l.optional ? " (if applicable)" : ""}`).join("\n")}
-  Workers' compensation: WA L&I active account, as applicable
-${INSURANCE_ATTEST.map((a) => `  \u2022 ${a.label(brand ? brand.name : "We")}`).join("\n")}
-` : ""}${missingDocs(sub).includes("bond") ? `
-BOND REQUIREMENT
-  ${formatMoney(BOND_MIN)} minimum, surety licensed in Washington
-` : ""}${missingDocs(sub).includes("w9") ? `
-W-9
-  Your TIN or EIN, tax classification, and a signature in Part II.
-  We can't issue payment without it.
-` : ""}
-UPLOAD THEM HERE
-  ${docsLink(brand)}
-
-  Your username: ${usernameOf(sub)}
-
-Tap the link, sign in, and upload. A photo from your phone is fine.${job ? "\n\nWe'll hold the job for you until then." : ""}
-
-— ${company}
-
-This is an automated message from an unmonitored address. Replies aren't received, and documents emailed back won't be filed. Please upload them at the link above.`;
-}
-
+// The document-request email is composed by the API (worker/mail.js), not
+// here: the server is what sends it, so the server owns the words. The
+// preview in NotifyForm asks for that same text rather than rendering a
+// second copy that could drift from what actually goes out.
 // SMS has to work for someone standing on a roof: one line, one link.
 // Kept under 160 chars where possible so it sends as a single segment.
 function buildDocSms(sub, job, brand) {
@@ -7225,22 +7188,49 @@ function NotifyForm({ data, brand, onClose }) {
   const [sendEmail, setSendEmail] = useState(hasEmail);
   const [sendSms, setSendSms] = useState(hasPhone && prefs.sms);
   const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
 
-  const emailBody = buildDocEmail(sub, job, trade, brand);
+  // The server composes the message, so this preview is the message. Asking it
+  // rather than rendering a second copy locally is what stops the reviewed text
+  // and the sent text drifting apart.
+  const [preview, setPreview] = useState(null);
+  const [previewErr, setPreviewErr] = useState("");
+  useEffect(() => {
+    let live = true;
+    api.previewDocRequest({ companyId: sub.id, jobId: job?.id, trade })
+      .then((p) => { if (live) { setPreview(p); setPreviewErr(""); } })
+      .catch((e) => { if (live) setPreviewErr(e?.body?.error || e?.message || "preview_failed"); });
+    return () => { live = false; };
+  }, [sub.id, job?.id, trade]);
+
   const smsBody = buildDocSms(sub, job, brand);
-  const subject = job
-    ? `Action needed: upload documents for ${job.title}`
-    : "Action needed: upload your compliance documents";
-  const canSend = (sendEmail && hasEmail) || (sendSms && hasPhone);
+  const subject = preview?.subject || "";
+  const emailBody = preview?.text || "";
+  const mailConfigured = preview ? preview.configured : true;
+  const canSend = !busy && preview && mailConfigured && sendEmail && hasEmail;
+
+  const send = async () => {
+    setErr(""); setBusy(true);
+    try {
+      await api.sendDocRequest({ companyId: sub.id, jobId: job?.id || null, trade: trade || null });
+      setBusy(false); setSent(true);
+    } catch (e) {
+      setBusy(false);
+      setErr(e?.body?.error === "no_email_on_file" ? "This contractor has no email on file."
+        : e?.body?.error === "mail_not_configured" ? "Email delivery isn't configured yet."
+        : `Could not send: ${e?.body?.detail || e?.body?.error || e?.message || "unknown error"}`);
+    }
+  };
 
   if (sent) {
     return (
       <div className="form sent-state">
         <CheckCircle2 size={40} />
-        <h2>Notification sent</h2>
+        <h2>Email sent</h2>
         <p>
-          {[sendEmail && `email to ${sub.email}`, sendSms && `text to ${sub.phone}`]
-            .filter(Boolean).join(" and ")} — {sub.contact} at {sub.company}.
+          Sent to {sub.email} — {sub.contact} at {sub.company}.
+          {sendSms && hasPhone && " The text message was not sent: SMS isn't wired up yet."}
         </p>
         <button className="btn-solid" onClick={onClose}>Done</button>
       </div>
@@ -7291,10 +7281,20 @@ function NotifyForm({ data, brand, onClose }) {
       {sendEmail && hasEmail && (
         <>
           <div className="form-sec">Email preview</div>
-          <div className="msg-preview">
-            <div className="mp-head"><span>Subject</span><strong>{subject}</strong></div>
-            <pre className="mp-body">{emailBody}</pre>
-          </div>
+          {previewErr ? (
+            <p className="wl-err"><AlertTriangle size={13} /> Could not load the preview ({previewErr}).</p>
+          ) : !preview ? (
+            <p className="cov-hint">Loading the message…</p>
+          ) : (
+            <div className="msg-preview">
+              <div className="mp-head"><span>Subject</span><strong>{subject}</strong></div>
+              <pre className="mp-body">{emailBody}</pre>
+            </div>
+          )}
+          {preview && !mailConfigured && (
+            <p className="wl-err"><AlertTriangle size={13} /> Email delivery isn't configured
+              on the server yet, so this can't be sent.</p>
+          )}
         </>
       )}
 
@@ -7303,13 +7303,16 @@ function NotifyForm({ data, brand, onClose }) {
           <div className="form-sec">Text preview</div>
           <div className="sms-bubble">{smsBody}</div>
           <p className="cov-hint">{smsBody.length} characters · {Math.ceil(smsBody.length / 160)} SMS segment{smsBody.length > 160 ? "s" : ""}</p>
+          <p className="wl-err"><AlertTriangle size={13} /> SMS isn't wired up yet — only the email will go out.</p>
         </>
       )}
 
+      {err && <p className="wl-err"><AlertTriangle size={13} /> {err}</p>}
+
       <div className="form-actions">
         <button className="btn-ghost" onClick={onClose}>Cancel</button>
-        <button className="btn-solid" disabled={!canSend} onClick={() => setSent(true)}>
-          <Send size={15} /> Send notification
+        <button className="btn-solid" disabled={!canSend} onClick={send}>
+          <Send size={15} /> {busy ? "Sending…" : "Send email"}
         </button>
       </div>
     </div>

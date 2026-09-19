@@ -517,3 +517,57 @@ production. Put them in `app/.env` for the frontend and `app/.dev.vars` for the
 worker; both are gitignored. Running without them leaves you with a sign-in
 form that has nothing to talk to, which is the correct behavior rather than a
 gap to fill with a shortcut.
+
+## Email (Resend)
+
+The compliance loop depends on telling a subcontractor to upload something.
+That is now a real send rather than a screen that said "Notification sent" and
+did nothing.
+
+**The server composes every message.** The alternative, a client posting a body
+for the server to relay, would let any signed-in user send arbitrary text from
+your sending domain. It also keeps the admin's preview honest: the preview
+endpoint and the send endpoint call the same template function, so the text
+that was reviewed is the text that goes out. `worker/mail.js` owns the
+templates; the client no longer has a copy.
+
+**Three messages exist:**
+
+| Trigger | To | Kind |
+|---|---|---|
+| Admin presses "Request docs" | the subcontractor | `doc_request` |
+| A work order is issued | the subcontractor | `wo_issued` |
+| Someone applies through the public form | the applicant | `application_received` |
+
+The two automatic ones never fail their action. A work order is still issued
+and an application still succeeds if the mail fails; the failure is recorded
+instead.
+
+**Every attempt is logged**, successes and failures, in `email_log`: recipient,
+kind, subject, status, Resend's id, and the error. "Did they get it?" is the
+first thing support asks, and a send that quietly failed is worse than one that
+visibly did. Bodies are not stored — they are reconstructible from the
+template, and keeping a copy of every notice means keeping personal data with
+no expiry story.
+
+**Setup:**
+
+1. Verify your sending domain in Resend and create an API key.
+2. Set two Worker variables:
+
+   | Variable | Value |
+   |---|---|
+   | `RESEND_API_KEY` | `re_...`, via `wrangler secret put` |
+   | `MAIL_FROM` | `SubSub <notifications@subsub.work>` |
+
+3. Apply `worker/migrations/005_email_log.sql`.
+
+With either variable unset, the preview says so, the send button is disabled,
+and the API returns `mail_not_configured` rather than pretending. Verified.
+
+`RESEND_API_BASE` overrides the endpoint and exists so this path can be tested
+against a local stand-in. Leave it unset in production.
+
+**SMS is still not wired.** The text-message option composes a preview and
+sends nothing, and the interface now says so instead of claiming it sent.
+Twilio is the intended provider.

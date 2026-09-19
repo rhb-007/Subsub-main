@@ -133,6 +133,17 @@ export const api = {
   setSubProperties: (companyId, propertyIds) =>
     request(`/subs/${companyId}/properties`, { method: "PUT", body: JSON.stringify({ propertyIds }) }),
 
+  // Email. The body is composed by the server, so the preview and the send are
+  // the same text; the client never supplies message content.
+  previewDocRequest: ({ companyId, jobId, trade }) => request(
+    `/notify/documents/preview?companyId=${encodeURIComponent(companyId)}`
+    + (jobId ? `&jobId=${encodeURIComponent(jobId)}` : "")
+    + (trade ? `&trade=${encodeURIComponent(trade)}` : "")),
+  sendDocRequest: (payload) => request("/notify/documents",
+    { method: "POST", body: JSON.stringify(payload) }),
+  notifyLog: (companyId) => request("/notify/log"
+    + (companyId ? `?companyId=${encodeURIComponent(companyId)}` : "")),
+
   listChangeOrders: () => request("/change-orders"),
   raiseChangeOrder: (co) => request("/change-orders", { method: "POST", body: JSON.stringify(co) }),
   respondToChangeOrder: (id, status) =>

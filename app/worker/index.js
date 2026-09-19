@@ -8,6 +8,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail } from "./mail.js";
 
 const app = new Hono();
 app.use("/api/*", cors());
@@ -337,7 +338,10 @@ app.post("/api/apply/:subdomain", async (c) => {
   const rl = await rateLimit(c.env, "apply", clientIp(c), { limit: 10, windowMinutes: 60 });
   if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
   const subdomain = c.req.param("subdomain").trim().toLowerCase();
-  const account = await c.env.DB.prepare(`SELECT id FROM accounts WHERE subdomain = ?`).bind(subdomain).first();
+  // name and subdomain are needed by the confirmation email, which says who
+  // the application went to and where they will eventually sign in.
+  const account = await c.env.DB.prepare(
+    `SELECT id, name, subdomain FROM accounts WHERE subdomain = ?`).bind(subdomain).first();
   if (!account) return c.json({ error: "unknown_account" }, 404);
 
   const body = await c.req.json().catch(() => ({}));
@@ -405,6 +409,18 @@ app.post("/api/apply/:subdomain", async (c) => {
   }
 
   await logEvent(c.env, account.id, user.id, "engagement.applied", engagementId, { companyId, reused: !!company });
+
+  // Confirm it landed, and say what happens next. Public form, so a failure
+  // here must never turn a successful application into an error.
+  if (body.email) {
+    const mail = applicationReceivedEmail({
+      companyName: body.company, contact: body.contact, account,
+    });
+    const result = await sendEmail(c.env, { to: body.email, subject: mail.subject,
+      text: mail.text, html: mail.html });
+    await logMail(c.env, { accountId: account.id, companyId, to: body.email,
+      kind: "application_received", subject: mail.subject, result, sentBy: null });
+  }
   return c.json({ ok: true });
 });
 
@@ -1126,6 +1142,25 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
     autoScheduled ? null : (responseWindow || "24h"), respondBy).run();
 
   await logEvent(c.env, accountId, userId, "wo.issued", id, { jobId, trade, companyId, woNumber });
+
+  // Tell them. A work order nobody knows about is why response deadlines get
+  // missed. Failure is logged and does not undo the issue.
+  {
+    const co = await c.env.DB.prepare(
+      `SELECT id, company, contact, email FROM companies WHERE id = ?`).bind(companyId).first();
+    if (co?.email) {
+      const [account, job] = await Promise.all([
+        c.env.DB.prepare(`SELECT id, name, subdomain FROM accounts WHERE id = ?`).bind(accountId).first(),
+        c.env.DB.prepare(`SELECT title, address, area, zip, date FROM jobs WHERE id = ?`).bind(jobId).first(),
+      ]);
+      const mail = workOrderIssuedEmail({ company: co, contact: co.contact, job, trade,
+        woNumber, account, respondBy });
+      const result = await sendEmail(c.env, { to: co.email, subject: mail.subject,
+        text: mail.text, html: mail.html });
+      await logMail(c.env, { accountId, companyId, to: co.email, kind: "wo_issued",
+        subject: mail.subject, result, sentBy: userId });
+    }
+  }
   await logActivity(c.env, accountId, userId, "wo_issued",
     `Issued ${woNumber} to ${await companyName(c.env.DB, companyId)} · ${trade}`);
   return c.json({ id, woNumber, status: autoScheduled ? "accepted" : "pending" }, 201);
@@ -1964,6 +1999,97 @@ app.post("/api/platform/impersonate/:accountId", async (c) => {
       JSON.stringify({ reason: b.reason || null, staffEmail: staff.email })),
   ]);
   return c.json({ ok: true, accountId, accountName: account.name, actAsUserId: target.user_id });
+});
+
+// ---------------------------------------------------------------------------
+// Outbound email
+// ---------------------------------------------------------------------------
+
+// Record every attempt, including the failures — "did they get it?" is the
+// first thing support asks, and a send that quietly failed is worse than one
+// that visibly did.
+async function logMail(env, { accountId, companyId, to, kind, subject, result, sentBy }) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO email_log (id, account_id, company_id, to_email, kind, subject, status, provider_id, error, sent_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(crypto.randomUUID(), accountId ?? null, companyId ?? null, to, kind, subject,
+      result.ok ? "sent" : "failed", result.id ?? null,
+      result.ok ? null : [result.error, result.detail].filter(Boolean).join(": "), sentBy ?? null).run();
+  } catch (err) {
+    console.error("[email_log] write failed:", err?.message || err);
+  }
+}
+
+// Everything the document-request template needs, fetched once and shared by
+// the preview and the send so the two cannot drift.
+async function docRequestContext(c, companyId, jobId, trade) {
+  const { accountId } = c.get("auth");
+  const row = await c.env.DB.prepare(
+    `SELECT co.*, en.doc_review FROM companies co
+       JOIN engagements en ON en.company_id = co.id AND en.account_id = ?
+      WHERE co.id = ?`
+  ).bind(accountId, companyId).first();
+  if (!row) return null;
+  const account = await c.env.DB.prepare(
+    `SELECT id, name, subdomain FROM accounts WHERE id = ?`).bind(accountId).first();
+  const job = jobId
+    ? await c.env.DB.prepare(
+        `SELECT id, title, address, area, zip, date FROM jobs WHERE id = ? AND account_id = ?`
+      ).bind(jobId, accountId).first()
+    : null;
+  return {
+    company: row, contact: row.contact, docReview: parseJson(row.doc_review, {}),
+    job, trade: trade || null, account,
+  };
+}
+
+// What will be sent, built by the same function that sends it. The admin
+// reviews this before pressing send.
+app.get("/api/notify/documents/preview", requireRole("admin", "pm"), async (c) => {
+  const ctx = await docRequestContext(c, c.req.query("companyId"), c.req.query("jobId"), c.req.query("trade"));
+  if (!ctx) return c.json({ error: "not_engaged" }, 404);
+  const mail = docRequestEmail(ctx);
+  return c.json({
+    to: ctx.company.email || null, subject: mail.subject, text: mail.text,
+    missing: mail.missing, configured: !!(c.env.RESEND_API_KEY && c.env.MAIL_FROM),
+  });
+});
+
+app.post("/api/notify/documents", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const ctx = await docRequestContext(c, b.companyId, b.jobId, b.trade);
+  if (!ctx) return c.json({ error: "not_engaged" }, 404);
+
+  const to = ctx.company.email;
+  if (!to) return c.json({ error: "no_email_on_file" }, 400);
+
+  const mail = docRequestEmail(ctx);
+  const result = await sendEmail(c.env, { to, subject: mail.subject, text: mail.text, html: mail.html });
+  await logMail(c.env, { accountId, companyId: ctx.company.id, to, kind: "doc_request",
+    subject: mail.subject, result, sentBy: userId });
+
+  if (!result.ok) return c.json({ error: result.error, detail: result.detail }, 502);
+  await logActivity(c.env, accountId, userId, "email_sent",
+    `Requested documents from ${ctx.company.company}`);
+  return c.json({ ok: true, to, id: result.id });
+});
+
+// What has been sent to this subcontractor, for the account that asks.
+app.get("/api/notify/log", async (c) => {
+  const { accountId } = c.get("auth");
+  const companyId = c.req.query("companyId");
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, company_id, to_email, kind, subject, status, error, at
+       FROM email_log
+      WHERE account_id = ?${companyId ? " AND company_id = ?" : ""}
+      ORDER BY at DESC LIMIT 100`
+  ).bind(...(companyId ? [accountId, companyId] : [accountId])).all();
+  return c.json(results.map((r) => ({
+    id: r.id, companyId: r.company_id, to: r.to_email, kind: r.kind,
+    subject: r.subject, status: r.status, error: r.error, at: r.at,
+  })));
 });
 
 export default app;

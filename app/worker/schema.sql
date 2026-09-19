@@ -374,3 +374,25 @@ CREATE TABLE platform_daily_stats (
   gmv_accepted_cents  INTEGER NOT NULL,
   basic_at_limit      INTEGER NOT NULL          -- the upgrade pipeline
 );
+
+-- ---------------------------------------------------------------------------
+-- Outbound email
+-- ---------------------------------------------------------------------------
+-- What was actually sent, from the app's own side. Bodies are not stored: they
+-- are reconstructible from the template, and keeping a copy of every notice
+-- means keeping personal data with no expiry story.
+CREATE TABLE email_log (
+  id           TEXT PRIMARY KEY,
+  account_id   TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+  company_id   TEXT REFERENCES companies(id) ON DELETE SET NULL,
+  to_email     TEXT NOT NULL,
+  kind         TEXT NOT NULL,          -- doc_request | wo_issued | application_received
+  subject      TEXT NOT NULL,
+  status       TEXT NOT NULL,          -- sent | failed
+  provider_id  TEXT,
+  error        TEXT,
+  sent_by      TEXT REFERENCES users(id),
+  at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_email_log_account_at ON email_log(account_id, at DESC);
+CREATE INDEX idx_email_log_company ON email_log(company_id, at DESC);
