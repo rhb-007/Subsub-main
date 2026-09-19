@@ -329,7 +329,14 @@ app.post("/api/signup", async (c) => {
     ok: true, accountId, userId, subdomain, kind,
     // The app is reached at the account's own subdomain once DNS is pointed
     // at it; the caller decides whether to send them there or to app.*.
-    signInUrl: `https://${subdomain}.subsub.work`,
+    // Branding, and with it a company hostname, is a Scale feature. A Basic
+    // account still reserves its subdomain, but signs in at the shared
+    // address. Sending a Basic customer to their own subdomain is how they
+    // end up staring at a certificate warning, because that hostname has no
+    // certificate until someone adds it as a custom domain.
+    signInUrl: plan === "scale"
+      ? `https://${subdomain}.subsub.work`
+      : "https://app.subsub.work",
     needsConfirmation,
   }, 201);
 });

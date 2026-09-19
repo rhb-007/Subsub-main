@@ -907,9 +907,11 @@ body.nav-open{overflow:hidden}
         if(code === 'subdomain_taken' || code === 'invalid_subdomain'){ sub.focus(); }
         return;
       }
-      if(res.body.subdomain){
-        document.getElementById('goApp').setAttribute('href',
-          'https://' + res.body.subdomain + '.subsub.work');
+      // Use the address the server chose. Rebuilding it here from the
+      // subdomain ignored the plan and sent Basic customers to a hostname
+      // that does not exist yet.
+      if(res.body.signInUrl){
+        document.getElementById('goApp').setAttribute('href', res.body.signInUrl);
       }
       if(res.body.needsConfirmation){
         var dl = document.getElementById('doneLine');

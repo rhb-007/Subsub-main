@@ -1331,7 +1331,7 @@ export default function SubSub() {
   // happened to be first in state, which is how a stranger arriving at the
   // generic address was greeted by some unrelated customer's name and logo.
   const GENERIC_BRAND = { id: null, name: "SubSub", subdomain: "app",
-    logoData: null, useDefaultMark: true, theme: null };
+    logoData: null, useDefaultMark: true, theme: null, isSubSub: true };
   const brand = !loggedIn
     ? (subdomainBrand || GENERIC_BRAND)
     : account;
@@ -6655,7 +6655,22 @@ function PoweredBy({ height = 15, className = "" }) {
 }
 
 // ---- Tenant brand mark (custom upload, else default, else initials) -----
+// Just the mark, no wordmark. The login card already prints the name
+// underneath, so the full lockup would say "SubSub" twice.
+function SubSubMark({ height = 24 }) {
+  return (
+    <svg height={height} viewBox="36 62 96 114" xmlns="http://www.w3.org/2000/svg"
+      role="img" aria-label="SubSub" style={{ width: "auto", display: "block", flex: "none" }}>
+      <path fill="#E39B32" d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/>
+      <path fill="#E39B32" d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/>
+      <path fill="#E39B32" d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/>
+    </svg>
+  );
+}
+
 function BrandMark({ brand, height = 24 }) {
+  // SubSub's own front door wears SubSub's own mark, not two initials.
+  if (brand.isSubSub) return <SubSubMark height={height} />;
   if (brand.logoData) {
     return <img src={brand.logoData} alt={brand.name} style={{ height, width: "auto", display: "block" }} />;
   }
@@ -6786,9 +6801,12 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
         )}
 
       </div>
-      <p className="login-foot">
-        <PoweredBy height={13} />
-      </p>
+      {/* "Powered by SubSub" belongs on a customer's portal, not on SubSub's own. */}
+      {!brand.isSubSub && (
+        <p className="login-foot">
+          <PoweredBy height={13} />
+        </p>
+      )}
     </div>
   );
 }
