@@ -111,6 +111,7 @@ CREATE TABLE jobs (
   address             TEXT,
   area                TEXT,            -- city label from the AREAS list
   zip                 TEXT,
+  property_id         TEXT,            -- set when the job is at a managed property
   lat                 REAL,
   lng                 REAL,
   sqft                INTEGER,
@@ -230,3 +231,141 @@ CREATE TABLE events (
   created_at     TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_events_account ON events(account_id, created_at);
+
+-- ---------------------------------------------------------------------------
+-- Properties (portfolio / property managers)
+-- ---------------------------------------------------------------------------
+-- A property belongs to one account. An engagement can be scoped to specific
+-- properties; scoped to none means "available everywhere on this account",
+-- which is how a general contractor uses it.
+CREATE TABLE properties (
+  id          TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  address     TEXT,
+  city        TEXT,
+  state       TEXT,
+  zip         TEXT,
+  units       INTEGER,
+  notes       TEXT,
+  created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_properties_account ON properties(account_id);
+
+-- Which properties an engagement is scoped to. No rows = every property.
+CREATE TABLE engagement_properties (
+  engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
+  property_id   TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  PRIMARY KEY (engagement_id, property_id)
+);
+CREATE INDEX idx_engagement_properties_property ON engagement_properties(property_id);
+
+-- ---------------------------------------------------------------------------
+-- Change orders
+-- ---------------------------------------------------------------------------
+-- A work order is never edited once accepted. Every change is a numbered
+-- change order the other side accepts or declines, so the original stays
+-- intact and the revised value is derived. Either side can raise one.
+CREATE TABLE change_orders (
+  id                TEXT PRIMARY KEY,
+  work_order_id     TEXT NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,
+  seq               INTEGER NOT NULL,            -- 1, 2, 3 … per work order
+  kind              TEXT NOT NULL,               -- added | deducted | no_cost
+  origin            TEXT NOT NULL CHECK (origin IN ('gc','sub')),
+  scope             TEXT NOT NULL,
+  value_delta_cents INTEGER NOT NULL DEFAULT 0,  -- negative for deductions
+  status            TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','accepted','declined','expired')),
+  raised_by         TEXT REFERENCES users(id),
+  raised_at         TEXT DEFAULT CURRENT_TIMESTAMP,
+  respond_by        TEXT,
+  responded_at      TEXT,
+  note              TEXT,
+  UNIQUE (work_order_id, seq)
+);
+CREATE INDEX idx_change_orders_wo ON change_orders(work_order_id, status);
+
+-- The revised value is derived, never stored on the work order.
+CREATE VIEW work_order_revised AS
+SELECT w.id,
+       w.value_cents AS original_cents,
+       w.value_cents + COALESCE(SUM(CASE WHEN c.status = 'accepted'
+                                         THEN c.value_delta_cents END), 0) AS revised_cents,
+       COUNT(CASE WHEN c.status = 'pending' THEN 1 END) AS pending_count
+FROM work_orders w
+LEFT JOIN change_orders c ON c.work_order_id = w.id
+GROUP BY w.id;
+
+-- ---------------------------------------------------------------------------
+-- Platform console (SubSub's own staff) — see DEPLOYMENT.pdf section 9
+-- ---------------------------------------------------------------------------
+-- Deliberately NOT a role in the app's own role table: staff get a separate
+-- surface on a separate hostname, checked server-side on every route.
+CREATE TABLE superadmins (
+  user_id      TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  role         TEXT NOT NULL CHECK (role IN ('superadmin','standard')),
+  finance      INTEGER NOT NULL DEFAULT 0,   -- may see revenue (superadmin only)
+  impersonate  INTEGER NOT NULL DEFAULT 0,   -- may sign in as an account (superadmin only)
+  created_at   TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Per-account activity stream. The app writes it; the console reads it.
+-- Store the rendered sentence at write time: the rows it referenced change.
+CREATE TABLE activity (
+  id          TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  at          TEXT NOT NULL,
+  user_id     TEXT REFERENCES users(id),   -- NULL for system / staff actions
+  kind        TEXT NOT NULL,               -- login, doc_verified, wo_issued, plan_changed, …
+  text        TEXT NOT NULL,
+  meta        TEXT                         -- JSON, optional
+);
+CREATE INDEX idx_activity_account_at ON activity(account_id, at DESC);
+CREATE INDEX idx_activity_user_at    ON activity(user_id, at DESC);
+
+-- Append-only subscription history. Current account state cannot tell you what
+-- expansion or churn happened in a given month; this can, and it is
+-- unrecoverable if not kept. MRR is normalized: annual ÷ 12.
+CREATE TABLE subscription_events (
+  id              TEXT PRIMARY KEY,
+  account_id      TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  at              TEXT NOT NULL,
+  kind            TEXT NOT NULL CHECK (kind IN
+                    ('created','upgraded','downgraded','cycle','canceled','reactivated','comped')),
+  from_plan       TEXT,
+  to_plan         TEXT,
+  cycle           TEXT CHECK (cycle IN ('monthly','annual')),
+  mrr_delta_cents INTEGER NOT NULL DEFAULT 0,
+  source          TEXT NOT NULL DEFAULT 'stripe'   -- stripe | platform_admin | system
+);
+CREATE INDEX idx_subscription_events_month ON subscription_events(substr(at, 1, 7));
+
+-- Mirrored from Stripe webhooks. Stripe stays the source of truth for money
+-- collected — never derive revenue from the accounts table alone.
+CREATE TABLE invoices (
+  id            TEXT PRIMARY KEY,                -- Stripe invoice id
+  account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  amount_cents  INTEGER NOT NULL,
+  status        TEXT NOT NULL,                   -- paid | open | void | uncollectible
+  period_start  TEXT NOT NULL,
+  period_end    TEXT NOT NULL,
+  paid_at       TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0       -- dunning visibility
+);
+CREATE INDEX idx_invoices_account ON invoices(account_id);
+
+-- Nightly rollup, so MRR-over-time doesn't scan live tables and yesterday's
+-- number stays yesterday's number.
+CREATE TABLE platform_daily_stats (
+  day                 TEXT PRIMARY KEY,
+  mrr_cents           INTEGER NOT NULL,
+  arr_cents           INTEGER NOT NULL,
+  accounts_basic      INTEGER NOT NULL,
+  accounts_scale      INTEGER NOT NULL,
+  accounts_annual     INTEGER NOT NULL,
+  new_accounts        INTEGER NOT NULL,
+  conversions         INTEGER NOT NULL,
+  churned             INTEGER NOT NULL,
+  gmv_accepted_cents  INTEGER NOT NULL,
+  basic_at_limit      INTEGER NOT NULL          -- the upgrade pipeline
+);

@@ -1635,11 +1635,24 @@ export default function SubSub() {
     setAdding(false);
   };
   // Called instead of opening the form when the plan is maxed out.
-  const addProperty = (p) => setProperties((ps) => [
-    { ...p, id: "p" + Date.now(), accountId: account.id }, ...ps]);
-  const patchProperty = (id, patch) =>
+  // Persists first so the id is the real one, then applies the optimistic
+  // shape the UI expects — same pattern as createJob. A failed write falls
+  // back to a local-only id rather than freezing the form.
+  const addProperty = async (p) => {
+    let id;
+    try { ({ id } = await api.createProperty(p)); }
+    catch (err) { console.error("[persist] createProperty failed:", err); id = "p" + Date.now(); }
+    setProperties((ps) => [{ ...p, id, accountId: account.id }, ...ps]);
+    return id;
+  };
+  const patchProperty = (id, patch) => {
+    persist("patchProperty", api.patchProperty(id, patch));
     setProperties((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  };
   const removeProperty = (id) => {
+    // The server clears the same two pointers inside one batch: the vendor
+    // scoping rows, and any job still aimed at this property.
+    persist("removeProperty", api.removeProperty(id));
     setProperties((ps) => ps.filter((p) => p.id !== id));
     // drop it from any vendor scoped to it, so nothing points at a dead property
     setEngagements((es) => es.map((e) => (e.propertyIds || []).includes(id)
@@ -1720,7 +1733,14 @@ export default function SubSub() {
       (e.companyId === companyId && e.accountId === account.id) ? { ...e, ...patch } : e));
   // Split a flat patch and write each half to its own table.
   const patchSub = (companyId, patch) => {
-    persist("patchSub", api.patchSub(companyId, patch));
+    // propertyIds is an engagement field, but it lives in its own join table
+    // rather than a column, so it goes to its own endpoint and is kept out of
+    // the generic PATCH body.
+    const { propertyIds, ...rest } = patch;
+    if (propertyIds !== undefined) {
+      persist("setSubProperties", api.setSubProperties(companyId, propertyIds));
+    }
+    if (Object.keys(rest).length) persist("patchSub", api.patchSub(companyId, rest));
     const { co, en } = splitPatch(patch);
     if (Object.keys(co).length) patchCompany(companyId, co);
     if (Object.keys(en).length) patchEngagement(companyId, en);
@@ -1875,12 +1895,14 @@ export default function SubSub() {
   async function hydrateAccount(accountId, userId) {
     setLoading(true);
     try {
-      const [flatSubs, ownJobs, bookings, members, uniformOrderRows, serviceCallRows] = await Promise.all([
+      const [flatSubs, ownJobs, bookings, members, uniformOrderRows, serviceCallRows,
+             propertyRows] = await Promise.all([
         api.listSubs(), api.listJobs(), api.listAllBookings(), api.listAccountUsers(),
-        api.listUniformOrders(), api.listServiceCalls(),
+        api.listUniformOrders(), api.listServiceCalls(), api.listProperties(),
       ]);
       setUniformOrders(uniformOrderRows);
       setServiceCalls(serviceCallRows);
+      setProperties(propertyRows);
 
       const cos = [], ens = [];
       flatSubs.forEach((flat) => {

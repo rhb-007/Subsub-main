@@ -46,6 +46,9 @@ const engagementRowToJs = (r) => ({
   caps: parseJson(r.caps, []),
   rating: r.rating, ratedJobs: r.rated_jobs, accepted: r.accepted, declined: r.declined,
   autoSchedule: !!r.auto_schedule, notes: r.notes,
+  // Which properties this vendor is scoped to. Empty = every property on the
+  // account, which is how a general contractor uses it.
+  propertyIds: r.property_ids ? String(r.property_ids).split(",") : [],
 });
 
 function composeSub(companyRow, engagementRow) {
@@ -431,7 +434,9 @@ app.get("/api/subs", async (c) => {
             en.status as en_status, en.doc_review as en_doc_review, en.categories as en_categories,
             en.caps as en_caps, en.rating as en_rating, en.rated_jobs as en_rated_jobs,
             en.accepted as en_accepted, en.declined as en_declined,
-            en.auto_schedule as en_auto_schedule, en.notes as en_notes
+            en.auto_schedule as en_auto_schedule, en.notes as en_notes,
+            (SELECT group_concat(ep.property_id) FROM engagement_properties ep
+              WHERE ep.engagement_id = en.id) as en_property_ids
      FROM engagements en JOIN companies co ON co.id = en.company_id
      WHERE en.account_id = ?`
   ).bind(accountId).all();
@@ -441,6 +446,7 @@ app.get("/api/subs", async (c) => {
     doc_review: r.en_doc_review, categories: r.en_categories, caps: r.en_caps,
     rating: r.en_rating, rated_jobs: r.en_rated_jobs, accepted: r.en_accepted, declined: r.en_declined,
     auto_schedule: r.en_auto_schedule, notes: r.en_notes,
+    property_ids: r.en_property_ids,
   }));
   return c.json(subs);
 });
@@ -1232,6 +1238,204 @@ app.post("/api/service-calls/:id/resolve", requireRole("admin", "pm"), async (c)
     `UPDATE service_calls SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ?`
   ).bind(c.req.param("id"), accountId).run();
   return c.json({ ok: true });
+});
+
+
+// ---------------------------------------------------------------------------
+// Properties (portfolio / property managers)
+// ---------------------------------------------------------------------------
+// Every query is scoped by account_id, so one account can never read or write
+// another's buildings even with a guessed id.
+
+const propertyRowToJs = (r) => ({
+  id: r.id, accountId: r.account_id, name: r.name, address: r.address,
+  city: r.city, state: r.state, zip: r.zip,
+  units: r.units == null ? "" : r.units, notes: r.notes || "",
+});
+
+app.get("/api/properties", async (c) => {
+  const { accountId } = c.get("auth");
+  const { results } = await c.env.DB.prepare(
+    `SELECT * FROM properties WHERE account_id = ? ORDER BY name`
+  ).bind(accountId).all();
+  return c.json(results.map(propertyRowToJs));
+});
+
+app.post("/api/properties", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const b = await c.req.json();
+  const name = (b.name || "").trim();
+  if (!name) return c.json({ error: "name_required" }, 400);
+  const id = uid();
+  await c.env.DB.prepare(
+    `INSERT INTO properties (id, account_id, name, address, city, state, zip, units, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, accountId, name, b.address || null, b.city || null, b.state || null,
+    b.zip || null, b.units === "" || b.units == null ? null : Number(b.units), b.notes || null).run();
+  await logEvent(c.env, accountId, c.get("auth").userId, "property.created", id, { name });
+  return c.json({ id }, 201);
+});
+
+app.patch("/api/properties/:id", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const b = await c.req.json();
+  const cols = { name: "name", address: "address", city: "city", state: "state",
+                 zip: "zip", units: "units", notes: "notes" };
+  const sets = [], vals = [];
+  for (const [k, col] of Object.entries(cols)) {
+    if (b[k] === undefined) continue;
+    sets.push(`${col} = ?`);
+    vals.push(k === "units" ? (b[k] === "" || b[k] == null ? null : Number(b[k])) : b[k]);
+  }
+  if (!sets.length) return c.json({ ok: true });
+  vals.push(c.req.param("id"), accountId);
+  await c.env.DB.prepare(
+    `UPDATE properties SET ${sets.join(", ")} WHERE id = ? AND account_id = ?`
+  ).bind(...vals).run();
+  return c.json({ ok: true });
+});
+
+app.delete("/api/properties/:id", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const id = c.req.param("id");
+  // engagement_properties cascades; jobs keep their history, so only the
+  // forward pointer is cleared.
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `DELETE FROM engagement_properties WHERE property_id = ?
+        AND engagement_id IN (SELECT id FROM engagements WHERE account_id = ?)`
+    ).bind(id, accountId),
+    c.env.DB.prepare(
+      `UPDATE jobs SET property_id = NULL WHERE property_id = ? AND account_id = ?`
+    ).bind(id, accountId),
+    c.env.DB.prepare(`DELETE FROM properties WHERE id = ? AND account_id = ?`).bind(id, accountId),
+  ]);
+  await logEvent(c.env, accountId, c.get("auth").userId, "property.deleted", id, null);
+  return c.json({ ok: true });
+});
+
+// Which properties a vendor is scoped to, for THIS account's engagement only.
+app.put("/api/subs/:companyId/properties", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const companyId = c.req.param("companyId");
+  const b = await c.req.json(); // { propertyIds: [...] }
+  const en = await c.env.DB.prepare(
+    `SELECT id FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(accountId, companyId).first();
+  if (!en) return c.json({ error: "not_engaged" }, 404);
+
+  const ids = Array.isArray(b.propertyIds) ? b.propertyIds : [];
+  // Only properties this account actually owns — a foreign id is dropped
+  // rather than trusted.
+  const stmts = [c.env.DB.prepare(`DELETE FROM engagement_properties WHERE engagement_id = ?`).bind(en.id)];
+  for (const pid of ids) {
+    stmts.push(c.env.DB.prepare(
+      `INSERT OR IGNORE INTO engagement_properties (engagement_id, property_id)
+       SELECT ?, id FROM properties WHERE id = ? AND account_id = ?`
+    ).bind(en.id, pid, accountId));
+  }
+  await c.env.DB.batch(stmts);
+  return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Change orders
+// ---------------------------------------------------------------------------
+// A work order is never edited once accepted. Each change is a numbered change
+// order the other side accepts or declines, and the revised value is derived
+// from the accepted ones (see the work_order_revised view).
+
+const changeOrderRowToJs = (r) => ({
+  id: r.id, workOrderId: r.work_order_id, seq: r.seq, kind: r.kind, origin: r.origin,
+  scope: r.scope, valueDelta: r.value_delta_cents, status: r.status,
+  raisedBy: r.raised_by, raisedAt: r.raised_at, respondBy: r.respond_by,
+  respondedAt: r.responded_at, note: r.note || "",
+  jobId: r.job_id, trade: r.trade, companyId: r.company_id,
+});
+
+app.get("/api/change-orders", async (c) => {
+  const { accountId } = c.get("auth");
+  const { results } = await c.env.DB.prepare(
+    `SELECT co.*, w.job_id, w.trade, w.company_id
+       FROM change_orders co
+       JOIN work_orders w ON w.id = co.work_order_id
+       JOIN jobs j ON j.id = w.job_id
+      WHERE j.account_id = ?
+      ORDER BY co.raised_at DESC`
+  ).bind(accountId).all();
+  return c.json(results.map(changeOrderRowToJs));
+});
+
+// Either side can raise one: the GC, or the sub who finds hidden conditions.
+app.post("/api/change-orders", async (c) => {
+  const { accountId, userId, role, companyId } = c.get("auth");
+  const b = await c.req.json(); // { workOrderId, kind, scope, valueDelta, respondBy, note }
+  const wo = await c.env.DB.prepare(
+    `SELECT w.id, w.status, w.company_id FROM work_orders w JOIN jobs j ON j.id = w.job_id
+      WHERE w.id = ? AND j.account_id = ?`
+  ).bind(b.workOrderId, accountId).first();
+  if (!wo) return c.json({ error: "work_order_not_found" }, 404);
+  // Account scope alone is not enough for a contractor: every sub in the
+  // account shares it. They may only touch their own company's work order.
+  if (role === "contractor" && wo.company_id !== companyId) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  // Guardrail from the deployment doc: no change order against a work order
+  // that was never accepted — reissue it instead.
+  if (wo.status !== "accepted") return c.json({ error: "work_order_not_accepted" }, 409);
+
+  const origin = role === "contractor" ? "sub" : "gc";
+  const next = await c.env.DB.prepare(
+    `SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM change_orders WHERE work_order_id = ?`
+  ).bind(wo.id).first();
+  const id = uid();
+  await c.env.DB.prepare(
+    `INSERT INTO change_orders (id, work_order_id, seq, kind, origin, scope, value_delta_cents, raised_by, respond_by, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, wo.id, next.n, b.kind || "added", origin, b.scope || "",
+    Number(b.valueDelta) || 0, userId, b.respondBy || null, b.note || null).run();
+  await logEvent(c.env, accountId, userId, "change_order.raised", id, { workOrderId: wo.id, seq: next.n, origin });
+  return c.json({ id, seq: next.n }, 201);
+});
+
+// The other side responds. Whoever raised it cannot also accept it.
+app.post("/api/change-orders/:id/respond", async (c) => {
+  const { accountId, role, companyId } = c.get("auth");
+  const b = await c.req.json(); // { status: "accepted" | "declined" }
+  if (!["accepted", "declined"].includes(b.status)) return c.json({ error: "bad_status" }, 400);
+  const co = await c.env.DB.prepare(
+    `SELECT co.*, w.company_id AS wo_company_id FROM change_orders co
+       JOIN work_orders w ON w.id = co.work_order_id
+       JOIN jobs j ON j.id = w.job_id
+      WHERE co.id = ? AND j.account_id = ?`
+  ).bind(c.req.param("id"), accountId).first();
+  if (!co) return c.json({ error: "not_found" }, 404);
+  if (role === "contractor" && co.wo_company_id !== companyId) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  if (co.status !== "pending") return c.json({ error: "already_resolved" }, 409);
+  const responderSide = role === "contractor" ? "sub" : "gc";
+  if (responderSide === co.origin) return c.json({ error: "cannot_answer_own" }, 403);
+
+  await c.env.DB.prepare(
+    `UPDATE change_orders SET status = ?, responded_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).bind(b.status, co.id).run();
+  await logEvent(c.env, accountId, c.get("auth").userId, "change_order." + b.status, co.id, { workOrderId: co.work_order_id, seq: co.seq });
+  return c.json({ ok: true });
+});
+
+// Original, revised and pending count for one work order — derived, never stored.
+app.get("/api/work-orders/:id/revised", async (c) => {
+  const { accountId } = c.get("auth");
+  const row = await c.env.DB.prepare(
+    `SELECT r.* FROM work_order_revised r
+       JOIN work_orders w ON w.id = r.id
+       JOIN jobs j ON j.id = w.job_id
+      WHERE r.id = ? AND j.account_id = ?`
+  ).bind(c.req.param("id"), accountId).first();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  return c.json({ id: row.id, originalCents: row.original_cents,
+    revisedCents: row.revised_cents, pendingCount: row.pending_count });
 });
 
 export default app;

@@ -124,4 +124,18 @@ export const api = {
   raiseServiceCall: (call) => request("/service-calls", { method: "POST", body: JSON.stringify(call) }),
   confirmServiceCall: (id, patch) => request(`/service-calls/${id}/confirm`, { method: "POST", body: JSON.stringify(patch || {}) }),
   resolveServiceCall: (id) => request(`/service-calls/${id}/resolve`, { method: "POST" }),
+
+  listProperties: () => request("/properties"),
+  createProperty: (p) => request("/properties", { method: "POST", body: JSON.stringify(p) }),
+  patchProperty: (id, patch) => request(`/properties/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  removeProperty: (id) => request(`/properties/${id}`, { method: "DELETE" }),
+  // Which properties a vendor is scoped to, for this account only.
+  setSubProperties: (companyId, propertyIds) =>
+    request(`/subs/${companyId}/properties`, { method: "PUT", body: JSON.stringify({ propertyIds }) }),
+
+  listChangeOrders: () => request("/change-orders"),
+  raiseChangeOrder: (co) => request("/change-orders", { method: "POST", body: JSON.stringify(co) }),
+  respondToChangeOrder: (id, status) =>
+    request(`/change-orders/${id}/respond`, { method: "POST", body: JSON.stringify({ status }) }),
+  getWorkOrderRevised: (woId) => request(`/work-orders/${woId}/revised`),
 };

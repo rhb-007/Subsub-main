@@ -290,3 +290,108 @@ endpoint, confirm field names against what `map()` assumes) before
 trusting any non-WA state's `field_mapping_verified: false` result in
 production — the `raw` column on every `license_checks` row has exactly
 what you need to compare against.
+
+---
+
+## Properties, change orders, and the platform console
+
+The app now builds from one source in two shapes, chosen at build time:
+
+```
+VITE_BUILD=tenant   npm run build    # app.subsub.work and each GC's subdomain
+VITE_BUILD=platform npm run build    # admin.subsub.work, SubSub's own console
+```
+
+Vite substitutes the literal, so in a tenant build every `BUILD ===
+"platform"` branch folds to false and the console is dropped by the
+minifier. Checked against the built bundles: the tenant bundle contains no
+`Superadmin`, `Revenue`, `Health` or impersonation code and is about 24 KB
+smaller. That is what keeps the console off the customer domain — the two
+hostnames are two builds of this one repo, not one bundle that hides a tab.
+
+### Database changes
+
+`schema.sql` is the full picture for a **fresh** database. It is not
+re-runnable against a live one, because its `CREATE TABLE`s have no `IF NOT
+EXISTS`. For a database that already has the earlier schema, apply the
+migration instead:
+
+```
+npx wrangler d1 execute subsub-db --config=wrangler.toml \
+  --file=./worker/migrations/002_properties_change_orders_platform.sql
+```
+
+It adds `properties`, `engagement_properties`, `change_orders`, the
+`work_order_revised` view, and the console's `superadmins`, `activity`,
+`subscription_events`, `invoices` and `platform_daily_stats`, plus
+`jobs.property_id`. Every statement is guarded except that one `ALTER`,
+which SQLite cannot make conditional — on a second run it stops with
+`duplicate column name: property_id`, which is safe to ignore. Both paths
+were checked against real SQLite: fresh `schema.sql` builds 20 tables and
+the view, and the migration takes a pre-migration database from 12 tables
+to the same 20.
+
+### What is wired to the database
+
+**Properties are fully wired.** `GET/POST/PATCH/DELETE /api/properties`,
+plus `PUT /api/subs/:companyId/properties` for the per-account vendor
+scoping (it lives in a join table, not a column, so `patchSub` routes
+`propertyIds` to it rather than putting it in the generic PATCH body).
+`hydrateAccount` loads properties on sign-in. Verified in Chromium against
+the local worker and D1: a property added through the UI survives a full
+page reload because it comes back from the database.
+
+**Change orders are fully wired.** `GET/POST /api/change-orders`,
+`POST /api/change-orders/:id/respond`, and
+`GET /api/work-orders/:id/revised`. The revised value is derived by the
+`work_order_revised` view and never stored on the work order. Guardrails,
+each exercised against the running worker:
+
+| Attempt | Result |
+|---|---|
+| Change order against a work order that was never accepted | 409, reissue instead |
+| The side that raised it tries to accept it | 403 |
+| A contractor from another company answers it | 403 |
+| Answering one that is already resolved | 409 |
+| A status other than accepted/declined | 400 |
+
+Sequence numbers are per work order, `origin` is derived from the caller's
+role rather than trusted from the body, and the arithmetic was checked:
+$12,400 + $1,800 − $400 = $13,800.
+
+Account isolation was tested directly, not assumed: a second account sees
+none of the first account's properties, its writes against a foreign
+property id affect zero rows, and a foreign property id passed to the
+vendor-scoping endpoint is dropped rather than trusted.
+
+### What is NOT wired — read this before launching the console
+
+**The platform console has no backend at all.** It runs entirely on seed
+data in the browser. The tables exist; nothing reads or writes them, and
+there are no `/api/platform/*` routes. In particular:
+
+- **Staff sign-in is not real.** The console's login accepts a seeded staff
+  user with no password check. Do not deploy `admin.subsub.work` until it
+  authenticates properly — the deployment doc asks for SSO or hardware
+  keys, and this is the one login that can open every account.
+- **Role gating is UI-only.** The standard staff role correctly sees only
+  Accounts and Companies in the interface, but nothing enforces that on the
+  server. Per the deployment doc, a standard user hitting
+  `/platform/revenue` or `/platform/health` must get a 403, and account
+  list responses must omit `mrr_cents` and `gmv_cents` for them. Enforce it
+  in the API, not just the UI.
+- **Impersonation is not audited.** The UI banner is not an audit trail.
+  Every sign-in-as needs an `events` row written server-side before the
+  session is handed over.
+- **Revenue numbers are fiction.** MRR, ARR and GMV come from seed arrays.
+  Real figures need `subscription_events` populated and `invoices` mirrored
+  from Stripe webhooks, reconciled nightly — never derived from the
+  accounts table alone, because comped, dunning and failed payments all
+  break that.
+- **The activity stream is browser-local.** `logEvent()` appends to React
+  state, so it is lost on reload and invisible to the console. It needs to
+  write to the `activity` table through an endpoint.
+
+`/api/apply/:subdomain` still has no rate limiting and no CAPTCHA, as noted
+above, and that remains true now that the application form is reachable
+from more places.
