@@ -261,7 +261,8 @@ app.post("/api/signup", async (c) => {
   const company = String(b.company || "").trim();
   const personName = String(b.name || "").trim();
   const email = String(b.email || "").trim().toLowerCase();
-  const phone = String(b.phone || "").trim() || null;
+  const phoneRaw = String(b.phone || "").trim();
+  const phone = phoneRaw ? normalizePhone(phoneRaw) : null;
   const subdomain = validSubdomain(b.subdomain);
   const plan = b.plan === "scale" ? "scale" : "basic";
   const billing = b.billing === "annual" ? "annual" : "monthly";
@@ -269,6 +270,9 @@ app.post("/api/signup", async (c) => {
   if (!company) return c.json({ error: "company_required" }, 400);
   if (!personName) return c.json({ error: "name_required" }, 400);
   if (!EMAIL_RE.test(email)) return c.json({ error: "invalid_email" }, 400);
+  // Mobile stays optional, but a half-typed one is worse than none: it reads
+  // as reachable and never is.
+  if (phoneRaw && !phone) return c.json({ error: "invalid_phone" }, 400);
   if (!subdomain) return c.json({ error: "invalid_subdomain" }, 400);
 
   const realAuth = !!(c.env.SUPABASE_URL && c.env.SUPABASE_ANON_KEY);
@@ -592,6 +596,18 @@ function validSubdomain(sub) {
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+// Ten digits, stored the way the forms display them, so the database doesn't
+// end up holding four spellings of the same number and no way to match them.
+// A leading US country code is dropped rather than rejected, because numbers
+// pasted out of a contact card usually carry one. Returns null for anything
+// that isn't ten digits -- callers decide whether that's empty or invalid.
+const normalizePhone = (v) => {
+  let d = String(v ?? "").replace(/\D/g, "");
+  if (d.length === 11 && d[0] === "1") d = d.slice(1);
+  if (d.length !== 10) return null;
+  return `(${d.slice(0, 3)})${d.slice(3, 6)}-${d.slice(6)}`;
+};
 
 // Create the auth user with Supabase's own signup endpoint. The anon key is
 // the public one and this is exactly what it is for, so no service_role key

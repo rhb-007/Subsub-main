@@ -177,6 +177,9 @@ legend{font:600 15px/1 Inter;padding:0;margin-bottom:13px}
   border-radius:8px;background:var(--white);font:400 16px Inter,sans-serif;color:var(--ink)}
 .field textarea{resize:vertical}
 .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--forest);outline:none}
+.field input[aria-invalid="true"]{border-color:#c0492f;background:#fdf7f6}
+.field input[aria-invalid="true"]:focus{border-color:#c0492f}
+.field-err{margin:7px 0 0;font:500 13.5px/1.4 Inter,sans-serif;color:#8a2f1c}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
 .roles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -458,7 +461,8 @@ body.nav-open{overflow:hidden}
         </div>
         <div class="two">
           <div class="field"><label for="phone">Mobile</label>
-            <input id="phone" type="tel" autocomplete="tel" placeholder="206-555-0100"></div>
+            <input id="phone" type="tel" autocomplete="tel" inputmode="numeric"
+              maxlength="13" placeholder="(206)555-0100"></div>
           <div class="field"><label for="pw">Password</label>
             <input id="pw" type="password" autocomplete="new-password" required></div>
         </div>
@@ -678,13 +682,98 @@ body.nav-open{overflow:hidden}
     b.addEventListener('click', function(){ go(+b.dataset.back); });
   });
 
+  /* ---- field validation ----
+     The server checks all of this again -- a browser check is a courtesy, not
+     a guard -- but catching it here saves a round trip and, more to the point,
+     tells the person which field is wrong instead of bouncing the whole form. */
+
+  // Same shape the API enforces, so the two can't disagree about what counts
+  // as an address.
+  var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+  // Ten digits. A leading country code is dropped rather than rejected,
+  // because pasting a number from a contact card usually brings one along.
+  function phoneDigits(v){
+    var d = String(v == null ? '' : v).replace(/\D/g,'');
+    if(d.length === 11 && d.charAt(0) === '1') d = d.slice(1);
+    return d.slice(0,10);
+  }
+  function formatPhone(v){
+    var d = phoneDigits(v);
+    if(d.length <= 3) return d;
+    if(d.length <= 6) return '(' + d.slice(0,3) + ')' + d.slice(3);
+    return '(' + d.slice(0,3) + ')' + d.slice(3,6) + '-' + d.slice(6);
+  }
+
+  function clearFieldError(el){
+    if(!el) return;
+    el.removeAttribute('aria-invalid');
+    var prior = el.parentNode && el.parentNode.querySelector('.field-err');
+    if(prior) prior.remove();
+  }
+  // Returns the element, so a caller can keep the first bad field in one line.
+  function markField(el, msg){
+    clearFieldError(el);
+    el.setAttribute('aria-invalid','true');
+    var p = document.createElement('p');
+    p.className = 'field-err';
+    p.setAttribute('role','alert');
+    p.textContent = msg;
+    el.parentNode.appendChild(p);
+    return el;
+  }
+
+  // Reformat as they type. The caret is only forced to the end when it was
+  // already there, so editing the middle of a number still works.
+  var phoneEl = document.getElementById('phone');
+  if(phoneEl){
+    phoneEl.addEventListener('input', function(){
+      var atEnd = this.selectionStart === this.value.length;
+      var next = formatPhone(this.value);
+      if(next !== this.value){
+        this.value = next;
+        if(atEnd){ this.selectionStart = this.selectionEnd = next.length; }
+      }
+      clearFieldError(this);
+    });
+  }
+  ['name','email','pw'].forEach(function(id){
+    var el = document.getElementById(id);
+    if(el) el.addEventListener('input', function(){ clearFieldError(this); });
+  });
+
   /* ---- step 1 ---- */
   document.getElementById('f1').addEventListener('submit', function(e){
     e.preventDefault();
-    var need = ['name','email','pw'];
-    for(var i=0;i<need.length;i++){
-      var el=document.getElementById(need[i]);
-      if(!el.value.trim()){ el.focus(); return; }
+    var nameEl = document.getElementById('name');
+    var emailEl = document.getElementById('email');
+    var pwEl = document.getElementById('pw');
+    var bad = null;
+
+    [nameEl, emailEl, pwEl, phoneEl].forEach(clearFieldError);
+
+    if(!nameEl.value.trim()) bad = markField(nameEl, 'Enter your name.');
+
+    var email = emailEl.value.trim();
+    if(!email) bad = markField(emailEl, 'Enter your work email.') || bad;
+    else if(email.indexOf('@') === -1) bad = markField(emailEl, 'An email address needs an @ sign.') || bad;
+    else if(!EMAIL_RE.test(email)) bad = markField(emailEl, 'That email address does not look right.') || bad;
+    else emailEl.value = email;
+
+    // Optional, but if they started typing one it has to be a whole number --
+    // a half-entered mobile is worse than none, since it looks reachable.
+    if(phoneEl && phoneEl.value.trim() && phoneDigits(phoneEl.value).length !== 10){
+      bad = markField(phoneEl, 'A mobile number needs 10 digits.') || bad;
+    }
+
+    if(pwEl.value.length < 8) bad = markField(pwEl, 'Use a password of at least 8 characters.') || bad;
+
+    if(bad){
+      // Focus the topmost problem, not the last one found.
+      var first = document.querySelector('#f1 [aria-invalid="true"]') || bad;
+      first.focus();
+      first.scrollIntoView({behavior:'smooth', block:'center'});
+      return;
     }
     go(2);
   });
@@ -761,7 +850,9 @@ body.nav-open{overflow:hidden}
       if(rows().length < PLANS[plan].limit) upBox.classList.add('hide');
       count();
     });
-    wrap.querySelectorAll('input').forEach(function(i){ i.addEventListener('input', count); });
+    wrap.querySelectorAll('input').forEach(function(i){
+      i.addEventListener('input', function(){ clearFieldError(i); count(); });
+    });
     list.appendChild(wrap);
     count();
   }
@@ -838,6 +929,7 @@ body.nav-open{overflow:hidden}
     email_in_use: 'That email already has an account. Sign in instead.',
     invalid_subdomain: 'That sign-in address cannot be used. Use 3-40 letters, numbers or dashes.',
     invalid_email: 'That email address does not look right.',
+    invalid_phone: 'A mobile number needs 10 digits.',
     weak_password: 'Use a password of at least 8 characters.',
     company_required: 'Enter your company name.',
     name_required: 'Enter your name.',
@@ -902,7 +994,8 @@ body.nav-open{overflow:hidden}
       if(!res.ok){
         var code = res.body && res.body.error;
         if(code === 'subdomain_taken' || code === 'invalid_subdomain'){ go(2); }
-        else if(code === 'email_in_use' || code === 'invalid_email' || code === 'weak_password'){ go(1); }
+        else if(code === 'email_in_use' || code === 'invalid_email' || code === 'invalid_phone'
+          || code === 'weak_password'){ go(1); }
         showSignupError(FIELD_ERRORS[code] || 'We could not create the account. Please try again.');
         if(code === 'subdomain_taken' || code === 'invalid_subdomain'){ sub.focus(); }
         return;
@@ -927,7 +1020,28 @@ body.nav-open{overflow:hidden}
   }
 
   document.getElementById('f3').addEventListener('submit', function(e){
-    e.preventDefault(); finishUp(false);
+    e.preventDefault();
+    // A mistyped invite address fails silently later -- the subcontractor
+    // simply never hears from us -- so catch it while somebody is still
+    // looking at the form. Empty rows are fine; they just aren't invites.
+    var bad = null;
+    rows().forEach(function(r){
+      var em = r.querySelector('.em');
+      if(!em) return;
+      clearFieldError(em);
+      var v = em.value.trim();
+      if(!v) return;
+      if(v.indexOf('@') === -1) bad = markField(em, 'An email address needs an @ sign.') || bad;
+      else if(!EMAIL_RE.test(v)) bad = markField(em, 'That email address does not look right.') || bad;
+      else em.value = v;
+    });
+    if(bad){
+      var first = document.querySelector('#f3 [aria-invalid="true"]') || bad;
+      first.focus();
+      first.scrollIntoView({behavior:'smooth', block:'center'});
+      return;
+    }
+    finishUp(false);
   });
   document.getElementById('skipInv').addEventListener('click', function(){ finishUp(true); });
 

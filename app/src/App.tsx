@@ -387,6 +387,26 @@ const kindOf = (account) =>
   (account && ACCOUNT_KINDS[account.kind]) ? account.kind : DEFAULT_ACCOUNT_KIND;
 const hasProperties = (account) => ACCOUNT_KINDS[kindOf(account)].properties;
 
+// Phone numbers are typed in a dozen shapes and then compared, dialled and
+// texted as one, so every field that takes one runs its input through here.
+// Ten digits, formatted as they type; a leading US country code is dropped
+// rather than rejected, because numbers pasted from a contact card carry one.
+const phoneDigits = (v) => {
+  let d = String(v ?? "").replace(/\D/g, "");
+  if (d.length === 11 && d[0] === "1") d = d.slice(1);
+  return d.slice(0, 10);
+};
+const formatPhone = (v) => {
+  const d = phoneDigits(v);
+  if (d.length <= 3) return d;
+  if (d.length <= 6) return `(${d.slice(0, 3)})${d.slice(3)}`;
+  return `(${d.slice(0, 3)})${d.slice(3, 6)}-${d.slice(6)}`;
+};
+// Same shape the API enforces, so the two can't disagree about what counts
+// as an address.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const validEmail = (v) => EMAIL_RE.test(String(v ?? "").trim());
+
 const ROLES = {
   admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
   pm: { label: "Project Manager", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
@@ -4195,7 +4215,10 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
   }));
   const [sent, setSent] = useState(false);
 
-  const ok1 = f.company.trim() && f.contact.trim() && f.email.trim();
+  // Mobile is optional here, but a half-typed one is worse than none -- it
+  // reads as reachable and never is.
+  const phoneOk = !f.phone.trim() || phoneDigits(f.phone).length === 10;
+  const ok1 = f.company.trim() && f.contact.trim() && validEmail(f.email) && phoneOk;
   const ok2 = f.categories.length > 0;
   const stepOk = step === 1 ? ok1 : step === 2 ? ok2 : true;
 
@@ -4245,8 +4268,9 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
               <label className="wl-fld">Email
                 <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)} /></label>
               <label className="wl-fld">Mobile
-                <input type="tel" value={f.phone} onChange={(e) => set("phone", e.target.value)}
-                  placeholder="206-555-0100" /></label>
+                <input type="tel" inputMode="numeric" maxLength={13} value={f.phone}
+                  onChange={(e) => set("phone", formatPhone(e.target.value))}
+                  placeholder="(206)555-0100" /></label>
             </div>
             <div className="wl-row">
               <label className="wl-fld">WA L&amp;I license #
@@ -4322,9 +4346,12 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
                 onClick={() => { onSubmit(f); setSent(true); }}>Submit application</button>}
         </div>
         {!stepOk && (
-          <p className="wl-err">{step === 1
-            ? "Company, your name and an email are needed."
-            : "Pick at least one trade."}</p>
+          <p className="wl-err">{step !== 1
+            ? "Pick at least one trade."
+            : !phoneOk ? "A mobile number needs 10 digits."
+            : f.email.trim() && !validEmail(f.email)
+              ? "That email address does not look right — check for a missing @."
+              : "Company, your name and an email are needed."}</p>
         )}
       </div>
       <PoweredBy className="wl-foot" height={15} />
@@ -4538,7 +4565,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <label className="fld">Full name<input value={p.name} onChange={(e) => { setP({ ...p, name: e.target.value }); setPSaved(false); }} /></label>
               <label className="fld">Email<input type="email" value={p.email} onChange={(e) => { setP({ ...p, email: e.target.value }); setPSaved(false); }} /></label>
             </div>
-            <label className="fld">Phone<input type="tel" value={p.phone} onChange={(e) => { setP({ ...p, phone: e.target.value }); setPSaved(false); }} placeholder="206-555-0100" /></label>
+            <label className="fld">Phone<input type="tel" inputMode="numeric" maxLength={13} value={p.phone} onChange={(e) => { setP({ ...p, phone: formatPhone(e.target.value) }); setPSaved(false); }} placeholder="(206)555-0100" /></label>
             <div className="role-locked">
               <span className={`role-badge r-${role}`}>{ROLES[role].label}</span>
               <span className="rl-note">Only an admin can change roles.</span>
@@ -7457,7 +7484,15 @@ function SubForm({ onSubmit, onCancel, existing, properties }) {
     { n: 2, label: "Trades & coverage" },
     { n: 3, label: "Crews & paperwork" },
   ];
-  const step1Ok = !!(f.company.trim() && f.contact.trim() && (f.notifyEmail || f.notifySms));
+  // Both are optional on this form, but a malformed one is worse than a blank:
+  // it looks reachable and silently isn't. Email is required once they've
+  // asked us to notify by email at all.
+  const subEmailOk = f.notifyEmail ? validEmail(f.email) : (!f.email.trim() || validEmail(f.email));
+  const subPhoneOk = f.notifySms
+    ? phoneDigits(f.phone).length === 10
+    : (!f.phone.trim() || phoneDigits(f.phone).length === 10);
+  const step1Ok = !!(f.company.trim() && f.contact.trim()
+    && (f.notifyEmail || f.notifySms) && subEmailOk && subPhoneOk);
   const step2Ok = !!(f.categories.length && f.caps.length && coverageOk);
   const step3Ok = cleanCrews.length > 0;
   const stepOk = step === 1 ? step1Ok : step === 2 ? step2Ok : step3Ok;
@@ -7494,7 +7529,7 @@ function SubForm({ onSubmit, onCancel, existing, properties }) {
       </div>
 
       <div className="fld-row">
-        <label className="fld">Phone<input type="tel" inputMode="tel" value={f.phone} onChange={(e) => set("phone", e.target.value)} placeholder="206-555-0100" /></label>
+        <label className="fld">Phone<input type="tel" inputMode="numeric" maxLength={13} value={f.phone} onChange={(e) => set("phone", formatPhone(e.target.value))} placeholder="(206)555-0100" /></label>
         <label className="fld">Email<input type="email" inputMode="email" value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="name@company.com" /></label>
       </div>
       <div className="fld-row">
@@ -7675,7 +7710,14 @@ function SubForm({ onSubmit, onCancel, existing, properties }) {
       </div>
       {!stepOk && (
         <p className="cov-hint">
-          {step === 1 ? "Company, contact and at least one notification method are needed."
+          {step === 1
+            ? !subEmailOk ? (f.notifyEmail && !f.email.trim()
+                ? "Add an email address, or turn off email notifications."
+                : "That email address does not look right — check for a missing @.")
+            : !subPhoneOk ? (f.notifySms && !f.phone.trim()
+                ? "Add a mobile number, or turn off text notifications."
+                : "A mobile number needs 10 digits.")
+            : "Company, contact and at least one notification method are needed."
             : step === 2 ? "Pick at least one trade, one capability, and set a coverage area."
             : "Add at least one crew with a named member."}
         </p>
