@@ -2007,7 +2007,18 @@ export default function SubSub() {
           + "Ask whoever runs the account to add you.";
       }
       if (err?.status === 501) return "This site isn't finished being set up. Tell your admin.";
-      return "Couldn't reach SubSub. Check your connection and try again.";
+      // Everything else was one message, which made a server fault and a lost
+      // connection indistinguishable -- and left nobody, including us, able to
+      // tell which had happened. Name what came back.
+      if (err?.status >= 500) {
+        return `SubSub's server returned an error (${err.status}${err.message ? `: ${err.message}` : ""}). `
+          + "Your login is fine — this is a fault on our side.";
+      }
+      if (err?.status) {
+        return `SubSub's server refused the request (${err.status}${err.message ? `: ${err.message}` : ""}).`;
+      }
+      return "Couldn't reach SubSub — the request never completed. This is usually the API "
+        + "address being wrong or unreachable, not your connection.";
     }
     if (!result) return "Couldn't sign you in. Try again.";
     // Land in the account this subdomain belongs to, if the person has a
