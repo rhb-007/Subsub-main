@@ -1325,7 +1325,16 @@ export default function SubSub() {
   // fallback — otherwise every subdomain would show the same generic/demo
   // branding on its login screen.
   const account = accounts.find((a) => a.id === membership.accountId) || accounts[0];
-  const brand = (!loggedIn && subdomainBrand) ? subdomainBrand : account;
+  // Signed out on a hostname that belongs to nobody — app.subsub.work, a
+  // preview URL, localhost — is SubSub's own front door, so it wears SubSub's
+  // branding. Falling through to `account` here meant whichever account
+  // happened to be first in state, which is how a stranger arriving at the
+  // generic address was greeted by some unrelated customer's name and logo.
+  const GENERIC_BRAND = { id: null, name: "SubSub", subdomain: "app",
+    logoData: null, useDefaultMark: true, theme: null };
+  const brand = !loggedIn
+    ? (subdomainBrand || GENERIC_BRAND)
+    : account;
   // What this person is, in the words the customer uses. A subcontractor signing
   // into someone else's portal is a contractor, not "a general contractor" — the
   // account type is the hiring side's identity, not theirs.
