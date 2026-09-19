@@ -13,6 +13,24 @@ import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEm
 const app = new Hono();
 app.use("/api/*", cors());
 
+// An unhandled throw was reaching the browser as a bare 500 with an empty
+// body, which is the least useful thing a server can say: indistinguishable,
+// from the outside, from a network failure. Every one of these is a bug here,
+// so name it.
+//
+// The message goes in the response as well as the log. These are a real
+// user's own API calls, not a public surface, and what comes back is a D1 or
+// runtime error string -- the difference between a diagnosable failure and a
+// mystery is worth more than keeping column names to ourselves. Revisit if
+// any of this becomes reachable unauthenticated.
+app.onError((err, c) => {
+  console.error("[unhandled]", c.req.method, c.req.path, err?.stack || err?.message || err);
+  return c.json({
+    error: "server_error",
+    detail: String(err?.message || err).slice(0, 300),
+  }, 500);
+});
+
 // ---------------------------------------------------------------------------
 // Field ownership — mirrors COMPANY_FIELDS / ENGAGEMENT_FIELDS in the UI.
 // splitPatch() routes a flat "sub" patch to the right table; composeSub()

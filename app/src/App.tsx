@@ -2046,7 +2046,10 @@ export default function SubSub() {
       // connection indistinguishable -- and left nobody, including us, able to
       // tell which had happened. Name what came back.
       if (err?.status >= 500) {
-        return `SubSub's server returned an error (${err.status}${err.message ? `: ${err.message}` : ""}). `
+        // The server names what it threw; pass that through rather than the
+        // generic code, which says only that something went wrong.
+        const why = err.body?.detail || err.message;
+        return `SubSub's server returned an error (${err.status}${why ? `: ${why}` : ""}). `
           + "Your login is fine — this is a fault on our side.";
       }
       if (err?.status) {
