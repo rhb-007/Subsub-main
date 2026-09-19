@@ -119,6 +119,7 @@ app.use("/api/*", async (c, next) => {
   // unauthenticated, since the applicant has no session at all yet (that's
   // exactly what a successful application eventually leads to).
   if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path === "/api/signup"
+    || c.req.path.startsWith("/api/platform/")
     || c.req.path.startsWith("/api/apply/")
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
 
@@ -150,6 +151,27 @@ function requireRole(...roles) {
     if (!roles.includes(auth.role)) return c.json({ error: "forbidden" }, 403);
     await next();
   };
+}
+
+// The per-account stream the console reads. Separate from `events`: that is a
+// machine audit log keyed by subject id, this is the rendered sentence a human
+// reads in support. Store the text at write time — the rows it refers to
+// change, so rebuilding the sentence later from foreign keys gives the wrong
+// answer. Never let a logging failure fail the request that caused it.
+const companyName = async (db, id) =>
+  (await db.prepare(`SELECT company FROM companies WHERE id = ?`).bind(id).first())?.company || "a subcontractor";
+
+async function logActivity(env, accountId, userId, kind, text, meta) {
+  if (!accountId || !text) return;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO activity (id, account_id, at, user_id, kind, text, meta)
+       VALUES (?, ?, datetime('now'), ?, ?, ?, ?)`
+    ).bind(crypto.randomUUID(), accountId, userId ?? null, kind, text,
+      meta ? JSON.stringify(meta) : null).run();
+  } catch (err) {
+    console.error("[activity] write failed:", err?.message || err);
+  }
 }
 
 async function logEvent(env, accountId, actorId, kind, subjectId, payload) {
@@ -291,6 +313,8 @@ app.post("/api/signup", async (c) => {
 
   await logEvent(c.env, accountId, userId, "account.created", accountId,
     { kind, plan, subdomain, viaAuth: realAuth });
+  await logActivity(c.env, accountId, userId, "account_created",
+    `${personName} created this account on the ${plan === "scale" ? "Scale" : "Basic"} plan`);
 
   return c.json({
     ok: true, accountId, userId, subdomain, kind,
@@ -679,6 +703,8 @@ app.post("/api/subs", requireRole("admin", "pm"), async (c) => {
   }
 
   await logEvent(c.env, accountId, userId, "engagement.invited", engagementId, { companyId, reused: !!company });
+  await logActivity(c.env, accountId, userId, "sub_added",
+    `Added ${await companyName(c.env.DB, companyId)}`);
   return c.json({ companyId, engagementId, reused: !!company }, 201);
 });
 
@@ -1013,6 +1039,7 @@ app.post("/api/jobs", requireRole("admin", "pm"), async (c) => {
     JSON.stringify(b.measurementDocs || []), userId).run();
 
   await logEvent(c.env, accountId, userId, "job.created", id, { title: b.title });
+  await logActivity(c.env, accountId, userId, "job_created", `Created job ${b.title}`);
   return c.json({ id }, 201);
 });
 
@@ -1023,6 +1050,8 @@ app.post("/api/jobs/:id/complete", requireRole("admin", "pm"), async (c) => {
     `UPDATE jobs SET status = 'completed', completed_at = ? WHERE id = ? AND account_id = ?`
   ).bind(new Date().toISOString().slice(0, 10), id, accountId).run();
   await logEvent(c.env, accountId, userId, "job.completed", id, {});
+  { const j = await c.env.DB.prepare(`SELECT title FROM jobs WHERE id = ?`).bind(id).first();
+    await logActivity(c.env, accountId, userId, "job_completed", `Completed ${j?.title || "a job"}`); }
   return c.json({ ok: true });
 });
 
@@ -1089,6 +1118,8 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
     autoScheduled ? null : (responseWindow || "24h"), respondBy).run();
 
   await logEvent(c.env, accountId, userId, "wo.issued", id, { jobId, trade, companyId, woNumber });
+  await logActivity(c.env, accountId, userId, "wo_issued",
+    `Issued ${woNumber} to ${await companyName(c.env.DB, companyId)} · ${trade}`);
   return c.json({ id, woNumber, status: autoScheduled ? "accepted" : "pending" }, 201);
 });
 
@@ -1230,6 +1261,9 @@ app.post("/api/subs/:companyId/documents/:kind/review", requireRole("admin", "pm
     .bind(JSON.stringify(docReview), engagement.id).run();
 
   await logEvent(c.env, accountId, userId, "doc.reviewed", companyId, { kind, status: body.status });
+  await logActivity(c.env, accountId, userId,
+    body.status === "verified" ? "doc_verified" : "doc_rejected",
+    `${body.status === "verified" ? "Verified" : "Rejected"} ${kind} for ${await companyName(c.env.DB, companyId)}`);
   return c.json({ ok: true });
 });
 
@@ -1398,6 +1432,8 @@ app.post("/api/service-calls", requireRole("admin", "pm"), async (c) => {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(id, accountId, b.jobId, b.trade, b.subId, b.crewName || null, b.kind, b.issue || null,
     b.returnDate || null, b.raisedBy || userId).run();
+  await logActivity(c.env, accountId, userId, "service_call",
+    `Raised a ${b.kind === "warranty" ? "warranty claim" : "callback"} on ${await companyName(c.env.DB, b.subId)}`);
   return c.json({ id }, 201);
 });
 
@@ -1454,6 +1490,7 @@ app.post("/api/properties", requireRole("admin", "pm"), async (c) => {
   ).bind(id, accountId, name, b.address || null, b.city || null, b.state || null,
     b.zip || null, b.units === "" || b.units == null ? null : Number(b.units), b.notes || null).run();
   await logEvent(c.env, accountId, c.get("auth").userId, "property.created", id, { name });
+  await logActivity(c.env, accountId, c.get("auth").userId, "property_added", `Added property ${name}`);
   return c.json({ id }, 201);
 });
 
@@ -1576,6 +1613,8 @@ app.post("/api/change-orders", async (c) => {
   ).bind(id, wo.id, next.n, b.kind || "added", origin, b.scope || "",
     Number(b.valueDelta) || 0, userId, b.respondBy || null, b.note || null).run();
   await logEvent(c.env, accountId, userId, "change_order.raised", id, { workOrderId: wo.id, seq: next.n, origin });
+  await logActivity(c.env, accountId, userId, "change_order",
+    `Change order #${next.n} raised by the ${origin === "sub" ? "subcontractor" : "general contractor"}`);
   return c.json({ id, seq: next.n }, 201);
 });
 
@@ -1602,6 +1641,8 @@ app.post("/api/change-orders/:id/respond", async (c) => {
     `UPDATE change_orders SET status = ?, responded_at = CURRENT_TIMESTAMP WHERE id = ?`
   ).bind(b.status, co.id).run();
   await logEvent(c.env, accountId, c.get("auth").userId, "change_order." + b.status, co.id, { workOrderId: co.work_order_id, seq: co.seq });
+  await logActivity(c.env, accountId, c.get("auth").userId, "change_order",
+    `Change order #${co.seq} ${b.status}`);
   return c.json({ ok: true });
 });
 
@@ -1617,6 +1658,245 @@ app.get("/api/work-orders/:id/revised", async (c) => {
   if (!row) return c.json({ error: "not_found" }, 404);
   return c.json({ id: row.id, originalCents: row.original_cents,
     revisedCents: row.revised_cents, pendingCount: row.pending_count });
+});
+
+// ---------------------------------------------------------------------------
+// Platform console — SubSub's own staff
+// ---------------------------------------------------------------------------
+// Staff are deliberately not a role in the app's own role table: they get a
+// separate surface on a separate hostname, checked here on every route.
+//
+// This gate is the whole reason the console can be deployed at all. It refuses
+// outright unless real auth is configured, so a console built without Supabase
+// cannot be signed into by anyone, and it re-reads the superadmins table on
+// every request rather than trusting anything the browser sends.
+//
+// Still missing before admin.subsub.work should exist: SSO or hardware keys in
+// front of this, since it is the one login that can reach every account.
+async function requireStaff(c) {
+  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) {
+    return { error: c.json({ error: "auth_not_configured" }, 501) };
+  }
+  const supaUser = await verifySupabaseToken(c.env, c.req.header("Authorization"));
+  if (!supaUser) return { error: c.json({ error: "unauthorized" }, 401) };
+
+  const row = await c.env.DB.prepare(
+    `SELECT u.id, u.name, u.email, s.role, s.finance, s.impersonate
+       FROM users u JOIN superadmins s ON s.user_id = u.id
+      WHERE u.auth_id = ? OR lower(u.email) = lower(?)`
+  ).bind(supaUser.id, supaUser.email || "").first();
+  // A valid Supabase session is not staff membership. Someone with a customer
+  // login must get nothing here.
+  if (!row) return { error: c.json({ error: "forbidden" }, 403) };
+
+  return { staff: {
+    userId: row.id, name: row.name, email: row.email, role: row.role,
+    finance: !!row.finance && row.role === "superadmin",
+    impersonate: !!row.impersonate && row.role === "superadmin",
+  } };
+}
+
+// Who am I, and what may I see? The console calls this before rendering.
+app.get("/api/platform/me", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  return c.json(staff);
+});
+
+// Financial figures are superadmin-only, and the check is here rather than in
+// the interface: a standard user calling this directly gets 403, not numbers.
+app.get("/api/platform/revenue", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  if (!staff.finance) return c.json({ error: "forbidden" }, 403);
+
+  const [subEvents, invoices, accounts] = await Promise.all([
+    c.env.DB.prepare(`SELECT * FROM subscription_events ORDER BY at`).all(),
+    c.env.DB.prepare(`SELECT * FROM invoices ORDER BY period_start DESC LIMIT 200`).all(),
+    c.env.DB.prepare(`SELECT id, name, plan, billing FROM accounts`).all(),
+  ]);
+  // Normalized: an annual plan counts as its monthly twelfth, or the number
+  // means nothing once the mix moves.
+  const mrrCents = accounts.results.reduce((n, a) =>
+    n + (a.plan === "scale" ? (a.billing === "annual" ? Math.round(99000 / 12) : 9900) : 0), 0);
+  return c.json({
+    mrrCents, arrCents: mrrCents * 12,
+    subscriptionEvents: subEvents.results,
+    invoices: invoices.results,
+  });
+});
+
+app.get("/api/platform/health", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  if (!staff.finance) return c.json({ error: "forbidden" }, 403);
+  const row = await c.env.DB.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM accounts)   AS accounts,
+       (SELECT COUNT(*) FROM users)      AS users,
+       (SELECT COUNT(*) FROM companies)  AS companies,
+       (SELECT COUNT(*) FROM jobs WHERE status = 'active')   AS active_jobs,
+       (SELECT COUNT(*) FROM work_orders WHERE status = 'pending') AS pending_wos,
+       (SELECT COUNT(*) FROM change_orders WHERE status = 'pending') AS pending_cos`
+  ).first();
+  return c.json(row);
+});
+
+// The account list. A standard user may see it, without the money columns.
+app.get("/api/platform/accounts", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const { results } = await c.env.DB.prepare(
+    `SELECT a.id, a.name, a.subdomain, a.kind, a.plan, a.billing, a.created_at,
+            (SELECT COUNT(*) FROM memberships m WHERE m.account_id = a.id AND m.role <> 'contractor') AS users,
+            (SELECT COUNT(*) FROM engagements e WHERE e.account_id = a.id) AS subs,
+            (SELECT COUNT(*) FROM jobs j WHERE j.account_id = a.id) AS jobs
+       FROM accounts a ORDER BY a.created_at DESC`
+  ).all();
+  const rows = results.map((a) => {
+    const base = { id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind,
+      plan: a.plan, billing: a.billing, createdAt: a.created_at,
+      users: a.users, subs: a.subs, jobs: a.jobs };
+    if (!staff.finance) return base;   // omitted, not hidden in the interface
+    return { ...base, mrrCents: a.plan === "scale"
+      ? (a.billing === "annual" ? Math.round(99000 / 12) : 9900) : 0 };
+  });
+  return c.json(rows);
+});
+
+// The global company registry — the one place a lapsed license is visible
+// across every account engaging that company.
+app.get("/api/platform/companies", async (c) => {
+  const { error } = await requireStaff(c);
+  if (error) return error;
+  const { results } = await c.env.DB.prepare(
+    `SELECT co.id, co.company, co.license, co.state, co.city,
+            (SELECT COUNT(*) FROM engagements e WHERE e.company_id = co.id) AS accounts,
+            (SELECT lc.status FROM license_checks lc WHERE lc.company_id = co.id
+              ORDER BY lc.checked_at DESC LIMIT 1) AS license_status
+       FROM companies co ORDER BY co.company`
+  ).all();
+  return c.json(results);
+});
+
+// One account's activity stream. This is the first place support looks when a
+// customer says somebody changed something.
+app.get("/api/platform/activity/:accountId", async (c) => {
+  const { error } = await requireStaff(c);
+  if (error) return error;
+  const { results } = await c.env.DB.prepare(
+    `SELECT a.*, u.name AS user_name FROM activity a
+       LEFT JOIN users u ON u.id = a.user_id
+      WHERE a.account_id = ? ORDER BY a.at DESC LIMIT 200`
+  ).bind(c.req.param("accountId")).all();
+  return c.json(results.map((r) => ({
+    id: r.id, accountId: r.account_id, at: r.at, userId: r.user_id,
+    userName: r.user_name, kind: r.kind, text: r.text, meta: parseJson(r.meta),
+  })));
+});
+
+// Everything the console renders, in the shapes its screens already derive
+// from. One call rather than six, because every screen cross-references the
+// others (an account row counts its own users, subs and jobs).
+//
+// This returns the whole platform. That is fine at this size and will not be:
+// once there are thousands of accounts this needs pagination, and the per-
+// account rollups belong in platform_daily_stats rather than being recomputed
+// in the browser on every load.
+app.get("/api/platform/bootstrap", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+
+  const [accounts, users, memberships, companies, engagements, jobs, subEvents, activity] =
+    await Promise.all([
+      c.env.DB.prepare(`SELECT * FROM accounts`).all(),
+      c.env.DB.prepare(`SELECT id, name, email, phone FROM users`).all(),
+      c.env.DB.prepare(`SELECT user_id, account_id, role, company_id FROM memberships`).all(),
+      c.env.DB.prepare(`SELECT id, company, license, ubi, city, state, zip, warranty FROM companies`).all(),
+      c.env.DB.prepare(`SELECT id, account_id, company_id, status, categories, rating, rated_jobs FROM engagements`).all(),
+      c.env.DB.prepare(`SELECT id, account_id, title, status, date, completed_at, created_at FROM jobs`).all(),
+      c.env.DB.prepare(`SELECT * FROM subscription_events ORDER BY at`).all(),
+      c.env.DB.prepare(
+        `SELECT a.*, u.name AS user_name FROM activity a
+           LEFT JOIN users u ON u.id = a.user_id
+          ORDER BY a.at DESC LIMIT 500`).all(),
+    ]);
+
+  // The last work order per job is what the console's "expired response"
+  // count walks, so hand back enough of it to compute that.
+  const { results: wos } = await c.env.DB.prepare(
+    `SELECT id, job_id, trade, company_id, status, respond_by, value_cents FROM work_orders WHERE voided_at IS NULL`
+  ).all();
+  const byJob = {};
+  wos.forEach((w) => {
+    (byJob[w.job_id] ||= {})[w.trade] = {
+      subId: w.company_id, status: w.status, respondBy: w.respond_by, value: w.value_cents,
+    };
+  });
+
+  return c.json({
+    // Financial figures are omitted for a standard user here too, not just on
+    // the dedicated revenue route — otherwise the omission is cosmetic.
+    accounts: accounts.results.map((a) => ({
+      id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind,
+      plan: a.plan, billing: a.billing, createdAt: (a.created_at || "").slice(0, 10),
+      status: "active",
+    })),
+    users: users.results,
+    memberships: memberships.results.map((m) => ({
+      userId: m.user_id, accountId: m.account_id, role: m.role, companyId: m.company_id,
+    })),
+    companies: companies.results,
+    engagements: engagements.results.map((e) => ({
+      id: e.id, accountId: e.account_id, companyId: e.company_id, status: e.status,
+      categories: parseJson(e.categories, []), rating: e.rating, ratedJobs: e.rated_jobs,
+    })),
+    jobs: jobs.results.map((j) => ({
+      id: j.id, accountId: j.account_id, title: j.title, status: j.status,
+      date: j.date, completedAt: j.completed_at,
+      createdAt: (j.created_at || "").slice(0, 10),
+      assignments: byJob[j.id] || {},
+    })),
+    subEvents: staff.finance ? subEvents.results.map((e) => ({
+      id: e.id, accountId: e.account_id, at: e.at, kind: e.kind,
+      fromPlan: e.from_plan, toPlan: e.to_plan, cycle: e.cycle, mrrDelta: e.mrr_delta_cents,
+    })) : [],
+    activity: activity.results.map((r) => ({
+      id: r.id, accountId: r.account_id, at: r.at, userId: r.user_id,
+      userName: r.user_name, kind: r.kind, text: r.text,
+    })),
+  });
+});
+
+// Signing in as a customer is audited before the session is handed over, not
+// after. The banner in the interface is not the audit trail.
+app.post("/api/platform/impersonate/:accountId", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  if (!staff.impersonate) return c.json({ error: "forbidden" }, 403);
+  const accountId = c.req.param("accountId");
+  const b = await c.req.json().catch(() => ({}));
+
+  const account = await c.env.DB.prepare(`SELECT id, name FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!account) return c.json({ error: "not_found" }, 404);
+  const target = await c.env.DB.prepare(
+    `SELECT user_id FROM memberships WHERE account_id = ? AND role = 'admin' LIMIT 1`
+  ).bind(accountId).first();
+  if (!target) return c.json({ error: "no_admin_on_account" }, 409);
+
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO activity (id, account_id, at, user_id, kind, text, meta)
+       VALUES (?, ?, datetime('now'), NULL, 'impersonation', ?, ?)`
+    ).bind(uid(), accountId, `${staff.name} signed in as this account`,
+      JSON.stringify({ staffUserId: staff.userId, reason: b.reason || null })),
+    c.env.DB.prepare(
+      `INSERT INTO events (account_id, actor_id, kind, subject_id, payload)
+       VALUES (?, ?, 'impersonation_started', ?, ?)`
+    ).bind(accountId, staff.userId, accountId,
+      JSON.stringify({ reason: b.reason || null, staffEmail: staff.email })),
+  ]);
+  return c.json({ ok: true, accountId, accountName: account.name, actAsUserId: target.user_id });
 });
 
 export default app;

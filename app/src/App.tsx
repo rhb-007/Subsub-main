@@ -1265,6 +1265,21 @@ export default function SubSub() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [publicView, setPublicView] = useState(BUILD === "platform" ? "superadmin" : "login"); // login | signup | superadmin
   const [superadminView, setSuperadminView] = useState(false);   // SubSub staff console
+  // What the SERVER says this staff user may do. Never derived in the browser:
+  // the same flags are re-checked on every platform request.
+  const [staff, setStaff] = useState(null);
+  // The console's own data, straight from the API. Null until it loads, so the
+  // screens never quietly render seed figures as if they were real.
+  const [platform, setPlatform] = useState(null);
+  const [platformErr, setPlatformErr] = useState("");
+  useEffect(() => {
+    if (!staff) { setPlatform(null); return; }
+    let live = true;
+    api.platform.bootstrap()
+      .then((d) => { if (live) { setPlatform(d); setPlatformErr(""); } })
+      .catch((e) => { if (live) setPlatformErr(e?.message || "load_failed"); });
+    return () => { live = false; };
+  }, [staff]);
   const [impersonating, setImpersonating] = useState(null);  // { by, account }
   const [subEvents] = useState(seedSubscriptionEvents);
   const [activity, setActivity] = useState(seedActivity);
@@ -2060,7 +2075,7 @@ export default function SubSub() {
         <style>{CSS}</style>
         {BUILD === "platform" && publicView === "superadmin" ? (
           <SuperadminLogin users={users}
-            onLogin={(uid) => { setCurrentUserId(uid); setSuperadminView(true); setLoggedIn(true); }} />
+            onLogin={(me) => { setStaff(me); setCurrentUserId(me.userId); setSuperadminView(true); setLoggedIn(true); }} />
         ) : publicView === "signup" ? (
           <SubSignup brand={brand}
             onSubmit={(data) => api.applyToAccount(brand.subdomain, data)}
@@ -2086,13 +2101,30 @@ export default function SubSub() {
   }
 
   if (superadminView && BUILD === "platform") {
-    const admin = seedSuperadmins.find((p) => p.userId === currentUserId) || { finance: false, impersonate: false };
+    const admin = staff || { role: "standard", finance: false, impersonate: false };
+    // With real staff auth the data is the API's. The seed arrays are only a
+    // fallback for the development picker, which no built bundle contains.
+    const P = platform || (staff ? null : {
+      accounts, users, memberships, companies, engagements, jobs: allJobs,
+      subEvents, activity,
+    });
+    if (!P) {
+      return (
+        <div className="ss-root"><style>{CSS}</style>
+          <div className="sa-page"><div className="sa-card">
+            <div className="sa-brand"><SubSubLogo height={26} /><span className="pf-tag">Platform</span></div>
+            <h1>{platformErr ? "Could not load" : "Loading…"}</h1>
+            {platformErr && <p className="sa-lede">{platformErr}</p>}
+          </div></div>
+        </div>
+      );
+    }
     return (
       <div className="ss-root">
         <style>{CSS}</style>
-        <SuperadminConsole me={me} admin={admin} accounts={accounts} users={users} memberships={memberships}
-          companies={companies} engagements={engagements} jobs={allJobs} subEvents={subEvents}
-          activity={activity}
+        <SuperadminConsole me={me} admin={admin} accounts={P.accounts} users={P.users} memberships={P.memberships}
+          companies={P.companies} engagements={P.engagements} jobs={P.jobs} subEvents={P.subEvents}
+          activity={P.activity}
           onAddUser={(accountId, u) => {
             const id = "u" + Date.now();
             setUsers((us) => [...us, { id, name: u.name.trim(), email: u.email.trim(), role: u.role }]);
@@ -2104,8 +2136,24 @@ export default function SubSub() {
             const what = Object.entries(patch).map(([k, v]) => `${k} → ${v}`).join(", ");
             logEvent("plan_changed", `Superadmin ${me.name} changed ${what}`, { accountId: id, userId: null });
           }}
-          onImpersonate={(acct) => {
-            // land as that account's first admin, read-only banner up, audited in production
+          onImpersonate={async (acct) => {
+            // The server decides. It re-checks the impersonate flag, picks the
+            // account's admin, and writes the audit row BEFORE handing the
+            // session over — the banner in the interface is not the record.
+            if (staff) {
+              try {
+                const r = await api.platform.impersonate(acct.id);
+                setImpersonating({ by: me.name, account: acct });
+                setCurrentAccountId(r.accountId); setCurrentUserId(r.actAsUserId);
+                setTab("dashboard"); setSuperadminView(false);
+              } catch (e) {
+                setPlatformErr(e?.status === 403
+                  ? "You do not have permission to sign in as an account."
+                  : (e?.message || "Could not start that session."));
+              }
+              return;
+            }
+            // Development picker only — no server, so nothing is audited.
             const mem = memberships.find((m) => m.accountId === acct.id && m.role === "admin");
             if (!mem) return;
             setImpersonating({ by: me.name, account: acct });
@@ -2113,7 +2161,8 @@ export default function SubSub() {
             setCurrentAccountId(acct.id); setCurrentUserId(mem.userId);
             setTab("dashboard"); setSuperadminView(false);
           }}
-          onSignOut={() => { setSuperadminView(false); setLoggedIn(false); setPublicView("superadmin"); }} />
+          onSignOut={() => { setStaff(null); setSuperadminView(false); setLoggedIn(false);
+            setPublicView("superadmin"); if (supabaseEnabled) supabase.auth.signOut(); }} />
       </div>
     );
   }
@@ -3372,13 +3421,56 @@ function SuperadminLogin({ users, onLogin }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
   const staff = users.filter((u) => u.platform);
-  const submit = (e) => {
+
+  // The seeded staff picker is a development convenience and nothing else. It
+  // exists only when Vite is serving from source; a built bundle never has it,
+  // so it cannot ship to a real hostname by accident.
+  const devPicker = import.meta.env.DEV && !supabaseEnabled;
+
+  const submit = async (e) => {
     e.preventDefault();
-    const u = staff.find((x) => x.email.toLowerCase() === email.trim().toLowerCase());
-    if (!u || !pw) { setErr("Wrong email or password."); return; }
-    onLogin(u.id);
+    if (!supabaseEnabled) {
+      setErr("This build has no authentication configured, so nobody can sign in.");
+      return;
+    }
+    setErr(""); setBusy(true);
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pw });
+    if (error) { setBusy(false); setErr("Wrong email or password."); return; }
+    // A valid session is not staff membership. The server re-reads the
+    // superadmins table and refuses a customer login outright.
+    try {
+      const me = await api.platform.me();
+      setBusy(false);
+      onLogin(me);
+    } catch (e2) {
+      await supabase.auth.signOut();
+      setBusy(false);
+      setErr(e2?.status === 403
+        ? "That account is not a SubSub staff account."
+        : "Could not verify staff access. Try again.");
+    }
   };
+
+  // Refuse outright rather than presenting a form that cannot work. Without
+  // this, a console built without Supabase would sign anyone in who typed a
+  // seeded address and any password at all.
+  if (!supabaseEnabled && !devPicker) {
+    return (
+      <div className="sa-page">
+        <div className="sa-card">
+          <div className="sa-brand"><SubSubLogo height={26} /><span className="pf-tag">Platform</span></div>
+          <h1>Not configured</h1>
+          <p className="sa-lede">
+            This console was built without authentication, so it will not sign anyone in.
+            Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY and rebuild.
+          </p>
+        </div>
+        <p className="sa-foot">SubSub, LLC · internal use only</p>
+      </div>
+    );
+  }
   return (
     <div className="sa-page">
       <div className="sa-card">
@@ -3395,14 +3487,21 @@ function SuperadminLogin({ users, onLogin }) {
               onChange={(e) => { setPw(e.target.value); setErr(""); }} />
           </label>
           {err && <p className="wl-err">{err}</p>}
-          <button className="sa-btn" type="submit"><LogIn size={15} /> Sign in</button>
+          <button className="sa-btn" type="submit" disabled={busy}>
+            <LogIn size={15} /> {busy ? "Checking…" : "Sign in"}
+          </button>
         </form>
+        {devPicker && (
         <div className="sa-staff">
-          <div className="ld-label">Accounts — tap to sign in</div>
+          <div className="ld-label">Development only — no authentication configured</div>
           {staff.map((u) => {
             const sa = seedSuperadmins.find((p) => p.userId === u.id);
             return (
-              <button key={u.id} type="button" className="ld-row" onClick={() => onLogin(u.id)}>
+              <button key={u.id} type="button" className="ld-row"
+                onClick={() => onLogin({ userId: u.id, name: u.name, email: u.email,
+                  role: sa?.role || "standard",
+                  finance: sa?.role === "superadmin" && !!sa?.finance,
+                  impersonate: sa?.role === "superadmin" && !!sa?.impersonate })}>
                 <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
                 <span className="ld-main"><span className="ld-name">{u.name}</span><span className="ld-email">{u.email}</span></span>
                 <span className={`pf-tag ${sa?.role === "standard" ? "std" : ""}`}>{STAFF_ROLE_LABEL[sa?.role] || "Standard"}</span>
@@ -3410,6 +3509,7 @@ function SuperadminLogin({ users, onLogin }) {
             );
           })}
         </div>
+        )}
       </div>
       <p className="sa-foot">SubSub, LLC · internal use only · every action is recorded</p>
     </div>

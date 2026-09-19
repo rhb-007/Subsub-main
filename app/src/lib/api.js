@@ -138,4 +138,20 @@ export const api = {
   respondToChangeOrder: (id, status) =>
     request(`/change-orders/${id}/respond`, { method: "POST", body: JSON.stringify({ status }) }),
   getWorkOrderRevised: (woId) => request(`/work-orders/${woId}/revised`),
+
+  // Platform console. Every one of these is refused server-side unless the
+  // caller holds a real session AND has a row in `superadmins`; the financial
+  // ones additionally require the finance flag.
+  platform: {
+    me: () => request("/platform/me"),
+    bootstrap: () => request("/platform/bootstrap"),
+    accounts: () => request("/platform/accounts"),
+    companies: () => request("/platform/companies"),
+    revenue: () => request("/platform/revenue"),
+    health: () => request("/platform/health"),
+    activity: (accountId) => request(`/platform/activity/${encodeURIComponent(accountId)}`),
+    impersonate: (accountId, reason) =>
+      request(`/platform/impersonate/${encodeURIComponent(accountId)}`,
+        { method: "POST", body: JSON.stringify({ reason: reason || null }) }),
+  },
 };

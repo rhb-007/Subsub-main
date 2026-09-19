@@ -364,37 +364,52 @@ none of the first account's properties, its writes against a foreign
 property id affect zero rows, and a foreign property id passed to the
 vendor-scoping endpoint is dropped rather than trusted.
 
-### What is NOT wired — read this before launching the console
+### The platform console
 
-**The platform console has no backend at all.** It runs entirely on seed
-data in the browser. The tables exist; nothing reads or writes them, and
-there are no `/api/platform/*` routes. In particular:
+It now has a backend, and the gate is the point of it.
 
-- **Staff sign-in is not real.** The console's login accepts a seeded staff
-  user with no password check. Do not deploy `admin.subsub.work` until it
-  authenticates properly — the deployment doc asks for SSO or hardware
-  keys, and this is the one login that can open every account.
-- **Role gating is UI-only.** The standard staff role correctly sees only
-  Accounts and Companies in the interface, but nothing enforces that on the
-  server. Per the deployment doc, a standard user hitting
-  `/platform/revenue` or `/platform/health` must get a 403, and account
-  list responses must omit `mrr_cents` and `gmv_cents` for them. Enforce it
-  in the API, not just the UI.
-- **Impersonation is not audited.** The UI banner is not an audit trail.
-  Every sign-in-as needs an `events` row written server-side before the
-  session is handed over.
-- **Revenue numbers are fiction.** MRR, ARR and GMV come from seed arrays.
-  Real figures need `subscription_events` populated and `invoices` mirrored
-  from Stripe webhooks, reconciled nightly — never derived from the
-  accounts table alone, because comped, dunning and failed payments all
-  break that.
-- **The activity stream is browser-local.** `logEvent()` appends to React
-  state, so it is lost on reload and invisible to the console. It needs to
-  write to the `activity` table through an endpoint.
+**Nothing reaches a platform route without real staff credentials.** Every
+`/api/platform/*` handler calls the same check first. With no Supabase
+configured it returns 501 and the console cannot be signed into by anyone —
+verified, including that the tenant dev-stub headers do not open it. With
+Supabase configured it verifies the session and then re-reads the
+`superadmins` table on every request: a valid customer login gets 403, an
+absent or bogus token gets 401.
 
-`/api/apply/:subdomain` still has no rate limiting and no CAPTCHA, as noted
-above, and that remains true now that the application form is reachable
-from more places.
+**Role enforcement is server-side, not cosmetic.** A standard staff user
+gets 403 from the revenue and health routes, and the account list and the
+console bootstrap simply omit the money — `mrrCents` is not in the payload,
+and subscription history comes back empty. Verified with a real subscription
+event present, so the empty array means withheld rather than absent.
+
+**Impersonation is audited before the session is handed over.** The endpoint
+re-checks the flag, picks the account's admin server-side, and writes both an
+`activity` row and an `events` row in one batch. The banner in the interface
+is not the record. A standard user is refused.
+
+**The activity stream is real.** The app writes a rendered sentence at the
+moment each thing happens — account created, subcontractor added, job created
+and completed, work order issued, document verified or rejected, property
+added, change order raised and answered, callback raised. The console reads
+them back attributed to the user who acted. A logging failure never fails the
+request that caused it.
+
+The console's screens render this data through one `/api/platform/bootstrap`
+call, in the shapes the screens already derive from. That call returns the
+whole platform, which is fine now and will not be: past a few thousand
+accounts it needs pagination, and the per-account rollups belong in
+`platform_daily_stats` rather than being recomputed in the browser.
+
+**Still to do before `admin.subsub.work` exists:**
+
+- **SSO or hardware keys in front of staff sign-in.** The gate is real, but
+  it is still a password. This is the one login that can reach every account.
+- **Revenue is derived from plan state, not from money collected.** Stripe
+  has to be the source of truth: mirror invoices from webhooks, reconcile
+  nightly, alert on drift. Comped, dunning and failed payments all break a
+  figure derived from the accounts table.
+- **`platform_daily_stats` is never populated.** Nothing writes the nightly
+  rollup yet, so MRR over time is computed live.
 
 ## Account type
 
