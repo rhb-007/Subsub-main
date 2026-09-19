@@ -4,6 +4,8 @@
 <!-- build: v12 2026-09-18 22:19 UTC -->
 <meta charset="utf-8">
 <meta name="build" content="v12 2026-09-18 22:19 UTC">
+<!-- Where the API lives. Must be a hostname mapped to the subsub-api Worker. -->
+<meta name="subsub-api" content="https://api.subsub.work/api">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="Create your SubSub account, name your company and invite your first subcontractors. They build their own profiles and upload their own documents.">
 <title>Set Up Your Account | SubSub</title>
@@ -810,8 +812,118 @@ body.nav-open{overflow:hidden}
     document.getElementById('goApp').setAttribute('href', PLANS[plan].branding
       ? 'https://' + (sub.value.trim() || 'yourcompany') + '.subsub.work'
       : 'https://app.subsub.work');
-    go(4);
+    createAccount(function(){ go(4); });
   }
+
+  /* ---- create the account for real -------------------------------------
+     Until this call lands there is no account: everything above is a form.
+     The API is on its own host, so this is a cross-origin POST (the Worker
+     sends CORS headers for /api/*). The password goes in the body over TLS,
+     never in the URL. */
+  // The API lives on its own hostname, so this is cross-origin. Change the
+  // meta tag in <head> rather than this script if the Worker moves; a local
+  // page talks to a local worker so the flow can be exercised end to end.
+  var API = (document.querySelector('meta[name="subsub-api"]') || {}).content
+    || (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)
+        ? 'http://127.0.0.1:8787/api'
+        : 'https://api.subsub.work/api');
+  var KINDS = {
+    'General contractor': 'general_contractor',
+    'Property manager': 'property_manager',
+    'Building owner': 'building_owner',
+    'Commercial portfolio manager': 'portfolio_manager'
+  };
+  var FIELD_ERRORS = {
+    subdomain_taken: 'That sign-in address is already taken. Pick another.',
+    email_in_use: 'That email already has an account. Sign in instead.',
+    invalid_subdomain: 'That sign-in address cannot be used. Use 3-40 letters, numbers or dashes.',
+    invalid_email: 'That email address does not look right.',
+    weak_password: 'Use a password of at least 8 characters.',
+    company_required: 'Enter your company name.',
+    name_required: 'Enter your name.',
+    rate_limited: 'Too many attempts from this connection. Try again in an hour.',
+    auth_unreachable: 'We could not reach the sign-in service. Try again in a moment.'
+  };
+
+  // The message has to live on whichever step the person is sent back to,
+  // or it renders inside a hidden step and they see nothing explaining why
+  // the form bounced them.
+  function showSignupError(msg){
+    var prior = document.getElementById('signupErr');
+    if(prior) prior.remove();
+    var step = document.querySelector('.step[data-on]');
+    if(!step) return;
+    var box = document.createElement('p');
+    box.id = 'signupErr';
+    box.setAttribute('role','alert');
+    box.setAttribute('tabindex','-1');
+    box.style.cssText = 'margin:14px 0 0;padding:12px 14px;border-radius:9px;'
+      + 'background:#fdf1ef;border:1px solid #e9c4bd;color:#8a2f1c;font-size:14.5px';
+    box.textContent = msg;
+    var form = step.querySelector('form');
+    if(form){ form.parentNode.insertBefore(box, form); } else { step.appendChild(box); }
+    box.focus();
+    box.scrollIntoView({behavior:'smooth', block:'center'});
+  }
+
+  var creating = false;
+  function createAccount(done){
+    if(creating) return;
+    creating = true;
+    var btns = document.querySelectorAll('#f3 button, #skipInv');
+    Array.prototype.forEach.call(btns, function(b){ b.disabled = true; });
+    var prior = document.getElementById('signupErr');
+    if(prior) prior.remove();
+
+    var roleEl = document.querySelector('input[name="role"]:checked');
+    var payload = {
+      kind: KINDS[roleEl ? roleEl.value : ''] || 'general_contractor',
+      name: document.getElementById('name').value.trim(),
+      email: document.getElementById('email').value.trim(),
+      phone: (document.getElementById('phone') || {}).value || '',
+      password: document.getElementById('pw').value,
+      company: company.value.trim(),
+      subdomain: (sub.value.trim() || company.value.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,20)),
+      plan: plan,
+      billing: billing
+    };
+
+    fetch(API + '/signup', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    }).then(function(r){
+      return r.json().catch(function(){ return {}; }).then(function(body){
+        return {ok: r.ok, status: r.status, body: body};
+      });
+    }).then(function(res){
+      Array.prototype.forEach.call(btns, function(b){ b.disabled = false; });
+      creating = false;
+      if(!res.ok){
+        var code = res.body && res.body.error;
+        if(code === 'subdomain_taken' || code === 'invalid_subdomain'){ go(2); }
+        else if(code === 'email_in_use' || code === 'invalid_email' || code === 'weak_password'){ go(1); }
+        showSignupError(FIELD_ERRORS[code] || 'We could not create the account. Please try again.');
+        if(code === 'subdomain_taken' || code === 'invalid_subdomain'){ sub.focus(); }
+        return;
+      }
+      if(res.body.subdomain){
+        document.getElementById('goApp').setAttribute('href',
+          'https://' + res.body.subdomain + '.subsub.work');
+      }
+      if(res.body.needsConfirmation){
+        var dl = document.getElementById('doneLine');
+        if(dl){ dl.textContent = 'Check ' + payload.email + ' for a confirmation link, '
+          + 'then sign in. Your subcontractor invites are on their way too.'; }
+      }
+      done();
+    }).catch(function(){
+      Array.prototype.forEach.call(btns, function(b){ b.disabled = false; });
+      creating = false;
+      showSignupError('We could not reach the server. Check your connection and try again.');
+    });
+  }
+
   document.getElementById('f3').addEventListener('submit', function(e){
     e.preventDefault(); finishUp(false);
   });

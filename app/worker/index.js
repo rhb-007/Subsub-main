@@ -118,7 +118,8 @@ app.use("/api/*", async (c, next) => {
   // /api/apply/* is the public subcontractor-application form — genuinely
   // unauthenticated, since the applicant has no session at all yet (that's
   // exactly what a successful application eventually leads to).
-  if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path.startsWith("/api/apply/")
+  if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path === "/api/signup"
+    || c.req.path.startsWith("/api/apply/")
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
 
   const accountId = c.req.header("X-Account-Id");
@@ -207,7 +208,102 @@ app.get("/api/auth/me", async (c) => {
 // needed here. Dedupes the company by license number exactly like the
 // admin's own POST /api/subs, so a contractor who's already on SubSub for
 // another GC doesn't get a duplicate profile.
+// ---------------------------------------------------------------------------
+// Account signup — public, unauthenticated. This is how a customer creates
+// their own workspace from the marketing site's get-started page.
+// ---------------------------------------------------------------------------
+// Creates three rows together: the account, its first user, and an admin
+// membership joining them. In real-auth mode the Supabase user is created
+// first, because a failure there must not leave an orphan account behind.
+app.post("/api/signup", async (c) => {
+  // Two ceilings, because they guard different things. The loose one bounds
+  // probing (a rejected request writes nothing, and somebody mistyping their
+  // subdomain three times is normal). The tight one bounds actual creation,
+  // which is the expensive, abusable half.
+  const attempts = await rateLimit(c.env, "signup-attempt", clientIp(c), { limit: 20, windowMinutes: 60 });
+  if (!attempts.ok) return c.json({ error: "rate_limited" }, 429);
+
+  const b = await c.req.json().catch(() => null);
+  if (!b) return c.json({ error: "bad_request" }, 400);
+
+  const kind = ACCOUNT_KINDS.includes(b.kind) ? b.kind : "general_contractor";
+  const company = String(b.company || "").trim();
+  const personName = String(b.name || "").trim();
+  const email = String(b.email || "").trim().toLowerCase();
+  const phone = String(b.phone || "").trim() || null;
+  const subdomain = validSubdomain(b.subdomain);
+  const plan = b.plan === "scale" ? "scale" : "basic";
+  const billing = b.billing === "annual" ? "annual" : "monthly";
+
+  if (!company) return c.json({ error: "company_required" }, 400);
+  if (!personName) return c.json({ error: "name_required" }, 400);
+  if (!EMAIL_RE.test(email)) return c.json({ error: "invalid_email" }, 400);
+  if (!subdomain) return c.json({ error: "invalid_subdomain" }, 400);
+
+  const realAuth = !!(c.env.SUPABASE_URL && c.env.SUPABASE_ANON_KEY);
+  if (realAuth && String(b.password || "").length < 8) {
+    return c.json({ error: "weak_password" }, 400);
+  }
+
+  // Check both uniqueness constraints up front, so the caller gets a field
+  // name back instead of a bare constraint violation.
+  const [subTaken, emailTaken] = await Promise.all([
+    c.env.DB.prepare(`SELECT id FROM accounts WHERE subdomain = ?`).bind(subdomain).first(),
+    c.env.DB.prepare(`SELECT id FROM users WHERE lower(email) = ?`).bind(email).first(),
+  ]);
+  if (subTaken) return c.json({ error: "subdomain_taken" }, 409);
+  if (emailTaken) return c.json({ error: "email_in_use" }, 409);
+
+  let authId = null, needsConfirmation = false;
+  if (realAuth) {
+    const signed = await supabaseSignUp(c.env, email, b.password);
+    if (!signed.ok) {
+      const status = signed.error === "email_in_use" ? 409
+        : signed.error === "auth_unreachable" ? 502 : 400;
+      return c.json({ error: signed.error, detail: signed.detail }, status);
+    }
+    authId = signed.authId;
+    needsConfirmation = !signed.session;
+  }
+
+  const creations = await rateLimit(c.env, "signup-created", clientIp(c), { limit: 3, windowMinutes: 60 });
+  if (!creations.ok) return c.json({ error: "rate_limited" }, 429);
+
+  const accountId = uid(), userId = uid(), membershipId = uid();
+  try {
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        `INSERT INTO accounts (id, name, subdomain, kind, plan, billing, use_default_mark)
+         VALUES (?, ?, ?, ?, ?, ?, 1)`
+      ).bind(accountId, company, subdomain, kind, plan, billing),
+      c.env.DB.prepare(
+        `INSERT INTO users (id, auth_id, name, email, phone) VALUES (?, ?, ?, ?, ?)`
+      ).bind(userId, authId, personName, email, phone),
+      c.env.DB.prepare(
+        `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, 'admin')`
+      ).bind(membershipId, userId, accountId),
+    ]);
+  } catch (err) {
+    // Two signups racing on the same subdomain or email land here.
+    console.error("[signup] insert failed:", err?.message || err);
+    return c.json({ error: "signup_conflict" }, 409);
+  }
+
+  await logEvent(c.env, accountId, userId, "account.created", accountId,
+    { kind, plan, subdomain, viaAuth: realAuth });
+
+  return c.json({
+    ok: true, accountId, userId, subdomain, kind,
+    // The app is reached at the account's own subdomain once DNS is pointed
+    // at it; the caller decides whether to send them there or to app.*.
+    signInUrl: `https://${subdomain}.subsub.work`,
+    needsConfirmation,
+  }, 201);
+});
+
 app.post("/api/apply/:subdomain", async (c) => {
+  const rl = await rateLimit(c.env, "apply", clientIp(c), { limit: 10, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
   const subdomain = c.req.param("subdomain").trim().toLowerCase();
   const account = await c.env.DB.prepare(`SELECT id FROM accounts WHERE subdomain = ?`).bind(subdomain).first();
   if (!account) return c.json({ error: "unknown_account" }, 404);
@@ -390,6 +486,85 @@ app.get("/api/account-by-subdomain/:subdomain", async (c) => {
 // a stylesheet-injection vector — reject anything that isn't exactly this
 // shape rather than trying to sanitize it.
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+// ---------------------------------------------------------------------------
+// Public-endpoint guards
+// ---------------------------------------------------------------------------
+// A Worker holds no state between requests, so the counter lives in D1. This
+// is a floor, not a wall: it stops one script hammering an endpoint. It does
+// not stop a distributed flood — put Cloudflare's own rate limiting rules and
+// a CAPTCHA in front of these paths too before linking them publicly.
+async function rateLimit(env, kind, key, { limit, windowMinutes }) {
+  const now = new Date();
+  const slot = Math.floor(now.getTime() / (windowMinutes * 60_000));
+  const bucket = `${kind}:${key}`;
+  const window = String(slot);
+  try {
+    await env.DB.prepare(
+      `INSERT INTO rate_limits (bucket, window, hits) VALUES (?, ?, 1)
+       ON CONFLICT (bucket, window) DO UPDATE SET hits = hits + 1`
+    ).bind(bucket, window).run();
+    const row = await env.DB.prepare(
+      `SELECT hits FROM rate_limits WHERE bucket = ? AND window = ?`
+    ).bind(bucket, window).first();
+    return { ok: (row?.hits ?? 0) <= limit, hits: row?.hits ?? 0 };
+  } catch (err) {
+    // A missing table (migration not yet applied) must not take the endpoint
+    // down — fail open and say so in the log rather than 500 on every signup.
+    console.error("[rateLimit] unavailable, allowing request:", err?.message || err);
+    return { ok: true, hits: 0 };
+  }
+}
+
+const clientIp = (c) =>
+  c.req.header("CF-Connecting-IP") || c.req.header("X-Forwarded-For") || "unknown";
+
+// Subdomains become hostnames, so the rules are stricter than a slug: no
+// leading/trailing dash, no double dash, 3-40 chars. The reserved list covers
+// the hostnames the product itself uses plus the usual impersonation risks.
+const SUBDOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/;
+const RESERVED_SUBDOMAINS = new Set([
+  "app", "www", "admin", "api", "platform", "dashboard", "portal", "status",
+  "mail", "smtp", "ftp", "cdn", "assets", "static", "help", "support",
+  "docs", "blog", "billing", "account", "accounts", "login", "signup",
+  "subsub", "test", "staging", "dev", "demo",
+]);
+function validSubdomain(sub) {
+  const s = String(sub || "").trim().toLowerCase();
+  if (!SUBDOMAIN_RE.test(s)) return null;
+  if (s.includes("--")) return null;
+  if (RESERVED_SUBDOMAINS.has(s)) return null;
+  return s;
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+// Create the auth user with Supabase's own signup endpoint. The anon key is
+// the public one and this is exactly what it is for, so no service_role key
+// is needed anywhere in this codebase.
+async function supabaseSignUp(env, email, password) {
+  let res, body;
+  try {
+    res = await fetch(`${env.SUPABASE_URL}/auth/v1/signup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: env.SUPABASE_ANON_KEY },
+      body: JSON.stringify({ email, password }),
+    });
+    body = await res.json();
+  } catch (err) {
+    return { ok: false, error: "auth_unreachable", detail: String(err?.message || err) };
+  }
+  if (!res.ok) {
+    const msg = String(body?.msg || body?.error_description || body?.error || "");
+    if (/already registered|already been registered|User already/i.test(msg)) {
+      return { ok: false, error: "email_in_use" };
+    }
+    if (/password/i.test(msg)) return { ok: false, error: "weak_password", detail: msg };
+    return { ok: false, error: "auth_failed", detail: msg };
+  }
+  // A project with email confirmation on returns a user but no session.
+  return { ok: true, authId: body?.user?.id || body?.id || null, session: !!body?.access_token };
+}
+
 const ACCOUNT_KINDS = ["general_contractor", "property_manager", "building_owner", "portfolio_manager"];
 
 function validTheme(theme) {
