@@ -211,7 +211,7 @@ async function logEvent(env, accountId, actorId, kind, subjectId, payload) {
 async function loginResponse(db, user) {
   const { results: memberships } = await db.prepare(
     `SELECT m.*, a.name as account_name, a.subdomain, a.kind, a.plan, a.billing, a.logo_key,
-            a.use_default_mark, a.theme, a.trades
+            a.use_default_mark, a.theme, a.trades, a.subscription_status, a.current_period_end
      FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
   ).bind(user.id).all();
   return {
@@ -221,6 +221,7 @@ async function loginResponse(db, user) {
       role: m.role, companyId: m.company_id,
       kind: m.kind, plan: m.plan, billing: m.billing, logoKey: m.logo_key, useDefaultMark: !!m.use_default_mark,
       theme: parseJson(m.theme), trades: parseJson(m.trades),
+      subscriptionStatus: m.subscription_status, currentPeriodEnd: m.current_period_end,
     })),
   };
 }
@@ -932,6 +933,10 @@ app.get("/api/account", async (c) => {
     // null when nobody has chosen yet -- which is the cue to ask, and is not
     // the same answer as an empty list.
     trades: parseJson(a.trades),
+    // What Stripe last told us. The app shows the renewal date from this
+    // rather than asking Stripe on every page load.
+    subscriptionStatus: a.subscription_status,
+    currentPeriodEnd: a.current_period_end,
     user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone } : null,
   });
 });

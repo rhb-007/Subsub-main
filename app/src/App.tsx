@@ -1100,6 +1100,15 @@ function formatDay(dateStr) {
   const d = new Date(`${dateStr}T12:00:00`);
   return isNaN(d) ? dateStr : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
+// A renewal date, from a full ISO timestamp rather than a plain date string --
+// Stripe's period end carries a time, and "renews 20 Sep 2027" wants the year
+// because it can be a year away.
+function niceDay(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
 // pretty preview like "Wed, Sep 16 · 7:00 AM"
 function formatWhen(dateStr, timeStr) {
   if (!dateStr) return null;
@@ -1762,7 +1771,7 @@ export default function SubSub() {
   const canBrand = PLANS[plan].branding;
   // Basic includes a single user; Scale is unlimited. Contractor logins don't
   // count against the seat limit — only admins and project managers do.
-  const seatCount = users.filter((u) => u.role !== "contractor").length;
+  const seatCount = accountUsers.filter((u) => u.role !== "contractor").length;
   const atSeatLimit = seatCount >= PLANS[plan].userLimit;
   const addSub = (sub) => {
     logEvent("sub_added", `Added ${sub.company}`);
@@ -2212,6 +2221,7 @@ export default function SubSub() {
       plan: acct.plan, billing: acct.billing,
       logoData: acct.logoKey ? logoUrl(acct.id) : null, useDefaultMark: acct.useDefaultMark,
       theme: acct.theme, trades: acct.trades,
+      subscriptionStatus: acct.subscriptionStatus, currentPeriodEnd: acct.currentPeriodEnd,
     }]);
     if (acct.user) setUsers((prev) => [...prev.filter((u) => u.id !== acct.user.id), acct.user]);
     setCurrentUserId(saved.userId);
@@ -3009,6 +3019,7 @@ export default function SubSub() {
           billing={billing} onSetBilling={setBilling}
           accountKind={kindOf(account)} onSetAccountKind={setAccountKind}
           accountTrades={account.trades} onSetAccountTrades={setAccountTrades}
+          subscriptionStatus={account.subscriptionStatus} currentPeriodEnd={account.currentPeriodEnd}
           canManage={can("account") && role === "admin"} mySub={mySub}
           onSaveUser={updateUser} onSaveBrand={setBrand}
           onUpgrade={startCheckout} onManageBilling={openBillingPortal}
@@ -5338,7 +5349,7 @@ function TradesPanel({ trades, onSave }) {
 
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
-  accountTrades, onSetAccountTrades,
+  accountTrades, onSetAccountTrades, subscriptionStatus, currentPeriodEnd,
   onSaveUser, onSaveBrand, onUpgrade, onManageBilling, billingBusy, billingErr,
   onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup }) {
@@ -5749,8 +5760,16 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               {active.annual && (
                 <span className="pc-cycle">
                   {billing === "annual"
-                    ? `${formatDollars(active.annual)}/yr · renews annually`
-                    : `${active.price}/mo · renews monthly`}
+                    ? `${formatDollars(active.annual)}/yr`
+                    : `${active.price}/mo`}
+                  {/* "Renews annually" without a date is half an answer. When
+                      Stripe has told us the date, say it; a cancelled
+                      subscription runs to the same date and then stops, so
+                      the word changes and the date does not. */}
+                  {currentPeriodEnd
+                    ? ` · ${subscriptionStatus === "canceled" ? "ends" : "renews"} ${niceDay(currentPeriodEnd)}`
+                    : billing === "annual" ? " · renews annually" : " · renews monthly"}
+                  {subscriptionStatus === "past_due" && " · payment failed"}
                 </span>
               )}
             </div>
@@ -9472,7 +9491,10 @@ const CSS = `
 .wo-open-meas{margin-left:auto;font-size:11px;font-weight:600;color:var(--ink-soft)}
 
 /* ---- white label branding ---- */
-.brand-logo{display:flex;align-items:center;color:var(--ink);flex:none}
+/* width:max-content because the wrapper otherwise sizes to the mark's text
+   content and ignores its padding and min-width -- a 34px square inside a
+   13px box, overlapping whatever sits next to it. */
+.brand-logo{display:flex;align-items:center;color:var(--ink);flex:none;width:max-content}
 .brand-logo.sm{color:var(--ink)}
 .brand-logo.lg,.brand-logo.xl{color:var(--ink)}
 .brand-initials{display:grid;place-items:center;background:var(--brand);color:#fff;border-radius:8px;
