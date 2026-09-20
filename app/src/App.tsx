@@ -1274,6 +1274,10 @@ export default function SubSub() {
   });
   const [invite, setInvite] = useState(null);
   const [inviteErr, setInviteErr] = useState("");
+  // Set when a sign-in resolves to more than one account and nothing in the
+  // address says which. Holds the whole login result, so choosing costs no
+  // second round trip.
+  const [chooser, setChooser] = useState(null);
   const [superadminView, setSuperadminView] = useState(false);   // SubSub staff console
   // What the SERVER says this staff user may do. Never derived in the browser:
   // the same flags are re-checked on every platform request.
@@ -2142,16 +2146,27 @@ export default function SubSub() {
         + "address being wrong or unreachable, not your connection.";
     }
     if (!result) return "Couldn't sign you in. Try again.";
-    // Land in the account this subdomain belongs to, if the person has a
-    // membership there — signing in on outerhome.subsub.work shouldn't drop
-    // someone into a different company they also happen to belong to.
-    const onSub = detectSubdomain();
-    const primary = (onSub && result.memberships.find((m) => m.subdomain === onSub)) || result.memberships[0];
-    if (!primary) {
+    if (!result.memberships.length) {
       return "Your login works, but you're not a member of any account yet. "
         + "Ask whoever runs the account to add you.";
     }
 
+    // Land in the account this subdomain belongs to, if the person has a
+    // membership there — signing in on outerhome.subsub.work shouldn't drop
+    // someone into a different company they also happen to belong to.
+    const onSub = detectSubdomain();
+    const here = onSub && result.memberships.find((m) => m.subdomain === onSub);
+    if (here) return enterAccount(result, here);
+
+    // A subcontractor who works for four general contractors has four of
+    // these, and picking the first is a coin toss they have to undo. Ask.
+    if (result.memberships.length > 1) { setChooser(result); return null; }
+    return enterAccount(result, result.memberships[0]);
+  }
+
+  // The rest of signing in, once it is settled which account is being entered.
+  async function enterAccount(result, primary) {
+    setChooser(null);
     setAuth({ userId: result.user.id, accountId: primary.accountId });
     setUsers((prev) => [...prev.filter((u) => u.id !== result.user.id), result.user]);
     setMemberships((prev) => [
@@ -2263,6 +2278,17 @@ export default function SubSub() {
     if (loggedIn && tab === "properties" && !hasProperties(account)) setTab("dashboard");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account.id, account.kind, loggedIn, tab]);
+
+  if (!loggedIn && chooser) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <AccountChooser result={chooser} brand={brand}
+          onPick={(m) => enterAccount(chooser, m)}
+          onBack={() => { setChooser(null); if (supabaseEnabled) supabase.auth.signOut(); }} />
+      </div>
+    );
+  }
 
   if (!loggedIn && resumeFailed) {
     return (
@@ -7750,6 +7776,52 @@ function BrandMark({ brand, height = 24 }) {
   );
 }
 
+// ---- Which account? ------------------------------------------------------
+// A subcontractor can work for several general contractors on one login, and
+// an admin can run more than one company. Signing in used to pick the first
+// membership and leave them to notice and undo it; the ones most likely to
+// have several are the ones least likely to be at a desk when they find out.
+//
+// Only shown when the address does not already say: on a customer's own
+// subdomain the question is already answered.
+function AccountChooser({ result, brand, onPick, onBack }) {
+  const wl = themeOf(brand);
+  const sorted = [...result.memberships].sort((a, b) =>
+    (a.accountName || "").localeCompare(b.accountName || ""));
+
+  return (
+    <div className="wl-page" style={themeVars(wl)}>
+      <div className="wl-card ac-card">
+        <div className="wl-brand"><BrandMark brand={brand} height={30} />
+          <span className="wl-brand-name">{brand.name}</span></div>
+        <h1>Which account?</h1>
+        <p className="wl-lede">
+          You're signed in as {result.user.email}. This login reaches {sorted.length} accounts.
+        </p>
+
+        <div className="ac-list">
+          {sorted.map((m) => (
+            <button key={m.accountId} className="ac-row" onClick={() => onPick(m)}>
+              <span className="ac-mark">
+                <BrandMark brand={{ name: m.accountName, logoData: m.logoKey ? logoUrl(m.accountId) : null,
+                  useDefaultMark: m.useDefaultMark }} height={30} />
+              </span>
+              <span className="ac-txt">
+                <b>{m.accountName}</b>
+                <span>{ROLES[m.role] ? ROLES[m.role].label : m.role}</span>
+              </span>
+              <ChevronRight size={17} />
+            </button>
+          ))}
+        </div>
+
+        <button className="wl-btn-ghost" onClick={onBack}>Sign in as someone else</button>
+      </div>
+      {!brand.isSubSub && <p className="login-foot"><PoweredBy height={13} /></p>}
+    </div>
+  );
+}
+
 // ---- Payment, inside our own page ----------------------------------------
 // Stripe's form, mounted in a panel here rather than on stripe.com. The
 // customer keeps our header, our background and our URL, and card details
@@ -9416,6 +9488,22 @@ const CSS = `
 
 /* The payment panel. Stripe's form sits inside it, so the chrome around it
    is ours: our mark, our card, our page still behind. */
+/* Account chooser. Rows, not cards: the question is "which of these", and a
+   list answers that faster than a grid of tiles. */
+.ac-card{max-width:440px;text-align:left}
+.ac-card .wl-brand{justify-content:flex-start}
+/* width:100% because the card centres its children, which otherwise leaves
+   the rows narrower than the text above them. */
+.ac-list{display:flex;flex-direction:column;gap:9px;margin:20px 0 18px;width:100%}
+.ac-row{display:flex;align-items:center;gap:13px;width:100%;text-align:left;cursor:pointer;
+  background:var(--wl-card);border:1px solid rgba(128,128,128,.28);border-radius:12px;
+  padding:13px 14px;color:var(--wl-text);font:inherit}
+.ac-row:hover{border-color:var(--wl-accent)}
+.ac-mark{flex:none;display:flex}
+.ac-txt{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.ac-txt b{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ac-txt span{font-size:12px;opacity:.7}
+
 .co-scrim{position:fixed;inset:0;z-index:80;background:rgba(18,33,28,.55);backdrop-filter:blur(2px);
   display:flex;align-items:flex-start;justify-content:center;padding:32px 16px;overflow-y:auto;
   overscroll-behavior:contain}
