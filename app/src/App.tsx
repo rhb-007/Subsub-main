@@ -7803,8 +7803,15 @@ function AccountChooser({ result, brand, onPick, onBack }) {
           {sorted.map((m) => (
             <button key={m.accountId} className="ac-row" onClick={() => onPick(m)}>
               <span className="ac-mark">
-                <BrandMark brand={{ name: m.accountName, logoData: m.logoKey ? logoUrl(m.accountId) : null,
-                  useDefaultMark: m.useDefaultMark }} height={30} />
+                {/* Their own mark when they have one and their plan carries
+                    it; otherwise SubSub's, which is what a Basic account
+                    wears everywhere else. Initials are a placeholder for a
+                    brand, and this is a list of real companies. */}
+                <BrandMark height={30} brand={
+                  m.logoKey && PLANS[m.plan]?.branding
+                    ? { name: m.accountName, logoData: logoUrl(m.accountId), useDefaultMark: false }
+                    : { name: m.accountName, isSubSub: true }
+                } />
               </span>
               <span className="ac-txt">
                 <b>{m.accountName}</b>
