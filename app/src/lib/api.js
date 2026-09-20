@@ -131,7 +131,10 @@ export const api = {
   // Billing. Checkout and portal both answer with a Stripe URL for the
   // browser to follow — card details never touch this app.
   getBilling: () => request("/billing"),
-  startCheckout: (cycle) => request("/billing/checkout", { method: "POST", body: JSON.stringify({ cycle }) }),
+  // mode "embedded" asks for a session we can mount inside our own page;
+  // anything else gets a hosted one to redirect to.
+  startCheckout: (cycle, mode) =>
+    request("/billing/checkout", { method: "POST", body: JSON.stringify({ cycle, mode }) }),
   billingPortal: () => request("/billing/portal", { method: "POST" }),
 
   // One-time subcontractor invite links. The first three need a session; the

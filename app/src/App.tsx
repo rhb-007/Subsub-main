@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 
 // ---- Build target ----------------------------------------------------------
 // "tenant"   → the customer app (app.subsub.work and each GC's own subdomain).
@@ -1454,11 +1454,16 @@ export default function SubSub() {
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingErr, setBillingErr] = useState("");
 
+  // Stripe's form opens in a panel here when we have a publishable key to
+  // mount it with; otherwise the browser goes to stripe.com as before.
+  const [checkoutSecret, setCheckoutSecret] = useState(null);
+
   const startCheckout = async (cycle) => {
     setBillingBusy(true); setBillingErr("");
     try {
-      const { url } = await api.startCheckout(cycle || billing);
-      window.location.href = url;
+      const res = await api.startCheckout(cycle || billing, STRIPE_PK ? "embedded" : "hosted");
+      if (res.clientSecret) { setCheckoutSecret(res.clientSecret); setBillingBusy(false); return; }
+      window.location.href = res.url;
     } catch (err) {
       console.error("[billing] checkout failed:", err);
       setBillingBusy(false);
@@ -3165,6 +3170,10 @@ export default function SubSub() {
         <InviteLinks canRevoke={role === "admin"} onClose={() => setInviteOpen(false)} /></Modal>}
       {editing && <Modal onClose={() => setEditing(null)} wide>
         <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub} onCancel={() => setEditing(null)} /></Modal>}
+
+      {checkoutSecret && (
+        <CheckoutPanel clientSecret={checkoutSecret} onClose={() => setCheckoutSecret(null)} />
+      )}
 
       {billingNote && (
         <div className="billing-note" role="status">
@@ -7737,6 +7746,83 @@ function BrandMark({ brand, height = 24 }) {
   );
 }
 
+// ---- Payment, inside our own page ----------------------------------------
+// Stripe's form, mounted in a panel here rather than on stripe.com. The
+// customer keeps our header, our background and our URL, and card details
+// still never touch this code -- the form is Stripe's, in an iframe they
+// control, and we only hand it a session id.
+//
+// Publishable keys are designed to be public: this one can start a payment
+// and do nothing else. Its absence is what decides whether we embed or
+// redirect, so a build without it still sells.
+const STRIPE_PK = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "";
+
+// Loaded on demand rather than in the page head: almost nobody upgrades, and
+// nobody should pay for Stripe's script on the dashboard. Cached so opening
+// the panel twice does not fetch it twice.
+let stripeJsPromise = null;
+function loadStripeJs() {
+  if (stripeJsPromise) return stripeJsPromise;
+  stripeJsPromise = new Promise((resolve, reject) => {
+    if (window.Stripe) return resolve(window.Stripe);
+    const el = document.createElement("script");
+    el.src = "https://js.stripe.com/v3/";
+    el.async = true;
+    el.onload = () => (window.Stripe ? resolve(window.Stripe) : reject(new Error("stripe_js_missing")));
+    el.onerror = () => reject(new Error("stripe_js_blocked"));
+    document.head.appendChild(el);
+  });
+  return stripeJsPromise;
+}
+
+function CheckoutPanel({ clientSecret, onClose }) {
+  const host = useRef(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    let checkout = null;
+    (async () => {
+      try {
+        const Stripe = await loadStripeJs();
+        if (!live) return;
+        checkout = await Stripe(STRIPE_PK).initEmbeddedCheckout({ clientSecret });
+        // The await above can outlive the panel, and mounting into a node
+        // React has already removed throws.
+        if (!live || !host.current) { checkout.destroy(); return; }
+        checkout.mount(host.current);
+      } catch (e) {
+        console.error("[checkout] could not mount:", e);
+        if (live) {
+          setErr(e?.message === "stripe_js_blocked"
+            ? "Couldn't load the payment form — something on this network is blocking Stripe."
+            : "Couldn't load the payment form. Try again in a moment.");
+        }
+      }
+    })();
+    return () => { live = false; if (checkout) checkout.destroy(); };
+  }, [clientSecret]);
+
+  return (
+    <div className="co-scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="co-panel" role="dialog" aria-label="Payment">
+        <div className="co-head">
+          <div>
+            <SubSubLogo height={17} />
+            <span className="co-sub">Secure payment by Stripe</span>
+          </div>
+          <button className="co-x" onClick={onClose} aria-label="Close">
+            <X size={17} />
+          </button>
+        </div>
+        {err
+          ? <p className="co-err">{err}</p>
+          : <div ref={host} className="co-mount" />}
+      </div>
+    </div>
+  );
+}
+
 // ---- Login / splash ------------------------------------------------------
 function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
   const wl = themeOf(brand);
@@ -9323,6 +9409,28 @@ const CSS = `
 .gs-body p{margin:5px 0 0;font-size:12.5px;color:var(--ink-soft);line-height:1.5;max-width:56ch}
 .gs-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}
 .gs-acts button{padding:8px 14px;font-size:12.5px;border-radius:9px}
+
+/* The payment panel. Stripe's form sits inside it, so the chrome around it
+   is ours: our mark, our card, our page still behind. */
+.co-scrim{position:fixed;inset:0;z-index:80;background:rgba(18,33,28,.55);backdrop-filter:blur(2px);
+  display:flex;align-items:flex-start;justify-content:center;padding:32px 16px;overflow-y:auto;
+  overscroll-behavior:contain}
+.co-panel{background:var(--card);border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.28);
+  width:min(560px,100%);padding:18px 18px 22px;margin:auto}
+.co-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}
+.co-head > div{display:flex;flex-direction:column;gap:5px}
+.co-sub{font-size:11.5px;color:var(--ink-soft)}
+.co-x{border:0;background:none;color:var(--ink-soft);cursor:pointer;padding:2px;line-height:0;flex:none}
+.co-x:hover{color:var(--ink)}
+/* Stripe measures its iframe against this, so it needs a height to grow into
+   rather than collapsing to nothing before the form loads. */
+.co-mount{min-height:460px}
+.co-err{margin:0;padding:14px;border-radius:10px;background:#fdf1ef;border:1px solid #e9c4bd;
+  color:#8a2f1c;font-size:13.5px}
+@media (max-width:560px){
+  .co-scrim{padding:0}
+  .co-panel{border-radius:0;min-height:100dvh;width:100%}
+}
 
 .billing-note{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:60;
   display:flex;align-items:center;gap:12px;background:var(--ink);color:#fff;

@@ -510,13 +510,25 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
   if (!account) return c.json({ error: "not_found" }, 404);
   const user = await c.env.DB.prepare(`SELECT email FROM users WHERE id = ?`).bind(userId).first();
 
+  // Embedded renders Stripe's form inside our own page; hosted sends the
+  // browser to stripe.com. The caller asks for embedded only when it has a
+  // publishable key to mount it with, so a build without one still works
+  // rather than showing an empty box.
+  const embedded = b.mode === "embedded";
+
   try {
     const session = await stripeCall(c.env, "/checkout/sessions", {
       params: {
         mode: "subscription",
         line_items: [{ price, quantity: 1 }],
-        success_url: `${APP_ORIGIN}/?billing=done`,
-        cancel_url: `${APP_ORIGIN}/?billing=cancelled`,
+        ...(embedded
+          // Stripe substitutes the real id into this placeholder; it must
+          // survive form-encoding as a literal, which it does, because the
+          // value is decoded again at the other end.
+          ? { ui_mode: "embedded",
+              return_url: `${APP_ORIGIN}/?billing=done&session_id={CHECKOUT_SESSION_ID}` }
+          : { success_url: `${APP_ORIGIN}/?billing=done`,
+              cancel_url: `${APP_ORIGIN}/?billing=cancelled` }),
         client_reference_id: accountId,
         allow_promotion_codes: true,
         // Reuse the customer if this account has ever paid, so a second
@@ -531,9 +543,9 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
         subscription_data: { metadata: { account_id: accountId } },
       },
       // A double-tapped button within the same minute is one checkout, not two.
-      idempotencyKey: `checkout:${accountId}:${cycle}:${Math.floor(Date.now() / 60000)}`,
+      idempotencyKey: `checkout:${accountId}:${cycle}:${embedded ? "e" : "h"}:${Math.floor(Date.now() / 60000)}`,
     });
-    return c.json({ url: session.url });
+    return c.json(embedded ? { clientSecret: session.client_secret } : { url: session.url });
   } catch (err) {
     console.error("[billing] checkout failed:", err?.message || err);
     return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
