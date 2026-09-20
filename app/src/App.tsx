@@ -9655,7 +9655,7 @@ const CSS = `
 .pc-name{font-size:20px;font-weight:800;letter-spacing:-.02em}
 .pc-usage{font-size:12.5px;color:var(--ink-soft);display:flex;flex-direction:column;gap:3px;text-align:right}
 .pc-usage strong{font-size:16px;color:var(--ink)}
-.plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}
+.plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin-top:4px}
 .plan-card{position:relative;background:var(--card);border:1px solid var(--line);border-radius:14px;
   padding:20px;display:flex;flex-direction:column;gap:10px;box-shadow:var(--shadow)}
 .plan-card.on{border-color:var(--brand);background:#f7faf8}
@@ -9928,7 +9928,10 @@ const CSS = `
 .lic-link{font-size:11.5px;font-weight:700;color:var(--brand);text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
 
 /* billing cycle */
-.cycle-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:6px}
+/* The billing toggle sat 6px above the plan cards, which read as though it
+   belonged to them rather than to the panel above. Give it room on both
+   sides so it is clearly its own control. */
+.cycle-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:22px 0 18px}
 .cycle{display:inline-flex;gap:4px;background:var(--paper);border:1px solid var(--line);
   padding:4px;border-radius:10px}
 .cycle button{appearance:none;border:0;background:none;font:600 13.5px Inter,sans-serif;
