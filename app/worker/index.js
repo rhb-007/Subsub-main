@@ -2520,6 +2520,318 @@ app.post("/api/platform/impersonate/:accountId", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// Platform writes
+// ---------------------------------------------------------------------------
+// Everything above this point reads. These change or remove other people's
+// data, so each one is gated on top of requireStaff and each one is audited:
+// a support action nobody can reconstruct afterwards is indistinguishable
+// from an intrusion.
+//
+// The split is deliberate. `standard` staff run support -- fix a typo, add a
+// user, send a reset -- while anything that creates, deletes or touches
+// money is `superadmin`. Support work should not require the account that
+// can delete a customer.
+function requireSuperadmin(c, staff) {
+  return staff.role === "superadmin" ? null : c.json({ error: "forbidden" }, 403);
+}
+
+// One place, so every one of these writes leaves the same trail.
+async function auditPlatform(env, staff, accountId, kind, text, meta) {
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO activity (id, account_id, at, user_id, kind, text, meta)
+       VALUES (?, ?, datetime('now'), NULL, ?, ?, ?)`
+    ).bind(uid(), accountId, kind, text, JSON.stringify({ ...(meta || {}), staffUserId: staff.userId, staffEmail: staff.email })),
+    env.DB.prepare(
+      `INSERT INTO events (account_id, actor_id, kind, subject_id, payload)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(accountId, staff.userId, kind, accountId, JSON.stringify({ ...(meta || {}), staffEmail: staff.email })),
+  ]);
+}
+
+app.post("/api/platform/accounts", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+
+  const b = await c.req.json().catch(() => ({}));
+  const name = String(b.name || "").trim();
+  const subdomain = validSubdomain(b.subdomain);
+  const kind = ACCOUNT_KINDS.includes(b.kind) ? b.kind : "general_contractor";
+  const plan = b.plan === "scale" ? "scale" : "basic";
+  const billing = b.billing === "annual" ? "annual" : "monthly";
+  if (!name) return c.json({ error: "name_required" }, 400);
+  if (!subdomain) return c.json({ error: "invalid_subdomain" }, 400);
+
+  const taken = await c.env.DB.prepare(`SELECT id FROM accounts WHERE subdomain = ?`).bind(subdomain).first();
+  if (taken) return c.json({ error: "subdomain_taken" }, 409);
+
+  // The console asks for an owner, because an account with nobody on it is a
+  // row, not a customer -- there would be no way in and nothing to reset.
+  const ownerName = String(b.ownerName || "").trim();
+  const ownerEmail = String(b.ownerEmail || "").trim().toLowerCase();
+  if (ownerEmail && !EMAIL_RE.test(ownerEmail)) return c.json({ error: "invalid_email" }, 400);
+  if (ownerEmail && !ownerName) return c.json({ error: "name_required" }, 400);
+
+  const id = uid();
+  await c.env.DB.prepare(
+    `INSERT INTO accounts (id, name, subdomain, kind, plan, billing, use_default_mark)
+     VALUES (?, ?, ?, ?, ?, ?, 1)`
+  ).bind(id, name, subdomain, kind, plan, billing).run();
+
+  let ownerId = null;
+  if (ownerEmail) {
+    // Reuse the person if this address is already known. Somebody running two
+    // companies is one person with two memberships, not two rows.
+    const existing = await c.env.DB.prepare(
+      `SELECT id FROM users WHERE lower(email) = lower(?)`).bind(ownerEmail).first();
+    ownerId = existing?.id || uid();
+    if (!existing) {
+      await c.env.DB.prepare(`INSERT INTO users (id, name, email) VALUES (?, ?, ?)`)
+        .bind(ownerId, ownerName, ownerEmail).run();
+    }
+    await c.env.DB.prepare(
+      `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, 'admin')`
+    ).bind(uid(), ownerId, id).run();
+  }
+
+  await auditPlatform(c.env, staff, id, "account_created",
+    `${staff.name} created this account`, { name, subdomain, plan, ownerEmail: ownerEmail || null });
+
+  return c.json({ id, name, subdomain, kind, plan, billing, ownerId }, 201);
+});
+
+// Plan and account type, from the console. Deliberately does NOT touch
+// Stripe: moving somebody to Scale here grants the features without charging
+// for them, which is what "comped" means and is sometimes exactly right --
+// but it must be a decision somebody made, and the subscription_events row
+// says so in those words.
+app.patch("/api/platform/accounts/:id", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+
+  const id = c.req.param("id");
+  const b = await c.req.json().catch(() => ({}));
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(id).first();
+  if (!account) return c.json({ error: "not_found" }, 404);
+
+  const sets = [], vals = [];
+  if (b.name != null) { sets.push("name = ?"); vals.push(String(b.name).trim()); }
+  if (b.kind != null) {
+    if (!ACCOUNT_KINDS.includes(b.kind)) return c.json({ error: "invalid_kind" }, 400);
+    sets.push("kind = ?"); vals.push(b.kind);
+  }
+  if (b.plan != null) {
+    if (!["basic", "scale"].includes(b.plan)) return c.json({ error: "invalid_plan" }, 400);
+    sets.push("plan = ?"); vals.push(b.plan);
+  }
+  if (b.billing != null) {
+    if (!["monthly", "annual"].includes(b.billing)) return c.json({ error: "invalid_billing" }, 400);
+    sets.push("billing = ?"); vals.push(b.billing);
+  }
+  if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
+
+  vals.push(id);
+  await c.env.DB.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
+
+  if (b.plan && b.plan !== account.plan) {
+    const monthly = (b.billing || account.billing) === "annual" ? 8250 : 9900;
+    await c.env.DB.prepare(
+      `INSERT INTO subscription_events (id, account_id, at, kind, from_plan, to_plan, cycle, mrr_delta_cents, source)
+       VALUES (?, ?, ?, 'comped', ?, ?, ?, ?, 'platform_admin')`
+    ).bind(uid(), id, new Date().toISOString(), account.plan, b.plan,
+      b.billing || account.billing, b.plan === "scale" ? monthly : -monthly).run();
+  }
+
+  const changed = Object.entries(b).map(([k, v]) => `${k} → ${v}`).join(", ");
+  await auditPlatform(c.env, staff, id, "plan_changed", `${staff.name} changed ${changed}`, b);
+  return c.json({ ok: true });
+});
+
+// Irreversible, so the caller has to name the thing it is deleting. That is
+// not ceremony: it is what stops a stale id, a mis-tapped row or a copied
+// curl from removing a customer nobody meant to touch.
+app.delete("/api/platform/accounts/:id", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+
+  const id = c.req.param("id");
+  const b = await c.req.json().catch(() => ({}));
+  const account = await c.env.DB.prepare(`SELECT id, name FROM accounts WHERE id = ?`).bind(id).first();
+  if (!account) return c.json({ error: "not_found" }, 404);
+  if (String(b.confirmName || "").trim() !== account.name) {
+    return c.json({ error: "confirm_name_mismatch" }, 400);
+  }
+
+  // Audited before the row goes, because the audit references it.
+  await auditPlatform(c.env, staff, id, "account_deleted",
+    `${staff.name} deleted account ${account.name}`, { name: account.name });
+
+  // Rows that point at the account but carry no cascade of their own. The
+  // rest (memberships, engagements, jobs, properties, invites) cascade.
+  await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE activity SET account_id = NULL WHERE account_id = ?`).bind(id),
+    c.env.DB.prepare(`UPDATE events SET account_id = NULL WHERE account_id = ?`).bind(id),
+    c.env.DB.prepare(`DELETE FROM accounts WHERE id = ?`).bind(id),
+  ]);
+  return c.json({ ok: true });
+});
+
+app.post("/api/platform/companies", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+
+  const b = await c.req.json().catch(() => ({}));
+  const company = String(b.company || "").trim();
+  if (!company) return c.json({ error: "company_required" }, 400);
+  if (b.email && !EMAIL_RE.test(String(b.email).trim())) return c.json({ error: "invalid_email" }, 400);
+  const phone = String(b.phone || "").trim() ? normalizePhone(b.phone) : null;
+  if (b.phone && String(b.phone).trim() && !phone) return c.json({ error: "invalid_phone" }, 400);
+
+  const id = uid();
+  await c.env.DB.prepare(
+    `INSERT INTO companies (id, company, contact, phone, email, license, ubi, city, state, zip)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, company, b.contact || null, phone, b.email || null, b.license || null,
+    b.ubi || null, b.city || null, b.state || null, b.zip || null).run();
+  await auditPlatform(c.env, staff, null, "company_created",
+    `${staff.name} created company ${company}`, { companyId: id });
+
+  return c.json({ id, company }, 201);
+});
+
+// Support work, so standard staff can do it: a wrong phone number on a
+// contractor is the sort of thing that should not need a superadmin.
+app.patch("/api/platform/companies/:id", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+
+  const id = c.req.param("id");
+  const b = await c.req.json().catch(() => ({}));
+  const co = await c.env.DB.prepare(`SELECT id, company FROM companies WHERE id = ?`).bind(id).first();
+  if (!co) return c.json({ error: "not_found" }, 404);
+
+  const allowed = { company: "company", contact: "contact", email: "email", license: "license",
+    ubi: "ubi", city: "city", state: "state", zip: "zip" };
+  const sets = [], vals = [];
+  for (const [key, column] of Object.entries(allowed)) {
+    if (b[key] === undefined) continue;
+    if (key === "email" && b.email && !EMAIL_RE.test(String(b.email).trim())) {
+      return c.json({ error: "invalid_email" }, 400);
+    }
+    sets.push(`${column} = ?`); vals.push(b[key] === "" ? null : b[key]);
+  }
+  if (b.phone !== undefined) {
+    const phone = String(b.phone || "").trim() ? normalizePhone(b.phone) : null;
+    if (String(b.phone || "").trim() && !phone) return c.json({ error: "invalid_phone" }, 400);
+    sets.push("phone = ?"); vals.push(phone);
+  }
+  if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
+
+  vals.push(id);
+  await c.env.DB.prepare(`UPDATE companies SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
+  await auditPlatform(c.env, staff, null, "company_edited",
+    `${staff.name} edited ${co.company}`, { companyId: id, fields: Object.keys(b) });
+  return c.json({ ok: true });
+});
+
+app.delete("/api/platform/companies/:id", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+
+  const id = c.req.param("id");
+  const b = await c.req.json().catch(() => ({}));
+  const co = await c.env.DB.prepare(`SELECT id, company FROM companies WHERE id = ?`).bind(id).first();
+  if (!co) return c.json({ error: "not_found" }, 404);
+  if (String(b.confirmName || "").trim() !== co.company) {
+    return c.json({ error: "confirm_name_mismatch" }, 400);
+  }
+
+  await auditPlatform(c.env, staff, null, "company_deleted",
+    `${staff.name} deleted company ${co.company}`, { companyId: id, name: co.company });
+  await c.env.DB.prepare(`DELETE FROM companies WHERE id = ?`).bind(id).run();
+  return c.json({ ok: true });
+});
+
+app.post("/api/platform/accounts/:id/users", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+
+  const accountId = c.req.param("id");
+  const b = await c.req.json().catch(() => ({}));
+  const name = String(b.name || "").trim();
+  const email = String(b.email || "").trim().toLowerCase();
+  const role = ["admin", "pm", "contractor"].includes(b.role) ? b.role : "pm";
+  if (!name) return c.json({ error: "name_required" }, 400);
+  if (!EMAIL_RE.test(email)) return c.json({ error: "invalid_email" }, 400);
+
+  const account = await c.env.DB.prepare(`SELECT id FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!account) return c.json({ error: "not_found" }, 404);
+
+  // Somebody may already exist here from an application or another account;
+  // reuse the person rather than creating a second row for the same address.
+  let user = await c.env.DB.prepare(`SELECT id FROM users WHERE lower(email) = lower(?)`).bind(email).first();
+  if (!user) {
+    const userId = uid();
+    await c.env.DB.prepare(`INSERT INTO users (id, name, email) VALUES (?, ?, ?)`)
+      .bind(userId, name, email).run();
+    user = { id: userId };
+  }
+  const existing = await c.env.DB.prepare(
+    `SELECT id FROM memberships WHERE user_id = ? AND account_id = ?`).bind(user.id, accountId).first();
+  if (existing) return c.json({ error: "already_a_member" }, 409);
+
+  await c.env.DB.prepare(
+    `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, ?)`
+  ).bind(uid(), user.id, accountId, role).run();
+  await auditPlatform(c.env, staff, accountId, "user_added",
+    `${staff.name} added ${name} as ${role}`, { userId: user.id, email, role });
+
+  return c.json({ id: user.id, name, email, role }, 201);
+});
+
+// Staff never see or set a password. This starts the same reset the person
+// could start themselves, on their behalf -- Supabase sends the mail and owns
+// the token, so there is nothing here to leak and nothing to expire ourselves.
+app.post("/api/platform/users/:id/reset-password", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) {
+    return c.json({ error: "auth_not_configured" }, 501);
+  }
+
+  const user = await c.env.DB.prepare(`SELECT id, email, name FROM users WHERE id = ?`)
+    .bind(c.req.param("id")).first();
+  if (!user?.email) return c.json({ error: "not_found" }, 404);
+
+  const res = await fetch(`${c.env.SUPABASE_URL}/auth/v1/recover`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: c.env.SUPABASE_ANON_KEY },
+    body: JSON.stringify({ email: user.email }),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    return c.json({ error: "reset_failed", detail: res ? `supabase_${res.status}` : "unreachable" }, 502);
+  }
+
+  const b = await c.req.json().catch(() => ({}));
+  await auditPlatform(c.env, staff, b.accountId || null, "password_reset",
+    `${staff.name} sent a password reset to ${user.email}`, { userId: user.id, email: user.email });
+
+  // No link comes back: the token is in the email and nowhere else, which is
+  // the property that makes this safe to do on somebody's behalf.
+  return c.json({ ok: true, email: user.email });
+});
+
+// ---------------------------------------------------------------------------
 // Outbound email
 // ---------------------------------------------------------------------------
 

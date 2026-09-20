@@ -193,5 +193,30 @@ export const api = {
     impersonate: (accountId, reason) =>
       request(`/platform/impersonate/${encodeURIComponent(accountId)}`,
         { method: "POST", body: JSON.stringify({ reason: reason || null }) }),
+
+    // Writes. Deleting takes the name back as confirmation -- the server
+    // checks it, so a stale id cannot remove the wrong customer.
+    createAccount: (data) => request("/platform/accounts", { method: "POST", body: JSON.stringify(data) }),
+    patchAccount: (id, patch) =>
+      request(`/platform/accounts/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    deleteAccount: (id, confirmName) =>
+      request(`/platform/accounts/${encodeURIComponent(id)}`,
+        { method: "DELETE", body: JSON.stringify({ confirmName }) }),
+
+    createCompany: (data) => request("/platform/companies", { method: "POST", body: JSON.stringify(data) }),
+    patchCompany: (id, patch) =>
+      request(`/platform/companies/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    deleteCompany: (id, confirmName) =>
+      request(`/platform/companies/${encodeURIComponent(id)}`,
+        { method: "DELETE", body: JSON.stringify({ confirmName }) }),
+
+    addUser: (accountId, user) =>
+      request(`/platform/accounts/${encodeURIComponent(accountId)}/users`,
+        { method: "POST", body: JSON.stringify(user) }),
+    // Returns only the address it went to. The token lives in the email and
+    // nowhere else, which is what makes this safe to do on someone's behalf.
+    resetPassword: (userId, accountId) =>
+      request(`/platform/users/${encodeURIComponent(userId)}/reset-password`,
+        { method: "POST", body: JSON.stringify({ accountId: accountId || null }) }),
   },
 };

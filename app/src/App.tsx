@@ -24,7 +24,7 @@ import {
   Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
-  DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy,
+  DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, logoUrl } from "./lib/api";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
@@ -1281,6 +1281,30 @@ export default function SubSub() {
       .catch((e) => { if (live) setPlatformErr(e?.message || "load_failed"); });
     return () => { live = false; };
   }, [staff]);
+
+  // Every console write runs through here. The server re-checks the staff
+  // role and writes the audit row before it changes anything, so the browser
+  // has nothing to decide -- it sends, then re-reads. Patching local state
+  // instead would leave a console showing what it hoped had happened, which
+  // is worse than one that waits half a second.
+  const platformWrite = async (call, failure, { reload = true } = {}) => {
+    setPlatformErr("");
+    try {
+      const result = await call();
+      if (reload) setPlatform(await api.platform.bootstrap());
+      return result;
+    } catch (err) {
+      console.error("[platform] write failed:", err);
+      setPlatformErr(
+        err?.status === 403 ? "You do not have permission to do that."
+          : err?.body?.error === "confirm_name_mismatch" ? "That name did not match, so nothing was deleted."
+          : err?.body?.error === "subdomain_taken" ? "That sign-in address is already taken."
+          : err?.body?.error === "already_a_member" ? "That person is already on this account."
+          : failure
+      );
+      throw err;
+    }
+  };
   const [impersonating, setImpersonating] = useState(null);  // { by, account }
   const [subEvents] = useState(seedSubscriptionEvents);
   const [activity, setActivity] = useState(seedActivity);
@@ -2333,17 +2357,45 @@ export default function SubSub() {
         <style>{CSS}</style>
         <SuperadminConsole me={me} admin={admin} accounts={P.accounts} users={P.users} memberships={P.memberships}
           companies={P.companies} engagements={P.engagements} jobs={P.jobs} subEvents={P.subEvents}
-          activity={P.activity}
-          onAddUser={(accountId, u) => {
-            const id = "u" + Date.now();
-            setUsers((us) => [...us, { id, name: u.name.trim(), email: u.email.trim(), role: u.role }]);
-            setMemberships((ms) => [...ms, { userId: id, accountId, role: u.role }]);
-            logEvent("user_added", `Superadmin ${me.name} added ${u.name.trim()} as ${ROLES[u.role].label}`, { accountId, userId: null });
+          activity={P.activity} err={platformErr}
+          // Every write goes to the server, which re-checks the staff role,
+          // writes the audit row and then changes the data. The console then
+          // re-reads rather than patching local state: a console showing what
+          // it hoped happened is worse than one that waits half a second.
+          onAddUser={async (accountId, u) => {
+            await platformWrite(() => api.platform.addUser(accountId, u),
+              "Could not add that user.");
           }}
-          onPatchAccount={(id, patch) => {
-            setAccounts((as) => as.map((a) => a.id === id ? { ...a, ...patch } : a));
-            const what = Object.entries(patch).map(([k, v]) => `${k} → ${v}`).join(", ");
-            logEvent("plan_changed", `Superadmin ${me.name} changed ${what}`, { accountId: id, userId: null });
+          onPatchAccount={async (id, patch) => {
+            await platformWrite(() => api.platform.patchAccount(id, patch),
+              "Could not change that account.");
+          }}
+          onCreateAccount={async (data) => {
+            await platformWrite(() => api.platform.createAccount(data),
+              "Could not create that account.");
+          }}
+          onDeleteAccount={async (id, confirmName) => {
+            await platformWrite(() => api.platform.deleteAccount(id, confirmName),
+              "Could not delete that account.");
+          }}
+          onCreateCompany={async (data) => {
+            await platformWrite(() => api.platform.createCompany(data),
+              "Could not create that company.");
+          }}
+          onEditCompany={async (id, patch) => {
+            await platformWrite(() => api.platform.patchCompany(id, patch),
+              "Could not save those changes.");
+          }}
+          onDeleteCompany={async (id, confirmName) => {
+            await platformWrite(() => api.platform.deleteCompany(id, confirmName),
+              "Could not delete that company.");
+          }}
+          onResetPassword={async (u, accountId) => {
+            // Nothing comes back but the address. The link is in the email and
+            // nowhere else, which is the property that makes sending one on
+            // somebody's behalf safe.
+            return platformWrite(() => api.platform.resetPassword(u.id, accountId),
+              "Could not send that reset email.", { reload: false });
           }}
           onImpersonate={async (acct) => {
             // The server decides. It re-checks the impersonate flag, picks the
@@ -3828,12 +3880,22 @@ const fmtC = (cents) => "$" + (Math.round(cents) / 100).toLocaleString("en-US", 
 const monthKey = (iso) => (iso || "").slice(0, 7);
 
 function SuperadminConsole({ me, admin, accounts, users, memberships, companies, engagements,
-  jobs, subEvents, activity, onPatchAccount, onAddUser, onImpersonate, onSignOut }) {
-  const [screen, setScreen] = useState("accounts");
+  jobs, subEvents, activity, err, onPatchAccount, onAddUser, onImpersonate, onSignOut,
+  onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany, onResetPassword }) {
+  const [screen, setScreen] = useState("dashboard");
   const [openId, setOpenId] = useState(null);
   const [menu, setMenu] = useState(false);
   const [actFilter, setActFilter] = useState("all");
   const [addUser, setAddUser] = useState(null);
+  const [newAccount, setNewAccount] = useState(null);   // form data while open
+  const [newCompany, setNewCompany] = useState(null);
+  const [editCompanyId, setEditCompanyId] = useState(null);
+  const [expandedCompanyId, setExpandedCompanyId] = useState(null);
+  const [expandedAccountId, setExpandedAccountId] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null); // { kind: "account"|"company", id, name }
+  const [resetFor, setResetFor] = useState(null);        // { userId, name, email }
+  const [resetLink, setResetLink] = useState(null);      // { email } once the API confirms it sent
+  const [sending, setSending] = useState(false);
   const now = new Date();
   const thisMonth = now.toISOString().slice(0, 7);
 
@@ -3891,7 +3953,7 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
     const engs = engagements.filter((e) => e.companyId === c.id);
     const accts = engs.map((e) => accounts.find((a) => a.id === e.accountId)).filter(Boolean);
     const lic = c.licenseCheck;
-    return { c, accts, lic, licOk: !lic || lic.status === "active",
+    return { c, accts, lic, licOk: !lic || String(lic.status).toLowerCase() === "active",
       dup: companies.filter((x) => x.license && x.license.toUpperCase().trim() === (c.license || "").toUpperCase().trim()).length > 1 };
   });
 
@@ -3912,6 +3974,7 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
 
   const isSuper = admin.role === "superadmin";
   const NAV = [
+    ["dashboard", "Dashboard", LayoutGrid],
     ["accounts", "Accounts", Building2],
     ["companies", "Companies", Users],
     ...(admin.finance ? [["revenue", "Revenue", TrendingUp]] : []),
@@ -3922,6 +3985,18 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
 
   return (
     <div className="pf-root">
+      {confirmDelete && (
+        <DeleteConfirmModal item={confirmDelete}
+          // The typed name travels to the server, which checks it against the
+          // row it is about to delete. A browser-side comparison alone would
+          // stop a slip of the finger but not a stale id.
+          onConfirm={async (confirmName) => {
+            const go = confirmDelete.kind === "account" ? onDeleteAccount : onDeleteCompany;
+            await go(confirmDelete.id, confirmName);
+            setConfirmDelete(null);
+          }}
+          onCancel={() => setConfirmDelete(null)} />
+      )}
       <header className="pf-top">
         <div className="pf-brand"><SubSubLogo height={20} /><span className="pf-tag">Platform</span></div>
         <button className="pf-burger" aria-expanded={navOpen} aria-label="Menu"
@@ -3968,11 +4043,115 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
       </header>
 
       <main className="pf-main">
+        {/* Whatever the last write said went wrong. Above the screen rather
+            than beside the button, because by the time it fails the button
+            may well have been dismissed with the form it sat in. */}
+        {err && <p className="pf-write-err" role="alert">{err}</p>}
+        {/* ===== DASHBOARD ===== */}
+        {screen === "dashboard" && !openId && (
+          <>
+            <div className="pf-head"><h2>Dashboard</h2></div>
+            <p className="pf-note">A snapshot of the whole system — every account, every subcontractor company, and what needs attention right now.</p>
+
+            <div className="pf-kpis">
+              <Kpi label="Live accounts" value={live.length} />
+              <Kpi label="Subcontractor companies" value={companies.length} />
+              {admin.finance && <Kpi label="MRR" value={fmtC(mrr)} accent />}
+              {admin.finance && <Kpi label="GMV to date" value={fmtC(gmvTotal)} />}
+              <Kpi label="Needs attention" value={health.atLimit + health.licFail + health.dups + health.expired}
+                warn={(health.atLimit + health.licFail + health.dups + health.expired) > 0} />
+            </div>
+
+            <div className="pf-dash-grid">
+              <div className="pf-panel pf-dash-card" onClick={() => go("accounts")}>
+                <h3><Building2 size={15} /> Accounts</h3>
+                <div className="pf-dash-stat"><b>{live.length}</b><span>live</span></div>
+                <p className="pf-note">
+                  {live.filter((r) => r.a.plan === "scale").length} on Scale ·{" "}
+                  {live.filter((r) => r.a.plan === "basic").length} on Basic
+                  {rows.length > live.length ? ` · ${rows.length - live.length} canceled` : ""}
+                </p>
+                {health.atLimit > 0 && <p className="pf-dash-flag">● {health.atLimit} at a plan limit — upgrade candidates</p>}
+              </div>
+
+              <div className="pf-panel pf-dash-card" onClick={() => go("companies")}>
+                <h3><Users size={15} /> Companies</h3>
+                <div className="pf-dash-stat"><b>{companies.length}</b><span>on the platform</span></div>
+                <p className="pf-note">
+                  {compRows.filter((r) => r.accts.length > 1).length} serving 2+ accounts ·{" "}
+                  {compRows.filter((r) => (r.c.status || "active") !== "active").length} inactive
+                </p>
+                {health.licFail > 0 && <p className="pf-dash-flag">● {health.licFail} with a failing license check</p>}
+                {health.dups > 0 && <p className="pf-dash-flag">● {health.dups} possible duplicate{health.dups === 1 ? "" : "s"}</p>}
+              </div>
+
+              {admin.finance && (
+                <div className="pf-panel pf-dash-card" onClick={() => go("revenue")}>
+                  <h3><TrendingUp size={15} /> Revenue</h3>
+                  <div className="pf-dash-stat"><b>{fmtC(mrr)}</b><span>MRR</span></div>
+                  <p className="pf-note">
+                    {fmtC(mrr * 12)} ARR ·{" "}
+                    {live.filter((r) => r.mrr > 0).length} paying account{live.filter((r) => r.mrr > 0).length === 1 ? "" : "s"}
+                  </p>
+                </div>
+              )}
+
+              {isSuper && (
+                <div className="pf-panel pf-dash-card" onClick={() => go("health")}>
+                  <h3><Activity size={15} /> Health</h3>
+                  <div className="pf-dash-stat"><b>{health.signups7d}</b><span>signups, 7 days</span></div>
+                  <p className="pf-note">{health.inactive14} account{health.inactive14 === 1 ? "" : "s"} inactive 14+ days</p>
+                </div>
+              )}
+            </div>
+
+            {(health.atLimit > 0 || health.licFail > 0 || health.dups > 0 || health.expired > 0) && (
+              <div className="pf-panel">
+                <h3>What needs attention</h3>
+                {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} at a plan limit — <a onClick={() => go("accounts")}>view accounts</a></p>}
+                {health.licFail > 0 && <p className="pf-act">▸ {health.licFail} compan{health.licFail === 1 ? "y" : "ies"} with a failing license check — <a onClick={() => go("companies")}>view companies</a></p>}
+                {health.dups > 0 && <p className="pf-act">▸ {health.dups} possible duplicate compan{health.dups === 1 ? "y" : "ies"} — <a onClick={() => go("companies")}>view companies</a></p>}
+                {health.expired > 0 && <p className="pf-act">▸ {health.expired} expired work-order offer{health.expired === 1 ? "" : "s"} with no reply</p>}
+              </div>
+            )}
+          </>
+        )}
+
         {/* ===== ACCOUNTS ===== */}
         {screen === "accounts" && !openId && (
           <>
             <div className="pf-head">
-              <h2>Accounts</h2>
+              <div><h2>Accounts</h2></div>
+              {isSuper && (
+                <button className="btn-solid" onClick={() => setNewAccount({ name: "", subdomain: "", ownerName: "", ownerEmail: "" })}>
+                  <Plus size={14} /> New account
+                </button>
+              )}
+            </div>
+            {newAccount && (
+              <div className="pf-panel pf-newform">
+                <h3>New account</h3>
+                <div className="pf-adduser pf-adduser-4">
+                  <input placeholder="Company name" value={newAccount.name} onChange={(e) => setNewAccount({ ...newAccount, name: e.target.value })} />
+                  <input placeholder="Subdomain (e.g. acme)" value={newAccount.subdomain}
+                    onChange={(e) => setNewAccount({ ...newAccount, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") })} />
+                  <input placeholder="Owner's full name" value={newAccount.ownerName} onChange={(e) => setNewAccount({ ...newAccount, ownerName: e.target.value })} />
+                  <input placeholder="Owner's work email" type="email" value={newAccount.ownerEmail} onChange={(e) => setNewAccount({ ...newAccount, ownerEmail: e.target.value })} />
+                </div>
+                <p className="pf-note">Creates the account on Basic and an admin membership for the owner. They'll need a password-reset link to sign in — send one from their account page once created.</p>
+                <div className="form-actions">
+                  <button className="btn-ghost" onClick={() => setNewAccount(null)}>Cancel</button>
+                  <button className="btn-solid"
+                    disabled={!newAccount.name.trim() || !newAccount.subdomain.trim() || !newAccount.ownerName.trim() || !newAccount.ownerEmail.trim()}
+                    onClick={async () => {
+                      try { await onCreateAccount(newAccount); setNewAccount(null); }
+                      catch { /* the console has already said why; keep the form */ }
+                    }}>Create account</button>
+                </div>
+              </div>
+            )}
+            <div className="pf-head">
+              <div />
               <div className="pf-kpis">
                 <Kpi label="Live accounts" value={live.length} />
                 <Kpi label="Scale" value={live.filter((r) => r.a.plan === "scale").length} />
@@ -3981,30 +4160,54 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                 {isSuper && <Kpi label="Subs on platform" value={companies.length} />}
               </div>
             </div>
-            <div className="pf-table-wrap">
-              <table className="pf-table">
-                <thead><tr>
-                  <th>Account</th><th>Plan</th><th>Users</th><th>Subs</th><th>Jobs / mo</th>
-                  {admin.finance && <th>MRR</th>}{admin.finance && <th>GMV</th>}<th>Last active</th><th>Status</th>
-                </tr></thead>
-                <tbody>
-                  {rows.sort((x, y) => y.mrr - x.mrr || y.gmv - x.gmv).map((r) => (
-                    <tr key={r.a.id} className={r.a.status === "canceled" ? "muted" : ""}
-                      onClick={() => { setOpenId(r.a.id); }}>
-                      <td><b>{r.a.name}</b><span className="pf-sub">{r.a.subdomain}.subsub.work</span></td>
-                      <td><span className={`plan-pill ${r.a.plan}`}>{PLANS[r.a.plan].name}</span>
-                        <span className="pf-sub">{r.a.billing}</span></td>
-                      <td>{r.users}</td>
-                      <td>{r.subs}{r.atLimit && <span className="pf-flag" title="At a Basic plan limit"> ●</span>}</td>
-                      <td>{r.jobsMo}</td>
-                      {admin.finance && <td>{r.mrr ? fmtC(r.mrr) : "—"}</td>}
-                      {admin.finance && <td>{r.gmv ? fmtC(r.gmv) : "—"}</td>}
-                      <td>{r.a.lastActive || "—"}</td>
-                      <td><span className={`pf-status ${r.a.status || "active"}`}>{r.a.status || "active"}</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="pf-account-grid">
+              {rows.sort((x, y) => y.mrr - x.mrr || y.gmv - x.gmv).map((r) => {
+                const isExpanded = expandedAccountId === r.a.id;
+                const status = r.a.status || "active";
+                return (
+                  <div key={r.a.id} className={`pf-company-card pf-account-card ${status === "canceled" ? "muted" : ""} ${isExpanded ? "is-open" : ""}`}>
+                    <div className="pfc-top" onClick={() => setOpenId(r.a.id)}>
+                      <div className="pfc-name">
+                        <b>{r.a.name}</b>
+                        <span className="pf-sub">{r.a.subdomain}.subsub.work</span>
+                      </div>
+                      <div className="pfc-summary">
+                        <span className={`plan-pill ${r.a.plan}`}>{PLANS[r.a.plan].name}</span>
+                        <span className={`pf-status ${status}`}>{status}</span>
+                        {r.atLimit && <span className="pf-flag" title="At a Basic plan limit">●</span>}
+                      </div>
+                      <div className="pfc-actions" onClick={(e) => e.stopPropagation()}>
+                        {isSuper && (
+                          <>
+                            <button className="pf-mini" title="Edit account"
+                              onClick={() => setOpenId(r.a.id)}><Pencil size={13} /></button>
+                            <button className="pf-mini pf-mini-danger" title="Delete account"
+                              onClick={() => setConfirmDelete({ kind: "account", id: r.a.id, name: r.a.name })}>
+                              <Trash2 size={13} /></button>
+                          </>
+                        )}
+                        <button className="pf-mini" title={isExpanded ? "Collapse" : "Expand"}
+                          onClick={() => setExpandedAccountId(isExpanded ? null : r.a.id)}>
+                          <ChevronDown size={13} style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+                        </button>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div className="pfc-rows">
+                        <div className="pfc-row"><span>Billing</span><span>{r.a.billing}</span></div>
+                        <div className="pfc-row"><span>Users</span><span>{r.users}</span></div>
+                        <div className="pfc-row"><span>Subs</span>
+                          <span>{r.subs}{r.atLimit && <span className="pf-flag" title="At a Basic plan limit"> ●</span>}</span></div>
+                        <div className="pfc-row"><span>Jobs / mo</span><span>{r.jobsMo}</span></div>
+                        {admin.finance && <div className="pfc-row"><span>MRR</span><span>{r.mrr ? fmtC(r.mrr) : "—"}</span></div>}
+                        {admin.finance && <div className="pfc-row"><span>GMV</span><span>{r.gmv ? fmtC(r.gmv) : "—"}</span></div>}
+                        <div className="pfc-row"><span>Last active</span><span>{r.a.lastActive || "—"}</span></div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {rows.length === 0 && <p className="pf-note">No accounts yet.</p>}
             </div>
             <p className="pf-note">● = Basic account at its subcontractor or monthly-job limit. That's an upgrade conversation.</p>
           </>
@@ -4019,11 +4222,13 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                 <h2>{open.a.name}</h2>
                 <p className="pf-sub">{open.a.subdomain}.subsub.work · created {open.a.createdAt || "—"} · last active {open.a.lastActive || "—"}</p>
               </div>
-              {admin.impersonate && open.a.status !== "canceled" && (
-                <button className="btn-solid" onClick={() => onImpersonate(open.a)}>
-                  <LogIn size={14} /> Sign in as this account
-                </button>
-              )}
+              <div className="pf-hd-actions">
+                {admin.impersonate && open.a.status !== "canceled" && (
+                  <button className="btn-solid" onClick={() => onImpersonate(open.a)}>
+                    <LogIn size={14} /> Sign in as this account
+                  </button>
+                )}
+              </div>
             </div>
             <div className="pf-kpis">
               <Kpi label="Plan" value={`${PLANS[open.a.plan].name} · ${open.a.billing}`} />
@@ -4070,8 +4275,45 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                     <option value="admin">Admin</option><option value="pm">Project Manager</option>
                   </select>
                   <button className="btn-solid small" disabled={!addUser.name.trim() || !addUser.email.trim()}
-                    onClick={() => { onAddUser(open.a.id, addUser); setAddUser(null); }}>Add</button>
+                    onClick={async () => {
+                      try { await onAddUser(open.a.id, addUser); setAddUser(null); }
+                      catch { /* keep the row so the address is not retyped */ }
+                    }}>Add</button>
                   <button className="pf-mini" onClick={() => setAddUser(null)}>Cancel</button>
+                </div>
+              )}
+              {resetFor && resetFor.accountId === open.a.id && (
+                <div className="pf-reset">
+                  {!resetLink || resetLink.email !== resetFor.email ? (
+                    <>
+                      <p>Send a password reset link to <b>{resetFor.name}</b> ({resetFor.email})?
+                        You will not see or set their password — only they can choose a new one, from a
+                        link that expires and can be used once.</p>
+                      <div className="form-actions">
+                        <button className="btn-ghost" onClick={() => setResetFor(null)}>Cancel</button>
+                        <button className="btn-solid" disabled={sending}
+                          onClick={async () => {
+                            setSending(true);
+                            try { setResetLink(await onResetPassword(resetFor, resetFor.accountId)); }
+                            catch { /* the parent has already said what went wrong */ }
+                            finally { setSending(false); }
+                          }}>
+                          <Key size={14} /> {sending ? "Sending…" : "Send reset link"}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* No link is shown, because none comes back. The token
+                          exists only inside the email -- which is exactly what
+                          makes sending one on somebody's behalf safe. */}
+                      <p><Check size={14} style={{ display: "inline", verticalAlign: -2 }} /> Reset email sent to <b>{resetLink.email}</b>.
+                        The link is in that email, expires, and works once.</p>
+                      <div className="form-actions">
+                        <button className="btn-ghost" onClick={() => { setResetFor(null); setResetLink(null); }}>Done</button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               {memberships.filter((m) => m.accountId === open.a.id && m.role !== "contractor").map((m) => {
@@ -4081,6 +4323,9 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                     <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
                     <span className="pf-line-main"><b>{u.name}</b><span className="pf-sub">{u.email}</span></span>
                     <span className={`role-badge r-${m.role}`}>{ROLES[m.role].label}</span>
+                    <button className="pf-mini" onClick={() => setResetFor({ userId: u.id, name: u.name, email: u.email, accountId: open.a.id })}>
+                      <Key size={12} /> Reset password
+                    </button>
                   </div>
                 ) : null;
               })}
@@ -4136,6 +4381,24 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
               ))}
               {!subEvents.some((e) => e.accountId === open.a.id) && <p className="pf-note">No events recorded.</p>}
             </div>
+
+            {isSuper && (
+              <div className="pf-panel pf-danger-zone">
+                <h3><AlertTriangle size={15} /> Danger zone</h3>
+                <div className="pf-danger-row">
+                  <div>
+                    <b>Delete this account</b>
+                    <p className="pf-note">Removes the account, its team memberships, and its subcontractor
+                      engagements. Job history and documents already on file are not recoverable from here.
+                      This cannot be undone.</p>
+                  </div>
+                  <button className="btn-danger-outline"
+                    onClick={() => setConfirmDelete({ kind: "account", id: open.a.id, name: open.a.name })}>
+                    <Trash2 size={14} /> Delete account
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -4143,7 +4406,39 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
         {screen === "companies" && !openId && (
           <>
             <div className="pf-head">
-              <h2>Companies</h2>
+              <div><h2>Companies</h2></div>
+              {isSuper && (
+                <button className="btn-solid" onClick={() => setNewCompany({ company: "", contact: "", email: "", phone: "", license: "", ubi: "", city: "", zip: "" })}>
+                  <Plus size={14} /> New company
+                </button>
+              )}
+            </div>
+            {newCompany && (
+              <div className="pf-panel pf-newform">
+                <h3>New company</h3>
+                <div className="pf-adduser pf-adduser-grid">
+                  <input placeholder="Company name" value={newCompany.company} onChange={(e) => setNewCompany({ ...newCompany, company: e.target.value })} />
+                  <input placeholder="Contact name" value={newCompany.contact} onChange={(e) => setNewCompany({ ...newCompany, contact: e.target.value })} />
+                  <input placeholder="Email" type="email" value={newCompany.email} onChange={(e) => setNewCompany({ ...newCompany, email: e.target.value })} />
+                  <input placeholder="Phone" value={newCompany.phone} onChange={(e) => setNewCompany({ ...newCompany, phone: e.target.value })} />
+                  <input placeholder="WA L&I license #" value={newCompany.license} onChange={(e) => setNewCompany({ ...newCompany, license: e.target.value })} />
+                  <input placeholder="UBI" value={newCompany.ubi} onChange={(e) => setNewCompany({ ...newCompany, ubi: e.target.value })} />
+                  <input placeholder="City" value={newCompany.city} onChange={(e) => setNewCompany({ ...newCompany, city: e.target.value })} />
+                  <input placeholder="ZIP" value={newCompany.zip} onChange={(e) => setNewCompany({ ...newCompany, zip: e.target.value })} />
+                </div>
+                <p className="pf-note">Creates a company record with no engagements yet — a hiring account still needs to invite or add them to actually work a job.</p>
+                <div className="form-actions">
+                  <button className="btn-ghost" onClick={() => setNewCompany(null)}>Cancel</button>
+                  <button className="btn-solid" disabled={!newCompany.company.trim() || !newCompany.license.trim()}
+                    onClick={async () => {
+                      try { await onCreateCompany(newCompany); setNewCompany(null); }
+                      catch { /* keep the form, and what is in it */ }
+                    }}>Create company</button>
+                </div>
+              </div>
+            )}
+            <div className="pf-head">
+              <div />
               <div className="pf-kpis">
                 <Kpi label="Subcontractor companies" value={companies.length} />
                 <Kpi label="Serving 2+ accounts" value={compRows.filter((r) => r.accts.length > 1).length} accent />
@@ -4152,23 +4447,94 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
               </div>
             </div>
             <p className="pf-note">One company can serve many hiring accounts. A lapsed license here affects every account engaging them — this is the only place that's visible.</p>
-            <div className="pf-table-wrap">
-              <table className="pf-table">
-                <thead><tr><th>Company</th><th>License</th><th>State status</th><th>Engaged by</th><th>Warranty</th></tr></thead>
-                <tbody>
-                  {compRows.sort((x, y) => y.accts.length - x.accts.length).map((r) => (
-                    <tr key={r.c.id} className={r.licOk ? "" : "warn"}>
-                      <td><b>{r.c.company}</b><span className="pf-sub">{r.c.contact} · {r.c.city}, {r.c.state}</span></td>
-                      <td><code>{r.c.license || "—"}</code>{r.dup && <span className="pf-flag" title="Same license number on another record"> dup</span>}</td>
-                      <td>{r.lic ? <span className={`pf-status ${r.lic.status === "active" ? "active" : "suspended"}`}>{r.lic.status}</span> : <span className="pf-sub">not checked</span>}</td>
-                      <td>{r.accts.map((a) => a.name).join(", ") || "—"}
-                        {r.accts.length > 1 && <span className="pf-multi"> ×{r.accts.length}</span>}</td>
-                      <td>{warrantyLabel(r.c).replace(" labor warranty", "")}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="pf-company-grid">
+              {compRows.sort((x, y) => y.accts.length - x.accts.length).map((r) => {
+                const isExpanded = expandedCompanyId === r.c.id;
+                const coStatus = r.c.status || "active";
+                return (
+                  <div key={r.c.id} className={`pf-company-card ${r.licOk ? "" : "warn"} ${coStatus !== "active" ? "muted" : ""} ${isExpanded ? "is-open" : ""}`}>
+                    <div className="pfc-top" onClick={() => setEditCompanyId(r.c.id)}>
+                      <div className="pfc-name">
+                        <b>{r.c.company}</b>
+                        <span className="pf-sub">{r.c.contact} · {r.c.city}, {r.c.state}</span>
+                      </div>
+                      <div className="pfc-summary">
+                        <span className={`pf-status ${coStatus === "active" ? "active" : "canceled"}`}>{coStatus}</span>
+                        {r.lic && String(r.lic.status).toLowerCase() !== "active" &&
+                          <span className="pf-status suspended" title="State license status">{r.lic.status}</span>}
+                        {r.accts.length > 1 && <span className="pf-multi">×{r.accts.length}</span>}
+                        {r.dup && <span className="pf-flag" title="Same license number on another record">dup</span>}
+                      </div>
+                      <div className="pfc-actions" onClick={(e) => e.stopPropagation()}>
+                        {isSuper && (
+                          <>
+                            <button className="pf-mini" title="Edit company"
+                              onClick={() => setEditCompanyId(r.c.id)}><Pencil size={13} /></button>
+                            <button className="pf-mini pf-mini-danger" title="Delete company"
+                              onClick={() => setConfirmDelete({ kind: "company", id: r.c.id, name: r.c.company })}>
+                              <Trash2 size={13} /></button>
+                          </>
+                        )}
+                        <button className="pf-mini" title={isExpanded ? "Collapse" : "Expand"}
+                          onClick={() => setExpandedCompanyId(isExpanded ? null : r.c.id)}>
+                          <ChevronDown size={13} style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+                        </button>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div className="pfc-rows">
+                        <div className="pfc-row">
+                          <span>License</span>
+                          <span><code>{r.c.license || "—"}</code></span>
+                        </div>
+                        <div className="pfc-row">
+                          <span>State status</span>
+                          <span>{r.lic
+                            ? <span className={`pf-status ${String(r.lic.status).toLowerCase() === "active" ? "active" : "suspended"}`}>{r.lic.status}</span>
+                            : <span className="pf-sub">not checked</span>}</span>
+                        </div>
+                        <div className="pfc-row">
+                          <span>Engaged by</span>
+                          <span>{r.accts.map((a) => a.name).join(", ") || "—"}</span>
+                        </div>
+                        <div className="pfc-row">
+                          <span>Warranty</span>
+                          <span>{warrantyLabel(r.c).replace(" labor warranty", "")}</span>
+                        </div>
+                        {isSuper && (
+                          <div className="pfc-row">
+                            <span>Account status</span>
+                            <button className="pf-mini"
+                              onClick={() => onEditCompany(r.c.id, { status: coStatus === "active" ? "inactive" : "active" })}>
+                              {coStatus === "active" ? "Deactivate" : "Reactivate"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {compRows.length === 0 && <p className="pf-note">No companies yet.</p>}
             </div>
+            {editCompanyId && (() => {
+              const co = companies.find((c) => c.id === editCompanyId);
+              if (!co) return null;
+              return (
+                <div className="pf-panel pf-newform">
+                  <div className="pf-panel-hd">
+                    <h3>Edit {co.company}</h3>
+                    {isSuper && (
+                      <button className="pf-mini pf-mini-danger"
+                        onClick={() => setConfirmDelete({ kind: "company", id: co.id, name: co.company })}>
+                        <Trash2 size={12} /> Delete company
+                      </button>
+                    )}
+                  </div>
+                  <CompanyEditFields co={co} onSave={(patch) => onEditCompany(co.id, patch)} onCancel={() => setEditCompanyId(null)} />
+                </div>
+              );
+            })()}
           </>
         )}
 
@@ -4191,20 +4557,21 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
               <h3>MRR movement by month</h3>
               <p className="pf-note">From the append-only subscription log, not current account state — which is why months don't drift.</p>
               <div className="pf-table-wrap">
-                <table className="pf-table pf-num">
+                <table className="pf-table pf-num pf-table-responsive">
                   <thead><tr><th>Month</th><th>Signups</th><th>Conversions</th><th>New</th><th>Expansion</th><th>Contraction</th><th>Churn</th><th>Net new</th><th>Ending MRR</th></tr></thead>
                   <tbody>
                     {running.map((r) => (
                       <tr key={r.m}>
-                        <td><b>{r.m}</b></td>
-                        <td>{r.signups}</td><td>{r.conversions}</td>
-                        <td className="up">{r.newMrr ? "+" + fmtC(r.newMrr) : "—"}</td>
-                        <td className="up">{r.expansion ? "+" + fmtC(r.expansion) : "—"}</td>
-                        <td className="down">{r.contraction ? "−" + fmtC(Math.abs(r.contraction)) : "—"}</td>
-                        <td className="down">{r.churn ? "−" + fmtC(Math.abs(r.churn)) : "—"}</td>
-                        <td><b className={(r.newMrr + r.expansion + r.contraction + r.churn) >= 0 ? "up" : "down"}>
+                        <td data-label="Month"><b>{r.m}</b></td>
+                        <td data-label="Signups">{r.signups}</td>
+                        <td data-label="Conversions">{r.conversions}</td>
+                        <td data-label="New" className="up">{r.newMrr ? "+" + fmtC(r.newMrr) : "—"}</td>
+                        <td data-label="Expansion" className="up">{r.expansion ? "+" + fmtC(r.expansion) : "—"}</td>
+                        <td data-label="Contraction" className="down">{r.contraction ? "−" + fmtC(Math.abs(r.contraction)) : "—"}</td>
+                        <td data-label="Churn" className="down">{r.churn ? "−" + fmtC(Math.abs(r.churn)) : "—"}</td>
+                        <td data-label="Net new"><b className={(r.newMrr + r.expansion + r.contraction + r.churn) >= 0 ? "up" : "down"}>
                           {(r.newMrr + r.expansion + r.contraction + r.churn) >= 0 ? "+" : "−"}{fmtC(Math.abs(r.newMrr + r.expansion + r.contraction + r.churn))}</b></td>
-                        <td><b>{fmtC(r.mrr)}</b></td>
+                        <td data-label="Ending MRR"><b>{fmtC(r.mrr)}</b></td>
                       </tr>
                     ))}
                   </tbody>
@@ -4249,6 +4616,69 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
         )}
       </main>
     </div>
+  );
+}
+
+
+function CompanyEditFields({ co, onSave, onCancel }) {
+  const [f, setF] = useState({ company: co.company, contact: co.contact, email: co.email || "",
+    phone: co.phone || "", license: co.license || "", ubi: co.ubi || "", city: co.city || "", zip: co.zip || "" });
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  return (
+    <>
+      <div className="pf-adduser pf-adduser-grid">
+        <input placeholder="Company name" value={f.company} onChange={(e) => set("company", e.target.value)} />
+        <input placeholder="Contact name" value={f.contact} onChange={(e) => set("contact", e.target.value)} />
+        <input placeholder="Email" value={f.email} onChange={(e) => set("email", e.target.value)} />
+        <input placeholder="Phone" value={f.phone} onChange={(e) => set("phone", e.target.value)} />
+        <input placeholder="License #" value={f.license} onChange={(e) => set("license", e.target.value)} />
+        <input placeholder="UBI" value={f.ubi} onChange={(e) => set("ubi", e.target.value)} />
+        <input placeholder="City" value={f.city} onChange={(e) => set("city", e.target.value)} />
+        <input placeholder="ZIP" value={f.zip} onChange={(e) => set("zip", e.target.value)} />
+      </div>
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-solid" disabled={!f.company.trim() || !f.license.trim()} onClick={() => onSave(f)}>Save changes</button>
+      </div>
+    </>
+  );
+}
+
+// Deleting an account or company is destructive and cross-references other
+// records (memberships, engagements). Require the name typed back, the same
+// pattern as most infra consoles, so it can't happen from a stray click.
+function DeleteConfirmModal({ item, onConfirm, onCancel }) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const match = typed.trim() === item.name;
+  const noun = item.kind === "account" ? "account" : "company";
+  return (
+    <Modal onClose={onCancel}>
+      <div className="form">
+        <h2><AlertTriangle size={19} style={{ color: "var(--red)", verticalAlign: -3, marginRight: 8 }} />
+          Delete this {noun}?</h2>
+        <p className="form-sub">
+          {item.kind === "account"
+            ? "This removes the account, its team memberships, and its subcontractor engagements. Job history and documents already on file are not recoverable from here."
+            : "This removes the company record and every hiring account's engagement with them. Any account currently working with this company loses that relationship."}
+          {" "}This cannot be undone.
+        </p>
+        <label className="fld">Type <b>{item.name}</b> to confirm
+          <input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus />
+        </label>
+        <div className="form-actions">
+          <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+          <button className="btn-danger" disabled={!match || busy}
+            onClick={async () => {
+              setBusy(true);
+              try { await onConfirm(typed.trim()); }
+              catch { setBusy(false); }   // the console has already said why
+            }}>
+            <Trash2 size={15} /> {busy ? "Deleting…" : `Delete ${noun}`}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -8506,6 +8936,7 @@ const CSS = `
 .pick-grid{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
 .pick{border:1px solid var(--line);background:var(--card);font-size:12.5px;padding:6px 11px;border-radius:7px;cursor:pointer;color:var(--ink-soft);font-weight:600}
 .pick.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+
 /* Used by the account-type picker and the trades panel. Thirty chips need to
    wrap; six short groups read better than one block of them. */
 .picks{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
@@ -8647,7 +9078,6 @@ const CSS = `
 .pick-row{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:11px;padding:12px 13px;background:var(--card)}
 .rec-dup{font-size:10.5px;font-weight:700;color:#a86a18;background:#fbf0dd;padding:3px 7px;border-radius:5px}
 
-
 /* header right: add + user switcher */
 .header-right{display:flex;align-items:center;gap:10px;flex:none}
 .user-wrap{position:relative}
@@ -8714,7 +9144,6 @@ const CSS = `
 .for-sub.warn{background:#fbf0dd;border-color:#ecd9b0;color:#8a5a12}
 .for-sub svg{flex:none;margin-top:1px}
 
-
 /* user row actions */
 .user-row-actions{display:flex;align-items:center;gap:7px;flex:none}
 .um-sec{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;
@@ -8742,7 +9171,6 @@ const CSS = `
 .auto-toggle{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--ink-soft);cursor:pointer;flex:none}
 .auto-toggle input{accent-color:var(--amber);width:17px;height:17px}
 .auto-booked{display:flex;align-items:center;gap:7px;color:#8a5a12;font-weight:700;font-size:13.5px}
-
 
 /* star rating */
 .star-rate{display:flex;align-items:center;gap:2px;flex:none}
@@ -8779,7 +9207,6 @@ const CSS = `
 .mc-day.booked{background:#dbe8f2;border-color:#c3d8e8;cursor:not-allowed;color:#2b5c85}
 .mc-day.booked .mc-num{color:#2b5c85}
 
-
 /* day-level availability in assign flows */
 .day-badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:6px}
 .d-free{background:#e2f0e7;color:#1f6b4a}
@@ -8791,7 +9218,6 @@ const CSS = `
 .pick-hint{font-size:11.5px;color:var(--ink-soft);font-style:italic;margin:-12px 0 14px}
 .off-days{display:flex;align-items:center;gap:7px;flex-wrap:wrap;background:#f7e5df;border:1px solid #f0d1c8;color:var(--red);font-size:12px;font-weight:600;padding:9px 12px;border-radius:9px;margin-bottom:14px}
 .off-chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:#f7e5df;border:1px solid #f0d1c8;padding:4px 9px;border-radius:7px;color:var(--red);font-weight:600}
-
 
 /* ---- request documentation CTAs ---- */
 .req-docs-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;background:#fbf0dd;border:1px solid #ecd9b0;border-radius:9px;padding:7px 9px}
@@ -8828,7 +9254,6 @@ const CSS = `
 .login-forgot:hover{color:var(--brand)}
 .login-foot{font-size:11.5px;color:var(--ink-soft);margin-top:18px;text-align:center}
 .um-signout{border-top:1px solid var(--line);border-radius:0 0 8px 8px !important;margin-top:3px;color:var(--red) !important;font-weight:700 !important}
-
 
 /* splash logo — centered, square, no squash */
 .login-logo{width:60px;height:60px;border-radius:16px;background:var(--brand);color:#fff;
@@ -8919,7 +9344,6 @@ const CSS = `
 .ac-desc{font-size:12px;color:var(--ink-soft);line-height:1.35}
 .ac-arrow{position:absolute;right:16px;top:50%;transform:translateY(-50%);color:var(--ink-soft)}
 
-
 /* segmented sub-tabs (Job Settings) */
 .seg-tabs{display:flex;gap:4px;background:var(--paper);border:1px solid var(--line);padding:4px;border-radius:10px;margin:4px 0 16px;width:fit-content}
 .seg-tabs button{border:0;background:none;padding:8px 16px;border-radius:7px;font-size:13px;font-weight:700;color:var(--ink-soft);cursor:pointer}
@@ -8941,7 +9365,6 @@ const CSS = `
 .cov-preview svg{flex:none;margin-top:2px;color:var(--brand)}
 .cov-preview em{font-style:normal;color:var(--red);font-weight:600}
 .detail-addr{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-soft);margin:0 0 6px}
-
 
 /* admin dashboard */
 .dash-hello{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:18px}
@@ -8975,7 +9398,6 @@ const CSS = `
 .radii-edit{display:flex;flex-direction:column;gap:4px}
 .radii-edit .radius-row{margin-top:4px}
 .radii-list{display:flex;flex-direction:column;gap:8px}
-
 
 /* job lifecycle */
 .form-sec{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--brand-dk);
@@ -9039,7 +9461,6 @@ const CSS = `
   border-radius:9px;padding:11px 13px;font-size:12.5px;font-weight:700;color:var(--brand);cursor:pointer;margin-top:12px}
 .wo-open-btn:hover{border-color:var(--brand)}
 .wo-open-meas{margin-left:auto;font-size:11px;font-weight:600;color:var(--ink-soft)}
-
 
 /* ---- white label branding ---- */
 .brand-logo{display:flex;align-items:center;color:var(--ink);flex:none}
@@ -9194,7 +9615,6 @@ const CSS = `
 .logo-actions{display:flex;flex-direction:column;gap:7px;flex:1;min-width:150px}
 .logo-actions .dm-upload,.logo-actions .dm-delete,.logo-actions .dm-replace{justify-content:center}
 
-
 /* logo mark editing (My account) */
 .mark-row{display:flex;align-items:center;gap:13px;background:var(--paper);border:1px solid var(--line);
   border-radius:11px;padding:13px 14px;margin-top:8px;flex-wrap:wrap}
@@ -9205,7 +9625,6 @@ const CSS = `
 .mark-hint{font-size:11px;color:var(--ink-soft);font-weight:600}
 .mark-actions{display:flex;gap:6px;flex:none}
 .brand-save{margin-bottom:14px}
-
 
 /* log in as (users tab) */
 .login-as-btn{display:flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--card);
@@ -9218,7 +9637,6 @@ const CSS = `
 .cal-doc{display:grid;place-items:center;color:#a86a18;opacity:.75}
 .cal-cell.needdocs:hover .cal-doc{opacity:1}
 .lg.needdocs{background:var(--amber)}
-
 
 /* subscription plans */
 .plan-current{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
@@ -9277,7 +9695,6 @@ const CSS = `
 .seg-tabs.sm button{padding:7px 12px;font-size:12.5px}
 .seg-n{font-size:10.5px;font-weight:800;opacity:.6;margin-left:3px}
 
-
 /* filter bar: collapse/expand + sort */
 .filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
 .filter-toggle{display:flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);
@@ -9294,7 +9711,6 @@ const CSS = `
 
 /* plan notice spacing */
 .plan-notice{margin-top:18px;margin-bottom:4px}
-
 
 /* crew-based availability */
 .crew-picker{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 16px}
@@ -9327,7 +9743,6 @@ const CSS = `
 .acg-cell.down{background:#f7e5df}
 .acg-cell.booked{background:#dbe8f2}
 
-
 /* notification preferences */
 .notify-opts{display:flex;flex-direction:column;gap:9px;margin-top:10px}
 .notify-opts.compact{flex-direction:row;gap:8px;margin-top:8px}
@@ -9348,7 +9763,6 @@ const CSS = `
   border-radius:9px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--ink-soft);line-height:1.45}
 .notify-note svg{flex:none;margin-top:1px}
 
-
 /* notification previews */
 .msg-preview{border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--card);margin-bottom:4px}
 .mp-head{display:flex;gap:10px;align-items:baseline;background:var(--paper);border-bottom:1px solid var(--line);padding:10px 13px}
@@ -9362,7 +9776,6 @@ const CSS = `
   color:#fff;padding:2px 6px;border-radius:20px;margin-left:6px;vertical-align:1px}
 .notify-opt.disabled{opacity:.5;cursor:not-allowed}
 .fld-err{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--red);font-weight:600;margin:8px 0 0}
-
 
 /* upgrade gate — left aligned, the delta table carries the argument */
 .up-form{gap:0}
@@ -9394,7 +9807,6 @@ const CSS = `
 .plan-pill{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
   background:var(--line);color:var(--ink-soft);padding:2px 7px;border-radius:20px}
 .plan-pill.scale{background:#fbf0dd;color:#8a5a12}
-
 
 /* document review */
 .rv-file{display:flex;align-items:center;gap:13px;background:var(--paper);border:1px solid var(--line);
@@ -9434,7 +9846,6 @@ const CSS = `
 .doc-review.urgent{background:var(--amber);border-color:var(--amber);color:#fff}
 .doc-review.urgent:hover{background:#a86a18;color:#fff}
 
-
 /* coverage schedule review */
 .cov-table{display:flex;flex-direction:column;gap:7px}
 .cov-line{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
@@ -9470,7 +9881,6 @@ const CSS = `
 .req-list svg{flex:none;margin-top:2px;color:var(--brand)}
 .req-note{font-size:12px;color:var(--ink-soft);margin:0;line-height:1.45}
 
-
 /* coverage overrides */
 .cov-line{flex-direction:column;align-items:stretch;gap:0}
 .cov-line-top{display:flex;align-items:center;gap:12px}
@@ -9487,7 +9897,6 @@ const CSS = `
   background:#f0f5fa;border:1px solid #cdd9e6;border-radius:8px;padding:9px 11px;margin:10px 0 0}
 .doc-waived{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;color:#2b5c85;
   background:#eaf0f6;border:1px solid #cdd9e6;padding:3px 8px;border-radius:20px;flex:none;cursor:help}
-
 
 /* WA license verification */
 .lic-card{display:flex;align-items:flex-start;gap:12px;border:1px solid var(--line);border-radius:11px;
@@ -9509,7 +9918,6 @@ const CSS = `
 .lic-actions{display:flex;align-items:center;gap:8px;flex:none}
 .lic-link{font-size:11.5px;font-weight:700;color:var(--brand);text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
 
-
 /* billing cycle */
 .cycle-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:6px}
 .cycle{display:inline-flex;gap:4px;background:var(--paper);border:1px solid var(--line);
@@ -9523,7 +9931,6 @@ const CSS = `
 .cycle-note{font-size:12.5px;color:var(--brand);font-weight:600}
 .plan-bill{font-size:11.5px;color:var(--ink-soft);margin-top:6px;display:block}
 .pc-cycle{display:block;font-size:12px;color:var(--ink-soft);margin-top:2px}
-
 
 /* response deadlines */
 .ddl{display:flex;align-items:flex-start;gap:9px;border-radius:9px;padding:11px 13px;
@@ -9543,7 +9950,6 @@ const CSS = `
 .trade-rematch{display:inline-flex;align-items:center;gap:5px;background:var(--brand);color:#fff;
   border:0;font-size:12px;font-weight:700;padding:7px 12px;border-radius:8px;cursor:pointer}
 .trade-rematch:hover{background:var(--brand-dk)}
-
 
 /* callbacks & warranty */
 .cov-banner{display:flex;align-items:flex-start;gap:11px;border:1px solid;border-radius:10px;
@@ -9589,7 +9995,6 @@ const CSS = `
 .portal-sec-note{font-size:13px;color:var(--ink-soft);margin:-4px 0 12px}
 .role.dim span{opacity:.6}
 
-
 /* per-trade work order lines */
 .bundle-box{display:flex;align-items:flex-start;gap:11px;background:#f2f8f4;border:1px solid #d4e7db;
   border-radius:10px;padding:13px 15px;margin-bottom:16px;color:var(--brand-dk)}
@@ -9616,7 +10021,6 @@ const CSS = `
 .rec-bundle{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;
   background:#e8f2ea;color:#1f6b4a;padding:3px 8px;border-radius:20px}
 
-
 /* multi-step contractor form */
 .sf-steps{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;
   margin:14px 0 20px}
@@ -9633,7 +10037,6 @@ const CSS = `
   background:var(--card);display:grid;place-items:center;font-size:11px;flex:none}
 .sf-steps button[data-state="now"] .sb-n{background:var(--brand);border-color:var(--brand);color:#fff}
 .sf-steps button[data-state="done"] .sb-n{background:var(--brand);border-color:var(--brand);color:#fff}
-
 
 /* ===== white-label pages (sign-in + public signup) ===== */
 .wl-themed{background:var(--wl-bg) !important;color:var(--wl-text) !important}
@@ -9733,7 +10136,6 @@ const CSS = `
 .theme-link{font-size:13px;font-weight:600;color:var(--brand);text-decoration:underline;text-underline-offset:2px}
 @media (max-width:640px){.theme-grid{grid-template-columns:1fr}}
 
-
 /* properties (portfolio / property managers) */
 .prop-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
 .prop-card{background:var(--card);border:1px solid var(--line);border-radius:12px;
@@ -9766,7 +10168,6 @@ const CSS = `
   .prop-stats{gap:12px}
 }
 
-
 /* "Powered by" + SubSub logo on the white-labeled sign-in / sign-up pages */
 .powered-by{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;
   letter-spacing:.01em;opacity:.7}
@@ -9775,7 +10176,6 @@ const CSS = `
 .wl-foot.powered-by{margin-top:20px;opacity:.6;color:var(--wl-text)}
 .login-foot .powered-by{opacity:.75}
 .bp-foot .powered-by{opacity:.85;font-size:10.5px}
-
 
 /* change orders */
 .co-context{display:grid;grid-template-columns:1fr;gap:0;border:1px solid var(--line);border-radius:10px;
@@ -9833,200 +10233,37 @@ const CSS = `
   .wo-co-delta{grid-column:2;text-align:right}
 }
 
-
-/* ===== platform console ===== */
-.pf-root{min-height:100vh;background:var(--paper);color:var(--ink)}
-.pf-top{display:flex;align-items:center;gap:22px;padding:0 22px;height:56px;background:#0f1a15;color:#fff;
-  position:sticky;top:0;z-index:20}
-.pf-brand{display:flex;align-items:center;gap:10px;color:#fff}
-.pf-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;
-  background:var(--amber);color:#1a1207;padding:3px 8px;border-radius:20px}
-.pf-nav{display:flex;gap:2px;flex:1}
-.pf-nav button{display:inline-flex;align-items:center;gap:7px;background:none;border:0;color:rgba(255,255,255,.7);
-  font:600 13.5px Inter,sans-serif;padding:9px 13px;border-radius:8px;cursor:pointer}
-.pf-nav button:hover{color:#fff;background:rgba(255,255,255,.07)}
-.pf-nav button.on{color:#fff;background:rgba(255,255,255,.12)}
-.pf-me{position:relative;margin-left:auto;flex:none}
-.pf-user{display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);
-  color:#fff;border-radius:10px;padding:5px 10px 5px 5px;cursor:pointer;font-family:inherit}
-.pf-user:hover,.pf-user[aria-expanded="true"]{background:rgba(255,255,255,.16)}
-.pf-avatar{background:var(--amber);color:#1a1207;width:28px;height:28px;font-size:11px}
-.pf-user-txt{display:flex;flex-direction:column;align-items:flex-start;line-height:1.15;text-align:left}
-.pf-user-txt b{font-size:13px;color:#fff}
-.pf-user-txt span{font-size:10.5px;color:rgba(255,255,255,.65)}
-/* the menu is a light surface on a dark bar: every color set explicitly, nothing inherited */
-.pf-menu{position:absolute;right:0;top:calc(100% + 8px);width:250px;background:#ffffff;color:#12211c;
-  border:1px solid #cfd8d2;border-radius:12px;box-shadow:0 18px 44px rgba(0,0,0,.28);padding:6px;z-index:60;
-  display:flex;flex-direction:column}
-.pf-menu-hd{padding:9px 10px 10px;border-bottom:1px solid #e3e8e5;display:flex;flex-direction:column;margin-bottom:4px}
-.pf-menu-hd b{font-size:13.5px;color:#12211c}
-.pf-menu-hd span{font-size:12px;color:#5d6f67}
-.pf-menu-hd em{font-style:normal;font-size:10.5px;font-weight:700;color:#8a5a12;background:#fbf0dd;
-  padding:2px 7px;border-radius:20px;align-self:flex-start;margin-top:6px}
-.pf-menu > button{display:flex;align-items:center;gap:9px;width:100%;background:transparent;border:0;padding:10px 11px;
-  border-radius:8px;font:600 13.5px Inter,sans-serif;color:#12211c;cursor:pointer;text-align:left}
-.pf-menu > button svg{color:#1f6b4a;flex:none}
-.pf-menu > button:hover{background:#f2f8f4;color:#1f6b4a}
-.pf-menu > button.pf-menu-out{border-top:1px solid #e3e8e5;border-radius:0 0 8px 8px;margin-top:4px;color:#b1391f}
-.pf-menu > button.pf-menu-out svg{color:#b1391f}
-.pf-menu > button.pf-menu-out:hover{background:#faece7}
-.pf-burger{display:none;margin-left:auto;width:40px;height:40px;border:1px solid rgba(255,255,255,.2);border-radius:9px;
-  background:transparent;cursor:pointer;align-items:center;justify-content:center;padding:0;flex:none}
-.pf-burger span{display:block;width:18px;height:2px;background:#fff;border-radius:2px;position:relative;transition:background .15s}
-.pf-burger span::before,.pf-burger span::after{content:"";position:absolute;left:0;width:18px;height:2px;background:#fff;border-radius:2px;transition:transform .18s,top .18s}
-.pf-burger span::before{top:-6px}
-.pf-burger span::after{top:6px}
-.pf-burger[aria-expanded="true"] span{background:transparent}
-.pf-burger[aria-expanded="true"] span::before{top:0;transform:rotate(45deg)}
-.pf-burger[aria-expanded="true"] span::after{top:0;transform:rotate(-45deg)}
-.pf-tag.std{background:#cfd8d2;color:#12211c}
-.pf-mini{display:inline-flex;align-items:center;gap:5px;background:var(--card);border:1px solid var(--line);
-  color:var(--ink);border-radius:8px;padding:7px 11px;font:600 12.5px Inter,sans-serif;cursor:pointer}
-.pf-mini:hover{border-color:var(--brand);color:var(--brand)}
-.pf-adduser{display:grid;grid-template-columns:1.2fr 1.4fr auto auto auto;gap:8px;align-items:center;
-  padding:10px;background:var(--paper);border:1px solid var(--line);border-radius:10px;margin-bottom:10px}
-.pf-adduser input,.pf-adduser select{border:1px solid var(--line);border-radius:8px;padding:9px 11px;
-  font:500 13.5px Inter,sans-serif;background:var(--card);min-width:0}
-.pf-main{max-width:1180px;margin:0 auto;padding:26px 22px 60px}
-.pf-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:18px}
-.pf-head h2{font-size:22px;letter-spacing:-.03em;margin:0}
-.pf-sub{display:block;font-size:12px;color:var(--ink-soft);font-weight:400;margin-top:2px}
-.pf-back{background:none;border:0;color:var(--brand);font:600 13.5px Inter,sans-serif;padding:0 0 14px;cursor:pointer}
-.pf-kpis{display:flex;gap:10px;flex-wrap:wrap}
-.pf-kpis-wrap{margin-bottom:18px}
-.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:130px;
-  display:flex;flex-direction:column;gap:3px}
-.kpi.accent{border-color:var(--brand);background:#f2f8f4}
-.kpi.warn{border-color:#e6c98f;background:#fffdf6}
-.kpi-v{font-size:22px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.1}
-.kpi-l{font-size:11.5px;color:var(--ink-soft);font-weight:600}
-.kpi-l em{font-style:normal;font-weight:500;opacity:.8}
-.pf-table-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:11px}
-.pf-table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:760px}
-.pf-table th{text-align:left;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
-  color:var(--ink-soft);padding:11px 14px;border-bottom:1px solid var(--line);background:var(--paper);white-space:nowrap}
-.pf-table td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
-.pf-table tbody tr{cursor:pointer}
-.pf-table tbody tr:hover{background:var(--paper)}
-.pf-table tbody tr:last-child td{border-bottom:0}
-.pf-table tr.muted td{opacity:.55}
-.pf-table tr.warn td:first-child{border-left:3px solid var(--red)}
-.pf-table code{font:600 12px ui-monospace,monospace;background:var(--paper);padding:2px 6px;border-radius:5px}
-.pf-num td{font-variant-numeric:tabular-nums;text-align:right}
-.pf-num td:first-child,.pf-num th:first-child{text-align:left}
-.pf-num th{text-align:right}
-.pf-flag{color:var(--amber);font-weight:800;font-size:11px}
-.pf-multi{color:var(--brand);font-weight:800;font-size:12px}
-.pf-status{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px;text-transform:capitalize}
-.pf-status.active{background:#e8f2ea;color:#1f6b4a}
-.pf-status.comped{background:#eaf0f6;color:#2b5c85}
-.pf-status.suspended,.pf-status.expired{background:#faece7;color:var(--red)}
-.pf-status.canceled{background:var(--line);color:var(--ink-soft)}
-.pf-note{font-size:12.5px;color:var(--ink-soft);margin:10px 0 0;line-height:1.5}
-.pf-act{font-size:13.5px;margin:6px 0;line-height:1.5}
-.pf-panel{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:18px 20px;margin-top:16px}
-.pf-panel h3{font-size:15px;letter-spacing:-.02em;margin:0 0 10px}
-.pf-plan-row{display:flex;gap:14px;flex-wrap:wrap}
-.pf-plan-row label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600;color:var(--ink-soft)}
-.pf-plan-row select{border:1px solid var(--line);border-radius:8px;padding:9px 12px;font:500 13.5px Inter,sans-serif;min-width:150px;background:var(--card)}
-.pf-line{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
-.pf-line:last-child{border-bottom:0}
-.pf-line-main{flex:1;display:flex;flex-direction:column}
-.pf-date{font:600 12px ui-monospace,monospace;color:var(--ink-soft);width:86px;flex:none}
-.pf-line b.up,.pf-table .up{color:var(--brand)}
-.pf-line b.down,.pf-table .down{color:var(--red)}
 .imp-banner{display:flex;align-items:center;gap:10px;background:var(--amber);color:#1a1207;padding:9px 18px;
   font-size:13px;font-weight:600}
 .imp-banner span{flex:1}
 .imp-banner button{background:#1a1207;color:#fff;border:0;border-radius:7px;padding:7px 12px;
   font:700 12.5px Inter,sans-serif;cursor:pointer}
 
-
-/* superadmin sign-in */
-.sa-page{min-height:100vh;background:#0f1a15;color:#fff;display:flex;flex-direction:column;align-items:center;
-  justify-content:center;padding:40px 20px}
-.sa-card{width:100%;max-width:440px;background:#16241d;border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:30px}
-.sa-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px;color:#fff}
-.sa-card h1{font-size:23px;letter-spacing:-.03em;margin:0}
-.sa-lede{font-size:13.5px;color:rgba(255,255,255,.6);margin:6px 0 20px;line-height:1.5}
-.sa-card .wl-fld{color:rgba(255,255,255,.85)}
-.sa-card .wl-fld input{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.18);color:#fff}
-.sa-card .wl-fld input:focus{outline-color:var(--amber)}
-.sa-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;background:var(--amber);
-  color:#1a1207;border:0;border-radius:9px;padding:13px;font:700 15px Inter,sans-serif;cursor:pointer;margin-top:4px}
-/* Google's own button is white by convention, and it has to override .sa-btn
-   above, so it is declared after it rather than before. */
-.sa-google{background:#fff;color:#1f2328;border:1px solid #d5dbd7}
-.sa-google:hover:not(:disabled){background:#f1f3f4}
-.sa-google:disabled{opacity:.65;cursor:default}
-/* The card is dark, so this link has to be light or it disappears. */
-.sa-alt{display:block;width:100%;margin-top:14px;background:none;border:0;
-  color:rgba(255,255,255,.62);font:600 12.5px Inter,sans-serif;cursor:pointer;
-  text-decoration:underline;text-underline-offset:3px}
-.sa-alt:hover{color:rgba(255,255,255,.88)}
-.sa-note{margin:2px 0 12px;font-size:12px;color:rgba(255,255,255,.55);line-height:1.5}
-.sa-back{margin-top:16px;background:none;border:0;color:rgba(255,255,255,.55);font:600 13px Inter,sans-serif;cursor:pointer;padding:0}
-.sa-back:hover{color:#fff}
-.sa-foot{margin-top:18px;font-size:11.5px;color:rgba(255,255,255,.35)}
-
-/* activity log */
-.pf-panel-hd{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;flex-wrap:wrap}
-.pf-panel-hd h3{margin:0}
-.pf-panel-hd select{border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:500 13px Inter,sans-serif;background:var(--card)}
-.pf-act-row{display:grid;grid-template-columns:96px 104px 1fr auto;gap:12px;align-items:baseline;
-  padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}
-.pf-act-row:last-child{border-bottom:0}
-.pf-act-when{font:600 11.5px ui-monospace,monospace;color:var(--ink-soft);display:flex;flex-direction:column}
-.pf-act-when em{font-style:normal;opacity:.7;font-size:10.5px}
-.pf-act-kind{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:3px 8px;
-  border-radius:20px;background:var(--paper);color:var(--ink-soft);white-space:nowrap;justify-self:start}
-.pf-act-kind.k-doc_verified,.pf-act-kind.k-job_completed{background:#e8f2ea;color:#1f6b4a}
-.pf-act-kind.k-doc_rejected{background:#faece7;color:var(--red)}
-.pf-act-kind.k-impersonation,.pf-act-kind.k-limit_hit{background:#fbf0dd;color:#8a5a12}
-.pf-act-kind.k-wo_issued,.pf-act-kind.k-change_order{background:#eaf0f6;color:#2b5c85}
-.pf-act-txt{color:var(--ink);line-height:1.4}
-.pf-act-who{font-size:12px;color:var(--ink-soft);white-space:nowrap}
-
 /* console — tablet and phone */
 @media (max-width:1000px){
-  .pf-main{padding:20px 18px 50px}
-  .pf-act-row{grid-template-columns:90px 1fr auto}
-  .pf-act-kind{display:none}
-}
-@media (max-width:1000px){
-  .pf-burger{display:flex}
-  .pf-nav{position:fixed;inset:0 0 0 auto;width:min(86vw,340px);height:100vh;background:#0f1a15;flex-direction:column;
-    gap:0;z-index:55;transform:translateX(100%);transition:transform .2s;overflow-y:auto;box-shadow:-12px 0 40px rgba(0,0,0,.4)}
-  .pf-nav.open{transform:none}
-  .pf-nav button{width:100%;justify-content:flex-start;padding:16px 22px;border-radius:0;font-size:16px;
-    border-bottom:1px solid rgba(255,255,255,.08);color:#fff}
-  .pf-nav button.on{background:rgba(255,255,255,.1)}
+  
+  
 }
 @media (max-width:760px){
-  .pf-top{gap:10px;padding:0 14px}
-  .pf-adduser{grid-template-columns:1fr 1fr}
-  .pf-adduser select,.pf-adduser .btn-solid,.pf-adduser .pf-mini{grid-column:span 1}
-  .pf-main{padding:16px 14px 44px}
-  .pf-head h2{font-size:19px}
-  .pf-kpis{gap:8px}
-  .kpi{min-width:calc(50% - 4px);flex:1 1 calc(50% - 4px);padding:10px 12px}
-  .kpi-v{font-size:19px}
-  .pf-panel{padding:14px 14px}
-  .pf-plan-row{flex-direction:column;gap:10px}
-  .pf-plan-row select{min-width:0;width:100%}
-  .pf-act-row{grid-template-columns:1fr;gap:3px;padding:10px 0}
-  .pf-act-when{flex-direction:row;gap:6px}
-  .pf-act-who{white-space:normal;font-size:11.5px}
-  .pf-menu{width:calc(100vw - 28px);right:-4px}
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
   .imp-banner{flex-wrap:wrap;padding:9px 14px;font-size:12.5px}
   .imp-banner button{width:100%}
-  .sa-card{padding:22px 18px}
+  
 }
-@media (max-width:400px){
-  .kpi{min-width:100%;flex-basis:100%}
-  .pf-nav button svg{display:none}
-}
-
 
 /* ===== one menu on mobile/tablet: nav + user in the same drawer ===== */
 .nav-burger{display:none;width:40px;height:40px;border:1px solid var(--line);border-radius:9px;background:var(--card);
@@ -10039,8 +10276,6 @@ const CSS = `
 .nav-burger[aria-expanded="true"] span::before{top:0;transform:rotate(45deg)}
 .nav-burger[aria-expanded="true"] span::after{top:0;transform:rotate(-45deg)}
 .nav-scrim{position:fixed;inset:0;background:rgba(18,33,28,.45);z-index:54}
-/* drawer-only blocks are hidden on desktop, where the user chip does this job */
-.drawer-user,.drawer-actions,.pf-drawer-user,.pf-drawer-actions{display:none}
 
 @media (max-width:1000px){
   /* tenant app */
@@ -10065,19 +10300,17 @@ const CSS = `
   .drawer-actions button:hover{background:var(--paper)}
   .drawer-actions .drawer-out,.drawer-actions .drawer-out svg{color:var(--red)}
 
-  /* platform console */
-  .pf-me{display:none}
-  .pf-nav{padding:0 0 24px}
-  .pf-drawer-user{display:flex;align-items:center;gap:11px;padding:18px 20px;border-bottom:1px solid rgba(255,255,255,.1)}
-  .pf-drawer-user .pf-avatar{width:36px;height:36px;font-size:13px}
-  .pf-drawer-txt{display:flex;flex-direction:column;line-height:1.2;min-width:0;color:#fff}
-  .pf-drawer-txt b{font-size:15px}
-  .pf-drawer-txt span{font-size:12px;color:rgba(255,255,255,.6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .pf-drawer-actions{display:flex;flex-direction:column;margin-top:auto;padding-top:8px;border-top:1px solid rgba(255,255,255,.1)}
-  .pf-drawer-actions button{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:14px 22px;
-    font:600 14.5px Inter,sans-serif;color:#fff;cursor:pointer;text-align:left}
-  .pf-drawer-actions button:hover{background:rgba(255,255,255,.08)}
-  .pf-drawer-actions .pf-drawer-out{color:#f5b8a6}
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
 }
 
 /* ============ RESPONSIVE ============ */
@@ -10097,7 +10330,6 @@ const CSS = `
 
 /* ---- Small tablet / large phone (<=820px) ---- */
 @media (max-width:820px){
-
 
   .filters{gap:8px}
   .ms,.ms-btn{min-width:0}
@@ -10381,5 +10613,302 @@ const CSS = `
   .cal-cell.clickable:hover{box-shadow:none}
   .cal-plus{opacity:1}
   button,.pick,.mini,.resp{touch-action:manipulation}
+}
+
+
+/* ---- Platform console -------------------------------------------------
+   The console's markup and its styles change together, so they are kept
+   together: this whole block is replaced as a unit rather than patched
+   rule by rule. Half of one and half of the other is worse than either. */
+/* ===== platform console ===== */
+.pf-root{min-height:100vh;background:var(--paper);color:var(--ink)}
+.pf-top{display:flex;align-items:center;gap:22px;padding:0 22px;height:56px;background:#0f1a15;color:#fff;
+  position:sticky;top:0;z-index:20}
+.pf-brand{display:flex;align-items:center;gap:10px;color:#fff}
+.pf-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;
+  background:var(--amber);color:#1a1207;padding:3px 8px;border-radius:20px}
+.pf-nav{display:flex;gap:2px;flex:1}
+.pf-nav button{display:inline-flex;align-items:center;gap:7px;background:none;border:0;color:rgba(255,255,255,.7);
+  font:600 13.5px Inter,sans-serif;padding:9px 13px;border-radius:8px;cursor:pointer}
+.pf-nav button:hover{color:#fff;background:rgba(255,255,255,.07)}
+.pf-nav button.on{color:#fff;background:rgba(255,255,255,.12)}
+.pf-me{position:relative;margin-left:auto;flex:none}
+.pf-user{display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);
+  color:#fff;border-radius:10px;padding:5px 10px 5px 5px;cursor:pointer;font-family:inherit}
+.pf-user:hover,.pf-user[aria-expanded="true"]{background:rgba(255,255,255,.16)}
+.pf-avatar{background:var(--amber);color:#1a1207;width:28px;height:28px;font-size:11px}
+.pf-user-txt{display:flex;flex-direction:column;align-items:flex-start;line-height:1.15;text-align:left}
+.pf-user-txt b{font-size:13px;color:#fff}
+.pf-user-txt span{font-size:10.5px;color:rgba(255,255,255,.65)}
+/* the menu is a light surface on a dark bar: every colour set explicitly, nothing inherited */
+.pf-menu{position:absolute;right:0;top:calc(100% + 8px);width:250px;background:#ffffff;color:#12211c;
+  border:1px solid #cfd8d2;border-radius:12px;box-shadow:0 18px 44px rgba(0,0,0,.28);padding:6px;z-index:60;
+  display:flex;flex-direction:column}
+.pf-menu-hd{padding:9px 10px 10px;border-bottom:1px solid #e3e8e5;display:flex;flex-direction:column;margin-bottom:4px}
+.pf-menu-hd b{font-size:13.5px;color:#12211c}
+.pf-menu-hd span{font-size:12px;color:#5d6f67}
+.pf-menu-hd em{font-style:normal;font-size:10.5px;font-weight:700;color:#8a5a12;background:#fbf0dd;
+  padding:2px 7px;border-radius:20px;align-self:flex-start;margin-top:6px}
+.pf-menu > button{display:flex;align-items:center;gap:9px;width:100%;background:transparent;border:0;padding:10px 11px;
+  border-radius:8px;font:600 13.5px Inter,sans-serif;color:#12211c;cursor:pointer;text-align:left}
+.pf-menu > button svg{color:#1f6b4a;flex:none}
+.pf-menu > button:hover{background:#f2f8f4;color:#1f6b4a}
+.pf-menu > button.pf-menu-out{border-top:1px solid #e3e8e5;border-radius:0 0 8px 8px;margin-top:4px;color:#b1391f}
+.pf-menu > button.pf-menu-out svg{color:#b1391f}
+.pf-menu > button.pf-menu-out:hover{background:#faece7}
+.pf-burger{display:none;margin-left:auto;width:40px;height:40px;border:1px solid rgba(255,255,255,.2);border-radius:9px;
+  background:transparent;cursor:pointer;align-items:center;justify-content:center;padding:0;flex:none}
+.pf-burger span{display:block;width:18px;height:2px;background:#fff;border-radius:2px;position:relative;transition:background .15s}
+.pf-burger span::before,.pf-burger span::after{content:"";position:absolute;left:0;width:18px;height:2px;background:#fff;border-radius:2px;transition:transform .18s,top .18s}
+.pf-burger span::before{top:-6px}
+.pf-burger span::after{top:6px}
+.pf-burger[aria-expanded="true"] span{background:transparent}
+.pf-burger[aria-expanded="true"] span::before{top:0;transform:rotate(45deg)}
+.pf-burger[aria-expanded="true"] span::after{top:0;transform:rotate(-45deg)}
+.pf-tag.std{background:#cfd8d2;color:#12211c}
+.pf-mini{display:inline-flex;align-items:center;gap:5px;background:var(--card);border:1px solid var(--line);
+  color:var(--ink);border-radius:8px;padding:7px 11px;font:600 12.5px Inter,sans-serif;cursor:pointer}
+.pf-mini:hover{border-color:var(--brand);color:var(--brand)}
+.pf-adduser,.pf-adduser-grid{display:grid;grid-template-columns:1.2fr 1.4fr auto auto auto;gap:8px;align-items:center;
+  padding:10px;background:var(--paper);border:1px solid var(--line);border-radius:10px;margin-bottom:10px}
+.pf-adduser input,.pf-adduser select{border:1px solid var(--line);border-radius:8px;padding:9px 11px;
+  font:500 13.5px Inter,sans-serif;background:var(--card);min-width:0}
+.pf-main{max-width:1180px;margin:0 auto;padding:26px 22px 60px}
+.pf-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:18px}
+.pf-head h2{font-size:22px;letter-spacing:-.03em;margin:0}
+.pf-sub{display:block;font-size:12px;color:var(--ink-soft);font-weight:400;margin-top:2px}
+.pf-back{background:none;border:0;color:var(--brand);font:600 13.5px Inter,sans-serif;padding:0 0 14px;cursor:pointer}
+.pf-kpis{display:flex;gap:10px;flex-wrap:wrap}
+.pf-kpis-wrap{margin-bottom:18px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:130px;
+  display:flex;flex-direction:column;gap:3px}
+.kpi.accent{border-color:var(--brand);background:#f2f8f4}
+.kpi.warn{border-color:#e6c98f;background:#fffdf6}
+.kpi-v{font-size:22px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.1}
+.kpi-l{font-size:11.5px;color:var(--ink-soft);font-weight:600}
+.kpi-l em{font-style:normal;font-weight:500;opacity:.8}
+.pf-table-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:11px}
+.pf-table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:760px}
+.pf-table th{text-align:left;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--ink-soft);padding:11px 14px;border-bottom:1px solid var(--line);background:var(--paper);white-space:nowrap}
+.pf-table td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+.pf-table tbody tr{cursor:pointer}
+.pf-table tbody tr:hover{background:var(--paper)}
+.pf-table tbody tr:last-child td{border-bottom:0}
+.pf-table tr.muted td{opacity:.55}
+.pf-table tr.warn td:first-child{border-left:3px solid var(--red)}
+.pf-table code{font:600 12px ui-monospace,monospace;background:var(--paper);padding:2px 6px;border-radius:5px}
+.pf-table.pf-table-responsive{min-width:0;width:100%;display:block}
+.pf-table.pf-table-responsive thead{display:none}
+.pf-table.pf-table-responsive tbody{display:block}
+.pf-table.pf-table-responsive tr{display:block;background:var(--card);border:1px solid var(--line);
+    border-radius:11px;padding:4px 14px;margin-bottom:10px}
+.pf-table.pf-table-responsive tr.warn{border-left:3px solid var(--red)}
+.pf-table.pf-table-responsive td{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;
+    padding:9px 0;border-bottom:1px solid var(--line);text-align:right}
+.pf-table.pf-table-responsive td:last-child{border-bottom:0}
+.pf-table.pf-table-responsive td[data-label]::before{content:attr(data-label);font-size:10.5px;font-weight:800;
+    text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);text-align:left;flex:none;padding-top:1px}
+.pf-table.pf-table-responsive td:not([data-label]),
+  .pf-table.pf-table-responsive td[data-label=""]{justify-content:flex-end}
+.pf-table.pf-table-responsive td > b,.pf-table.pf-table-responsive td > span:first-child{text-align:right}
+.pf-table.pf-table-responsive .pf-sub{display:block;text-align:right}
+.pf-table.pf-table-responsive .pf-row-actions{justify-content:flex-end}
+.pf-num td{font-variant-numeric:tabular-nums;text-align:right}
+.pf-num td:first-child,.pf-num th:first-child{text-align:left}
+.pf-num th{text-align:right}
+@media (max-width:700px){
+  .pf-num.pf-table-responsive td:first-child{text-align:right}
+}
+.pf-flag{color:var(--amber);font-weight:800;font-size:11px}
+.pf-multi{color:var(--brand);font-weight:800;font-size:12px}
+.pf-status{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px;text-transform:capitalize}
+.pf-status.active{background:#e8f2ea;color:#1f6b4a}
+.pf-status.comped{background:#eaf0f6;color:#2b5c85}
+.pf-status.suspended,.pf-status.expired{background:#faece7;color:var(--red)}
+.pf-status.canceled{background:var(--line);color:var(--ink-soft)}
+.pf-note{font-size:12.5px;color:var(--ink-soft);margin:10px 0 0;line-height:1.5}
+.pf-act{font-size:13.5px;margin:6px 0;line-height:1.5}
+.pf-panel{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:18px 20px;margin-top:16px}
+.pf-panel h3{font-size:15px;letter-spacing:-.02em;margin:0 0 10px}
+.pf-plan-row{display:flex;gap:14px;flex-wrap:wrap}
+.pf-plan-row label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600;color:var(--ink-soft)}
+.pf-plan-row select{border:1px solid var(--line);border-radius:8px;padding:9px 12px;font:500 13.5px Inter,sans-serif;min-width:150px;background:var(--card)}
+.pf-line{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px;flex-wrap:wrap}
+.pf-line:last-child{border-bottom:0}
+.pf-line-main{flex:1;min-width:0;display:flex;flex-direction:column}
+.pf-line-main span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:480px){
+  .pf-line .pf-mini{width:100%;justify-content:center;order:99}
+}
+.pf-date{font:600 12px ui-monospace,monospace;color:var(--ink-soft);width:86px;flex:none}
+.pf-line b.up,.pf-table .up{color:var(--brand)}
+.pf-line b.down,.pf-table .down{color:var(--red)}
+/* superadmin sign-in */
+.sa-page{min-height:100vh;background:#0f1a15;color:#fff;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;padding:40px 20px}
+.sa-card{width:100%;max-width:440px;background:#16241d;border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:30px}
+.sa-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px;color:#fff}
+.sa-card h1{font-size:23px;letter-spacing:-.03em;margin:0}
+.sa-lede{font-size:13.5px;color:rgba(255,255,255,.6);margin:6px 0 20px;line-height:1.5}
+.sa-google-btn{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;
+  background:#fff;color:#1f1f1f;border:1px solid rgba(255,255,255,.9);border-radius:9px;
+  padding:13px;font:600 15px Inter,sans-serif;cursor:pointer;margin-top:4px}
+.sa-google-btn:hover{background:#f5f5f5}
+.sa-google-btn:disabled{opacity:.7;cursor:default}
+.sa-google-note{font-size:12px;color:rgba(255,255,255,.5);margin-top:12px;line-height:1.5}
+.sa-staff{margin-top:22px;padding-top:18px;border-top:1px solid rgba(255,255,255,.1)}
+.sa-staff .ld-label{color:rgba(255,255,255,.5)}
+.sa-staff .ld-row{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.12)}
+.sa-staff .ld-row:hover{border-color:var(--amber);background:rgba(255,255,255,.08)}
+.sa-staff .ld-name{color:#fff}
+.sa-staff .ld-email{color:rgba(255,255,255,.55)}
+.sa-foot{margin-top:18px;font-size:11.5px;color:rgba(255,255,255,.35)}
+/* activity log */
+.pf-panel-hd{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+.pf-panel-hd h3{margin:0}
+.pf-panel-hd select{border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:500 13px Inter,sans-serif;background:var(--card)}
+.pf-act-row{display:grid;grid-template-columns:96px 104px 1fr auto;gap:12px;align-items:baseline;
+  padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}
+.pf-act-row:last-child{border-bottom:0}
+.pf-act-when{font:600 11.5px ui-monospace,monospace;color:var(--ink-soft);display:flex;flex-direction:column}
+.pf-act-when em{font-style:normal;opacity:.7;font-size:10.5px}
+.pf-act-kind{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:3px 8px;
+  border-radius:20px;background:var(--paper);color:var(--ink-soft);white-space:nowrap;justify-self:start}
+.pf-act-kind.k-doc_verified,.pf-act-kind.k-job_completed{background:#e8f2ea;color:#1f6b4a}
+.pf-act-kind.k-doc_rejected{background:#faece7;color:var(--red)}
+.pf-act-kind.k-impersonation,.pf-act-kind.k-limit_hit{background:#fbf0dd;color:#8a5a12}
+.pf-act-kind.k-wo_issued,.pf-act-kind.k-change_order{background:#eaf0f6;color:#2b5c85}
+.pf-act-txt{color:var(--ink);line-height:1.4}
+.pf-act-who{font-size:12px;color:var(--ink-soft);white-space:nowrap}
+.pf-act-row{grid-template-columns:90px 1fr auto}
+.pf-act-kind{display:none}
+@media (max-width:600px){
+  .pf-act-row{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:11px 0}
+  .pf-act-when{flex-direction:row;gap:6px;width:100%}
+  .pf-act-txt{width:100%}
+  .pf-act-who{font-size:11.5px;opacity:.75}
+}
+@media (max-width:1000px){
+  .pf-burger{display:flex}
+  .pf-nav{position:fixed;inset:0 0 0 auto;width:min(86vw,340px);height:100vh;background:#0f1a15;flex-direction:column;
+    gap:0;z-index:55;transform:translateX(100%);transition:transform .2s;overflow-y:auto;box-shadow:-12px 0 40px rgba(0,0,0,.4)}
+  .pf-nav.open{transform:none}
+  .pf-nav button{width:100%;justify-content:flex-start;padding:16px 22px;border-radius:0;font-size:16px;
+    border-bottom:1px solid rgba(255,255,255,.08);color:#fff}
+  .pf-nav button.on{background:rgba(255,255,255,.1)}
+}
+@media (max-width:820px){
+  .pf-top{gap:10px;padding:0 14px}
+  .pf-adduser,.pf-adduser-grid{grid-template-columns:1fr;gap:8px}
+  .pf-adduser select,.pf-adduser .btn-solid,.pf-adduser .pf-mini,
+  .pf-adduser-grid select,.pf-adduser-grid input{width:100%;justify-content:center}
+  .pf-main{padding:16px 14px 44px}
+  .pf-head h2{font-size:19px}
+  .pf-kpis{gap:8px}
+  .kpi{min-width:calc(50% - 4px);flex:1 1 calc(50% - 4px);padding:10px 12px}
+  .kpi-v{font-size:19px}
+  .pf-panel{padding:14px 14px}
+  .pf-plan-row{flex-direction:column;gap:10px}
+  .pf-plan-row select{min-width:0;width:100%}
+  .pf-act-when{flex-direction:row;gap:6px}
+  .pf-act-who{white-space:normal;font-size:11.5px}
+  .pf-menu{width:calc(100vw - 28px);right:-4px}
+  .sa-card{padding:22px 18px}
+}
+@media (max-width:400px){
+  .kpi{min-width:100%;flex-basis:100%}
+  .pf-nav button svg{display:none}
+}
+/* drawer-only blocks are hidden on desktop, where the user chip does this job */
+.drawer-user,.drawer-actions,.pf-drawer-user,.pf-drawer-actions{display:none}
+@media (max-width:1000px){
+  /* platform console */
+  .pf-me{display:none}
+  .pf-nav{padding:0 0 24px}
+  .pf-drawer-user{display:flex;align-items:center;gap:11px;padding:18px 20px;border-bottom:1px solid rgba(255,255,255,.1)}
+  .pf-drawer-user .pf-avatar{width:36px;height:36px;font-size:13px}
+  .pf-drawer-txt{display:flex;flex-direction:column;line-height:1.2;min-width:0;color:#fff}
+  .pf-drawer-txt b{font-size:15px}
+  .pf-drawer-txt span{font-size:12px;color:rgba(255,255,255,.6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pf-drawer-actions{display:flex;flex-direction:column;margin-top:auto;padding-top:8px;border-top:1px solid rgba(255,255,255,.1)}
+  .pf-drawer-actions button{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:14px 22px;
+    font:600 14.5px Inter,sans-serif;color:#fff;cursor:pointer;text-align:left}
+  .pf-drawer-actions button:hover{background:rgba(255,255,255,.08)}
+  .pf-drawer-actions .pf-drawer-out{color:#f5b8a6}
+}
+/* superadmin CRUD: create/edit forms, delete confirm, reset panel */
+.btn-danger{display:inline-flex;align-items:center;gap:8px;background:var(--red);color:#fff;border:0;
+  border-radius:10px;padding:11px 20px;font:700 14px Inter,sans-serif;cursor:pointer}
+.btn-danger:hover{background:#9c3119}
+.btn-danger:disabled{opacity:.4;cursor:not-allowed}
+.pf-hd-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pf-danger-btn{color:var(--red);border-color:#f0d9d1}
+.pf-danger-btn:hover{background:#faece7;border-color:var(--red)}
+.btn-danger-outline{display:inline-flex;align-items:center;gap:8px;background:var(--card);color:var(--red);
+  border:1px solid #f0d9d1;border-radius:10px;padding:10px 18px;font:700 13.5px Inter,sans-serif;cursor:pointer;flex:none}
+.btn-danger-outline:hover{background:#faece7;border-color:var(--red)}
+.pf-danger-zone{border-color:#f0d9d1;background:#fffaf8}
+.pf-danger-zone h3{display:flex;align-items:center;gap:8px;color:var(--red)}
+.pf-danger-row{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.pf-danger-row b{display:block;font-size:14px;margin-bottom:4px}
+.pf-danger-row .pf-note{margin:0;max-width:52ch}
+.pf-company-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:16px}
+.pf-write-err{margin:0 0 16px;padding:12px 14px;border-radius:10px;background:#fdf1ef;
+  border:1px solid #e9c4bd;color:#8a2f1c;font-size:13.5px}
+.pf-account-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:16px}
+.pf-dash-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:16px}
+.pf-dash-card{cursor:pointer;transition:border-color .12s}
+.pf-dash-card:hover{border-color:var(--brand)}
+.pf-dash-card h3{display:flex;align-items:center;gap:8px;margin:0 0 12px}
+.pf-dash-stat{display:flex;align-items:baseline;gap:7px;margin-bottom:8px}
+.pf-dash-stat b{font-size:26px;font-weight:800;letter-spacing:-.03em;line-height:1}
+.pf-dash-stat span{font-size:12.5px;color:var(--ink-soft)}
+.pf-dash-flag{font-size:12.5px;color:var(--amber);font-weight:600;margin:4px 0 0}
+.pf-act a{color:var(--brand);font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.pf-account-card.muted{opacity:.6}
+.pf-company-card{background:var(--card);border:1px solid var(--line);border-radius:11px;
+  transition:border-color .12s}
+.pf-company-card:hover{border-color:var(--brand)}
+.pf-company-card.warn{border-left:3px solid var(--red)}
+.pfc-top{display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer}
+.pfc-name{display:flex;flex-direction:column;min-width:0;flex:1}
+.pfc-name b{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pfc-name .pf-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pfc-summary{display:flex;align-items:center;gap:6px;flex:none}
+.pfc-summary .pf-multi,.pfc-summary .pf-flag{font-size:10.5px}
+.pfc-actions{display:flex;align-items:center;gap:4px;flex:none}
+.pf-company-card.is-open{border-color:var(--brand)}
+.pfc-rows{display:flex;flex-direction:column;gap:7px;padding:2px 14px 13px;border-top:1px solid var(--line)}
+.pfc-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;font-size:12.5px;padding-top:9px}
+.pfc-row > span:first-child{color:var(--ink-soft);font-size:10.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.04em;flex:none;padding-top:1px}
+.pfc-row > span:last-child{text-align:right}
+@media (max-width:480px){
+  .pf-company-grid,.pf-account-grid{grid-template-columns:1fr}
+  .pfc-name b,.pfc-name .pf-sub{white-space:normal}
+  .pf-danger-row{flex-direction:column;align-items:stretch}
+  .btn-danger-outline{width:100%;justify-content:center}
+}
+.pf-newform{border-color:var(--brand);background:#f9fbfa}
+.pf-newform h3{margin-bottom:12px}
+.pf-adduser-4{grid-template-columns:repeat(4,1fr)}
+.pf-adduser-grid{display:grid;gap:8px;margin-bottom:12px}
+.pf-row-actions{display:flex;gap:6px;white-space:nowrap}
+.pf-mini-danger{color:var(--red);border-color:#f0d9d1}
+.pf-mini-danger:hover{background:#faece7;border-color:var(--red);color:var(--red)}
+.pf-reset{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:12px}
+.pf-reset p{font-size:13.5px;line-height:1.55;margin:0 0 10px;color:var(--ink)}
+.pf-reset-url{display:block;background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:10px 12px;font:600 12px ui-monospace,monospace;word-break:break-all;color:var(--brand);margin-bottom:4px}
+@media (max-width:760px){
+  .pf-hd-actions{width:100%;flex-direction:column;align-items:stretch}
+  .pf-hd-actions button{width:100%;justify-content:center}
+}
+@media (max-width:820px){
+  .pf-adduser-4{grid-template-columns:1fr 1fr}
+}
+@media (max-width:480px){
+  .pf-adduser-4,.pf-adduser-grid{grid-template-columns:1fr}
 }
 `;
