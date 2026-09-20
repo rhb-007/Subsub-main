@@ -7871,12 +7871,18 @@ function AccountChooser({ result, brand, onPick, onBack }) {
                   and two letters in a square is a stand-in for a brand rather
                   than one -- so an account without a logo is its name, set as
                   text, which is what it is. */}
-              {m.logoKey && PLANS[m.plan]?.branding && (
-                <span className="ac-mark">
-                  <img src={logoUrl(m.accountId)} alt="" height={30}
-                    style={{ height: 30, width: "auto", display: "block" }} />
-                </span>
-              )}
+              <span className="ac-mark">
+                {m.logoKey && PLANS[m.plan]?.branding
+                  ? <img src={logoUrl(m.accountId)} alt="" height={30}
+                      style={{ height: 30, width: "auto", display: "block" }} />
+                  // No logo of their own: their initials, set as text rather
+                  // than dressed up as a mark. It keeps every row starting at
+                  // the same place without inventing a brand for them.
+                  : <span className="ac-ini">
+                      {(m.accountName || "").split(" ").filter(Boolean)
+                        .map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
+                    </span>}
+              </span>
               <span className="ac-txt">
                 <b>{m.accountName}</b>
                 <span>{ROLES[m.role] ? ROLES[m.role].label : m.role}</span>
@@ -9570,7 +9576,8 @@ const CSS = `
   background:var(--wl-card);border:1px solid rgba(128,128,128,.28);border-radius:12px;
   padding:13px 14px;color:var(--wl-text);font:inherit}
 .ac-row:hover{border-color:var(--wl-accent)}
-.ac-mark{flex:none;display:flex}
+.ac-mark{flex:none;display:flex;align-items:center;justify-content:center;min-width:34px}
+.ac-ini{font:700 13px Inter,sans-serif;letter-spacing:.04em;color:var(--wl-accent);opacity:.85}
 .ac-txt{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
 .ac-txt b{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ac-txt span{font-size:12px;opacity:.7}
