@@ -8742,8 +8742,12 @@ const CSS = `
 .add-btn:hover{background:var(--brand-dk)}
 .add-wrap{position:relative;flex:none}
 .add-scrim{position:fixed;inset:0;z-index:30}
+/* Hangs below the header, so on a short window -- an iPad in landscape, a
+   Stage Manager pane -- a menu listing several accounts runs off the bottom
+   with nothing to scroll. Cap it against the visible height instead. */
 .add-menu{position:absolute;top:100%;right:0;margin-top:6px;background:#ffffff;color:#12211c;border:1px solid #cfd8d2;
-  border-radius:11px;box-shadow:0 14px 36px rgba(26,43,35,.22);z-index:60;min-width:200px;padding:5px;display:flex;flex-direction:column}
+  border-radius:11px;box-shadow:0 14px 36px rgba(26,43,35,.22);z-index:60;min-width:200px;padding:5px;display:flex;flex-direction:column;
+  max-height:calc(100dvh - 96px);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .add-menu button{display:flex;align-items:center;gap:9px;border:0;background:transparent;padding:10px 12px;font-size:13.5px;
   font-weight:600;color:#12211c;cursor:pointer;border-radius:8px;text-align:left}
 .add-menu button svg{color:#1f6b4a;flex:none}
@@ -10281,8 +10285,17 @@ const CSS = `
   /* tenant app */
   .nav-burger{display:flex}
   .user-wrap{display:none}
-  .ss-header .tabs{position:fixed;inset:0 0 0 auto;width:min(86vw,340px);height:100vh;background:var(--card);
-    flex-direction:column;align-items:stretch;gap:0;padding:0 0 24px;border-radius:0;z-index:55;overflow-y:auto;
+  /* 100vh is taller than what a phone or tablet browser actually shows once
+     its own chrome is counted, so the last thing in the drawer -- which is
+     "My account" and "Sign out" -- ends up below the fold with no way to
+     scroll to it. dvh is the visible height; vh stays as the fallback for
+     anything that does not know dvh. The bottom padding clears the home
+     indicator on a device that has one. */
+  .ss-header .tabs{position:fixed;inset:0 0 0 auto;width:min(86vw,340px);height:100vh;height:100dvh;
+    max-height:100dvh;background:var(--card);
+    flex-direction:column;align-items:stretch;gap:0;border-radius:0;z-index:55;
+    overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+    padding:0 0 max(24px,env(safe-area-inset-bottom));
     transform:translateX(100%);transition:transform .2s;box-shadow:-12px 0 40px rgba(0,0,0,.18)}
   .ss-header .tabs.open{transform:none}
   .ss-header .tabs > button{width:100%;justify-content:flex-start;padding:15px 20px;border-radius:0;
@@ -10293,7 +10306,8 @@ const CSS = `
   .drawer-user-txt{display:flex;flex-direction:column;line-height:1.2;min-width:0}
   .drawer-user-txt b{font-size:15px}
   .drawer-user-txt span{font-size:12px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .drawer-actions{display:flex;flex-direction:column;margin-top:auto;padding-top:8px;border-top:1px solid var(--line)}
+  .drawer-actions{display:flex;flex-direction:column;margin-top:auto;padding-top:8px;
+    border-top:1px solid var(--line);flex:none}
   .drawer-actions button{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:14px 20px;
     font:600 14.5px Inter,sans-serif;color:var(--ink);cursor:pointer;text-align:left}
   .drawer-actions button svg{color:var(--brand)}
@@ -10791,8 +10805,13 @@ const CSS = `
 }
 @media (max-width:1000px){
   .pf-burger{display:flex}
-  .pf-nav{position:fixed;inset:0 0 0 auto;width:min(86vw,340px);height:100vh;background:#0f1a15;flex-direction:column;
-    gap:0;z-index:55;transform:translateX(100%);transition:transform .2s;overflow-y:auto;box-shadow:-12px 0 40px rgba(0,0,0,.4)}
+  /* Same as the tenant drawer: the console's sign-out sits at the bottom. */
+  .pf-nav{position:fixed;inset:0 0 0 auto;width:min(86vw,340px);height:100vh;height:100dvh;
+    max-height:100dvh;background:#0f1a15;flex-direction:column;
+    gap:0;z-index:55;transform:translateX(100%);transition:transform .2s;
+    overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+    padding-bottom:max(16px,env(safe-area-inset-bottom));
+    box-shadow:-12px 0 40px rgba(0,0,0,.4)}
   .pf-nav.open{transform:none}
   .pf-nav button{width:100%;justify-content:flex-start;padding:16px 22px;border-radius:0;font-size:16px;
     border-bottom:1px solid rgba(255,255,255,.08);color:#fff}
