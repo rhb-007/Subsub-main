@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail } from "./mail.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
+import { verifyAccessJwt } from "./access.js";
 
 const app = new Hono();
 app.use("/api/*", cors());
@@ -2247,28 +2248,53 @@ function linkedProviders(supaUser) {
     : [meta.provider].filter(Boolean);
 }
 
-async function requireStaff(c) {
-  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) {
-    return { error: c.json({ error: "auth_not_configured" }, 501) };
-  }
+// Who is asking, for the platform console. Two ways in, and the first is the
+// one that should be used:
+//
+//   1. Cloudflare Access. It sits in front of the console's hostname and
+//      will not pass a request through until Google Workspace has vouched
+//      for the person, then signs a JWT saying who they are. Nothing
+//      unauthenticated reaches this Worker, and the console needs no login
+//      screen of its own.
+//
+//   2. A Supabase session. The original route, kept for a console reached at
+//      a hostname Access does not cover -- local development, mainly. It
+//      demands a federated login unless STAFF_ALLOW_PASSWORD is set.
+//
+// Either way, identity is not membership: the superadmins table decides, and
+// a customer's perfectly valid login gets nothing here.
+async function staffIdentity(c) {
+  const accessClaims = await verifyAccessJwt(c.env, c.req.header("Cf-Access-Jwt-Assertion"));
+  if (accessClaims) return { email: accessClaims.email, authId: null, via: "access" };
+
+  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) return { error: "auth_not_configured" };
   const authHeader = c.req.header("Authorization");
   const supaUser = await verifySupabaseToken(c.env, authHeader);
-  if (!supaUser) return { error: c.json({ error: "unauthorized" }, 401) };
+  if (!supaUser) return { error: "unauthorized" };
 
-  // Staff sign in through Google Workspace. A password on the same address is
-  // refused, so disabling someone in Workspace actually locks them out here.
-  // STAFF_ALLOW_PASSWORD exists for break-glass and should not be set in
-  // normal operation — see app/README.md.
+  // A password on a staff address is refused, so disabling someone in
+  // Workspace actually locks them out. STAFF_ALLOW_PASSWORD is break-glass
+  // and should not be set in normal operation — see app/README.md.
   const breakGlass = String(c.env.STAFF_ALLOW_PASSWORD || "") === "1";
   if (!breakGlass && !sessionUsedFederatedLogin(decodeJwtClaims(authHeader), supaUser)) {
-    return { error: c.json({ error: "sso_required" }, 403) };
+    return { error: "sso_required" };
+  }
+  return { email: supaUser.email || "", authId: supaUser.id, via: "supabase" };
+}
+
+async function requireStaff(c) {
+  const who = await staffIdentity(c);
+  if (who.error) {
+    const status = who.error === "auth_not_configured" ? 501
+      : who.error === "unauthorized" ? 401 : 403;
+    return { error: c.json({ error: who.error }, status) };
   }
 
-  // Anyone with any Google account can complete a Google sign-in, so the
-  // Workspace domain is checked here rather than trusted from the `hd` hint
-  // sent to Google, which is advisory only.
+  // Anyone with any Google account can complete a Google sign-in, and an
+  // Access policy can be widened by mistake, so the staff domain is checked
+  // here too — the one place it cannot be skipped.
   const domain = String(c.env.STAFF_EMAIL_DOMAIN || "").trim().toLowerCase();
-  const email = String(supaUser.email || "").toLowerCase();
+  const email = String(who.email || "").toLowerCase();
   if (domain && !email.endsWith("@" + domain)) {
     return { error: c.json({ error: "wrong_domain" }, 403) };
   }
@@ -2276,16 +2302,17 @@ async function requireStaff(c) {
   const row = await c.env.DB.prepare(
     `SELECT u.id, u.name, u.email, s.role, s.finance, s.impersonate
        FROM users u JOIN superadmins s ON s.user_id = u.id
-      WHERE u.auth_id = ? OR lower(u.email) = lower(?)`
-  ).bind(supaUser.id, supaUser.email || "").first();
-  // A valid Supabase session is not staff membership. Someone with a customer
-  // login must get nothing here.
+      WHERE (? IS NOT NULL AND u.auth_id = ?) OR lower(u.email) = lower(?)`
+  ).bind(who.authId, who.authId, email).first();
+  // Being signed in is not being staff. Someone with a customer login, or a
+  // Workspace account nobody has granted anything to, must get nothing here.
   if (!row) return { error: c.json({ error: "forbidden" }, 403) };
 
   return { staff: {
     userId: row.id, name: row.name, email: row.email, role: row.role,
     finance: !!row.finance && row.role === "superadmin",
     impersonate: !!row.impersonate && row.role === "superadmin",
+    via: who.via,
   } };
 }
 

@@ -3668,11 +3668,15 @@ function SuperadminLogin({ onLogin }) {
       const me = await api.platform.me();
       setBusy(false);
       onLogin(me);
+      return true;
     } catch (e2) {
-      await supabase.auth.signOut();
+      // Only drop a Supabase session we actually established. Under Access
+      // there is none, and signing out of nothing would throw.
+      if (supabaseEnabled) await supabase.auth.signOut().catch(() => {});
       setBusy(false);
       setErr(STAFF_ERRORS[e2?.body?.error] || STAFF_ERRORS[e2?.message]
         || "Could not verify staff access. Try again.");
+      return false;
     }
   };
 
@@ -3696,17 +3700,46 @@ function SuperadminLogin({ onLogin }) {
     // where the effect below picks the session up.
   };
 
-  // Returning from Google: the session is already in place, so go straight to
-  // the staff check rather than showing the sign-in screen again.
+  // Ask the API who we are before drawing a sign-in screen, because under
+  // Cloudflare Access we are already signed in: reaching this page at all
+  // means Access let the request through and stamped it with an identity.
+  // Only if that comes back unauthorized is there anything to ask for.
+  //
+  // It also covers coming back from Google in the Supabase flow, where the
+  // session is in place by the time this runs.
+  const [checking, setChecking] = useState(true);
   useEffect(() => {
-    if (!supabaseEnabled) return;
     let live = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (live && data?.session) { setBusy(true); finish(); }
-    });
+    (async () => {
+      try {
+        const me = await api.platform.me();
+        if (live) onLogin(me);
+        return;
+      } catch (e2) {
+        // 401 means nobody has identified us, which is the one case where a
+        // sign-in screen is the right answer. 403 is a real refusal — known,
+        // and not staff — and saying so beats offering a button that will
+        // fail the same way.
+        if (live && e2?.status && e2.status !== 401) {
+          setErr(STAFF_ERRORS[e2?.body?.error] || "Could not verify staff access.");
+        }
+      }
+      if (live) setChecking(false);
+    })();
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (checking) {
+    return (
+      <div className="sa-page">
+        <div className="sa-card">
+          <div className="sa-brand"><SubSubLogo height={26} /><span className="pf-tag">Platform</span></div>
+          <p className="sa-lede">Checking your access…</p>
+        </div>
+      </div>
+    );
+  }
 
   // Break-glass only, and refused by the API unless STAFF_ALLOW_PASSWORD is set.
   const submit = async (e) => {
@@ -3721,18 +3754,18 @@ function SuperadminLogin({ onLogin }) {
     await finish();
   };
 
-  // Refuse outright rather than presenting a form that cannot work. Without
-  // this, a console built without Supabase would sign anyone in who typed a
-  // seeded address and any password at all.
+  // No Supabase and no Access identity either: there is nothing to offer, so
+  // do not draw a form that cannot work. Without this, a console built with
+  // neither would present a password box that signs nobody in.
   if (!supabaseEnabled) {
     return (
       <div className="sa-page">
         <div className="sa-card">
           <div className="sa-brand"><SubSubLogo height={26} /><span className="pf-tag">Platform</span></div>
-          <h1>Not configured</h1>
+          <h1>Not signed in</h1>
           <p className="sa-lede">
-            This console was built without authentication, so it will not sign anyone in.
-            Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY and rebuild.
+            {err || "This console expects Cloudflare Access in front of it. Reaching this "
+              + "page without an identity means Access is not covering this hostname."}
           </p>
         </div>
         <p className="sa-foot">SubSub, LLC · internal use only</p>

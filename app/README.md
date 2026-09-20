@@ -414,7 +414,51 @@ The Workspace domain is checked server-side too. The `hd` parameter sent to
 Google is an account-chooser hint and nothing more — anyone with any Google
 account can complete the flow, so `STAFF_EMAIL_DOMAIN` is what actually holds.
 
+### Cloudflare Access is the way in
+
+Access sits in front of `admin.subsub.work` and refuses to pass a request
+through until Google Workspace has vouched for the person. It then adds a
+signed `Cf-Access-Jwt-Assertion` header naming them, which `access.js`
+verifies against Cloudflare's published keys.
+
+This is better than the Supabase OAuth route below in the way that matters:
+an unauthenticated stranger never receives the console at all, rather than
+receiving it and being turned away after it loads. There is also no OAuth
+client to register, no redirect URIs and no client secret in the Worker.
+
+The header is verified, never merely read. It is only meaningful because
+Access signed it — the same header on a request to a hostname Access does not
+cover is just a claim, which is why the audience and issuer are checked too:
+every Access application in an account is signed by the same keys, so without
+the `aud` check a token minted for any other app would pass.
+
+**Access covers the hostname, not the account.** So `requireStaff` still reads
+`superadmins` and still enforces `STAFF_EMAIL_DOMAIN`. Being let through the
+door is not the same as being staff, and an Access policy can be widened by
+mistake.
+
 **Setting it up:**
+
+1. **Zero Trust → Access → Applications** — add a self-hosted application for
+   `admin.subsub.work`, covering all paths. Identity provider: Google
+   Workspace. Policy: allow emails ending `@subsub.work`.
+2. **Route the console's API calls through the same hostname.** The console
+   calls `admin.subsub.work/api/*`, not `api.subsub.work` — Access only
+   stamps requests to hostnames it covers, and a cross-origin call to the
+   API hostname would arrive anonymous. Add `admin.subsub.work/api/*` as a
+   route on the `subsub-api` Worker.
+3. **Worker variables**: `ACCESS_TEAM_DOMAIN` (e.g. `subsub.cloudflareaccess.com`)
+   and `ACCESS_AUD` (the application's Audience tag, shown on its overview).
+4. **Console build**: `VITE_BUILD=platform`, with `VITE_API_BASE` pointing at
+   `https://admin.subsub.work/api`.
+
+Then add the first staff row by hand, as below. `STAFF_ALLOW_PASSWORD` should
+stay unset: Access removes the reason for it.
+
+### Supabase OAuth (the older route)
+
+Kept for a console reached at a hostname Access does not cover — local
+development, mainly.
 
 1. **Google Cloud Console** — create an OAuth 2.0 Client ID (Web application)
    in the project for your Workspace. Authorised redirect URI:
