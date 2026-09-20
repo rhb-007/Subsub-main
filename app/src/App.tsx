@@ -1453,8 +1453,12 @@ export default function SubSub() {
     } catch (err) {
       console.error("[billing] checkout failed:", err);
       setBillingBusy(false);
+      // Stripe says exactly what it objected to; passing that through beats
+      // "try again in a moment", which is advice that has never once helped
+      // with a misconfigured price id.
       setBillingErr(err?.status === 501
         ? "Billing isn't switched on yet, so nothing can be charged. Nobody can upgrade until it is."
+        : err?.body?.detail ? `Stripe refused: ${err.body.detail}`
         : "Couldn't start checkout. Try again in a moment.");
     }
   };
@@ -1472,6 +1476,7 @@ export default function SubSub() {
       setBillingBusy(false);
       setBillingErr(err?.status === 409
         ? "There's no subscription to manage yet."
+        : err?.body?.detail ? `Stripe refused: ${err.body.detail}`
         : "Couldn't open billing. Try again in a moment.");
     }
   };
