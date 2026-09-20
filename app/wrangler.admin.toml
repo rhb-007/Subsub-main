@@ -1,0 +1,29 @@
+# The internal console (admin.subsub.work).
+#
+# Separate from wrangler.toml, which is the API: same repository, same build
+# output, different Worker. Deployed with
+#   wrangler deploy -c wrangler.admin.toml
+# after a build with VITE_BUILD=platform, which is what puts the console into
+# dist/ rather than the customer app.
+name = "subsub-admin"
+main = "worker-admin.js"
+compatibility_date = "2026-01-01"
+
+# Same reason as the API's: a deploy would otherwise delete whatever is set
+# in the dashboard.
+keep_vars = true
+
+# The built console. VITE_BUILD decides which app this is; the path is the
+# same either way, so the build variable is the only thing that must be right.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+# A single-page app: every path that is not a file is the app itself.
+not_found_handling = "single-page-application"
+
+# /api/* goes to the API Worker without leaving Cloudflare, arriving with the
+# Access assertion intact. This is what lets the console be authenticated by
+# the edge rather than by a login screen.
+[[services]]
+binding = "API"
+service = "subsub-api"

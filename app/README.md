@@ -442,15 +442,29 @@ mistake.
 1. **Zero Trust → Access → Applications** — add a self-hosted application for
    `admin.subsub.work`, covering all paths. Identity provider: Google
    Workspace. Policy: allow emails ending `@subsub.work`.
-2. **Route the console's API calls through the same hostname.** The console
-   calls `admin.subsub.work/api/*`, not `api.subsub.work` — Access only
-   stamps requests to hostnames it covers, and a cross-origin call to the
-   API hostname would arrive anonymous. Add `admin.subsub.work/api/*` as a
-   route on the `subsub-api` Worker.
+2. **Nothing to route.** `worker-admin.js` forwards `/api/*` to the API over
+   a service binding, so everything the console does happens on
+   `admin.subsub.work` and Access covers all of it.
 3. **Worker variables**: `ACCESS_TEAM_DOMAIN` (e.g. `subsub.cloudflareaccess.com`)
    and `ACCESS_AUD` (the application's Audience tag, shown on its overview).
-4. **Console build**: `VITE_BUILD=platform`, with `VITE_API_BASE` pointing at
-   `https://admin.subsub.work/api`.
+4. **Console deploy**: its own Worker, from this same repository.
+
+   Cloudflare Pages allows one project per repository and `subsub-app` has
+   it, so the console is a Worker with static assets instead — which is where
+   Cloudflare is pointing new projects anyway.
+
+   | Setting | Value |
+   |---|---|
+   | Root directory | `app` |
+   | Build command | `npm run build` |
+   | Deploy command | `npx wrangler deploy -c wrangler.admin.toml` |
+   | Variable | `VITE_BUILD` = `platform` |
+
+   `VITE_API_BASE` is deliberately left unset: `worker-admin.js` forwards
+   `/api/*` to the API over a service binding, so the console calls its own
+   origin and the default relative base is correct. That is what keeps the
+   Access assertion attached — a cross-origin call to `api.subsub.work` would
+   arrive anonymous however tightly Access guarded the page.
 
 Then add the first staff row by hand, as below. `STAFF_ALLOW_PASSWORD` should
 stay unset: Access removes the reason for it.
