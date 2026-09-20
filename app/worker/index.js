@@ -211,7 +211,8 @@ async function logEvent(env, accountId, actorId, kind, subjectId, payload) {
 async function loginResponse(db, user) {
   const { results: memberships } = await db.prepare(
     `SELECT m.*, a.name as account_name, a.subdomain, a.kind, a.plan, a.billing, a.logo_key,
-            a.use_default_mark, a.theme, a.trades, a.subscription_status, a.current_period_end
+            a.use_default_mark, a.theme, a.trades, a.subscription_status, a.current_period_end,
+            a.comped
      FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
   ).bind(user.id).all();
   return {
@@ -222,6 +223,7 @@ async function loginResponse(db, user) {
       kind: m.kind, plan: m.plan, billing: m.billing, logoKey: m.logo_key, useDefaultMark: !!m.use_default_mark,
       theme: parseJson(m.theme), trades: parseJson(m.trades),
       subscriptionStatus: m.subscription_status, currentPeriodEnd: m.current_period_end,
+      comped: !!m.comped,
     })),
   };
 }
@@ -622,7 +624,10 @@ async function applySubscription(env, account, sub) {
   const status = sub.status;
   const entitled = ENTITLED.has(status);
   const cycle = sub.items?.data?.[0]?.price?.recurring?.interval === "year" ? "annual" : "monthly";
-  const plan = entitled ? "scale" : "basic";
+  // A comped account keeps Scale whatever Stripe says. Somebody who was given
+  // the plan should not lose it because a card they never entered expired,
+  // or because a cancelled trial from months ago finally reported in.
+  const plan = (entitled || account.comped) ? "scale" : "basic";
   const periodEnd = stripeTime(sub.current_period_end);
 
   const was = account.plan;
@@ -949,6 +954,7 @@ app.get("/api/account", async (c) => {
     // rather than asking Stripe on every page load.
     subscriptionStatus: a.subscription_status,
     currentPeriodEnd: a.current_period_end,
+    comped: !!a.comped,
     user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone } : null,
   });
 });
@@ -2476,7 +2482,9 @@ app.get("/api/platform/bootstrap", async (c) => {
     // the dedicated revenue route — otherwise the omission is cosmetic.
     accounts: accounts.results.map((a) => ({
       id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind,
-      plan: a.plan, billing: a.billing, createdAt: (a.created_at || "").slice(0, 10),
+      plan: a.plan, billing: a.billing, comped: !!a.comped, compNote: a.comp_note,
+      subscriptionStatus: a.subscription_status, currentPeriodEnd: a.current_period_end,
+      createdAt: (a.created_at || "").slice(0, 10),
       status: "active",
     })),
     users: users.results,
@@ -2645,6 +2653,23 @@ app.patch("/api/platform/accounts/:id", async (c) => {
     if (!["basic", "scale"].includes(b.plan)) return c.json({ error: "invalid_plan" }, 400);
     sets.push("plan = ?"); vals.push(b.plan);
   }
+  // Comping is the one plan change that is a decision rather than a
+  // consequence, so it carries a note: a comp nobody can explain becomes
+  // permanent, because nobody can tell whether it still applies.
+  if (b.comped !== undefined) {
+    const on = !!b.comped;
+    const note = String(b.compNote || "").trim().slice(0, 300);
+    if (on && !note) return c.json({ error: "reason_required" }, 400);
+    sets.push("comped = ?"); vals.push(on ? 1 : 0);
+    sets.push("comp_note = ?"); vals.push(on ? note : null);
+    // Granting one sets the plan; withdrawing one hands the account back to
+    // whatever Stripe thinks, which is Basic unless they are actually paying.
+    if (on) { sets.push("plan = ?"); vals.push("scale"); }
+    else if (b.plan == null) {
+      sets.push("plan = ?");
+      vals.push(ENTITLED.has(account.subscription_status || "") ? "scale" : "basic");
+    }
+  }
   if (b.billing != null) {
     if (!["monthly", "annual"].includes(b.billing)) return c.json({ error: "invalid_billing" }, 400);
     sets.push("billing = ?"); vals.push(b.billing);
@@ -2654,13 +2679,19 @@ app.patch("/api/platform/accounts/:id", async (c) => {
   vals.push(id);
   await c.env.DB.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
 
-  if (b.plan && b.plan !== account.plan) {
+  // A comp earns no revenue, so its delta is zero -- counting one as MRR
+  // would inflate the number that decides whether this business works.
+  const nextPlan = b.comped ? "scale" : b.plan;
+  if (nextPlan && nextPlan !== account.plan) {
     const monthly = (b.billing || account.billing) === "annual" ? 8250 : 9900;
+    const comping = b.comped !== undefined;
     await c.env.DB.prepare(
       `INSERT INTO subscription_events (id, account_id, at, kind, from_plan, to_plan, cycle, mrr_delta_cents, source)
-       VALUES (?, ?, ?, 'comped', ?, ?, ?, ?, 'platform_admin')`
-    ).bind(uid(), id, new Date().toISOString(), account.plan, b.plan,
-      b.billing || account.billing, b.plan === "scale" ? monthly : -monthly).run();
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'platform_admin')`
+    ).bind(uid(), id, new Date().toISOString(),
+      comping ? "comped" : (nextPlan === "scale" ? "upgraded" : "downgraded"),
+      account.plan, nextPlan, b.billing || account.billing,
+      comping ? 0 : (nextPlan === "scale" ? monthly : -monthly)).run();
   }
 
   const changed = Object.entries(b).map(([k, v]) => `${k} → ${v}`).join(", ");

@@ -3051,6 +3051,7 @@ export default function SubSub() {
           accountKind={kindOf(account)} onSetAccountKind={setAccountKind}
           accountTrades={account.trades} onSetAccountTrades={setAccountTrades}
           subscriptionStatus={account.subscriptionStatus} currentPeriodEnd={account.currentPeriodEnd}
+          comped={account.comped}
           canManage={can("account") && role === "admin"} mySub={mySub}
           onSaveUser={updateUser} onSaveBrand={setBrand}
           onUpgrade={startCheckout} onManageBilling={openBillingPortal}
@@ -4224,6 +4225,9 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                       </div>
                       <div className="pfc-summary">
                         <span className={`plan-pill ${r.a.plan}`}>{PLANS[r.a.plan].name}</span>
+                        {/* Otherwise a Scale account with no revenue reads as
+                            a billing fault rather than a decision. */}
+                        {r.a.comped && <span className="pf-comp-tag" title={r.a.compNote || ""}>Comped</span>}
                         <span className={`pf-status ${status}`}>{status}</span>
                         {r.atLimit && <span className="pf-flag" title="At a Basic plan limit">●</span>}
                       </div>
@@ -4302,14 +4306,15 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                   <select value={open.a.billing} onChange={(e) => onPatchAccount(open.a.id, { billing: e.target.value })}>
                     <option value="monthly">Monthly</option><option value="annual">Annual</option>
                   </select></label>
-                <label>Status
-                  <select value={open.a.status || "active"} onChange={(e) => onPatchAccount(open.a.id, { status: e.target.value })}>
-                    <option value="active">Active</option><option value="comped">Comped</option>
-                    <option value="suspended">Suspended</option><option value="canceled">Canceled</option>
-                  </select></label>
               </div>
-              <p className="pf-note">Plan and cycle changes here should go through the billing provider in production — this writes account state only.</p>
+              <p className="pf-note">
+                {open.a.subscriptionStatus
+                  ? `Stripe says ${open.a.subscriptionStatus}${open.a.currentPeriodEnd ? `, through ${niceDay(open.a.currentPeriodEnd)}` : ""}. Changing the plan here does not change what they are billed.`
+                  : "No Stripe subscription. Changing the plan here grants the features and bills nothing — use the comp below if that is what you mean."}
+              </p>
             </div>
+
+            <CompPanel account={open.a} onSave={(patch) => onPatchAccount(open.a.id, patch)} />
 
             <div className="pf-panel">
               <div className="pf-panel-hd">
@@ -4670,6 +4675,64 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
   );
 }
 
+
+// Scale, on the house. Distinct from simply setting the plan, because the
+// two mean different things a month later: a comp survives Stripe, says who
+// granted it and why, and adds nothing to MRR. Setting the plan by hand
+// looks identical today and is indistinguishable from a billing fault by the
+// time anyone asks.
+function CompPanel({ account, onSave }) {
+  const [note, setNote] = useState(account.compNote || "");
+  const [busy, setBusy] = useState(false);
+  const on = !!account.comped;
+
+  // Reflect a comp granted from another browser rather than keeping ours.
+  useEffect(() => { setNote(account.compNote || ""); }, [account.id, account.compNote]);
+
+  const run = async (patch) => {
+    setBusy(true);
+    try { await onSave(patch); } catch { /* the console says why */ }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className={`pf-panel pf-comp ${on ? "on" : ""}`}>
+      <h3>{on ? "Complimentary account" : "Give this account Scale for free"}</h3>
+      <p className="pf-note">
+        {on
+          ? "Scale features, nothing billed. This outranks Stripe: a failed card or a cancelled trial will not take it away."
+          : "Grants every Scale feature and charges nothing. It survives Stripe, adds nothing to MRR, and is recorded against your name."}
+      </p>
+
+      {on ? (
+        <>
+          <p className="pf-comp-note"><b>Reason:</b> {account.compNote || "none recorded"}</p>
+          <button className="btn-danger-outline" disabled={busy}
+            onClick={() => run({ comped: false })}>
+            {busy ? "Working…" : "End the comp"}
+          </button>
+          <p className="pf-note">
+            They return to whatever they are actually paying for — Basic, unless a
+            live subscription says otherwise.
+          </p>
+        </>
+      ) : (
+        <>
+          <label className="fld">Why, and who agreed to it
+            <input value={note} maxLength={300} disabled={busy}
+              placeholder="Design partner through Q1 — agreed with RB"
+              onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <button className="btn-solid" disabled={busy || !note.trim()}
+            onClick={() => run({ comped: true, compNote: note.trim() })}>
+            <Zap size={15} /> {busy ? "Working…" : "Comp this account"}
+          </button>
+          {!note.trim() && <p className="cov-hint">A reason is required — a comp nobody can explain becomes permanent.</p>}
+        </>
+      )}
+    </div>
+  );
+}
 
 function CompanyEditFields({ co, onSave, onCancel }) {
   const [f, setF] = useState({ company: co.company, contact: co.contact, email: co.email || "",
@@ -5384,7 +5447,7 @@ function TradesPanel({ trades, onSave }) {
 
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
-  accountTrades, onSetAccountTrades, subscriptionStatus, currentPeriodEnd,
+  accountTrades, onSetAccountTrades, subscriptionStatus, currentPeriodEnd, comped,
   onSaveUser, onSaveBrand, onUpgrade, onManageBilling, billingBusy, billingErr,
   onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup }) {
@@ -5777,7 +5840,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           {billingErr && <p className="billing-err" role="alert">{billingErr}</p>}
           {/* Cards, invoices and cancellation live in Stripe's portal. This
               is the door to it, shown only once there is a customer there. */}
-          {plan === "scale" && (
+          {plan === "scale" && !comped && (
             <div className="billing-manage">
               <div>
                 <b>Payment and invoices</b>
@@ -5804,7 +5867,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                   for a free account too: a cancelled subscription still runs
                   to a date, and "when does this stop" is the question being
                   asked. "Renews" becomes "ends" when it will not. */}
-              {currentPeriodEnd && (
+              {comped && <span className="pc-renew comp">Complimentary — nothing to pay</span>}
+              {!comped && currentPeriodEnd && (
                 <span className={`pc-renew ${subscriptionStatus === "past_due" ? "warn" : ""}`}>
                   {subscriptionStatus === "canceled" || plan === "basic" ? "Access ends " : "Renews "}
                   {niceDay(currentPeriodEnd)}
@@ -9838,6 +9902,7 @@ const CSS = `
 .settings-panel{max-width:none}
 .pc-renew{display:block;margin-top:5px;font-size:12.5px;color:var(--ink-soft)}
 .pc-renew.warn{color:#8a2f1c;font-weight:600}
+.pc-renew.comp{color:#8a5a12;font-weight:600}
 .brand-preview{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:14px 0 4px;background:var(--card)}
 .bp-chrome{display:flex;align-items:center;gap:6px;background:var(--paper);border-bottom:1px solid var(--line);padding:9px 12px}
 .bp-dot{width:8px;height:8px;border-radius:50%;background:var(--line)}
@@ -11124,6 +11189,14 @@ const CSS = `
 .pf-danger-row b{display:block;font-size:14px;margin-bottom:4px}
 .pf-danger-row .pf-note{margin:0;max-width:52ch}
 .pf-company-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:16px}
+.pf-comp{border-left:3px solid var(--line)}
+.pf-comp.on{border-left-color:var(--gold,#E39B32);background:#fffdf6}
+.pf-comp .fld{max-width:480px;margin:12px 0}
+.pf-comp-note{font-size:13px;margin:10px 0 12px}
+.pf-comp-tag{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:800;
+  letter-spacing:.06em;text-transform:uppercase;color:#8a5a12;background:#fdf1dc;
+  border:1px solid #edd9ae;border-radius:5px;padding:2px 6px}
+
 .pf-write-err{margin:0 0 16px;padding:12px 14px;border-radius:10px;background:#fdf1ef;
   border:1px solid #e9c4bd;color:#8a2f1c;font-size:13.5px}
 .pf-account-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:16px}

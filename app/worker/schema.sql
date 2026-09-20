@@ -29,6 +29,10 @@ CREATE TABLE accounts (
   -- local cache of what it last told us. subscription_status is Stripe's own
   -- vocabulary kept verbatim; NULL means nobody ever subscribed, which is not
   -- the same as canceled.
+  -- Complimentary: Scale features without payment. Outranks Stripe rather
+  -- than being inferred from the absence of a subscription.
+  comped                 INTEGER NOT NULL DEFAULT 0,
+  comp_note              TEXT,
   stripe_customer_id     TEXT,
   stripe_subscription_id TEXT,
   subscription_status    TEXT,
