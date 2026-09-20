@@ -5766,19 +5766,23 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             <div>
               <span className="pc-label">Current plan</span>
               <span className="pc-name">{active.name}</span>
-              {active.annual && (
+              {active.annual ? (
                 <span className="pc-cycle">
-                  {billing === "annual"
-                    ? `${formatDollars(active.annual)}/yr`
-                    : `${active.price}/mo`}
-                  {/* "Renews annually" without a date is half an answer. When
-                      Stripe has told us the date, say it; a cancelled
-                      subscription runs to the same date and then stops, so
-                      the word changes and the date does not. */}
-                  {currentPeriodEnd
-                    ? ` · ${subscriptionStatus === "canceled" ? "ends" : "renews"} ${niceDay(currentPeriodEnd)}`
-                    : billing === "annual" ? " · renews annually" : " · renews monthly"}
-                  {subscriptionStatus === "past_due" && " · payment failed"}
+                  {billing === "annual" ? `${formatDollars(active.annual)}/yr` : `${active.price}/mo`}
+                  {!currentPeriodEnd && (billing === "annual" ? " · renews annually" : " · renews monthly")}
+                </span>
+              ) : (
+                <span className="pc-cycle">No subscription</span>
+              )}
+              {/* The date sits on its own line beside the plan name, and shows
+                  for a free account too: a cancelled subscription still runs
+                  to a date, and "when does this stop" is the question being
+                  asked. "Renews" becomes "ends" when it will not. */}
+              {currentPeriodEnd && (
+                <span className={`pc-renew ${subscriptionStatus === "past_due" ? "warn" : ""}`}>
+                  {subscriptionStatus === "canceled" || plan === "basic" ? "Access ends " : "Renews "}
+                  {niceDay(currentPeriodEnd)}
+                  {subscriptionStatus === "past_due" && " · payment failed, Stripe is retrying"}
                 </span>
               )}
             </div>
@@ -9732,7 +9736,13 @@ const CSS = `
 .who-for{font-size:11.5px;color:var(--ink-soft);font-weight:600}
 
 /* brand settings */
-.settings-panel{max-width:620px}
+/* Profile and Company were capped at 620px while Subscription, Users and
+   every other pane used the page, so two of the five screens behind the same
+   tab were a narrow column and the rest were not. The cap is gone; the
+   fields inside already collapse to one column on a narrow screen. */
+.settings-panel{max-width:none}
+.pc-renew{display:block;margin-top:5px;font-size:12.5px;color:var(--ink-soft)}
+.pc-renew.warn{color:#8a2f1c;font-weight:600}
 .brand-preview{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:14px 0 4px;background:var(--card)}
 .bp-chrome{display:flex;align-items:center;gap:6px;background:var(--paper);border-bottom:1px solid var(--line);padding:9px 12px}
 .bp-dot{width:8px;height:8px;border-radius:50%;background:var(--line)}
@@ -10977,8 +10987,16 @@ const CSS = `
   .kpi{min-width:100%;flex-basis:100%}
   .pf-nav button svg{display:none}
 }
-/* drawer-only blocks are hidden on desktop, where the user chip does this job */
-.drawer-user,.drawer-actions,.pf-drawer-user,.pf-drawer-actions{display:none}
+/* Drawer-only blocks, hidden on desktop where the user chip does this job.
+   Scoped to desktop rather than left unconditional: this rule sits below the
+   media query that reveals the tenant drawer's own blocks, and being later
+   at equal specificity it was winning at every width -- so "My account" and
+   "Sign out" were display:none inside the very drawer that exists to hold
+   them. Reachable only by rotating to landscape, where the desktop chip
+   takes over. */
+@media (min-width:1001px){
+  .drawer-user,.drawer-actions,.pf-drawer-user,.pf-drawer-actions{display:none}
+}
 @media (max-width:1000px){
   /* platform console */
   .pf-me{display:none}
