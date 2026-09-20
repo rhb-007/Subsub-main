@@ -29,6 +29,10 @@ app.onError((err, c) => {
   console.error("[unhandled]", c.req.method, c.req.path, err?.stack || err?.message || err);
   return c.json({
     error: "server_error",
+    // Kept in the response as well as the log because these are a signed-in
+    // person's own API calls, and it turns an afternoon of guessing into one
+    // look. It is not shown on screen -- the interface says what to do; this
+    // is for whoever is reading the console or the network tab.
     detail: String(err?.message || err).slice(0, 300),
   }, 500);
 });

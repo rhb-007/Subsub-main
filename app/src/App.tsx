@@ -2129,21 +2129,20 @@ export default function SubSub() {
           + "Ask whoever runs the account to add you.";
       }
       if (err?.status === 501) return "This site isn't finished being set up. Tell your admin.";
-      // Everything else was one message, which made a server fault and a lost
-      // connection indistinguishable -- and left nobody, including us, able to
-      // tell which had happened. Name what came back.
+      // A stack trace is not a message. Somebody trying to sign in cannot act
+      // on "no such column", and reading one does not inspire confidence in
+      // the company holding their insurance certificates. The detail is
+      // logged above and in the Worker's own log, which is where it is
+      // useful; what reaches the screen says what to do instead.
       if (err?.status >= 500) {
-        // The server names what it threw; pass that through rather than the
-        // generic code, which says only that something went wrong.
-        const why = err.body?.detail || err.message;
-        return `SubSub's server returned an error (${err.status}${why ? `: ${why}` : ""}). `
-          + "Your login is fine — this is a fault on our side.";
+        return "SubSub is having a problem right now — this isn't your login. "
+          + "Try again in a minute, and let us know if it keeps happening.";
       }
-      if (err?.status) {
-        return `SubSub's server refused the request (${err.status}${err.message ? `: ${err.message}` : ""}).`;
+      if (err?.status === 429) {
+        return "Too many attempts from this connection. Wait a few minutes and try again.";
       }
-      return "Couldn't reach SubSub — the request never completed. This is usually the API "
-        + "address being wrong or unreachable, not your connection.";
+      if (err?.status) return "We couldn't complete that sign-in. Try again in a moment.";
+      return "Couldn't reach SubSub. Check your connection, then try again.";
     }
     if (!result) return "Couldn't sign you in. Try again.";
     if (!result.memberships.length) {
