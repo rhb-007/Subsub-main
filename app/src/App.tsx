@@ -7866,17 +7866,17 @@ function AccountChooser({ result, brand, onPick, onBack }) {
         <div className="ac-list">
           {sorted.map((m) => (
             <button key={m.accountId} className="ac-row" onClick={() => onPick(m)}>
-              <span className="ac-mark">
-                {/* Their own mark when they have one and their plan carries
-                    it; otherwise SubSub's, which is what a Basic account
-                    wears everywhere else. Initials are a placeholder for a
-                    brand, and this is a list of real companies. */}
-                <BrandMark height={30} brand={
-                  m.logoKey && PLANS[m.plan]?.branding
-                    ? { name: m.accountName, logoData: logoUrl(m.accountId), useDefaultMark: false }
-                    : { name: m.accountName, isSubSub: true }
-                } />
-              </span>
+              {/* Only a mark somebody actually uploaded. SubSub's own mark
+                  beside another company's name would claim they are SubSub,
+                  and two letters in a square is a stand-in for a brand rather
+                  than one -- so an account without a logo is its name, set as
+                  text, which is what it is. */}
+              {m.logoKey && PLANS[m.plan]?.branding && (
+                <span className="ac-mark">
+                  <img src={logoUrl(m.accountId)} alt="" height={30}
+                    style={{ height: 30, width: "auto", display: "block" }} />
+                </span>
+              )}
               <span className="ac-txt">
                 <b>{m.accountName}</b>
                 <span>{ROLES[m.role] ? ROLES[m.role].label : m.role}</span>
