@@ -25,6 +25,7 @@ import {
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
+  Globe, RefreshCw,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, logoUrl } from "./lib/api";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
@@ -1110,6 +1111,21 @@ function niceDay(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   return isNaN(d) ? "" : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+// "4 minutes ago" rather than an ISO timestamp: the only thing anyone wants
+// from this field is whether the answer beside it is fresh.
+function niceWhen(iso) {
+  if (!iso) return "";
+  const then = new Date(iso);
+  if (isNaN(then)) return "";
+  const secs = Math.max(0, Math.round((Date.now() - then.getTime()) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? "" : "s"} ago`;
+  return `on ${niceDay(iso)}`;
 }
 
 // pretty preview like "Wed, Sep 16 · 7:00 AM"
@@ -2422,6 +2438,11 @@ export default function SubSub() {
             await platformWrite(() => api.platform.createAccount(data),
               "Could not create that account.");
           }}
+          // Returns what Cloudflare said, so the panel can show it without
+          // waiting for the reload the other writes trigger.
+          onSyncHostname={async (id) =>
+            platformWrite(() => api.platform.syncHostname(id),
+              "Could not set up that address.")}
           onDeleteAccount={async (id, confirmName) => {
             await platformWrite(() => api.platform.deleteAccount(id, confirmName),
               "Could not delete that account.");
@@ -3935,7 +3956,8 @@ const monthKey = (iso) => (iso || "").slice(0, 7);
 
 function SuperadminConsole({ me, admin, accounts, users, memberships, companies, engagements,
   jobs, subEvents, activity, err, onPatchAccount, onAddUser, onImpersonate, onSignOut,
-  onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany, onResetPassword }) {
+  onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
+  onResetPassword, onSyncHostname }) {
   const [screen, setScreen] = useState("dashboard");
   const [openId, setOpenId] = useState(null);
   const [menu, setMenu] = useState(false);
@@ -4358,6 +4380,14 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                         {/* Otherwise a Scale account with no revenue reads as
                             a billing fault rather than a decision. */}
                         {r.a.comped && <span className="pf-comp-tag" title={r.a.compNote || ""}>Comped</span>}
+                        {/* A Scale account whose address is not live is the
+                            one failure a customer notices before we do. */}
+                        {r.a.plan === "scale" && r.a.hostnameStatus !== "active" && (
+                          <span className={`pf-host-pill t-${r.a.hostnameStatus === "failed" ? "bad" : "wait"}`}
+                            title={r.a.hostnameError || "Branded address is not live yet"}>
+                            {r.a.hostnameStatus === "failed" ? "Address failed" : "Address setting up"}
+                          </span>
+                        )}
                         <span className={`pf-status ${status}`}>{status}</span>
                         {r.atLimit && <span className="pf-flag" title="At a Basic plan limit">●</span>}
                       </div>
@@ -4406,15 +4436,7 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
               <div>
                 <h2>{open.a.name}</h2>
                 <p className="pf-sub">{open.a.subdomain}.subsub.work · created {open.a.createdAt || "—"} · last active {open.a.lastActive || "—"}</p>
-                {/* The subdomain is reserved from the moment the account
-                    exists, but nothing serves that hostname until somebody
-                    adds it as a custom domain in Cloudflare -- so printing it
-                    alone reads as a working address and it is a dead link. */}
-                <p className="pf-signin">Signs in at <b>app.subsub.work</b>.{" "}
-                  {open.a.plan === "scale"
-                    ? <>Their own address <b>{open.a.subdomain}.subsub.work</b> is reserved, and answers once it is added as a custom domain in Cloudflare.</>
-                    : <>Their own address is reserved but not served — a branded hostname is a Scale feature.</>}
-                </p>
+                <p className="pf-signin">Signs in at <b>app.subsub.work</b>, and at their own address once it is live.</p>
               </div>
               <div className="pf-hd-actions">
                 {admin.impersonate && open.a.status !== "canceled" && (
@@ -4452,6 +4474,8 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                   : "No Stripe subscription. Changing the plan here grants the features and bills nothing — use the comp below if that is what you mean."}
               </p>
             </div>
+
+            <HostnamePanel account={open.a} onSync={() => onSyncHostname(open.a.id)} />
 
             <CompPanel account={open.a} onSave={(patch) => onPatchAccount(open.a.id, patch)} />
 
@@ -4879,6 +4903,82 @@ function RankList({ rows, max, total, empty, label }) {
       </ol>
       {total > rows.length && <p className="pf-note">+{total - rows.length} more</p>}
     </>
+  );
+}
+
+// The branded address, and whether it actually answers.
+//
+// Nobody opens Cloudflare for this: the Worker provisions the hostname when
+// an account reaches Scale and re-checks every ten minutes until the
+// certificate is issued. What this panel is for is the two minutes in
+// between, and the case where Cloudflare said no -- because "it's a dead
+// link" reaching support before it reaches the console is how the manual
+// version failed.
+const HOSTNAME_STATE = {
+  active:  { label: "Live",        tone: "ok",   say: "Answering, with a valid certificate." },
+  pending: { label: "Setting up",  tone: "wait", say: "Registered. The certificate is usually issued within a couple of minutes." },
+  failed:  { label: "Failed",      tone: "bad",  say: "Cloudflare refused. Nothing is answering at this address." },
+  removed: { label: "Taken down",  tone: "off",  say: "Removed — this account is not on Scale." },
+  unconfigured: { label: "Not wired up", tone: "off",
+    say: "This Worker has no Cloudflare API credentials, so no hostname can be provisioned." },
+};
+
+function HostnamePanel({ account, onSync }) {
+  const [busy, setBusy] = useState(false);
+  const [justRan, setJustRan] = useState(null);
+
+  useEffect(() => { setJustRan(null); }, [account.id]);
+
+  const scale = account.plan === "scale";
+  const status = justRan?.status || account.hostnameStatus || null;
+  const err = justRan ? justRan.error : account.hostnameError;
+  const state = HOSTNAME_STATE[status];
+  const host = `${account.subdomain}.subsub.work`;
+
+  const run = async () => {
+    setBusy(true);
+    try { setJustRan(await onSync()); }
+    catch { /* the console has already said why */ }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="pf-panel pf-host">
+      <div className="pf-panel-hd">
+        <h3><Globe size={15} /> Branded address</h3>
+        {state && <span className={`pf-host-pill t-${state.tone}`}>{state.label}</span>}
+      </div>
+
+      <p className="pf-host-url">
+        {status === "active"
+          ? <a href={`https://${host}`} target="_blank" rel="noreferrer">{host}</a>
+          : host}
+      </p>
+
+      <p className="pf-note">
+        {!scale
+          ? "Reserved, not served — a branded address is a Scale feature. Moving this account to Scale sets it up automatically."
+          : state
+            ? state.say
+            : "Not set up yet. It is created automatically within ten minutes of reaching Scale, or immediately with the button below."}
+      </p>
+
+      {/* Cloudflare's own words. A paraphrase is not something anyone can
+          search for, and this is the line support will be reading out. */}
+      {err && <p className="pf-host-err">{err}</p>}
+
+      {account.hostnameCheckedAt && !justRan && (
+        <p className="pf-host-when">Last checked {niceWhen(account.hostnameCheckedAt)}</p>
+      )}
+
+      {scale && (
+        <div className="form-actions">
+          <button className="pf-mini" onClick={run} disabled={busy}>
+            <RefreshCw size={13} /> {busy ? "Checking…" : status === "active" ? "Re-check" : "Set it up now"}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -11545,4 +11645,19 @@ body{background:var(--paper)}
   text-transform:uppercase;color:var(--ink-soft);opacity:.85}
 .pf-trades .picks{margin-top:0}
 .pf-opt{font-style:normal;font-weight:600;text-transform:none;letter-spacing:0;opacity:.7}
+
+/* Branded hostname: state first, then the address, then what to do about it. */
+.pf-host-url{font:700 15px ui-monospace,monospace;margin:2px 0 0;word-break:break-all}
+.pf-host-url a{color:var(--brand);text-decoration:none}
+.pf-host-url a:hover{text-decoration:underline}
+.pf-host-pill{font-size:10.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+  padding:3px 9px;border-radius:20px;white-space:nowrap}
+.pf-host-pill.t-ok{background:#e8f2ea;color:#1f6b4a}
+.pf-host-pill.t-wait{background:#fbf0dd;color:#8a5a12}
+.pf-host-pill.t-bad{background:#faece7;color:var(--red)}
+.pf-host-pill.t-off{background:var(--line);color:var(--ink-soft)}
+.pf-host-err{font:600 12px ui-monospace,monospace;background:#fdf1ef;border:1px solid #e9c4bd;
+  color:#8a2f1c;border-radius:8px;padding:9px 11px;margin:10px 0 0;word-break:break-word;line-height:1.5}
+.pf-host-when{font-size:11.5px;color:var(--ink-soft);margin:9px 0 0}
+.pf-host .form-actions{margin-top:12px}
 `;

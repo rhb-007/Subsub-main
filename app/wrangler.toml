@@ -43,7 +43,15 @@ database_id = "b8874422-45db-48de-9c6b-3bc0819736cc"
 binding = "FILES"
 bucket_name = "subsub-files"
 
-# Nightly WA L&I license re-check (03:00 UTC). Requires CRON_SECRET to be
-# set with `wrangler secret put CRON_SECRET` before this is useful.
+# Two schedules, both landing on the `scheduled` handler in worker/index.js:
+#
+#   03:00 UTC  nightly  — WA L&I license re-check, plus a hostname sweep.
+#   every 10m           — hostname sweep only. A branded hostname's certificate
+#                         is issued within a couple of minutes, and a customer
+#                         who has just paid for their own address should not
+#                         wait until 3am to find out whether it works.
+#
+# Until the `scheduled` export existed these fired into a Hono app that only
+# had `fetch`, so nothing ran at all.
 [triggers]
-crons = ["0 3 * * *"]
+crons = ["0 3 * * *", "*/10 * * * *"]

@@ -11,6 +11,9 @@ import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail } from "./mail.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
+import {
+  hostnameConfig, brandedHost, provisionHostname, deprovisionHostname, checkHostname,
+} from "./hostnames.js";
 
 const app = new Hono();
 app.use("/api/*", cors());
@@ -358,6 +361,12 @@ app.post("/api/signup", async (c) => {
     return c.json({ error: "signup_conflict" }, 409);
   }
 
+  // A Scale signup gets its address started immediately; a Basic one has
+  // none to start. Either way this does not hold up the response.
+  if (plan === "scale") {
+    syncHostnameAfter(c, { id: accountId, subdomain, plan }, { reason: "signup" });
+  }
+
   await logEvent(c.env, accountId, userId, "account.created", accountId,
     { kind, plan, subdomain, viaAuth: realAuth });
   await logActivity(c.env, accountId, userId, "account_created",
@@ -372,9 +381,11 @@ app.post("/api/signup", async (c) => {
     // address. Sending a Basic customer to their own subdomain is how they
     // end up staring at a certificate warning, because that hostname has no
     // certificate until someone adds it as a custom domain.
-    signInUrl: plan === "scale"
-      ? `https://${subdomain}.subsub.work`
-      : "https://app.subsub.work",
+    // Always the shared address at this moment, even on Scale: provisioning
+    // the branded hostname started a few lines above and its certificate is
+    // a minute or two away. Sending somebody to an address that is not live
+    // yet is how they meet a certificate warning on their first visit.
+    signInUrl: "https://app.subsub.work",
     // Creating an account never signs anyone in. The address has not been
     // proved yet, and an account usable before anyone has opened the mailbox
     // it names is an account that can be opened on somebody else's address.
@@ -653,6 +664,14 @@ async function applySubscription(env, account, sub) {
 
     await logActivity(env, account.id, null, "plan_changed",
       plan === "scale" ? `Upgraded to Scale (${cycle})` : "Moved to Basic");
+
+    // Paying for Scale is the moment the branded address is owed, and
+    // stopping is the moment it is not. No ctx here -- the webhook handler
+    // awaits this, which is right: Stripe retries a failed webhook, and a
+    // hostname left unprovisioned because the response beat it is worse
+    // than a webhook that took another second.
+    await syncHostname(env, { id: account.id, subdomain: account.subdomain, plan },
+      { reason: "stripe" });
   }
 }
 
@@ -1126,6 +1145,55 @@ async function ensureAuthUser(env, email) {
   if (signed.ok) return { ok: true, created: true, authId: signed.authId };
   if (signed.error === "email_in_use") return { ok: true, created: false, authId: null };
   return { ok: false, error: signed.error, detail: signed.detail };
+}
+
+// ---------------------------------------------------------------------------
+// Branded hostnames
+// ---------------------------------------------------------------------------
+
+// Bring an account's hostname into line with its plan, and write down what
+// happened. Never throws: every caller is a request somebody is waiting on --
+// a signup, a payment, a plan change -- and none of them should fail because
+// Cloudflare's API was slow. What it cannot finish now, the nightly sweep
+// finishes later.
+async function syncHostname(env, account, { reason } = {}) {
+  const sub = account?.subdomain;
+  if (!sub) return null;
+  if (!hostnameConfig(env)) return null;      // not wired up; nothing to record
+
+  const wanted = account.plan === "scale";
+  try {
+    const res = wanted
+      ? await provisionHostname(env, sub)
+      : await deprovisionHostname(env, sub);
+    await env.DB.prepare(
+      `UPDATE accounts SET hostname_status = ?, hostname_error = ?, hostname_checked_at = ? WHERE id = ?`
+    ).bind(res.status, res.error || null, new Date().toISOString(), account.id).run();
+    if (res.status === "failed") {
+      console.error("[hostname]", reason || "sync", sub, res.error);
+    }
+    return res;
+  } catch (err) {
+    // A thrown error here is a bug in this code, not a Cloudflare refusal,
+    // but the account still should not be left claiming an address it has
+    // not got.
+    console.error("[hostname] threw:", sub, err?.stack || err?.message || err);
+    try {
+      await env.DB.prepare(
+        `UPDATE accounts SET hostname_status = 'failed', hostname_error = ?, hostname_checked_at = ? WHERE id = ?`
+      ).bind(String(err?.message || err).slice(0, 300), new Date().toISOString(), account.id).run();
+    } catch { /* the log above is the record */ }
+    return { ok: false, status: "failed", error: String(err?.message || err) };
+  }
+}
+
+// Fire and forget, without losing the work when the response returns. A
+// Worker stops executing the moment it replies unless the platform is told
+// to wait, so this is not decoration.
+function syncHostnameAfter(c, account, opts) {
+  const run = syncHostname(c.env, account, opts);
+  try { c.executionCtx.waitUntil(run); } catch { /* no ctx in tests; it still runs */ }
+  return run;
 }
 
 const ACCOUNT_KINDS = ["general_contractor", "property_manager", "building_owner", "portfolio_manager"];
@@ -1936,9 +2004,8 @@ app.put("/api/uploads/:kind/:fileName", async (c) => {
 // Nightly sweep target — re-checks every company with a license on file and
 // flags any status change. Wire this up as a Cron Trigger (see wrangler.toml).
 // ---------------------------------------------------------------------------
-app.get("/api/cron/license-sweep", async (c) => {
-  if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
-  const { results: companies } = await c.env.DB.prepare(
+async function licenseSweep(env) {
+  const { results: companies } = await env.DB.prepare(
     `SELECT id, license, state, license_check FROM companies WHERE license IS NOT NULL AND license != ''`
   ).all();
 
@@ -1948,9 +2015,59 @@ app.get("/api/cron/license-sweep", async (c) => {
     const state = (co.state || "WA").trim().toUpperCase();
     const result = await verifyLicenseForState(state, co.license);
     if (result.status && result.status !== prevStatus) flagged.push({ companyId: co.id, from: prevStatus, to: result.status });
-    await storeLicenseCheck(c.env.DB, co.id, state, result);
+    await storeLicenseCheck(env.DB, co.id, state, result);
   }
-  return c.json({ checked: companies.length, flagged });
+  return { checked: companies.length, flagged };
+}
+
+// Every Scale account whose address is not live yet. Two different problems
+// look the same from a customer's side -- a certificate still being issued,
+// and a provisioning call that failed hours ago and nobody saw -- so this
+// retries both. Provisioning is idempotent, which is what makes a blind
+// retry the right shape here.
+//
+// Also catches the reverse: an account that dropped to Basic while the
+// Worker was mid-deploy and kept an address it is no longer paying for.
+async function hostnameSweep(env) {
+  if (!hostnameConfig(env)) return { skipped: "cloudflare_not_configured" };
+
+  const { results } = await env.DB.prepare(
+    `SELECT id, subdomain, plan, hostname_status FROM accounts
+      WHERE (plan = 'scale' AND (hostname_status IS NULL OR hostname_status IN ('pending','failed')))
+         OR (plan != 'scale' AND hostname_status IN ('active','pending','failed'))`
+  ).all();
+
+  const changed = [];
+  for (const a of results) {
+    let res;
+    if (a.plan === "scale" && a.hostname_status === "pending") {
+      // Already registered and merely waiting on a certificate: ask, do not
+      // re-register. Re-posting a pending hostname every few minutes is how
+      // you find Cloudflare's rate limit.
+      res = await checkHostname(env, a.subdomain);
+      await env.DB.prepare(
+        `UPDATE accounts SET hostname_status = ?, hostname_error = ?, hostname_checked_at = ? WHERE id = ?`
+      ).bind(res.status, res.error || null, new Date().toISOString(), a.id).run();
+    } else {
+      // Never attempted, failed, or on the wrong side of a plan change.
+      // syncHostname records its own outcome.
+      res = await syncHostname(env, a, { reason: "sweep" });
+    }
+    if (res && res.status !== a.hostname_status) {
+      changed.push({ subdomain: a.subdomain, from: a.hostname_status, to: res.status });
+    }
+  }
+  return { checked: results.length, changed };
+}
+
+app.get("/api/cron/license-sweep", async (c) => {
+  if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
+  return c.json(await licenseSweep(c.env));
+});
+
+app.get("/api/cron/hostname-sweep", async (c) => {
+  if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
+  return c.json(await hostnameSweep(c.env));
 });
 
 // ---------------------------------------------------------------------------
@@ -2518,6 +2635,8 @@ app.get("/api/platform/bootstrap", async (c) => {
       // What this account hires out. The console ranks these into "top trades",
       // which is the only demand signal that exists before anyone engages a sub.
       trades: parseJson(a.trades, []),
+      hostnameStatus: a.hostname_status, hostnameError: a.hostname_error,
+      hostnameCheckedAt: a.hostname_checked_at,
       subscriptionStatus: a.subscription_status, currentPeriodEnd: a.current_period_end,
       createdAt: (a.created_at || "").slice(0, 10),
       status: "active",
@@ -2666,6 +2785,10 @@ app.post("/api/platform/accounts", async (c) => {
     ).bind(uid(), ownerId, id).run();
   }
 
+  if (plan === "scale") {
+    syncHostnameAfter(c, { id, subdomain, plan }, { reason: "platform_create" });
+  }
+
   await auditPlatform(c.env, staff, id, "account_created",
     `${staff.name} created this account`, { name, subdomain, plan, ownerEmail: ownerEmail || null });
 
@@ -2739,6 +2862,12 @@ app.patch("/api/platform/accounts/:id", async (c) => {
       comping ? 0 : (nextPlan === "scale" ? monthly : -monthly)).run();
   }
 
+  // Comping an account is an upgrade as far as its address is concerned:
+  // somebody was given Scale, and Scale includes their own hostname.
+  if (nextPlan && nextPlan !== account.plan) {
+    syncHostnameAfter(c, { id, subdomain: account.subdomain, plan: nextPlan }, { reason: "platform_patch" });
+  }
+
   const changed = Object.entries(b).map(([k, v]) => `${k} → ${v}`).join(", ");
   await auditPlatform(c.env, staff, id, "plan_changed", `${staff.name} changed ${changed}`, b);
   return c.json({ ok: true });
@@ -2755,7 +2884,7 @@ app.delete("/api/platform/accounts/:id", async (c) => {
 
   const id = c.req.param("id");
   const b = await c.req.json().catch(() => ({}));
-  const account = await c.env.DB.prepare(`SELECT id, name FROM accounts WHERE id = ?`).bind(id).first();
+  const account = await c.env.DB.prepare(`SELECT id, name, subdomain FROM accounts WHERE id = ?`).bind(id).first();
   if (!account) return c.json({ error: "not_found" }, 404);
   if (String(b.confirmName || "").trim() !== account.name) {
     return c.json({ error: "confirm_name_mismatch" }, 400);
@@ -2764,6 +2893,14 @@ app.delete("/api/platform/accounts/:id", async (c) => {
   // Audited before the row goes, because the audit references it.
   await auditPlatform(c.env, staff, id, "account_deleted",
     `${staff.name} deleted account ${account.name}`, { name: account.name });
+
+  // Before the row goes too: once it is gone there is nothing left to say
+  // which hostname belonged to it, and an orphaned CNAME pointing at the app
+  // is how a deleted customer's address keeps answering.
+  if (account.subdomain && hostnameConfig(c.env)) {
+    try { await deprovisionHostname(c.env, account.subdomain); }
+    catch (err) { console.error("[hostname] delete:", account.subdomain, err?.message || err); }
+  }
 
   // Rows that point at the account but carry no cascade of their own. The
   // rest (memberships, engagements, jobs, properties, invites) cascade.
@@ -2853,6 +2990,33 @@ app.delete("/api/platform/companies/:id", async (c) => {
     `${staff.name} deleted company ${co.company}`, { companyId: id, name: co.company });
   await c.env.DB.prepare(`DELETE FROM companies WHERE id = ?`).bind(id).run();
   return c.json({ ok: true });
+});
+
+// Re-run provisioning for one account, now. The sweep gets there on its own
+// within ten minutes; this is for the support call where that is ten minutes
+// too long, and for reading back exactly what Cloudflare said.
+app.post("/api/platform/accounts/:id/hostname", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+  if (!hostnameConfig(c.env)) return c.json({ error: "cloudflare_not_configured" }, 501);
+
+  const account = await c.env.DB.prepare(
+    `SELECT id, name, subdomain, plan FROM accounts WHERE id = ?`).bind(c.req.param("id")).first();
+  if (!account) return c.json({ error: "not_found" }, 404);
+
+  const res = await syncHostname(c.env, account, { reason: "platform_retry" });
+  await auditPlatform(c.env, staff, account.id, "hostname_sync",
+    `${staff.name} re-ran hostname setup for ${account.subdomain} — ${res?.status || "no change"}`,
+    { subdomain: account.subdomain, status: res?.status || null, error: res?.error || null });
+
+  return c.json({
+    status: res?.status || null,
+    error: res?.error || null,
+    host: res?.host || null,
+    checkedAt: new Date().toISOString(),
+  });
 });
 
 app.post("/api/platform/accounts/:id/users", async (c) => {
@@ -3027,4 +3191,32 @@ app.get("/api/notify/log", async (c) => {
   })));
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+
+  // wrangler.toml declares a nightly Cron Trigger, and until this existed
+  // there was no `scheduled` handler for it to call -- the schedule fired
+  // and the sweeps never ran. The HTTP routes above stay, because being able
+  // to run either one by hand is worth keeping.
+  async scheduled(event, env, ctx) {
+    // Two schedules, two jobs. A certificate is issued in a couple of
+    // minutes, so a customer waiting on their address should not wait until
+    // 3am to find out it is live; a state licensing register changes at
+    // most daily and there is no reason to hammer it.
+    const nightly = event.cron === "0 3 * * *";
+    const jobs = nightly
+      ? [["hostnames", hostnameSweep], ["licenses", licenseSweep]]
+      : [["hostnames", hostnameSweep]];
+
+    ctx.waitUntil((async () => {
+      for (const [name, run] of jobs) {
+        try {
+          console.log(`[cron] ${name}`, JSON.stringify(await run(env)));
+        } catch (err) {
+          // One sweep failing must not take the other down with it.
+          console.error(`[cron] ${name} failed:`, err?.stack || err?.message || err);
+        }
+      }
+    })());
+  },
+};

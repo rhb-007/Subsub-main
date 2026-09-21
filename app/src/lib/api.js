@@ -213,6 +213,11 @@ export const api = {
       request(`/platform/companies/${encodeURIComponent(id)}`,
         { method: "DELETE", body: JSON.stringify({ confirmName }) }),
 
+    // Re-run branded-hostname setup now. The Worker's sweep does this on its
+    // own every ten minutes; this is the "don't make me wait" button.
+    syncHostname: (accountId) =>
+      request(`/platform/accounts/${encodeURIComponent(accountId)}/hostname`, { method: "POST" }),
+
     addUser: (accountId, user) =>
       request(`/platform/accounts/${encodeURIComponent(accountId)}/users`,
         { method: "POST", body: JSON.stringify(user) }),

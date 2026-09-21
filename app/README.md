@@ -228,6 +228,64 @@ license verification, work-order immutability, suggested phased rollout).
     it publicly yet, but do this before a real GC puts this URL on their
     website.
 
+## Branded hostnames (`outerhome.subsub.work`) — provisioned automatically
+
+A Scale account is sold its own address, and it used to be a dead link until
+somebody opened Cloudflare, added a custom domain to the Pages project and
+waited for a certificate. One manual step per customer is one step nobody
+does on a Friday, and the customer meets a certificate warning on the thing
+they just paid for. `worker/hostnames.js` does it instead.
+
+**What happens, and when.** Reaching Scale — signing up on it, upgrading
+through Stripe, being created or comped from the console — triggers two
+idempotent Cloudflare calls: a *proxied* CNAME in the zone pointing the
+subdomain at `<project>.pages.dev`, and the hostname registered as a custom
+domain on the Pages project so a certificate is issued. Dropping off Scale,
+or deleting the account, removes both. Nothing else needs doing.
+
+Provisioning never fails the request that triggered it. Signing up, or
+paying, does not depend on Cloudflare's API answering this second: the
+account's `hostname_status` records where it got to, and the sweep in the
+Worker's `scheduled` handler retries every ten minutes until it is `active`.
+Both the sweep and the "Set it up now" button in the console re-run the same
+idempotent calls, so a blind retry is always safe.
+
+**The console shows it.** Account detail has a Branded address panel with
+the live status, Cloudflare's own error text when there is one, and a
+re-check button; the accounts list flags any Scale account whose address is
+not live, because that is the one failure a customer notices before we do.
+
+**Setup — four values on the `subsub-api` Worker**, then this runs by
+itself. Until they are set, provisioning is a no-op and nothing breaks.
+
+| Name | Where to find it | Kind |
+|---|---|---|
+| `CF_API_TOKEN` | dash.cloudflare.com → My Profile → API Tokens → Create Token → Custom | **Secret** |
+| `CF_ACCOUNT_ID` | Cloudflare dashboard → Workers & Pages → right-hand sidebar | Variable |
+| `CF_ZONE_ID` | Cloudflare dashboard → `subsub.work` → Overview → right-hand sidebar | Variable |
+| `CF_PAGES_PROJECT` | the Pages project name serving the app — `subsub-app` | Variable |
+
+`APP_DOMAIN` is optional and defaults to `subsub.work`.
+
+The token needs exactly two permissions, and no more — it can create DNS
+records in a live zone, so scope it tightly:
+
+- **Zone → DNS → Edit**, restricted to the `subsub.work` zone
+- **Account → Cloudflare Pages → Edit**, restricted to this account
+
+**Run the migration first**: `worker/migrations/010_branded_hostnames.sql`
+adds `hostname_status`, `hostname_error` and `hostname_checked_at` to
+`accounts`.
+
+**Guardrails.** `hostnames.js` re-checks the reserved-subdomain list itself
+rather than trusting the stored row — it is the code that can actually point
+a hostname somewhere, and a stored subdomain of `api` would take
+`api.subsub.work` away from the API. Deprovisioning only ever deletes DNS
+records carrying this code's own comment, so a record somebody added by hand
+is left alone. `scripts/hostnames-test.mjs` (`npm run test:hostnames`) covers
+both, plus retry-safety and each failure mode, against a stand-in for
+Cloudflare's API.
+
 ## Expanding license verification beyond Washington
 
 `STATE_LICENSING_APIS.md` surveys all 49 other states + DC for the same
