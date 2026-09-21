@@ -1470,6 +1470,20 @@ export default function SubSub() {
   const canRate = role === "admin" || role === "pm";
   const canComplete = role === "admin" || role === "pm";
 
+  // "Home" is not one screen. An admin's is the dashboard; a contractor has
+  // no dashboard at all -- the role cannot see one -- and theirs is the job
+  // list. Sending everybody to "dashboard" would land a contractor on a blank
+  // screen, since the tab renders behind can("dashboard").
+  const homeTab = can("dashboard") ? "dashboard" : "portal";
+  const homeTitle = homeTab === "dashboard" ? "Back to the dashboard" : "Back to my jobs";
+  const goHome = () => {
+    // Anything open belongs to the screen being left: a contractor's detail
+    // modal, a half-opened menu, the mobile drawer. Home means home.
+    setSelected(null); setAddMenu(false); setUserMenu(false); setMobileNav(false);
+    if (homeTab === "portal") setPane("jobs");
+    setTab(homeTab);
+  };
+
   // The account being viewed supplies branding and the plan. Before login,
   // prefer the real account this subdomain belongs to (if any) over the
   // fallback — otherwise every subdomain would show the same generic/demo
@@ -2667,13 +2681,21 @@ export default function SubSub() {
       )}
       <header className="ss-header">
         <div className="header-top">
-          <div className="brand">
-            <div className="brand-logo"><BrandMark brand={brand} height={26} /></div>
-            <div className="brand-txt">
-              <h1>{brand.name}</h1>
-              <p>{portalUrl(brand)}</p>
-            </div>
-          </div>
+          {/* The logo and the company name are what people reach for to get
+              back to where they started -- every other site on the web has
+              taught them that -- so they are one button, and it goes home.
+              The heading stays a heading: a button is phrasing content and
+              may live inside an h1, whereas an h1 inside a button has its
+              heading role stripped, which would leave this screen with none. */}
+          <h1 className="brand">
+            <button className="brand-home" onClick={goHome} title={homeTitle}>
+              <span className="brand-logo"><BrandMark brand={brand} height={26} /></span>
+              <span className="brand-txt">
+                <span className="brand-name">{brand.name}</span>
+                <span className="brand-url">{portalUrl(brand)}</span>
+              </span>
+            </button>
+          </h1>
           <div className="header-right">
             {role !== "contractor" && (
               <div className="add-wrap">
@@ -4387,7 +4409,12 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
           onCancel={() => setConfirmDelete(null)} />
       )}
       <header className="pf-top">
-        <div className="pf-brand"><SubSubLogo height={20} /><span className="pf-tag">Platform</span></div>
+        {/* Same rule as the customer header: the mark goes back to the top
+            of the console. Staff live on the accounts list and end up deep in
+            a drawer; this is the way out they already expect. */}
+        <button className="pf-brand" onClick={() => go("dashboard")} title="Back to the dashboard">
+          <SubSubLogo height={20} /><span className="pf-tag">Platform</span>
+        </button>
         <button className="pf-burger" aria-expanded={navOpen} aria-label="Menu"
           onClick={() => setNavOpen((o) => !o)}><span /></button>
         {navOpen && <div className="nav-scrim" onClick={() => setNavOpen(false)} />}
@@ -10371,10 +10398,19 @@ body{background:var(--paper)}
 .ss-header{display:flex;flex-direction:column;gap:12px;padding:14px 24px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
 .header-top{display:flex;justify-content:space-between;align-items:center;gap:14px}
 .ss-header .tabs{align-self:flex-start}
-.brand{display:flex;align-items:center;gap:12px}
+/* The h1 is now only a wrapper -- the button inside it carries the layout,
+   so that the whole mark, name and address is one hit target rather than
+   three. font:inherit undoes the heading's own size and weight, which the
+   name span sets for itself. */
+.brand{margin:0;font:inherit;display:flex;min-width:0}
+.brand-home{display:flex;align-items:center;gap:12px;min-width:0;
+  background:none;border:0;color:inherit;font:inherit;text-align:left;cursor:pointer;
+  /* Padding for the fingertip, negative margin so adding it moved nothing. */
+  padding:6px 8px;margin:-6px -8px;border-radius:11px;
+  transition:background .12s}
+.brand-home:hover{background:var(--paper)}
+.brand-home:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
 .logo{width:38px;height:38px;border-radius:9px;background:var(--brand);color:#fff;display:grid;place-items:center}
-.brand h1{margin:0;font-size:19px;font-weight:700;letter-spacing:-.02em}
-.brand p{margin:0;font-size:12.5px;color:var(--ink-soft)}
 .tabs{display:flex;gap:4px;background:var(--paper);padding:4px;border-radius:10px}
 .tabs button{border:0;background:none;padding:8px 14px;border-radius:7px;font-size:13.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;gap:7px}
 .tabs button.on{background:var(--card);color:var(--ink);box-shadow:var(--shadow)}
@@ -11176,8 +11212,11 @@ body{background:var(--paper)}
 .brand-logo.lg,.brand-logo.xl{color:var(--ink)}
 .brand-initials{display:grid;place-items:center;background:var(--brand);color:#fff;border-radius:8px;
   font-size:12px;font-weight:800;padding:0 8px;letter-spacing:.02em}
-.brand-txt h1{margin:0;font-size:17px;font-weight:700;letter-spacing:-.02em}
-.brand-txt p{margin:1px 0 0;font-size:11.5px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.brand-txt{display:flex;flex-direction:column;min-width:0}
+.brand-name{font-size:17px;font-weight:700;letter-spacing:-.02em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.brand-url{margin-top:1px;font-size:11.5px;font-weight:400;color:var(--ink-soft);
+  font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ss-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
   max-width:1160px;margin:0 auto;padding:18px 24px 28px;font-size:11.5px;color:var(--ink-soft);
   border-top:1px solid var(--line)}
@@ -12366,7 +12405,11 @@ body{background:var(--paper)}
 .pf-root{min-height:100vh;background:var(--paper);color:var(--ink)}
 .pf-top{display:flex;align-items:center;gap:22px;padding:0 22px;height:56px;background:#0f1a15;color:#fff;
   position:sticky;top:0;z-index:20}
-.pf-brand{display:flex;align-items:center;gap:10px;color:#fff}
+.pf-brand{display:flex;align-items:center;gap:10px;color:#fff;
+  background:none;border:0;font:inherit;cursor:pointer;
+  padding:7px 8px;margin:-7px -8px;border-radius:9px;transition:background .12s}
+.pf-brand:hover{background:rgba(255,255,255,.08)}
+.pf-brand:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
 .pf-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;
   background:var(--amber);color:#1a1207;padding:3px 8px;border-radius:20px}
 .pf-nav{display:flex;gap:2px;flex:1}
