@@ -4697,11 +4697,7 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                               // top of the page, which is nowhere near the
                               // button that was pressed -- so a failed send
                               // read as a button that did nothing at all.
-                              setResetErr(err?.body?.rateLimited
-                                ? "Supabase is limiting how many of these it will send in an hour. Wait a few minutes and try again — nothing is broken."
-                                : err?.body?.detail
-                                  ? `Supabase refused: ${err.body.detail}`
-                                  : "That did not send. Check the Worker log for the reason.");
+                              setResetErr(resetFailureText(err));
                             }
                             finally { setSending(false); }
                           }}>
@@ -5360,6 +5356,35 @@ function RankList({ rows, max, total, empty, label }) {
       {total > rows.length && <p className="pf-note">+{total - rows.length} more</p>}
     </>
   );
+}
+
+// Why a reset did not send, in terms of the thing to go and fix.
+//
+// The first version of this ended with "check the Worker log for the reason",
+// which is not something the person reading it can do -- they are in a
+// browser on an iPad. An error message that names a tool the reader does not
+// have is the same as no message. Every branch below either says what to
+// change or hands over the code and status, which is enough to identify it
+// without reading a log at all.
+function resetFailureText(err) {
+  const code = err?.body?.error;
+  const detail = err?.body?.detail;
+
+  if (err?.body?.rateLimited) {
+    return "Supabase is limiting how many of these it will send in an hour. "
+      + "Wait a few minutes and try again — nothing is broken.";
+  }
+  if (code === "auth_not_configured") {
+    return "The API has no sign-in service configured, so there is nothing to send the reset through. "
+      + "SUPABASE_URL and SUPABASE_ANON_KEY need to be set on the subsub-api Worker.";
+  }
+  if (code === "not_found") return "That person's record no longer exists on this account.";
+  if (err?.status === 403) return "This staff account is not allowed to send password resets.";
+  if (err?.status === 401) return "Your console session has expired. Reload the page and sign in again.";
+  if (detail) return `Supabase refused: ${detail}`;
+  // Nothing useful came back, so hand over what did. A code and a status are
+  // enough to identify any of these without guessing.
+  return `That did not send (${code || "no error code"}${err?.status ? `, HTTP ${err.status}` : ""}).`;
 }
 
 // Every mail this account has been sent, and whether it went.
