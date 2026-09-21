@@ -4252,7 +4252,10 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
             <div className="pf-head">
               <div><h2>Accounts</h2></div>
               {isSuper && (
-                <button className="btn-solid" onClick={() => setNewAccount({ name: "", subdomain: "", ownerName: "", ownerEmail: "" })}>
+                <button className="btn-solid" onClick={() => setNewAccount({
+                  name: "", subdomain: "", kind: "general_contractor", plan: "basic", billing: "monthly",
+                  ownerName: "", ownerEmail: "", ownerPhone: "", trades: [],
+                })}>
                   <Plus size={14} /> New account
                 </button>
               )}
@@ -4273,13 +4276,61 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                   <label className="pf-fld"><span>Subdomain</span>
                     <input placeholder="cascadeexteriors" value={newAccount.subdomain}
                       onChange={(e) => setNewAccount({ ...newAccount, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") })} />
-                    <em className="pf-fld-hint">{(newAccount.subdomain || "…")}.subsub.work</em></label>
+                    {newAccount.subdomain && <em className="pf-fld-hint">{newAccount.subdomain}.subsub.work</em>}</label>
+                  <label className="pf-fld"><span>Account type</span>
+                    <select value={newAccount.kind} onChange={(e) => setNewAccount({ ...newAccount, kind: e.target.value })}>
+                      {Object.entries(ACCOUNT_KINDS).map(([id, k]) => <option key={id} value={id}>{k.label}</option>)}
+                    </select>
+                    <em className="pf-fld-hint">Anything but a general contractor manages a standing property list.</em></label>
+                  <label className="pf-fld"><span>Plan</span>
+                    <select value={newAccount.plan} onChange={(e) => setNewAccount({ ...newAccount, plan: e.target.value })}>
+                      <option value="basic">Basic</option><option value="scale">Scale</option>
+                    </select>
+                    <em className="pf-fld-hint">Scale here grants the features and bills nothing — comp it afterwards so the reason is recorded.</em></label>
+                  <label className="pf-fld"><span>Billing cycle</span>
+                    <select value={newAccount.billing} onChange={(e) => setNewAccount({ ...newAccount, billing: e.target.value })}>
+                      <option value="monthly">Monthly</option><option value="annual">Annual</option>
+                    </select></label>
                   <label className="pf-fld"><span>Owner's full name</span>
                     <input placeholder="Dana Reyes" value={newAccount.ownerName} onChange={(e) => setNewAccount({ ...newAccount, ownerName: e.target.value })} /></label>
                   <label className="pf-fld"><span>Owner's work email</span>
                     <input placeholder="dana@example.com" type="email" value={newAccount.ownerEmail} onChange={(e) => setNewAccount({ ...newAccount, ownerEmail: e.target.value })} /></label>
+                  <label className="pf-fld"><span>Owner's mobile <em className="pf-opt">optional</em></span>
+                    <input placeholder="(206) 555-0100" inputMode="tel" maxLength={13} value={newAccount.ownerPhone}
+                      onChange={(e) => setNewAccount({ ...newAccount, ownerPhone: formatPhone(e.target.value) })} /></label>
                 </div>
-                <p className="pf-note">Creates the account on Basic and an admin membership for the owner. They'll need a password-reset link to sign in — send one from their account page once created.</p>
+
+                {/* Signup asks for these and the console did not, so an account
+                    created here arrived with no trades and the app had nothing
+                    to decide what to ask their subcontractors to prove. */}
+                <div className="pf-trades">
+                  <span className="pf-trades-hd">Trades they hire out <em className="pf-opt">optional — they can choose later</em></span>
+                  {TRADE_GROUPS.map(([heading, ids]) => (
+                    <div key={heading} className="pf-trade-group">
+                      <h5>{heading}</h5>
+                      <div className="picks">
+                        {ids.map((id) => (
+                          <button key={id} type="button"
+                            className={`pick ${newAccount.trades.includes(id) ? "on" : ""}`}
+                            onClick={() => setNewAccount({
+                              ...newAccount,
+                              trades: newAccount.trades.includes(id)
+                                ? newAccount.trades.filter((x) => x !== id)
+                                : [...newAccount.trades, id],
+                            })}>{TRADE_LABEL[id]}</button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <p className="pf-note">
+                  Creates the account and an admin membership for the owner. Nobody is signed in and no
+                  password is set: open the new account and send a reset link, which is how they get in.
+                  {newAccount.plan === "basic"
+                    ? " They sign in at app.subsub.work — a Basic account reserves its subdomain but does not serve it."
+                    : " Their own subdomain only answers once it is added as a custom domain in Cloudflare; until then they sign in at app.subsub.work."}
+                </p>
                 <div className="form-actions">
                   <button className="btn-ghost" onClick={() => setNewAccount(null)}>Cancel</button>
                   <button className="btn-solid"
@@ -4355,6 +4406,15 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
               <div>
                 <h2>{open.a.name}</h2>
                 <p className="pf-sub">{open.a.subdomain}.subsub.work · created {open.a.createdAt || "—"} · last active {open.a.lastActive || "—"}</p>
+                {/* The subdomain is reserved from the moment the account
+                    exists, but nothing serves that hostname until somebody
+                    adds it as a custom domain in Cloudflare -- so printing it
+                    alone reads as a working address and it is a dead link. */}
+                <p className="pf-signin">Signs in at <b>app.subsub.work</b>.{" "}
+                  {open.a.plan === "scale"
+                    ? <>Their own address <b>{open.a.subdomain}.subsub.work</b> is reserved, and answers once it is added as a custom domain in Cloudflare.</>
+                    : <>Their own address is reserved but not served — a branded hostname is a Scale feature.</>}
+                </p>
               </div>
               <div className="pf-hd-actions">
                 {admin.impersonate && open.a.status !== "canceled" && (
@@ -4365,7 +4425,7 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
               </div>
             </div>
             <div className="pf-kpis">
-              <Kpi label="Plan" value={`${PLANS[open.a.plan].name} · ${open.a.billing}`} />
+              <Kpi label="Plan" value={PLANS[open.a.plan].name} sub={open.a.billing} />
               {admin.finance && <Kpi label="MRR" value={open.mrr ? fmtC(open.mrr) : "—"} accent />}
               <Kpi label="Team users" value={open.users} />
               <Kpi label="Subcontractors" value={open.subs} />
@@ -4444,6 +4504,11 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                           makes sending one on somebody's behalf safe. */}
                       <p><Check size={14} style={{ display: "inline", verticalAlign: -2 }} /> Reset email sent to <b>{resetLink.email}</b>.
                         The link is in that email, expires, and works once.</p>
+                      {resetLink.created && (
+                        <p className="pf-note">They had no sign-in yet, so one was created first — they may
+                          also get a "confirm your email" message. The reset link is the one that lets them
+                          choose a password.</p>
+                      )}
                       <div className="form-actions">
                         <button className="btn-ghost" onClick={() => { setResetFor(null); setResetLink(null); }}>Done</button>
                       </div>
@@ -11457,10 +11522,27 @@ body{background:var(--paper)}
   padding:9px 11px;font:500 13.5px Inter,sans-serif;background:var(--card);color:var(--ink)}
 .pf-fld input:focus,.pf-fld select:focus{outline:2px solid var(--brand);outline-offset:-1px;border-color:var(--brand)}
 .pf-fld input::placeholder{color:#a3ada7}
-.pf-fld-hint{font-style:normal;font-size:11.5px;color:var(--ink-soft);word-break:break-all}
+/* break-word, not break-all: a long subdomain still wraps, but a sentence
+   stops being chopped mid-word on a phone. */
+.pf-fld-hint{font-style:normal;font-size:11.5px;color:var(--ink-soft);line-height:1.45;overflow-wrap:break-word}
 @media (max-width:620px){
   .pf-form-grid{grid-template-columns:1fr;padding:13px}
 }
 
 .pf-reconcile{border-top:1px solid var(--line);margin-top:12px;padding-top:11px;color:#8a5a12}
+
+/* Where this account actually signs in, next to the hostname it reserves. */
+.pf-signin{font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin:8px 0 0;max-width:70ch}
+.pf-signin b{color:var(--ink);font-weight:700}
+
+/* Trade picker inside the console's creation form. */
+.pf-trades{padding:14px 16px 16px;background:var(--paper);border:1px solid var(--line);
+  border-radius:10px;margin-bottom:14px}
+.pf-trades-hd{display:block;font-size:10.5px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--ink-soft)}
+.pf-trade-group{margin-top:13px}
+.pf-trade-group h5{margin:0 0 7px;font-size:11px;font-weight:700;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--ink-soft);opacity:.85}
+.pf-trades .picks{margin-top:0}
+.pf-opt{font-style:normal;font-weight:600;text-transform:none;letter-spacing:0;opacity:.7}
 `;

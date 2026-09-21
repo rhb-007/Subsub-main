@@ -1100,6 +1100,34 @@ async function supabaseSignUp(env, email, password) {
   return { ok: true, authId: body?.user?.id || body?.id || null, session: !!body?.access_token };
 }
 
+// A password nobody will ever use or see. It exists because Supabase needs
+// one to create an account, and the person it belongs to will set their own
+// from the reset link that follows.
+function throwawayPassword() {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return "Aa1!" + [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Make sure this address exists in Supabase, creating it if it does not.
+//
+// Staff can create an account or add a colleague from the console, and both
+// wrote a users row with auth_id left null and no Supabase account behind it.
+// "Send reset link" then called /auth/v1/recover, which answers 200 for an
+// address it has never seen -- deliberately, so the endpoint cannot be used
+// to discover who has an account. The console reported a reset sent, no mail
+// was ever going to arrive, and the person could never sign in.
+//
+// Creating it here is the anon-key signup the public form already uses, so
+// no new secret and no extra privilege. Already-registered is the expected
+// answer, not a failure: it means there was nothing to do.
+async function ensureAuthUser(env, email) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return { ok: false, error: "auth_not_configured" };
+  const signed = await supabaseSignUp(env, email, throwawayPassword());
+  if (signed.ok) return { ok: true, created: true, authId: signed.authId };
+  if (signed.error === "email_in_use") return { ok: true, created: false, authId: null };
+  return { ok: false, error: signed.error, detail: signed.detail };
+}
+
 const ACCOUNT_KINDS = ["general_contractor", "property_manager", "building_owner", "portfolio_manager"];
 
 // The trade categories an account can hire out -- the same thirty ids the app
@@ -2603,14 +2631,24 @@ app.post("/api/platform/accounts", async (c) => {
   // row, not a customer -- there would be no way in and nothing to reset.
   const ownerName = String(b.ownerName || "").trim();
   const ownerEmail = String(b.ownerEmail || "").trim().toLowerCase();
+  const ownerPhoneRaw = String(b.ownerPhone || "").trim();
+  const ownerPhone = normalizePhone(ownerPhoneRaw);
   if (ownerEmail && !EMAIL_RE.test(ownerEmail)) return c.json({ error: "invalid_email" }, 400);
   if (ownerEmail && !ownerName) return c.json({ error: "name_required" }, 400);
+  if (ownerPhoneRaw && !ownerPhone) return c.json({ error: "invalid_phone" }, 400);
+
+  // Same rule the public signup uses: absent means "never chosen", which the
+  // app treats differently from "hires nobody" -- it is what decides whether
+  // to ask. An empty list from the console therefore stays null.
+  const trades = b.trades === undefined ? null : validTrades(b.trades);
+  if (trades === null && b.trades !== undefined) return c.json({ error: "invalid_trades" }, 400);
 
   const id = uid();
   await c.env.DB.prepare(
-    `INSERT INTO accounts (id, name, subdomain, kind, plan, billing, use_default_mark)
-     VALUES (?, ?, ?, ?, ?, ?, 1)`
-  ).bind(id, name, subdomain, kind, plan, billing).run();
+    `INSERT INTO accounts (id, name, subdomain, kind, plan, billing, trades, use_default_mark)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+  ).bind(id, name, subdomain, kind, plan, billing,
+    trades && trades.length ? JSON.stringify(trades) : null).run();
 
   let ownerId = null;
   if (ownerEmail) {
@@ -2620,8 +2658,8 @@ app.post("/api/platform/accounts", async (c) => {
       `SELECT id FROM users WHERE lower(email) = lower(?)`).bind(ownerEmail).first();
     ownerId = existing?.id || uid();
     if (!existing) {
-      await c.env.DB.prepare(`INSERT INTO users (id, name, email) VALUES (?, ?, ?)`)
-        .bind(ownerId, ownerName, ownerEmail).run();
+      await c.env.DB.prepare(`INSERT INTO users (id, name, email, phone) VALUES (?, ?, ?, ?)`)
+        .bind(ownerId, ownerName, ownerEmail, ownerPhone).run();
     }
     await c.env.DB.prepare(
       `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, 'admin')`
@@ -2631,7 +2669,7 @@ app.post("/api/platform/accounts", async (c) => {
   await auditPlatform(c.env, staff, id, "account_created",
     `${staff.name} created this account`, { name, subdomain, plan, ownerEmail: ownerEmail || null });
 
-  return c.json({ id, name, subdomain, kind, plan, billing, ownerId }, 201);
+  return c.json({ id, name, subdomain, kind, plan, billing, trades, ownerId }, 201);
 });
 
 // Plan and account type, from the console. Deliberately does NOT touch
@@ -2864,9 +2902,19 @@ app.post("/api/platform/users/:id/reset-password", async (c) => {
     return c.json({ error: "auth_not_configured" }, 501);
   }
 
-  const user = await c.env.DB.prepare(`SELECT id, email, name FROM users WHERE id = ?`)
+  const user = await c.env.DB.prepare(`SELECT id, email, name, auth_id FROM users WHERE id = ?`)
     .bind(c.req.param("id")).first();
   if (!user?.email) return c.json({ error: "not_found" }, 404);
+
+  // Somebody added from the console has no Supabase account yet, and recover
+  // on an unknown address succeeds without sending anything. Create it first
+  // so the mail below has somewhere to go.
+  const auth = await ensureAuthUser(c.env, user.email);
+  if (!auth.ok) return c.json({ error: auth.error, detail: auth.detail }, 502);
+  if (auth.authId && !user.auth_id) {
+    await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ?`)
+      .bind(auth.authId, user.id).run();
+  }
 
   const res = await fetch(`${c.env.SUPABASE_URL}/auth/v1/recover`, {
     method: "POST",
@@ -2882,8 +2930,10 @@ app.post("/api/platform/users/:id/reset-password", async (c) => {
     `${staff.name} sent a password reset to ${user.email}`, { userId: user.id, email: user.email });
 
   // No link comes back: the token is in the email and nowhere else, which is
-  // the property that makes this safe to do on somebody's behalf.
-  return c.json({ ok: true, email: user.email });
+  // the property that makes this safe to do on somebody's behalf. `created`
+  // says a Supabase account had to be made first, which is worth telling the
+  // operator: with confirmation on, that sends a second mail of its own.
+  return c.json({ ok: true, email: user.email, created: !!auth.created });
 });
 
 // ---------------------------------------------------------------------------
