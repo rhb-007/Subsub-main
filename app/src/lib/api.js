@@ -213,6 +213,9 @@ export const api = {
       request(`/platform/companies/${encodeURIComponent(id)}`,
         { method: "DELETE", body: JSON.stringify({ confirmName }) }),
 
+    // What this account has been sent, and whether it went out.
+    mailLog: (accountId) => request(`/platform/accounts/${encodeURIComponent(accountId)}/mail`),
+
     // Read-only: probes each Cloudflare setting and says which one is wrong.
     hostnameCheck: () => request("/platform/hostname-check"),
 

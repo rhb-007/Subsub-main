@@ -3036,6 +3036,22 @@ app.delete("/api/platform/companies/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// Every mail this account has been sent, and whether it went. The schema
+// has recorded this from the start and nothing ever showed it, so "did they
+// get the email?" was answered by guessing.
+app.get("/api/platform/accounts/:id/mail", async (c) => {
+  const { error } = await requireStaff(c);
+  if (error) return error;
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, to_email, kind, subject, status, error, at FROM email_log
+      WHERE account_id = ? ORDER BY at DESC LIMIT 25`
+  ).bind(c.req.param("id")).all();
+  return c.json(results.map((r) => ({
+    id: r.id, to: r.to_email, kind: r.kind, subject: r.subject,
+    status: r.status, error: r.error, at: r.at,
+  })));
+});
+
 // Which of the four Cloudflare settings is wrong, when one of them is.
 // Read-only: every probe is a GET, so this is safe to hit repeatedly while
 // somebody is fixing a value in the dashboard.
@@ -3121,6 +3137,8 @@ app.post("/api/platform/users/:id/reset-password", async (c) => {
     return c.json({ error: "auth_not_configured" }, 501);
   }
 
+  const b = await c.req.json().catch(() => ({}));
+  const accountId = b.accountId || null;
   const user = await c.env.DB.prepare(`SELECT id, email, name, auth_id FROM users WHERE id = ?`)
     .bind(c.req.param("id")).first();
   if (!user?.email) return c.json({ error: "not_found" }, 404);
@@ -3167,18 +3185,33 @@ app.post("/api/platform/users/:id/reset-password", async (c) => {
       const body = await res.json().catch(() => null);
       said = body?.msg || body?.error_description || body?.error || null;
     }
+    const why = [said || (res ? `HTTP ${res.status}` : "Supabase was unreachable"), authNote]
+      .filter(Boolean).join(" · ");
+    // A durable record, because "did they get it?" is the first thing anyone
+    // asks and a message in a panel is gone the moment the page is closed.
+    await logMail(c.env, {
+      accountId, companyId: null, to: user.email, kind: "password_reset",
+      subject: "Password reset", sentBy: staff.userId,
+      result: { ok: false, error: "supabase", detail: why },
+    });
     return c.json({
       error: "reset_failed",
-      detail: [said || (res ? `HTTP ${res.status}` : "Supabase was unreachable"), authNote]
-        .filter(Boolean).join(" · "),
+      detail: why,
       // A send limit is worth naming as itself: it is the one failure here
       // that fixes itself, and the answer is to wait rather than to retry.
       rateLimited: !!(res && (res.status === 429 || /rate limit/i.test(said || ""))),
     }, 502);
   }
 
-  const b = await c.req.json().catch(() => ({}));
-  await auditPlatform(c.env, staff, b.accountId || null, "password_reset",
+  await logMail(c.env, {
+    accountId, companyId: null, to: user.email,
+    kind: "password_reset", subject: "Password reset", sentBy: staff.userId,
+    // Supabase accepted it. That is not the same as it arriving, which is
+    // why the row says who, when and what was handed over rather than
+    // claiming delivery.
+    result: { ok: true },
+  });
+  await auditPlatform(c.env, staff, accountId, "password_reset",
     `${staff.name} sent a password reset to ${user.email}`, { userId: user.id, email: user.email });
 
   // No link comes back: the token is in the email and nowhere else, which is

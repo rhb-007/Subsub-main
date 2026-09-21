@@ -2447,6 +2447,7 @@ export default function SubSub() {
               "Could not set up that address.")}
           // Read-only, so it does not reload the console the way a write does.
           onCheckHostnameSetup={() => api.platform.hostnameCheck()}
+          onMailLog={(id) => api.platform.mailLog(id)}
           onDeleteAccount={async (id, confirmName) => {
             await platformWrite(() => api.platform.deleteAccount(id, confirmName),
               "Could not delete that account.");
@@ -3971,7 +3972,7 @@ const monthKey = (iso) => (iso || "").slice(0, 7);
 function SuperadminConsole({ me, admin, accounts, users, memberships, companies, engagements,
   jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
-  onResetPassword, onSyncHostname, onCheckHostnameSetup }) {
+  onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog }) {
   const [screen, setScreen] = useState("dashboard");
   const [openId, setOpenId] = useState(null);
   const [menu, setMenu] = useState(false);
@@ -4699,6 +4700,8 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
               })}
             </div>
 
+            <MailLog accountId={open.a.id} load={onMailLog} />
+
             <div className="pf-panel">
               <div className="pf-panel-hd">
                 <h3>User activity</h3>
@@ -5313,6 +5316,83 @@ function RankList({ rows, max, total, empty, label }) {
       </ol>
       {total > rows.length && <p className="pf-note">+{total - rows.length} more</p>}
     </>
+  );
+}
+
+// Every mail this account has been sent, and whether it went.
+//
+// email_log has recorded this since the schema was written and nothing ever
+// showed it, so "did they get the email?" -- the first question support ever
+// asks -- was answered by guessing. Accepted is not delivered, and the row
+// says so: what it records is that the provider took it.
+const MAIL_KIND = {
+  password_reset: "Password reset",
+  doc_request: "Document request",
+  wo_issued: "Work order",
+  application_received: "Application received",
+};
+
+function MailLog({ accountId, load }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => { setRows(null); setOpen(false); setErr(""); }, [accountId]);
+
+  const fetchRows = async () => {
+    setErr("");
+    try { setRows(await load(accountId)); }
+    catch (e) { setErr(e?.body?.detail || "Could not load the mail log."); }
+  };
+
+  return (
+    <div className="pf-panel">
+      <div className="pf-panel-hd">
+        <h3><Mail size={15} /> Email sent to this account</h3>
+        <button className="pf-mini" onClick={() => {
+          const next = !open;
+          setOpen(next);
+          if (next && rows === null) fetchRows();
+        }}>
+          <ChevronDown size={13} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+          {open ? "Hide" : "Show"}
+        </button>
+      </div>
+
+      {open && (
+        <>
+          {err && <p className="pf-host-err">{err}</p>}
+          {rows === null && !err && <p className="pf-note">Loading…</p>}
+          {rows && rows.length === 0 && <p className="pf-note">Nothing has been sent to this account yet.</p>}
+          {rows && rows.length > 0 && (
+            <>
+              <div className="pf-maillog">
+                {rows.map((r) => (
+                  <div key={r.id} className={`pf-mail-row ${r.status === "sent" ? "" : "bad"}`}>
+                    <span className="pf-mail-when">{niceWhen(r.at)}</span>
+                    <span className="pf-mail-main">
+                      <b>{MAIL_KIND[r.kind] || r.kind}</b>
+                      <span>{r.to}</span>
+                      {r.error && <em>{r.error}</em>}
+                    </span>
+                    <span className={`pf-host-pill t-${r.status === "sent" ? "ok" : "bad"}`}>
+                      {r.status === "sent" ? "Accepted" : "Failed"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="pf-note">
+                "Accepted" means the provider took it, not that it landed in an inbox — a bounce or a
+                spam filter happens after this point and is not visible here.
+              </p>
+            </>
+          )}
+          <div className="form-actions">
+            <button className="pf-mini" onClick={fetchRows}><RefreshCw size={13} /> Refresh</button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -12196,6 +12276,24 @@ body{background:var(--paper)}
 .addr-host a{color:var(--brand);text-decoration:none}
 .addr-host a:hover{text-decoration:underline}
 .addr-state p{font-size:13px;color:var(--ink-soft);line-height:1.55;margin:0}
+
+/* ---- console: what was sent, and whether it went ---------------------- */
+.pf-maillog{display:flex;flex-direction:column;margin-top:4px}
+.pf-mail-row{display:flex;align-items:flex-start;gap:12px;padding:10px 0;
+  border-bottom:1px solid var(--line)}
+.pf-mail-row:last-child{border-bottom:0}
+.pf-mail-when{font:600 11.5px ui-monospace,monospace;color:var(--ink-soft);
+  flex:none;width:112px;padding-top:2px}
+.pf-mail-main{display:flex;flex-direction:column;flex:1;min-width:0;line-height:1.4}
+.pf-mail-main b{font-size:13.5px}
+.pf-mail-main > span{font-size:12.5px;color:var(--ink-soft);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.pf-mail-main em{font-style:normal;font:600 11.5px ui-monospace,monospace;
+  color:#8a2f1c;margin-top:3px;word-break:break-word}
+@media (max-width:600px){
+  .pf-mail-row{flex-wrap:wrap;gap:6px 10px}
+  .pf-mail-when{width:auto;order:3}
+}
 .addr-spin{width:12px;height:12px;border-radius:50%;border:2px solid #e6c98f;
   border-top-color:transparent;animation:addr-spin 1s linear infinite;margin-left:2px}
 @keyframes addr-spin{to{transform:rotate(360deg)}}
