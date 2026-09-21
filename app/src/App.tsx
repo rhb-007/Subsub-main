@@ -2247,6 +2247,8 @@ export default function SubSub() {
       result.memberships.forEach((m) => {
         byId[m.accountId] = { id: m.accountId, name: m.accountName, subdomain: m.subdomain,
           kind: m.kind, plan: m.plan, billing: m.billing, theme: m.theme, trades: m.trades,
+          subscriptionStatus: m.subscriptionStatus, currentPeriodEnd: m.currentPeriodEnd,
+          comped: m.comped, cancelAtPeriodEnd: m.cancelAtPeriodEnd,
           hostnameStatus: m.hostnameStatus,
           logoData: m.logoKey ? logoUrl(m.accountId) : null, useDefaultMark: m.useDefaultMark };
       });
@@ -2322,6 +2324,7 @@ export default function SubSub() {
       logoData: acct.logoKey ? logoUrl(acct.id) : null, useDefaultMark: acct.useDefaultMark,
       theme: acct.theme, trades: acct.trades,
       subscriptionStatus: acct.subscriptionStatus, currentPeriodEnd: acct.currentPeriodEnd,
+      comped: acct.comped, cancelAtPeriodEnd: acct.cancelAtPeriodEnd,
       hostnameStatus: acct.hostnameStatus, hostnameCheckedAt: acct.hostnameCheckedAt,
     }]);
     if (acct.user) setUsers((prev) => [...prev.filter((u) => u.id !== acct.user.id), acct.user]);
@@ -3199,7 +3202,7 @@ export default function SubSub() {
           accountKind={kindOf(account)} onSetAccountKind={setAccountKind}
           accountTrades={account.trades} onSetAccountTrades={setAccountTrades}
           subscriptionStatus={account.subscriptionStatus} currentPeriodEnd={account.currentPeriodEnd}
-          comped={account.comped}
+          comped={account.comped} cancelAtPeriodEnd={account.cancelAtPeriodEnd}
           canManage={can("account") && role === "admin"} mySub={mySub}
           onSaveUser={updateUser} onSaveBrand={setBrand}
           onUpgrade={startCheckout} onManageBilling={openBillingPortal}
@@ -6706,7 +6709,7 @@ function AddressStatus({ subdomain, status, onRefresh }) {
 
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
-  accountTrades, onSetAccountTrades, subscriptionStatus, currentPeriodEnd, comped,
+  accountTrades, onSetAccountTrades, subscriptionStatus, currentPeriodEnd, comped, cancelAtPeriodEnd,
   onSaveUser, onSaveBrand, onUpgrade, onManageBilling, billingBusy, billingErr,
   onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup,
@@ -7120,7 +7123,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               {active.annual ? (
                 <span className="pc-cycle">
                   {billing === "annual" ? `${formatDollars(active.annual)}/yr` : `${active.price}/mo`}
-                  {!currentPeriodEnd && (billing === "annual" ? " · renews annually" : " · renews monthly")}
+                  {!currentPeriodEnd && (billing === "annual" ? " · billed yearly" : " · billed monthly")}
                 </span>
               ) : (
                 <span className="pc-cycle">No subscription</span>
@@ -7131,10 +7134,19 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                   asked. "Renews" becomes "ends" when it will not. */}
               {comped && <span className="pc-renew comp">Complimentary — nothing to pay</span>}
               {!comped && currentPeriodEnd && (
-                <span className={`pc-renew ${subscriptionStatus === "past_due" ? "warn" : ""}`}>
-                  {subscriptionStatus === "canceled" || plan === "basic" ? "Access ends " : "Renews "}
-                  {niceDay(currentPeriodEnd)}
-                  {subscriptionStatus === "past_due" && " · payment failed, Stripe is retrying"}
+                <span className={`pc-renew ${subscriptionStatus === "past_due" || cancelAtPeriodEnd ? "warn" : ""}`}>
+                  {/* Three different things, and saying the wrong one is a
+                      support call: somebody told they will be charged again
+                      after cancelling, or told their access ends when it
+                      does not. Stripe keeps a cancelling subscription
+                      `active` to the last day, so the flag decides, not the
+                      status. */}
+                  {subscriptionStatus === "canceled" || plan === "basic"
+                    ? <>Access ends {niceDay(currentPeriodEnd)}</>
+                    : cancelAtPeriodEnd
+                      ? <>Cancels {niceDay(currentPeriodEnd)} — no further charges</>
+                      : <>Renews automatically {niceDay(currentPeriodEnd)} · {billing === "annual" ? "yearly" : "monthly"}</>}
+                  {subscriptionStatus === "past_due" && " · payment failed, we're retrying"}
                 </span>
               )}
             </div>
@@ -9223,8 +9235,11 @@ function CheckoutPanel({ clientSecret, onClose }) {
       <div className="co-panel" role="dialog" aria-label="Payment">
         <div className="co-head">
           <div>
-            <SubSubLogo height={17} />
-            <span className="co-sub">Secure payment by Stripe</span>
+            <SubSubLogo height={26} />
+            {/* The processor's name is theirs to show, and it already appears
+                inside their own frame below. What this line is for is the
+                reassurance, which survives without borrowing the brand. */}
+            <span className="co-sub">Secure payment</span>
           </div>
           <button className="co-x" onClick={onClose} aria-label="Close">
             <X size={17} />
@@ -10858,8 +10873,10 @@ body{background:var(--paper)}
 .co-panel{background:var(--card);border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.28);
   width:min(560px,100%);padding:18px 18px 22px;margin:auto}
 .co-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}
-.co-head > div{display:flex;flex-direction:column;gap:5px}
-.co-sub{font-size:11.5px;color:var(--ink-soft)}
+/* Flush left with the form below it, rather than inset by the panel's own
+   padding on top of it -- the mark was sitting in from the edge twice. */
+.co-head > div{display:flex;flex-direction:column;gap:6px;margin-left:-2px}
+.co-sub{font-size:12px;color:var(--ink-soft);margin-left:2px}
 .co-x{border:0;background:none;color:var(--ink-soft);cursor:pointer;padding:2px;line-height:0;flex:none}
 .co-x:hover{color:var(--ink)}
 /* Stripe measures its iframe against this, so it needs a height to grow into

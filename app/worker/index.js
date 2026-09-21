@@ -252,7 +252,7 @@ async function loginResponse(db, user) {
   const { results: memberships } = await db.prepare(
     `SELECT m.*, a.name as account_name, a.subdomain, a.kind, a.plan, a.billing, a.logo_key,
             a.use_default_mark, a.theme, a.trades, a.subscription_status, a.current_period_end,
-            a.comped, a.hostname_status
+            a.comped, a.hostname_status, a.cancel_at_period_end
      FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
   ).bind(user.id).all();
   return {
@@ -263,7 +263,8 @@ async function loginResponse(db, user) {
       kind: m.kind, plan: m.plan, billing: m.billing, logoKey: m.logo_key, useDefaultMark: !!m.use_default_mark,
       theme: parseJson(m.theme), trades: parseJson(m.trades),
       subscriptionStatus: m.subscription_status, currentPeriodEnd: m.current_period_end,
-      comped: !!m.comped, hostnameStatus: m.hostname_status || null,
+      comped: !!m.comped, cancelAtPeriodEnd: !!m.cancel_at_period_end,
+      hostnameStatus: m.hostname_status || null,
     })),
   };
 }
@@ -708,20 +709,28 @@ async function accountForStripe(env, { accountId, customerId }) {
 async function applySubscription(env, account, sub) {
   const status = sub.status;
   const entitled = ENTITLED.has(status);
-  const cycle = sub.items?.data?.[0]?.price?.recurring?.interval === "year" ? "annual" : "monthly";
+  const item = sub.items?.data?.[0];
+  const cycle = item?.price?.recurring?.interval === "year" ? "annual" : "monthly";
   // A comped account keeps Scale whatever Stripe says. Somebody who was given
   // the plan should not lose it because a card they never entered expired,
   // or because a cancelled trial from months ago finally reported in.
   const plan = (entitled || account.comped) ? "scale" : "basic";
-  const periodEnd = stripeTime(sub.current_period_end);
+  // Stripe moved current_period_end off the subscription and onto its items,
+  // so reading only the old place returned nothing and the app fell back to
+  // "renews annually" with no date -- which is exactly what it looked like.
+  // Both are read, newest first, so this works either side of that change.
+  const periodEnd = stripeTime(item?.current_period_end ?? sub.current_period_end);
+  // Status stays `active` on a subscription that is cancelling, so this is
+  // the only thing that distinguishes "renews on" from "ends on".
+  const cancelAtEnd = sub.cancel_at_period_end ? 1 : 0;
 
   const was = account.plan;
   await env.DB.prepare(
     `UPDATE accounts SET plan = ?, billing = ?, stripe_subscription_id = ?,
             stripe_customer_id = COALESCE(stripe_customer_id, ?),
-            subscription_status = ?, current_period_end = ?
+            subscription_status = ?, current_period_end = ?, cancel_at_period_end = ?
      WHERE id = ?`
-  ).bind(plan, cycle, sub.id, sub.customer, status, periodEnd, account.id).run();
+  ).bind(plan, cycle, sub.id, sub.customer, status, periodEnd, cancelAtEnd, account.id).run();
 
   if (was !== plan) {
     const monthly = cycle === "annual" ? 8250 : 9900;   // $990/yr and $99/mo, in cents
@@ -1052,6 +1061,7 @@ app.get("/api/account", async (c) => {
     // Cloudflare's own words about our credentials or our zone, which is
     // staff's problem to read and nothing a customer can act on. Telling
     // them "dns: Authentication failed" would be alarming and useless.
+    cancelAtPeriodEnd: !!a.cancel_at_period_end,
     hostnameStatus: a.hostname_status || null,
     hostnameCheckedAt: a.hostname_checked_at || null,
     user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone } : null,

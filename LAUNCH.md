@@ -17,14 +17,11 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [x] **1. Console UI** — dashboard, range picker, trend chart, forms,
       responsive layout.
-- [~] **2. Embedded checkout** — makes payment feel like part of SubSub
-      instead of a redirect to Stripe. Code shipped. Waiting on
-      `VITE_STRIPE_PUBLISHABLE_KEY` being set on the **subsub-app** Pages
-      project (it is currently on **subsub-api**, where it does nothing —
-      `VITE_` values are baked in at build time by whatever builds the
-      page), then a **Retry deployment**.
-      *Done when:* upgrading shows the card form inside the SubSub page.
-- [ ] **3. Stripe live mode** — the actual gate on taking money. Everything
+- [x] **2. Embedded checkout** — the card form renders inside the SubSub
+      page. Needed the publishable key on the **subsub-app** Pages project
+      rather than on the API, and `ui_mode: embedded_page` — Stripe renamed
+      the old value and refused the session outright.
+- [~] **3. Stripe live mode** — the actual gate on taking money. Everything
       today is test mode, so no real card can pay. Recreate the two prices
       in live mode, swap the secret key and webhook secret, take one real
       charge.
@@ -56,3 +53,7 @@ Fixed as encountered, because each one blocked something on the list:
   send to.
 - Revenue reporting dropped downgrades entirely, so logged MRR drifted above
   the real figure and never came back.
+- Nothing in the app handled a confirmation or reset link, so a working one
+  did nothing and a failed one looked identical.
+- Stripe moved `current_period_end` onto subscription items, so the renewal
+  date was never stored and the plan line had no date to show.
