@@ -1431,6 +1431,7 @@ export default function SubSub() {
   const [jobZip, setJobZip] = useState("");
   const [inRangeOnly, setInRangeOnly] = useState(false);
   const [selected, setSelected] = useState(null);
+  const [newPropertyAt, setNewPropertyAt] = useState(0);   // see tryAddProperty
   const [jobForm, setJobForm] = useState(null);           // { forSub? } create-job modal
   const [assigning, setAssigning] = useState(null);       // { job, trade } -> pick contractor
   const [viewWO, setViewWO] = useState(null);   // { job, trade, a }
@@ -1944,6 +1945,13 @@ export default function SubSub() {
     if (atContractorLimit) { setAddMenu(false); setUpgradePrompt({ kind: "contractor" }); return; }
     setAdding(true);
   };
+  // The new-property form lives inside PropertiesView, which owns it because
+  // that is where it is nearly always opened from. Opening it from the header
+  // means crossing that boundary, so a nonce is passed down and the view
+  // opens a blank form whenever it changes -- a boolean would not fire twice
+  // in a row, and "Add a property, cancel, add another" is an ordinary thing
+  // to do.
+  const tryAddProperty = () => { setTab("properties"); setNewPropertyAt(Date.now()); };
   const tryAddUser = () => {
     if (atSeatLimit) { setAddMenu(false); setUpgradePrompt({ kind: "user" }); return; }
     setUserForm(true);
@@ -2706,7 +2714,14 @@ export default function SubSub() {
                     <div className="add-menu">
                       <button onClick={() => { setAddMenu(false); tryAddContractor(); }}><Hammer size={14} /> Contractor</button>
                       <button onClick={() => { setAddMenu(false); setInviteOpen(true); }}><Link2 size={14} /> Invite link</button>
-                        <button onClick={() => { setAddMenu(false); tryAddJob(); }}><Calendar size={14} /> Job</button>
+                      {/* Only accounts that keep a building list. A general
+                          contractor works job to job and has nothing to put
+                          here, which is why it is not simply always shown. */}
+                      {can("properties") && (
+                        <button onClick={() => { setAddMenu(false); tryAddProperty(); }}>
+                          <Building2 size={14} /> Property</button>
+                      )}
+                      <button onClick={() => { setAddMenu(false); tryAddJob(); }}><Calendar size={14} /> Job</button>
                       {can("users") && <button onClick={() => { setAddMenu(false); tryAddUser(); }}><Users size={14} /> User</button>}
                     </div>
                   </>
@@ -2864,6 +2879,8 @@ export default function SubSub() {
           onAddSub={() => tryAddContractor()}
           onGoJobs={() => setTab("jobs")} onGoContractors={() => setTab("network")}
           onNewJob={() => tryAddJob()}
+          properties={can("properties") ? accountProperties : null}
+          onGoProperties={() => setTab("properties")} onAddProperty={tryAddProperty}
           onAssign={(job, trade, replacing) => setAssigning({ job, trade, replacing })}
           onRequestDocs={requestDocs} onOpenSub={(sb) => setSelected(sb)}
           onReviewDoc={(sb, kind) => setReviewing({ sub: sb, kind })}
@@ -3016,7 +3033,7 @@ export default function SubSub() {
           })}
           onAdd={addProperty} onPatch={patchProperty} onRemove={removeProperty}
           onOpenSub={(s) => { setSelected(s); setTab("contractors"); }}
-          onNewJob={(p) => tryAddJob(null, p)} />
+          onNewJob={(p) => tryAddJob(null, p)} newAt={newPropertyAt} />
       )}
 
       {tab === "calendar" && can("calendar") && (
@@ -6061,12 +6078,16 @@ function Kpi({ label, value, sub, accent, warn }) {
 // ---- Properties (portfolio / property managers) -------------------------
 // Vendors can be scoped to specific properties. A vendor with none listed is
 // treated as available across the whole account, which is how a GC uses it.
-function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor }) {
+function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, newAt }) {
   const [form, setForm] = useState(null);   // null | {} | property
   const [assigning, setAssigning] = useState(null);   // the property whose vendor list is open
   const vendorsFor = (pid) => subs.filter((s) => (s.propertyIds || []).includes(pid));
   const unscoped = subs.filter((s) => !(s.propertyIds || []).length);
   const jobsFor = (pid) => jobs.filter((j) => j.propertyId === pid);
+
+  // "Add -> Property" in the header lands here. Guarded on 0 so arriving at
+  // the tab normally does not spring a form open.
+  useEffect(() => { if (newAt) setForm({}); }, [newAt]);
 
   if (form) return (
     <main className="ss-main">
@@ -7489,7 +7510,7 @@ function UniformAdmin({ orders, subs, onDecide }) {
 // The order is the dependency order: trades decide which documents get asked
 // for, documents decide who can be assigned, so a job created before either
 // is a job with nobody to give it to.
-function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, onInvite, onAddSub, onNewJob, onGoContractors }) {
+function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, onInvite, onAddSub, onNewJob, onGoContractors, properties, onAddProperty }) {
   const key = `subsub.gs.${accountId}`;
   const [hidden, setHidden] = useState(() => {
     try { return localStorage.getItem(key) === "1"; } catch { return false; }
@@ -7515,6 +7536,16 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
         { label: "Add one myself", onClick: onAddSub },
       ],
     },
+    // Somebody managing buildings has nowhere to point a job until the
+    // buildings exist, so for those accounts this is a step rather than
+    // something to discover later. A general contractor never sees it.
+    ...(Array.isArray(properties) ? [{
+      id: "properties", done: properties.length > 0,
+      title: "Add the properties you manage",
+      note: "Jobs are raised against a building, and contractors can be scoped to "
+        + "the ones they actually work, so this is worth doing before the first job.",
+      actions: [{ label: "Add a property", onClick: onAddProperty, solid: true }],
+    }] : []),
     {
       id: "docs", done: approved.length > 0,
       title: "Approve their documents",
@@ -7579,7 +7610,11 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
   );
 }
 
-function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense }) {
+// `properties` is null for an account that keeps no building list -- a general
+// contractor -- and an array for the rest, so it is both the data and the
+// answer to "does this account think in buildings at all".
+function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty }) {
+  const managesProperties = Array.isArray(properties);
   const today = new Date().toISOString().slice(0, 10);
   const slots = jobs.flatMap((j) => j.trades.map((t) => ({ job: j, trade: t, a: j.assignments[t] })));
   const open = slots.filter((s) => !s.a);
@@ -7621,9 +7656,19 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
 
       <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
         subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
-        onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors} />
+        onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors}
+        properties={properties} onAddProperty={onAddProperty} />
 
-      <div className="dash-grid">
+      <div className={`dash-grid ${managesProperties ? "g5" : ""}`}>
+        {/* For somebody running a portfolio this is the headline number, so it
+            leads -- and on a narrow screen it takes the full width above the
+            rest rather than leaving an odd card stranded beside a gap. */}
+        {managesProperties && (
+          <button className="dash-card prop" onClick={onGoProperties}>
+            <span className="dc-num">{properties.length}</span>
+            <span className="dc-lab">Properties under management</span>
+          </button>
+        )}
         <button className={`dash-card ${open.length ? "accent" : ""}`} onClick={onGoJobs}>
           <span className="dc-num">{open.length}</span>
           <span className="dc-lab">Unassigned trade slots</span>
@@ -7783,7 +7828,13 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
       <section className="dash-sec">
         <h3><Calendar size={15} /> Upcoming jobs {upcoming.length > 0 && <span className="sec-count">{upcoming.length}</span>}</h3>
         {upcoming.length === 0 ? (
-          <div className="dash-empty"><ClipboardList size={24} /><p>Nothing scheduled yet.</p></div>
+          <div className="dash-empty">
+            <ClipboardList size={24} /><p>Nothing scheduled yet.</p>
+            {/* The empty state named the problem and then offered no way out
+                of it; the button is the whole reason somebody reads this. */}
+            <button className="btn-solid dash-empty-btn" onClick={onNewJob}>
+              <Plus size={15} /> New job</button>
+          </div>
         ) : upcoming.slice(0, 5).map((j) => {
           const filled = j.trades.filter((t) => j.assignments[t]).length;
           return (
@@ -11054,6 +11105,11 @@ body{background:var(--paper)}
 .billing-manage p{margin:3px 0 0;font-size:12px;color:var(--ink-soft)}
 
 .dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-bottom:18px}
+/* An account that keeps a building list gets a fifth card. Five across on a
+   wide screen; on anything narrower the portfolio count takes the full width
+   above the others, which reads better than one card marooned next to a gap. */
+.dash-grid.g5{grid-template-columns:repeat(5,1fr)}
+.dash-card.prop .dc-num{color:var(--brand)}
 .dash-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px;box-shadow:var(--shadow);
   display:flex;flex-direction:column;gap:4px}
 .dash-card.accent{border-color:#ecd9b0;background:#fffdf6}
@@ -11073,6 +11129,7 @@ body{background:var(--paper)}
   border:1px dashed var(--line);border-radius:12px}
 .dash-empty svg{opacity:.5;margin-bottom:8px}
 .dash-empty p{margin:0;font-size:13.5px}
+.dash-empty-btn{display:inline-flex;align-items:center;gap:7px;margin-top:13px}
 
 /* assign: choose existing vs new */
 .assign-choice{display:flex;flex-direction:column;gap:10px;margin-bottom:16px}
@@ -12117,6 +12174,8 @@ body{background:var(--paper)}
   .ms-btn{min-width:118px}
   .user-row-perms{display:none}
   .dash-grid{grid-template-columns:repeat(2,1fr)}
+  .dash-grid.g5{grid-template-columns:repeat(2,1fr)}
+  .dash-card.prop{grid-column:1/-1}
   .trade-row{flex-wrap:wrap}
   .trade-side{width:100%;justify-content:space-between;padding-top:10px;margin-top:4px;border-top:1px solid var(--line)}
   .job-card-head{flex-direction:column;align-items:flex-start;gap:8px}
@@ -12344,7 +12403,7 @@ body{background:var(--paper)}
   .cov-preview{font-size:12px}
 
   /* contractor dashboard on phones */
-  .dash-grid{grid-template-columns:1fr 1fr;gap:9px}
+  .dash-grid,.dash-grid.g5{grid-template-columns:1fr 1fr;gap:9px}
   .dash-card{padding:12px}
   .dc-num{font-size:20px}
   .hdr-avail{padding:7px 9px}
