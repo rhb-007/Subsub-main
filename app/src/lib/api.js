@@ -27,6 +27,16 @@ export const API_BASE = (import.meta.env.VITE_API_BASE || "/api").replace(/\/+$/
 // A logo is an <img src>, so it needs the same base as every other call.
 export const logoUrl = (accountId) => `${API_BASE}/logo/${accountId}`;
 
+// encodeURIComponent(undefined) is the string "undefined", so a missing id
+// becomes a perfectly well-formed request for a record that cannot exist --
+// and the server answers "no such thing", which reads like the record was
+// deleted rather than like the caller forgot to pass one. Fail here instead,
+// where the stack still says who called.
+const needId = (v, what) => {
+  if (v === undefined || v === null || v === "") throw new Error(`missing_${what}`);
+  return encodeURIComponent(v);
+};
+
 const AUTH_KEY = "subsub.auth";
 
 export function getAuth() {
@@ -237,7 +247,7 @@ export const api = {
     setupCheck: () => request("/platform/setup-check"),
 
     // What this account has been sent, and whether it went out.
-    mailLog: (accountId) => request(`/platform/accounts/${encodeURIComponent(accountId)}/mail`),
+    mailLog: (accountId) => request(`/platform/accounts/${needId(accountId, "account_id")}/mail`),
 
     // Read-only: probes each Cloudflare setting and says which one is wrong.
     hostnameCheck: () => request("/platform/hostname-check"),
@@ -245,15 +255,15 @@ export const api = {
     // Re-run branded-hostname setup now. The Worker's sweep does this on its
     // own every ten minutes; this is the "don't make me wait" button.
     syncHostname: (accountId) =>
-      request(`/platform/accounts/${encodeURIComponent(accountId)}/hostname`, { method: "POST" }),
+      request(`/platform/accounts/${needId(accountId, "account_id")}/hostname`, { method: "POST" }),
 
     addUser: (accountId, user) =>
-      request(`/platform/accounts/${encodeURIComponent(accountId)}/users`,
+      request(`/platform/accounts/${needId(accountId, "account_id")}/users`,
         { method: "POST", body: JSON.stringify(user) }),
     // Returns only the address it went to. The token lives in the email and
     // nowhere else, which is what makes this safe to do on someone's behalf.
     resetPassword: (userId, accountId) =>
-      request(`/platform/users/${encodeURIComponent(userId)}/reset-password`,
+      request(`/platform/users/${needId(userId, "user_id")}/reset-password`,
         { method: "POST", body: JSON.stringify({ accountId: accountId || null }) }),
   },
 };

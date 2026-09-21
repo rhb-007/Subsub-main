@@ -2475,11 +2475,17 @@ export default function SubSub() {
             await platformWrite(() => api.platform.deleteCompany(id, confirmName),
               "Could not delete that company.");
           }}
-          onResetPassword={async (u, accountId) => {
+          // Takes the id itself rather than an object to pick a field out of.
+          // It used to take the row and read `u.id`, but the row it is handed
+          // carries `userId` -- so every reset asked the server for a user
+          // called "undefined", got "no such user" back, and sent nothing.
+          // A shape with one field named differently at each end is a bug
+          // waiting to happen; two strings cannot be got wrong.
+          onResetPassword={async (userId, accountId) => {
             // Nothing comes back but the address. The link is in the email and
             // nowhere else, which is the property that makes sending one on
             // somebody's behalf safe.
-            return platformWrite(() => api.platform.resetPassword(u.id, accountId),
+            return platformWrite(() => api.platform.resetPassword(userId, accountId),
               "Could not send that reset email.", { reload: false });
           }}
           onImpersonate={async (acct) => {
@@ -4692,7 +4698,7 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                         <button className="btn-solid" disabled={sending}
                           onClick={async () => {
                             setSending(true); setResetErr("");
-                            try { setResetLink(await onResetPassword(resetFor, resetFor.accountId)); }
+                            try { setResetLink(await onResetPassword(resetFor.userId, resetFor.accountId)); }
                             catch (err) {
                               // The console-wide banner for this sits at the
                               // top of the page, which is nowhere near the
