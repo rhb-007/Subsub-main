@@ -27,6 +27,11 @@
   --white:#fff;
   --gold:#E39B32;
   --gold-dk:#C07D1C;
+  /* Gold that can be READ on a light background. --gold and --gold-dk are
+     button fills, where the text sits on them in near-black; used as text on
+     white they come out at 3.4:1, which is under AA for anything but large
+     type. This one is 5.3:1 and still unmistakably gold. */
+  --gold-ink:#96600C;
   --rule:#DCE3DF;
   --muted:#5D6F67;
   --red:#9B3A22;
@@ -134,8 +139,17 @@ nav.top a.btn-gold:hover{color:#20160A}
 .aud:hover{border-color:var(--gold)}
 .aud h3{font-size:20px;letter-spacing:-.02em}
 .aud p{margin-top:9px;font-size:15.5px;color:var(--muted);line-height:1.55}
-.aud .more{display:inline-block;margin-top:12px;font-size:14.5px;font-weight:600;color:var(--forest-lift)}
-.aud:hover .more{color:var(--gold-dk)}
+.aud .more{display:inline-flex;align-items:center;gap:7px;margin-top:14px;font-size:14.5px;
+  font-weight:700;color:var(--gold-ink)}
+/* The arrow is drawn rather than typed: a character would inherit the font's
+   own idea of one and sit off the baseline. It nudges on hover, which is the
+   whole reason it is there. */
+.aud .more::after{content:"";width:16px;height:10px;flex:none;
+  background:currentColor;transition:transform .16s ease;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 10'%3E%3Cpath d='M0 5h13M9.5 1L13.5 5l-4 4' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center/contain;
+          mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 10'%3E%3Cpath d='M0 5h13M9.5 1L13.5 5l-4 4' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center/contain}
+.aud:hover .more::after,.aud:focus-visible .more::after{transform:translateX(4px)}
+@media (prefers-reduced-motion:reduce){ .aud .more::after{transition:none} }
 
 /* ---------- pricing ---------- */
 .plans{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:44px}
@@ -610,12 +624,13 @@ body.nav-open{overflow:hidden}
   <section class="sec sec-screen" id="the-screen">
     <div class="wrap screen-grid">
       <div class="screen-copy">
-        <h2 class="h-lg">This is the part everyone argues about.</h2>
-        <p class="lede-d">Who is free, who is covered, who is still owed a certificate — and the
-          work order that comes out of answering all three. One screen, on your own address.</p>
+        <h2 class="h-lg">Nobody actually knows who's covered.</h2>
+        <p class="lede-d">Certificates sit in somebody's inbox. Registrations lapse without a word.
+          Whether a crew is free is a phone call. So work gets handed out on memory, and the
+          paperwork gets checked after something has already gone wrong.</p>
         <ul class="screen-pts">
-          <li><b>Matched by trade, distance, availability and rating.</b></li>
-          <li><b>Anyone out of compliance is shown, and can't be assigned.</b></li>
+          <li><b>All three answered before you assign</b> — free, covered, in range.</li>
+          <li><b>A sub who isn't clear can't be given the job.</b> Not a warning. Blocked.</li>
           <li><b>The work order writes itself</b> when you pick a crew.</li>
         </ul>
         <a class="btn btn-gold" href="book-a-demo.html">See it on your own jobs</a>

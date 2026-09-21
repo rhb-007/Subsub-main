@@ -112,6 +112,13 @@ Fixed as encountered, because each one blocked something on the list:
 
 ## Known, not blocking
 
+- Gold used as TEXT on a light background does not meet AA. `--gold` and
+  `--gold-dk` are button fills, where the label sits on them in near-black;
+  as text on white they come out at 3.4:1. index.html now has `--gold-ink`
+  (5.3:1) for that job. The other pages still use `--gold-dk` as text in two
+  places each -- the eyebrow chip and the numbered steps -- and should move
+  to the same token.
+
 - `scripts/hostnames-test.mjs` has three failing assertions in its `diagnose`
   section. They fail on the commit before this work too, and branded hostnames
   provision correctly in production, so this is test drift rather than a live
