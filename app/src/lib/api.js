@@ -233,6 +233,9 @@ export const api = {
       request(`/platform/companies/${encodeURIComponent(id)}`,
         { method: "DELETE", body: JSON.stringify({ confirmName }) }),
 
+    // Which settings the Worker actually has. Names only, never values.
+    setupCheck: () => request("/platform/setup-check"),
+
     // What this account has been sent, and whether it went out.
     mailLog: (accountId) => request(`/platform/accounts/${encodeURIComponent(accountId)}/mail`),
 

@@ -14,6 +14,7 @@ import { verifyAccessJwt } from "./access.js";
 import {
   hostnameConfig, brandedHost, provisionHostname, deprovisionHostname, checkHostname, diagnose,
 } from "./hostnames.js";
+import { setupCheck } from "./setup-check.js";
 
 const app = new Hono();
 app.use("/api/*", cors());
@@ -3105,6 +3106,17 @@ app.delete("/api/platform/companies/:id", async (c) => {
     `${staff.name} deleted company ${co.company}`, { companyId: id, name: co.company });
   await c.env.DB.prepare(`DELETE FROM companies WHERE id = ?`).bind(id).run();
   return c.json({ ok: true });
+});
+
+// Which settings this Worker actually has. Names only, never values: the
+// question is "is it set", and a console that prints secrets is a console
+// that leaks them into the next screenshot somebody sends for help.
+app.get("/api/platform/setup-check", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+  return c.json(setupCheck(c.env));
 });
 
 // Every mail this account has been sent, and whether it went. The schema

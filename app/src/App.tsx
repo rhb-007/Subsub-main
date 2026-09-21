@@ -2458,6 +2458,7 @@ export default function SubSub() {
           // Read-only, so it does not reload the console the way a write does.
           onCheckHostnameSetup={() => api.platform.hostnameCheck()}
           onMailLog={(id) => api.platform.mailLog(id)}
+          onSetupCheck={() => api.platform.setupCheck()}
           onDeleteAccount={async (id, confirmName) => {
             await platformWrite(() => api.platform.deleteAccount(id, confirmName),
               "Could not delete that account.");
@@ -4015,7 +4016,7 @@ const monthKey = (iso) => (iso || "").slice(0, 7);
 function SuperadminConsole({ me, admin, accounts, users, memberships, companies, engagements,
   jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
-  onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog }) {
+  onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck }) {
   const [screen, setScreen] = useState("dashboard");
   const [openId, setOpenId] = useState(null);
   const [menu, setMenu] = useState(false);
@@ -5052,6 +5053,8 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
               <Kpi label="Duplicate companies" value={health.dups} warn={health.dups > 0} />
               <Kpi label="Inactive 14+ days" value={health.inactive14} warn={health.inactive14 > 0} sub="churn risk" />
             </div>
+            <SetupCheck load={onSetupCheck} />
+
             <div className="pf-panel">
               <h3>What to act on</h3>
               {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} sitting at a plan limit — they've hit the wall and haven't upgraded. Worth a call.</p>}
@@ -5459,6 +5462,85 @@ function MailLog({ accountId, load }) {
             <button className="pf-mini" onClick={fetchRows}><RefreshCw size={13} /> Refresh</button>
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+// What the API can actually see.
+//
+// The half-configured state is the one worth showing: a missing
+// SUPABASE_URL breaks password resets and nothing else, because staff sign
+// in through Access and the console keeps working either way. There was no
+// way to tell from inside SubSub whether a setting was really there, and
+// comparing a dashboard screenshot against a list of names by eye is how an
+// afternoon goes -- a name one letter wrong looks exactly like a name that
+// is right.
+const SETUP_STATE = {
+  ok: { tone: "ok", label: "Configured" },
+  partial: { tone: "bad", label: "Half configured" },
+  off: { tone: "off", label: "Not set up" },
+};
+
+function SetupCheck({ load }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    setBusy(true); setErr("");
+    try { setData(await load()); }
+    catch (e) { setErr(e?.body?.detail || e?.message || "Could not read the settings."); }
+    finally { setBusy(false); }
+  };
+  useEffect(() => { run(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  return (
+    <div className="pf-panel">
+      <div className="pf-panel-hd">
+        <h3><Shield size={15} /> API settings</h3>
+        <button className="pf-mini" onClick={run} disabled={busy}>
+          <RefreshCw size={13} /> {busy ? "Checking…" : "Re-check"}
+        </button>
+      </div>
+      <p className="pf-note pf-rank-sub">
+        Whether each integration is configured on the API. Names only — no values are ever read back.
+      </p>
+
+      {err && <p className="pf-host-err">{err}</p>}
+      {!data && !err && <p className="pf-note">Checking…</p>}
+
+      {data && data.groups.map((g) => {
+        const st = SETUP_STATE[g.state] || SETUP_STATE.off;
+        return (
+          <div key={g.id} className="pf-setup">
+            <div className="pf-setup-hd">
+              <b>{g.label}</b>
+              <span className={`pf-host-pill t-${st.tone}`}>{st.label}</span>
+            </div>
+            <div className="pf-setup-vars">
+              {g.vars.map((v) => (
+                <span key={v.name} className={v.set ? "on" : "off"}>
+                  {v.set ? "✓" : "✕"} {v.name}
+                </span>
+              ))}
+            </div>
+            {/* The whole reason this screen exists. */}
+            {g.vars.filter((v) => v.suggestion).map((v) => (
+              <p key={v.name} className="pf-setup-hint">
+                <b>{v.name}</b> is missing, but <b>{v.suggestion.name}</b> is set —
+                {" "}that looks like the same name misspelled. Rename it and redeploy.
+              </p>
+            ))}
+            {g.state !== "ok" && <p className="pf-note">{g.matters}</p>}
+          </div>
+        );
+      })}
+
+      {data && data.unused.length > 0 && (
+        <p className="pf-note">
+          Set but unread by the API: {data.unused.join(", ")}. Usually a rename left behind.
+        </p>
       )}
     </div>
   );
@@ -12344,6 +12426,20 @@ body{background:var(--paper)}
 .addr-host a{color:var(--brand);text-decoration:none}
 .addr-host a:hover{text-decoration:underline}
 .addr-state p{font-size:13px;color:var(--ink-soft);line-height:1.55;margin:0}
+
+/* ---- console: which settings the API has ------------------------------ */
+.pf-setup{border-top:1px solid var(--line);padding:13px 0 3px}
+.pf-setup:first-of-type{border-top:0;padding-top:4px}
+.pf-setup-hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.pf-setup-hd b{font-size:14px}
+.pf-setup-vars{display:flex;flex-wrap:wrap;gap:6px}
+.pf-setup-vars span{font:600 11.5px ui-monospace,monospace;padding:4px 9px;border-radius:7px;
+  border:1px solid var(--line);background:var(--paper);white-space:nowrap}
+.pf-setup-vars span.on{color:#1f6b4a;border-color:#bcd9c7;background:#f2f8f4}
+.pf-setup-vars span.off{color:var(--red);border-color:#e9c4bd;background:#fdf1ef}
+.pf-setup-hint{font-size:13px;line-height:1.55;margin:10px 0 0;padding:10px 12px;
+  border-radius:8px;background:#fffdf6;border:1px solid #e6c98f;color:#7a4e10}
+.pf-setup-hint b{font-family:ui-monospace,monospace;font-size:12.5px}
 
 /* ---- console: what was sent, and whether it went ---------------------- */
 .pf-maillog{display:flex;flex-direction:column;margin-top:4px}
