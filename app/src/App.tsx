@@ -9171,13 +9171,20 @@ function SubSubLogo({ height = 16 }) {
   );
 }
 
-// "Powered by" + the logo, used on the two pages a subcontractor sees
-// before they're inside the app.
+// The mark at the foot of every white-labelled page, and the only thing on
+// it that is ours. It links home, because a subcontractor who notices it is
+// exactly the person worth telling who built this.
+//
+// A new tab, not this one: it appears on the sign-in screen and on the
+// application form, and a curious click halfway through filling one in
+// should not throw the form away. `noopener` and nothing more -- the
+// referrer is worth keeping, since it says which customer's page sent them.
 function PoweredBy({ height = 15, className = "" }) {
   return (
-    <span className={`powered-by ${className}`}>
+    <a className={`powered-by ${className}`} href="https://subsub.work/"
+      target="_blank" rel="noopener" aria-label="Powered by SubSub — visit subsub.work">
       <span>Powered by</span><SubSubLogo height={height} />
-    </span>
+    </a>
   );
 }
 
@@ -11278,7 +11285,14 @@ body{background:var(--paper)}
 
 /* "Powered by" + SubSub logo on the white-labeled sign-in / sign-up pages */
 .powered-by{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;
-  letter-spacing:.01em;opacity:.7}
+  letter-spacing:.01em;opacity:.7;text-decoration:none;color:inherit;cursor:pointer;
+  transition:opacity .12s;
+  /* The text is 13px tall and a fingertip is not. The padding makes the tap
+     target reachable on a phone; the matching negative margin means adding
+     it moved nothing on the page. */
+  padding:7px 4px;margin:-7px -4px}
+.powered-by:hover,.powered-by:focus-visible{opacity:1;text-decoration:none}
+.powered-by:focus-visible{outline:2px solid var(--brand);outline-offset:1px;border-radius:5px}
 .powered-by > span{white-space:nowrap}
 .powered-by .ss-logo{position:relative;top:.5px}
 .wl-foot.powered-by{margin-top:20px;opacity:.6;color:var(--wl-text)}
@@ -11881,7 +11895,14 @@ body{background:var(--paper)}
 
 /* "Powered by" + SubSub logo on the white-labeled sign-in / sign-up pages */
 .powered-by{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;
-  letter-spacing:.01em;opacity:.7}
+  letter-spacing:.01em;opacity:.7;text-decoration:none;color:inherit;cursor:pointer;
+  transition:opacity .12s;
+  /* The text is 13px tall and a fingertip is not. The padding makes the tap
+     target reachable on a phone; the matching negative margin means adding
+     it moved nothing on the page. */
+  padding:7px 4px;margin:-7px -4px}
+.powered-by:hover,.powered-by:focus-visible{opacity:1;text-decoration:none}
+.powered-by:focus-visible{outline:2px solid var(--brand);outline-offset:1px;border-radius:5px}
 .powered-by > span{white-space:nowrap}
 .powered-by .ss-logo{position:relative;top:.5px}
 .wl-foot.powered-by{margin-top:20px;opacity:.6;color:var(--wl-text)}
