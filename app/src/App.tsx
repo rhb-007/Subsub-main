@@ -91,6 +91,9 @@ const TRADE_GROUPS = [
   ["Specialty", ["garage_doors", "restoration", "cleaning"]],
 ];
 
+// id -> label, so a rename in CATEGORIES reaches every place that prints one.
+const TRADE_LABEL = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.label]));
+
 const CAP_LIBRARY = {
   roofing: ["Asphalt shingle", "Metal roof", "Cedar shake", "Flat / TPO", "Tear-off", "Repair / leak", "Skylight"],
   siding: ["Fiber cement", "Vinyl", "LP SmartSide", "Cedar", "Stucco", "Board & batten"],
@@ -3978,7 +3981,10 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
       m,
       newMrr: sum((e) => e.kind === "upgraded" && e.fromPlan === "basic"),
       churn: sum((e) => e.kind === "canceled"),
-      contraction: sum((e) => e.kind === "cycle" && e.mrrDelta < 0),
+      // A move back to Basic is logged as "downgraded", and counting only
+      // "cycle" here dropped it from every total -- so the log's ending MRR
+      // drifted above the real one and never came back.
+      contraction: sum((e) => (e.kind === "cycle" && e.mrrDelta < 0) || e.kind === "downgraded"),
       expansion: sum((e) => e.kind === "cycle" && e.mrrDelta > 0),
       signups: ev.filter((e) => e.kind === "created").length,
       conversions: ev.filter((e) => e.kind === "upgraded").length,
@@ -4020,6 +4026,42 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
     dups: compRows.filter((r) => r.dup).length,
     inactive14: live.filter((r) => daysSince(r.a.lastActive, now.getTime()) > 14).length,
   };
+
+  // ---- this month, kept apart from all time ------------------------------
+  // The dashboard answers two questions -- "what moved this month" and "how
+  // big is the platform" -- and they were sharing one row of tiles. Numbers
+  // that mean different things do not belong in the same group.
+  const monthLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
+  const moNow = running.find((r) => r.m === thisMonth)
+    || { signups: 0, conversions: 0, newMrr: 0, expansion: 0, contraction: 0, churn: 0 };
+  const lostMrr = moNow.contraction + moNow.churn;            // already negative
+  const netNewMrr = moNow.newMrr + moNow.expansion + lostMrr;
+  const newAccountsMo = accounts.filter((a) => monthKey(a.createdAt) === thisMonth).length;
+  const jobsMoTotal = rows.reduce((n, r) => n + r.jobsMo, 0);
+  const attention = health.atLimit + health.licFail + health.dups + health.expired;
+  // What the append-only log says MRR should be, versus what the accounts
+  // actually bill. They agree unless a plan was changed outside the webhook.
+  const loggedMrr = running.length ? running[running.length - 1].mrr : 0;
+
+  // ---- ranked lists ------------------------------------------------------
+  // Six rows, one hue, sorted. Past six it stops being a picture and wants to
+  // be a table, so the tail is counted rather than drawn.
+  const rank = (counts, n = 6) => {
+    const all = Object.entries(counts).filter(([, v]) => v > 0)
+      .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
+    return { rows: all.slice(0, n), max: all.length ? all[0][1] : 0, total: all.length };
+  };
+  const topLocations = rank(companies.reduce((m, c) => {
+    const k = [c.city, c.state].filter(Boolean).join(", ").trim();
+    if (k) m[k] = (m[k] || 0) + 1;
+    return m;
+  }, {}));
+  // Demand, not supply: what the hiring accounts say they put out to bid.
+  // It is the only trade signal that exists before anyone engages a sub.
+  const topTrades = rank(accounts.reduce((m, a) => {
+    (a.trades || []).forEach((t) => { m[t] = (m[t] || 0) + 1; });
+    return m;
+  }, {}));
 
   const open = rows.find((r) => r.a.id === openId);
 
@@ -4101,62 +4143,98 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
         {/* ===== DASHBOARD ===== */}
         {screen === "dashboard" && !openId && (
           <>
-            <div className="pf-head"><h2>Dashboard</h2></div>
-            <p className="pf-note">A snapshot of the whole system — every account, every subcontractor company, and what needs attention right now.</p>
-
-            <div className="pf-kpis">
-              <Kpi label="Live accounts" value={live.length} />
-              <Kpi label="Subcontractor companies" value={companies.length} />
-              {admin.finance && <Kpi label="MRR" value={fmtC(mrr)} accent />}
-              {admin.finance && <Kpi label="GMV to date" value={fmtC(gmvTotal)} />}
-              <Kpi label="Needs attention" value={health.atLimit + health.licFail + health.dups + health.expired}
-                warn={(health.atLimit + health.licFail + health.dups + health.expired) > 0} />
+            <div className="pf-head">
+              <div>
+                <h2>Dashboard</h2>
+                <span className="pf-sub">Every account, every subcontractor company, and what needs attention right now.</span>
+              </div>
             </div>
 
-            <div className="pf-dash-grid">
-              <div className="pf-panel pf-dash-card" onClick={() => go("accounts")}>
-                <h3><Building2 size={15} /> Accounts</h3>
-                <div className="pf-dash-stat"><b>{live.length}</b><span>live</span></div>
-                <p className="pf-note">
-                  {live.filter((r) => r.a.plan === "scale").length} on Scale ·{" "}
-                  {live.filter((r) => r.a.plan === "basic").length} on Basic
-                  {rows.length > live.length ? ` · ${rows.length - live.length} canceled` : ""}
-                </p>
-                {health.atLimit > 0 && <p className="pf-dash-flag">● {health.atLimit} at a plan limit — upgrade candidates</p>}
+            {/* What moved this month. Kept apart from the totals below, because
+                a number that resets on the 1st and a number that only ever
+                grows are not comparable and should not sit side by side. */}
+            <section className="pf-section">
+              <div className="pf-section-hd"><h3>This month</h3><span>{monthLabel}</span></div>
+              <div className="pf-kpis">
+                <Kpi label="New accounts" value={newAccountsMo} />
+                {admin.finance && <Kpi label="Conversions to paid" value={moNow.conversions} />}
+                {admin.finance && <Kpi label="Net new MRR" value={(netNewMrr >= 0 ? "+" : "−") + fmtC(Math.abs(netNewMrr))} accent />}
+                {admin.finance && <Kpi label="ARR contribution" value={(netNewMrr >= 0 ? "+" : "−") + fmtC(Math.abs(netNewMrr * 12))} sub="net new MRR × 12" />}
+                <Kpi label="Jobs created" value={jobsMoTotal} />
+                <Kpi label="Needs attention" value={attention} warn={attention > 0} />
+              </div>
+            </section>
+
+            {/* Everything up to and including this month. */}
+            <section className="pf-section">
+              <div className="pf-section-hd"><h3>All time</h3><span>through {monthLabel}</span></div>
+              <div className="pf-kpis">
+                <Kpi label="Live accounts" value={live.length} />
+                <Kpi label="Subcontractor companies" value={companies.length} />
+                {admin.finance && <Kpi label="MRR" value={fmtC(mrr)} accent />}
+                {admin.finance && <Kpi label="ARR" value={fmtC(mrr * 12)} />}
+                {admin.finance && <Kpi label="GMV to date" value={fmtC(gmvTotal)} />}
               </div>
 
-              <div className="pf-panel pf-dash-card" onClick={() => go("companies")}>
-                <h3><Users size={15} /> Companies</h3>
-                <div className="pf-dash-stat"><b>{companies.length}</b><span>on the platform</span></div>
-                <p className="pf-note">
-                  {compRows.filter((r) => r.accts.length > 1).length} serving 2+ accounts ·{" "}
-                  {compRows.filter((r) => (r.c.status || "active") !== "active").length} inactive
-                </p>
-                {health.licFail > 0 && <p className="pf-dash-flag">● {health.licFail} with a failing license check</p>}
-                {health.dups > 0 && <p className="pf-dash-flag">● {health.dups} possible duplicate{health.dups === 1 ? "" : "s"}</p>}
-              </div>
-
-              {admin.finance && (
-                <div className="pf-panel pf-dash-card" onClick={() => go("revenue")}>
-                  <h3><TrendingUp size={15} /> Revenue</h3>
-                  <div className="pf-dash-stat"><b>{fmtC(mrr)}</b><span>MRR</span></div>
+              <div className="pf-dash-grid">
+                <div className="pf-panel pf-dash-card" onClick={() => go("accounts")}>
+                  <h3><Building2 size={15} /> Accounts</h3>
+                  <div className="pf-dash-stat"><b>{live.length}</b><span>live</span></div>
                   <p className="pf-note">
-                    {fmtC(mrr * 12)} ARR ·{" "}
-                    {live.filter((r) => r.mrr > 0).length} paying account{live.filter((r) => r.mrr > 0).length === 1 ? "" : "s"}
+                    {live.filter((r) => r.a.plan === "scale").length} on Scale ·{" "}
+                    {live.filter((r) => r.a.plan === "basic").length} on Basic
+                    {rows.length > live.length ? ` · ${rows.length - live.length} canceled` : ""}
                   </p>
+                  {health.atLimit > 0 && <p className="pf-dash-flag">● {health.atLimit} at a plan limit — upgrade candidates</p>}
                 </div>
-              )}
 
-              {isSuper && (
-                <div className="pf-panel pf-dash-card" onClick={() => go("health")}>
-                  <h3><Activity size={15} /> Health</h3>
-                  <div className="pf-dash-stat"><b>{health.signups7d}</b><span>signups, 7 days</span></div>
-                  <p className="pf-note">{health.inactive14} account{health.inactive14 === 1 ? "" : "s"} inactive 14+ days</p>
+                <div className="pf-panel pf-dash-card" onClick={() => go("companies")}>
+                  <h3><Users size={15} /> Companies</h3>
+                  <div className="pf-dash-stat"><b>{companies.length}</b><span>on the platform</span></div>
+                  <p className="pf-note">
+                    {compRows.filter((r) => r.accts.length > 1).length} serving 2+ accounts ·{" "}
+                    {compRows.filter((r) => (r.c.status || "active") !== "active").length} inactive
+                  </p>
+                  {health.licFail > 0 && <p className="pf-dash-flag">● {health.licFail} with a failing license check</p>}
+                  {health.dups > 0 && <p className="pf-dash-flag">● {health.dups} possible duplicate{health.dups === 1 ? "" : "s"}</p>}
                 </div>
-              )}
-            </div>
 
-            {(health.atLimit > 0 || health.licFail > 0 || health.dups > 0 || health.expired > 0) && (
+                {admin.finance && (
+                  <div className="pf-panel pf-dash-card" onClick={() => go("revenue")}>
+                    <h3><TrendingUp size={15} /> Revenue</h3>
+                    <div className="pf-dash-stat"><b>{fmtC(mrr)}</b><span>MRR</span></div>
+                    <p className="pf-note">
+                      {fmtC(mrr * 12)} ARR ·{" "}
+                      {live.filter((r) => r.mrr > 0).length} paying account{live.filter((r) => r.mrr > 0).length === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                )}
+
+                {isSuper && (
+                  <div className="pf-panel pf-dash-card" onClick={() => go("health")}>
+                    <h3><Activity size={15} /> Health</h3>
+                    <div className="pf-dash-stat"><b>{health.signups7d}</b><span>signups, 7 days</span></div>
+                    <p className="pf-note">{health.inactive14} account{health.inactive14 === 1 ? "" : "s"} inactive 14+ days</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="pf-split">
+                <div className="pf-panel">
+                  <h3><MapPin size={15} /> Top locations</h3>
+                  <p className="pf-note pf-rank-sub">Subcontractor companies, by city.</p>
+                  <RankList {...topLocations} empty="No company addresses on file yet." />
+                </div>
+                <div className="pf-panel">
+                  <h3><Hammer size={15} /> Top trades</h3>
+                  <p className="pf-note pf-rank-sub">Accounts hiring each trade.</p>
+                  <RankList {...topTrades} label={(id) => TRADE_LABEL[id] || id}
+                    empty="No account has chosen its trades yet." />
+                </div>
+              </div>
+            </section>
+
+            {attention > 0 && (
               <div className="pf-panel">
                 <h3>What needs attention</h3>
                 {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} at a plan limit — <a onClick={() => go("accounts")}>view accounts</a></p>}
@@ -4179,15 +4257,27 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                 </button>
               )}
             </div>
+            <div className="pf-kpis pf-kpis-wrap">
+              <Kpi label="Live accounts" value={live.length} />
+              <Kpi label="Scale" value={live.filter((r) => r.a.plan === "scale").length} />
+              <Kpi label="Basic" value={live.filter((r) => r.a.plan === "basic").length} />
+              {admin.finance && <Kpi label="MRR" value={fmtC(mrr)} accent />}
+              {isSuper && <Kpi label="Subs on platform" value={companies.length} />}
+            </div>
             {newAccount && (
               <div className="pf-panel pf-newform">
                 <h3>New account</h3>
-                <div className="pf-adduser pf-adduser-4">
-                  <input placeholder="Company name" value={newAccount.name} onChange={(e) => setNewAccount({ ...newAccount, name: e.target.value })} />
-                  <input placeholder="Subdomain (e.g. acme)" value={newAccount.subdomain}
-                    onChange={(e) => setNewAccount({ ...newAccount, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") })} />
-                  <input placeholder="Owner's full name" value={newAccount.ownerName} onChange={(e) => setNewAccount({ ...newAccount, ownerName: e.target.value })} />
-                  <input placeholder="Owner's work email" type="email" value={newAccount.ownerEmail} onChange={(e) => setNewAccount({ ...newAccount, ownerEmail: e.target.value })} />
+                <div className="pf-form-grid">
+                  <label className="pf-fld"><span>Company name</span>
+                    <input placeholder="Cascade Exteriors" value={newAccount.name} onChange={(e) => setNewAccount({ ...newAccount, name: e.target.value })} /></label>
+                  <label className="pf-fld"><span>Subdomain</span>
+                    <input placeholder="cascadeexteriors" value={newAccount.subdomain}
+                      onChange={(e) => setNewAccount({ ...newAccount, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") })} />
+                    <em className="pf-fld-hint">{(newAccount.subdomain || "…")}.subsub.work</em></label>
+                  <label className="pf-fld"><span>Owner's full name</span>
+                    <input placeholder="Dana Reyes" value={newAccount.ownerName} onChange={(e) => setNewAccount({ ...newAccount, ownerName: e.target.value })} /></label>
+                  <label className="pf-fld"><span>Owner's work email</span>
+                    <input placeholder="dana@example.com" type="email" value={newAccount.ownerEmail} onChange={(e) => setNewAccount({ ...newAccount, ownerEmail: e.target.value })} /></label>
                 </div>
                 <p className="pf-note">Creates the account on Basic and an admin membership for the owner. They'll need a password-reset link to sign in — send one from their account page once created.</p>
                 <div className="form-actions">
@@ -4201,16 +4291,6 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                 </div>
               </div>
             )}
-            <div className="pf-head">
-              <div />
-              <div className="pf-kpis">
-                <Kpi label="Live accounts" value={live.length} />
-                <Kpi label="Scale" value={live.filter((r) => r.a.plan === "scale").length} />
-                <Kpi label="Basic" value={live.filter((r) => r.a.plan === "basic").length} />
-                {admin.finance && <Kpi label="MRR" value={fmtC(mrr)} accent />}
-                {isSuper && <Kpi label="Subs on platform" value={companies.length} />}
-              </div>
-            </div>
             <div className="pf-account-grid">
               {rows.sort((x, y) => y.mrr - x.mrr || y.gmv - x.gmv).map((r) => {
                 const isExpanded = expandedAccountId === r.a.id;
@@ -4468,18 +4548,33 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                 </button>
               )}
             </div>
+            <div className="pf-kpis pf-kpis-wrap">
+              <Kpi label="Subcontractor companies" value={companies.length} />
+              <Kpi label="Serving 2+ accounts" value={compRows.filter((r) => r.accts.length > 1).length} accent />
+              <Kpi label="License issues" value={health.licFail} warn={health.licFail > 0} />
+              <Kpi label="Possible duplicates" value={health.dups} warn={health.dups > 0} />
+            </div>
             {newCompany && (
               <div className="pf-panel pf-newform">
                 <h3>New company</h3>
-                <div className="pf-adduser pf-adduser-grid">
-                  <input placeholder="Company name" value={newCompany.company} onChange={(e) => setNewCompany({ ...newCompany, company: e.target.value })} />
-                  <input placeholder="Contact name" value={newCompany.contact} onChange={(e) => setNewCompany({ ...newCompany, contact: e.target.value })} />
-                  <input placeholder="Email" type="email" value={newCompany.email} onChange={(e) => setNewCompany({ ...newCompany, email: e.target.value })} />
-                  <input placeholder="Phone" value={newCompany.phone} onChange={(e) => setNewCompany({ ...newCompany, phone: e.target.value })} />
-                  <input placeholder="WA L&I license #" value={newCompany.license} onChange={(e) => setNewCompany({ ...newCompany, license: e.target.value })} />
-                  <input placeholder="UBI" value={newCompany.ubi} onChange={(e) => setNewCompany({ ...newCompany, ubi: e.target.value })} />
-                  <input placeholder="City" value={newCompany.city} onChange={(e) => setNewCompany({ ...newCompany, city: e.target.value })} />
-                  <input placeholder="ZIP" value={newCompany.zip} onChange={(e) => setNewCompany({ ...newCompany, zip: e.target.value })} />
+                <div className="pf-form-grid">
+                  <label className="pf-fld"><span>Company name</span>
+                    <input placeholder="Rainier Roofing" value={newCompany.company} onChange={(e) => setNewCompany({ ...newCompany, company: e.target.value })} /></label>
+                  <label className="pf-fld"><span>Contact name</span>
+                    <input placeholder="Sam Ortiz" value={newCompany.contact} onChange={(e) => setNewCompany({ ...newCompany, contact: e.target.value })} /></label>
+                  <label className="pf-fld"><span>Email</span>
+                    <input placeholder="sam@example.com" type="email" value={newCompany.email} onChange={(e) => setNewCompany({ ...newCompany, email: e.target.value })} /></label>
+                  <label className="pf-fld"><span>Phone</span>
+                    <input placeholder="(206) 555-0100" inputMode="tel" value={newCompany.phone}
+                      onChange={(e) => setNewCompany({ ...newCompany, phone: formatPhone(e.target.value) })} /></label>
+                  <label className="pf-fld"><span>WA L&amp;I license #</span>
+                    <input placeholder="RAINIRR891QZ" value={newCompany.license} onChange={(e) => setNewCompany({ ...newCompany, license: e.target.value })} /></label>
+                  <label className="pf-fld"><span>UBI</span>
+                    <input placeholder="601 234 567" value={newCompany.ubi} onChange={(e) => setNewCompany({ ...newCompany, ubi: e.target.value })} /></label>
+                  <label className="pf-fld"><span>City</span>
+                    <input placeholder="Seattle" value={newCompany.city} onChange={(e) => setNewCompany({ ...newCompany, city: e.target.value })} /></label>
+                  <label className="pf-fld"><span>ZIP</span>
+                    <input placeholder="98101" inputMode="numeric" value={newCompany.zip} onChange={(e) => setNewCompany({ ...newCompany, zip: e.target.value })} /></label>
                 </div>
                 <p className="pf-note">Creates a company record with no engagements yet — a hiring account still needs to invite or add them to actually work a job.</p>
                 <div className="form-actions">
@@ -4492,15 +4587,6 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                 </div>
               </div>
             )}
-            <div className="pf-head">
-              <div />
-              <div className="pf-kpis">
-                <Kpi label="Subcontractor companies" value={companies.length} />
-                <Kpi label="Serving 2+ accounts" value={compRows.filter((r) => r.accts.length > 1).length} accent />
-                <Kpi label="License issues" value={health.licFail} warn={health.licFail > 0} />
-                <Kpi label="Possible duplicates" value={health.dups} warn={health.dups > 0} />
-              </div>
-            </div>
             <p className="pf-note">One company can serve many hiring accounts. A lapsed license here affects every account engaging them — this is the only place that's visible.</p>
             <div className="pf-company-grid">
               {compRows.sort((x, y) => y.accts.length - x.accts.length).map((r) => {
@@ -4597,7 +4683,25 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
         {screen === "revenue" && !openId && admin.finance && (
           <>
             <div className="pf-head">
-              <h2>Revenue</h2>
+              <div>
+                <h2>Revenue</h2>
+                <span className="pf-sub">Recurring revenue, normalized to a month — an annual plan counts as a twelfth of its price.</span>
+              </div>
+            </div>
+
+            <section className="pf-section">
+              <div className="pf-section-hd"><h3>This month</h3><span>{monthLabel}</span></div>
+              <div className="pf-kpis">
+                <Kpi label="Net new MRR" value={(netNewMrr >= 0 ? "+" : "−") + fmtC(Math.abs(netNewMrr))} accent />
+                <Kpi label="ARR contribution" value={(netNewMrr >= 0 ? "+" : "−") + fmtC(Math.abs(netNewMrr * 12))} sub="net new MRR × 12" />
+                <Kpi label="New MRR" value={moNow.newMrr ? "+" + fmtC(moNow.newMrr) : "—"} />
+                <Kpi label="Lost MRR" value={lostMrr ? "−" + fmtC(Math.abs(lostMrr)) : "—"} warn={lostMrr < 0} sub="churn + downgrades" />
+                <Kpi label="Conversions to paid" value={moNow.conversions} />
+              </div>
+            </section>
+
+            <section className="pf-section">
+              <div className="pf-section-hd"><h3>All time</h3><span>through {monthLabel}</span></div>
               <div className="pf-kpis">
                 <Kpi label="MRR (normalized)" value={fmtC(mrr)} accent />
                 <Kpi label="ARR" value={fmtC(mrr * 12)} />
@@ -4606,43 +4710,57 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                 <Kpi label="Annual mix" value={`${live.filter((r) => r.mrr > 0).length
                   ? Math.round(live.filter((r) => r.mrr > 0 && r.a.billing === "annual").length / live.filter((r) => r.mrr > 0).length * 100) : 0}%`} />
               </div>
-            </div>
 
-            <div className="pf-panel">
-              <h3>MRR movement by month</h3>
-              <p className="pf-note">From the append-only subscription log, not current account state — which is why months don't drift.</p>
-              <div className="pf-table-wrap">
-                <table className="pf-table pf-num pf-table-responsive">
-                  <thead><tr><th>Month</th><th>Signups</th><th>Conversions</th><th>New</th><th>Expansion</th><th>Contraction</th><th>Churn</th><th>Net new</th><th>Ending MRR</th></tr></thead>
-                  <tbody>
-                    {running.map((r) => (
-                      <tr key={r.m}>
-                        <td data-label="Month"><b>{r.m}</b></td>
-                        <td data-label="Signups">{r.signups}</td>
-                        <td data-label="Conversions">{r.conversions}</td>
-                        <td data-label="New" className="up">{r.newMrr ? "+" + fmtC(r.newMrr) : "—"}</td>
-                        <td data-label="Expansion" className="up">{r.expansion ? "+" + fmtC(r.expansion) : "—"}</td>
-                        <td data-label="Contraction" className="down">{r.contraction ? "−" + fmtC(Math.abs(r.contraction)) : "—"}</td>
-                        <td data-label="Churn" className="down">{r.churn ? "−" + fmtC(Math.abs(r.churn)) : "—"}</td>
-                        <td data-label="Net new"><b className={(r.newMrr + r.expansion + r.contraction + r.churn) >= 0 ? "up" : "down"}>
-                          {(r.newMrr + r.expansion + r.contraction + r.churn) >= 0 ? "+" : "−"}{fmtC(Math.abs(r.newMrr + r.expansion + r.contraction + r.churn))}</b></td>
-                        <td data-label="Ending MRR"><b>{fmtC(r.mrr)}</b></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="pf-panel">
+                <h3>MRR movement by month</h3>
+                <p className="pf-note">From the append-only subscription log, not current account state — which is why months don't drift.</p>
+                <div className="pf-table-wrap">
+                  <table className="pf-table pf-num pf-table-responsive">
+                    <thead><tr><th>Month</th><th>Signups</th><th>Conversions</th><th>New</th><th>Expansion</th><th>Contraction</th><th>Churn</th><th>Net new</th><th>Ending MRR</th></tr></thead>
+                    <tbody>
+                      {running.map((r) => (
+                        <tr key={r.m}>
+                          <td data-label="Month"><b>{r.m}</b></td>
+                          <td data-label="Signups">{r.signups}</td>
+                          <td data-label="Conversions">{r.conversions}</td>
+                          <td data-label="New" className="up">{r.newMrr ? "+" + fmtC(r.newMrr) : "—"}</td>
+                          <td data-label="Expansion" className="up">{r.expansion ? "+" + fmtC(r.expansion) : "—"}</td>
+                          <td data-label="Contraction" className="down">{r.contraction ? "−" + fmtC(Math.abs(r.contraction)) : "—"}</td>
+                          <td data-label="Churn" className="down">{r.churn ? "−" + fmtC(Math.abs(r.churn)) : "—"}</td>
+                          <td data-label="Net new"><b className={(r.newMrr + r.expansion + r.contraction + r.churn) >= 0 ? "up" : "down"}>
+                            {(r.newMrr + r.expansion + r.contraction + r.churn) >= 0 ? "+" : "−"}{fmtC(Math.abs(r.newMrr + r.expansion + r.contraction + r.churn))}</b></td>
+                          <td data-label="Ending MRR"><b>{fmtC(r.mrr)}</b></td>
+                        </tr>
+                      ))}
+                      {running.length === 0 && (
+                        <tr><td data-label="" colSpan={9}>No subscription activity yet.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                {/* The log and the accounts should agree. When they don't, a plan
+                    was changed somewhere the webhook never saw, and the table
+                    above is the number that is wrong -- say so rather than
+                    letting two figures quietly disagree across the page. */}
+                {running.length > 0 && loggedMrr !== mrr && (
+                  <p className="pf-note pf-reconcile">
+                    Ending MRR above is {fmtC(loggedMrr)}, but the accounts currently bill {fmtC(mrr)}.
+                    A plan was changed without a subscription event — usually an edit made directly
+                    in the database, or a Stripe change that arrived before the webhook was connected.
+                  </p>
+                )}
               </div>
-            </div>
 
-            <div className="pf-panel">
-              <h3>GMV through the platform</h3>
-              <p className="pf-note">Work-order value accepted across all accounts. Not revenue — the denominator for a future take rate, and an early signal of account health.</p>
-              <div className="pf-kpis">
-                <Kpi label="Accepted work-order value" value={fmtC(gmvTotal)} />
-                <Kpi label="Per paying account" value={live.filter((r) => r.mrr > 0).length ? fmtC(gmvTotal / live.filter((r) => r.mrr > 0).length) : "—"} />
-                <Kpi label="Upgrade pipeline" value={health.atLimit} sub="Basic at limit" warn={health.atLimit > 0} />
+              <div className="pf-panel">
+                <h3>GMV through the platform</h3>
+                <p className="pf-note">Work-order value accepted across all accounts. Not revenue — the denominator for a future take rate, and an early signal of account health.</p>
+                <div className="pf-kpis pf-kpis-top">
+                  <Kpi label="Accepted work-order value" value={fmtC(gmvTotal)} />
+                  <Kpi label="Per paying account" value={live.filter((r) => r.mrr > 0).length ? fmtC(gmvTotal / live.filter((r) => r.mrr > 0).length) : "—"} />
+                  <Kpi label="Upgrade pipeline" value={health.atLimit} sub="Basic at limit" warn={health.atLimit > 0} />
+                </div>
               </div>
-            </div>
+            </section>
           </>
         )}
 
@@ -4674,6 +4792,30 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
   );
 }
 
+
+// A ranked magnitude list: one hue, sorted, value in a column of its own so
+// the numbers line up. Six rows at most -- past that it stops being a picture
+// and wants to be a table, so the tail is counted rather than drawn.
+function RankList({ rows, max, total, empty, label }) {
+  if (!rows.length) return <p className="pf-note">{empty}</p>;
+  const name = label || ((k) => k);
+  return (
+    <>
+      <ol className="pf-rank">
+        {rows.map(([k, n]) => (
+          <li key={k}>
+            <span className="pf-rank-k" title={name(k)}>{name(k)}</span>
+            {/* A floor of 3% so a count of one is still a visible mark rather
+                than a sliver that reads as zero. */}
+            <span className="pf-rank-track"><i style={{ width: `${Math.max(3, (n / max) * 100)}%` }} /></span>
+            <b className="pf-rank-n">{n}</b>
+          </li>
+        ))}
+      </ol>
+      {total > rows.length && <p className="pf-note">+{total - rows.length} more</p>}
+    </>
+  );
+}
 
 // Scale, on the house. Distinct from simply setting the plan, because the
 // two mean different things a month later: a comp survives Stripe, says who
@@ -4799,7 +4941,10 @@ function Kpi({ label, value, sub, accent, warn }) {
   return (
     <div className={`kpi ${accent ? "accent" : ""} ${warn ? "warn" : ""}`}>
       <span className="kpi-v">{value}</span>
-      <span className="kpi-l">{label}{sub ? <em> · {sub}</em> : null}</span>
+      {/* The qualifier goes on its own line: inline, it wrapped mid-phrase
+          and left the separator dangling at the end of the label. */}
+      <span className="kpi-l">{label}</span>
+      {sub ? <span className="kpi-sub">{sub}</span> : null}
     </div>
   );
 }
@@ -8979,6 +9124,11 @@ const CSS = `
 :root{--ink:#1a2b23;--ink-soft:#4a5c53;--paper:#f6f4ee;--card:#fffdf8;--line:#e2ddd0;
   --brand:#1f6b4a;--brand-dk:#14523a;--amber:#c8871e;--red:#b5442e;--shadow:0 1px 2px rgba(26,43,35,.06)}
 *{box-sizing:border-box}
+/* Without this the browser's default 8px body margin frames every full-bleed
+   bar in paper -- most visibly the console header, which is meant to run edge
+   to edge. */
+html,body{margin:0;padding:0}
+body{background:var(--paper)}
 .ss-root{font-family:'Inter',system-ui,sans-serif;background:var(--paper);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
 .ss-header{display:flex;flex-direction:column;gap:12px;padding:14px 24px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
 .header-top{display:flex;justify-content:space-between;align-items:center;gap:14px}
@@ -11006,15 +11156,17 @@ const CSS = `
 .pf-head h2{font-size:22px;letter-spacing:-.03em;margin:0}
 .pf-sub{display:block;font-size:12px;color:var(--ink-soft);font-weight:400;margin-top:2px}
 .pf-back{background:none;border:0;color:var(--brand);font:600 13.5px Inter,sans-serif;padding:0 0 14px;cursor:pointer}
-.pf-kpis{display:flex;gap:10px;flex-wrap:wrap}
+.pf-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(154px,1fr));gap:10px;align-items:stretch}
 .pf-kpis-wrap{margin-bottom:18px}
-.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:130px;
+.pf-kpis-top{margin-top:14px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:0;
   display:flex;flex-direction:column;gap:3px}
 .kpi.accent{border-color:var(--brand);background:#f2f8f4}
 .kpi.warn{border-color:#e6c98f;background:#fffdf6}
-.kpi-v{font-size:22px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.1}
+.kpi-v{font-size:22px;font-weight:800;letter-spacing:-.03em;line-height:1.1}
 .kpi-l{font-size:11.5px;color:var(--ink-soft);font-weight:600}
 .kpi-l em{font-style:normal;font-weight:500;opacity:.8}
+.kpi-sub{font-size:11px;color:var(--ink-soft);font-weight:500;opacity:.85;line-height:1.35}
 .pf-table-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:11px}
 .pf-table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:760px}
 .pf-table th{text-align:left;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
@@ -11026,26 +11178,28 @@ const CSS = `
 .pf-table tr.muted td{opacity:.55}
 .pf-table tr.warn td:first-child{border-left:3px solid var(--red)}
 .pf-table code{font:600 12px ui-monospace,monospace;background:var(--paper);padding:2px 6px;border-radius:5px}
-.pf-table.pf-table-responsive{min-width:0;width:100%;display:block}
-.pf-table.pf-table-responsive thead{display:none}
-.pf-table.pf-table-responsive tbody{display:block}
-.pf-table.pf-table-responsive tr{display:block;background:var(--card);border:1px solid var(--line);
+@media (max-width:820px){
+  .pf-table.pf-table-responsive{min-width:0;width:100%;display:block}
+  .pf-table.pf-table-responsive thead{display:none}
+  .pf-table.pf-table-responsive tbody{display:block}
+  .pf-table.pf-table-responsive tr{display:block;background:var(--card);border:1px solid var(--line);
     border-radius:11px;padding:4px 14px;margin-bottom:10px}
-.pf-table.pf-table-responsive tr.warn{border-left:3px solid var(--red)}
-.pf-table.pf-table-responsive td{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;
+  .pf-table.pf-table-responsive tr.warn{border-left:3px solid var(--red)}
+  .pf-table.pf-table-responsive td{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;
     padding:9px 0;border-bottom:1px solid var(--line);text-align:right}
-.pf-table.pf-table-responsive td:last-child{border-bottom:0}
-.pf-table.pf-table-responsive td[data-label]::before{content:attr(data-label);font-size:10.5px;font-weight:800;
+  .pf-table.pf-table-responsive td:last-child{border-bottom:0}
+  .pf-table.pf-table-responsive td[data-label]::before{content:attr(data-label);font-size:10.5px;font-weight:800;
     text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);text-align:left;flex:none;padding-top:1px}
-.pf-table.pf-table-responsive td:not([data-label]),
+  .pf-table.pf-table-responsive td:not([data-label]),
   .pf-table.pf-table-responsive td[data-label=""]{justify-content:flex-end}
-.pf-table.pf-table-responsive td > b,.pf-table.pf-table-responsive td > span:first-child{text-align:right}
-.pf-table.pf-table-responsive .pf-sub{display:block;text-align:right}
-.pf-table.pf-table-responsive .pf-row-actions{justify-content:flex-end}
+  .pf-table.pf-table-responsive td > b,.pf-table.pf-table-responsive td > span:first-child{text-align:right}
+  .pf-table.pf-table-responsive .pf-sub{display:block;text-align:right}
+  .pf-table.pf-table-responsive .pf-row-actions{justify-content:flex-end}
+}
 .pf-num td{font-variant-numeric:tabular-nums;text-align:right}
 .pf-num td:first-child,.pf-num th:first-child{text-align:left}
 .pf-num th{text-align:right}
-@media (max-width:700px){
+@media (max-width:820px){
   .pf-num.pf-table-responsive td:first-child{text-align:right}
 }
 .pf-flag{color:var(--amber);font-weight:800;font-size:11px}
@@ -11138,8 +11292,8 @@ const CSS = `
   .pf-adduser-grid select,.pf-adduser-grid input{width:100%;justify-content:center}
   .pf-main{padding:16px 14px 44px}
   .pf-head h2{font-size:19px}
-  .pf-kpis{gap:8px}
-  .kpi{min-width:calc(50% - 4px);flex:1 1 calc(50% - 4px);padding:10px 12px}
+  .pf-kpis{gap:8px;grid-template-columns:repeat(auto-fit,minmax(138px,1fr))}
+  .kpi{padding:10px 12px}
   .kpi-v{font-size:19px}
   .pf-panel{padding:14px 14px}
   .pf-plan-row{flex-direction:column;gap:10px}
@@ -11150,8 +11304,11 @@ const CSS = `
   .sa-card{padding:22px 18px}
 }
 @media (max-width:400px){
-  .kpi{min-width:100%;flex-basis:100%}
   .pf-nav button svg{display:none}
+}
+/* Two tiles across survives a 390px phone; one across only below that. */
+@media (max-width:359px){
+  .pf-kpis{grid-template-columns:1fr}
 }
 /* Drawer-only blocks, hidden on desktop where the user chip does this job.
    Scoped to desktop rather than left unconditional: this rule sits below the
@@ -11194,7 +11351,7 @@ const CSS = `
 .pf-danger-row{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
 .pf-danger-row b{display:block;font-size:14px;margin-bottom:4px}
 .pf-danger-row .pf-note{margin:0;max-width:52ch}
-.pf-company-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:16px}
+.pf-company-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px;margin-top:16px}
 .pf-comp{border-left:3px solid var(--line)}
 .pf-comp.on{border-left-color:var(--gold,#E39B32);background:#fffdf6}
 .pf-comp .fld{max-width:480px;margin:12px 0}
@@ -11205,7 +11362,7 @@ const CSS = `
 
 .pf-write-err{margin:0 0 16px;padding:12px 14px;border-radius:10px;background:#fdf1ef;
   border:1px solid #e9c4bd;color:#8a2f1c;font-size:13.5px}
-.pf-account-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:16px}
+.pf-account-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px;margin-top:16px}
 .pf-dash-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:16px}
 .pf-dash-card{cursor:pointer;transition:border-color .12s}
 .pf-dash-card:hover{border-color:var(--brand)}
@@ -11220,13 +11377,13 @@ const CSS = `
   transition:border-color .12s}
 .pf-company-card:hover{border-color:var(--brand)}
 .pf-company-card.warn{border-left:3px solid var(--red)}
-.pfc-top{display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer}
-.pfc-name{display:flex;flex-direction:column;min-width:0;flex:1}
+.pfc-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:12px 14px;cursor:pointer}
+.pfc-name{display:flex;flex-direction:column;min-width:0;flex:1 1 150px}
 .pfc-name b{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pfc-name .pf-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pfc-summary{display:flex;align-items:center;gap:6px;flex:none}
+.pfc-summary{display:flex;align-items:center;gap:6px;flex:0 0 auto;flex-wrap:wrap}
 .pfc-summary .pf-multi,.pfc-summary .pf-flag{font-size:10.5px}
-.pfc-actions{display:flex;align-items:center;gap:4px;flex:none}
+.pfc-actions{display:flex;align-items:center;gap:4px;flex:0 0 auto;margin-left:auto}
 .pf-company-card.is-open{border-color:var(--brand)}
 .pfc-rows{display:flex;flex-direction:column;gap:7px;padding:2px 14px 13px;border-top:1px solid var(--line)}
 .pfc-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;font-size:12.5px;padding-top:9px}
@@ -11260,4 +11417,50 @@ const CSS = `
 @media (max-width:480px){
   .pf-adduser-4,.pf-adduser-grid{grid-template-columns:1fr}
 }
+
+/* ---- console: sections, ranked lists, labelled forms -------------------
+   A screen that answers two questions -- what moved this month, and how big
+   the platform is -- has to say which group is which. Without the rule and
+   the caption the two sets of numbers read as one list, and a figure that
+   resets on the 1st sits next to one that only ever grows. */
+.pf-section{margin-top:26px}
+.pf-section-hd{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+  padding-bottom:9px;margin-bottom:12px;border-bottom:1px solid var(--line)}
+.pf-section-hd h3{margin:0;font-size:11.5px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--ink-soft)}
+.pf-section-hd span{font-size:12.5px;color:var(--ink-soft);margin-left:auto}
+
+/* Two panels that read together, side by side while there is room for both. */
+.pf-split{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px;align-items:start}
+.pf-split > .pf-panel{margin-top:16px}
+
+/* Ranked bars. One hue: these are magnitudes, not identities, so colour
+   carries size and nothing else. Square at the baseline, rounded at the
+   data end; the value sits in its own column so the digits line up. */
+.pf-rank{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.pf-rank li{display:grid;grid-template-columns:minmax(72px,38%) 1fr auto;align-items:center;gap:12px}
+.pf-rank-k{font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pf-rank-track{height:10px;background:var(--paper);border:1px solid var(--line);border-radius:3px;overflow:hidden}
+.pf-rank-track i{display:block;height:100%;background:var(--brand);border-radius:0 4px 4px 0}
+.pf-rank-n{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;
+  color:var(--ink-soft);min-width:2ch;text-align:right}
+.pf-rank-sub{margin:0 0 12px}
+
+/* Creation forms: two columns, and a label that stays put once the field has
+   something in it. A placeholder is not a label -- it leaves every filled row
+   unlabelled at exactly the moment somebody checks their work. */
+.pf-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px 14px;
+  padding:15px 16px;background:var(--paper);border:1px solid var(--line);border-radius:10px;margin-bottom:14px}
+.pf-fld{display:flex;flex-direction:column;gap:5px;min-width:0}
+.pf-fld > span{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft)}
+.pf-fld input,.pf-fld select{width:100%;min-width:0;border:1px solid var(--line);border-radius:8px;
+  padding:9px 11px;font:500 13.5px Inter,sans-serif;background:var(--card);color:var(--ink)}
+.pf-fld input:focus,.pf-fld select:focus{outline:2px solid var(--brand);outline-offset:-1px;border-color:var(--brand)}
+.pf-fld input::placeholder{color:#a3ada7}
+.pf-fld-hint{font-style:normal;font-size:11.5px;color:var(--ink-soft);word-break:break-all}
+@media (max-width:620px){
+  .pf-form-grid{grid-template-columns:1fr;padding:13px}
+}
+
+.pf-reconcile{border-top:1px solid var(--line);margin-top:12px;padding-top:11px;color:#8a5a12}
 `;

@@ -2487,6 +2487,9 @@ app.get("/api/platform/bootstrap", async (c) => {
     accounts: accounts.results.map((a) => ({
       id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind,
       plan: a.plan, billing: a.billing, comped: !!a.comped, compNote: a.comp_note,
+      // What this account hires out. The console ranks these into "top trades",
+      // which is the only demand signal that exists before anyone engages a sub.
+      trades: parseJson(a.trades, []),
       subscriptionStatus: a.subscription_status, currentPeriodEnd: a.current_period_end,
       createdAt: (a.created_at || "").slice(0, 10),
       status: "active",
