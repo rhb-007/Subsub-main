@@ -347,6 +347,31 @@ body.nav-open{overflow:hidden}
   .hero{background:var(--forest);color:#fff;padding:66px 0 86px}
   .hero-grid{display:grid;grid-template-columns:1.02fr .98fr;gap:60px;align-items:center}
   .hero h1{color:#fff;max-width:16ch}
+
+  /* The crew. A cutout on transparency, so it sits straight on the forest
+     with no card around it. The mask feathers the bottom edge, where the
+     photograph stops mid-torso -- without it the hero ends in a hard
+     horizontal line across five chests. */
+  /* Bottom-aligned and run down into the section's own padding, so the crew
+     stands in the hero rather than floating in the middle of it. The overrun
+     is smaller than that padding, so nothing needs clipping. */
+  .hero-crew{align-self:end;margin-bottom:-62px}
+  .hero-crew img{display:block;width:112%;max-width:none;margin-left:-8%;height:auto;
+    -webkit-mask-image:linear-gradient(to bottom,#000 84%,transparent 100%);
+            mask-image:linear-gradient(to bottom,#000 84%,transparent 100%)}
+
+  /* The product screen, further down. Dark so it reads as a screen rather
+     than more page, and so the window keeps the lift it had in the hero. */
+  .sec-screen{background:var(--forest);color:#fff}
+  .sec-screen h2{color:#fff}
+  .screen-grid{display:grid;grid-template-columns:.86fr 1.14fr;gap:60px;align-items:center}
+  .screen-pts{list-style:none;margin:26px 0 30px;padding:0}
+  .screen-pts li{position:relative;padding-left:26px;margin-bottom:13px;
+    font-size:15.5px;line-height:1.55;color:rgba(255,255,255,.82)}
+  .screen-pts li b{color:#fff;font-weight:600}
+  .screen-pts li::before{content:"";position:absolute;left:0;top:.62em;
+    width:9px;height:9px;border-radius:50%;background:var(--gold)}
+
   /* the product window: chrome + roster + a live work order */
   .appwin{background:#fff;border-radius:12px;overflow:hidden;color:var(--ink)}
   .aw-chrome{display:flex;align-items:center;gap:11px;padding:13px 16px;
@@ -406,6 +431,11 @@ body.nav-open{overflow:hidden}
   .side-w{font-size:12.5px;color:var(--muted)}
   @media (max-width:1000px){
     .hero-grid{grid-template-columns:1fr;gap:46px}
+    .screen-grid{grid-template-columns:1fr;gap:42px}
+    /* Stacked, the crew sits under the words: centred, smaller, and without
+       the overrun, which only makes sense beside a column of text. */
+    .hero-crew{max-width:560px;margin:0 auto -30px}
+    .hero-crew img{width:100%;margin-left:0}
     .panel[data-open]{grid-template-columns:1fr;gap:28px}
     .rl-s{display:none}
     .rl-t{font-size:14px}
@@ -474,51 +504,15 @@ body.nav-open{overflow:hidden}
         <p class="fine-d" style="margin-top:20px">Free for up to 3 subcontractors. No card, no contract.</p>
       </div>
 
-      <div class="appwin shadow-lift">
-        <div class="aw-chrome">
-          <svg class="oh-logo" width="117.8" height="18" viewBox="67 244 708 108" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Outerhome"><polygon fill="#181716" points="184.99,277.48 184.99,347.67 163.33,347.67 163.33,290.18 128.24,271.51 93.14,290.18 93.14,332.74 93.16,332.73 128.32,311.39 128.24,347.67 71.49,347.67 71.49,277.48 128.24,247.61"/><path fill="#181716" d="M236.56,312.57c0-14.46,11.17-25.14,26.33-25.14c15.15,0,26.33,10.62,26.33,25.14c0,14.53-11.17,25.14-26.33,25.14C247.74,337.72,236.56,327.03,236.56,312.57z M280.07,312.57c0-9.99-7.33-17.18-17.18-17.18c-9.85,0-17.18,7.19-17.18,17.18c0,9.99,7.33,17.18,17.18,17.18C272.74,329.76,280.07,322.56,280.07,312.57z"/><path fill="#181716" d="M305.9,315.72v-27.59h9.08v27.24c0,10.06,4.54,14.39,12.43,14.39c7.89,0,12.36-4.33,12.36-14.39v-27.24h8.94v27.59c0,14.25-8.03,22-21.37,22C313.93,337.72,305.9,329.96,305.9,315.72z"/><path fill="#181716" d="M376.99,295.81h-16.2v-7.68h41.48v7.68h-16.2v41.2h-9.08V295.81z"/><path fill="#181716" d="M453.24,329.41v7.61h-36.66v-48.89h35.69v7.61h-26.61v12.71h23.6v7.47h-23.6v13.48H453.24z"/><path fill="#181716" d="M502.82,337.02l-9.99-14.32c-0.63,0.07-1.26,0.07-1.89,0.07h-11.03v14.25h-9.08v-48.89h20.11c12.85,0,20.81,6.56,20.81,17.39c0,7.4-3.77,12.85-10.41,15.43l11.24,16.06H502.82z M490.53,295.81h-10.61v19.48h10.61c7.96,0,12.08-3.63,12.08-9.78C502.61,299.38,498.49,295.81,490.53,295.81z"/><path fill="#181716" d="M572.79,288.13v48.89h-9.08v-20.95h-25.28v20.95h-9.08v-48.89h9.08v20.18h25.28v-20.18H572.79z"/><path fill="#181716" d="M589.89,312.57c0-14.46,11.17-25.14,26.33-25.14c15.15,0,26.33,10.62,26.33,25.14c0,14.53-11.17,25.14-26.33,25.14C601.07,337.72,589.89,327.03,589.89,312.57z M633.4,312.57c0-9.99-7.33-17.18-17.18-17.18c-9.85,0-17.18,7.19-17.18,17.18c0,9.99,7.33,17.18,17.18,17.18C626.07,329.76,633.4,322.56,633.4,312.57z"/><path fill="#181716" d="M704.49,337.02l-0.07-32.4l-16.06,26.82h-4.05l-16.06-26.4v31.98h-8.66v-48.89h7.47l19.41,32.4l19.06-32.4h7.47l0.07,48.89H704.49z"/><path fill="#181716" d="M770.41,329.41v7.61h-36.66v-48.89h35.69v7.61h-26.61v12.71h23.6v7.47h-23.6v13.48H770.41z"/></svg>
-          <span class="aw-url">
-            <svg width="11" height="11" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.2">
-              <rect x="3.5" y="8" width="11" height="7.5" rx="1.5"/><path d="M6 8V6a3 3 0 016 0v2"/>
-            </svg>
-            <b>outerhome.subsub.work</b>
-          </span>
-        </div>
-
-        <div class="aw-sec">
-          <h3>Matched Subcontractors</h3>
-          <span>3 available</span>
-        </div>
-        <div class="r-row">
-          <div><div class="r-name">Cascade Roofworks</div>
-            <div class="r-meta">2 crews free · rated 4.8</div></div>
-          <span class="chip c-live">Ready to dispatch</span>
-        </div>
-        <div class="r-row">
-          <div><div class="r-name">Summit Roofing LLC</div>
-            <div class="r-meta">Certificate uploaded</div></div>
-          <span class="chip c-review">Awaiting review</span>
-        </div>
-        <div class="r-row">
-          <div><div class="r-name">Ridgeline Roofing</div>
-            <div class="r-meta">Registration lapsed</div></div>
-          <span class="chip c-block">Can't be assigned</span>
-        </div>
-
-        <div class="aw-sec aw-sec-job">
-          <h3>The job</h3>
-          <span>Work order issued</span>
-        </div>
-        <div class="wo">
-          <div class="wo-top">
-            <span class="wo-id">WO-4417</span>
-            <span class="wo-title">1420 Maple St — tear-off &amp; re-roof</span>
-          </div>
-          <div class="wo-line-2">
-            <span>Cascade · Roof Crew A</span>
-            <strong>$12,400</strong>
-          </div>
-        </div>
+      <div class="hero-crew">
+        <picture>
+          <source type="image/webp" srcset="hero-crew.webp 820w, hero-crew@2x.webp 1626w"
+            sizes="(max-width:900px) 92vw, 46vw">
+          <img src="hero-crew.png" srcset="hero-crew.png 820w, hero-crew@2x.png 1626w"
+            sizes="(max-width:900px) 92vw, 46vw" width="820" height="470"
+            alt="Five sock-puppet subcontractors in hard hats and hi-vis vests, grinning, one holding a hammer and one a length of timber"
+            fetchpriority="high" decoding="async">
+        </picture>
       </div>
     </div>
   </section>
@@ -607,6 +601,71 @@ body.nav-open{overflow:hidden}
           <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#5D6F67" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span><b>Release on completion</b>, once the job is closed and rated.</span></li>
           <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#5D6F67" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span><b>Year-end totals already assembled.</b></span></li>
         </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- The product, after the lifecycle has explained what the stages are.
+       Dark, so the screen reads as a screen rather than more page. -->
+  <section class="sec sec-screen" id="the-screen">
+    <div class="wrap screen-grid">
+      <div class="screen-copy">
+        <h2 class="h-lg">This is the part everyone argues about.</h2>
+        <p class="lede-d">Who is free, who is covered, who is still owed a certificate — and the
+          work order that comes out of answering all three. One screen, on your own address.</p>
+        <ul class="screen-pts">
+          <li><b>Matched by trade, distance, availability and rating.</b></li>
+          <li><b>Anyone out of compliance is shown, and can't be assigned.</b></li>
+          <li><b>The work order writes itself</b> when you pick a crew.</li>
+        </ul>
+        <a class="btn btn-gold" href="book-a-demo.html">See it on your own jobs</a>
+      </div>
+
+      <div class="appwin shadow-lift">
+        <div class="aw-chrome">
+          <svg class="oh-logo" width="117.8" height="18" viewBox="67 244 708 108" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Outerhome"><polygon fill="#181716" points="184.99,277.48 184.99,347.67 163.33,347.67 163.33,290.18 128.24,271.51 93.14,290.18 93.14,332.74 93.16,332.73 128.32,311.39 128.24,347.67 71.49,347.67 71.49,277.48 128.24,247.61"/><path fill="#181716" d="M236.56,312.57c0-14.46,11.17-25.14,26.33-25.14c15.15,0,26.33,10.62,26.33,25.14c0,14.53-11.17,25.14-26.33,25.14C247.74,337.72,236.56,327.03,236.56,312.57z M280.07,312.57c0-9.99-7.33-17.18-17.18-17.18c-9.85,0-17.18,7.19-17.18,17.18c0,9.99,7.33,17.18,17.18,17.18C272.74,329.76,280.07,322.56,280.07,312.57z"/><path fill="#181716" d="M305.9,315.72v-27.59h9.08v27.24c0,10.06,4.54,14.39,12.43,14.39c7.89,0,12.36-4.33,12.36-14.39v-27.24h8.94v27.59c0,14.25-8.03,22-21.37,22C313.93,337.72,305.9,329.96,305.9,315.72z"/><path fill="#181716" d="M376.99,295.81h-16.2v-7.68h41.48v7.68h-16.2v41.2h-9.08V295.81z"/><path fill="#181716" d="M453.24,329.41v7.61h-36.66v-48.89h35.69v7.61h-26.61v12.71h23.6v7.47h-23.6v13.48H453.24z"/><path fill="#181716" d="M502.82,337.02l-9.99-14.32c-0.63,0.07-1.26,0.07-1.89,0.07h-11.03v14.25h-9.08v-48.89h20.11c12.85,0,20.81,6.56,20.81,17.39c0,7.4-3.77,12.85-10.41,15.43l11.24,16.06H502.82z M490.53,295.81h-10.61v19.48h10.61c7.96,0,12.08-3.63,12.08-9.78C502.61,299.38,498.49,295.81,490.53,295.81z"/><path fill="#181716" d="M572.79,288.13v48.89h-9.08v-20.95h-25.28v20.95h-9.08v-48.89h9.08v20.18h25.28v-20.18H572.79z"/><path fill="#181716" d="M589.89,312.57c0-14.46,11.17-25.14,26.33-25.14c15.15,0,26.33,10.62,26.33,25.14c0,14.53-11.17,25.14-26.33,25.14C601.07,337.72,589.89,327.03,589.89,312.57z M633.4,312.57c0-9.99-7.33-17.18-17.18-17.18c-9.85,0-17.18,7.19-17.18,17.18c0,9.99,7.33,17.18,17.18,17.18C626.07,329.76,633.4,322.56,633.4,312.57z"/><path fill="#181716" d="M704.49,337.02l-0.07-32.4l-16.06,26.82h-4.05l-16.06-26.4v31.98h-8.66v-48.89h7.47l19.41,32.4l19.06-32.4h7.47l0.07,48.89H704.49z"/><path fill="#181716" d="M770.41,329.41v7.61h-36.66v-48.89h35.69v7.61h-26.61v12.71h23.6v7.47h-23.6v13.48H770.41z"/></svg>
+          <span class="aw-url">
+            <svg width="11" height="11" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.2">
+              <rect x="3.5" y="8" width="11" height="7.5" rx="1.5"/><path d="M6 8V6a3 3 0 016 0v2"/>
+            </svg>
+            <b>outerhome.subsub.work</b>
+          </span>
+        </div>
+
+        <div class="aw-sec">
+          <h3>Matched Subcontractors</h3>
+          <span>3 available</span>
+        </div>
+        <div class="r-row">
+          <div><div class="r-name">Cascade Roofworks</div>
+            <div class="r-meta">2 crews free · rated 4.8</div></div>
+          <span class="chip c-live">Ready to dispatch</span>
+        </div>
+        <div class="r-row">
+          <div><div class="r-name">Summit Roofing LLC</div>
+            <div class="r-meta">Certificate uploaded</div></div>
+          <span class="chip c-review">Awaiting review</span>
+        </div>
+        <div class="r-row">
+          <div><div class="r-name">Ridgeline Roofing</div>
+            <div class="r-meta">Registration lapsed</div></div>
+          <span class="chip c-block">Can't be assigned</span>
+        </div>
+
+        <div class="aw-sec aw-sec-job">
+          <h3>The job</h3>
+          <span>Work order issued</span>
+        </div>
+        <div class="wo">
+          <div class="wo-top">
+            <span class="wo-id">WO-4417</span>
+            <span class="wo-title">1420 Maple St — tear-off &amp; re-roof</span>
+          </div>
+          <div class="wo-line-2">
+            <span>Cascade · Roof Crew A</span>
+            <strong>$12,400</strong>
+          </div>
+        </div>
       </div>
     </div>
   </section>
