@@ -167,3 +167,41 @@ console.log("pasted values are trimmed");
   const cfg = hostnameConfig({ CF_API_TOKEN: " tok\n", CF_ZONE_ID: "z1 ", CF_ACCOUNT_ID: " a1", CF_PAGES_PROJECT: "subsub-app\n" });
   eq("no stray whitespace", [cfg.token, cfg.zoneId, cfg.accountId, cfg.project], ["tok", "z1", "a1", "subsub-app"]);
 }
+
+console.log("token shape is checked before anything is sent");
+{
+  const { tokenShapeProblem, diagnose } = await import("../worker/hostnames.js");
+  const good = "abcdEFGH1234_-.~+/=abcdEFGH1234abcdEFGH12";
+
+  eq("a good token passes", tokenShapeProblem(good), null);
+  eq("unset", tokenShapeProblem(""), "No token is set.");
+  eq("token id spotted", /shape of a token's ID/.test(tokenShapeProblem("a".repeat(32))), true);
+  eq("Bearer prefix spotted", /starts with "Bearer"/.test(tokenShapeProblem("Bearer " + good)), true);
+  eq("inner newline named", /line break/.test(tokenShapeProblem("abcdEFGH1234abcd\nEFGH1234abcdEFGH1234abcd")), true);
+  eq("non-breaking space named", /non-breaking space/.test(tokenShapeProblem("abcdEFGH1234abcd EFGH1234abcdEFGH1234")), true);
+  eq("curly quote named", /quote mark/.test(tokenShapeProblem("abcdEFGH1234abcd“EFGH1234abcdEFGH1234")), true);
+  eq("truncated spotted", /looks truncated/.test(tokenShapeProblem("short")), true);
+
+  // It never echoes the secret back into a message somebody will paste on.
+  const secret = "abcdEFGH1234abcd\nEFGH1234abcdEFGH1234abcd";
+  eq("never repeats the token", tokenShapeProblem(secret).includes("abcdEFGH"), false);
+
+  // And it short-circuits: a malformed token is not sent anywhere.
+  let called = false;
+  globalThis.fetch = async () => { called = true; return json({ success: true, result: [] }); };
+  const d = await diagnose({ ...env, CF_API_TOKEN: "Bearer " + good });
+  eq("nothing sent for a malformed token", called, false);
+  eq("reported as the token check", d.checks.map(c => [c.id, c.ok]), [["token", false]]);
+}
+
+console.log("Cloudflare's error_chain is not thrown away");
+{
+  const { provisionHostname } = await import("../worker/hostnames.js");
+  globalThis.fetch = async () => json({
+    success: false,
+    errors: [{ code: 6003, message: "Invalid request headers",
+               error_chain: [{ code: 6111, message: "Invalid format for Authorization header" }] }],
+  }, 400);
+  const r = await provisionHostname(env, "newco");
+  eq("chain included", r.error, "dns: Invalid request headers — Invalid format for Authorization header");
+}

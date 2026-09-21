@@ -82,9 +82,47 @@ async function cf(cfg, path, init = {}) {
 }
 
 const hasCode = (r, code) => (r.errors || []).some((e) => e?.code === code);
+
+// Cloudflare puts the useful half of a rejection in error_chain -- the
+// top-level message for a malformed header is the generic "Invalid request
+// headers", and the chain underneath is the line that says which header and
+// why. Dropping it was throwing away the answer.
 const errText = (r) =>
-  (r.errors || []).map((e) => e?.message).filter(Boolean).join("; ")
+  (r.errors || []).flatMap((e) => [e?.message, ...(e?.error_chain || []).map((c) => c?.message)])
+    .filter(Boolean).join(" — ")
   || `cloudflare_http_${r.status}`;
+
+// What is wrong with this token without sending it anywhere -- and without
+// ever repeating it back. A token that cannot go in a header is rejected by
+// Cloudflare as "Invalid request headers", which sounds like our bug and is
+// not: it is a stray character in a value somebody pasted. Saying which kind
+// of stray character turns an afternoon into ten seconds.
+//
+// Every message below describes the token. None of them contains it.
+export function tokenShapeProblem(raw) {
+  const t = String(raw ?? "");
+  if (!t) return "No token is set.";
+  if (/^bearer\s/i.test(t)) return 'The value starts with "Bearer". Store only the token itself — the header is added for you.';
+  if (/^[0-9a-f]{32}$/i.test(t)) {
+    return "This is 32 hex characters, which is the shape of a token's ID rather than the token. "
+      + "The token itself was shown once, on the screen straight after it was created — roll the token to get a fresh one.";
+  }
+  // The legal set for a bearer credential. Anything outside it -- a newline
+  // from a wrapped paste, a non-breaking space, a curly quote an autocorrect
+  // introduced -- makes the header unsendable.
+  const bad = [...t].filter((ch) => !/[A-Za-z0-9._~+/=-]/.test(ch));
+  if (bad.length) {
+    const names = [...new Set(bad.map((ch) =>
+      ch === "\n" ? "a line break" : ch === "\r" ? "a carriage return" : ch === "\t" ? "a tab"
+      : ch === " " ? "a space" : ch === "\u00a0" ? "a non-breaking space"
+      : /["“”'‘’]/.test(ch) ? "a quote mark"
+      : `an unexpected character (code ${ch.codePointAt(0)})`))];
+    return `The token contains ${names.join(" and ")}, which cannot be sent in a request header. `
+      + "Copy it again, taking care not to pick up surrounding text or a line break.";
+  }
+  if (t.length < 30) return `The token is only ${t.length} characters. A Cloudflare API token is around 40 — this looks truncated.`;
+  return null;
+}
 
 // The CNAME. 81057 is "record already exists", which is the answer we want
 // from a retry, so it counts as success rather than as a failure to report.
@@ -165,6 +203,16 @@ export async function diagnose(env) {
       configured: false, missing,
       checks: [{ id: "config", label: "Settings present", ok: false,
         detail: `Not set on this Worker: ${missing.join(", ")}` }],
+    };
+  }
+
+  // Before asking Cloudflare: a token that cannot go in a header never
+  // reaches them, and their answer for it says nothing about the token.
+  const shape = tokenShapeProblem(cfg.token);
+  if (shape) {
+    return {
+      configured: true, zone: cfg.domain, project: cfg.project,
+      checks: [{ id: "token", label: "API token is valid", ok: false, detail: shape }],
     };
   }
 
