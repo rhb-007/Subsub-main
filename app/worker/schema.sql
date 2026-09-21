@@ -113,7 +113,9 @@ CREATE TABLE memberships (
   id             TEXT PRIMARY KEY,
   user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   account_id     TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  role           TEXT NOT NULL CHECK (role IN ('admin','pm','contractor')),
+  -- admin | pm | owner | contractor. No CHECK: widening one in SQLite means
+  -- rebuilding the table, and the API validates the role on every write.
+  role           TEXT NOT NULL,
   company_id     TEXT REFERENCES companies(id),   -- set when role = 'contractor'
   created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (user_id, account_id)
@@ -146,6 +148,11 @@ CREATE TABLE jobs (
   completed_at        TEXT,
   notes               TEXT,
   created_by          TEXT REFERENCES users(id),
+  -- A building owner can raise work on their own property, but it must not
+  -- reach a subcontractor until the account has priced it and agreed to it.
+  -- requested_by set with approved_at null is a request; both set is a job.
+  requested_by        TEXT REFERENCES users(id),
+  approved_at         TEXT,
   created_at          TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_jobs_account_status ON jobs(account_id, status);
@@ -272,6 +279,17 @@ CREATE TABLE properties (
 CREATE INDEX idx_properties_account ON properties(account_id);
 
 -- Which properties an engagement is scoped to. No rows = every property.
+-- Which properties a membership may see. No rows means no restriction, which
+-- is what an admin or project manager has; a building owner is scoped to the
+-- buildings listed here and an owner with none listed sees nothing.
+CREATE TABLE membership_properties (
+  membership_id  TEXT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE,
+  property_id    TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  PRIMARY KEY (membership_id, property_id)
+);
+CREATE INDEX idx_mp_membership ON membership_properties(membership_id);
+CREATE INDEX idx_mp_property ON membership_properties(property_id);
+
 CREATE TABLE engagement_properties (
   engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
   property_id   TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,

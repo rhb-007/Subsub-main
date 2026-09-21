@@ -132,6 +132,8 @@ export const api = {
   listAllBookings: () => request("/jobs/all-bookings"),
   createJob: (job) => request("/jobs", { method: "POST", body: JSON.stringify(job) }),
   patchJob: (jobId, patch) => request(`/jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  // Turns a building owner's request into a job that can be assigned.
+  approveJob: (jobId) => request(`/jobs/${jobId}/approve`, { method: "POST" }),
   completeJob: (jobId) => request(`/jobs/${jobId}/complete`, { method: "POST" }),
   reopenJob: (jobId) => request(`/jobs/${jobId}/reopen`, { method: "POST" }),
   assign: (jobId, details) => request(`/jobs/${jobId}/assign`, { method: "POST", body: JSON.stringify(details) }),

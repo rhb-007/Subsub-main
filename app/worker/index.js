@@ -178,6 +178,10 @@ app.use("/api/*", async (c, next) => {
     c.set("auth", {
       userId: sess.act_as_user_id, accountId: sess.account_id,
       role: seat.role, companyId: seat.company_id,
+      membershipId: seat.id,
+      // Staff sitting in an owner's seat see the owner's buildings and no
+      // others. Support is not a reason to widen somebody's access.
+      propertyIds: await propertyScope(c.env.DB, seat),
       // Who is really here. Nothing reads it yet; it is set because a
       // session whose real actor is unrecoverable is the one thing this
       // table exists to prevent.
@@ -204,7 +208,77 @@ app.use("/api/*", async (c, next) => {
   ).bind(userId, accountId).first();
   if (!membership) return c.json({ error: "forbidden" }, 403);
 
-  c.set("auth", { userId, accountId, role: membership.role, companyId: membership.company_id });
+  c.set("auth", {
+    userId, accountId, role: membership.role, companyId: membership.company_id,
+    membershipId: membership.id,
+    propertyIds: await propertyScope(c.env.DB, membership),
+  });
+  await next();
+});
+
+// Which properties a seat may see, and therefore which jobs, which
+// contractors and which of anything else hangs off a building.
+//
+// `null` means no restriction -- an admin or a project manager sees the whole
+// account, which is what every membership was before building owners existed.
+// An array means exactly those, and an EMPTY array means nothing: an owner
+// nobody has granted a building to must not fall through to seeing them all.
+// That asymmetry is the whole point, so it is decided here once rather than
+// at each call site, where "no rows" reads like "no filter".
+async function propertyScope(db, membership) {
+  if (membership.role !== "owner") return null;
+  const { results } = await db.prepare(
+    `SELECT property_id FROM membership_properties WHERE membership_id = ?`
+  ).bind(membership.id).all();
+  return (results || []).map((r) => r.property_id);
+}
+
+// Guards a single property id against the seat's scope.
+const maySeeProperty = (auth, propertyId) =>
+  !auth.propertyIds || (propertyId != null && auth.propertyIds.includes(propertyId));
+
+// A `WHERE` fragment plus its bindings, for the scoped list endpoints. Written
+// as `IN ()` with no members when the scope is empty, which SQLite reads as
+// false -- the safe direction.
+function scopeClause(auth, column) {
+  if (!auth.propertyIds) return { sql: "", vals: [] };
+  if (!auth.propertyIds.length) return { sql: ` AND 0 `, vals: [] };
+  return {
+    sql: ` AND ${column} IN (${auth.propertyIds.map(() => "?").join(",")}) `,
+    vals: auth.propertyIds,
+  };
+}
+
+// What a building owner may reach. An allowlist, not a deny-list, and that is
+// deliberate: the routes here were all written when an account had three roles
+// and some of them reason about the caller by elimination. The work-order
+// response route, for instance, asks "is this a contractor working on someone
+// else's order" -- a question that silently answers "no, let them through" for
+// a role that did not exist when it was written. A deny-list would have to be
+// amended every time a route is added, by somebody who remembers this exists.
+// This way a new route refuses owners until somebody decides otherwise, which
+// is the direction a mistake should fail in.
+//
+// Everything listed is either scoped to the owner's own buildings inside the
+// handler, or carries nothing account-specific at all.
+const OWNER_ALLOWED = [
+  [/^\/api\/account$/, ["GET"]],
+  [/^\/api\/account-by-subdomain\/[^/]+$/, ["GET"]],
+  [/^\/api\/logo\/[^/]+$/, ["GET"]],
+  [/^\/api\/auth\/me$/, ["GET"]],
+  [/^\/api\/account-users$/, ["GET"]],     // scoped: themselves only
+  [/^\/api\/properties$/, ["GET"]],        // scoped: their buildings
+  [/^\/api\/jobs$/, ["GET", "POST"]],      // scoped; POST creates a request
+  [/^\/api\/subs$/, ["GET"]],              // scoped: who works their buildings
+  [/^\/api\/service-calls$/, ["GET"]],     // scoped: on their own jobs
+];
+
+app.use("/api/*", async (c, next) => {
+  const auth = c.get("auth");
+  if (!auth || auth.role !== "owner") return next();
+  const path = new URL(c.req.url).pathname;
+  const ok = OWNER_ALLOWED.some(([re, methods]) => re.test(path) && methods.includes(c.req.method));
+  if (!ok) return c.json({ error: "forbidden" }, 403);
   await next();
 });
 
@@ -1069,21 +1143,60 @@ app.post("/api/invite/:token", async (c) => {
 // This account's members (admin/pm/contractor), composed with the person's
 // name/email/phone — what the UI calls `accountUsers`.
 app.get("/api/account-users", async (c) => {
-  const { accountId } = c.get("auth");
+  const auth = c.get("auth");
+  const { accountId } = auth;
+  // A building owner is a guest in somebody else's account: who else has a
+  // login there is not theirs to read. They still need their own row, which
+  // is how the app knows which seat it is sitting in.
+  const mine = auth.role === "owner" ? ` AND m.user_id = ? ` : "";
   const { results } = await c.env.DB.prepare(
     `SELECT u.*, m.role, m.company_id FROM memberships m
-     JOIN users u ON u.id = m.user_id WHERE m.account_id = ?`
+     JOIN users u ON u.id = m.user_id WHERE m.account_id = ? ${mine}`
+  ).bind(accountId, ...(auth.role === "owner" ? [auth.userId] : [])).all();
+  const { results: scopes } = await c.env.DB.prepare(
+    `SELECT mp.property_id, m.user_id FROM membership_properties mp
+       JOIN memberships m ON m.id = mp.membership_id WHERE m.account_id = ?`
   ).bind(accountId).all();
+  const byUser = {};
+  for (const r of scopes || []) (byUser[r.user_id] ||= []).push(r.property_id);
+
   return c.json(results.map((r) => ({
     id: r.id, name: r.name, email: r.email, phone: r.phone, role: r.role, subId: r.company_id,
+    propertyIds: byUser[r.id] || [],
   })));
 });
 
 // Add (or re-invite) a person to this account. Dedupes the person on email —
 // same person can already exist as a user from another account.
+// A role the API will accept on a membership. The database no longer carries
+// a CHECK for this (see migration 014), so this is the constraint.
+const MEMBER_ROLES = ["admin", "pm", "owner", "contractor"];
+
+// Replaces a membership's building list. Only an owner has one: giving an
+// admin a list would read as a restriction the rest of the code does not
+// apply, so the rows are cleared instead of written.
+async function setMembershipProperties(db, membershipId, accountId, role, propertyIds) {
+  const stmts = [db.prepare(`DELETE FROM membership_properties WHERE membership_id = ?`).bind(membershipId)];
+  if (role === "owner") {
+    for (const pid of [...new Set(propertyIds || [])]) {
+      stmts.push(db.prepare(
+        `INSERT OR IGNORE INTO membership_properties (membership_id, property_id)
+         SELECT ?, id FROM properties WHERE id = ? AND account_id = ?`
+      ).bind(membershipId, pid, accountId));
+    }
+  }
+  await db.batch(stmts);
+}
+
 app.post("/api/account-users", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
-  const b = await c.req.json(); // { name, email, phone, role, subId }
+  const b = await c.req.json(); // { name, email, phone, role, subId, propertyIds }
+  if (!MEMBER_ROLES.includes(b.role)) return c.json({ error: "invalid_role" }, 400);
+  // A building owner scoped to nothing can see nothing, which is a login that
+  // does not work and a support call that follows. Refuse it at the door.
+  if (b.role === "owner" && !(b.propertyIds || []).length) {
+    return c.json({ error: "properties_required" }, 400);
+  }
   let user = await c.env.DB.prepare(`SELECT * FROM users WHERE lower(email) = lower(?)`).bind(b.email).first();
   const userId = user?.id ?? uid();
   if (!user) {
@@ -1093,13 +1206,17 @@ app.post("/api/account-users", requireRole("admin"), async (c) => {
   const existingMembership = await c.env.DB.prepare(
     `SELECT id FROM memberships WHERE user_id = ? AND account_id = ?`
   ).bind(userId, accountId).first();
+  let membershipId;
   if (existingMembership) {
+    membershipId = existingMembership.id;
     await c.env.DB.prepare(`UPDATE memberships SET role = ?, company_id = ? WHERE id = ?`)
-      .bind(b.role, b.subId ?? null, existingMembership.id).run();
+      .bind(b.role, b.subId ?? null, membershipId).run();
   } else {
+    membershipId = uid();
     await c.env.DB.prepare(`INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, ?, ?)`)
-      .bind(uid(), userId, accountId, b.role, b.subId ?? null).run();
+      .bind(membershipId, userId, accountId, b.role, b.subId ?? null).run();
   }
+  await setMembershipProperties(c.env.DB, membershipId, accountId, b.role, b.propertyIds);
   return c.json({ id: userId }, 201);
 });
 
@@ -1112,8 +1229,18 @@ app.patch("/api/account-users/:userId", requireRole("admin"), async (c) => {
       .bind(b.name ?? null, b.email ?? null, b.phone ?? null, userId).run();
   }
   if (b.role != null) {
+    if (!MEMBER_ROLES.includes(b.role)) return c.json({ error: "invalid_role" }, 400);
     await c.env.DB.prepare(`UPDATE memberships SET role = ?, company_id = ? WHERE user_id = ? AND account_id = ?`)
       .bind(b.role, b.subId ?? null, userId, accountId).run();
+  }
+  // The list travels with the role. Demoting somebody to owner without one
+  // would leave them seeing nothing; promoting an owner to admin has to drop
+  // theirs, or a stale list sits there looking like it means something.
+  if (b.role != null || b.propertyIds !== undefined) {
+    const m = await c.env.DB.prepare(
+      `SELECT id, role FROM memberships WHERE user_id = ? AND account_id = ?`
+    ).bind(userId, accountId).first();
+    if (m) await setMembershipProperties(c.env.DB, m.id, accountId, m.role, b.propertyIds);
   }
   return c.json({ ok: true });
 });
@@ -1461,7 +1588,17 @@ app.patch("/api/account", requireRole("admin"), async (c) => {
 
 // List every company engaged with the current account, composed flat.
 app.get("/api/subs", async (c) => {
-  const { accountId } = c.get("auth");
+  const auth = c.get("auth");
+  const { accountId } = auth;
+  // An owner has no contractor directory -- they see who is coming to their
+  // own buildings and nobody else. Anyone with no work order on one of their
+  // jobs is not a contractor they have any business reading.
+  const onlyMine = auth.propertyIds ? `
+       AND en.company_id IN (
+         SELECT wo.company_id FROM work_orders wo JOIN jobs j ON j.id = wo.job_id
+          WHERE j.account_id = ? AND wo.voided_at IS NULL
+            AND j.property_id IN (${auth.propertyIds.map(() => "?").join(",") || "NULL"}))` : "";
+  const scopeVals = auth.propertyIds ? [accountId, ...auth.propertyIds] : [];
   const { results } = await c.env.DB.prepare(
     `SELECT co.*, en.id as en_id, en.account_id as en_account_id, en.company_id as en_company_id,
             en.status as en_status, en.doc_review as en_doc_review, en.categories as en_categories,
@@ -1471,8 +1608,8 @@ app.get("/api/subs", async (c) => {
             (SELECT group_concat(ep.property_id) FROM engagement_properties ep
               WHERE ep.engagement_id = en.id) as en_property_ids
      FROM engagements en JOIN companies co ON co.id = en.company_id
-     WHERE en.account_id = ?`
-  ).bind(accountId).all();
+     WHERE en.account_id = ? ${onlyMine}`
+  ).bind(accountId, ...scopeVals).all();
 
   const subs = results.map((r) => composeSub(r, {
     id: r.en_id, account_id: r.en_account_id, company_id: r.en_company_id, status: r.en_status,
@@ -1806,10 +1943,15 @@ app.post("/api/subs/:companyId/verify-license", requireRole("admin", "pm"), asyn
 // Jobs
 // ---------------------------------------------------------------------------
 app.get("/api/jobs", async (c) => {
-  const { accountId } = c.get("auth");
+  const auth = c.get("auth");
+  const { accountId } = auth;
+  // An owner sees the jobs at their own buildings and nothing else. A job with
+  // no property is account-wide work and is not theirs to see either, which
+  // `property_id IN (...)` gives for free -- NULL matches nothing.
+  const scope = scopeClause(auth, "property_id");
   const { results: jobs } = await c.env.DB.prepare(
-    `SELECT * FROM jobs WHERE account_id = ? ORDER BY created_at DESC`
-  ).bind(accountId).all();
+    `SELECT * FROM jobs WHERE account_id = ? ${scope.sql} ORDER BY created_at DESC`
+  ).bind(accountId, ...scope.vals).all();
 
   const { results: wos } = await c.env.DB.prepare(
     `SELECT wo.* FROM work_orders wo JOIN jobs j ON j.id = wo.job_id
@@ -1818,7 +1960,7 @@ app.get("/api/jobs", async (c) => {
   const woByJob = {};
   for (const w of wos) (woByJob[w.job_id] ||= []).push(w);
 
-  return c.json(jobs.map((j) => jobRowToJs(j, woByJob[j.id] || [])));
+  return c.json(jobs.map((j) => stripMoney(auth, jobRowToJs(j, woByJob[j.id] || []))));
 });
 
 // Every job the API has ever seen, across ALL accounts, but only the fact of
@@ -1850,25 +1992,91 @@ function jobRowToJs(j, workOrders) {
     trades: parseJson(j.trades, []), scope: j.scope, materialSource: j.material_source,
     materialsPaidBy: j.materials_paid_by, measurementDocs: parseJson(j.measurement_docs, []),
     status: j.status, completedAt: j.completed_at, notes: j.notes, createdAt: j.created_at?.slice(0, 10), assignments,
+    // The column has been on jobs since the beginning and was cleared when a
+    // property was deleted, but nothing ever wrote it and nothing ever read
+    // it back, so a job's building survived only until the page reloaded.
+    propertyId: j.property_id || null,
+    // Set when a building owner asked for the work. Until approved_at is
+    // filled in it is a request, and nothing may be assigned against it.
+    requestedBy: j.requested_by || null, approvedAt: j.approved_at || null,
   };
 }
 
-app.post("/api/jobs", requireRole("admin", "pm"), async (c) => {
-  const { accountId, userId } = c.get("auth");
+// What a building owner is not shown. They see the work, the schedule and who
+// is coming; what the account pays a subcontractor is not theirs. Applied on
+// the way out of the API rather than hidden in the page, because a value the
+// browser is sent is a value the browser can be made to show.
+function stripMoney(auth, job) {
+  if (auth.role !== "owner") return job;
+  const assignments = {};
+  for (const [trade, a] of Object.entries(job.assignments || {})) {
+    const { value, ...rest } = a;
+    assignments[trade] = rest;
+  }
+  return { ...job, assignments };
+}
+
+// An owner may raise work, which is why this is not requireRole("admin","pm"):
+// what they create is a request rather than a job, and the difference is
+// enforced below rather than left to the caller to declare.
+app.post("/api/jobs", requireRole("admin", "pm", "owner"), async (c) => {
+  const auth = c.get("auth");
+  const { accountId, userId } = auth;
   const b = await c.req.json();
   const id = uid();
+
+  const propertyId = b.propertyId || null;
+  // An owner's work has to be at one of their own buildings. Refusing here
+  // rather than filtering means a request aimed somewhere else is an error
+  // they see, not a row that quietly goes missing.
+  if (auth.role === "owner") {
+    if (!propertyId) return c.json({ error: "property_required" }, 400);
+    if (!maySeeProperty(auth, propertyId)) return c.json({ error: "forbidden" }, 403);
+  } else if (propertyId) {
+    const owned = await c.env.DB.prepare(
+      `SELECT id FROM properties WHERE id = ? AND account_id = ?`).bind(propertyId, accountId).first();
+    if (!owned) return c.json({ error: "property_not_found" }, 404);
+  }
+
+  const requestedBy = auth.role === "owner" ? userId : null;
   await c.env.DB.prepare(
     `INSERT INTO jobs (id, account_id, title, client, address, area, zip, sqft, stories, date, time,
-       trades, scope, material_source, materials_paid_by, measurement_docs, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       trades, scope, material_source, materials_paid_by, measurement_docs, created_by,
+       property_id, requested_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(id, accountId, b.title, b.client || null, b.address || null, b.area || null, b.zip || null,
     b.sqft || null, b.stories || null, b.date || null, b.time || "07:00",
     JSON.stringify(b.trades || []), b.scope || null, b.materialSource || null, b.materialsPaidBy || null,
-    JSON.stringify(b.measurementDocs || []), userId).run();
+    JSON.stringify(b.measurementDocs || []), userId, propertyId, requestedBy).run();
 
-  await logEvent(c.env, accountId, userId, "job.created", id, { title: b.title });
-  await logActivity(c.env, accountId, userId, "job_created", `Created job ${b.title}`);
-  return c.json({ id }, 201);
+  if (requestedBy) {
+    await logEvent(c.env, accountId, userId, "job.requested", id, { title: b.title });
+    await logActivity(c.env, accountId, userId, "job_requested", `Requested work: ${b.title}`);
+  } else {
+    await logEvent(c.env, accountId, userId, "job.created", id, { title: b.title });
+    await logActivity(c.env, accountId, userId, "job_created", `Created job ${b.title}`);
+  }
+  return c.json({ id, requested: !!requestedBy }, 201);
+});
+
+// Turning an owner's request into a job somebody can be assigned to. Only the
+// account can do this -- that is the entire point of a request.
+app.post("/api/jobs/:id/approve", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = c.req.param("id");
+  const job = await c.env.DB.prepare(
+    `SELECT id, title, requested_by, approved_at FROM jobs WHERE id = ? AND account_id = ?`
+  ).bind(id, accountId).first();
+  if (!job) return c.json({ error: "job_not_found" }, 404);
+  if (!job.requested_by) return c.json({ error: "not_a_request" }, 400);
+  if (job.approved_at) return c.json({ ok: true, alreadyApproved: true });
+
+  await c.env.DB.prepare(
+    `UPDATE jobs SET approved_at = datetime('now') WHERE id = ? AND account_id = ?`
+  ).bind(id, accountId).run();
+  await logEvent(c.env, accountId, userId, "job.approved", id, { title: job.title });
+  await logActivity(c.env, accountId, userId, "job_approved", `Approved requested work: ${job.title}`);
+  return c.json({ ok: true });
 });
 
 app.post("/api/jobs/:id/complete", requireRole("admin", "pm"), async (c) => {
@@ -1895,10 +2103,19 @@ app.post("/api/jobs/:id/reopen", requireRole("admin", "pm"), async (c) => {
 app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   const id = c.req.param("id");
-  const b = await c.req.json(); // { notes?, measurementDocs? }
+  const b = await c.req.json(); // { notes?, measurementDocs?, propertyId? }
   const sets = [], vals = [];
   if (b.notes !== undefined) { sets.push("notes = ?"); vals.push(b.notes); }
   if (b.measurementDocs !== undefined) { sets.push("measurement_docs = ?"); vals.push(JSON.stringify(b.measurementDocs)); }
+  if (b.propertyId !== undefined) {
+    const pid = b.propertyId || null;
+    if (pid) {
+      const owned = await c.env.DB.prepare(
+        `SELECT id FROM properties WHERE id = ? AND account_id = ?`).bind(pid, accountId).first();
+      if (!owned) return c.json({ error: "property_not_found" }, 404);
+    }
+    sets.push("property_id = ?"); vals.push(pid);
+  }
   if (!sets.length) return c.json({ ok: true });
   vals.push(id, accountId);
   await c.env.DB.prepare(`UPDATE jobs SET ${sets.join(", ")} WHERE id = ? AND account_id = ?`).bind(...vals).run();
@@ -1913,8 +2130,13 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   const jobId = c.req.param("jobId");
   const { trade, companyId, crewName, tradeScope, value, responseWindow } = await c.req.json();
 
-  const job = await c.env.DB.prepare(`SELECT id FROM jobs WHERE id = ? AND account_id = ?`).bind(jobId, accountId).first();
+  const job = await c.env.DB.prepare(
+    `SELECT id, requested_by, approved_at FROM jobs WHERE id = ? AND account_id = ?`
+  ).bind(jobId, accountId).first();
   if (!job) return c.json({ error: "job_not_found" }, 404);
+  // A request an owner raised is not work anybody has agreed to yet. Issuing a
+  // work order against one would commit the account to a price it never set.
+  if (job.requested_by && !job.approved_at) return c.json({ error: "not_approved" }, 409);
 
   const engagement = await c.env.DB.prepare(
     `SELECT * FROM engagements WHERE account_id = ? AND company_id = ?`
@@ -2311,11 +2533,16 @@ const serviceCallRowToJs = (r) => ({
 });
 
 app.get("/api/service-calls", async (c) => {
-  const { accountId } = c.get("auth");
+  const auth = c.get("auth");
+  const { accountId } = auth;
+  const scope = auth.propertyIds ? `
+      AND sc.job_id IN (SELECT id FROM jobs WHERE account_id = ?
+            AND property_id IN (${auth.propertyIds.map(() => "?").join(",") || "NULL"}))` : "";
   const { results } = await c.env.DB.prepare(
     `SELECT sc.*, co.company as company_name FROM service_calls sc
-     JOIN companies co ON co.id = sc.company_id WHERE sc.account_id = ? ORDER BY sc.raised_at DESC`
-  ).bind(accountId).all();
+     JOIN companies co ON co.id = sc.company_id
+     WHERE sc.account_id = ? ${scope} ORDER BY sc.raised_at DESC`
+  ).bind(accountId, ...(auth.propertyIds ? [accountId, ...auth.propertyIds] : [])).all();
   return c.json(results.map(serviceCallRowToJs));
 });
 
@@ -2367,10 +2594,14 @@ const propertyRowToJs = (r) => ({
 });
 
 app.get("/api/properties", async (c) => {
-  const { accountId } = c.get("auth");
+  const auth = c.get("auth");
+  // A building owner is scoped to their own buildings. The filter is here and
+  // not only in the browser, because the browser is not the thing being
+  // trusted -- this endpoint answers a request, not a page.
+  const scope = scopeClause(auth, "id");
   const { results } = await c.env.DB.prepare(
-    `SELECT * FROM properties WHERE account_id = ? ORDER BY name`
-  ).bind(accountId).all();
+    `SELECT * FROM properties WHERE account_id = ? ${scope.sql} ORDER BY name`
+  ).bind(auth.accountId, ...scope.vals).all();
   return c.json(results.map(propertyRowToJs));
 });
 

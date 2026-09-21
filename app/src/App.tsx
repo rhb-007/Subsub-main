@@ -446,8 +446,16 @@ const validEmail = (v) => EMAIL_RE.test(String(v ?? "").trim());
 const ROLES = {
   admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
   pm: { label: "Project Manager", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
+  // A building owner is a guest in somebody else's account, scoped to the
+  // buildings they were granted. No contractor directory -- they see who is
+  // coming to their own jobs, not who the account works with -- and no
+  // availability calendar or uniforms, which are the account's business.
+  owner: { label: "Building owner", can: ["dashboard", "properties", "jobs", "account"] },
   contractor: { label: "Contractor", can: ["portal", "account"] },
 };
+// Roles that belong to the account itself, as opposed to somebody it let in.
+// The difference decides who may see money and who may run the place.
+const isStaffRole = (r) => r === "admin" || r === "pm";
 const seedUsers = [
   { id: "u1", name: "Richard Braun", email: "rb@outerhome.com", role: "admin" },
   { id: "u2", name: "Alicia Gomez", email: "alicia@outerhome.com", role: "pm" },
@@ -1647,7 +1655,8 @@ export default function SubSub() {
     .filter((m) => m.accountId === account.id)
     .map((m) => {
       const u = users.find((x) => x.id === m.userId);
-      return u ? { ...u, role: m.role, subId: m.companyId ?? null } : null;
+      return u ? { ...u, role: m.role, subId: m.companyId ?? null,
+        propertyIds: m.propertyIds || [] } : null;
     })
     .filter(Boolean), [memberships, users, account.id]);
 
@@ -1725,10 +1734,11 @@ export default function SubSub() {
 
   // --- Jobs: a job has multiple trades, each trade gets its own contractor ---
   const createJob = async (job, forSub) => {
-    let id;
-    try { ({ id } = await api.createJob(job)); }
+    let id, requested = false;
+    try { ({ id, requested } = await api.createJob(job)); }
     catch (err) { console.error("[persist] createJob failed:", err); id = Date.now(); }
-    logEvent("job_created", `Created job ${job.title}`);
+    logEvent(requested ? "job_requested" : "job_created",
+      requested ? `Requested work: ${job.title}` : `Created job ${job.title}`);
 
     const assignments = {};
     if (forSub && docsComplete(forSub)) {
@@ -1742,10 +1752,23 @@ export default function SubSub() {
       });
     }
     setJobs((js) => [{ ...job, id, accountId: account.id, status: "active", notes: "",
-      createdAt: new Date().toISOString().slice(0, 10), assignments }, ...js]);
+      createdAt: new Date().toISOString().slice(0, 10), assignments,
+      // Mirrors what the server just decided, so the row reads as a request
+      // straight away rather than looking like a live job until the next load.
+      requestedBy: requested ? currentUserId : null, approvedAt: null }, ...js]);
     setJobForm(null);
     setTab("jobs");
     return id;
+  };
+
+  // Agreeing to work a building owner asked for. Until this happens nothing
+  // can be assigned against it, which the server enforces too.
+  const approveJob = (id) => {
+    const jb = allJobs.find((j) => j.id === id);
+    persist("approveJob", api.approveJob(id));
+    setJobs((js) => js.map((j) => (j.id === id
+      ? { ...j, approvedAt: new Date().toISOString() } : j)));
+    if (jb) logEvent("job_approved", `Approved requested work: ${jb.title}`);
   };
 
   // Mark a job complete — this is what unlocks rating and notes.
@@ -1938,7 +1961,10 @@ export default function SubSub() {
       ? { ...e, propertyIds: e.propertyIds.filter((x) => x !== id) } : e));
   };
   const tryAddJob = (forSub, forProperty) => {
-    if (atJobLimit) { setAddMenu(false); setUpgradePrompt({ kind: "job" }); return; }
+    // The plan belongs to the account, not to a guest of it. Showing an owner
+    // an upgrade prompt would be asking the wrong person for money.
+    if (atJobLimit && role !== "owner") { setAddMenu(false); setUpgradePrompt({ kind: "job" }); return; }
+    if (atJobLimit) { setAddMenu(false); setBillingNote("This account has reached its job limit. Ask whoever manages it to raise it."); return; }
     setJobForm({ ...(forSub ? { forSub } : {}), ...(forProperty ? { forProperty } : {}) });
   };
   const tryAddContractor = () => {
@@ -1986,7 +2012,8 @@ export default function SubSub() {
     const userId = existing ? existing.id : "u" + Date.now();
     if (!existing) setUsers((us) => [...us, { id: userId, name: u.name, email: u.email, phone: u.phone }]);
     setMemberships((ms) => [...ms.filter((m) => !(m.userId === userId && m.accountId === account.id)),
-      { userId, accountId: account.id, role: u.role, companyId: u.subId ?? null }]);
+      { userId, accountId: account.id, role: u.role, companyId: u.subId ?? null,
+        propertyIds: u.propertyIds || [] }]);
     setUserForm(false);
   };
   // Removing someone from an account drops the membership, not the person —
@@ -1998,11 +2025,13 @@ export default function SubSub() {
   const updateUser = (u) => {
     persist("updateAccountUser", api.updateAccountUser(u.id, {
       name: u.name, email: u.email, phone: u.phone, role: u.role, subId: u.subId,
+      propertyIds: u.propertyIds || [],
     }));
     // name/email/phone are the person; role is the membership.
     setMemberships((ms) => ms.map((m) =>
       (m.userId === u.id && m.accountId === account.id)
-        ? { ...m, role: u.role, companyId: u.subId ?? m.companyId } : m));
+        ? { ...m, role: u.role, companyId: u.subId ?? m.companyId,
+            propertyIds: u.role === "owner" ? (u.propertyIds || []) : [] } : m));
     setUsers((us) => us.map((x) => (x.id === u.id ? { ...x, ...u } : x)));
     setEditUser(null);
   };
@@ -2181,11 +2210,21 @@ export default function SubSub() {
   async function hydrateAccount(accountId, userId) {
     setLoading(true);
     try {
-      const [flatSubs, ownJobs, bookings, members, uniformOrderRows, serviceCallRows,
-             propertyRows] = await Promise.all([
+      // allSettled, not all: a building owner is refused several of these
+      // outright -- the cross-account booking feed, the uniform orders -- and
+      // one 403 rejecting the whole batch would leave them staring at an empty
+      // account rather than at their own buildings. A call that fails yields
+      // an empty list, which is the truthful answer for a seat that may not
+      // see the thing.
+      const settled = await Promise.allSettled([
         api.listSubs(), api.listJobs(), api.listAllBookings(), api.listAccountUsers(),
         api.listUniformOrders(), api.listServiceCalls(), api.listProperties(),
       ]);
+      settled.forEach((r, i) => {
+        if (r.status === "rejected") console.warn("[hydrate] call", i, "failed:", r.reason);
+      });
+      const [flatSubs, ownJobs, bookings, members, uniformOrderRows, serviceCallRows,
+             propertyRows] = settled.map((r) => (r.status === "fulfilled" && Array.isArray(r.value)) ? r.value : []);
       setUniformOrders(uniformOrderRows);
       setServiceCalls(serviceCallRows);
       setProperties(propertyRows);
@@ -2219,7 +2258,8 @@ export default function SubSub() {
         const key = (m) => `${m.userId}:${m.accountId}`;
         const byKey = Object.fromEntries(prev.map((m) => [key(m), m]));
         members.forEach((m) => {
-          byKey[`${m.id}:${accountId}`] = { userId: m.id, accountId, role: m.role, companyId: m.subId };
+          byKey[`${m.id}:${accountId}`] = { userId: m.id, accountId, role: m.role, companyId: m.subId,
+            propertyIds: m.propertyIds || [] };
         });
         return Object.values(byKey);
       });
@@ -2705,7 +2745,12 @@ export default function SubSub() {
             </button>
           </h1>
           <div className="header-right">
-            {role !== "contractor" && (
+            {role === "owner" ? (
+              // One thing they can do, so it is a button rather than a menu
+              // with a single item in it.
+              <button className="add-btn" onClick={() => tryAddJob()}>
+                <Plus size={16} /> Request work</button>
+            ) : role !== "contractor" && (
               <div className="add-wrap">
                 <button className="add-btn" onClick={() => setAddMenu((v) => !v)}><Plus size={16} /> Add</button>
                 {addMenu && (
@@ -2884,7 +2929,8 @@ export default function SubSub() {
           onAssign={(job, trade, replacing) => setAssigning({ job, trade, replacing })}
           onRequestDocs={requestDocs} onOpenSub={(sb) => setSelected(sb)}
           onReviewDoc={(sb, kind) => setReviewing({ sub: sb, kind })}
-          onVerifyLicense={(sb) => verifyLicense(sb.id)} />
+          onVerifyLicense={(sb) => verifyLicense(sb.id)}
+          onApproveJob={approveJob} users={users} />
       )}
 
       {tab === "network" && can("contractors") && (
@@ -3033,7 +3079,8 @@ export default function SubSub() {
           })}
           onAdd={addProperty} onPatch={patchProperty} onRemove={removeProperty}
           onOpenSub={(s) => { setSelected(s); setTab("contractors"); }}
-          onNewJob={(p) => tryAddJob(null, p)} newAt={newPropertyAt} />
+          onNewJob={(p) => tryAddJob(null, p)} newAt={newPropertyAt}
+          canManage={role !== "owner"} />
       )}
 
       {tab === "calendar" && can("calendar") && (
@@ -3262,6 +3309,7 @@ export default function SubSub() {
 
       {tab === "account" && (
         <AccountView me={me} users={accountUsers} subs={subs} jobs={jobs} brand={brand} plan={plan} role={role}
+          properties={accountProperties}
           seatCount={seatCount} atSeatLimit={atSeatLimit}
           jobsThisMonth={jobsThisMonth} canBrand={canBrand}
           billing={billing} onSetBilling={setBilling}
@@ -3363,7 +3411,7 @@ export default function SubSub() {
         </Modal>
       )}
       {jobForm && <Modal onClose={() => setJobForm(null)} wide>
-        <JobForm allJobs={allJobs} accountId={account.id} properties={accountProperties} forProperty={jobForm.forProperty} forSub={jobForm.forSub} jobs={jobs}
+        <JobForm allJobs={allJobs} accountId={account.id} properties={accountProperties} forProperty={jobForm.forProperty} forSub={jobForm.forSub} jobs={jobs} asOwner={role === "owner"}
           onSubmit={(job) => createJob(job, jobForm.forSub)}
           onCancel={() => setJobForm(null)} /></Modal>}
       {assigning && <Modal onClose={() => setAssigning(null)} wide>
@@ -3415,9 +3463,10 @@ export default function SubSub() {
           onUpgrade={() => startCheckout(billing)}
           onDecline={() => setUpgradePrompt(null)} /></Modal>}
       {userForm && <Modal onClose={() => setUserForm(false)}>
-        <UserForm subs={subs} onSubmit={addUser} onCancel={() => setUserForm(false)} /></Modal>}
+        <UserForm subs={subs} properties={accountProperties} onSubmit={addUser}
+          onCancel={() => setUserForm(false)} /></Modal>}
       {editUser && <Modal onClose={() => setEditUser(null)}>
-        <UserForm subs={subs} existing={editUser} isSelf={editUser.id === currentUserId}
+        <UserForm subs={subs} properties={accountProperties} existing={editUser} isSelf={editUser.id === currentUserId}
           canChangeRole={can("users") && editUser.id !== currentUserId}
           onSubmit={updateUser} onCancel={() => setEditUser(null)} /></Modal>}
       {adding && <Modal onClose={() => setAdding(false)} wide>
@@ -6078,7 +6127,7 @@ function Kpi({ label, value, sub, accent, warn }) {
 // ---- Properties (portfolio / property managers) -------------------------
 // Vendors can be scoped to specific properties. A vendor with none listed is
 // treated as available across the whole account, which is how a GC uses it.
-function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, newAt }) {
+function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, newAt, canManage = true }) {
   const [form, setForm] = useState(null);   // null | {} | property
   const [assigning, setAssigning] = useState(null);   // the property whose vendor list is open
   const vendorsFor = (pid) => subs.filter((s) => (s.propertyIds || []).includes(pid));
@@ -6142,18 +6191,25 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
     <main className="ss-main">
       <div className="dash-hello">
         <div>
-          <h2>Properties</h2>
+          <h2>{canManage ? "Properties" : "Your buildings"}</h2>
           <p>{properties.length === 0
-            ? "Add the buildings you manage, then scope vendors to them."
+            ? (canManage
+                ? "Add the buildings you manage, then scope vendors to them."
+                : "Nobody has given you access to a building yet.")
             : `${properties.length} propert${properties.length === 1 ? "y" : "ies"} · ${
                 properties.reduce((n, p) => n + (Number(p.units) || 0), 0)} units`}</p>
         </div>
-        <button className="add-btn small" onClick={() => setForm({})}>
-          <Plus size={14} /> New property
-        </button>
+        {/* A building owner does not run the portfolio: the buildings are
+            added, edited and removed by whoever manages them, and the server
+            refuses all three from this seat anyway. */}
+        {canManage && (
+          <button className="add-btn small" onClick={() => setForm({})}>
+            <Plus size={14} /> New property
+          </button>
+        )}
       </div>
 
-      {unscoped.length > 0 && properties.length > 0 && (
+      {canManage && unscoped.length > 0 && properties.length > 0 && (
         <p className="rollup-note">
           {unscoped.length === 1
             ? "1 vendor isn't scoped to a property, so they're available at all of them."
@@ -6163,8 +6219,10 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
 
       {properties.length === 0 ? (
         <div className="dash-empty"><Building2 size={24} />
-          <p>No properties yet. Add one and you can give it its own vendor list.</p>
-          <button className="btn-solid" onClick={() => setForm({})}>Add a property</button>
+          <p>{canManage
+            ? "No properties yet. Add one and you can give it its own vendor list."
+            : "No buildings have been shared with you. Whoever manages them can grant access."}</p>
+          {canManage && <button className="btn-solid" onClick={() => setForm({})}>Add a property</button>}
         </div>
       ) : (
         <div className="prop-grid">
@@ -6181,20 +6239,25 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                       {[p.address, p.city, p.state, p.zip].filter(Boolean).join(", ")}
                     </span>
                   </div>
-                  <div className="prop-actions">
-                    <button className="edit-btn" onClick={() => setForm(p)}><Pencil size={13} /> Edit</button>
-                    <button className="icon-x" title="Remove property"
-                      onClick={() => onRemove(p.id)}><Trash2 size={13} /></button>
-                  </div>
+                  {canManage && (
+                    <div className="prop-actions">
+                      <button className="edit-btn" onClick={() => setForm(p)}><Pencil size={13} /> Edit</button>
+                      <button className="icon-x" title="Remove property"
+                        onClick={() => onRemove(p.id)}><Trash2 size={13} /></button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="prop-stats">
                   <span><strong>{p.units || "—"}</strong> units</span>
-                  <span><strong>{vs.length}</strong> assigned vendor{vs.length === 1 ? "" : "s"}</span>
+                  {canManage && <span><strong>{vs.length}</strong> assigned vendor{vs.length === 1 ? "" : "s"}</span>}
                   <span><strong>{open}</strong> open job{open === 1 ? "" : "s"}</span>
                 </div>
 
-                {vs.length > 0 ? (
+                {/* The vendor list is the account's roster and its compliance
+                    state. An owner sees who is coming to their own jobs, in
+                    the job itself -- not who else is on the books. */}
+                {!canManage ? null : vs.length > 0 ? (
                   <div className="prop-vendors">
                     {vs.slice(0, 6).map((v) => (
                       <button key={v.id} className="prop-vendor" onClick={() => onOpenSub(v)}>
@@ -6212,11 +6275,13 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
 
                 {p.notes && <p className="prop-notes">{p.notes}</p>}
                 <div className="prop-cta">
-                  <button className="prop-job" onClick={() => setAssigning(p)}>
-                    <Users size={12} /> Assign vendors
-                  </button>
+                  {canManage && (
+                    <button className="prop-job" onClick={() => setAssigning(p)}>
+                      <Users size={12} /> Assign vendors
+                    </button>
+                  )}
                   <button className="prop-job" onClick={() => onNewJob(p)}>
-                    <Plus size={12} /> New job here
+                    <Plus size={12} /> {canManage ? "New job here" : "Request work here"}
                   </button>
                 </div>
               </div>
@@ -6792,7 +6857,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   onCancelSubscription, onResumeSubscription, cancelBusy,
   onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup,
-  hostnameStatus, onRefreshHostname }) {
+  hostnameStatus, onRefreshHostname, properties = [] }) {
   const panes = [["profile", "Profile"]]
     .concat(canManage ? [["company", "Company"], ["users", "Users"], ["billing", "Subscription"]] : []);
   const brandingOn = PLANS[plan].branding;
@@ -7144,7 +7209,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           </div>
           {adding && (
             <div className="portal-panel" style={{ marginBottom: 12 }}>
-              <UserForm subs={subs} onSubmit={(u) => { onAddUser(u); setAdding(false); }} onCancel={() => setAdding(false)} />
+              <UserForm subs={subs} properties={properties}
+                onSubmit={(u) => { onAddUser(u); setAdding(false); }} onCancel={() => setAdding(false)} />
             </div>
           )}
           <div className="user-list">
@@ -7159,7 +7225,12 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                       <span className={`role-badge r-${u.role}`}>{ROLES[u.role].label}</span>
                       {u.id === currentUserId && <span className="you-badge">you</span>}
                     </div>
-                    <p className="user-row-sub">{u.email}{linked ? ` · ${linked.company}` : ""}</p>
+                    <p className="user-row-sub">{u.email}{linked ? ` · ${linked.company}` : ""}
+                      {u.role === "owner" && (() => {
+                        const names = (u.propertyIds || [])
+                          .map((id) => properties.find((p) => p.id === id)?.name).filter(Boolean);
+                        return names.length ? ` · ${names.join(", ")}` : " · no buildings yet";
+                      })()}</p>
                   </div>
                   <div className="user-row-actions">
                     {linked && !docsComplete(linked) && (
@@ -7613,7 +7684,7 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
 // `properties` is null for an account that keeps no building list -- a general
 // contractor -- and an array for the rest, so it is both the data and the
 // answer to "does this account think in buildings at all".
-function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty }) {
+function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, users = [] }) {
   const managesProperties = Array.isArray(properties);
   const today = new Date().toISOString().slice(0, 10);
   const slots = jobs.flatMap((j) => j.trades.map((t) => ({ job: j, trade: t, a: j.assignments[t] })));
@@ -7639,26 +7710,56 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
     && j.trades.every((t) => j.assignments[t] && (j.assignments[t].status === "accepted" || j.assignments[t].auto)));
 
   const first = me.name.split(" ")[0];
+  const isOwner = role === "owner";
+  // A request nobody has agreed to yet. The owner watches for it to clear;
+  // the account has to do something about it.
+  const awaitingApproval = jobs.filter((j) => j.requestedBy && !j.approvedAt);
 
   return (
     <main className="ss-main">
       <div className="dash-hello">
         <div>
           <h2>Good to see you, {first}</h2>
-          <p>{jobs.length === 0 ? "No jobs yet — create one to get started." :
-            `${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${open.length} trade slot${open.length === 1 ? "" : "s"} still unassigned`}</p>
+          <p>{isOwner
+            ? (jobs.length === 0
+                ? `Nothing scheduled at your ${properties.length === 1 ? "building" : "buildings"} yet.`
+                : `${jobs.length} job${jobs.length === 1 ? "" : "s"} at your ${properties.length === 1 ? "building" : `${properties.length} buildings`}${awaitingApproval.length ? ` · ${awaitingApproval.length} request${awaitingApproval.length === 1 ? "" : "s"} waiting on approval` : ""}`)
+            : jobs.length === 0 ? "No jobs yet — create one to get started." :
+              `${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${open.length} trade slot${open.length === 1 ? "" : "s"} still unassigned`}</p>
         </div>
         <div className="dash-cta">
-          <button className="btn-solid" onClick={onNewJob}><Plus size={15} /> New job</button>
-          <button className="btn-ghost" onClick={onGoJobs}><ClipboardList size={15} /> All jobs</button>
+          <button className="btn-solid" onClick={onNewJob}>
+            <Plus size={15} /> {isOwner ? "Request work" : "New job"}</button>
+          <button className="btn-ghost" onClick={onGoJobs}>
+            <ClipboardList size={15} /> {isOwner ? "All work" : "All jobs"}</button>
         </div>
       </div>
 
-      <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
+      {!isOwner && <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
         subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
         onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors}
-        properties={properties} onAddProperty={onAddProperty} />
+        properties={properties} onAddProperty={onAddProperty} />}
 
+      {/* An owner gets their own row. Reusing the account's -- unassigned
+          slots, contractors missing documents -- would be showing somebody
+          a work queue they cannot act on and, worse, telling a building
+          owner which of the account's contractors are out of compliance. */}
+      {isOwner ? (
+        <div className="dash-grid g3">
+          <button className="dash-card prop" onClick={onGoProperties}>
+            <span className="dc-num">{properties.length}</span>
+            <span className="dc-lab">Your building{properties.length === 1 ? "" : "s"}</span>
+          </button>
+          <button className="dash-card" onClick={onGoJobs}>
+            <span className="dc-num">{upcoming.length}</span>
+            <span className="dc-lab">Work scheduled</span>
+          </button>
+          <button className={`dash-card ${awaitingApproval.length ? "accent" : ""}`} onClick={onGoJobs}>
+            <span className="dc-num">{awaitingApproval.length}</span>
+            <span className="dc-lab">Request{awaitingApproval.length === 1 ? "" : "s"} waiting on approval</span>
+          </button>
+        </div>
+      ) : (
       <div className={`dash-grid ${managesProperties ? "g5" : ""}`}>
         {/* For somebody running a portfolio this is the headline number, so it
             leads -- and on a narrow screen it takes the full width above the
@@ -7666,7 +7767,9 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         {managesProperties && (
           <button className="dash-card prop" onClick={onGoProperties}>
             <span className="dc-num">{properties.length}</span>
-            <span className="dc-lab">Properties under management</span>
+            <span className="dc-lab">{isOwner
+              ? `Your building${properties.length === 1 ? "" : "s"}`
+              : "Properties under management"}</span>
           </button>
         )}
         <button className={`dash-card ${open.length ? "accent" : ""}`} onClick={onGoJobs}>
@@ -7681,13 +7784,48 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
           <span className="dc-num">{nonCompliant.length}</span>
           <span className="dc-lab">Contractors missing docs</span>
         </button>
+        {/* What the account pays a subcontractor is not an owner's business,
+            so the card is not rendered for them at all -- the API does not
+            send them the figures either. */}
         <button className="dash-card" onClick={onGoJobs}>
           <span className="dc-num">{committed ? formatMoney(committed) : "—"}</span>
           <span className="dc-lab">Committed sub spend</span>
         </button>
       </div>
+      )}
 
-      {open.length > 0 && (
+      {awaitingApproval.length > 0 && (
+        <section className="dash-sec">
+          <h3><Building2 size={15} /> {isOwner ? "Waiting on approval" : "Work your owners asked for"}
+            <span className="sec-count amber">{awaitingApproval.length}</span></h3>
+          {awaitingApproval.map((j) => {
+            const who = users.find((u) => u.id === j.requestedBy);
+            const where = (properties || []).find((p) => p.id === j.propertyId);
+            return (
+              <div key={j.id} className="dash-row">
+                <div className="dash-row-main">
+                  <div className="dr-title">{j.title}</div>
+                  <span className="dr-meta">
+                    {where ? where.name : "A building"}
+                    {j.date ? ` · ${niceDay(j.date)}` : " · no date given"}
+                    {isOwner ? " · not approved yet" : ` · asked for by ${who ? who.name : "an owner"}`}
+                  </span>
+                </div>
+                {!isOwner && (
+                  <button className="btn-solid dash-row-btn" onClick={() => onApproveJob(j.id)}>
+                    <Check size={14} /> Approve</button>
+                )}
+              </div>
+            );
+          })}
+          {!isOwner && (
+            <p className="rollup-note">Approving turns a request into a job you can price and
+              assign. Nothing reaches a contractor until you do.</p>
+          )}
+        </section>
+      )}
+
+      {!isOwner && open.length > 0 && (
         <section className="dash-sec">
           <h3><AlertTriangle size={15} /> Needs a contractor <span className="sec-count amber">{open.length}</span></h3>
           {open.slice(0, 6).map(({ job, trade }) => {
@@ -7709,7 +7847,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </section>
       )}
 
-      {expiredOffers.length > 0 && (
+      {!isOwner && expiredOffers.length > 0 && (
         <section className="dash-sec">
           <h3><Clock size={15} /> No reply — needs re-matching
             <span className="sec-count red">{expiredOffers.length}</span></h3>
@@ -7732,7 +7870,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </section>
       )}
 
-      {licenseIssues.length > 0 && (
+      {!isOwner && licenseIssues.length > 0 && (
         <section className="dash-sec">
           <h3><Shield size={15} /> Registration problems <span className="sec-count red">{licenseIssues.length}</span></h3>
           {licenseIssues.map((s) => (
@@ -7754,7 +7892,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </section>
       )}
 
-      {toReview.length > 0 && (
+      {!isOwner && toReview.length > 0 && (
         <section className="dash-sec">
           <h3><Shield size={15} /> Documents to verify <span className="sec-count amber">{toReview.reduce((n, x) => n + x.kinds.length, 0)}</span></h3>
           {toReview.map(({ sub, kinds }) => (
@@ -7772,7 +7910,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </section>
       )}
 
-      {nonCompliant.length > 0 && (
+      {!isOwner && nonCompliant.length > 0 && (
         <section className="dash-sec">
           <h3><AlertTriangle size={15} /> Awaiting documents <span className="sec-count red">{nonCompliant.length}</span></h3>
           {nonCompliant.map((s) => (
@@ -7790,7 +7928,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </section>
       )}
 
-      {declined.length > 0 && (
+      {!isOwner && declined.length > 0 && (
         <section className="dash-sec">
           <h3><XCircle size={15} /> Declined — needs reassigning <span className="sec-count red">{declined.length}</span></h3>
           {declined.map(({ job, trade, a }) => {
@@ -7809,7 +7947,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </section>
       )}
 
-      {readyToComplete.length > 0 && (
+      {!isOwner && readyToComplete.length > 0 && (
         <section className="dash-sec">
           <h3><CheckCircle2 size={15} /> Ready to mark complete <span className="sec-count">{readyToComplete.length}</span></h3>
           {readyToComplete.slice(0, 5).map((j) => (
@@ -7826,14 +7964,15 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
       )}
 
       <section className="dash-sec">
-        <h3><Calendar size={15} /> Upcoming jobs {upcoming.length > 0 && <span className="sec-count">{upcoming.length}</span>}</h3>
+        <h3><Calendar size={15} /> {isOwner ? "Coming up at your buildings" : "Upcoming jobs"}
+          {upcoming.length > 0 && <span className="sec-count">{upcoming.length}</span>}</h3>
         {upcoming.length === 0 ? (
           <div className="dash-empty">
             <ClipboardList size={24} /><p>Nothing scheduled yet.</p>
             {/* The empty state named the problem and then offered no way out
                 of it; the button is the whole reason somebody reads this. */}
             <button className="btn-solid dash-empty-btn" onClick={onNewJob}>
-              <Plus size={15} /> New job</button>
+              <Plus size={15} /> {isOwner ? "Request work" : "New job"}</button>
           </div>
         ) : upcoming.slice(0, 5).map((j) => {
           const filled = j.trades.filter((t) => j.assignments[t]).length;
@@ -7856,7 +7995,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         })}
       </section>
 
-      {unrated.length > 0 && (
+      {!isOwner && unrated.length > 0 && (
         <section className="dash-sec">
           <h3><Star size={15} /> Completed, not yet rated <span className="sec-count">{unrated.length}</span></h3>
           {unrated.slice(0, 5).map(({ job, trade, a }) => (
@@ -7955,13 +8094,17 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
 
 // ---- Create job ----------------------------------------------------------
 // The job holds every project fact. Work orders are derived from it on assign.
-function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, properties, forProperty }) {
+function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, properties, forProperty, asOwner = false }) {
+  // An owner with one building never has a choice to make, so it is made for
+  // them rather than presented as an empty select they must fill in.
+  const onlyOne = asOwner && (properties || []).length === 1 ? properties[0] : null;
+  const start = forProperty || onlyOne;
   const [f, setF] = useState({
-    title: forProperty ? `${forProperty.name} — ` : "",
-    client: "", propertyId: forProperty ? forProperty.id : "",
-    address: forProperty ? forProperty.address || "" : "",
-    area: forProperty ? forProperty.city || "" : "",
-    zip: forProperty ? forProperty.zip || "" : "",
+    title: start ? `${start.name} — ` : "",
+    client: "", propertyId: start ? start.id : "",
+    address: start ? start.address || "" : "",
+    area: start ? start.city || "" : "",
+    zip: start ? start.zip || "" : "",
     sqft: "", stories: "",
     date: "", time: "07:00",
     trades: forSub ? [...forSub.categories] : [],
@@ -7978,12 +8121,16 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const toggleTrade = (id) => setF((s) => ({ ...s, trades: s.trades.includes(id) ? s.trades.filter((x) => x !== id) : [...s.trades, id] }));
   const when = formatWhen(f.date, f.time);
-  const valid = f.title && f.trades.length && f.address;
+  // A request has to name a building: it is the only thing that decides whose
+  // it is, and the server refuses one without.
+  const valid = f.title && f.trades.length && f.address && (!asOwner || f.propertyId);
 
   return (
     <div className="form">
-      <h2>Create job</h2>
-      <p className="form-sub">Enter the project once. Work orders are generated per trade when you assign contractors.</p>
+      <h2>{asOwner ? "Request work" : "Create job"}</h2>
+      <p className="form-sub">{asOwner
+        ? "This goes to whoever manages the building. They price it and arrange the contractors — nothing is booked until they approve it."
+        : "Enter the project once. Work orders are generated per trade when you assign contractors."}</p>
       {forSub && (
         <div className={`for-sub ${docsComplete(forSub) ? "" : "warn"}`}>
           {docsComplete(forSub)
@@ -7994,9 +8141,16 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
 
       <div className="form-sec">1 · Project</div>
       {(properties || []).length > 0 && (
-        <label className="fld">Property <span className="fld-note">fills the address and scopes vendor matching</span>
+        <label className="fld">
+          {asOwner ? "Which building" : "Property"}
+          <span className="fld-note">{asOwner
+            ? "Only the buildings you have access to"
+            : "fills the address and scopes vendor matching"}</span>
           <select value={f.propertyId} onChange={(e) => pickProperty(e.target.value)}>
-            <option value="">Not at a managed property</option>
+            {/* An owner has no "somewhere else" to pick: work they ask for is
+                at one of their own buildings or it is not theirs to ask for. */}
+            {!asOwner && <option value="">Not at a managed property</option>}
+            {asOwner && !f.propertyId && <option value="">Choose a building…</option>}
             {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </label>
@@ -8079,7 +8233,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
       <div className="form-actions">
         <button className="btn-ghost" onClick={onCancel}>Cancel</button>
         <button className="btn-solid" onClick={() => onSubmit(f)} disabled={!valid}>
-          <Plus size={15} /> Create job &amp; find contractors
+          <Plus size={15} /> {asOwner ? "Send this request" : <>Create job &amp; find contractors</>}
         </button>
       </div>
     </div>
@@ -9160,12 +9314,19 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable }) {
 }
 
 // ---- Create / edit user -------------------------------------------------
-function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = true }) {
+function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = true, properties = [] }) {
   const [f, setF] = useState(existing
-    ? { id: existing.id, name: existing.name, email: existing.email, role: existing.role, subId: existing.subId || "" }
-    : { name: "", email: "", role: "pm", subId: "" });
+    ? { id: existing.id, name: existing.name, email: existing.email, role: existing.role,
+        subId: existing.subId || "", propertyIds: existing.propertyIds || [] }
+    : { name: "", email: "", role: "pm", subId: "", propertyIds: [] });
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
-  const valid = f.name && f.email && (f.role !== "contractor" || f.subId);
+  // Building owner is only offered where there are buildings to scope one to.
+  const roles = Object.entries(ROLES).filter(([k]) => k !== "owner" || properties.length > 0);
+  // An owner scoped to nothing would sign in to an empty account, so the list
+  // is as required as a name is.
+  const valid = f.name && f.email
+    && (f.role !== "contractor" || f.subId)
+    && (f.role !== "owner" || f.propertyIds.length > 0);
   const roleLocked = existing && !canChangeRole;
   return (
     <div className="form">
@@ -9185,12 +9346,13 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
           </div>
         ) : (
           <div className="role-pick">
-            {Object.entries(ROLES).map(([k, r]) => (
+            {roles.map(([k, r]) => (
               <button key={k} type="button" className={f.role === k ? "on" : ""} onClick={() => set("role", k)}>
                 <span className="rp-label">{r.label}</span>
                 <span className="rp-desc">
                   {k === "admin" && "Full access, can manage users"}
                   {k === "pm" && "Create jobs & work orders, assign contractors"}
+                  {k === "owner" && "Only the buildings you choose — can request work, sees no costs"}
                   {k === "contractor" && "Own availability, trades, docs, job responses"}
                 </span>
               </button>
@@ -9198,6 +9360,27 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
           </div>
         )}
       </div>
+      {f.role === "owner" && !roleLocked && (
+        <div className="fld">Buildings they can see
+          <div className="pick-grid">
+            {properties.map((p) => (
+              <button key={p.id} type="button"
+                className={`pick ${f.propertyIds.includes(p.id) ? "on" : ""}`}
+                // From the live list, not the one this render captured: two
+                // taps in the same batch would otherwise both start from the
+                // same array and the second would drop the first.
+                onClick={() => setF((s) => ({ ...s, propertyIds: s.propertyIds.includes(p.id)
+                  ? s.propertyIds.filter((x) => x !== p.id)
+                  : [...s.propertyIds, p.id] }))}>{p.name}</button>
+            ))}
+          </div>
+          <p className="fld-note">
+            {f.propertyIds.length
+              ? `They will see ${f.propertyIds.length} of your ${properties.length} propert${properties.length === 1 ? "y" : "ies"}, the jobs at ${f.propertyIds.length === 1 ? "it" : "them"}, and who is coming. Not the others, not your other contractors, and no costs.`
+              : "Pick at least one. An owner with none would sign in to an empty account."}
+          </p>
+        </div>
+      )}
       {f.role === "contractor" && !roleLocked && (
         <label className="fld">Link to contractor record
           <select value={f.subId} onChange={(e) => set("subId", Number(e.target.value))}>
@@ -9208,7 +9391,10 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
       )}
       <div className="form-actions">
         <button className="btn-ghost" onClick={onCancel}>Cancel</button>
-        <button className="btn-solid" onClick={() => onSubmit({ ...f, subId: f.subId || undefined })} disabled={!valid}>
+        <button className="btn-solid" onClick={() => onSubmit({
+          ...f, subId: f.subId || undefined,
+          propertyIds: f.role === "owner" ? f.propertyIds : [],
+        })} disabled={!valid}>
           {existing ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Create user</>}
         </button>
       </div>
@@ -10321,9 +10507,7 @@ function SubForm({ onSubmit, onCancel, existing, properties }) {
             {properties.map((p) => (
               <button key={p.id} type="button"
                 className={`pick ${(f.propertyIds || []).includes(p.id) ? "on" : ""}`}
-                onClick={() => set("propertyIds", (f.propertyIds || []).includes(p.id)
-                  ? f.propertyIds.filter((x) => x !== p.id)
-                  : [...(f.propertyIds || []), p.id])}>{p.name}</button>
+                onClick={() => toggle("propertyIds", p.id)}>{p.name}</button>
             ))}
           </div>
           <p className="cov-hint">
@@ -11109,6 +11293,9 @@ body{background:var(--paper)}
    wide screen; on anything narrower the portfolio count takes the full width
    above the others, which reads better than one card marooned next to a gap. */
 .dash-grid.g5{grid-template-columns:repeat(5,1fr)}
+/* A building owner's row is three: their buildings, what is scheduled, and
+   what is still waiting on the account to agree to it. */
+.dash-grid.g3{grid-template-columns:repeat(3,1fr)}
 .dash-card.prop .dc-num{color:var(--brand)}
 .dash-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px;box-shadow:var(--shadow);
   display:flex;flex-direction:column;gap:4px}
@@ -12174,7 +12361,7 @@ body{background:var(--paper)}
   .ms-btn{min-width:118px}
   .user-row-perms{display:none}
   .dash-grid{grid-template-columns:repeat(2,1fr)}
-  .dash-grid.g5{grid-template-columns:repeat(2,1fr)}
+  .dash-grid.g5,.dash-grid.g3{grid-template-columns:repeat(2,1fr)}
   .dash-card.prop{grid-column:1/-1}
   .trade-row{flex-wrap:wrap}
   .trade-side{width:100%;justify-content:space-between;padding-top:10px;margin-top:4px;border-top:1px solid var(--line)}
@@ -12403,7 +12590,7 @@ body{background:var(--paper)}
   .cov-preview{font-size:12px}
 
   /* contractor dashboard on phones */
-  .dash-grid,.dash-grid.g5{grid-template-columns:1fr 1fr;gap:9px}
+  .dash-grid,.dash-grid.g5,.dash-grid.g3{grid-template-columns:1fr 1fr;gap:9px}
   .dash-card{padding:12px}
   .dc-num{font-size:20px}
   .hdr-avail{padding:7px 9px}

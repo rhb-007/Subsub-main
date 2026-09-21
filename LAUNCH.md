@@ -77,3 +77,18 @@ Fixed as encountered, because each one blocked something on the list:
   keeps a building list.
 - The logo and company name in both headers did nothing when clicked, which
   is the one thing every other site on the web has trained people to try.
+- A job's property was never saved. The column existed and was cleared when a
+  building was deleted, but nothing wrote it and nothing read it, so a job's
+  building survived until the page reloaded. Owner scoping is built on that
+  link, so it had to be real first.
+- Two taps on a property picker in the same instant kept only the second.
+
+## Known, not blocking
+
+- `scripts/hostnames-test.mjs` has three failing assertions in its `diagnose`
+  section. They fail on the commit before this work too, and branded hostnames
+  provision correctly in production, so this is test drift rather than a live
+  fault. Worth a look before anyone trusts that file again.
+- The Add menu has a "User" entry behind `can("users")`, and no role grants
+  `users`, so it never renders. Users are managed from My account -> Users,
+  which works. Dead branch, harmless.

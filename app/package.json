@@ -13,7 +13,8 @@
     "deploy": "wrangler deploy",
     "test:e2e": "node scripts/e2e-smoke.mjs",
     "test:hostnames": "node scripts/hostnames-test.mjs",
-    "test:setup": "node scripts/setup-check-test.mjs"
+    "test:setup": "node scripts/setup-check-test.mjs",
+    "test:owner": "node scripts/owner-scope-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
