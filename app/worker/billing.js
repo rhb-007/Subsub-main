@@ -37,7 +37,11 @@ export async function stripeCall(env, path, { method = "POST", params, idempoten
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
 
   const body = params ? encode(params).join("&") : undefined;
-  const res = await fetch(`${API}${path}`, { method, headers, body });
+  // Overridable the same way RESEND_API_BASE is, and for the same reason:
+  // without it the only way to find out how this behaves when Stripe refuses
+  // something is to make Stripe refuse something.
+  const base = (env.STRIPE_API_BASE || API).replace(/\/+$/, "");
+  const res = await fetch(`${base}${path}`, { method, headers, body });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(json?.error?.message || `stripe_${res.status}`);

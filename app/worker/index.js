@@ -564,38 +564,75 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
   // browser to stripe.com. The caller asks for embedded only when it has a
   // publishable key to mount it with, so a build without one still works
   // rather than showing an empty box.
-  const embedded = b.mode === "embedded";
+  const wantsEmbedded = b.mode === "embedded";
 
+  // Everything that does not depend on where the form is drawn.
+  const base = {
+    mode: "subscription",
+    line_items: [{ price, quantity: 1 }],
+    client_reference_id: accountId,
+    allow_promotion_codes: true,
+    // Reuse the customer if this account has ever paid, so a second
+    // subscription does not arrive under a second customer with the same
+    // email and split their billing history in two.
+    ...(account.stripe_customer_id
+      ? { customer: account.stripe_customer_id }
+      : { customer_email: user?.email || undefined }),
+    // Stamped in two places because the webhook may see either object
+    // first, depending on which event arrives.
+    metadata: { account_id: accountId },
+    subscription_data: { metadata: { account_id: accountId } },
+  };
+
+  // Stripe renamed this value: `embedded` is refused now in favour of
+  // `embedded_page`. Older API versions still want the old spelling, so both
+  // are tried -- and if neither is accepted, the hosted page is. Where the
+  // form is drawn is a preference; being able to pay is not, and a rename at
+  // Stripe must never be the reason a customer cannot hand over money.
+  const attempts = wantsEmbedded
+    ? [
+        { mode: "embedded", ui_mode: "embedded_page" },
+        { mode: "embedded", ui_mode: "embedded" },
+        { mode: "hosted" },
+      ]
+    : [{ mode: "hosted" }];
+
+  let lastErr = null;
   try {
-    const session = await stripeCall(c.env, "/checkout/sessions", {
-      params: {
-        mode: "subscription",
-        line_items: [{ price, quantity: 1 }],
-        ...(embedded
-          // Stripe substitutes the real id into this placeholder; it must
-          // survive form-encoding as a literal, which it does, because the
-          // value is decoded again at the other end.
-          ? { ui_mode: "embedded",
-              return_url: `${APP_ORIGIN}/?billing=done&session_id={CHECKOUT_SESSION_ID}` }
-          : { success_url: `${APP_ORIGIN}/?billing=done`,
-              cancel_url: `${APP_ORIGIN}/?billing=cancelled` }),
-        client_reference_id: accountId,
-        allow_promotion_codes: true,
-        // Reuse the customer if this account has ever paid, so a second
-        // subscription does not arrive under a second customer with the same
-        // email and split their billing history in two.
-        ...(account.stripe_customer_id
-          ? { customer: account.stripe_customer_id }
-          : { customer_email: user?.email || undefined }),
-        // Stamped in two places because the webhook may see either object
-        // first, depending on which event arrives.
-        metadata: { account_id: accountId },
-        subscription_data: { metadata: { account_id: accountId } },
-      },
-      // A double-tapped button within the same minute is one checkout, not two.
-      idempotencyKey: `checkout:${accountId}:${cycle}:${embedded ? "e" : "h"}:${Math.floor(Date.now() / 60000)}`,
-    });
-    return c.json(embedded ? { clientSecret: session.client_secret } : { url: session.url });
+    for (const attempt of attempts) {
+      const embedded = attempt.mode === "embedded";
+      try {
+        const session = await stripeCall(c.env, "/checkout/sessions", {
+          params: {
+            ...base,
+            ...(embedded
+              // Stripe substitutes the real id into this placeholder; it must
+              // survive form-encoding as a literal, which it does, because the
+              // value is decoded again at the other end.
+              ? { ui_mode: attempt.ui_mode,
+                  return_url: `${APP_ORIGIN}/?billing=done&session_id={CHECKOUT_SESSION_ID}` }
+              : { success_url: `${APP_ORIGIN}/?billing=done`,
+                  cancel_url: `${APP_ORIGIN}/?billing=cancelled` }),
+          },
+          // A double-tapped button within the same minute is one checkout, not
+          // two. The spelling is part of the key: a retry after a refusal is a
+          // different request, and reusing the key would replay the refusal.
+          idempotencyKey: `checkout:${accountId}:${cycle}:${embedded ? attempt.ui_mode : "h"}:${Math.floor(Date.now() / 60000)}`,
+        });
+        if (attempt !== attempts[0]) {
+          console.warn("[billing] checkout fell back to",
+            attempt.ui_mode || "hosted", "--", lastErr?.message || "");
+        }
+        return c.json(embedded ? { clientSecret: session.client_secret } : { url: session.url });
+      } catch (err) {
+        lastErr = err;
+        // Only a quarrel about ui_mode is worth another attempt. A declined
+        // card or a missing price fails the same way every time, and retrying
+        // it only delays the message that would have helped.
+        if (!/ui_mode/i.test(String(err?.message || ""))) throw err;
+      }
+    }
+    throw lastErr;
   } catch (err) {
     console.error("[billing] checkout failed:", err?.message || err);
     return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
