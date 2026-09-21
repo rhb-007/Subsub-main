@@ -82,6 +82,12 @@ Fixed as encountered, because each one blocked something on the list:
   building survived until the page reloaded. Owner scoping is built on that
   link, so it had to be real first.
 - Two taps on a property picker in the same instant kept only the second.
+- Switching an account's type to "general contractor" left any scoped seat on
+  it with no building list, and their dashboard crashed on it rather than
+  showing an empty one.
+- The role called "Project Manager" is now "Property manager" throughout.
+  These accounts are property businesses; project-manager was general
+  contractor language that had been left on the role everywhere.
 
 ## Known, not blocking
 

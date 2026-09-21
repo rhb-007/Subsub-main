@@ -16,12 +16,17 @@ VALUES ('acc_pm','Cascade Management','cascademanagement','property_manager','sc
 INSERT OR REPLACE INTO users (id,auth_id,name,email) VALUES
   ('usr_pm','auth_pm','Richard Braun','pm@example.test'),
   ('usr_own1','auth_own1','Dana Whitfield','owner1@example.test'),
-  ('usr_own2','auth_own2','Theo Marsh','owner2@example.test');
+  ('usr_own2','auth_own2','Theo Marsh','owner2@example.test'),
+  -- The inverse seat: a managing agent running two buildings for whoever
+  -- owns them. Deliberately NOT the same two as Dana's, so "scoped" and
+  -- "scoped to the same thing" cannot be confused for each other.
+  ('usr_mgr','auth_mgr','Priya Raman','manager1@example.test');
 
 INSERT OR REPLACE INTO memberships (id,user_id,account_id,role,company_id) VALUES
   ('mem_pm','usr_pm','acc_pm','admin',NULL),
   ('mem_own1','usr_own1','acc_pm','owner',NULL),
-  ('mem_own2','usr_own2','acc_pm','owner',NULL);
+  ('mem_own2','usr_own2','acc_pm','owner',NULL),
+  ('mem_mgr','usr_mgr','acc_pm','propmgr',NULL);
 
 -- Sixteen buildings, so "the manager still sees the whole portfolio" is a
 -- number that could not appear by accident.
@@ -29,10 +34,13 @@ INSERT OR REPLACE INTO properties (id,account_id,name,address,city,state,zip,uni
   WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 16)
   SELECT 'p' || i, 'acc_pm', 'Building ' || i, (100 + i) || ' Main St', 'Seattle', 'WA', '98101', 10 + i FROM n;
 
-DELETE FROM membership_properties WHERE membership_id IN ('mem_own1','mem_own2');
+DELETE FROM membership_properties WHERE membership_id IN ('mem_own1','mem_own2','mem_mgr');
 INSERT INTO membership_properties (membership_id,property_id) VALUES
   ('mem_own1','p1'), ('mem_own1','p2'),
-  ('mem_own2','p9');
+  ('mem_own2','p9'),
+  -- Overlaps Dana on p1 and reaches p9, which is Theo's. One building shared
+  -- with an owner, one not: enough to tell a real filter from a lucky one.
+  ('mem_mgr','p1'), ('mem_mgr','p9');
 
 INSERT OR REPLACE INTO jobs (id,account_id,title,address,date,trades,property_id,status) VALUES
   ('job_p1','acc_pm','Building 1 — roof repair','101 Main St','2026-10-02','["roofing"]','p1','active'),

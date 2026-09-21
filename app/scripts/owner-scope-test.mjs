@@ -40,6 +40,7 @@ const check = (name, ok, detail = "") => {
 const dana = await tok("owner1@example.test");   // granted p1 and p2
 const theo = await tok("owner2@example.test");   // granted p9
 const pm   = await tok("pm@example.test");       // runs the account
+const mgr  = await tok("manager1@example.test"); // manages p1 and p9 only
 
 console.log("\n-- each owner sees their own buildings and no others --");
 const dp = await call(dana, "/properties");
@@ -117,6 +118,77 @@ check("Dana sees the one working her building", dsubs.some((s) => s.id === "cmp_
 check("not one with no work there", !dsubs.some((s) => s.id === "cmp_s"));
 check("Theo, with no work orders at all, sees none", (await call(theo, "/subs")).body.length === 0);
 check("the manager sees both", (await call(pm, "/subs")).body.length === 2);
+
+
+// ---------------------------------------------------------------------------
+// The inverse seat: a managing agent scoped to named buildings. Restricted the
+// same way an owner is, but there to run the work rather than watch it -- so
+// the interesting questions are the opposite ones. Can they act? And do they
+// stop at the edge of their own list?
+// ---------------------------------------------------------------------------
+console.log("\n-- a scoped property manager sees only their buildings --");
+const mp = await call(mgr, "/properties");
+check("scoped to p1 and p9", mp.body?.length === 2
+  && mp.body.every((p) => ["p1", "p9"].includes(p.id)),
+  (mp.body || []).map((p) => p.id).join(","));
+const mj = await call(mgr, "/jobs");
+check("and the jobs at exactly those",
+  mj.body.every((j) => ["p1", "p9"].includes(j.propertyId)),
+  mj.body.map((j) => j.propertyId).join(","));
+// p2 is Dana's and not theirs. Sharing p1 with her must not carry p2 across.
+check("not p2, which is an owner's but not theirs",
+  !mj.body.some((j) => j.id === "job_p2"));
+
+console.log("\n-- but unlike an owner, they can act --");
+const mgrJob = await call(mgr, "/jobs", { method: "POST", body: JSON.stringify(
+  { title: "Boiler service", propertyId: "p9", trades: ["roofing"] }) });
+check("they create jobs, not requests",
+  mgrJob.status === 201 && mgrJob.body.requested === false, `requested=${mgrJob.body?.requested}`);
+check("and are sent costs, which an owner is not",
+  "value" in ((await call(mgr, "/jobs")).body.find((j) => j.id === "job_p1")?.assignments?.roofing || {}));
+check("and get the whole contractor roster to pick from",
+  (await call(mgr, "/subs")).body.length === 2);
+
+console.log("\n-- and stop at the edge of their list --");
+check("no job at a building they do not manage",
+  (await call(mgr, "/jobs", { method: "POST", body: JSON.stringify(
+    { title: "x", propertyId: "p2", trades: ["roofing"] }) })).status === 403);
+// The id is in the URL. The list endpoints never showed them job_p2, but
+// that is not the same as being unable to reach it.
+check("cannot complete a job at a building that is not theirs",
+  (await call(mgr, "/jobs/job_p2/complete", { method: "POST" })).status === 403);
+check("cannot assign against one either",
+  (await call(mgr, "/jobs/job_p2/assign", { method: "POST", body: JSON.stringify(
+    { trade: "roofing", companyId: "cmp_r" }) })).status === 403);
+check("nor reach the work order issued for a job of theirs from elsewhere",
+  (await call(theo, "/work-orders/wo_1/crew", { method: "POST",
+    body: JSON.stringify({ crewName: "x" }) })).status === 403);
+
+console.log("\n-- and cannot change the account itself --");
+for (const [label, path, method, body] of [
+  ["add a building", "/properties", "POST", "{}"],
+  ["remove one", "/properties/p1", "DELETE", null],
+  ["add a user", "/account-users", "POST", "{}"],
+  ["change the account", "/account", "PATCH", "{}"],
+  ["open billing", "/billing/portal", "POST", "{}"],
+  ["invite a contractor", "/invites", "POST", "{}"],
+  ["add a contractor", "/subs", "POST", "{}"],
+]) {
+  check(`refused: ${label}`, (await call(mgr, path, { method, body })).status === 403);
+}
+
+console.log("\n-- an account that stops keeping buildings --");
+// The account type is editable, so a portfolio can be switched to "general
+// contractor" while scoped seats still exist on it. Their buildings go away
+// underneath them; what must not happen is the API handing them everything
+// instead. (The page has its own guard for the same case -- it used to crash.)
+await call(pm, "/account", { method: "PATCH", body: JSON.stringify({ kind: "general_contractor" }) });
+const stranded = await call(mgr, "/jobs");
+check("a stranded seat still sees only its own buildings' jobs",
+  stranded.status === 200 && stranded.body.every((j) => ["p1", "p9"].includes(j.propertyId)));
+check("and still cannot reach another's",
+  (await call(mgr, "/jobs/job_p2/complete", { method: "POST" })).status === 403);
+await call(pm, "/account", { method: "PATCH", body: JSON.stringify({ kind: "property_manager" }) });
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
