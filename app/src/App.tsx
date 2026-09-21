@@ -1975,7 +1975,7 @@ export default function SubSub() {
   const canBrand = PLANS[plan].branding;
   // Basic includes a single user; Scale is unlimited. Contractor logins don't
   // count against the seat limit — only admins and property managers do.
-  // Neither do tenants: a building has as many as it has flats, and charging
+  // Neither do tenants: a building has as many as it has apartments, and charging
   // per resident would price the feature out of being used at all.
   const seatCount = accountUsers.filter((u) => u.role !== "contractor" && u.role !== "tenant").length;
   const atSeatLimit = seatCount >= PLANS[plan].userLimit;
@@ -6239,7 +6239,7 @@ function Kpi({ label, value, sub, accent, warn }) {
 // used one should not have to learn a second thing.
 //
 // The difference is the building. A link can name one, which is what you want
-// for a specific flat; or leave it open, which is what you want for a notice
+// for a specific apartment; or leave it open, which is what you want for a notice
 // in a lobby, and the tenant says which building they are in when they accept.
 function TenantInvites({ properties, tenants }) {
   const [rows, setRows] = useState(null);
@@ -6313,7 +6313,7 @@ function TenantInvites({ properties, tenants }) {
               </select>
             </label>
             <label className="fld">Who it's for <span className="fld-note">optional, for your own list</span>
-              <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Flat 4B" />
+              <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Apt 4B" />
             </label>
             <button className="btn-solid" onClick={create} disabled={busy}>
               <Plus size={15} /> {busy ? "Creating…" : "Create link"}
@@ -6415,6 +6415,7 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
     useDefaultMark: acct.useDefaultMark, theme: acct.theme,
   };
   const t = themeOf(brand);
+  const office = tenantWhere(acct.kind) === "office";
   // A link that names the building does not ask; one that does not, must.
   const mustChoose = !invite.fixedProperty && invite.properties.length > 1;
   const propertyId = invite.fixedProperty || (invite.properties.length === 1
@@ -6429,7 +6430,7 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
     } catch (e) {
       console.error("[tenant-signup] failed:", e);
       setErr(e?.body?.error === "already_a_member"
-        ? "That email address already has a different kind of account here. Ask your building manager to sort it out."
+        ? "That email address already has a different kind of account here. Ask your building manager for help."
         : e?.body?.error === "rate_limited"
         ? "Too many attempts from this connection. Wait an hour and try again."
         : "That didn't go through. Check the email address and try again.");
@@ -6461,7 +6462,7 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
         <h1>Report repairs at {where ? where.name : "your building"}</h1>
         <p className="wl-sub">
           {brand.name} manages {where ? where.name : "your building"}. Set yourself up here and you can
-          report anything that needs fixing, and follow what happens to it, without phoning anybody.
+          report anything that needs fixing, and follow what happens to it, without calling anyone.
           {invite.label ? ` This link was sent for ${invite.label}.` : ""}
         </p>
 
@@ -6480,8 +6481,12 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
           <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)}
             placeholder="jane@example.com" />
         </label>
-        <label className="wl-fld">Flat or unit <span className="wl-opt">optional</span>
-          <input value={f.unit} onChange={(e) => set("unit", e.target.value)} placeholder="4B" />
+        {/* An office says "Suite 300" and an apartment says "Apt 4B". Asking
+            for the wrong one reads as a form written for somebody else. */}
+        <label className="wl-fld">{office ? "Suite or unit" : "Apartment or unit"}
+          <span className="wl-opt">optional</span>
+          <input value={f.unit} onChange={(e) => set("unit", e.target.value)}
+            placeholder={office ? "Suite 300" : "Apt 4B"} />
         </label>
 
         {err && <p className="wl-err" role="alert">{err}</p>}
@@ -6511,13 +6516,13 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
 // What a tenant is told, and when. The account's own vocabulary is not much
 // use here: "requested_by set, approved_at null, no work orders issued" is
 // four states to somebody running the building and one sentence to the person
-// waiting in the flat.
+// waiting in the apartment.
 function tenantStage(job) {
   if (job.status === "completed") return { key: "done", label: "Done", tone: "ok" };
   const assigned = Object.values(job.assignments || {});
   const accepted = assigned.filter((a) => a.status === "accepted" || a.auto);
   if (accepted.length) {
-    return { key: "booked", label: job.date ? "Booked in" : "Contractor assigned", tone: "ok" };
+    return { key: "booked", label: job.date ? "Scheduled" : "Contractor assigned", tone: "ok" };
   }
   if (assigned.length) return { key: "arranging", label: "Finding a time", tone: "busy" };
   if (job.requestedBy && !job.approvedAt) return { key: "sent", label: "With the manager", tone: "wait" };
@@ -6526,17 +6531,17 @@ function tenantStage(job) {
 
 // The trades a tenant would actually name, in the words they would use. The
 // account's full list runs to thirty and includes excavation and coping,
-// which is not a menu to hand somebody whose tap is dripping.
+// which is not a menu to hand somebody whose faucet is dripping.
 // What a tenant would actually say, in the words they would say it in.
 //
 // The first version of this listed trades -- "Plumbing", "HVAC" -- which is
 // how the account thinks and not how anybody else does. Nobody standing in a
-// flat with water coming through the ceiling picks "restoration". They say
+// apartment with water coming through the ceiling picks "restoration". They say
 // the sink is leaking, so that is what the list says, and the trade is
 // worked out from it behind the scenes.
 //
 // `where` splits the two kinds of building: an office tenant has no bath to
-// report and a flat has no server room. "both" covers the things that go
+// report and an apartment has no server room. "both" covers the things that go
 // wrong in either.
 //
 // `trade` is what gets attached to the job so it can be matched to a
@@ -6547,51 +6552,53 @@ const TENANT_PROBLEMS = [
   // ---- Water, drains and plumbing ----
   { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My sink is leaking" },
   { g: "Water & plumbing", trade: "plumbing", where: "both", label: "There's water under the sink" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "A tap is dripping" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "A tap won't turn off" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "A faucet is dripping" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "A faucet won't shut off" },
   { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My toilet won't stop running" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My toilet is blocked" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My toilet is clogged" },
   { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My toilet won't flush" },
-  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "The shower has no pressure" },
-  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "The bath or shower won't drain" },
+  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "The shower has no water pressure" },
+  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "The tub or shower won't drain" },
   { g: "Water & plumbing", trade: "plumbing", where: "both", label: "The sink is draining slowly" },
   { g: "Water & plumbing", trade: "plumbing", where: "both", label: "I have no hot water" },
   { g: "Water & plumbing", trade: "plumbing", where: "both", label: "I have no water at all" },
   { g: "Water & plumbing", trade: "plumbing", where: "both", label: "A pipe is leaking" },
-  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "My washing machine connection is leaking" },
+  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "My garbage disposal isn't working" },
+  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "My washer hookup is leaking" },
   { g: "Water & plumbing", trade: "plumbing", where: "home", label: "My dishwasher is leaking" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "There's a smell from the drains" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "There's a sewer smell from the drains" },
   { g: "Water & plumbing", trade: "plumbing", where: "office", label: "A restroom needs attention" },
-  { g: "Water & plumbing", trade: "plumbing", where: "office", label: "The kitchenette sink is blocked" },
+  { g: "Water & plumbing", trade: "plumbing", where: "office", label: "The break room sink is clogged" },
 
   // ---- Heating and cooling ----
   { g: "Heating & cooling", trade: "hvac", where: "both", label: "I have no heat" },
   { g: "Heating & cooling", trade: "hvac", where: "both", label: "The heat is on too high and I can't turn it down" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The air conditioning is on too low — it's freezing" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The air conditioning isn't working" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The air conditioning is blowing warm air" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The AC is on too low — it's freezing" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The AC isn't working" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The AC is blowing warm air" },
   { g: "Heating & cooling", trade: "hvac", where: "both", label: "The thermostat isn't responding" },
-  { g: "Heating & cooling", trade: "hvac", where: "home", label: "A radiator is cold" },
+  { g: "Heating & cooling", trade: "hvac", where: "home", label: "A radiator or baseboard heater is cold" },
   { g: "Heating & cooling", trade: "hvac", where: "home", label: "A radiator is leaking" },
   { g: "Heating & cooling", trade: "hvac", where: "both", label: "It's too cold in here" },
   { g: "Heating & cooling", trade: "hvac", where: "both", label: "It's too warm in here" },
   { g: "Heating & cooling", trade: "hvac", where: "both", label: "The vents are noisy" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "There's a smell when the heating comes on" },
-  { g: "Heating & cooling", trade: "hvac", where: "office", label: "The air conditioning runs all night" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "There's a smell when the heat comes on" },
+  { g: "Heating & cooling", trade: "hvac", where: "office", label: "The AC runs all night" },
   { g: "Heating & cooling", trade: "hvac", where: "office", label: "The server room is overheating" },
 
-  // ---- Electrics ----
-  { g: "Electrics", trade: "electrical", where: "both", label: "A socket has stopped working" },
-  { g: "Electrics", trade: "electrical", where: "both", label: "There's no power in one room" },
-  { g: "Electrics", trade: "electrical", where: "both", label: "The fuse box keeps tripping" },
-  { g: "Electrics", trade: "electrical", where: "both", label: "A light has gone out" },
-  { g: "Electrics", trade: "electrical", where: "both", label: "The lights keep flickering" },
-  { g: "Electrics", trade: "electrical", where: "both", label: "A light fitting is hanging loose" },
-  { g: "Electrics", trade: "electrical", where: "home", label: "The smoke alarm keeps beeping" },
-  { g: "Electrics", trade: "electrical", where: "home", label: "The door buzzer or intercom isn't working" },
-  { g: "Electrics", trade: "electrical", where: "home", label: "The extractor fan isn't working" },
-  { g: "Electrics", trade: "electrical", where: "office", label: "The lighting in the open plan area is out" },
-  { g: "Electrics", trade: "electrical", where: "both", label: "There's a burning smell from a socket" },
+  // ---- Electrical ----
+  { g: "Electrical", trade: "electrical", where: "both", label: "An outlet has stopped working" },
+  { g: "Electrical", trade: "electrical", where: "both", label: "There's no power in one room" },
+  { g: "Electrical", trade: "electrical", where: "both", label: "The breaker keeps tripping" },
+  { g: "Electrical", trade: "electrical", where: "both", label: "A light has gone out" },
+  { g: "Electrical", trade: "electrical", where: "both", label: "The lights keep flickering" },
+  { g: "Electrical", trade: "electrical", where: "both", label: "A light fixture is hanging loose" },
+  { g: "Electrical", trade: "electrical", where: "home", label: "The smoke detector keeps chirping" },
+  { g: "Electrical", trade: "electrical", where: "home", label: "The buzzer or intercom isn't working" },
+  { g: "Electrical", trade: "electrical", where: "home", label: "The exhaust fan isn't working" },
+  { g: "Electrical", trade: "electrical", where: "home", label: "The garbage disposal has no power" },
+  { g: "Electrical", trade: "electrical", where: "office", label: "The lighting in the open area is out" },
+  { g: "Electrical", trade: "electrical", where: "both", label: "There's a burning smell from an outlet" },
 
   // ---- Doors, windows and locks ----
   { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "My door won't lock" },
@@ -6601,40 +6608,41 @@ const TENANT_PROBLEMS = [
   { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "A window won't open" },
   { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "A window won't close" },
   { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "There's broken glass" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "There's a draught round a window" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "The main entrance door isn't closing" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "office", label: "A meeting room door won't lock" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "There's a draft around a window" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "home", label: "The screen is torn or missing" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "The main entry door isn't closing" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "office", label: "A conference room door won't lock" },
 
   // ---- Walls, ceilings and floors ----
   { g: "Walls, ceilings & floors", trade: "roofing", where: "both", label: "Water is dripping from the ceiling" },
-  { g: "Walls, ceilings & floors", trade: "drywall", where: "both", label: "There's a damp patch on the wall" },
-  { g: "Walls, ceilings & floors", trade: "restoration", where: "both", label: "There's mould" },
+  { g: "Walls, ceilings & floors", trade: "drywall", where: "both", label: "There's a water stain on the wall or ceiling" },
+  { g: "Walls, ceilings & floors", trade: "restoration", where: "both", label: "There's mold" },
   { g: "Walls, ceilings & floors", trade: "drywall", where: "both", label: "There's a crack in the wall or ceiling" },
-  { g: "Walls, ceilings & floors", trade: "drywall", where: "both", label: "A hole needs patching" },
+  { g: "Walls, ceilings & floors", trade: "drywall", where: "both", label: "There's a hole that needs patching" },
   { g: "Walls, ceilings & floors", trade: "painting", where: "both", label: "The paint is peeling" },
   { g: "Walls, ceilings & floors", trade: "flooring", where: "both", label: "The floor is damaged" },
-  { g: "Walls, ceilings & floors", trade: "flooring", where: "office", label: "The carpet is lifting" },
+  { g: "Walls, ceilings & floors", trade: "flooring", where: "both", label: "The carpet is lifting or torn" },
   { g: "Walls, ceilings & floors", trade: "tile_stone", where: "both", label: "A tile is loose or cracked" },
   { g: "Walls, ceilings & floors", trade: "restoration", where: "both", label: "There's damage after a leak" },
 
-  // ---- Fittings ----
-  { g: "Fittings & fixtures", trade: "cabinets_counters", where: "both", label: "A cupboard door has come off" },
-  { g: "Fittings & fixtures", trade: "cabinets_counters", where: "home", label: "The worktop is damaged" },
-  { g: "Fittings & fixtures", trade: "trim_carpentry", where: "both", label: "A shelf or rail has come away from the wall" },
-  { g: "Fittings & fixtures", trade: "trim_carpentry", where: "both", label: "A door handle has come off" },
-  { g: "Fittings & fixtures", trade: "trim_carpentry", where: "both", label: "Skirting or trim has come loose" },
+  // ---- Cabinets and fixtures ----
+  { g: "Cabinets & fixtures", trade: "cabinets_counters", where: "both", label: "A cabinet door has come off" },
+  { g: "Cabinets & fixtures", trade: "cabinets_counters", where: "home", label: "The countertop is damaged" },
+  { g: "Cabinets & fixtures", trade: "trim_carpentry", where: "home", label: "A closet rod or shelf has pulled out of the wall" },
+  { g: "Cabinets & fixtures", trade: "trim_carpentry", where: "both", label: "A door knob or handle has come off" },
+  { g: "Cabinets & fixtures", trade: "trim_carpentry", where: "both", label: "Baseboard or trim has come loose" },
 
-  // ---- Outside and communal ----
-  { g: "Outside & communal", trade: "electrical", where: "both", label: "A communal light is out" },
-  { g: "Outside & communal", trade: "cleaning", where: "both", label: "The communal areas need cleaning" },
-  { g: "Outside & communal", trade: "cleaning", where: "home", label: "The bin area needs attention" },
-  { g: "Outside & communal", trade: "gutters", where: "both", label: "The gutter is overflowing" },
-  { g: "Outside & communal", trade: "roofing", where: "both", label: "The roof is leaking" },
-  { g: "Outside & communal", trade: "landscaping", where: "both", label: "The grounds are overgrown" },
-  { g: "Outside & communal", trade: "garage_doors", where: "both", label: "The car park gate isn't working" },
-  { g: "Outside & communal", trade: "masonry", where: "both", label: "There's damage to the brickwork" },
-  { g: "Outside & communal", trade: null, where: "both", label: "The lift isn't working" },
-  { g: "Outside & communal", trade: "cleaning", where: "office", label: "The cleaners have missed an area" },
+  // ---- Outside and common areas ----
+  { g: "Outside & common areas", trade: "electrical", where: "both", label: "A light in the hallway or common area is out" },
+  { g: "Outside & common areas", trade: "cleaning", where: "both", label: "The common areas need cleaning" },
+  { g: "Outside & common areas", trade: "cleaning", where: "home", label: "The trash or recycling area needs attention" },
+  { g: "Outside & common areas", trade: "gutters", where: "both", label: "The gutter is overflowing" },
+  { g: "Outside & common areas", trade: "roofing", where: "both", label: "The roof is leaking" },
+  { g: "Outside & common areas", trade: "landscaping", where: "both", label: "The landscaping needs attention" },
+  { g: "Outside & common areas", trade: "garage_doors", where: "both", label: "The parking gate isn't working" },
+  { g: "Outside & common areas", trade: "masonry", where: "both", label: "There's damage to the brickwork or siding" },
+  { g: "Outside & common areas", trade: null, where: "both", label: "The elevator isn't working" },
+  { g: "Outside & common areas", trade: "cleaning", where: "office", label: "The cleaning crew missed an area" },
 
   // ---- Anything else ----
   // No trade: nobody can tell from "something else" what it needs, and the
@@ -6653,7 +6661,7 @@ const tenantGroups = (where) => {
   return seen;
 };
 
-// An office tenant has no bath to report and a flat has no server room. The
+// An office tenant has no bathtub to report and an apartment has no server room. The
 // account type is the only signal there is -- a commercial portfolio is
 // offices, everything else is treated as homes -- and it only decides what is
 // offered first, never what can be said, since the description is free text.
@@ -6693,10 +6701,11 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
   const titleOf = (f) => (f.title.trim() || f.problem?.label || "");
 
   const q = (form?.query || "").trim().toLowerCase();
-  // Browsing respects the split -- a flat has no server room to scroll past.
-  // Searching does not: a managing agent's portfolio can hold both a block of
-  // flats and a parade of shops, and somebody who types "server" has told you
-  // which one they are in more clearly than the account type ever could.
+  // Browsing respects the split -- an apartment has no server room to scroll past.
+  // Searching does not: one management company's portfolio can hold both an
+  // apartment building and a strip of storefronts, and somebody who types
+  // "server" has said which one they are in more clearly than the account
+  // type ever could.
   const matches = q
     ? TENANT_PROBLEMS.filter((x) => x.label.toLowerCase().includes(q) || x.g.toLowerCase().includes(q))
     : form?.group ? forHere.filter((x) => x.g === form.group)
@@ -6719,7 +6728,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
       area: at?.city || "",
       zip: at?.zip || "",
       // Everything the person doing the work needs and nowhere else to put
-      // it: which flat, what they picked, when it started, and their own
+      // it: which unit, what they picked, when it started, and their own
       // words -- in that order, because that is the order it gets read in.
       scope: [
         unit ? `Unit ${unit}.` : null,
@@ -12409,7 +12418,7 @@ body{background:var(--paper)}
 /* A dead link is not a success, so the tick's colour would be a lie. */
 .wl-tick.warn{color:#b5442e}
 /* Lead-in under the heading on the tenant sign-up, and the "optional" tag
-   that keeps somebody from hunting for their flat number. */
+   that keeps somebody from hunting for their unit number. */
 .wl-sub{margin:0 0 18px;font-size:13.5px;line-height:1.5;color:var(--wl-text);opacity:.8}
 .wl-opt{font-weight:500;font-size:11px;opacity:.6;margin-left:6px}
 .wl-done p{font-size:15px;opacity:.78;line-height:1.55;margin-top:10px}
@@ -12993,7 +13002,7 @@ body{background:var(--paper)}
 /* A dead link is not a success, so the tick's colour would be a lie. */
 .wl-tick.warn{color:#b5442e}
 /* Lead-in under the heading on the tenant sign-up, and the "optional" tag
-   that keeps somebody from hunting for their flat number. */
+   that keeps somebody from hunting for their unit number. */
 .wl-sub{margin:0 0 18px;font-size:13.5px;line-height:1.5;color:var(--wl-text);opacity:.8}
 .wl-opt{font-weight:500;font-size:11px;opacity:.6;margin-left:6px}
 .wl-done p{font-size:15px;opacity:.78;line-height:1.55;margin-top:10px}

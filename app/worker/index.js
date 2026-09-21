@@ -2178,6 +2178,9 @@ app.get("/api/tenant-invite/:token", async (c) => {
       id: account.id, name: account.name, subdomain: account.subdomain,
       theme: parseJson(account.theme),
       logoKey: account.logo_key, useDefaultMark: !!account.use_default_mark,
+      // Only so the form can ask for a suite rather than an apartment where
+      // that is the right word. Nothing is decided by it.
+      kind: account.kind,
     },
   });
 });

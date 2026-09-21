@@ -30,38 +30,44 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       one login. Ten minutes, highest value per minute of anything left.
       *Done when:* 2FA is on for Cloudflare, and for the Google account if
       it can reach Cloudflare.
-- [ ] **5. Email the subcontractor their invite** — today "Invite link"
-      produces a link and hands it back to the contractor to send themselves,
-      by text or their own email. It works, but it puts the slowest step of
-      onboarding on the busiest person in the account, and an invite that
-      arrives from SubSub carrying the contractor's own logo is the one that
-      gets opened. Add an optional email address to the invite; fill it in and
-      we send it, leave it blank and it behaves exactly as it does now.
-      Needs: an `email` column on `sub_invites`, a branded template through
-      Resend, a row in the mail log, and a resend button — because the first
-      question after sending is always "did they get it".
-      *Done when:* typing a subcontractor's address into the invite modal
-      lands a branded invite in their inbox, the invite list shows it was
-      sent, and resending works.
+- [ ] **5. Send invites, by email and text** — today an invite is a link the
+      account copies and sends themselves, for subcontractors and tenants
+      alike. It works, and it puts the slowest step of onboarding on the
+      busiest person in the building. An invite that arrives from SubSub
+      wearing the customer's own logo is the one that gets opened, and a
+      managing agent with two hundred apartments is never going to paste two
+      hundred links.
+      Both audiences, both channels: email through Resend, which is already
+      wired up, and text through Twilio, which is not. A tenant reached by
+      text is the realistic case — the notice is on the door, the phone is in
+      their hand — so the number is worth collecting at invite time.
+      Needs: an address and a number on the invite, both optional; a branded
+      template for each; a row in the mail log either way; a resend button,
+      because the first question afterwards is always "did they get it"; and
+      Twilio credentials, which is the only genuinely new piece.
+      *Done when:* typing an address or a number into either invite modal
+      lands a branded invite, the list shows it was sent, and resending works.
+- [ ] **6. Photos on a tenant report** — a picture of the leak is worth more
+      than the paragraph describing it: it decides which trade goes out, and
+      often whether anyone needs to go out twice. Jobs already carry uploaded
+      files and the bucket is already there, so this is a camera button on the
+      report form, thumbnails on the job, and nothing new underneath.
+      *Done when:* a tenant can attach photos from a phone, and they appear on
+      the job the contractor is sent.
 
 ## Worth doing when tenants are in real use
 
-- Tenant invites are links you send yourself, like subcontractor ones. Item 5
-  above (emailing an invite) should cover both when it lands — a managing
-  agent with two hundred flats will not paste two hundred links.
-- Photos on a tenant report. A picture of the leak would save a visit, and
-  jobs already carry uploaded documents, so the pieces are there.
 - Telling a tenant when something changes. They see status when they look;
   they are not told, and "has anyone done anything" is the question the
   feature exists to stop being asked by phone.
 - Whether a building is flats or offices is guessed from the account type,
-  which is the only signal there is. A managing agent holding both gets the
+  which is the only signal there is. A management company holding both gets the
   residential list when browsing; typing finds either. A flag on the property
   itself would settle it properly.
 
 ## Parked — deliberately not before launch
 
-SMS notifications (Twilio) · bot protection on the signup form (Turnstile) ·
+Bot protection on the signup form (Turnstile) ·
 daily stats rollup in the console · contractor licence verification outside
 Washington.
 
@@ -99,6 +105,10 @@ Fixed as encountered, because each one blocked something on the list:
 - Two taps on a property picker in the same instant kept only the second.
 - A seat's role read as "Property manager (property manager)" whenever the
   account's own type was the same word as the role.
+- The tenant vocabulary shipped in British English — flat, tap, cupboard,
+  lift, fuse box, mould. Rewritten: apartment, faucet, cabinet, elevator,
+  breaker, mold. The unit field now asks an office for a suite and an
+  apartment for an apartment.
 - Switching an account's type to "general contractor" left any scoped seat on
   it with no building list, and their dashboard crashed on it rather than
   showing an empty one.
