@@ -30,6 +30,19 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       one login. Ten minutes, highest value per minute of anything left.
       *Done when:* 2FA is on for Cloudflare, and for the Google account if
       it can reach Cloudflare.
+- [ ] **5. Email the subcontractor their invite** — today "Invite link"
+      produces a link and hands it back to the contractor to send themselves,
+      by text or their own email. It works, but it puts the slowest step of
+      onboarding on the busiest person in the account, and an invite that
+      arrives from SubSub carrying the contractor's own logo is the one that
+      gets opened. Add an optional email address to the invite; fill it in and
+      we send it, leave it blank and it behaves exactly as it does now.
+      Needs: an `email` column on `sub_invites`, a branded template through
+      Resend, a row in the mail log, and a resend button — because the first
+      question after sending is always "did they get it".
+      *Done when:* typing a subcontractor's address into the invite modal
+      lands a branded invite in their inbox, the invite list shows it was
+      sent, and resending works.
 
 ## Parked — deliberately not before launch
 
@@ -57,3 +70,10 @@ Fixed as encountered, because each one blocked something on the list:
   did nothing and a failed one looked identical.
 - Stripe moved `current_period_end` onto subscription items, so the renewal
   date was never stored and the plan line had no date to show.
+- An account's type (general contractor, property manager, and so on) could
+  only be corrected in the database, so one picked wrongly at signup was
+  stuck. The console can now change it — Accounts, open the account, Account
+  type — and it is superadmin-only, because it decides whether the account
+  keeps a building list.
+- The logo and company name in both headers did nothing when clicked, which
+  is the one thing every other site on the web has trained people to try.
