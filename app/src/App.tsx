@@ -3436,7 +3436,7 @@ export default function SubSub() {
 
       {can("tenant") && tab !== "account" && (
         <TenantPortal me={me} brand={brand} jobs={jobs} properties={accountProperties}
-          unit={membership.unit}
+          unit={membership.unit} accountKind={kindOf(account)}
           onReport={(r) => createJob({ ...r, trades: r.trades || [] })} />
       )}
 
@@ -6505,41 +6505,206 @@ function tenantStage(job) {
 // The trades a tenant would actually name, in the words they would use. The
 // account's full list runs to thirty and includes excavation and coping,
 // which is not a menu to hand somebody whose tap is dripping.
+// What a tenant would actually say, in the words they would say it in.
+//
+// The first version of this listed trades -- "Plumbing", "HVAC" -- which is
+// how the account thinks and not how anybody else does. Nobody standing in a
+// flat with water coming through the ceiling picks "restoration". They say
+// the sink is leaking, so that is what the list says, and the trade is
+// worked out from it behind the scenes.
+//
+// `where` splits the two kinds of building: an office tenant has no bath to
+// report and a flat has no server room. "both" covers the things that go
+// wrong in either.
+//
+// `trade` is what gets attached to the job so it can be matched to a
+// subcontractor. null means nobody can tell from the description alone, and
+// the account picks when they approve it -- better than guessing wrong and
+// sending the request to a plumber because the list had to say something.
 const TENANT_PROBLEMS = [
-  { trade: "plumbing", label: "Water or a leak", hint: "Taps, pipes, drains, a leak" },
-  { trade: "hvac", label: "Heating or cooling", hint: "No heat, no hot water, air conditioning" },
-  { trade: "electrical", label: "Electrics", hint: "Sockets, lights, the fuse box" },
-  { trade: "windows_doors", label: "Doors or windows", hint: "Won't close, won't lock, broken glass" },
-  { trade: "roofing", label: "Roof or ceiling", hint: "A drip from above, damp patches" },
-  { trade: "restoration", label: "Damage after a leak or fire", hint: "Something needs putting right" },
-  { trade: "cleaning", label: "Cleaning", hint: "Communal areas, after works" },
-  { trade: "trim_carpentry", label: "Something else", hint: "Tell us and we'll route it" },
+  // ---- Water, drains and plumbing ----
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My sink is leaking" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "There's water under the sink" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "A tap is dripping" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "A tap won't turn off" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My toilet won't stop running" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My toilet is blocked" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My toilet won't flush" },
+  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "The shower has no pressure" },
+  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "The bath or shower won't drain" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "The sink is draining slowly" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "I have no hot water" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "I have no water at all" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "A pipe is leaking" },
+  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "My washing machine connection is leaking" },
+  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "My dishwasher is leaking" },
+  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "There's a smell from the drains" },
+  { g: "Water & plumbing", trade: "plumbing", where: "office", label: "A restroom needs attention" },
+  { g: "Water & plumbing", trade: "plumbing", where: "office", label: "The kitchenette sink is blocked" },
+
+  // ---- Heating and cooling ----
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "I have no heat" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The heat is on too high and I can't turn it down" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The air conditioning is on too low — it's freezing" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The air conditioning isn't working" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The air conditioning is blowing warm air" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The thermostat isn't responding" },
+  { g: "Heating & cooling", trade: "hvac", where: "home", label: "A radiator is cold" },
+  { g: "Heating & cooling", trade: "hvac", where: "home", label: "A radiator is leaking" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "It's too cold in here" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "It's too warm in here" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The vents are noisy" },
+  { g: "Heating & cooling", trade: "hvac", where: "both", label: "There's a smell when the heating comes on" },
+  { g: "Heating & cooling", trade: "hvac", where: "office", label: "The air conditioning runs all night" },
+  { g: "Heating & cooling", trade: "hvac", where: "office", label: "The server room is overheating" },
+
+  // ---- Electrics ----
+  { g: "Electrics", trade: "electrical", where: "both", label: "A socket has stopped working" },
+  { g: "Electrics", trade: "electrical", where: "both", label: "There's no power in one room" },
+  { g: "Electrics", trade: "electrical", where: "both", label: "The fuse box keeps tripping" },
+  { g: "Electrics", trade: "electrical", where: "both", label: "A light has gone out" },
+  { g: "Electrics", trade: "electrical", where: "both", label: "The lights keep flickering" },
+  { g: "Electrics", trade: "electrical", where: "both", label: "A light fitting is hanging loose" },
+  { g: "Electrics", trade: "electrical", where: "home", label: "The smoke alarm keeps beeping" },
+  { g: "Electrics", trade: "electrical", where: "home", label: "The door buzzer or intercom isn't working" },
+  { g: "Electrics", trade: "electrical", where: "home", label: "The extractor fan isn't working" },
+  { g: "Electrics", trade: "electrical", where: "office", label: "The lighting in the open plan area is out" },
+  { g: "Electrics", trade: "electrical", where: "both", label: "There's a burning smell from a socket" },
+
+  // ---- Doors, windows and locks ----
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "My door won't lock" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "My door won't close properly" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "I'm locked out" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "My key or fob has stopped working" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "A window won't open" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "A window won't close" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "There's broken glass" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "There's a draught round a window" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "The main entrance door isn't closing" },
+  { g: "Doors, windows & locks", trade: "windows_doors", where: "office", label: "A meeting room door won't lock" },
+
+  // ---- Walls, ceilings and floors ----
+  { g: "Walls, ceilings & floors", trade: "roofing", where: "both", label: "Water is dripping from the ceiling" },
+  { g: "Walls, ceilings & floors", trade: "drywall", where: "both", label: "There's a damp patch on the wall" },
+  { g: "Walls, ceilings & floors", trade: "restoration", where: "both", label: "There's mould" },
+  { g: "Walls, ceilings & floors", trade: "drywall", where: "both", label: "There's a crack in the wall or ceiling" },
+  { g: "Walls, ceilings & floors", trade: "drywall", where: "both", label: "A hole needs patching" },
+  { g: "Walls, ceilings & floors", trade: "painting", where: "both", label: "The paint is peeling" },
+  { g: "Walls, ceilings & floors", trade: "flooring", where: "both", label: "The floor is damaged" },
+  { g: "Walls, ceilings & floors", trade: "flooring", where: "office", label: "The carpet is lifting" },
+  { g: "Walls, ceilings & floors", trade: "tile_stone", where: "both", label: "A tile is loose or cracked" },
+  { g: "Walls, ceilings & floors", trade: "restoration", where: "both", label: "There's damage after a leak" },
+
+  // ---- Fittings ----
+  { g: "Fittings & fixtures", trade: "cabinets_counters", where: "both", label: "A cupboard door has come off" },
+  { g: "Fittings & fixtures", trade: "cabinets_counters", where: "home", label: "The worktop is damaged" },
+  { g: "Fittings & fixtures", trade: "trim_carpentry", where: "both", label: "A shelf or rail has come away from the wall" },
+  { g: "Fittings & fixtures", trade: "trim_carpentry", where: "both", label: "A door handle has come off" },
+  { g: "Fittings & fixtures", trade: "trim_carpentry", where: "both", label: "Skirting or trim has come loose" },
+
+  // ---- Outside and communal ----
+  { g: "Outside & communal", trade: "electrical", where: "both", label: "A communal light is out" },
+  { g: "Outside & communal", trade: "cleaning", where: "both", label: "The communal areas need cleaning" },
+  { g: "Outside & communal", trade: "cleaning", where: "home", label: "The bin area needs attention" },
+  { g: "Outside & communal", trade: "gutters", where: "both", label: "The gutter is overflowing" },
+  { g: "Outside & communal", trade: "roofing", where: "both", label: "The roof is leaking" },
+  { g: "Outside & communal", trade: "landscaping", where: "both", label: "The grounds are overgrown" },
+  { g: "Outside & communal", trade: "garage_doors", where: "both", label: "The car park gate isn't working" },
+  { g: "Outside & communal", trade: "masonry", where: "both", label: "There's damage to the brickwork" },
+  { g: "Outside & communal", trade: null, where: "both", label: "The lift isn't working" },
+  { g: "Outside & communal", trade: "cleaning", where: "office", label: "The cleaners have missed an area" },
+
+  // ---- Anything else ----
+  // No trade: nobody can tell from "something else" what it needs, and the
+  // account works it out when they read it.
+  { g: "Something else", trade: null, where: "both", label: "Something else — I'll describe it" },
 ];
 
-function TenantPortal({ me, brand, jobs, properties, unit, onReport }) {
-  const [form, setForm] = useState(null);   // null | { propertyId, trade, title, scope }
+// The groups, in the order they are offered. Derived rather than written out
+// twice, so adding a problem to a new group cannot leave the group unlisted.
+const tenantGroups = (where) => {
+  const seen = [];
+  for (const p of TENANT_PROBLEMS) {
+    if (p.where !== "both" && p.where !== where) continue;
+    if (!seen.includes(p.g)) seen.push(p.g);
+  }
+  return seen;
+};
+
+// An office tenant has no bath to report and a flat has no server room. The
+// account type is the only signal there is -- a commercial portfolio is
+// offices, everything else is treated as homes -- and it only decides what is
+// offered first, never what can be said, since the description is free text.
+const tenantWhere = (accountKind) => accountKind === "portfolio_manager" ? "office" : "home";
+
+// When it started. Four answers rather than a date, because "a couple of
+// weeks ago" is the true answer and a date picker forces somebody to invent
+// a precise one -- and it is the difference between urgent and not.
+const TENANT_WHEN = [
+  { id: "today", label: "Today" },
+  { id: "days", label: "A few days ago" },
+  { id: "weeks", label: "A week or two ago" },
+  { id: "longer", label: "Longer than that" },
+];
+
+function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport }) {
+  // null until they start. `group` and `query` are how the list of eighty
+  // things gets down to the six worth reading: pick the area, or type a word.
+  const [form, setForm] = useState(null);
   const [sent, setSent] = useState(false);
   const mine = [...jobs].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   const building = properties[0] || null;
+  const where = tenantWhere(accountKind);
+  const forHere = TENANT_PROBLEMS.filter((x) => x.where === "both" || x.where === where);
 
   const start = () => setForm({
-    propertyId: building?.id || "", trade: "", title: "", scope: "",
+    propertyId: building?.id || "", group: "", query: "",
+    problem: null, title: "", when: "", scope: "",
   });
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const ready = form && form.propertyId && form.trade && form.title.trim();
+
+  // What they picked IS the title. Copying it into the box below as well
+  // showed the same sentence twice in a row and made people wonder which one
+  // counted; now the box is empty and only used by somebody who wants to say
+  // it differently.
+  const pick = (problem) => setForm((f) => ({ ...f, problem, query: "" }));
+  const titleOf = (f) => (f.title.trim() || f.problem?.label || "");
+
+  const q = (form?.query || "").trim().toLowerCase();
+  // Browsing respects the split -- a flat has no server room to scroll past.
+  // Searching does not: a managing agent's portfolio can hold both a block of
+  // flats and a parade of shops, and somebody who types "server" has told you
+  // which one they are in more clearly than the account type ever could.
+  const matches = q
+    ? TENANT_PROBLEMS.filter((x) => x.label.toLowerCase().includes(q) || x.g.toLowerCase().includes(q))
+    : form?.group ? forHere.filter((x) => x.g === form.group)
+    : [];
+
+  // Nothing to type: picking something is enough to send it.
+  const ready = form && form.propertyId && form.problem;
 
   const submit = () => {
-    const where = properties.find((p) => p.id === form.propertyId);
+    const at = properties.find((p) => p.id === form.propertyId);
+    const when = TENANT_WHEN.find((w) => w.id === form.when);
+    const title = titleOf(form);
     onReport({
-      title: form.title.trim(),
+      title,
       propertyId: form.propertyId,
-      trades: [form.trade],
-      address: where?.address || "",
-      area: where?.city || "",
-      zip: where?.zip || "",
-      // The flat is the single most useful thing on the whole report and
-      // there is nowhere else on a job to put it.
-      scope: [unit ? `Unit ${unit}.` : null, form.scope.trim()].filter(Boolean).join(" "),
+      // No trade when it cannot be told from the description; the account
+      // decides on approval rather than the list guessing.
+      trades: form.problem.trade ? [form.problem.trade] : [],
+      address: at?.address || "",
+      area: at?.city || "",
+      zip: at?.zip || "",
+      // Everything the person doing the work needs and nowhere else to put
+      // it: which flat, what they picked, when it started, and their own
+      // words -- in that order, because that is the order it gets read in.
+      scope: [
+        unit ? `Unit ${unit}.` : null,
+        form.problem.label !== title ? `Reported as: ${form.problem.label}.` : null,
+        when ? `Started: ${when.label.toLowerCase()}.` : null,
+        form.scope.trim(),
+      ].filter(Boolean).join(" "),
     });
     setForm(null);
     setSent(true);
@@ -6562,27 +6727,93 @@ function TenantPortal({ me, brand, jobs, properties, unit, onReport }) {
           </label>
         )}
 
-        <div className="fld">What is it?
-          <div className="tn-picks">
-            {TENANT_PROBLEMS.map((p) => (
-              <button key={p.trade} type="button"
-                className={`tn-pick ${form.trade === p.trade ? "on" : ""}`}
-                onClick={() => set("trade", p.trade)}>
-                <span className="tn-pick-l">{p.label}</span>
-                <span className="tn-pick-h">{p.hint}</span>
+        {/* Chosen, and done with -- shown as a line they can change rather
+            than eighty buttons they have to scroll past to reach the rest of
+            the form. */}
+        {form.problem ? (
+          <div className="fld">What is it?
+            <div className="tn-chosen">
+              <span>{form.problem.label}</span>
+              <button type="button" className="tn-change"
+                onClick={() => setForm((f) => ({ ...f, problem: null, group: "", query: "" }))}>
+                Change
               </button>
-            ))}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="fld">What is it?
+            <input className="tn-search" value={form.query}
+              onChange={(e) => set("query", e.target.value)}
+              placeholder="Type what's wrong — 'toilet', 'no heat', 'window'" />
 
-        <label className="fld">In a few words
-          <input value={form.title} onChange={(e) => set("title", e.target.value)}
-            placeholder="e.g. Kitchen tap won't stop running" />
-        </label>
-        <label className="fld">Anything else that would help
-          <textarea rows={4} value={form.scope} onChange={(e) => set("scope", e.target.value)}
-            placeholder="When it started, where exactly, whether it is getting worse." />
-        </label>
+            {/* Nothing typed and no area chosen: offer the areas. Six big
+                targets beats eighty small ones on a phone. */}
+            {!q && !form.group && (
+              <div className="tn-groups">
+                {tenantGroups(where).map((g) => (
+                  <button key={g} type="button" className="tn-group" onClick={() => set("group", g)}>
+                    {g}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {(q || form.group) && (
+              <>
+                {form.group && !q && (
+                  <button type="button" className="tn-back" onClick={() => set("group", "")}>
+                    ← All areas
+                  </button>
+                )}
+                <div className="tn-picks">
+                  {matches.map((x) => (
+                    <button key={`${x.g}-${x.label}`} type="button" className="tn-pick"
+                      onClick={() => pick(x)}>
+                      <span className="tn-pick-l">{x.label}</span>
+                      {q && <span className="tn-pick-h">{x.g}</span>}
+                    </button>
+                  ))}
+                </div>
+                {matches.length === 0 && (
+                  <p className="fine">
+                    Nothing matches that. Pick <b>Something else</b> below and describe it in
+                    your own words — it goes to the same place.
+                  </p>
+                )}
+                {q && (
+                  <button type="button" className="tn-back" onClick={() => set("query", "")}>
+                    ← Back to the list
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {form.problem && (
+          <>
+            <label className="fld">Want to put it differently?
+              <input value={form.title} onChange={(e) => set("title", e.target.value)}
+                placeholder={form.problem.label} />
+              <span className="fld-note">Optional — leave it and we'll use what you picked.</span>
+            </label>
+
+            <div className="fld">When did it start?
+              <div className="tn-when">
+                {TENANT_WHEN.map((w) => (
+                  <button key={w.id} type="button"
+                    className={`pick ${form.when === w.id ? "on" : ""}`}
+                    onClick={() => set("when", form.when === w.id ? "" : w.id)}>{w.label}</button>
+                ))}
+              </div>
+            </div>
+
+            <label className="fld">Tell us more, in your own words
+              <textarea rows={5} value={form.scope} onChange={(e) => set("scope", e.target.value)}
+                placeholder="Where exactly it is, whether it's getting worse, whether anything has been done about it before, and when someone can get in." />
+            </label>
+          </>
+        )}
 
         <div className="form-actions">
           <button className="btn-ghost" onClick={() => setForm(null)}>Cancel</button>
@@ -11887,15 +12118,29 @@ body{background:var(--paper)}
 .tn-chip.busy{background:#e8eff8;color:#2b4d7a}
 .tn-chip.ok{background:#e6f2ec;color:#1d5740}
 .tn-form{max-width:none}
-.tn-picks{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+/* Eighty things is a lot to put in front of somebody, so it is never all of
+   them at once: six areas, or whatever a typed word matches. */
+.tn-search{width:100%;margin-top:8px}
+.tn-groups{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.tn-group{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:15px 13px;
+  font:700 13.5px Inter,sans-serif;color:var(--ink);text-align:left;cursor:pointer;line-height:1.3}
+.tn-group:hover{border-color:var(--brand)}
+.tn-picks{display:flex;flex-direction:column;gap:7px;margin-top:10px}
 .tn-pick{display:flex;flex-direction:column;gap:2px;text-align:left;background:var(--card);
-  border:1px solid var(--line);border-radius:11px;padding:11px 12px;cursor:pointer;font-family:inherit}
+  border:1px solid var(--line);border-radius:11px;padding:12px 13px;cursor:pointer;font-family:inherit}
 .tn-pick:hover{border-color:var(--brand)}
-.tn-pick.on{border-color:var(--brand);background:#f2f8f5;box-shadow:inset 0 0 0 1px var(--brand)}
-.tn-pick-l{font-size:13.5px;font-weight:700;color:var(--ink)}
-.tn-pick-h{font-size:11.5px;color:var(--ink-soft);line-height:1.35}
+.tn-pick-l{font-size:13.5px;font-weight:600;color:var(--ink);line-height:1.35}
+.tn-pick-h{font-size:11px;color:var(--ink-soft);line-height:1.3}
+.tn-back{background:none;border:0;color:var(--brand);font:600 12.5px Inter,sans-serif;
+  padding:9px 0 0;cursor:pointer}
+/* What they picked, once they have picked it. */
+.tn-chosen{display:flex;align-items:center;gap:10px;justify-content:space-between;margin-top:8px;
+  background:#f2f8f5;border:1px solid var(--brand);border-radius:11px;padding:12px 13px}
+.tn-chosen span{font-size:13.5px;font-weight:600;line-height:1.35}
+.tn-change{flex:none;background:none;border:0;color:var(--brand);font:700 12px Inter,sans-serif;cursor:pointer}
+.tn-when{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
 @media(max-width:560px){
-  .tn-picks{grid-template-columns:1fr}
+  .tn-groups{grid-template-columns:1fr}
 }
 .dash-card.prop .dc-num{color:var(--brand)}
 .dash-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px;box-shadow:var(--shadow);

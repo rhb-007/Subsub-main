@@ -54,6 +54,10 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
 - Telling a tenant when something changes. They see status when they look;
   they are not told, and "has anyone done anything" is the question the
   feature exists to stop being asked by phone.
+- Whether a building is flats or offices is guessed from the account type,
+  which is the only signal there is. A managing agent holding both gets the
+  residential list when browsing; typing finds either. A flag on the property
+  itself would settle it properly.
 
 ## Parked — deliberately not before launch
 
