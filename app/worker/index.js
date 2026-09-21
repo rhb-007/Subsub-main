@@ -3253,10 +3253,22 @@ app.post("/api/platform/users/:id/reset-password", async (c) => {
     }
   }
 
+  // Send them back to their own company's address when it is live, and to
+  // the shared one otherwise. A reset that lands on a generic sign-in page is
+  // a worse first impression than the problem that caused it, and landing on
+  // a branded hostname that is not serving yet is worse still.
+  const acct = accountId
+    ? await c.env.DB.prepare(`SELECT subdomain, hostname_status FROM accounts WHERE id = ?`)
+        .bind(accountId).first().catch(() => null)
+    : null;
+  const redirectTo = acct?.hostname_status === "active"
+    ? `https://${acct.subdomain}.${(c.env.APP_DOMAIN || "subsub.work")}`
+    : `https://app.${(c.env.APP_DOMAIN || "subsub.work")}`;
+
   const res = await fetch(`${c.env.SUPABASE_URL}/auth/v1/recover`, {
     method: "POST",
     headers: { "Content-Type": "application/json", apikey: c.env.SUPABASE_ANON_KEY },
-    body: JSON.stringify({ email: user.email }),
+    body: JSON.stringify({ email: user.email, redirect_to: redirectTo }),
   }).catch(() => null);
 
   if (!res || !res.ok) {

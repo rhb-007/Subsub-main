@@ -30,6 +30,27 @@ import {
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, logoUrl } from "./lib/api";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
 
+// What a confirmation or reset link left in the address bar.
+//
+// Read at module load, which is the only safe moment: the Supabase client is
+// configured with detectSessionInUrl, so it reads the fragment and clears it
+// as soon as it can. Reading late means not reading at all.
+//
+// Everything a link has to say is in that fragment -- whether it worked,
+// what kind of link it was, and why it did not -- and until now nothing in
+// the app looked. A valid reset link landed on the sign-in screen and did
+// nothing, because there was no page that asks for a new password; an
+// expired one landed on the same screen with the reason hidden in the URL.
+const AUTH_LINK = (() => {
+  if (typeof window === "undefined") return {};
+  const h = new URLSearchParams(String(window.location.hash || "").replace(/^#/, ""));
+  return {
+    error: h.get("error_description") || h.get("error") || "",
+    errorCode: h.get("error_code") || "",
+    type: h.get("type") || "",
+  };
+})();
+
 // ---- Persistence bridge ---------------------------------------------------
 // The app below still reads/writes plain useState — every mutator additionally
 // calls the API so it survives a reload. See "persistence wiring" further
@@ -1338,6 +1359,36 @@ export default function SubSub() {
     }
   };
   const [impersonating, setImpersonating] = useState(null);  // { by, account }
+
+  // Arrived on a confirmation or reset link. Decided from the fragment the
+  // module captured before Supabase could clear it, then confirmed by the
+  // client's own PASSWORD_RECOVERY event -- belt and braces, because getting
+  // this wrong means a working link silently doing nothing, which is the bug
+  // this screen exists to end.
+  const [authFlow, setAuthFlow] = useState(() =>
+    AUTH_LINK.error
+      ? { kind: "link_failed", code: AUTH_LINK.errorCode, message: AUTH_LINK.error }
+      : AUTH_LINK.type === "recovery"
+        ? { kind: "set_password", reason: "recovery" }
+        : (AUTH_LINK.type === "signup" || AUTH_LINK.type === "invite")
+          ? { kind: "set_password", reason: "confirmed" }
+          : null);
+
+  useEffect(() => {
+    if (!supabaseEnabled) return;
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY") setAuthFlow({ kind: "set_password", reason: "recovery" });
+    });
+    return () => data?.subscription?.unsubscribe?.();
+  }, []);
+
+  // Nothing should stay in the address bar once it has been read: a fragment
+  // carrying a one-time token is not something to leave lying in history.
+  const closeAuthFlow = () => {
+    setAuthFlow(null);
+    try { window.history.replaceState(null, "", window.location.pathname + window.location.search); }
+    catch { /* nothing to do if the browser refuses */ }
+  };
   const [subEvents] = useState(seedSubscriptionEvents);
   const [activity, setActivity] = useState(seedActivity);
   // Append to the account's activity stream. Cheap to call; the console reads it.
@@ -2372,6 +2423,23 @@ export default function SubSub() {
             </button>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (authFlow) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <AuthLanding flow={authFlow} brand={brand}
+          onCancel={closeAuthFlow}
+          onDone={async () => {
+            closeAuthFlow();
+            // They hold a session already, so this is the ordinary sign-in
+            // path rather than anything special.
+            const msg = await handleLogin();
+            if (msg) console.warn("[auth-link] signed in but could not enter:", msg);
+          }} />
       </div>
     );
   }
@@ -5076,6 +5144,126 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
   );
 }
 
+
+// The page a confirmation or password-reset link lands on.
+//
+// Both kinds end the same way -- somebody choosing a password -- so they are
+// one screen. A confirmation link is the only way a person added from the
+// console can ever set one: the account was created for them with a password
+// nobody knows, and confirming the address is the moment they hold a session
+// long enough to replace it.
+//
+// The failure case is a screen too. "Email link is invalid or has expired"
+// was arriving as a fragment on the sign-in page and being shown to nobody,
+// so a link that did not work looked exactly like a link that did.
+function AuthLanding({ flow, brand, onDone, onCancel }) {
+  const [pw, setPw] = useState("");
+  const [again, setAgain] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState(false);
+
+  const failed = flow.kind === "link_failed";
+  const expired = /expired|invalid/i.test(flow.code || "") || /expired|invalid/i.test(flow.message || "");
+
+  const save = async () => {
+    if (pw.length < 8) { setErr("Use at least 8 characters."); return; }
+    if (pw !== again) { setErr("Those two do not match."); return; }
+    setBusy(true); setErr("");
+    const { error } = await supabase.auth.updateUser({ password: pw });
+    setBusy(false);
+    if (error) {
+      // The commonest one by far: the link's session is gone, so there is
+      // nothing to attach the new password to.
+      setErr(/session|jwt|expired/i.test(error.message)
+        ? "That link has expired. Ask for a new one below."
+        : error.message);
+      return;
+    }
+    // They hold a valid session now, so there is no reason to make them sign
+    // in again with the password they just typed.
+    onDone();
+  };
+
+  const resend = async () => {
+    if (!email.trim()) { setErr("Enter your email first."); return; }
+    setBusy(true); setErr("");
+    // Back to the address they are standing on, so somebody who started at
+    // their own company's address ends up there rather than at the shared one.
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(),
+      { redirectTo: window.location.origin });
+    setBusy(false);
+    if (error) setErr(error.message); else setSent(true);
+  };
+
+  return (
+    <div className="login-wrap wl-themed">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-logo-wrap"><BrandMark brand={brand} height={38} /></div>
+          <h1>{brand.name}</h1>
+          <p>{failed ? "Link problem" : flow.reason === "confirmed" ? "Email confirmed" : "Choose a new password"}</p>
+        </div>
+
+        {failed ? (
+          <>
+            <div className="login-err"><AlertTriangle size={13} />
+              {expired
+                ? "That link has already been used or has expired. They only work once, and email scanners sometimes open them before you do."
+                : (flow.message || "That link did not work.")}
+            </div>
+            {sent ? (
+              <div className="login-err" style={{ color: "var(--forest-lift)" }}>
+                <CheckCircle2 size={13} /> Sent. Check {email} — open the new link on this device.
+              </div>
+            ) : (
+              <>
+                <p className="login-note">Send yourself a fresh one:</p>
+                <label className="fld">Email
+                  <input type="email" inputMode="email" autoComplete="username" value={email}
+                    onChange={(e) => { setEmail(e.target.value); setErr(""); }}
+                    placeholder="you@company.com"
+                    onKeyDown={(e) => e.key === "Enter" && resend()} />
+                </label>
+                {err && <div className="login-err"><AlertTriangle size={13} /> {err}</div>}
+                <button className="btn-solid login-btn" onClick={resend} disabled={busy}>
+                  <Mail size={15} /> {busy ? "Sending…" : "Send a new link"}
+                </button>
+              </>
+            )}
+            <button className="login-forgot" onClick={onCancel}>Back to sign in</button>
+          </>
+        ) : (
+          <>
+            <p className="login-note">
+              {flow.reason === "confirmed"
+                ? "Your email address is confirmed. Pick a password and you are in."
+                : "Pick a new password. You will be signed in straight away."}
+            </p>
+            <label className="fld">New password
+              <input type="password" autoComplete="new-password" value={pw}
+                onChange={(e) => { setPw(e.target.value); setErr(""); }}
+                placeholder="At least 8 characters"
+                onKeyDown={(e) => e.key === "Enter" && save()} />
+            </label>
+            <label className="fld">Type it again
+              <input type="password" autoComplete="new-password" value={again}
+                onChange={(e) => { setAgain(e.target.value); setErr(""); }}
+                placeholder="••••••••"
+                onKeyDown={(e) => e.key === "Enter" && save()} />
+            </label>
+            {err && <div className="login-err"><AlertTriangle size={13} /> {err}</div>}
+            <button className="btn-solid login-btn" onClick={save} disabled={busy}>
+              <Lock size={15} /> {busy ? "Saving…" : "Save password and continue"}
+            </button>
+          </>
+        )}
+      </div>
+      <p className="login-foot"><PoweredBy height={12} /></p>
+    </div>
+  );
+}
 
 // ---- dashboard: date range -----------------------------------------------
 // Presets as rows, because nobody fights a calendar grid for "last 30 days".
@@ -9101,7 +9289,10 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
   const forgotPassword = async () => {
     if (!supabaseEnabled) { setErr("Password reset isn't wired up in this demo."); return; }
     if (!email.trim()) { setErr("Enter your email first, then tap this again."); return; }
-    const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+    // Back to the address they are standing on: somebody who starts at their
+    // own company's address should not be returned to the shared one.
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(),
+      { redirectTo: window.location.origin });
     if (error) setErr(error.message);
     else setResetSent(true);
   };
