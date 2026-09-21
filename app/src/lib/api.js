@@ -132,8 +132,19 @@ export const api = {
   listAllBookings: () => request("/jobs/all-bookings"),
   createJob: (job) => request("/jobs", { method: "POST", body: JSON.stringify(job) }),
   patchJob: (jobId, patch) => request(`/jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(patch) }),
-  // Turns a building owner's request into a job that can be assigned.
+  // Turns a building owner's or tenant's request into a job that can be assigned.
   approveJob: (jobId) => request(`/jobs/${jobId}/approve`, { method: "POST" }),
+
+  // Tenants. The first two need a signed-in manager; the last two are how
+  // somebody holding a link becomes a tenant, before they have any account.
+  listTenantInvites: () => request("/tenant-invites"),
+  createTenantInvite: (body) => request("/tenant-invites", { method: "POST", body: JSON.stringify(body) }),
+  revokeTenantInvite: (id) => request(`/tenant-invites/${id}`, { method: "DELETE" }),
+  // No auth header to add when signed out; authHeaders() simply returns none,
+  // which is how the subcontractor invite lookup above works too.
+  lookupTenantInvite: (token) => request(`/tenant-invite/${encodeURIComponent(token)}`),
+  acceptTenantInvite: (token, body) =>
+    request(`/tenant-invite/${encodeURIComponent(token)}`, { method: "POST", body: JSON.stringify(body) }),
   completeJob: (jobId) => request(`/jobs/${jobId}/complete`, { method: "POST" }),
   reopenJob: (jobId) => request(`/jobs/${jobId}/reopen`, { method: "POST" }),
   assign: (jobId, details) => request(`/jobs/${jobId}/assign`, { method: "POST", body: JSON.stringify(details) }),

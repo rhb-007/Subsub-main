@@ -44,6 +44,17 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       lands a branded invite in their inbox, the invite list shows it was
       sent, and resending works.
 
+## Worth doing when tenants are in real use
+
+- Tenant invites are links you send yourself, like subcontractor ones. Item 5
+  above (emailing an invite) should cover both when it lands — a managing
+  agent with two hundred flats will not paste two hundred links.
+- Photos on a tenant report. A picture of the leak would save a visit, and
+  jobs already carry uploaded documents, so the pieces are there.
+- Telling a tenant when something changes. They see status when they look;
+  they are not told, and "has anyone done anything" is the question the
+  feature exists to stop being asked by phone.
+
 ## Parked — deliberately not before launch
 
 SMS notifications (Twilio) · bot protection on the signup form (Turnstile) ·

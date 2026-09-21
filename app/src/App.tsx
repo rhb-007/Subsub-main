@@ -424,6 +424,9 @@ const ACCOUNT_KINDS = {
   portfolio_manager:  { label: "Commercial portfolio manager", properties: true,
                         invites: ["owner", "propmgr"] },
 };
+// Anyone keeping a building list has people living or trading in it, so
+// tenants are offered on all three rather than listed per kind.
+const hasTenants = (account) => ACCOUNT_KINDS[kindOf(account)].properties;
 const DEFAULT_ACCOUNT_KIND = "general_contractor";
 const kindOf = (account) =>
   (account && ACCOUNT_KINDS[account.kind]) ? account.kind : DEFAULT_ACCOUNT_KIND;
@@ -465,10 +468,16 @@ const ROLES = {
   // costs, because they are the ones arranging and agreeing the work.
   propmgr: { label: "Property manager (specific buildings)",
     can: ["dashboard", "contractors", "properties", "calendar", "jobs", "account"] },
+  // Somebody who lives or trades in one of the buildings. They report
+  // problems and follow what happens to them, and that is the whole of it --
+  // no dashboard, no portfolio, no other tenant's repairs, no money. Their
+  // screen is its own thing rather than a stripped-down version of the
+  // account's, which is why "tenant" is the only view they carry.
+  tenant: { label: "Tenant", can: ["tenant", "account"] },
   contractor: { label: "Contractor", can: ["portal", "account"] },
 };
 // Seats limited to named buildings, as opposed to the whole account.
-const SCOPED_ROLES = ["owner", "propmgr"];
+const SCOPED_ROLES = ["owner", "propmgr", "tenant"];
 // Roles that belong to the account itself, as opposed to somebody it let in.
 // The difference decides who may see money and who may run the place.
 const isStaffRole = (r) => r === "admin" || r === "pm";
@@ -1338,6 +1347,15 @@ export default function SubSub() {
   });
   const [invite, setInvite] = useState(null);
   const [inviteErr, setInviteErr] = useState("");
+  // The same idea for tenants, on its own parameter. A separate name rather
+  // than a flag on the other one: the two links are accepted by answering
+  // completely different questions and land on different screens.
+  const [tenantToken] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("tenant");
+  });
+  const [tenantInvite, setTenantInvite] = useState(null);
+  const [tenantInviteErr, setTenantInviteErr] = useState("");
   // Set when a sign-in resolves to more than one account and nothing in the
   // address says which. Holds the whole login result, so choosing costs no
   // second round trip.
@@ -1499,8 +1517,10 @@ export default function SubSub() {
   // no dashboard at all -- the role cannot see one -- and theirs is the job
   // list. Sending everybody to "dashboard" would land a contractor on a blank
   // screen, since the tab renders behind can("dashboard").
-  const homeTab = can("dashboard") ? "dashboard" : "portal";
-  const homeTitle = homeTab === "dashboard" ? "Back to the dashboard" : "Back to my jobs";
+  const homeTab = can("dashboard") ? "dashboard" : can("tenant") ? "tenant" : "portal";
+  const homeTitle = homeTab === "dashboard" ? "Back to the dashboard"
+    : homeTab === "tenant" ? "Back to your reports"
+    : "Back to my jobs";
   const goHome = () => {
     // Anything open belongs to the screen being left: a contractor's detail
     // modal, a half-opened menu, the mobile drawer. Home means home.
@@ -1543,8 +1563,11 @@ export default function SubSub() {
   // What this person is, in the words the customer uses. A subcontractor signing
   // into someone else's portal is a contractor, not "a general contractor" — the
   // account type is the hiring side's identity, not theirs.
-  const roleLabel = role === "contractor"
-    ? ROLES.contractor.label
+  // A contractor and a tenant are both guests: naming the account's own type
+  // at them ("Property manager (tenant)") describes somebody else's business,
+  // not their relationship to it.
+  const roleLabel = role === "contractor" || role === "tenant"
+    ? ROLES[role].label
     : `${ACCOUNT_KINDS[kindOf(account)].label} (${ROLES[role].label.toLowerCase()})`;
   const plan = account.plan;
   const billing = account.billing || "monthly";
@@ -1672,7 +1695,7 @@ export default function SubSub() {
     .map((m) => {
       const u = users.find((x) => x.id === m.userId);
       return u ? { ...u, role: m.role, subId: m.companyId ?? null,
-        propertyIds: m.propertyIds || [] } : null;
+        propertyIds: m.propertyIds || [], unit: m.unit || null } : null;
     })
     .filter(Boolean), [memberships, users, account.id]);
 
@@ -1931,7 +1954,9 @@ export default function SubSub() {
   const canBrand = PLANS[plan].branding;
   // Basic includes a single user; Scale is unlimited. Contractor logins don't
   // count against the seat limit — only admins and property managers do.
-  const seatCount = accountUsers.filter((u) => u.role !== "contractor").length;
+  // Neither do tenants: a building has as many as it has flats, and charging
+  // per resident would price the feature out of being used at all.
+  const seatCount = accountUsers.filter((u) => u.role !== "contractor" && u.role !== "tenant").length;
   const atSeatLimit = seatCount >= PLANS[plan].userLimit;
   const addSub = (sub) => {
     logEvent("sub_added", `Added ${sub.company}`);
@@ -2275,7 +2300,7 @@ export default function SubSub() {
         const byKey = Object.fromEntries(prev.map((m) => [key(m), m]));
         members.forEach((m) => {
           byKey[`${m.id}:${accountId}`] = { userId: m.id, accountId, role: m.role, companyId: m.subId,
-            propertyIds: m.propertyIds || [] };
+            propertyIds: m.propertyIds || [], unit: m.unit || null };
         });
         return Object.values(byKey);
       });
@@ -2366,6 +2391,24 @@ export default function SubSub() {
     await hydrateAccount(primary.accountId, result.user.id);
     return null;
   }
+
+  useEffect(() => {
+    if (!tenantToken) return;
+    let live = true;
+    api.lookupTenantInvite(tenantToken).then((res) => {
+      if (!live) return;
+      setTenantInvite(res);
+      setPublicView("tenant-signup");
+    }).catch((err) => {
+      if (!live) return;
+      console.error("[tenant-invite] lookup failed:", err);
+      setTenantInviteErr(err?.status === 410
+        ? "That link has already been used, or it has expired. Ask your building manager for a new one."
+        : "That link isn't valid. Check you copied all of it, or ask your building manager for a new one.");
+      setPublicView("tenant-signup");
+    });
+    return () => { live = false; };
+  }, [tenantToken]);
 
   useEffect(() => {
     if (!inviteToken) return;
@@ -2559,6 +2602,10 @@ export default function SubSub() {
         {BUILD === "platform" && publicView === "superadmin" ? (
           <SuperadminLogin
             onLogin={(me) => { setStaff(me); setCurrentUserId(me.userId); setSuperadminView(true); setLoggedIn(true); }} />
+        ) : publicView === "tenant-signup" ? (
+          <TenantSignup invite={tenantInvite} error={tenantInviteErr}
+            onSubmit={(data) => api.acceptTenantInvite(tenantToken, data)}
+            onBackToLogin={() => setPublicView("login")} />
         ) : publicView === "signup" ? (
           <SubSignup brand={brand}
             onSubmit={(data) => inviteToken
@@ -2769,7 +2816,7 @@ export default function SubSub() {
                 when it comes to one thing it is a button rather than a menu
                 with a single item in it. */}
             {(() => {
-              if (role === "contractor") return null;
+              if (role === "contractor" || role === "tenant") return null;
               const actions = [];
               if (role === "owner") {
                 actions.push(["work", "Request work", "Request work", Plus, () => tryAddJob()]);
@@ -2963,7 +3010,7 @@ export default function SubSub() {
           onRequestDocs={requestDocs} onOpenSub={(sb) => setSelected(sb)}
           onReviewDoc={(sb, kind) => setReviewing({ sub: sb, kind })}
           onVerifyLicense={(sb) => verifyLicense(sb.id)}
-          onApproveJob={approveJob} users={users} />
+          onApproveJob={approveJob} users={accountUsers} />
       )}
 
       {tab === "network" && can("contractors") && (
@@ -3385,6 +3432,12 @@ export default function SubSub() {
             persist("decideUniformOrder", api.decideUniformOrder(id, status));
             setUniformOrders((os) => os.map((o) => o.id === id ? { ...o, status } : o));
           }} />
+      )}
+
+      {can("tenant") && tab !== "account" && (
+        <TenantPortal me={me} brand={brand} jobs={jobs} properties={accountProperties}
+          unit={membership.unit}
+          onReport={(r) => createJob({ ...r, trades: r.trades || [] })} />
       )}
 
       {can("portal") && tab !== "account" && (
@@ -6158,6 +6211,442 @@ function Kpi({ label, value, sub, accent, warn }) {
   );
 }
 
+// ---- Tenant invite links -------------------------------------------------
+// The same shape as the subcontractor version -- a link you send yourself,
+// one use, thirty days -- because it is the same job and somebody who has
+// used one should not have to learn a second thing.
+//
+// The difference is the building. A link can name one, which is what you want
+// for a specific flat; or leave it open, which is what you want for a notice
+// in a lobby, and the tenant says which building they are in when they accept.
+function TenantInvites({ properties, tenants }) {
+  const [rows, setRows] = useState(null);
+  const [label, setLabel] = useState("");
+  const [propertyId, setPropertyId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(null);
+
+  const load = async () => {
+    try { setRows(await api.listTenantInvites()); }
+    catch (e) { console.error("[tenant-invites] load failed:", e); setRows([]); setErr("Could not load your links."); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const copy = async (url, id) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(id);
+      setTimeout(() => setCopied((c) => c === id ? null : c), 2000);
+    } catch { setCopied(null); }
+  };
+
+  const create = async () => {
+    setBusy(true); setErr("");
+    try {
+      const made = await api.createTenantInvite({ label: label.trim() || null, propertyId: propertyId || null });
+      setRows((cur) => [made, ...(cur || [])]);
+      setLabel("");
+      copy(made.url, made.id);
+    } catch (e) {
+      console.error("[tenant-invites] create failed:", e);
+      setErr(e?.body?.error === "property_required"
+        ? "Pick a building. Your account is limited to certain buildings, so an open link isn't available to you."
+        : "Could not create a link. Try again.");
+    } finally { setBusy(false); }
+  };
+
+  const revoke = async (id) => {
+    try {
+      await api.revokeTenantInvite(id);
+      setRows((cur) => cur.map((r) => r.id === id ? { ...r, status: "revoked" } : r));
+    } catch (e) { console.error("[tenant-invites] revoke failed:", e); setErr("Could not revoke that link."); }
+  };
+
+  const open = (rows || []).filter((r) => r.status === "open");
+  const past = (rows || []).filter((r) => r.status !== "open");
+
+  return (
+    <>
+      <div className="jobs-head">
+        <h3>{tenants.length} tenant{tenants.length === 1 ? "" : "s"}</h3>
+      </div>
+      <p className="panel-note">
+        Tenants report repairs themselves and follow what happens, on your own branded address.
+        What they report lands with you to approve and assign, exactly like a building owner's
+        request. They never see costs, your contractors, or anyone else's repairs.
+      </p>
+
+      {properties.length === 0 ? (
+        <div className="dash-empty"><Building2 size={24} />
+          <p>Add a building first — a tenant has to be a tenant of something.</p>
+        </div>
+      ) : (
+        <>
+          <div className="inv-make">
+            <label className="fld">Building
+              <select value={propertyId} onChange={(e) => setPropertyId(e.target.value)}>
+                <option value="">Let them choose</option>
+                {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
+            <label className="fld">Who it's for <span className="fld-note">optional, for your own list</span>
+              <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Flat 4B" />
+            </label>
+            <button className="btn-solid" onClick={create} disabled={busy}>
+              <Plus size={15} /> {busy ? "Creating…" : "Create link"}
+            </button>
+          </div>
+          <p className="fine">
+            {propertyId
+              ? "The link names this building, so whoever uses it can only be a tenant of it."
+              : "Left open, whoever uses it picks their building when they sign up — right for a notice in a lobby, and you can correct it afterwards."}
+            {" "}Each link works once and expires after 30 days.
+          </p>
+        </>
+      )}
+
+      {err && <p className="billing-err" role="alert">{err}</p>}
+
+      {rows === null ? <p className="fine">Loading…</p> : (
+        <>
+          {open.map((r) => (
+            <div key={r.id} className="inv-row-out">
+              <div className="inv-main">
+                <b>{r.label || "Unnamed link"}
+                  <span className="inv-chip">{r.propertyName || "they choose"}</span></b>
+                <code className="inv-url">{r.url}</code>
+              </div>
+              <div className="inv-acts">
+                <button className="pick" onClick={() => copy(r.url, r.id)}>
+                  {copied === r.id ? <><Check size={13} /> Copied</> : <><Link2 size={13} /> Copy</>}
+                </button>
+                <button className="icon-x" title="Revoke this link" onClick={() => revoke(r.id)}>
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            </div>
+          ))}
+          {past.length > 0 && (
+            <>
+              <h4 className="inv-past">Earlier links</h4>
+              {past.map((r) => (
+                <div key={r.id} className="inv-row-out spent">
+                  <div className="inv-main">
+                    <b>{r.label || "Unnamed link"}
+                      <span className="inv-chip">{r.propertyName || "they chose"}</span></b>
+                    <span className="fine">
+                      {r.status === "accepted" ? `Accepted ${niceDay(r.usedAt)}`
+                        : r.status === "revoked" ? "Revoked"
+                        : "Expired"}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+// ---- Tenant sign-up ------------------------------------------------------
+// What somebody holding a tenant link sees, before they have any account at
+// all. Wears the building manager's branding, because the letter or the
+// noticeboard it came from had their name on it and arriving at a stranger's
+// login is how a link gets ignored.
+//
+// Three questions and no more. A tenant is not applying for anything; they
+// are being told where to report a broken boiler.
+function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
+  const [f, setF] = useState({ name: "", email: "", unit: "", propertyId: "" });
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [err, setErr] = useState("");
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+
+  // Until the lookup lands there is no branding to wear, so the page stays
+  // blank rather than flashing SubSub's own and then repainting.
+  if (!invite && !error) {
+    return <div className="wl-page"><div className="wl-card wl-done"><p>Loading…</p></div></div>;
+  }
+
+  if (error) {
+    return (
+      <div className="wl-page">
+        <div className="wl-card wl-done">
+          <div className="wl-tick warn"><AlertTriangle size={30} /></div>
+          <h1>This link doesn't work</h1>
+          <p>{error}</p>
+          <button className="wl-btn" onClick={onBackToLogin}>Go to sign in</button>
+        </div>
+        <PoweredBy className="wl-foot" height={15} />
+      </div>
+    );
+  }
+
+  const acct = invite.account;
+  const brand = {
+    id: acct.id, name: acct.name, subdomain: acct.subdomain,
+    logoData: acct.logoKey ? logoUrl(acct.id) : null,
+    useDefaultMark: acct.useDefaultMark, theme: acct.theme,
+  };
+  const t = themeOf(brand);
+  // A link that names the building does not ask; one that does not, must.
+  const mustChoose = !invite.fixedProperty && invite.properties.length > 1;
+  const propertyId = invite.fixedProperty || (invite.properties.length === 1
+    ? invite.properties[0].id : f.propertyId);
+  const ready = f.name.trim() && validEmail(f.email) && propertyId;
+
+  const go = async () => {
+    setBusy(true); setErr("");
+    try {
+      await onSubmit({ name: f.name.trim(), email: f.email.trim(), unit: f.unit.trim(), propertyId });
+      setDone(true);
+    } catch (e) {
+      console.error("[tenant-signup] failed:", e);
+      setErr(e?.body?.error === "already_a_member"
+        ? "That email address already has a different kind of account here. Ask your building manager to sort it out."
+        : e?.body?.error === "rate_limited"
+        ? "Too many attempts from this connection. Wait an hour and try again."
+        : "That didn't go through. Check the email address and try again.");
+    } finally { setBusy(false); }
+  };
+
+  if (done) return (
+    <div className="wl-page" style={themeVars(t)}>
+      <div className="wl-card wl-done">
+        <div className="wl-brand"><BrandMark brand={brand} height={30} />
+          <span className="wl-brand-name">{brand.name}</span></div>
+        <div className="wl-tick"><CheckCircle2 size={34} /></div>
+        <h1>You're set up.</h1>
+        <p>We've sent an email to <b>{f.email}</b> with a link to choose a password. After that
+          you can report anything that needs fixing and see what's happening with it.</p>
+        <button className="wl-btn" onClick={onBackToLogin}>Go to sign in</button>
+      </div>
+      <PoweredBy className="wl-foot" height={15} />
+    </div>
+  );
+
+  const where = invite.properties.find((p) => p.id === propertyId);
+
+  return (
+    <div className="wl-page" style={themeVars(t)}>
+      <div className="wl-card">
+        <div className="wl-brand"><BrandMark brand={brand} height={30} />
+          <span className="wl-brand-name">{brand.name}</span></div>
+        <h1>Report repairs at {where ? where.name : "your building"}</h1>
+        <p className="wl-sub">
+          {brand.name} manages {where ? where.name : "your building"}. Set yourself up here and you can
+          report anything that needs fixing, and follow what happens to it, without phoning anybody.
+          {invite.label ? ` This link was sent for ${invite.label}.` : ""}
+        </p>
+
+        {mustChoose && (
+          <label className="wl-fld">Which building do you live in?
+            <select value={f.propertyId} onChange={(e) => set("propertyId", e.target.value)}>
+              <option value="">Choose…</option>
+              {invite.properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+        )}
+        <label className="wl-fld">Your name
+          <input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Jane Doe" />
+        </label>
+        <label className="wl-fld">Email
+          <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)}
+            placeholder="jane@example.com" />
+        </label>
+        <label className="wl-fld">Flat or unit <span className="wl-opt">optional</span>
+          <input value={f.unit} onChange={(e) => set("unit", e.target.value)} placeholder="4B" />
+        </label>
+
+        {err && <p className="wl-err" role="alert">{err}</p>}
+        <button className="wl-btn" onClick={go} disabled={!ready || busy}>
+          {busy ? "Setting you up…" : "Set me up"}
+        </button>
+        <p className="wl-fine">
+          You'll only ever see what you report yourself. Nobody else's repairs, and none of
+          {" "}{brand.name}'s own records.
+        </p>
+      </div>
+      <PoweredBy className="wl-foot" height={15} />
+    </div>
+  );
+}
+
+// ---- Tenant portal -------------------------------------------------------
+// The whole of what a tenant sees. Not a cut-down version of the account's
+// screen: somebody reporting a broken boiler is not managing a portfolio, and
+// a dashboard with four of its five panels hidden reads as a thing that is
+// missing rather than a thing that is finished.
+//
+// Two jobs, in this order: report something, and find out what happened to
+// what you reported. Everything else is left out on purpose -- no costs, no
+// contractor directory, and none of the building's other work.
+
+// What a tenant is told, and when. The account's own vocabulary is not much
+// use here: "requested_by set, approved_at null, no work orders issued" is
+// four states to somebody running the building and one sentence to the person
+// waiting in the flat.
+function tenantStage(job) {
+  if (job.status === "completed") return { key: "done", label: "Done", tone: "ok" };
+  const assigned = Object.values(job.assignments || {});
+  const accepted = assigned.filter((a) => a.status === "accepted" || a.auto);
+  if (accepted.length) {
+    return { key: "booked", label: job.date ? "Booked in" : "Contractor assigned", tone: "ok" };
+  }
+  if (assigned.length) return { key: "arranging", label: "Finding a time", tone: "busy" };
+  if (job.requestedBy && !job.approvedAt) return { key: "sent", label: "With the manager", tone: "wait" };
+  return { key: "approved", label: "Approved — arranging a contractor", tone: "busy" };
+}
+
+// The trades a tenant would actually name, in the words they would use. The
+// account's full list runs to thirty and includes excavation and coping,
+// which is not a menu to hand somebody whose tap is dripping.
+const TENANT_PROBLEMS = [
+  { trade: "plumbing", label: "Water or a leak", hint: "Taps, pipes, drains, a leak" },
+  { trade: "hvac", label: "Heating or cooling", hint: "No heat, no hot water, air conditioning" },
+  { trade: "electrical", label: "Electrics", hint: "Sockets, lights, the fuse box" },
+  { trade: "windows_doors", label: "Doors or windows", hint: "Won't close, won't lock, broken glass" },
+  { trade: "roofing", label: "Roof or ceiling", hint: "A drip from above, damp patches" },
+  { trade: "restoration", label: "Damage after a leak or fire", hint: "Something needs putting right" },
+  { trade: "cleaning", label: "Cleaning", hint: "Communal areas, after works" },
+  { trade: "trim_carpentry", label: "Something else", hint: "Tell us and we'll route it" },
+];
+
+function TenantPortal({ me, brand, jobs, properties, unit, onReport }) {
+  const [form, setForm] = useState(null);   // null | { propertyId, trade, title, scope }
+  const [sent, setSent] = useState(false);
+  const mine = [...jobs].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  const building = properties[0] || null;
+
+  const start = () => setForm({
+    propertyId: building?.id || "", trade: "", title: "", scope: "",
+  });
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const ready = form && form.propertyId && form.trade && form.title.trim();
+
+  const submit = () => {
+    const where = properties.find((p) => p.id === form.propertyId);
+    onReport({
+      title: form.title.trim(),
+      propertyId: form.propertyId,
+      trades: [form.trade],
+      address: where?.address || "",
+      area: where?.city || "",
+      zip: where?.zip || "",
+      // The flat is the single most useful thing on the whole report and
+      // there is nowhere else on a job to put it.
+      scope: [unit ? `Unit ${unit}.` : null, form.scope.trim()].filter(Boolean).join(" "),
+    });
+    setForm(null);
+    setSent(true);
+  };
+
+  if (form) return (
+    <main className="ss-main tn-main">
+      <div className="form tn-form">
+        <h2>Report a problem</h2>
+        <p className="form-sub">
+          This goes to {brand.name}. They arrange the repair and you can follow it here.
+        </p>
+
+        {properties.length > 1 && (
+          <label className="fld">Which building
+            <select value={form.propertyId} onChange={(e) => set("propertyId", e.target.value)}>
+              <option value="">Choose…</option>
+              {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+        )}
+
+        <div className="fld">What is it?
+          <div className="tn-picks">
+            {TENANT_PROBLEMS.map((p) => (
+              <button key={p.trade} type="button"
+                className={`tn-pick ${form.trade === p.trade ? "on" : ""}`}
+                onClick={() => set("trade", p.trade)}>
+                <span className="tn-pick-l">{p.label}</span>
+                <span className="tn-pick-h">{p.hint}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <label className="fld">In a few words
+          <input value={form.title} onChange={(e) => set("title", e.target.value)}
+            placeholder="e.g. Kitchen tap won't stop running" />
+        </label>
+        <label className="fld">Anything else that would help
+          <textarea rows={4} value={form.scope} onChange={(e) => set("scope", e.target.value)}
+            placeholder="When it started, where exactly, whether it is getting worse." />
+        </label>
+
+        <div className="form-actions">
+          <button className="btn-ghost" onClick={() => setForm(null)}>Cancel</button>
+          <button className="btn-solid" onClick={submit} disabled={!ready}>
+            <Plus size={15} /> Send it
+          </button>
+        </div>
+      </div>
+    </main>
+  );
+
+  return (
+    <main className="ss-main tn-main">
+      <div className="tn-hello">
+        <h2>Hello, {me.name.split(" ")[0]}</h2>
+        <p>
+          {building ? building.name : "Your building"}
+          {unit ? ` · Unit ${unit}` : ""}
+        </p>
+      </div>
+
+      {sent && (
+        <div className="tn-sent" role="status">
+          <CheckCircle2 size={16} />
+          <span>Sent to {brand.name}. You'll see it below, and it will update as they get on with it.</span>
+        </div>
+      )}
+
+      <button className="tn-cta" onClick={start}>
+        <Plus size={18} /> Report a problem
+      </button>
+
+      <h3 className="tn-h3">{mine.length ? "What you've reported" : ""}</h3>
+      {mine.length === 0 ? (
+        <div className="dash-empty">
+          <ClipboardList size={24} />
+          <p>Nothing reported yet. When you do, it will show up here with where it has got to.</p>
+        </div>
+      ) : (
+        <div className="tn-list">
+          {mine.map((j) => {
+            const st = tenantStage(j);
+            const who = Object.values(j.assignments || {})
+              .map((a) => a.subId).filter(Boolean);
+            return (
+              <div key={j.id} className="tn-row">
+                <div className="tn-row-main">
+                  <div className="tn-row-title">{j.title}</div>
+                  <span className="tn-row-meta">
+                    Reported {j.createdAt ? niceDay(j.createdAt) : "recently"}
+                    {j.date ? ` · booked for ${niceDay(j.date)}` : ""}
+                    {who.length ? " · a contractor is assigned" : ""}
+                  </span>
+                </div>
+                <span className={`tn-chip ${st.tone}`}>{st.label}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </main>
+  );
+}
+
 // ---- Properties (portfolio / property managers) -------------------------
 // Vendors can be scoped to specific properties. A vendor with none listed is
 // treated as available across the whole account, which is how a GC uses it.
@@ -6898,8 +7387,13 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   hostnameStatus, onRefreshHostname, properties = [] }) {
   // accountKind is already a prop; the user form needs it to know which
   // scoped roles this account has anybody to hand out.
+  const tenantSeats = users.filter((u) => u.role === "tenant");
+  const staffSeats = users.filter((u) => u.role !== "tenant");
   const panes = [["profile", "Profile"]]
-    .concat(canManage ? [["company", "Company"], ["users", "Users"], ["billing", "Subscription"]] : []);
+    .concat(canManage ? [["company", "Company"], ["users", "Users"]] : [])
+    // Only where there are buildings for tenants to be in.
+    .concat(canManage && ACCOUNT_KINDS[accountKind].properties ? [["tenants", "Tenants"]] : [])
+    .concat(canManage ? [["billing", "Subscription"]] : []);
   const brandingOn = PLANS[plan].branding;
   const [pane, setPane] = useState("profile");
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -7254,7 +7748,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             </div>
           )}
           <div className="user-list">
-            {users.map((u) => {
+            {staffSeats.map((u) => {
               const linked = u.subId && subs.find((x) => x.id === u.subId);
               return (
                 <div key={u.id} className="user-row">
@@ -7289,6 +7783,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             })}
           </div>
         </>
+      )}
+
+      {pane === "tenants" && canManage && (
+        <TenantInvites properties={properties} tenants={tenantSeats} />
       )}
 
       {pane === "billing" && canManage && (
@@ -7842,7 +8340,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
 
       {awaitingApproval.length > 0 && (
         <section className="dash-sec">
-          <h3><Building2 size={15} /> {isOwner ? "Waiting on approval" : "Work your owners asked for"}
+          <h3><Building2 size={15} /> {isOwner ? "Waiting on approval" : "Asked for by owners and tenants"}
             <span className="sec-count amber">{awaitingApproval.length}</span></h3>
           {awaitingApproval.map((j) => {
             const who = users.find((u) => u.id === j.requestedBy);
@@ -7854,7 +8352,11 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
                   <span className="dr-meta">
                     {where ? where.name : "A building"}
                     {j.date ? ` · ${niceDay(j.date)}` : " · no date given"}
-                    {isOwner ? " · not approved yet" : ` · asked for by ${who ? who.name : "an owner"}`}
+                    {isOwner ? " · not approved yet"
+                      : ` · asked for by ${who ? who.name : "someone"}${
+                          who?.role === "tenant"
+                            ? ` (tenant${who.unit ? `, unit ${who.unit}` : ""})`
+                            : who?.role === "owner" ? " (owner)" : ""}`}
                   </span>
                 </div>
                 {!isOwner && (
@@ -10780,6 +11282,10 @@ body{background:var(--paper)}
 .inv-main{min-width:0;display:flex;flex-direction:column;gap:4px}
 .inv-main b{font-size:13.5px}
 .inv-url{font-size:11.5px;color:var(--ink-soft);word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+/* Which building a tenant link is tied to, or that it lets them choose. */
+.inv-chip{display:inline-block;margin-left:8px;font-size:10.5px;font-weight:700;
+  background:var(--paper);border:1px solid var(--line);color:var(--ink-soft);
+  padding:2px 8px;border-radius:20px;vertical-align:1px}
 .inv-acts{display:flex;gap:7px;flex:none}
 .inv-acts .pick{display:flex;align-items:center;gap:5px}
 .inv-past{margin:20px 0 0;font-size:11.5px;font-weight:700;letter-spacing:.06em;
@@ -11354,6 +11860,43 @@ body{background:var(--paper)}
 /* A building owner's row is three: their buildings, what is scheduled, and
    what is still waiting on the account to agree to it. */
 .dash-grid.g3{grid-template-columns:repeat(3,1fr)}
+
+/* ---- tenant portal ----
+   Deliberately roomier than the rest of the app. Everything else here is a
+   working tool somebody uses all day and wants dense; this is a page most
+   people will see twice a year, on a phone, while annoyed. */
+.tn-main{max-width:660px}
+.tn-hello h2{margin:0 0 3px;font-size:22px;font-weight:800;letter-spacing:-.02em}
+.tn-hello p{margin:0 0 20px;font-size:13.5px;color:var(--ink-soft)}
+.tn-cta{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;
+  background:var(--brand);color:#fff;border:0;border-radius:13px;padding:17px;
+  font:700 15.5px Inter,sans-serif;cursor:pointer;box-shadow:var(--shadow)}
+.tn-cta:hover{background:var(--brand-dk)}
+.tn-sent{display:flex;align-items:flex-start;gap:9px;background:#eef6f1;border:1px solid #cfe4d8;
+  color:#1d5740;border-radius:11px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.45}
+.tn-h3{margin:26px 0 10px;font-size:12.5px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--ink-soft)}
+.tn-list{display:flex;flex-direction:column;gap:9px}
+.tn-row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
+  border-radius:12px;padding:14px 15px;box-shadow:var(--shadow)}
+.tn-row-main{flex:1;min-width:0}
+.tn-row-title{font-size:14.5px;font-weight:700;letter-spacing:-.01em}
+.tn-row-meta{display:block;margin-top:3px;font-size:12px;color:var(--ink-soft)}
+.tn-chip{flex:none;font-size:11.5px;font-weight:700;padding:5px 10px;border-radius:20px;white-space:nowrap}
+.tn-chip.wait{background:#fbf0dd;color:#8a5a12}
+.tn-chip.busy{background:#e8eff8;color:#2b4d7a}
+.tn-chip.ok{background:#e6f2ec;color:#1d5740}
+.tn-form{max-width:none}
+.tn-picks{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.tn-pick{display:flex;flex-direction:column;gap:2px;text-align:left;background:var(--card);
+  border:1px solid var(--line);border-radius:11px;padding:11px 12px;cursor:pointer;font-family:inherit}
+.tn-pick:hover{border-color:var(--brand)}
+.tn-pick.on{border-color:var(--brand);background:#f2f8f5;box-shadow:inset 0 0 0 1px var(--brand)}
+.tn-pick-l{font-size:13.5px;font-weight:700;color:var(--ink)}
+.tn-pick-h{font-size:11.5px;color:var(--ink-soft);line-height:1.35}
+@media(max-width:560px){
+  .tn-picks{grid-template-columns:1fr}
+}
 .dash-card.prop .dc-num{color:var(--brand)}
 .dash-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px;box-shadow:var(--shadow);
   display:flex;flex-direction:column;gap:4px}
@@ -11589,6 +12132,12 @@ body{background:var(--paper)}
 .wl-done{text-align:center}
 .wl-done .wl-brand{justify-content:center}
 .wl-tick{color:var(--wl-accent);margin:6px 0 14px;display:flex;justify-content:center}
+/* A dead link is not a success, so the tick's colour would be a lie. */
+.wl-tick.warn{color:#b5442e}
+/* Lead-in under the heading on the tenant sign-up, and the "optional" tag
+   that keeps somebody from hunting for their flat number. */
+.wl-sub{margin:0 0 18px;font-size:13.5px;line-height:1.5;color:var(--wl-text);opacity:.8}
+.wl-opt{font-weight:500;font-size:11px;opacity:.6;margin-left:6px}
 .wl-done p{font-size:15px;opacity:.78;line-height:1.55;margin-top:10px}
 .wl-done .wl-btn{margin-top:22px}
 @media (max-width:560px){
@@ -12167,6 +12716,12 @@ body{background:var(--paper)}
 .wl-done{text-align:center}
 .wl-done .wl-brand{justify-content:center}
 .wl-tick{color:var(--wl-accent);margin:6px 0 14px;display:flex;justify-content:center}
+/* A dead link is not a success, so the tick's colour would be a lie. */
+.wl-tick.warn{color:#b5442e}
+/* Lead-in under the heading on the tenant sign-up, and the "optional" tag
+   that keeps somebody from hunting for their flat number. */
+.wl-sub{margin:0 0 18px;font-size:13.5px;line-height:1.5;color:var(--wl-text);opacity:.8}
+.wl-opt{font-weight:500;font-size:11px;opacity:.6;margin-left:6px}
 .wl-done p{font-size:15px;opacity:.78;line-height:1.55;margin-top:10px}
 .wl-done .wl-btn{margin-top:22px}
 @media (max-width:560px){

@@ -151,6 +151,11 @@ app.use("/api/*", async (c, next) => {
     || c.req.path.startsWith("/api/platform/")
     || c.req.path.startsWith("/api/apply/")
     || c.req.path.startsWith("/api/invite/")
+    // The tenant equivalent, and public for the same reason: somebody
+    // holding the link has no account yet -- getting one is the point. The
+    // trailing slash matters: /api/tenant-invites, which is the manager's
+    // list of who has been sent one, stays behind auth.
+    || c.req.path.startsWith("/api/tenant-invite/")
     || c.req.path === "/api/stripe/webhook"
     || c.req.path === "/api/impersonation/end"
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
@@ -229,7 +234,7 @@ app.use("/api/*", async (c, next) => {
 // building owner sees theirs and can ask for work; a scoped property manager
 // runs the work at theirs. Both are restricted the same way -- what differs is
 // what they may do inside the restriction, which requireRole decides.
-const SCOPED_ROLES = ["owner", "propmgr"];
+const SCOPED_ROLES = ["owner", "propmgr", "tenant"];
 
 async function propertyScope(db, membership) {
   if (!SCOPED_ROLES.includes(membership.role)) return null;
@@ -279,11 +284,28 @@ const OWNER_ALLOWED = [
   [/^\/api\/service-calls$/, ["GET"]],     // scoped: on their own jobs
 ];
 
+// A tenant's is narrower again. They report problems and watch what happens
+// to them; there is no portfolio to look at, no contractor list, and no
+// building-wide view -- other people's repairs are not their business any
+// more than theirs are other people's.
+const TENANT_ALLOWED = [
+  [/^\/api\/account$/, ["GET"]],
+  [/^\/api\/account-by-subdomain\/[^/]+$/, ["GET"]],
+  [/^\/api\/logo\/[^/]+$/, ["GET"]],
+  [/^\/api\/auth\/me$/, ["GET"]],
+  [/^\/api\/account-users$/, ["GET"]],     // scoped: themselves only
+  [/^\/api\/properties$/, ["GET"]],        // scoped: their building
+  [/^\/api\/jobs$/, ["GET", "POST"]],      // scoped: their own reports
+];
+
 app.use("/api/*", async (c, next) => {
   const auth = c.get("auth");
-  if (!auth || auth.role !== "owner") return next();
+  const list = auth?.role === "owner" ? OWNER_ALLOWED
+    : auth?.role === "tenant" ? TENANT_ALLOWED
+    : null;
+  if (!list) return next();
   const path = new URL(c.req.url).pathname;
-  const ok = OWNER_ALLOWED.some(([re, methods]) => re.test(path) && methods.includes(c.req.method));
+  const ok = list.some(([re, methods]) => re.test(path) && methods.includes(c.req.method));
   if (!ok) return c.json({ error: "forbidden" }, 403);
   await next();
 });
@@ -1197,11 +1219,11 @@ app.get("/api/account-users", async (c) => {
   // is how the app knows which seat it is sitting in. A scoped property
   // manager does need the list -- they answer the owners who raise work, and
   // a request signed "an owner" is no use to them.
-  const mine = auth.role === "owner" ? ` AND m.user_id = ? ` : "";
+  const mine = (auth.role === "owner" || auth.role === "tenant") ? ` AND m.user_id = ? ` : "";
   const { results } = await c.env.DB.prepare(
-    `SELECT u.*, m.role, m.company_id FROM memberships m
+    `SELECT u.*, m.role, m.company_id, m.unit FROM memberships m
      JOIN users u ON u.id = m.user_id WHERE m.account_id = ? ${mine}`
-  ).bind(accountId, ...(auth.role === "owner" ? [auth.userId] : [])).all();
+  ).bind(accountId, ...((auth.role === "owner" || auth.role === "tenant") ? [auth.userId] : [])).all();
   const { results: scopes } = await c.env.DB.prepare(
     `SELECT mp.property_id, m.user_id FROM membership_properties mp
        JOIN memberships m ON m.id = mp.membership_id WHERE m.account_id = ?`
@@ -1211,7 +1233,7 @@ app.get("/api/account-users", async (c) => {
 
   return c.json(results.map((r) => ({
     id: r.id, name: r.name, email: r.email, phone: r.phone, role: r.role, subId: r.company_id,
-    propertyIds: byUser[r.id] || [],
+    propertyIds: byUser[r.id] || [], unit: r.unit || null,
   })));
 });
 
@@ -1219,7 +1241,7 @@ app.get("/api/account-users", async (c) => {
 // same person can already exist as a user from another account.
 // A role the API will accept on a membership. The database no longer carries
 // a CHECK for this (see migration 014), so this is the constraint.
-const MEMBER_ROLES = ["admin", "pm", "owner", "propmgr", "contractor"];
+const MEMBER_ROLES = ["admin", "pm", "owner", "propmgr", "tenant", "contractor"];
 
 // Replaces a membership's building list. Only an owner has one: giving an
 // admin a list would read as a restriction the rest of the code does not
@@ -1562,6 +1584,9 @@ function syncHostnameAfter(c, account, opts) {
 }
 
 const ACCOUNT_KINDS = ["general_contractor", "property_manager", "building_owner", "portfolio_manager"];
+// The kinds that keep a building list, and so are the only ones with anything
+// for a tenant or a building owner to be attached to.
+const ACCOUNT_KINDS_WITH_PROPERTIES = ["property_manager", "building_owner", "portfolio_manager"];
 
 // The trade categories an account can hire out -- the same thirty ids the app
 // renders from. Kept here too because the browser's copy is a convenience and
@@ -1990,6 +2015,208 @@ app.post("/api/subs/:companyId/verify-license", requireRole("admin", "pm"), asyn
 });
 
 // ---------------------------------------------------------------------------
+// Tenants
+// ---------------------------------------------------------------------------
+// The same shape as a subcontractor invite -- a one-use link with a life --
+// but accepted by naming a building rather than a company.
+
+// Tenants arrive at the account's own address, not app.subsub.work: the whole
+// point is that the letter or noticeboard says their building's name. Falls
+// back to the generic address for an account with no branded hostname yet.
+const tenantInviteUrl = (account, token) =>
+  account.hostname_status === "active" && account.subdomain
+    ? `https://${account.subdomain}.subsub.work/?tenant=${token}`
+    : `https://app.subsub.work/?tenant=${token}`;
+
+const tenantInviteRowToJs = (r, account, propertyName) => ({
+  id: r.id, label: r.label, propertyId: r.property_id, propertyName: propertyName || null,
+  createdAt: r.created_at, expiresAt: r.expires_at, usedAt: r.used_at,
+  revokedAt: r.revoked_at, userId: r.user_id,
+  url: tenantInviteUrl(account, r.token),
+  status: r.revoked_at ? "revoked"
+    : r.used_at ? "accepted"
+    : new Date(r.expires_at) < new Date() ? "expired"
+    : "open",
+});
+
+async function lookupTenantInvite(env, token) {
+  if (!token || !/^[0-9a-f]{64}$/.test(token)) return { error: "invalid" };
+  const row = await env.DB.prepare(`SELECT * FROM tenant_invites WHERE token = ?`).bind(token).first();
+  if (!row) return { error: "invalid" };
+  if (row.revoked_at) return { error: "revoked" };
+  if (row.used_at) return { error: "used" };
+  if (new Date(row.expires_at) < new Date()) return { error: "expired" };
+  const account = await env.DB.prepare(
+    `SELECT id, name, subdomain, theme, logo_key, use_default_mark, kind, hostname_status
+       FROM accounts WHERE id = ?`).bind(row.account_id).first();
+  if (!account) return { error: "invalid" };
+  return { invite: row, account };
+}
+
+app.get("/api/tenant-invites", requireRole("admin", "pm", "propmgr"), async (c) => {
+  const auth = c.get("auth");
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(auth.accountId).first();
+  // A scoped property manager sees the links for their own buildings. An
+  // unscoped one sees the lot, including any not yet tied to a building.
+  const scope = scopeClause(auth, "ti.property_id");
+  const { results } = await c.env.DB.prepare(
+    `SELECT ti.*, p.name AS property_name FROM tenant_invites ti
+       LEFT JOIN properties p ON p.id = ti.property_id
+      WHERE ti.account_id = ? ${scope.sql} ORDER BY ti.created_at DESC LIMIT 200`
+  ).bind(auth.accountId, ...scope.vals).all();
+  return c.json((results || []).map((r) => tenantInviteRowToJs(r, account, r.property_name)));
+});
+
+app.post("/api/tenant-invites", requireRole("admin", "pm", "propmgr"), async (c) => {
+  const auth = c.get("auth");
+  const { accountId, userId } = auth;
+  const b = await c.req.json().catch(() => ({}));
+  const label = String(b.label || "").trim().slice(0, 120) || null;
+  const propertyId = b.propertyId || null;
+
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!ACCOUNT_KINDS_WITH_PROPERTIES.includes(account?.kind || "")) {
+    return c.json({ error: "not_a_property_account" }, 400);
+  }
+  if (propertyId) {
+    const owned = await c.env.DB.prepare(
+      `SELECT id FROM properties WHERE id = ? AND account_id = ?`).bind(propertyId, accountId).first();
+    if (!owned) return c.json({ error: "property_not_found" }, 404);
+    if (!maySeeProperty(auth, propertyId)) return c.json({ error: "forbidden" }, 403);
+  } else if (auth.propertyIds) {
+    // A scoped manager cannot hand out a link that lets somebody choose any
+    // building on the account, including ones that are not theirs.
+    return c.json({ error: "property_required" }, 400);
+  }
+
+  const id = uid(), token = newInviteToken();
+  const expires = new Date(Date.now() + INVITE_TTL_DAYS * 86400_000).toISOString();
+  await c.env.DB.prepare(
+    `INSERT INTO tenant_invites (id, account_id, property_id, token, label, created_by, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, accountId, propertyId, token, label, userId, expires).run();
+  await logActivity(c.env, accountId, userId, "tenant_invite_created",
+    label ? `Tenant link created for ${label}` : "Tenant link created");
+
+  const row = await c.env.DB.prepare(
+    `SELECT ti.*, p.name AS property_name FROM tenant_invites ti
+       LEFT JOIN properties p ON p.id = ti.property_id WHERE ti.id = ?`).bind(id).first();
+  return c.json(tenantInviteRowToJs(row, account, row.property_name), 201);
+});
+
+app.delete("/api/tenant-invites/:id", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const res = await c.env.DB.prepare(
+    `UPDATE tenant_invites SET revoked_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND account_id = ? AND used_at IS NULL AND revoked_at IS NULL`
+  ).bind(c.req.param("id"), accountId).run();
+  if (!res.meta.changes) return c.json({ error: "not_found" }, 404);
+  return c.json({ ok: true });
+});
+
+// What the branded page shows somebody holding a tenant link, before they
+// have any account at all. Public, so it says as little as it can get away
+// with: the building's name and the account's branding.
+app.get("/api/tenant-invite/:token", async (c) => {
+  const { error, invite, account } = await lookupTenantInvite(c.env, c.req.param("token"));
+  if (error) return c.json({ error }, error === "invalid" ? 404 : 410);
+
+  // Only offered when the link does not already name one. A link that does
+  // must not list the rest of the portfolio to somebody who is not in it yet.
+  let properties = [];
+  if (!invite.property_id) {
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, name FROM properties WHERE account_id = ? ORDER BY name`).bind(account.id).all();
+    properties = results || [];
+  } else {
+    const p = await c.env.DB.prepare(
+      `SELECT id, name FROM properties WHERE id = ?`).bind(invite.property_id).first();
+    properties = p ? [p] : [];
+  }
+
+  return c.json({
+    label: invite.label,
+    fixedProperty: invite.property_id || null,
+    properties,
+    account: {
+      id: account.id, name: account.name, subdomain: account.subdomain,
+      theme: parseJson(account.theme),
+      logoKey: account.logo_key, useDefaultMark: !!account.use_default_mark,
+    },
+  });
+});
+
+// Accepting one. Creates the person, the seat and the building scope, and
+// leaves them with a Supabase account they can set a password on.
+app.post("/api/tenant-invite/:token", async (c) => {
+  const rl = await rateLimit(c.env, "tenant-invite", clientIp(c), { limit: 10, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+
+  const { error, invite, account } = await lookupTenantInvite(c.env, c.req.param("token"));
+  if (error) return c.json({ error }, error === "invalid" ? 404 : 410);
+
+  const b = await c.req.json().catch(() => ({}));
+  const name = String(b.name || "").trim().slice(0, 120);
+  const email = String(b.email || "").trim().toLowerCase();
+  const unit = String(b.unit || "").trim().slice(0, 60) || null;
+  const propertyId = invite.property_id || b.propertyId || null;
+  if (!name) return c.json({ error: "name_required" }, 400);
+  if (!EMAIL_RE.test(email)) return c.json({ error: "bad_email" }, 400);
+  if (!propertyId) return c.json({ error: "property_required" }, 400);
+
+  // The building has to belong to this account, whether the link named it or
+  // the tenant chose it. A chosen one is the case that matters.
+  const property = await c.env.DB.prepare(
+    `SELECT id FROM properties WHERE id = ? AND account_id = ?`).bind(propertyId, account.id).first();
+  if (!property) return c.json({ error: "property_not_found" }, 404);
+
+  let user = await c.env.DB.prepare(`SELECT * FROM users WHERE lower(email) = lower(?)`).bind(email).first();
+  const userId = user?.id ?? uid();
+  if (!user) {
+    await c.env.DB.prepare(`INSERT INTO users (id, name, email) VALUES (?, ?, ?)`)
+      .bind(userId, name, email).run();
+  }
+
+  // Already a seat here? Then this link is not what put them in the account,
+  // and silently changing what they are would be the wrong move.
+  const seat = await c.env.DB.prepare(
+    `SELECT id, role FROM memberships WHERE user_id = ? AND account_id = ?`).bind(userId, account.id).first();
+  if (seat && seat.role !== "tenant") return c.json({ error: "already_a_member" }, 409);
+
+  const membershipId = seat?.id ?? uid();
+  if (seat) {
+    await c.env.DB.prepare(`UPDATE memberships SET unit = COALESCE(?, unit) WHERE id = ?`)
+      .bind(unit, membershipId).run();
+  } else {
+    await c.env.DB.prepare(
+      `INSERT INTO memberships (id, user_id, account_id, role, unit) VALUES (?, ?, ?, 'tenant', ?)`
+    ).bind(membershipId, userId, account.id, unit).run();
+  }
+  await c.env.DB.prepare(
+    `INSERT OR IGNORE INTO membership_properties (membership_id, property_id) VALUES (?, ?)`
+  ).bind(membershipId, propertyId).run();
+
+  // A login to go with the seat. Non-blocking: the seat is real either way,
+  // and a tenant who cannot sign in yet is a password reset away, whereas a
+  // failed request here would lose the invite for good.
+  let authNote = null;
+  const made = await ensureAuthUser(c.env, email);
+  if (!made.ok) authNote = made.error;
+  else if (made.authId && !user?.auth_id) {
+    await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ? AND auth_id IS NULL`)
+      .bind(made.authId, userId).run();
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE tenant_invites SET used_at = CURRENT_TIMESTAMP, user_id = ? WHERE id = ?`
+  ).bind(userId, invite.id).run();
+  await logActivity(c.env, account.id, null, "tenant_joined",
+    `${name} joined as a tenant${unit ? ` (${unit})` : ""}`);
+
+  return c.json({ ok: true, email, authNote });
+});
+
+// ---------------------------------------------------------------------------
 // Jobs
 // ---------------------------------------------------------------------------
 app.get("/api/jobs", async (c) => {
@@ -1998,10 +2225,14 @@ app.get("/api/jobs", async (c) => {
   // An owner sees the jobs at their own buildings and nothing else. A job with
   // no property is account-wide work and is not theirs to see either, which
   // `property_id IN (...)` gives for free -- NULL matches nothing.
+  //
+  // A tenant is narrower still: their own reports, not the building's work.
+  // Sharing a building with somebody is not a reason to see their repairs.
   const scope = scopeClause(auth, "property_id");
+  const mine = auth.role === "tenant" ? ` AND requested_by = ? ` : "";
   const { results: jobs } = await c.env.DB.prepare(
-    `SELECT * FROM jobs WHERE account_id = ? ${scope.sql} ORDER BY created_at DESC`
-  ).bind(accountId, ...scope.vals).all();
+    `SELECT * FROM jobs WHERE account_id = ? ${scope.sql} ${mine} ORDER BY created_at DESC`
+  ).bind(accountId, ...scope.vals, ...(auth.role === "tenant" ? [auth.userId] : [])).all();
 
   const { results: wos } = await c.env.DB.prepare(
     `SELECT wo.* FROM work_orders wo JOIN jobs j ON j.id = wo.job_id
@@ -2057,7 +2288,7 @@ function jobRowToJs(j, workOrders) {
 // the way out of the API rather than hidden in the page, because a value the
 // browser is sent is a value the browser can be made to show.
 function stripMoney(auth, job) {
-  if (auth.role !== "owner") return job;
+  if (auth.role !== "owner" && auth.role !== "tenant") return job;
   const assignments = {};
   for (const [trade, a] of Object.entries(job.assignments || {})) {
     const { value, ...rest } = a;
@@ -2069,7 +2300,7 @@ function stripMoney(auth, job) {
 // An owner may raise work, which is why this is not requireRole("admin","pm"):
 // what they create is a request rather than a job, and the difference is
 // enforced below rather than left to the caller to declare.
-app.post("/api/jobs", requireRole("admin", "pm", "owner", "propmgr"), async (c) => {
+app.post("/api/jobs", requireRole("admin", "pm", "owner", "propmgr", "tenant"), async (c) => {
   const auth = c.get("auth");
   const { accountId, userId } = auth;
   const b = await c.req.json();
@@ -2088,9 +2319,9 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "propmgr"), async (c) 
     if (!owned) return c.json({ error: "property_not_found" }, 404);
   }
 
-  // Only an owner raises requests. A scoped property manager is there to run
-  // the work, so what they create is a job, the same as any other manager's.
-  const requestedBy = auth.role === "owner" ? userId : null;
+  // Owners and tenants raise requests; a scoped property manager is there to
+  // run the work, so what they create is a job like any other manager's.
+  const requestedBy = (auth.role === "owner" || auth.role === "tenant") ? userId : null;
   await c.env.DB.prepare(
     `INSERT INTO jobs (id, account_id, title, client, address, area, zip, sqft, stories, date, time,
        trades, scope, material_source, materials_paid_by, measurement_docs, created_by,

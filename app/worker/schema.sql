@@ -117,6 +117,9 @@ CREATE TABLE memberships (
   -- rebuilding the table, and the API validates the role on every write.
   role           TEXT NOT NULL,
   company_id     TEXT REFERENCES companies(id),   -- set when role = 'contractor'
+  -- Which flat, door or unit, when role = 'tenant'. Free text: "4B",
+  -- "Flat 2, rear" and "Shop 3" are all real answers and none of them parse.
+  unit           TEXT,
   created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (user_id, account_id)
 );
@@ -455,6 +458,27 @@ CREATE INDEX idx_email_log_company ON email_log(company_id, at DESC);
 -- The token is the credential. It is the only thing standing between a
 -- stranger and a row in someone's contractor list, so it is generated from
 -- crypto.getRandomValues, expires, and is spent on first use.
+-- An invitation to become a tenant of a building. Separate from sub_invites
+-- because the two are accepted by answering completely different questions:
+-- a company, a licence and a trade list on one side, a building and a
+-- password on the other.
+CREATE TABLE tenant_invites (
+  id           TEXT PRIMARY KEY,
+  account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  -- NULL means the tenant picks from the account's buildings when they
+  -- accept, which is how one link on a noticeboard would be used.
+  property_id  TEXT REFERENCES properties(id) ON DELETE CASCADE,
+  token        TEXT UNIQUE NOT NULL,
+  label        TEXT,
+  created_by   TEXT REFERENCES users(id),
+  created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+  expires_at   TEXT NOT NULL,
+  used_at      TEXT,
+  user_id      TEXT REFERENCES users(id),
+  revoked_at   TEXT
+);
+CREATE INDEX idx_tenant_invites_account ON tenant_invites(account_id);
+
 CREATE TABLE sub_invites (
   id          TEXT PRIMARY KEY,
   account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
