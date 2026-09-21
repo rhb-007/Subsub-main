@@ -40,7 +40,8 @@ const check = (name, ok, detail = "") => {
 const dana = await tok("owner1@example.test");   // granted p1 and p2
 const theo = await tok("owner2@example.test");   // granted p9
 const pm   = await tok("pm@example.test");       // runs the account
-const mgr  = await tok("manager1@example.test"); // manages p1 and p9 only
+const mgr  = await tok("manager1@example.test"); // assigned p1 and p9
+const wide = await tok("manager2@example.test"); // same role, no list at all
 
 console.log("\n-- each owner sees their own buildings and no others --");
 const dp = await call(dana, "/properties");
@@ -121,12 +122,24 @@ check("the manager sees both", (await call(pm, "/subs")).body.length === 2);
 
 
 // ---------------------------------------------------------------------------
-// The inverse seat: a managing agent scoped to named buildings. Restricted the
-// same way an owner is, but there to run the work rather than watch it -- so
-// the interesting questions are the opposite ones. Can they act? And do they
-// stop at the edge of their own list?
+// A property manager assigned to named buildings. Same role as any other
+// manager -- the list is the only difference -- so the questions are: does
+// the list actually narrow them, does its absence leave a colleague seeing
+// everything, and can they still do the job inside it?
 // ---------------------------------------------------------------------------
-console.log("\n-- a scoped property manager sees only their buildings --");
+console.log("\n-- the same role, unnarrowed, still sees the whole account --");
+check("every building", (await call(wide, "/properties")).body?.length === 16);
+// Not a count -- earlier checks in this file raise requests that stay. What
+// matters is that nothing is filtered out: the buildings nobody assigned them
+// and the account-wide job with no building at all.
+const wideJobs = (await call(wide, "/jobs")).body;
+check("every job, including ones at buildings nobody assigned them",
+  ["job_p1", "job_p2", "job_p9", "job_none"].every((id) => wideJobs.some((j) => j.id === id)),
+  wideJobs.map((j) => j.id).join(","));
+check("and can still act on one at a building nobody assigned them",
+  (await call(wide, "/jobs/job_p2", { method: "PATCH", body: JSON.stringify({ notes: "seen" }) })).status === 200);
+
+console.log("\n-- a narrowed property manager sees only their buildings --");
 const mp = await call(mgr, "/properties");
 check("scoped to p1 and p9", mp.body?.length === 2
   && mp.body.every((p) => ["p1", "p9"].includes(p.id)),
@@ -164,18 +177,21 @@ check("nor reach the work order issued for a job of theirs from elsewhere",
   (await call(theo, "/work-orders/wo_1/crew", { method: "POST",
     body: JSON.stringify({ crewName: "x" }) })).status === 403);
 
-console.log("\n-- and cannot change the account itself --");
+console.log("\n-- and cannot change the portfolio or the account --");
 for (const [label, path, method, body] of [
   ["add a building", "/properties", "POST", "{}"],
-  ["remove one", "/properties/p1", "DELETE", null],
+  ["edit a building that is not theirs", "/properties/p2", "PATCH", "{}"],
+  ["remove a building that is not theirs", "/properties/p2", "DELETE", null],
   ["add a user", "/account-users", "POST", "{}"],
   ["change the account", "/account", "PATCH", "{}"],
   ["open billing", "/billing/portal", "POST", "{}"],
-  ["invite a contractor", "/invites", "POST", "{}"],
-  ["add a contractor", "/subs", "POST", "{}"],
 ]) {
-  check(`refused: ${label}`, (await call(mgr, path, { method, body })).status === 403);
+  check(`refused: ${label}`, (await call(mgr, path, { method, body })).status === 403,
+    `status ${(await call(mgr, path, { method, body })).status}`);
 }
+// An unnarrowed manager is unchanged by all of this: same role, same powers.
+check("but an unnarrowed one can still edit a building",
+  (await call(wide, "/properties/p2", { method: "PATCH", body: JSON.stringify({ name: "Building 2" }) })).status === 200);
 
 console.log("\n-- an account that stops keeping buildings --");
 // The account type is editable, so a portfolio can be switched to "general

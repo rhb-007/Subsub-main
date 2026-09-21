@@ -234,14 +234,32 @@ app.use("/api/*", async (c, next) => {
 // building owner sees theirs and can ask for work; a scoped property manager
 // runs the work at theirs. Both are restricted the same way -- what differs is
 // what they may do inside the restriction, which requireRole decides.
-const SCOPED_ROLES = ["owner", "propmgr", "tenant"];
+// Roles that are ALWAYS limited to named buildings, and for which an empty
+// list means access to nothing. A property manager is deliberately not one of
+// them: theirs is optional, and empty means the whole account -- see
+// propertyScope, where that asymmetry lives.
+const ALWAYS_SCOPED_ROLES = ["owner", "tenant"];
 
 async function propertyScope(db, membership) {
-  if (!SCOPED_ROLES.includes(membership.role)) return null;
+  const role = membership.role;
+  // A property manager's list is optional. Most firms have one or two people
+  // who see the whole book; a big one assigns each manager to named buildings
+  // and wants them to see only those. Same role either way -- the buildings
+  // are the difference, not the job.
+  if (role !== "pm" && !ALWAYS_SCOPED_ROLES.includes(role)) return null;
+
   const { results } = await db.prepare(
     `SELECT property_id FROM membership_properties WHERE membership_id = ?`
   ).bind(membership.id).all();
-  return (results || []).map((r) => r.property_id);
+  const ids = (results || []).map((r) => r.property_id);
+
+  // Here is the asymmetry, and it is deliberate. For a manager, no rows means
+  // nobody narrowed them, so they see everything -- which is what every
+  // membership was before any of this existed, and what an upgrade must leave
+  // untouched. For an owner or a tenant, no rows means nobody has given them
+  // a building, and they must see nothing rather than fall through to all.
+  if (!ids.length && role === "pm") return null;
+  return ids;
 }
 
 // Guards a single property id against the seat's scope.
@@ -322,6 +340,20 @@ app.use("/api/*", async (c, next) => {
   const auth = c.get("auth");
   if (!auth?.propertyIds) return next();          // an unrestricted seat
   const path = new URL(c.req.url).pathname;
+
+  // A building named directly: editing or removing one that is not theirs.
+  const prop = path.match(/^\/api\/properties\/([^/]+)$/);
+  if (prop) {
+    if (!maySeeProperty(auth, prop[1])) return c.json({ error: "forbidden" }, 403);
+    return next();
+  }
+  // Adding one is not narrowing work at a building, it is changing the
+  // portfolio, and somebody given five buildings to run is not the person who
+  // decides there is a sixth. They would not be able to see it afterwards
+  // either, which is its own kind of wrong.
+  if (path === "/api/properties" && c.req.method === "POST") {
+    return c.json({ error: "forbidden" }, 403);
+  }
 
   // The three ways a request names work: directly, through the work order
   // issued for it, or through a service call raised against it.
@@ -1241,14 +1273,17 @@ app.get("/api/account-users", async (c) => {
 // same person can already exist as a user from another account.
 // A role the API will accept on a membership. The database no longer carries
 // a CHECK for this (see migration 014), so this is the constraint.
-const MEMBER_ROLES = ["admin", "pm", "owner", "propmgr", "tenant", "contractor"];
+const MEMBER_ROLES = ["admin", "pm", "owner", "tenant", "contractor"];
 
 // Replaces a membership's building list. Only an owner has one: giving an
 // admin a list would read as a restriction the rest of the code does not
 // apply, so the rows are cleared instead of written.
 async function setMembershipProperties(db, membershipId, accountId, role, propertyIds) {
   const stmts = [db.prepare(`DELETE FROM membership_properties WHERE membership_id = ?`).bind(membershipId)];
-  if (SCOPED_ROLES.includes(role)) {
+  // A manager with no list is unrestricted, so an empty list is a real state
+  // to store rather than a reason to skip the write -- clearing one is how
+  // somebody gets widened back to the whole account.
+  if (role === "pm" || ALWAYS_SCOPED_ROLES.includes(role)) {
     for (const pid of [...new Set(propertyIds || [])]) {
       stmts.push(db.prepare(
         `INSERT OR IGNORE INTO membership_properties (membership_id, property_id)
@@ -1263,9 +1298,10 @@ app.post("/api/account-users", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
   const b = await c.req.json(); // { name, email, phone, role, subId, propertyIds }
   if (!MEMBER_ROLES.includes(b.role)) return c.json({ error: "invalid_role" }, 400);
-  // A seat scoped to nothing can see nothing, which is a login that does not
-  // work and a support call that follows. Refuse it at the door.
-  if (SCOPED_ROLES.includes(b.role) && !(b.propertyIds || []).length) {
+  // An owner or tenant scoped to nothing can see nothing, which is a login
+  // that does not work and a support call that follows. A manager with no
+  // list is the ordinary case -- the whole account -- so it is not refused.
+  if (ALWAYS_SCOPED_ROLES.includes(b.role) && !(b.propertyIds || []).length) {
     return c.json({ error: "properties_required" }, 400);
   }
   let user = await c.env.DB.prepare(`SELECT * FROM users WHERE lower(email) = lower(?)`).bind(b.email).first();
@@ -2053,7 +2089,7 @@ async function lookupTenantInvite(env, token) {
   return { invite: row, account };
 }
 
-app.get("/api/tenant-invites", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.get("/api/tenant-invites", requireRole("admin", "pm"), async (c) => {
   const auth = c.get("auth");
   const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(auth.accountId).first();
   // A scoped property manager sees the links for their own buildings. An
@@ -2067,7 +2103,7 @@ app.get("/api/tenant-invites", requireRole("admin", "pm", "propmgr"), async (c) 
   return c.json((results || []).map((r) => tenantInviteRowToJs(r, account, r.property_name)));
 });
 
-app.post("/api/tenant-invites", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/tenant-invites", requireRole("admin", "pm"), async (c) => {
   const auth = c.get("auth");
   const { accountId, userId } = auth;
   const b = await c.req.json().catch(() => ({}));
@@ -2300,7 +2336,7 @@ function stripMoney(auth, job) {
 // An owner may raise work, which is why this is not requireRole("admin","pm"):
 // what they create is a request rather than a job, and the difference is
 // enforced below rather than left to the caller to declare.
-app.post("/api/jobs", requireRole("admin", "pm", "owner", "propmgr", "tenant"), async (c) => {
+app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) => {
   const auth = c.get("auth");
   const { accountId, userId } = auth;
   const b = await c.req.json();
@@ -2344,7 +2380,7 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "propmgr", "tenant"), 
 
 // Turning an owner's request into a job somebody can be assigned to. Only the
 // account can do this -- that is the entire point of a request.
-app.post("/api/jobs/:id/approve", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/jobs/:id/approve", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const id = c.req.param("id");
   const job = await c.env.DB.prepare(
@@ -2362,7 +2398,7 @@ app.post("/api/jobs/:id/approve", requireRole("admin", "pm", "propmgr"), async (
   return c.json({ ok: true });
 });
 
-app.post("/api/jobs/:id/complete", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/jobs/:id/complete", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const id = c.req.param("id");
   await c.env.DB.prepare(
@@ -2374,7 +2410,7 @@ app.post("/api/jobs/:id/complete", requireRole("admin", "pm", "propmgr"), async 
   return c.json({ ok: true });
 });
 
-app.post("/api/jobs/:id/reopen", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/jobs/:id/reopen", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   await c.env.DB.prepare(
     `UPDATE jobs SET status = 'active', completed_at = NULL WHERE id = ? AND account_id = ?`
@@ -2383,7 +2419,7 @@ app.post("/api/jobs/:id/reopen", requireRole("admin", "pm", "propmgr"), async (c
 });
 
 // Everything about a job that ISN'T a work order — notes, measurement docs.
-app.patch("/api/jobs/:id", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   const id = c.req.param("id");
   const b = await c.req.json(); // { notes?, measurementDocs?, propertyId? }
@@ -2408,7 +2444,7 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm", "propmgr"), async (c) => {
 // ---------------------------------------------------------------------------
 // Work orders — issuing one is atomic and server-side authoritative.
 // ---------------------------------------------------------------------------
-app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const jobId = c.req.param("jobId");
   const { trade, companyId, crewName, tradeScope, value, responseWindow } = await c.req.json();
@@ -2480,7 +2516,7 @@ const windowMins = (id) => RESPONSE_WINDOW_MINS[id] ?? 1440;
 
 // Void the live WO for a job+trade and issue a fresh one — this is how
 // "editing" a work order actually works; nothing is ever UPDATEd in place.
-app.post("/api/work-orders/:id/reissue", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/work-orders/:id/reissue", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const id = c.req.param("id");
   const wo = await c.env.DB.prepare(
@@ -2530,7 +2566,7 @@ app.post("/api/work-orders/:id/respond", async (c) => {
 });
 
 // Pull a trade off a job entirely — voids the live WO, issues nothing new.
-app.post("/api/jobs/:jobId/unassign/:trade", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/jobs/:jobId/unassign/:trade", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const { jobId, trade } = c.req.param();
   const wo = await c.env.DB.prepare(
@@ -2545,7 +2581,7 @@ app.post("/api/jobs/:jobId/unassign/:trade", requireRole("admin", "pm", "propmgr
 
 // Reassigning which crew covers a WO is operational, not a contract term —
 // unlike reissue(), this updates the live row in place.
-app.post("/api/work-orders/:id/crew", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/work-orders/:id/crew", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   const id = c.req.param("id");
   const { crewName } = await c.req.json();
@@ -2571,7 +2607,7 @@ app.post("/api/work-orders/:id/signed", async (c) => {
 
 // Rating a job's work belongs to the RELATIONSHIP, not the company — the
 // engagement's rating is the average across every rated WO under it.
-app.post("/api/work-orders/:id/rate", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/work-orders/:id/rate", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const id = c.req.param("id");
   const { rating } = await c.req.json(); // 1-5
@@ -2829,7 +2865,7 @@ app.get("/api/service-calls", async (c) => {
   return c.json(results.map(serviceCallRowToJs));
 });
 
-app.post("/api/service-calls", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/service-calls", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const b = await c.req.json(); // { jobId, trade, subId, crewName, kind, issue, returnDate, raisedBy }
   const id = uid();
@@ -2855,7 +2891,7 @@ app.post("/api/service-calls/:id/confirm", async (c) => {
   return c.json({ ok: true });
 });
 
-app.post("/api/service-calls/:id/resolve", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/service-calls/:id/resolve", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   await c.env.DB.prepare(
     `UPDATE service_calls SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ?`
@@ -4009,7 +4045,7 @@ async function docRequestContext(c, companyId, jobId, trade) {
 
 // What will be sent, built by the same function that sends it. The admin
 // reviews this before pressing send.
-app.get("/api/notify/documents/preview", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.get("/api/notify/documents/preview", requireRole("admin", "pm"), async (c) => {
   const ctx = await docRequestContext(c, c.req.query("companyId"), c.req.query("jobId"), c.req.query("trade"));
   if (!ctx) return c.json({ error: "not_engaged" }, 404);
   const mail = docRequestEmail(ctx);
@@ -4019,7 +4055,7 @@ app.get("/api/notify/documents/preview", requireRole("admin", "pm", "propmgr"), 
   });
 });
 
-app.post("/api/notify/documents", requireRole("admin", "pm", "propmgr"), async (c) => {
+app.post("/api/notify/documents", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
   const ctx = await docRequestContext(c, b.companyId, b.jobId, b.trade);

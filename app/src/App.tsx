@@ -420,9 +420,12 @@ const seedSubs = [
 const ACCOUNT_KINDS = {
   general_contractor: { label: "General contractor", properties: false, invites: [] },
   property_manager:   { label: "Property manager", properties: true, invites: ["owner"] },
-  building_owner:     { label: "Building owner", properties: true, invites: ["propmgr"] },
+  // A building owner's account has no owners to invite -- they are the owner.
+  // The people they let in are managing agents, which is the ordinary
+  // property manager role with a list of buildings attached.
+  building_owner:     { label: "Building owner", properties: true, invites: [] },
   portfolio_manager:  { label: "Commercial portfolio manager", properties: true,
-                        invites: ["owner", "propmgr"] },
+                        invites: ["owner"] },
 };
 // Anyone keeping a building list has people living or trading in it, so
 // tenants are offered on all three rather than listed per kind.
@@ -457,17 +460,18 @@ const ROLES = {
   // "Property manager", not "project manager": these accounts are property
   // businesses, and project-manager was general-contractor language that had
   // been left on the role everywhere.
+  //
+  // One role whether they run the whole book or five buildings. A large
+  // managing agent assigns each manager to named buildings and a small one
+  // does not; that is the same job with or without a list, and it lives in
+  // membership_properties rather than in a second role nobody could tell
+  // apart from this one by its name.
   pm: { label: "Property manager", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
   // A building owner is a guest in somebody else's account, scoped to the
   // buildings they were granted. No contractor directory -- they see who is
   // coming to their own jobs, not who the account works with -- and no
   // availability calendar or uniforms, which are the account's business.
   owner: { label: "Building owner", can: ["dashboard", "properties", "jobs", "account"] },
-  // The inverse: somebody running specific buildings for whoever owns them.
-  // Everything a property manager does, on their buildings only. They see
-  // costs, because they are the ones arranging and agreeing the work.
-  propmgr: { label: "Property manager (specific buildings)",
-    can: ["dashboard", "contractors", "properties", "calendar", "jobs", "account"] },
   // Somebody who lives or trades in one of the buildings. They report
   // problems and follow what happens to them, and that is the whole of it --
   // no dashboard, no portfolio, no other tenant's repairs, no money. Their
@@ -476,11 +480,20 @@ const ROLES = {
   tenant: { label: "Tenant", can: ["tenant", "account"] },
   contractor: { label: "Contractor", can: ["portal", "account"] },
 };
-// Seats limited to named buildings, as opposed to the whole account.
-const SCOPED_ROLES = ["owner", "propmgr", "tenant"];
+// Roles that are always limited to named buildings, and for which an empty
+// list means nothing rather than everything. A property manager's list is
+// optional, so they are not here -- ask `isScoped` instead, which reads the
+// seat rather than the role.
+const ALWAYS_SCOPED_ROLES = ["owner", "tenant"];
+// Whether THIS seat is narrowed, which for a manager is a question about
+// their buildings and not about their job title.
+const isScoped = (m) => (m?.propertyIds || []).length > 0;
 // Roles that belong to the account itself, as opposed to somebody it let in.
 // The difference decides who may see money and who may run the place.
 const isStaffRole = (r) => r === "admin" || r === "pm";
+// Runs the account itself: its buildings, its plan, its onboarding. A manager
+// given five buildings runs those five, not the firm.
+const runsTheAccount = (role, membership) => isStaffRole(role) && !isScoped(membership);
 const seedUsers = [
   { id: "u1", name: "Richard Braun", email: "rb@outerhome.com", role: "admin" },
   { id: "u2", name: "Alicia Gomez", email: "alicia@outerhome.com", role: "pm" },
@@ -1566,9 +1579,17 @@ export default function SubSub() {
   // A contractor and a tenant are both guests: naming the account's own type
   // at them ("Property manager (tenant)") describes somebody else's business,
   // not their relationship to it.
-  const roleLabel = role === "contractor" || role === "tenant"
-    ? ROLES[role].label
-    : `${ACCOUNT_KINDS[kindOf(account)].label} (${ROLES[role].label.toLowerCase()})`;
+  //
+  // And the account's type is often the same word as the role -- a property
+  // manager working for a property manager -- which read as "Property manager
+  // (property manager)". Said once in that case.
+  const roleLabel = (() => {
+    if (role === "contractor" || role === "tenant") return ROLES[role].label;
+    const kind = ACCOUNT_KINDS[kindOf(account)].label;
+    const seat = ROLES[role].label;
+    if (kind.toLowerCase() === seat.toLowerCase()) return seat;
+    return `${kind} (${seat.toLowerCase()})`;
+  })();
   const plan = account.plan;
   const billing = account.billing || "monthly";
   const setBilling = (c) => {
@@ -2004,7 +2025,7 @@ export default function SubSub() {
   const tryAddJob = (forSub, forProperty) => {
     // The plan belongs to the account, not to a guest of it. Showing an owner
     // an upgrade prompt would be asking the wrong person for money.
-    if (atJobLimit && isStaffRole(role)) { setAddMenu(false); setUpgradePrompt({ kind: "job" }); return; }
+    if (atJobLimit && runsTheAccount(role, membership)) { setAddMenu(false); setUpgradePrompt({ kind: "job" }); return; }
     if (atJobLimit) { setAddMenu(false); setBillingNote("This account has reached its job limit. Ask whoever manages it to raise it."); return; }
     setJobForm({ ...(forSub ? { forSub } : {}), ...(forProperty ? { forProperty } : {}) });
   };
@@ -2821,7 +2842,7 @@ export default function SubSub() {
               if (role === "owner") {
                 actions.push(["work", "Request work", "Request work", Plus, () => tryAddJob()]);
               } else {
-                if (isStaffRole(role)) {
+                if (runsTheAccount(role, membership)) {
                   actions.push(["contractor", "Contractor", "New contractor", Hammer, tryAddContractor]);
                   actions.push(["invite", "Invite link", "Invite link", Link2, () => setInviteOpen(true)]);
                   // A general contractor works job to job and has no building
@@ -3010,7 +3031,8 @@ export default function SubSub() {
           onRequestDocs={requestDocs} onOpenSub={(sb) => setSelected(sb)}
           onReviewDoc={(sb, kind) => setReviewing({ sub: sb, kind })}
           onVerifyLicense={(sb) => verifyLicense(sb.id)}
-          onApproveJob={approveJob} users={accountUsers} />
+          onApproveJob={approveJob} users={accountUsers}
+          runsAccount={runsTheAccount(role, membership)} />
       )}
 
       {tab === "network" && can("contractors") && (
@@ -3160,7 +3182,7 @@ export default function SubSub() {
           onAdd={addProperty} onPatch={patchProperty} onRemove={removeProperty}
           onOpenSub={(s) => { setSelected(s); setTab("contractors"); }}
           onNewJob={(p) => tryAddJob(null, p)} newAt={newPropertyAt}
-          canManage={isStaffRole(role)} asOwner={role === "owner"} />
+          canManage={runsTheAccount(role, membership)} asOwner={role === "owner"} />
       )}
 
       {tab === "calendar" && can("calendar") && (
@@ -7991,7 +8013,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                       {u.id === currentUserId && <span className="you-badge">you</span>}
                     </div>
                     <p className="user-row-sub">{u.email}{linked ? ` · ${linked.company}` : ""}
-                      {SCOPED_ROLES.includes(u.role) && (() => {
+                      {(ALWAYS_SCOPED_ROLES.includes(u.role) || isScoped(u)) && (() => {
                         const names = (u.propertyIds || [])
                           .map((id) => properties.find((p) => p.id === id)?.name).filter(Boolean);
                         return names.length ? ` · ${names.join(", ")}` : " · no buildings yet";
@@ -8453,7 +8475,7 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
 // `properties` is null for an account that keeps no building list -- a general
 // contractor -- and an array for the rest, so it is both the data and the
 // answer to "does this account think in buildings at all".
-function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, users = [] }) {
+function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, users = [], runsAccount = true }) {
   const managesProperties = Array.isArray(properties);
   const today = new Date().toISOString().slice(0, 10);
   const slots = jobs.flatMap((j) => j.trades.map((t) => ({ job: j, trade: t, a: j.assignments[t] })));
@@ -8510,7 +8532,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </div>
       </div>
 
-      {isStaffRole(role) && <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
+      {runsAccount && <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
         subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
         onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors}
         properties={properties} onAddProperty={onAddProperty} />}
@@ -10099,22 +10121,26 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
         subId: existing.subId || "", propertyIds: existing.propertyIds || [] }
     : { name: "", email: "", role: "pm", subId: "", propertyIds: [] });
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
-  // The scoped roles depend on what kind of account this is -- an owner
-  // hands out management of a building, a managing agent hands out sight of
-  // one -- and none of them mean anything without buildings to scope to. A
-  // role somebody already holds stays listed either way, so editing a user
-  // cannot silently change what they are.
+  // Building owner is only offered by an account that has owners on the other
+  // side of the table, and never without buildings to attach them to. A role
+  // somebody already holds stays listed either way, so editing a user cannot
+  // silently change what they are.
   const offered = ACCOUNT_KINDS[accountKind]?.invites || [];
   const roles = Object.entries(ROLES).filter(([k]) =>
-    !SCOPED_ROLES.includes(k)
+    !ALWAYS_SCOPED_ROLES.includes(k)
     || k === existing?.role
     || (offered.includes(k) && properties.length > 0));
-  // An owner scoped to nothing would sign in to an empty account, so the list
-  // is as required as a name is.
-  const scoped = SCOPED_ROLES.includes(f.role);
+
+  // Two different meanings for the same empty list, so they are named apart.
+  // A manager with none ticked runs the whole account, which is the common
+  // case and the one that must stay effortless. An owner with none ticked
+  // would sign in to an empty account, so for them it is required.
+  const canNarrow = f.role === "pm" && properties.length > 0;
+  const mustScope = ALWAYS_SCOPED_ROLES.includes(f.role);
+  const showBuildings = (canNarrow || mustScope) && f.role !== "tenant";
   const valid = f.name && f.email
     && (f.role !== "contractor" || f.subId)
-    && (!scoped || f.propertyIds.length > 0);
+    && (!mustScope || f.propertyIds.length > 0);
   const roleLocked = existing && !canChangeRole;
   return (
     <div className="form">
@@ -10139,9 +10165,10 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
                 <span className="rp-label">{r.label}</span>
                 <span className="rp-desc">
                   {k === "admin" && "Full access, can manage users"}
-                  {k === "pm" && "Create jobs & work orders, assign contractors — every building"}
+                  {k === "pm" && (properties.length > 0
+                    ? "Runs jobs and contractors — every building, or only the ones you pick"
+                    : "Create jobs & work orders, assign contractors")}
                   {k === "owner" && "Only the buildings you choose — can request work, sees no costs"}
-                  {k === "propmgr" && "Runs the buildings you choose — creates jobs, assigns contractors, sees their costs"}
                   {k === "contractor" && "Own availability, trades, docs, job responses"}
                 </span>
               </button>
@@ -10149,8 +10176,8 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
           </div>
         )}
       </div>
-      {scoped && !roleLocked && (
-        <div className="fld">{f.role === "owner" ? "Buildings they can see" : "Buildings they manage"}
+      {showBuildings && !roleLocked && (
+        <div className="fld">{f.role === "owner" ? "Buildings they can see" : "Buildings"}
           <div className="pick-grid">
             {properties.map((p) => (
               <button key={p.id} type="button"
@@ -10165,10 +10192,12 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
           </div>
           <p className="fld-note">
             {!f.propertyIds.length
-              ? "Pick at least one. A seat with none would sign in to an empty account."
+              ? (mustScope
+                  ? "Pick at least one. A seat with none would sign in to an empty account."
+                  : "Leave them all unticked and they run every building on the account — which is what most managers should do. Tick some to assign them to just those.")
               : f.role === "owner"
               ? `They will see ${f.propertyIds.length} of your ${properties.length} propert${properties.length === 1 ? "y" : "ies"}, the jobs at ${f.propertyIds.length === 1 ? "it" : "them"}, and who is coming. Not the others, not your other contractors, and no costs.`
-              : `They will run ${f.propertyIds.length} of your ${properties.length} propert${properties.length === 1 ? "y" : "ies"} — raising jobs, assigning contractors and seeing what those cost. Nothing at the others, and they cannot change your billing, your users or your property list.`}
+              : `Assigned to ${f.propertyIds.length} of your ${properties.length} propert${properties.length === 1 ? "y" : "ies"} — they run the jobs at ${f.propertyIds.length === 1 ? "it" : "them"} and see nothing at the others. They cannot add or remove buildings, or change your billing and users.`}
           </p>
         </div>
       )}
@@ -10184,7 +10213,7 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
         <button className="btn-ghost" onClick={onCancel}>Cancel</button>
         <button className="btn-solid" onClick={() => onSubmit({
           ...f, subId: f.subId || undefined,
-          propertyIds: scoped ? f.propertyIds : [],
+          propertyIds: showBuildings ? f.propertyIds : [],
         })} disabled={!valid}>
           {existing ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Create user</>}
         </button>

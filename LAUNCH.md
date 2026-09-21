@@ -97,6 +97,8 @@ Fixed as encountered, because each one blocked something on the list:
   building survived until the page reloaded. Owner scoping is built on that
   link, so it had to be real first.
 - Two taps on a property picker in the same instant kept only the second.
+- A seat's role read as "Property manager (property manager)" whenever the
+  account's own type was the same word as the role.
 - Switching an account's type to "general contractor" left any scoped seat on
   it with no building list, and their dashboard crashed on it rather than
   showing an empty one.

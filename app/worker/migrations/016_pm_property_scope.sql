@@ -1,0 +1,19 @@
+-- Migration 016 — one property manager role, optionally narrowed.
+--
+-- 014 and 015 introduced a second role, 'propmgr', for a property manager
+-- limited to named buildings. That was the wrong shape. A large managing
+-- agent has many property managers and assigns each to specific buildings;
+-- a small one has two people who both see everything. That is not two jobs,
+-- it is one job with or without a list, and two roles in the picker made
+-- somebody choose between names that meant the same thing.
+--
+-- So there is one 'pm' role again. No rows in membership_properties means
+-- the whole account, which is what every existing membership has and what an
+-- upgrade must leave alone; rows mean those buildings only.
+--
+--   npx wrangler d1 execute subsub-db --config=wrangler.toml \
+--     --file=./worker/migrations/016_pm_property_scope.sql
+--
+-- Safe to run more than once. Anyone already given the short-lived 'propmgr'
+-- role keeps their buildings: only the word for what they are changes.
+UPDATE memberships SET role = 'pm' WHERE role = 'propmgr';
