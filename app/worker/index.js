@@ -640,7 +640,13 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
   }
 });
 
-// Cancelling, without leaving SubSub.
+// Moving an account down to the free Basic plan, without leaving SubSub.
+//
+// "Cancel" is Stripe's word for it and this does call Stripe's cancel, but
+// the product meaning is a downgrade: the account stays open, the data stays
+// put, and only the paid features stop. Saying "cancel" to the customer
+// reads as losing the account, which is not what happens and not what
+// anybody wants to be told.
 //
 // Stripe's billing portal is a hosted page -- there is no embedded version
 // of it -- so sending somebody there to cancel undoes the whole point of an
@@ -668,7 +674,7 @@ app.post("/api/billing/cancel", requireRole("admin"), async (c) => {
     const full = await accountRow(c.env, accountId);
     if (full) await applySubscription(c.env, full, sub);
     await logActivity(c.env, accountId, c.get("auth").userId, "plan_changed",
-      "Subscription set to cancel at the end of the period");
+      "Scheduled to move to the free Basic plan at the end of the period");
     return c.json({ ok: true, endsAt: stripeTime(sub.items?.data?.[0]?.current_period_end ?? sub.current_period_end) });
   } catch (err) {
     console.error("[billing] cancel failed:", err?.message || err);
@@ -693,7 +699,7 @@ app.post("/api/billing/resume", requireRole("admin"), async (c) => {
     const full = await accountRow(c.env, accountId);
     if (full) await applySubscription(c.env, full, sub);
     await logActivity(c.env, accountId, c.get("auth").userId, "plan_changed",
-      "Subscription set to keep renewing");
+      "Staying on Scale — the move to Basic was called off");
     return c.json({ ok: true });
   } catch (err) {
     console.error("[billing] resume failed:", err?.message || err);

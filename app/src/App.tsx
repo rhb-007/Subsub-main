@@ -7174,9 +7174,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                       `active` to the last day, so the flag decides, not the
                       status. */}
                   {subscriptionStatus === "canceled" || plan === "basic"
-                    ? <>Access ends {niceDay(currentPeriodEnd)}</>
+                    ? <>Moved to Basic {niceDay(currentPeriodEnd)}</>
                     : cancelAtPeriodEnd
-                      ? <>Cancels {niceDay(currentPeriodEnd)} — no further charges</>
+                      ? <>Scale until {niceDay(currentPeriodEnd)}, then Basic — free</>
                       : <>Renews automatically {niceDay(currentPeriodEnd)} · {billing === "annual" ? "yearly" : "monthly"}</>}
                   {subscriptionStatus === "past_due" && " · payment failed, we're retrying"}
                 </span>
@@ -7192,8 +7192,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             <div className="cancel-note">
               <AlertTriangle size={14} />
               <span>
-                Set to cancel on <b>{niceDay(currentPeriodEnd)}</b>. Everything on Scale keeps working
-                until then. Change your mind with <b>Keep my subscription</b> below.
+                Moving to the free <b>Basic</b> plan on <b>{niceDay(currentPeriodEnd)}</b>. Everything on
+                Scale keeps working until then, and your account, contractors and job history stay
+                exactly as they are. Changed your mind? <b>Stay on Scale</b> below.
               </span>
             </div>
           )}
@@ -7236,50 +7237,56 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     <li key={ft} className="feat-off"><X size={13} /> {ft}</li>
                   ))}
                 </ul>
-                {plan === pl.id
+                {/* Each card's button is about that card's plan. The way
+                    back from a scheduled downgrade belongs on Scale ("stay
+                    here"), not on Basic -- putting it there read as though
+                    Basic were the thing being kept. */}
+                {plan === pl.id && !(pl.id === "scale" && cancelAtPeriodEnd)
                   ? <button className="btn-ghost plan-btn" disabled>Current plan</button>
                   : pl.id === "scale"
-                    ? <button className="btn-solid plan-btn" disabled={billingBusy}
-                        onClick={() => onUpgrade()}>
-                        <Zap size={15} /> {billingBusy ? "Opening checkout…" : "Upgrade"}
-                      </button>
-                    // Cancelling happens here. Stripe's portal is a hosted
-                    // page with no embedded form, so sending somebody there
-                    // makes the last thing they see of us somebody else's
-                    // website -- which undoes the embedded checkout entirely.
-                    : cancelAtPeriodEnd
-                      ? <button className="btn-ghost plan-btn" disabled={cancelBusy}
+                    ? cancelAtPeriodEnd
+                      ? <button className="btn-solid plan-btn" disabled={cancelBusy}
                           onClick={onResumeSubscription}>
-                          {cancelBusy ? "Working…" : "Keep my subscription"}</button>
+                          {cancelBusy ? "Working…" : "Stay on Scale"}</button>
+                      : <button className="btn-solid plan-btn" disabled={billingBusy}
+                          onClick={() => onUpgrade()}>
+                          <Zap size={15} /> {billingBusy ? "Opening checkout…" : "Upgrade"}
+                        </button>
+                    // Moving to Basic happens here rather than in Stripe's
+                    // portal, which is a hosted page with no embedded form.
+                    : cancelAtPeriodEnd
+                      ? <button className="btn-ghost plan-btn" disabled>
+                          Starts {niceDay(currentPeriodEnd)}</button>
                       : <button className="btn-ghost plan-btn" disabled={cancelBusy}
-                          onClick={() => setConfirmCancel(true)}>Cancel subscription</button>}
+                          onClick={() => setConfirmCancel(true)}>Switch to Basic</button>}
               </div>
             ))}
           </div>
           {confirmCancel && (
             <Modal onClose={() => setConfirmCancel(false)}>
               <div className="cancel-modal">
-                <h3>Cancel your subscription?</h3>
+                <h3>Switch to the free Basic plan?</h3>
                 <p>
                   {currentPeriodEnd
                     ? <>You keep everything on Scale until <b>{niceDay(currentPeriodEnd)}</b> — you have paid
-                        for that time and we are not taking it back. Nothing more will be charged after that.</>
+                        for that time and we are not taking it back. Nothing more is charged after that.</>
                     : <>You keep everything on Scale until the end of the period you have paid for.
-                        Nothing more will be charged after that.</>}
+                        Nothing more is charged after that.</>}
                 </p>
                 <p className="cancel-after">
-                  After that the account moves to Basic: three subcontractors, one user, five jobs a month,
-                  and sign-in moves back to app.subsub.work. Nothing is deleted, and you can come back
-                  any time.
+                  <b>Your account stays open.</b> Your contractors, documents and job history are all
+                  kept — nothing is deleted. From that date Basic's limits apply: three subcontractors,
+                  one user, five jobs a month, and sign-in moves back to app.subsub.work. You can go
+                  back to Scale whenever you like.
                 </p>
                 {billingErr && <p className="pf-host-err">{billingErr}</p>}
                 <div className="form-actions">
                   <button className="btn-ghost" onClick={() => setConfirmCancel(false)}>
-                    Keep my subscription
+                    Stay on Scale
                   </button>
-                  <button className="btn-danger" disabled={cancelBusy}
+                  <button className="btn-solid" disabled={cancelBusy}
                     onClick={async () => { await onCancelSubscription(); setConfirmCancel(false); }}>
-                    {cancelBusy ? "Cancelling…" : "Yes, cancel it"}
+                    {cancelBusy ? "Switching…" : "Switch to Basic"}
                   </button>
                 </div>
               </div>
