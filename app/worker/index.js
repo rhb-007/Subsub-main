@@ -640,6 +640,67 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
   }
 });
 
+// Cancelling, without leaving SubSub.
+//
+// Stripe's billing portal is a hosted page -- there is no embedded version
+// of it -- so sending somebody there to cancel undoes the whole point of an
+// embedded checkout: the last thing they see of us before they leave is
+// somebody else's website. Cancelling is one API call, so it happens here.
+//
+// At period end, never immediately. They paid for the period; taking it away
+// early is both wrong and the kind of thing that turns a quiet cancellation
+// into a chargeback. The account keeps Scale until the date it was paid to.
+app.post("/api/billing/cancel", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+
+  const account = await c.env.DB.prepare(
+    `SELECT stripe_subscription_id FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!account?.stripe_subscription_id) return c.json({ error: "no_subscription" }, 409);
+
+  try {
+    const sub = await stripeCall(c.env, `/subscriptions/${account.stripe_subscription_id}`, {
+      params: { cancel_at_period_end: true },
+    });
+    // Write through rather than waiting for the webhook: the customer is
+    // looking at the screen now, and "did that work?" should not depend on
+    // how quickly Stripe calls back.
+    const full = await accountRow(c.env, accountId);
+    if (full) await applySubscription(c.env, full, sub);
+    await logActivity(c.env, accountId, c.get("auth").userId, "plan_changed",
+      "Subscription set to cancel at the end of the period");
+    return c.json({ ok: true, endsAt: stripeTime(sub.items?.data?.[0]?.current_period_end ?? sub.current_period_end) });
+  } catch (err) {
+    console.error("[billing] cancel failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// And changing their mind, which is the same call in reverse. Worth having:
+// somebody who cancels by accident should not have to buy the plan again.
+app.post("/api/billing/resume", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+
+  const account = await c.env.DB.prepare(
+    `SELECT stripe_subscription_id FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!account?.stripe_subscription_id) return c.json({ error: "no_subscription" }, 409);
+
+  try {
+    const sub = await stripeCall(c.env, `/subscriptions/${account.stripe_subscription_id}`, {
+      params: { cancel_at_period_end: false },
+    });
+    const full = await accountRow(c.env, accountId);
+    if (full) await applySubscription(c.env, full, sub);
+    await logActivity(c.env, accountId, c.get("auth").userId, "plan_changed",
+      "Subscription set to keep renewing");
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error("[billing] resume failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
 // Stripe's own billing portal: card changes, invoices, cancellation. Building
 // any of that ourselves would mean handling card details, which is the one
 // thing worth never touching.
@@ -706,6 +767,9 @@ async function accountForStripe(env, { accountId, customerId }) {
 
 // Write the plan change and the row that explains it. mrr_delta is signed, so
 // the platform console can sum a month without re-deriving who moved where.
+const accountRow = (env, id) =>
+  env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(id).first();
+
 async function applySubscription(env, account, sub) {
   const status = sub.status;
   const entitled = ENTITLED.has(status);
@@ -725,12 +789,29 @@ async function applySubscription(env, account, sub) {
   const cancelAtEnd = sub.cancel_at_period_end ? 1 : 0;
 
   const was = account.plan;
-  await env.DB.prepare(
-    `UPDATE accounts SET plan = ?, billing = ?, stripe_subscription_id = ?,
-            stripe_customer_id = COALESCE(stripe_customer_id, ?),
-            subscription_status = ?, current_period_end = ?, cancel_at_period_end = ?
-     WHERE id = ?`
-  ).bind(plan, cycle, sub.id, sub.customer, status, periodEnd, cancelAtEnd, account.id).run();
+  // The cancel flag lives in a column added by migration 013. A deploy can
+  // land before somebody runs the migration, and if that makes this write
+  // throw then every webhook fails -- payments succeed at Stripe and never
+  // reach the account, which is the worst failure this file has. So the
+  // newer shape is tried and the older one is the fallback: a missing column
+  // costs one field, not the whole subscription.
+  try {
+    await env.DB.prepare(
+      `UPDATE accounts SET plan = ?, billing = ?, stripe_subscription_id = ?,
+              stripe_customer_id = COALESCE(stripe_customer_id, ?),
+              subscription_status = ?, current_period_end = ?, cancel_at_period_end = ?
+       WHERE id = ?`
+    ).bind(plan, cycle, sub.id, sub.customer, status, periodEnd, cancelAtEnd, account.id).run();
+  } catch (err) {
+    if (!/no such column/i.test(String(err?.message || err))) throw err;
+    console.warn("[billing] cancel_at_period_end column missing -- run migration 013");
+    await env.DB.prepare(
+      `UPDATE accounts SET plan = ?, billing = ?, stripe_subscription_id = ?,
+              stripe_customer_id = COALESCE(stripe_customer_id, ?),
+              subscription_status = ?, current_period_end = ?
+       WHERE id = ?`
+    ).bind(plan, cycle, sub.id, sub.customer, status, periodEnd, account.id).run();
+  }
 
   if (was !== plan) {
     const monthly = cycle === "annual" ? 8250 : 9900;   // $990/yr and $99/mo, in cents

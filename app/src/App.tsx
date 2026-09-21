@@ -1568,6 +1568,33 @@ export default function SubSub() {
         : "Couldn't open billing. Try again in a moment.");
     }
   };
+  // Cancelling and un-cancelling, in the app. Both re-read the account
+  // rather than guessing at the new state: the server has just heard from
+  // Stripe, and a screen showing what it hoped happened is how somebody ends
+  // up thinking they cancelled when they did not.
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const changeSubscription = async (which) => {
+    setCancelBusy(true); setBillingErr("");
+    try {
+      await (which === "cancel" ? api.cancelSubscription() : api.resumeSubscription());
+      const fresh = await api.getAccount();
+      setAccounts((as) => as.map((a) => a.id === fresh.id ? {
+        ...a, plan: fresh.plan, billing: fresh.billing,
+        subscriptionStatus: fresh.subscriptionStatus,
+        currentPeriodEnd: fresh.currentPeriodEnd,
+        cancelAtPeriodEnd: fresh.cancelAtPeriodEnd,
+      } : a));
+    } catch (err) {
+      console.error("[billing] change failed:", err);
+      setBillingErr(err?.status === 409
+        ? "There's no subscription to change yet."
+        : err?.body?.detail ? `Stripe refused: ${err.body.detail}`
+        : "Couldn't make that change. Try again in a moment.");
+    } finally {
+      setCancelBusy(false);
+    }
+  };
+
   const setAccountKind = (kind) => {
     if (!ACCOUNT_KINDS[kind]) return;
     persist("patchAccount.kind", api.patchAccount({ kind }));
@@ -3206,6 +3233,9 @@ export default function SubSub() {
           canManage={can("account") && role === "admin"} mySub={mySub}
           onSaveUser={updateUser} onSaveBrand={setBrand}
           onUpgrade={startCheckout} onManageBilling={openBillingPortal}
+          onCancelSubscription={() => changeSubscription("cancel")}
+          onResumeSubscription={() => changeSubscription("resume")}
+          cancelBusy={cancelBusy}
           billingBusy={billingBusy} billingErr={billingErr}
           onAddUser={addUser} onRemoveUser={removeUser} onEditUser={setEditUser}
           onLoginAs={(id) => {
@@ -6711,6 +6741,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
   accountTrades, onSetAccountTrades, subscriptionStatus, currentPeriodEnd, comped, cancelAtPeriodEnd,
   onSaveUser, onSaveBrand, onUpgrade, onManageBilling, billingBusy, billingErr,
+  onCancelSubscription, onResumeSubscription, cancelBusy,
   onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup,
   hostnameStatus, onRefreshHostname }) {
@@ -6718,6 +6749,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     .concat(canManage ? [["company", "Company"], ["users", "Users"], ["billing", "Subscription"]] : []);
   const brandingOn = PLANS[plan].branding;
   const [pane, setPane] = useState("profile");
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   // profile form
   const [p, setP] = useState({ name: me.name, email: me.email, phone: me.phone || "" });
@@ -7156,6 +7188,16 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <span><strong>{jobsThisMonth}</strong> of {active.jobsPerMonth === Infinity ? "unlimited" : active.jobsPerMonth} job{active.jobsPerMonth === 1 ? "" : "s"} this month</span>
             </div>
           </div>
+          {cancelAtPeriodEnd && plan === "scale" && (
+            <div className="cancel-note">
+              <AlertTriangle size={14} />
+              <span>
+                Set to cancel on <b>{niceDay(currentPeriodEnd)}</b>. Everything on Scale keeps working
+                until then. Change your mind with <b>Keep my subscription</b> below.
+              </span>
+            </div>
+          )}
+
           <div className="cycle-row">
             <div className="cycle" role="tablist" aria-label="Billing cycle">
               {[["monthly", "Monthly"], ["annual", "Annual"]].map(([c, l]) => (
@@ -7201,14 +7243,49 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                         onClick={() => onUpgrade()}>
                         <Zap size={15} /> {billingBusy ? "Opening checkout…" : "Upgrade"}
                       </button>
-                    // Downgrading means cancelling a subscription, which
-                    // belongs in Stripe's portal: it is where the customer
-                    // can see what they are giving up and when it ends.
-                    : <button className="btn-ghost plan-btn" disabled={billingBusy}
-                        onClick={onManageBilling}>Cancel in billing</button>}
+                    // Cancelling happens here. Stripe's portal is a hosted
+                    // page with no embedded form, so sending somebody there
+                    // makes the last thing they see of us somebody else's
+                    // website -- which undoes the embedded checkout entirely.
+                    : cancelAtPeriodEnd
+                      ? <button className="btn-ghost plan-btn" disabled={cancelBusy}
+                          onClick={onResumeSubscription}>
+                          {cancelBusy ? "Working…" : "Keep my subscription"}</button>
+                      : <button className="btn-ghost plan-btn" disabled={cancelBusy}
+                          onClick={() => setConfirmCancel(true)}>Cancel subscription</button>}
               </div>
             ))}
           </div>
+          {confirmCancel && (
+            <Modal onClose={() => setConfirmCancel(false)}>
+              <div className="cancel-modal">
+                <h3>Cancel your subscription?</h3>
+                <p>
+                  {currentPeriodEnd
+                    ? <>You keep everything on Scale until <b>{niceDay(currentPeriodEnd)}</b> — you have paid
+                        for that time and we are not taking it back. Nothing more will be charged after that.</>
+                    : <>You keep everything on Scale until the end of the period you have paid for.
+                        Nothing more will be charged after that.</>}
+                </p>
+                <p className="cancel-after">
+                  After that the account moves to Basic: three subcontractors, one user, five jobs a month,
+                  and sign-in moves back to app.subsub.work. Nothing is deleted, and you can come back
+                  any time.
+                </p>
+                {billingErr && <p className="pf-host-err">{billingErr}</p>}
+                <div className="form-actions">
+                  <button className="btn-ghost" onClick={() => setConfirmCancel(false)}>
+                    Keep my subscription
+                  </button>
+                  <button className="btn-danger" disabled={cancelBusy}
+                    onClick={async () => { await onCancelSubscription(); setConfirmCancel(false); }}>
+                    {cancelBusy ? "Cancelling…" : "Yes, cancel it"}
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          )}
+
           {plan === "scale" && (
             <div className="usage-panel">
               <h4>Usage this month</h4>
@@ -10877,6 +10954,16 @@ body{background:var(--paper)}
    padding on top of it -- the mark was sitting in from the edge twice. */
 .co-head > div{display:flex;flex-direction:column;gap:6px;margin-left:-2px}
 .co-sub{font-size:12px;color:var(--ink-soft);margin-left:2px}
+
+/* ---- cancelling, in the app ------------------------------------------- */
+.cancel-modal{padding:4px 2px}
+.cancel-modal h3{font-size:18px;letter-spacing:-.02em;margin:0 0 12px}
+.cancel-modal p{font-size:14px;line-height:1.6;color:var(--ink);margin:0 0 12px}
+.cancel-modal .cancel-after{font-size:13px;color:var(--ink-soft)}
+.cancel-modal .form-actions{margin-top:18px}
+.cancel-note{display:flex;align-items:flex-start;gap:9px;margin-top:14px;padding:12px 14px;
+  border:1px solid #e6c98f;background:#fffdf6;border-radius:11px;font-size:13.5px;line-height:1.55}
+.cancel-note svg{color:var(--amber);flex:none;margin-top:2px}
 .co-x{border:0;background:none;color:var(--ink-soft);cursor:pointer;padding:2px;line-height:0;flex:none}
 .co-x:hover{color:var(--ink)}
 /* Stripe measures its iframe against this, so it needs a height to grow into

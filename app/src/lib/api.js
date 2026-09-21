@@ -146,6 +146,11 @@ export const api = {
   addAccountUser: (u) => request("/account-users", { method: "POST", body: JSON.stringify(u) }),
   updateAccountUser: (userId, patch) => request(`/account-users/${userId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removeAccountUser: (userId) => request(`/account-users/${userId}`, { method: "DELETE" }),
+  // Cancelling happens here rather than in Stripe's hosted portal, which has
+  // no embedded form. Always at period end -- they paid for the period.
+  cancelSubscription: () => request("/billing/cancel", { method: "POST" }),
+  resumeSubscription: () => request("/billing/resume", { method: "POST" }),
+
   getAccount: () => request("/account"),
   // Public — no auth required, used to brand a login screen before signin.
   getAccountBySubdomain: (subdomain) => request(`/account-by-subdomain/${encodeURIComponent(subdomain)}`),
