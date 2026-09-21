@@ -2741,7 +2741,9 @@ export default function SubSub() {
         <nav className={`tabs ${mobileNav ? "open" : ""}`} onClick={(e) => { if (e.target.closest("button")) setMobileNav(false); }}>
           <div className="drawer-user">
             <span className="user-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
-            <span className="drawer-user-txt"><b>{me.name}</b><span>{roleLabel} · {account.name}</span></span>
+            {/* The company name is the page heading and the footer already;
+                here it only cost the role the room to be read. */}
+            <span className="drawer-user-txt"><b>{me.name}</b><span>{roleLabel}</span></span>
           </div>
           {can("dashboard") && (
             <button className={tab === "dashboard" ? "on" : ""} onClick={() => setTab("dashboard")}>
@@ -4718,7 +4720,21 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                   <select value={open.a.billing} onChange={(e) => onPatchAccount(open.a.id, { billing: e.target.value })}>
                     <option value="monthly">Monthly</option><option value="annual">Annual</option>
                   </select></label>
+                {/* The differences are small but they decide whether the
+                    account keeps a building list, and one chosen wrongly at
+                    signup could only be corrected in the database. */}
+                <label>Account type
+                  <select value={kindOf(open.a)} onChange={(e) => onPatchAccount(open.a.id, { kind: e.target.value })}>
+                    {Object.entries(ACCOUNT_KINDS).map(([id, k]) => (
+                      <option key={id} value={id}>{k.label}</option>
+                    ))}
+                  </select></label>
               </div>
+              <p className="pf-note">
+                {ACCOUNT_KINDS[kindOf(open.a)].properties
+                  ? "Keeps a building list: vendors are scoped to specific properties."
+                  : "No building list: vendors are matched by trade and coverage area, job by job."}
+              </p>
               <p className="pf-note">
                 {open.a.subscriptionStatus
                   ? `Stripe says ${open.a.subscriptionStatus}${open.a.currentPeriodEnd ? `, through ${niceDay(open.a.currentPeriodEnd)}` : ""}. Changing the plan here does not change what they are billed.`
