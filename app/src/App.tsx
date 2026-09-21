@@ -7302,7 +7302,13 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 <div className="wd-row"><span>Contractors on account</span><strong>{subs.length}</strong></div>
                 <div className="wd-row"><span>User seats</span><strong>{seatCount} · unlimited</strong></div>
               </div>
-              <p className="cov-hint">SMS usage is billed monthly alongside your $50 subscription. Email notifications are included.</p>
+              {/* Was "$50 subscription", which is neither the monthly nor
+                  the annual price. A number typed into a sentence goes stale
+                  the first time pricing moves; the plan's name does not. */}
+              <p className="cov-hint">
+                SMS usage is billed monthly, separately from your Scale subscription.
+                Email notifications are included at no extra cost.
+              </p>
             </div>
           )}
         </>
