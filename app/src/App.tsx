@@ -27,7 +27,7 @@ import {
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
   Globe, RefreshCw,
 } from "lucide-react";
-import { api, getAuth, setAuth, clearAuth, logoUrl } from "./lib/api";
+import { api, getAuth, setAuth, clearAuth, clearStoredAuth, logoUrl } from "./lib/api";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
 
 // ---- Persistence bridge ---------------------------------------------------
@@ -2238,6 +2238,16 @@ export default function SubSub() {
   const resumeSession = async () => {
     const saved = getAuth();
     if (!saved?.userId || !saved?.accountId) return;
+    // Never resume somebody else's seat. The banner lives in memory, so a
+    // refresh would put a staff member back inside a customer's account with
+    // nothing on screen saying so -- which is the one state this whole
+    // mechanism exists to make impossible. Sessions are half an hour and
+    // deliberately cheap to start again.
+    if (saved.impersonation) {
+      api.platform.endImpersonation(saved.impersonation);
+      clearStoredAuth();
+      return;
+    }
     setResumeFailed(false);
 
     let acct;
@@ -2478,13 +2488,41 @@ export default function SubSub() {
             if (staff) {
               try {
                 const r = await api.platform.impersonate(acct.id);
-                setImpersonating({ by: me.name, account: acct });
+                // The token is what the API accepts. Setting the ids alone
+                // used to leave every call refused, and the app fell back to
+                // "contractor with no contractor record" -- an empty screen
+                // where the account should have been.
+                setAuth({ userId: r.actAsUserId, accountId: r.accountId, impersonation: r.token });
+                setImpersonating({ by: me.name, account: acct, token: r.token });
                 setCurrentAccountId(r.accountId); setCurrentUserId(r.actAsUserId);
-                setTab("dashboard"); setSuperadminView(false);
+                setSuperadminView(false);
+
+                // And then actually load it. The console has the platform's
+                // data, not this account's, so without this the app renders
+                // whatever happened to be in state.
+                const acctData = await api.getAccount();
+                setAccounts((prev) => [...prev.filter((a) => a.id !== acctData.id), {
+                  id: acctData.id, name: acctData.name, subdomain: acctData.subdomain,
+                  kind: acctData.kind, plan: acctData.plan, billing: acctData.billing,
+                  logoData: acctData.logoKey ? logoUrl(acctData.id) : null,
+                  useDefaultMark: acctData.useDefaultMark, theme: acctData.theme,
+                  trades: acctData.trades, subscriptionStatus: acctData.subscriptionStatus,
+                  currentPeriodEnd: acctData.currentPeriodEnd,
+                  hostnameStatus: acctData.hostnameStatus,
+                }]);
+                await hydrateAccount(r.accountId, r.actAsUserId);
+                setTab(ROLES.admin.can[0]);
+                setLoggedIn(true);
               } catch (e) {
+                // Leave no half-started session behind: a token in storage
+                // with the console still on screen is the worst of both.
+                clearStoredAuth();
+                setImpersonating(null); setSuperadminView(true);
                 setPlatformErr(e?.status === 403
                   ? "You do not have permission to sign in as an account."
-                  : (e?.message || "Could not start that session."));
+                  : e?.body?.error === "no_admin_on_account"
+                    ? "That account has nobody on it to sign in as."
+                    : (e?.message || "Could not start that session."));
               }
               return;
             }
@@ -2509,10 +2547,15 @@ export default function SubSub() {
         <div className="imp-banner">
           <Shield size={14} />
           <span>Viewing <b>{impersonating.account.name}</b> as superadmin ({impersonating.by}). Actions are recorded.</span>
-          <button onClick={() => {
+          <button onClick={async () => {
+            // Hand the seat back rather than just walking away from it: the
+            // session would expire on its own, but a revoked one cannot be
+            // used by anything that still has the token.
+            if (impersonating.token) await api.platform.endImpersonation(impersonating.token);
+            clearStoredAuth();
             // Return to whoever the server said this staff user is. There is no
             // seeded staff list to fall back to any more.
-            setImpersonating(null); setSuperadminView(true);
+            setImpersonating(null); setSuperadminView(true); setLoggedIn(false);
             if (staff?.userId) setCurrentUserId(staff.userId);
           }}>Back to console</button>
         </div>

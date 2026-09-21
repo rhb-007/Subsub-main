@@ -151,7 +151,39 @@ app.use("/api/*", async (c, next) => {
     || c.req.path.startsWith("/api/apply/")
     || c.req.path.startsWith("/api/invite/")
     || c.req.path === "/api/stripe/webhook"
+    || c.req.path === "/api/impersonation/end"
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
+
+  // Staff sitting in a customer's seat. Checked before anything else and
+  // taken from the row rather than the request: the caller says which token,
+  // never which account or which identity, so a stale or tampered header
+  // cannot widen what it reaches. An expired or handed-back session stops
+  // working the moment it is looked up, which is the reason this is a table
+  // and not a signed blob nobody can take back.
+  const impToken = c.req.header("X-Impersonation-Token");
+  if (impToken) {
+    const sess = await c.env.DB.prepare(
+      `SELECT account_id, act_as_user_id, staff_user_id FROM impersonation_sessions
+        WHERE token = ? AND ended_at IS NULL AND expires_at > datetime('now')`
+    ).bind(impToken).first();
+    if (!sess) return c.json({ error: "impersonation_expired" }, 401);
+
+    const seat = await c.env.DB.prepare(
+      `SELECT * FROM memberships WHERE user_id = ? AND account_id = ?`
+    ).bind(sess.act_as_user_id, sess.account_id).first();
+    // The seat can be removed while somebody is in it.
+    if (!seat) return c.json({ error: "forbidden" }, 403);
+
+    c.set("auth", {
+      userId: sess.act_as_user_id, accountId: sess.account_id,
+      role: seat.role, companyId: seat.company_id,
+      // Who is really here. Nothing reads it yet; it is set because a
+      // session whose real actor is unrecoverable is the one thing this
+      // table exists to prevent.
+      impersonatedBy: sess.staff_user_id,
+    });
+    return next();
+  }
 
   const accountId = c.req.header("X-Account-Id");
   let userId;
@@ -2739,7 +2771,46 @@ app.post("/api/platform/impersonate/:accountId", async (c) => {
     ).bind(accountId, staff.userId, accountId,
       JSON.stringify({ reason: b.reason || null, staffEmail: staff.email })),
   ]);
-  return c.json({ ok: true, accountId, accountName: account.name, actAsUserId: target.user_id });
+  // The session itself. Thirty minutes is long enough to look at a problem
+  // and short enough that a forgotten tab is not a standing key to somebody
+  // else's business.
+  const token = [...crypto.getRandomValues(new Uint8Array(32))]
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  const expires = new Date(Date.now() + 30 * 60000).toISOString().replace("T", " ").slice(0, 19);
+  await c.env.DB.prepare(
+    `INSERT INTO impersonation_sessions (token, account_id, act_as_user_id, staff_user_id, reason, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(token, accountId, target.user_id, staff.userId, b.reason || null, expires).run();
+
+  return c.json({
+    ok: true, accountId, accountName: account.name,
+    actAsUserId: target.user_id, token, expiresAt: expires,
+  });
+});
+
+// Handing the seat back. Deliberately needs no session of its own: revoking
+// is not a privileged act, and a staff member closing a tab should never be
+// the reason a session outlives its use.
+app.post("/api/impersonation/end", async (c) => {
+  const token = c.req.header("X-Impersonation-Token")
+    || (await c.req.json().catch(() => ({})))?.token;
+  if (!token) return c.json({ ok: true });
+
+  const sess = await c.env.DB.prepare(
+    `SELECT account_id, staff_user_id FROM impersonation_sessions
+      WHERE token = ? AND ended_at IS NULL`).bind(token).first();
+  await c.env.DB.prepare(
+    `UPDATE impersonation_sessions SET ended_at = datetime('now') WHERE token = ?`
+  ).bind(token).run();
+
+  if (sess) {
+    await c.env.DB.prepare(
+      `INSERT INTO activity (id, account_id, at, user_id, kind, text, meta)
+       VALUES (?, ?, datetime('now'), NULL, 'impersonation', ?, ?)`
+    ).bind(uid(), sess.account_id, "Staff session ended",
+      JSON.stringify({ staffUserId: sess.staff_user_id })).run();
+  }
+  return c.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------

@@ -39,11 +39,24 @@ export function clearAuth() {
   localStorage.removeItem(AUTH_KEY);
   if (supabaseEnabled) supabase.auth.signOut();
 }
+// Drop a stored session WITHOUT signing anyone out of Supabase. Ending an
+// impersonation must not take the staff member's own login with it -- on the
+// console that login is how they got there.
+export function clearStoredAuth() {
+  localStorage.removeItem(AUTH_KEY);
+}
 
 async function authHeaders() {
   const auth = getAuth();
   const headers = {};
   if (auth?.accountId) headers["X-Account-Id"] = auth.accountId;
+
+  // Staff sitting in a customer's seat. This replaces the identity entirely
+  // rather than adding to it: the server takes the account and the person
+  // from its own row, so nothing else in this header set can widen what the
+  // session reaches. It is sent alongside the rest so a call made before the
+  // switch finishes cannot be attributed to the wrong session.
+  if (auth?.impersonation) headers["X-Impersonation-Token"] = auth.impersonation;
 
   if (supabaseEnabled) {
     const { data } = await supabase.auth.getSession();
@@ -196,6 +209,13 @@ export const api = {
     impersonate: (accountId, reason) =>
       request(`/platform/impersonate/${encodeURIComponent(accountId)}`,
         { method: "POST", body: JSON.stringify({ reason: reason || null }) }),
+    // Hand the seat back. Best effort: a session nobody ended still expires
+    // on its own, so a failure here is not worth stopping anything for.
+    endImpersonation: (token) =>
+      request("/impersonation/end", {
+        method: "POST", body: JSON.stringify({ token }),
+        headers: { "X-Impersonation-Token": token },
+      }).catch(() => null),
 
     // Writes. Deleting takes the name back as confirmation -- the server
     // checks it, so a stale id cannot remove the wrong customer.
