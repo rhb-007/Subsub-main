@@ -473,6 +473,9 @@ CREATE TABLE tenant_invites (
   created_by   TEXT REFERENCES users(id),
   created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
   expires_at   TEXT NOT NULL,
+  -- Only set when something actually left, by email or by text. An invite
+  -- marked sent that never went is worse than one marked nothing.
+  sent_at      TEXT,
   used_at      TEXT,
   user_id      TEXT REFERENCES users(id),
   revoked_at   TEXT

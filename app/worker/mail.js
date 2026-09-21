@@ -174,6 +174,46 @@ This is an automated message from an unmonitored address. Replies aren't receive
   return { subject: `We received your application to ${who}`, text, html: textToHtml(text, null) };
 }
 
+// What a tenant is sent when their building manager sets them up.
+//
+// It has one job, and it is not to explain a product: somebody who has just
+// been told they can report a leak online needs to know who it is from, what
+// it is for, and where to click. Everything else can wait until they are in.
+export function tenantInviteEmail({ firstName, account, propertyName, unit, link }) {
+  const who = account?.name || "your building manager";
+  const place = [propertyName, unit ? `Unit ${unit}` : null].filter(Boolean).join(", ");
+  const text = `Hi ${firstName || "there"},
+
+${who} has set you up to report repairs at ${place || "your building"}.
+
+Choose a password and you're in:
+  ${link}
+
+After that you can report anything that needs fixing -- a leak, no heat, a
+door that won't lock -- and see what's happening with it, without calling
+anybody. Photos of the problem help, if you have them.
+
+Only you can see what you report.
+
+-- ${who}
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+  return {
+    subject: `${who}: report repairs at ${place || "your building"}`,
+    text,
+    html: textToHtml(text, link),
+  };
+}
+
+// The same, short enough to survive a single text message. Written to be
+// read on a lock screen: who, what, link.
+export function tenantInviteSms({ account, propertyName, unit, link }) {
+  const who = account?.name || "Your building manager";
+  const place = [propertyName, unit ? `Unit ${unit}` : null].filter(Boolean).join(", ");
+  return `${who}: you can now report repairs at ${place || "your building"} online. `
+    + `Set your password: ${link}`;
+}
+
 // A plain-text message rendered as minimal HTML. Deliberately not a designed
 // template: these are operational notices, they have to survive every client,
 // and the text part stays the source of truth.

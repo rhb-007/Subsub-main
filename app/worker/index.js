@@ -8,7 +8,9 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail } from "./mail.js";
+import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail,
+  tenantInviteEmail, tenantInviteSms } from "./mail.js";
+import { sendSms, toE164 } from "./sms.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
 import {
@@ -153,8 +155,8 @@ app.use("/api/*", async (c, next) => {
     || c.req.path.startsWith("/api/invite/")
     // The tenant equivalent, and public for the same reason: somebody
     // holding the link has no account yet -- getting one is the point. The
-    // trailing slash matters: /api/tenant-invites, which is the manager's
-    // list of who has been sent one, stays behind auth.
+    // trailing slash matters: /api/tenants, the manager's roster, stays
+    // behind auth, and so would any other path beginning the same way.
     || c.req.path.startsWith("/api/tenant-invite/")
     || c.req.path === "/api/stripe/webhook"
     || c.req.path === "/api/impersonation/end"
@@ -2089,138 +2091,106 @@ async function lookupTenantInvite(env, token) {
   return { invite: row, account };
 }
 
-app.get("/api/tenant-invites", requireRole("admin", "pm"), async (c) => {
+// Adding a tenant is not handing somebody a link. A managing agent with three
+// hundred apartments is never going to paste three hundred links, and the
+// person who has to be chased for it is the busiest one in the building. They
+// type in who lives where -- or upload the list they already have -- and
+// SubSub does the sending.
+//
+// Everything about one tenant that the account has to know, plus whether the
+// invite got out and how.
+const tenantRowToJs = (r) => ({
+  userId: r.user_id, name: r.name, email: r.email, phone: r.phone,
+  unit: r.unit, propertyId: r.property_id, propertyName: r.property_name || null,
+  addedAt: r.created_at,
+  // "invited" until they set a password; after that the seat is theirs.
+  status: r.used_at ? "active" : "invited",
+  invitedAt: r.invite_created_at || null,
+  lastSentAt: r.last_sent_at || null,
+});
+
+// The roster. Scoped like everything else -- a manager assigned to two
+// buildings sees the tenants of those two.
+app.get("/api/tenants", requireRole("admin", "pm"), async (c) => {
   const auth = c.get("auth");
-  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(auth.accountId).first();
-  // A scoped property manager sees the links for their own buildings. An
-  // unscoped one sees the lot, including any not yet tied to a building.
-  const scope = scopeClause(auth, "ti.property_id");
+  const scope = scopeClause(auth, "mp.property_id");
   const { results } = await c.env.DB.prepare(
-    `SELECT ti.*, p.name AS property_name FROM tenant_invites ti
-       LEFT JOIN properties p ON p.id = ti.property_id
-      WHERE ti.account_id = ? ${scope.sql} ORDER BY ti.created_at DESC LIMIT 200`
+    `SELECT u.id AS user_id, u.name, u.email, u.phone,
+            m.unit, m.created_at,
+            mp.property_id, p.name AS property_name,
+            ti.first_created AS invite_created_at, ti.used_at, ti.last_sent_at
+       FROM memberships m
+       JOIN users u ON u.id = m.user_id
+       LEFT JOIN membership_properties mp ON mp.membership_id = m.id
+       LEFT JOIN properties p ON p.id = mp.property_id
+       -- Rolled up, not joined row for row: resending mints a fresh invite
+       -- and revokes the old one, so a tenant who has been chased twice has
+       -- three rows here and would otherwise appear three times, each with a
+       -- different idea of whether they had signed in.
+       LEFT JOIN (
+         SELECT user_id, account_id,
+                MAX(used_at)    AS used_at,
+                MAX(sent_at)    AS last_sent_at,
+                MIN(created_at) AS first_created
+           FROM tenant_invites GROUP BY user_id, account_id
+       ) ti ON ti.user_id = u.id AND ti.account_id = m.account_id
+      WHERE m.account_id = ? AND m.role = 'tenant' ${scope.sql}
+      ORDER BY p.name, m.unit, u.name`
   ).bind(auth.accountId, ...scope.vals).all();
-  return c.json((results || []).map((r) => tenantInviteRowToJs(r, account, r.property_name)));
+  return c.json((results || []).map(tenantRowToJs));
 });
 
-app.post("/api/tenant-invites", requireRole("admin", "pm"), async (c) => {
-  const auth = c.get("auth");
-  const { accountId, userId } = auth;
-  const b = await c.req.json().catch(() => ({}));
-  const label = String(b.label || "").trim().slice(0, 120) || null;
-  const propertyId = b.propertyId || null;
+// One tenant, created and invited in a single step. Returns what happened to
+// the sending as well as the creating, because "added but not told" is a
+// state somebody has to be able to see and fix.
+async function createTenant(c, auth, row, account) {
+  const first = String(row.firstName || "").trim().slice(0, 60);
+  const last = String(row.lastName || "").trim().slice(0, 60);
+  const name = [first, last].filter(Boolean).join(" ");
+  const email = String(row.email || "").trim().toLowerCase();
+  const phoneRaw = String(row.phone || "").trim();
+  // Stored the way every other number here is stored; toE164 turns it into
+  // what Twilio wants at the moment of sending, and refusing early means a
+  // spreadsheet row with a bad number is reported as bad rather than
+  // silently never texted.
+  const phone = phoneRaw ? normalizePhone(phoneRaw) : null;
+  const textable = phoneRaw ? toE164(phoneRaw) : null;
+  const unit = String(row.unit || "").trim().slice(0, 60) || null;
+  const propertyId = row.propertyId || null;
 
-  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
-  if (!ACCOUNT_KINDS_WITH_PROPERTIES.includes(account?.kind || "")) {
-    return c.json({ error: "not_a_property_account" }, 400);
-  }
-  if (propertyId) {
-    const owned = await c.env.DB.prepare(
-      `SELECT id FROM properties WHERE id = ? AND account_id = ?`).bind(propertyId, accountId).first();
-    if (!owned) return c.json({ error: "property_not_found" }, 404);
-    if (!maySeeProperty(auth, propertyId)) return c.json({ error: "forbidden" }, 403);
-  } else if (auth.propertyIds) {
-    // A scoped manager cannot hand out a link that lets somebody choose any
-    // building on the account, including ones that are not theirs.
-    return c.json({ error: "property_required" }, 400);
-  }
+  if (!name) return { ok: false, error: "name_required" };
+  // One of the two, not both: a tenant with a phone and no email is ordinary,
+  // and so is the reverse. With neither there is no way to tell them.
+  if (!email && !phone) return { ok: false, error: "contact_required" };
+  if (email && !EMAIL_RE.test(email)) return { ok: false, error: "bad_email" };
+  if (phoneRaw && (!phone || !textable)) return { ok: false, error: "bad_phone" };
+  if (!propertyId) return { ok: false, error: "property_required" };
+  if (!maySeeProperty(auth, propertyId)) return { ok: false, error: "forbidden" };
 
-  const id = uid(), token = newInviteToken();
-  const expires = new Date(Date.now() + INVITE_TTL_DAYS * 86400_000).toISOString();
-  await c.env.DB.prepare(
-    `INSERT INTO tenant_invites (id, account_id, property_id, token, label, created_by, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, accountId, propertyId, token, label, userId, expires).run();
-  await logActivity(c.env, accountId, userId, "tenant_invite_created",
-    label ? `Tenant link created for ${label}` : "Tenant link created");
-
-  const row = await c.env.DB.prepare(
-    `SELECT ti.*, p.name AS property_name FROM tenant_invites ti
-       LEFT JOIN properties p ON p.id = ti.property_id WHERE ti.id = ?`).bind(id).first();
-  return c.json(tenantInviteRowToJs(row, account, row.property_name), 201);
-});
-
-app.delete("/api/tenant-invites/:id", requireRole("admin", "pm"), async (c) => {
-  const { accountId } = c.get("auth");
-  const res = await c.env.DB.prepare(
-    `UPDATE tenant_invites SET revoked_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND account_id = ? AND used_at IS NULL AND revoked_at IS NULL`
-  ).bind(c.req.param("id"), accountId).run();
-  if (!res.meta.changes) return c.json({ error: "not_found" }, 404);
-  return c.json({ ok: true });
-});
-
-// What the branded page shows somebody holding a tenant link, before they
-// have any account at all. Public, so it says as little as it can get away
-// with: the building's name and the account's branding.
-app.get("/api/tenant-invite/:token", async (c) => {
-  const { error, invite, account } = await lookupTenantInvite(c.env, c.req.param("token"));
-  if (error) return c.json({ error }, error === "invalid" ? 404 : 410);
-
-  // Only offered when the link does not already name one. A link that does
-  // must not list the rest of the portfolio to somebody who is not in it yet.
-  let properties = [];
-  if (!invite.property_id) {
-    const { results } = await c.env.DB.prepare(
-      `SELECT id, name FROM properties WHERE account_id = ? ORDER BY name`).bind(account.id).all();
-    properties = results || [];
-  } else {
-    const p = await c.env.DB.prepare(
-      `SELECT id, name FROM properties WHERE id = ?`).bind(invite.property_id).first();
-    properties = p ? [p] : [];
-  }
-
-  return c.json({
-    label: invite.label,
-    fixedProperty: invite.property_id || null,
-    properties,
-    account: {
-      id: account.id, name: account.name, subdomain: account.subdomain,
-      theme: parseJson(account.theme),
-      logoKey: account.logo_key, useDefaultMark: !!account.use_default_mark,
-      // Only so the form can ask for a suite rather than an apartment where
-      // that is the right word. Nothing is decided by it.
-      kind: account.kind,
-    },
-  });
-});
-
-// Accepting one. Creates the person, the seat and the building scope, and
-// leaves them with a Supabase account they can set a password on.
-app.post("/api/tenant-invite/:token", async (c) => {
-  const rl = await rateLimit(c.env, "tenant-invite", clientIp(c), { limit: 10, windowMinutes: 60 });
-  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
-
-  const { error, invite, account } = await lookupTenantInvite(c.env, c.req.param("token"));
-  if (error) return c.json({ error }, error === "invalid" ? 404 : 410);
-
-  const b = await c.req.json().catch(() => ({}));
-  const name = String(b.name || "").trim().slice(0, 120);
-  const email = String(b.email || "").trim().toLowerCase();
-  const unit = String(b.unit || "").trim().slice(0, 60) || null;
-  const propertyId = invite.property_id || b.propertyId || null;
-  if (!name) return c.json({ error: "name_required" }, 400);
-  if (!EMAIL_RE.test(email)) return c.json({ error: "bad_email" }, 400);
-  if (!propertyId) return c.json({ error: "property_required" }, 400);
-
-  // The building has to belong to this account, whether the link named it or
-  // the tenant chose it. A chosen one is the case that matters.
   const property = await c.env.DB.prepare(
-    `SELECT id FROM properties WHERE id = ? AND account_id = ?`).bind(propertyId, account.id).first();
-  if (!property) return c.json({ error: "property_not_found" }, 404);
+    `SELECT id, name FROM properties WHERE id = ? AND account_id = ?`
+  ).bind(propertyId, auth.accountId).first();
+  if (!property) return { ok: false, error: "property_not_found" };
 
-  let user = await c.env.DB.prepare(`SELECT * FROM users WHERE lower(email) = lower(?)`).bind(email).first();
+  // Two people in one apartment is normal -- a couple, roommates, a business
+  // and its owner -- so the unit is a label, never a key. The email is the
+  // key, because that is what a login is.
+  let user = email
+    ? await c.env.DB.prepare(`SELECT * FROM users WHERE lower(email) = lower(?)`).bind(email).first()
+    : null;
   const userId = user?.id ?? uid();
   if (!user) {
-    await c.env.DB.prepare(`INSERT INTO users (id, name, email) VALUES (?, ?, ?)`)
-      .bind(userId, name, email).run();
+    await c.env.DB.prepare(`INSERT INTO users (id, name, email, phone) VALUES (?, ?, ?, ?)`)
+      .bind(userId, name, email || `${userId}@no-email.invalid`, phone).run();
+  } else {
+    await c.env.DB.prepare(`UPDATE users SET phone = COALESCE(?, phone) WHERE id = ?`)
+      .bind(phone, userId).run();
   }
 
-  // Already a seat here? Then this link is not what put them in the account,
-  // and silently changing what they are would be the wrong move.
   const seat = await c.env.DB.prepare(
-    `SELECT id, role FROM memberships WHERE user_id = ? AND account_id = ?`).bind(userId, account.id).first();
-  if (seat && seat.role !== "tenant") return c.json({ error: "already_a_member" }, 409);
+    `SELECT id, role FROM memberships WHERE user_id = ? AND account_id = ?`
+  ).bind(userId, auth.accountId).first();
+  if (seat && seat.role !== "tenant") return { ok: false, error: "already_a_member" };
 
   const membershipId = seat?.id ?? uid();
   if (seat) {
@@ -2229,30 +2199,266 @@ app.post("/api/tenant-invite/:token", async (c) => {
   } else {
     await c.env.DB.prepare(
       `INSERT INTO memberships (id, user_id, account_id, role, unit) VALUES (?, ?, ?, 'tenant', ?)`
-    ).bind(membershipId, userId, account.id, unit).run();
+    ).bind(membershipId, userId, auth.accountId, unit).run();
   }
   await c.env.DB.prepare(
     `INSERT OR IGNORE INTO membership_properties (membership_id, property_id) VALUES (?, ?)`
   ).bind(membershipId, propertyId).run();
 
-  // A login to go with the seat. Non-blocking: the seat is real either way,
-  // and a tenant who cannot sign in yet is a password reset away, whereas a
-  // failed request here would lose the invite for good.
-  let authNote = null;
-  const made = await ensureAuthUser(c.env, email);
-  if (!made.ok) authNote = made.error;
-  else if (made.authId && !user?.auth_id) {
+  const sent = await issueTenantInvite(c, auth, {
+    userId, name, first, email, phone, unit, account, property,
+    channels: row.channels,
+  });
+  return { ok: true, userId, name, email, phone, unit,
+    propertyId, propertyName: property.name, sent };
+}
+
+// Mint a fresh token for this tenant and send it. Used both when they are
+// first added and when somebody presses resend, which is the same act: the
+// old link stops working, which is what "resend" should mean.
+async function issueTenantInvite(c, auth, t) {
+  const token = newInviteToken();
+  const expires = new Date(Date.now() + INVITE_TTL_DAYS * 86400_000).toISOString();
+  await c.env.DB.prepare(
+    `UPDATE tenant_invites SET revoked_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND account_id = ? AND used_at IS NULL AND revoked_at IS NULL`
+  ).bind(t.userId, auth.accountId).run();
+  const inviteId = uid();
+  await c.env.DB.prepare(
+    `INSERT INTO tenant_invites (id, account_id, property_id, token, label, created_by, expires_at, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(inviteId, auth.accountId, t.property.id, token, t.unit, auth.userId, expires, t.userId).run();
+
+  const link = tenantInviteUrl(t.account, token);
+  const want = Array.isArray(t.channels) && t.channels.length
+    ? t.channels
+    : [t.email ? "email" : null, t.phone ? "sms" : null].filter(Boolean);
+  const out = { email: null, sms: null };
+
+  if (want.includes("email") && t.email && !t.email.endsWith("@no-email.invalid")) {
+    const mail = tenantInviteEmail({
+      firstName: t.first || t.name, account: t.account,
+      propertyName: t.property.name, unit: t.unit, link,
+    });
+    const res = await sendEmail(c.env, { to: t.email, subject: mail.subject, text: mail.text, html: mail.html });
+    out.email = res.ok ? "sent" : (res.error || "failed");
+    await logMail(c.env, { accountId: auth.accountId, to: t.email, kind: "tenant_invite",
+      subject: mail.subject, result: res, sentBy: auth.userId });
+  }
+  if (want.includes("sms") && t.phone) {
+    const body = tenantInviteSms({ account: t.account, propertyName: t.property.name, unit: t.unit, link });
+    const res = await sendSms(c.env, { to: t.phone, body });
+    out.sms = res.ok ? "sent" : (res.error || "failed");
+    await logSms(c.env, { accountId: auth.accountId, to: t.phone, kind: "tenant_invite",
+      result: { ...res, body } });
+  }
+
+  // Only counted as sent if something actually went out. An invite recorded
+  // as sent that never left is the worst of both worlds: nobody chases it.
+  if (out.email === "sent" || out.sms === "sent") {
+    await c.env.DB.prepare(`UPDATE tenant_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .bind(inviteId).run();
+  }
+  return out;
+}
+
+app.post("/api/tenants", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(auth.accountId).first();
+  if (!ACCOUNT_KINDS_WITH_PROPERTIES.includes(account?.kind || "")) {
+    return c.json({ error: "not_a_property_account" }, 400);
+  }
+  const b = await c.req.json().catch(() => ({}));
+  const res = await createTenant(c, auth, b, account);
+  if (!res.ok) return c.json({ error: res.error }, res.error === "forbidden" ? 403 : 400);
+  await logActivity(c.env, auth.accountId, auth.userId, "tenant_added",
+    `Added tenant ${res.name}${res.unit ? ` (${res.unit})` : ""} at ${res.propertyName}`);
+  return c.json(res, 201);
+});
+
+// The same thing, many at a time, for the list a managing agent already has
+// in a spreadsheet. The browser parses the file and sends rows in batches, so
+// this stays a plain array and nothing here has to understand a file format.
+//
+// Every row is reported on individually. A bulk import that fails as a unit
+// because row 184 has a typo is one somebody gives up on.
+app.post("/api/tenants/bulk", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(auth.accountId).first();
+  if (!ACCOUNT_KINDS_WITH_PROPERTIES.includes(account?.kind || "")) {
+    return c.json({ error: "not_a_property_account" }, 400);
+  }
+  const b = await c.req.json().catch(() => ({}));
+  const rows = Array.isArray(b.rows) ? b.rows : [];
+  // A cap, because this runs inside one request and a spreadsheet can hold
+  // anything. The browser sends in batches of this size or smaller.
+  if (rows.length > 25) return c.json({ error: "too_many", max: 25 }, 400);
+
+  const results = [];
+  for (const row of rows) {
+    try {
+      const res = await createTenant(c, auth, row, account);
+      results.push(res.ok
+        ? { ok: true, userId: res.userId, name: res.name, unit: res.unit, sent: res.sent }
+        : { ok: false, error: res.error });
+    } catch (err) {
+      console.error("[tenants] bulk row failed:", err);
+      results.push({ ok: false, error: "failed" });
+    }
+  }
+  const added = results.filter((r) => r.ok).length;
+  if (added) {
+    await logActivity(c.env, auth.accountId, auth.userId, "tenants_imported",
+      `Imported ${added} tenant${added === 1 ? "" : "s"}`);
+  }
+  return c.json({ results });
+});
+
+app.post("/api/tenants/:userId/resend", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const userId = c.req.param("userId");
+  const b = await c.req.json().catch(() => ({}));
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(auth.accountId).first();
+  const row = await c.env.DB.prepare(
+    `SELECT u.name, u.email, u.phone, m.unit, mp.property_id, p.name AS property_name
+       FROM memberships m JOIN users u ON u.id = m.user_id
+       LEFT JOIN membership_properties mp ON mp.membership_id = m.id
+       LEFT JOIN properties p ON p.id = mp.property_id
+      WHERE m.user_id = ? AND m.account_id = ? AND m.role = 'tenant'`
+  ).bind(userId, auth.accountId).first();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (!maySeeProperty(auth, row.property_id)) return c.json({ error: "forbidden" }, 403);
+
+  const sent = await issueTenantInvite(c, auth, {
+    userId, name: row.name, first: String(row.name || "").split(" ")[0],
+    email: row.email, phone: row.phone, unit: row.unit, account,
+    property: { id: row.property_id, name: row.property_name },
+    channels: b.channels,
+  });
+  return c.json({ ok: true, sent });
+});
+
+// Removing a tenant drops their seat here, not the person: the same address
+// may be a tenant of somebody else's building.
+app.delete("/api/tenants/:userId", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const userId = c.req.param("userId");
+  const row = await c.env.DB.prepare(
+    `SELECT m.id, mp.property_id FROM memberships m
+       LEFT JOIN membership_properties mp ON mp.membership_id = m.id
+      WHERE m.user_id = ? AND m.account_id = ? AND m.role = 'tenant'`
+  ).bind(userId, auth.accountId).first();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (!maySeeProperty(auth, row.property_id)) return c.json({ error: "forbidden" }, 403);
+  await c.env.DB.prepare(`DELETE FROM memberships WHERE id = ?`).bind(row.id).run();
+  await c.env.DB.prepare(
+    `UPDATE tenant_invites SET revoked_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND account_id = ? AND used_at IS NULL AND revoked_at IS NULL`
+  ).bind(userId, auth.accountId).run();
+  return c.json({ ok: true });
+});
+
+// What the branded page shows somebody holding a tenant link, before they
+// have any account at all. Public, so it says as little as it can get away
+// with: the building's name and the account's branding.
+// What the branded page shows somebody holding a tenant link, before they
+// have any account at all. Public, so it says as little as it can: their own
+// first name, their building, and the branding of whoever set them up.
+app.get("/api/tenant-invite/:token", async (c) => {
+  const { error, invite, account } = await lookupTenantInvite(c.env, c.req.param("token"));
+  if (error) return c.json({ error }, error === "invalid" ? 404 : 410);
+
+  const who = invite.user_id
+    ? await c.env.DB.prepare(`SELECT name, email FROM users WHERE id = ?`).bind(invite.user_id).first()
+    : null;
+  const property = invite.property_id
+    ? await c.env.DB.prepare(`SELECT name FROM properties WHERE id = ?`).bind(invite.property_id).first()
+    : null;
+
+  // A tenant added by phone alone has a placeholder address on file, which is
+  // fine for texting them and no use as a login. Rather than send them a link
+  // that turns them away, the page asks for an address at this point -- the
+  // one moment they are already here and paying attention.
+  const placeholder = !who?.email || String(who.email).endsWith("@no-email.invalid");
+
+  return c.json({
+    // A first name only. The link arrived in their inbox or on their phone,
+    // so this is recognition rather than disclosure -- and the surname and
+    // the full address are not needed to say "this is yours".
+    firstName: String(who?.name || "").split(" ")[0] || null,
+    needsEmail: placeholder,
+    propertyName: property?.name || null,
+    unit: invite.label || null,
+    account: {
+      id: account.id, name: account.name, subdomain: account.subdomain,
+      theme: parseJson(account.theme),
+      logoKey: account.logo_key, useDefaultMark: !!account.use_default_mark,
+      kind: account.kind,
+    },
+  });
+});
+
+// Accepting one. Everything about them is already known -- their building
+// manager typed it in, or uploaded it -- so the only thing left is a
+// password, which they choose and Supabase stores. No service_role key is
+// involved here or anywhere else in this codebase.
+app.post("/api/tenant-invite/:token", async (c) => {
+  const rl = await rateLimit(c.env, "tenant-invite", clientIp(c), { limit: 20, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+
+  const { error, invite, account } = await lookupTenantInvite(c.env, c.req.param("token"));
+  if (error) return c.json({ error }, error === "invalid" ? 404 : 410);
+  if (!invite.user_id) return c.json({ error: "invalid" }, 404);
+
+  const b = await c.req.json().catch(() => ({}));
+  const password = String(b.password || "");
+  if (password.length < 8) return c.json({ error: "weak_password" }, 400);
+
+  const user = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(invite.user_id).first();
+  if (!user) return c.json({ error: "invalid" }, 404);
+
+  // Added by phone alone: there is no address to sign in with, so they give
+  // one now. Taking it here rather than refusing them is the difference
+  // between a text that works and a text that wastes somebody's afternoon.
+  let email = user.email;
+  if (!email || String(email).endsWith("@no-email.invalid")) {
+    email = String(b.email || "").trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) return c.json({ error: "email_required" }, 400);
+    const clash = await c.env.DB.prepare(
+      `SELECT id FROM users WHERE lower(email) = lower(?) AND id != ?`).bind(email, user.id).first();
+    if (clash) return c.json({ error: "email_in_use_here" }, 409);
+    await c.env.DB.prepare(`UPDATE users SET email = ? WHERE id = ?`).bind(email, user.id).run();
+  }
+
+  const signed = await supabaseSignUp(c.env, email, password);
+  if (!signed.ok && signed.error !== "email_in_use") {
+    return c.json({ error: signed.error, detail: signed.detail }, 400);
+  }
+  // `existed` is Supabase's enumeration protection showing through: an
+  // address that is already registered answers 200 with a fabricated id and
+  // an empty identities list. Writing that id would point auth_id at nobody.
+  const already = signed.error === "email_in_use" || signed.existed;
+  if (signed.ok && !signed.existed && signed.authId && !user.auth_id) {
     await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ? AND auth_id IS NULL`)
-      .bind(made.authId, userId).run();
+      .bind(signed.authId, user.id).run();
   }
 
   await c.env.DB.prepare(
-    `UPDATE tenant_invites SET used_at = CURRENT_TIMESTAMP, user_id = ? WHERE id = ?`
-  ).bind(userId, invite.id).run();
+    `UPDATE tenant_invites SET used_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(invite.id).run();
   await logActivity(c.env, account.id, null, "tenant_joined",
-    `${name} joined as a tenant${unit ? ` (${unit})` : ""}`);
+    `${user.name} set up their login${invite.label ? ` (${invite.label})` : ""}`);
 
-  return c.json({ ok: true, email, authNote });
+  return c.json({
+    ok: true, email,
+    // Supabase projects with email confirmation on will not sign them in
+    // yet. Saying so is the difference between "check your email" and a
+    // person typing a correct password into a screen that keeps refusing it.
+    needsConfirmation: signed.ok && !signed.session && !already,
+    // Already registered: they have a password from somewhere and the one
+    // just typed was not used. Telling them to sign in beats telling them
+    // nothing and letting them wonder why it does not work.
+    existed: already,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -4020,6 +4226,23 @@ async function logMail(env, { accountId, companyId, to, kind, subject, result, s
       result.ok ? null : [result.error, result.detail].filter(Boolean).join(": "), sentBy ?? null).run();
   } catch (err) {
     console.error("[email_log] write failed:", err?.message || err);
+  }
+}
+
+// The same for text messages. Segments matter: carriers bill per 160
+// characters, not per message, so a long one is several and counting messages
+// would understate the bill the console reports.
+async function logSms(env, { accountId, companyId, to, kind, result }) {
+  try {
+    const segments = Math.max(1, Math.ceil(String(result.body || "").length / 160)) || 1;
+    await env.DB.prepare(
+      `INSERT INTO sms_log (id, account_id, company_id, to_phone, kind, segments, status, provider_id, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(crypto.randomUUID(), accountId ?? null, companyId ?? null, to, kind, segments,
+      result.ok ? "sent" : "failed", result.id ?? null,
+      result.ok ? null : [result.error, result.detail].filter(Boolean).join(": ")).run();
+  } catch (err) {
+    console.error("[sms_log] write failed:", err?.message || err);
   }
 }
 

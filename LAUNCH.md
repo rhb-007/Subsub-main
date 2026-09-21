@@ -30,24 +30,18 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       one login. Ten minutes, highest value per minute of anything left.
       *Done when:* 2FA is on for Cloudflare, and for the Google account if
       it can reach Cloudflare.
-- [ ] **5. Send invites, by email and text** — today an invite is a link the
-      account copies and sends themselves, for subcontractors and tenants
-      alike. It works, and it puts the slowest step of onboarding on the
-      busiest person in the building. An invite that arrives from SubSub
-      wearing the customer's own logo is the one that gets opened, and a
-      managing agent with two hundred apartments is never going to paste two
-      hundred links.
-      Both audiences, both channels: email through Resend, which is already
-      wired up, and text through Twilio, which is not. A tenant reached by
-      text is the realistic case — the notice is on the door, the phone is in
-      their hand — so the number is worth collecting at invite time.
-      Needs: an address and a number on the invite, both optional; a branded
-      template for each; a row in the mail log either way; a resend button,
-      because the first question afterwards is always "did they get it"; and
-      Twilio credentials, which is the only genuinely new piece.
-      *Done when:* typing an address or a number into either invite modal
-      lands a branded invite, the list shows it was sent, and resending works.
-- [ ] **6. Photos on a tenant report** — a picture of the leak is worth more
+- [x] **5. Send invites, by email and text** — done for tenants: the account
+      types in who lives where, or uploads the list it already keeps, and
+      SubSub sends the invite. Email works today (Resend is configured).
+      **Text needs Twilio credentials** — `TWILIO_ACCOUNT_SID`,
+      `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` — and until they are set, a text is
+      reported as not sent rather than silently dropped.
+      Still to do: the same for **subcontractor** invites, which are still a
+      link the account copies.
+- [ ] **6. Subcontractor invites, sent the same way** — the tenant side is
+      done; a subcontractor invite is still a link somebody copies. Same
+      machinery, one audience along.
+- [ ] **7. Photos on a tenant report** — a picture of the leak is worth more
       than the paragraph describing it: it decides which trade goes out, and
       often whether anyone needs to go out twice. Jobs already carry uploaded
       files and the bucket is already there, so this is a camera button on the

@@ -37,6 +37,12 @@ const GROUPS = [
       + "Without the webhook secret, payments succeed at Stripe and never reach the account.",
   },
   {
+    id: "sms", label: "Text messages (Twilio)",
+    vars: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM"],
+    matters: "Texting a tenant their invite. Unset, invites still go by email and "
+      + "nothing is silently dropped -- the send is reported as not configured.",
+  },
+  {
     id: "hostnames", label: "Branded addresses (Cloudflare)",
     vars: ["CF_API_TOKEN", "CF_ACCOUNT_ID", "CF_ZONE_ID", "CF_PAGES_PROJECT"],
     matters: "Provisioning a Scale account's own address. Unset, nothing is provisioned and "

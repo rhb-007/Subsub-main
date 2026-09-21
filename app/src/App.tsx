@@ -6233,65 +6233,179 @@ function Kpi({ label, value, sub, accent, warn }) {
   );
 }
 
-// ---- Tenant invite links -------------------------------------------------
-// The same shape as the subcontractor version -- a link you send yourself,
-// one use, thirty days -- because it is the same job and somebody who has
-// used one should not have to learn a second thing.
+// ---- Tenants ------------------------------------------------------------
+// The first version of this handed out links for the account to send itself,
+// which is fine for a handful of subcontractors and useless here: a managing
+// agent has three hundred apartments and an existing list of who lives in
+// them. Nobody is pasting three hundred links.
 //
-// The difference is the building. A link can name one, which is what you want
-// for a specific apartment; or leave it open, which is what you want for a notice
-// in a lobby, and the tenant says which building they are in when they accept.
-function TenantInvites({ properties, tenants }) {
+// So: type in who lives where, or upload the list, and SubSub sends the
+// invite. Two people in one unit is normal -- a couple, roommates, a business
+// and its owner -- so the unit is a label and the email is the key.
+
+// A spreadsheet, without a spreadsheet library.
+//
+// CSV only, on purpose: every tool a managing agent uses exports it, Excel
+// and Sheets are one menu item away from it, and the alternative is several
+// hundred kilobytes of parser in the bundle to read a file with five columns
+// in it. Handles quoted fields, embedded commas and quoted newlines, which is
+// what actually breaks naive splitting on a real export.
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = "", quoted = false;
+  const src = String(text).replace(/\r\n?/g, "\n");
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') { field += '"'; i++; }   // "" is a literal quote
+        else quoted = false;
+      } else field += ch;
+      continue;
+    }
+    if (ch === '"') { quoted = true; continue; }
+    if (ch === "," || ch === "\t") { row.push(field); field = ""; continue; }
+    if (ch === "\n") { row.push(field); rows.push(row); row = []; field = ""; continue; }
+    field += ch;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows.filter((r) => r.some((x) => String(x).trim() !== ""));
+}
+
+// Match the columns somebody actually exported rather than demanding a
+// template. "First Name", "first_name", "Tenant First" and "Given name" are
+// all the same column, and a managing agent should not have to rename
+// headers to use their own data.
+const TENANT_COLUMNS = [
+  { key: "firstName", match: /^(first|given)[\s_-]*(name)?$|^tenant\s*first/i },
+  { key: "lastName", match: /^(last|sur|family)[\s_-]*(name)?$|^tenant\s*last/i },
+  { key: "email", match: /e[\s_-]*mail/i },
+  { key: "phone", match: /phone|mobile|cell|tel/i },
+  { key: "unit", match: /^(unit|apt|apartment|suite|door|#)/i },
+  { key: "propertyName", match: /propert|building|address|site/i },
+  // One full name in one column is common enough to handle rather than
+  // reject; it is split on the last space.
+  { key: "fullName", match: /^(name|tenant|resident|full[\s_-]*name)$/i },
+];
+
+function mapTenantRows(rows, properties, fallbackPropertyId) {
+  if (!rows.length) return { header: [], rows: [] };
+  const header = rows[0].map((h) => String(h).trim());
+  const index = {};
+  header.forEach((h, i) => {
+    for (const col of TENANT_COLUMNS) {
+      if (col.match.test(h) && index[col.key] === undefined) { index[col.key] = i; break; }
+    }
+  });
+  const at = (r, key) => index[key] === undefined ? "" : String(r[index[key]] ?? "").trim();
+  const byName = new Map(properties.map((p) => [p.name.trim().toLowerCase(), p.id]));
+
+  const out = rows.slice(1).map((r, n) => {
+    let firstName = at(r, "firstName"), lastName = at(r, "lastName");
+    if (!firstName && !lastName) {
+      const whole = at(r, "fullName");
+      if (whole) {
+        const bits = whole.split(/\s+/);
+        lastName = bits.length > 1 ? bits.pop() : "";
+        firstName = bits.join(" ");
+      }
+    }
+    const named = at(r, "propertyName").toLowerCase();
+    const propertyId = byName.get(named) || fallbackPropertyId || "";
+    const email = at(r, "email").toLowerCase();
+    const phone = at(r, "phone");
+    const problems = [];
+    if (!firstName && !lastName) problems.push("no name");
+    if (!email && !phone) problems.push("no email or phone");
+    if (email && !validEmail(email)) problems.push("email looks wrong");
+    if (!propertyId) problems.push(named ? `no building called "${at(r, "propertyName")}"` : "no building");
+    return { line: n + 2, firstName, lastName, email, phone,
+      unit: at(r, "unit"), propertyId, problems };
+  });
+  return { header, rows: out, matched: Object.keys(index) };
+}
+
+function TenantsPane({ properties, accountKind }) {
   const [rows, setRows] = useState(null);
-  const [label, setLabel] = useState("");
-  const [propertyId, setPropertyId] = useState("");
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [copied, setCopied] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [q, setQ] = useState("");
+  const [busyId, setBusyId] = useState(null);
+  const [note, setNote] = useState("");
+  const office = tenantWhere(accountKind) === "office";
+  const unitWord = office ? "Suite" : "Unit";
 
   const load = async () => {
-    try { setRows(await api.listTenantInvites()); }
-    catch (e) { console.error("[tenant-invites] load failed:", e); setRows([]); setErr("Could not load your links."); }
+    try { setRows(await api.listTenants()); setErr(""); }
+    catch (e) {
+      console.error("[tenants] load failed:", e);
+      setRows([]);
+      // The one failure worth naming precisely. Everything else is "try
+      // again"; this one is a migration nobody has run, and saying so is the
+      // difference between a five-second fix and an afternoon.
+      setErr(/no such table|D1_ERROR/i.test(String(e?.body?.error || e?.message || ""))
+        ? "The tenants tables aren't in the database yet — migrations 015 and 017 need running."
+        : "Could not load your tenants.");
+    }
   };
   useEffect(() => { load(); }, []);
 
-  const copy = async (url, id) => {
+  const shown = (rows || []).filter((t) => {
+    const s = q.trim().toLowerCase();
+    if (!s) return true;
+    return [t.name, t.email, t.phone, t.unit, t.propertyName]
+      .some((v) => String(v || "").toLowerCase().includes(s));
+  });
+
+  const resend = async (t) => {
+    setBusyId(t.userId); setNote("");
     try {
-      await navigator.clipboard.writeText(url);
-      setCopied(id);
-      setTimeout(() => setCopied((c) => c === id ? null : c), 2000);
-    } catch { setCopied(null); }
+      const res = await api.resendTenantInvite(t.userId);
+      setNote(sendSummary(res.sent, t.name));
+      load();
+    } catch (e) { console.error("[tenants] resend failed:", e); setNote("That didn't send."); }
+    finally { setBusyId(null); }
   };
 
-  const create = async () => {
-    setBusy(true); setErr("");
-    try {
-      const made = await api.createTenantInvite({ label: label.trim() || null, propertyId: propertyId || null });
-      setRows((cur) => [made, ...(cur || [])]);
-      setLabel("");
-      copy(made.url, made.id);
-    } catch (e) {
-      console.error("[tenant-invites] create failed:", e);
-      setErr(e?.body?.error === "property_required"
-        ? "Pick a building. Your account is limited to certain buildings, so an open link isn't available to you."
-        : "Could not create a link. Try again.");
-    } finally { setBusy(false); }
+  const remove = async (t) => {
+    setBusyId(t.userId);
+    try { await api.removeTenant(t.userId); setRows((cur) => cur.filter((x) => x.userId !== t.userId)); }
+    catch (e) { console.error("[tenants] remove failed:", e); setNote("Could not remove them."); }
+    finally { setBusyId(null); }
   };
 
-  const revoke = async (id) => {
-    try {
-      await api.revokeTenantInvite(id);
-      setRows((cur) => cur.map((r) => r.id === id ? { ...r, status: "revoked" } : r));
-    } catch (e) { console.error("[tenant-invites] revoke failed:", e); setErr("Could not revoke that link."); }
-  };
+  if (properties.length === 0) {
+    return (
+      <div className="dash-empty"><Building2 size={24} />
+        <p>Add a building first — a tenant has to be a tenant of something.</p>
+      </div>
+    );
+  }
 
-  const open = (rows || []).filter((r) => r.status === "open");
-  const past = (rows || []).filter((r) => r.status !== "open");
+  if (adding) return (
+    <TenantForm properties={properties} unitWord={unitWord}
+      onCancel={() => setAdding(false)}
+      onDone={(msg) => { setAdding(false); setNote(msg); load(); }} />
+  );
+  if (importing) return (
+    <TenantImport properties={properties} unitWord={unitWord}
+      onCancel={() => setImporting(false)}
+      onDone={(msg) => { setImporting(false); setNote(msg); load(); }} />
+  );
 
   return (
     <>
       <div className="jobs-head">
-        <h3>{tenants.length} tenant{tenants.length === 1 ? "" : "s"}</h3>
+        <h3>{(rows || []).length} tenant{(rows || []).length === 1 ? "" : "s"}</h3>
+        <div className="tn-head-actions">
+          <button className="btn-ghost" onClick={() => setImporting(true)}>
+            <ClipboardList size={14} /> Import a spreadsheet
+          </button>
+          <button className="add-btn small" onClick={() => setAdding(true)}>
+            <Plus size={14} /> Add a tenant
+          </button>
+        </div>
       </div>
       <p className="panel-note">
         Tenants report repairs themselves and follow what happens, on your own branded address.
@@ -6299,77 +6413,317 @@ function TenantInvites({ properties, tenants }) {
         request. They never see costs, your contractors, or anyone else's repairs.
       </p>
 
-      {properties.length === 0 ? (
-        <div className="dash-empty"><Building2 size={24} />
-          <p>Add a building first — a tenant has to be a tenant of something.</p>
-        </div>
-      ) : (
-        <>
-          <div className="inv-make">
-            <label className="fld">Building
-              <select value={propertyId} onChange={(e) => setPropertyId(e.target.value)}>
-                <option value="">Let them choose</option>
-                {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </label>
-            <label className="fld">Who it's for <span className="fld-note">optional, for your own list</span>
-              <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Apt 4B" />
-            </label>
-            <button className="btn-solid" onClick={create} disabled={busy}>
-              <Plus size={15} /> {busy ? "Creating…" : "Create link"}
-            </button>
-          </div>
-          <p className="fine">
-            {propertyId
-              ? "The link names this building, so whoever uses it can only be a tenant of it."
-              : "Left open, whoever uses it picks their building when they sign up — right for a notice in a lobby, and you can correct it afterwards."}
-            {" "}Each link works once and expires after 30 days.
-          </p>
-        </>
+      {err && <p className="billing-err" role="alert">{err}</p>}
+      {note && <p className="rollup-note" role="status">{note}</p>}
+
+      {(rows || []).length > 8 && (
+        <input className="tn-search" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="Search by name, unit, building, email or phone" />
       )}
 
-      {err && <p className="billing-err" role="alert">{err}</p>}
-
-      {rows === null ? <p className="fine">Loading…</p> : (
-        <>
-          {open.map((r) => (
-            <div key={r.id} className="inv-row-out">
-              <div className="inv-main">
-                <b>{r.label || "Unnamed link"}
-                  <span className="inv-chip">{r.propertyName || "they choose"}</span></b>
-                <code className="inv-url">{r.url}</code>
+      {rows === null ? <p className="fine">Loading…</p> : rows.length === 0 ? (
+        <div className="dash-empty"><Users size={24} />
+          <p>No tenants yet. Add one, or import the list you already have.</p>
+        </div>
+      ) : (
+        <div className="user-list">
+          {shown.map((t) => (
+            <div key={t.userId} className="user-row">
+              <span className="user-avatar lg">
+                {String(t.name || "?").split(" ").map((w) => w[0]).join("").slice(0, 2)}
+              </span>
+              <div className="user-row-main">
+                <div className="user-row-head">
+                  <h4>{t.name}</h4>
+                  <span className={`tn-chip ${t.status === "active" ? "ok" : "wait"}`}>
+                    {t.status === "active" ? "Signed in" : t.lastSentAt ? "Invite sent" : "Not sent yet"}
+                  </span>
+                </div>
+                <p className="user-row-sub">
+                  {[t.propertyName, t.unit ? `${unitWord} ${t.unit}` : null,
+                    t.email && !t.email.endsWith("@no-email.invalid") ? t.email : null,
+                    t.phone].filter(Boolean).join(" · ")}
+                </p>
               </div>
-              <div className="inv-acts">
-                <button className="pick" onClick={() => copy(r.url, r.id)}>
-                  {copied === r.id ? <><Check size={13} /> Copied</> : <><Link2 size={13} /> Copy</>}
-                </button>
-                <button className="icon-x" title="Revoke this link" onClick={() => revoke(r.id)}>
-                  <Trash2 size={13} />
-                </button>
+              <div className="user-row-actions">
+                {t.status !== "active" && (
+                  <button className="btn-notify sm" disabled={busyId === t.userId}
+                    onClick={() => resend(t)}>
+                    <Mail size={12} /> {busyId === t.userId ? "Sending…" : "Resend invite"}
+                  </button>
+                )}
+                <button className="icon-x" title="Remove this tenant"
+                  disabled={busyId === t.userId} onClick={() => remove(t)}><Trash2 size={13} /></button>
               </div>
             </div>
           ))}
-          {past.length > 0 && (
-            <>
-              <h4 className="inv-past">Earlier links</h4>
-              {past.map((r) => (
-                <div key={r.id} className="inv-row-out spent">
-                  <div className="inv-main">
-                    <b>{r.label || "Unnamed link"}
-                      <span className="inv-chip">{r.propertyName || "they chose"}</span></b>
-                    <span className="fine">
-                      {r.status === "accepted" ? `Accepted ${niceDay(r.usedAt)}`
-                        : r.status === "revoked" ? "Revoked"
-                        : "Expired"}
-                    </span>
-                  </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// One sentence saying what actually happened to the sending, which is not
+// always "sent": a number with no Twilio behind it, an address Resend
+// refused. Silence here is how somebody ends up wondering for a week.
+function sendSummary(sent, name) {
+  const who = name ? `${name}: ` : "";
+  const bits = [];
+  if (sent?.email === "sent") bits.push("emailed");
+  if (sent?.sms === "sent") bits.push("texted");
+  if (bits.length) return `${who}invite ${bits.join(" and ")}.`;
+  const why = sent?.sms === "sms_not_configured" ? "texting isn't set up yet (Twilio)"
+    : sent?.email === "mail_not_configured" ? "email isn't set up yet (Resend)"
+    : [sent?.email, sent?.sms].filter((x) => x && x !== "sent").join(", ") || "nothing was sent";
+  return `${who}added, but the invite didn't go out — ${why}.`;
+}
+
+// Adding one by hand. Six fields, and the building is remembered between
+// saves -- somebody entering a floor of apartments should not re-pick it
+// fourteen times.
+function TenantForm({ properties, unitWord, onCancel, onDone }) {
+  const [f, setF] = useState({
+    propertyId: properties.length === 1 ? properties[0].id : "",
+    firstName: "", lastName: "", email: "", phone: "", unit: "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [saved, setSaved] = useState([]);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  // A name plus one way to reach them. Either is fine on its own: a tenant
+  // with a phone and no email is ordinary, and so is the reverse.
+  const ready = f.propertyId && (f.firstName.trim() || f.lastName.trim())
+    && (validEmail(f.email.trim()) || f.phone.trim().replace(/\D/g, "").length >= 10);
+
+  const save = async (andAnother) => {
+    setBusy(true); setErr("");
+    try {
+      const res = await api.addTenant({
+        propertyId: f.propertyId, firstName: f.firstName.trim(), lastName: f.lastName.trim(),
+        email: f.email.trim(), phone: f.phone.trim(), unit: f.unit.trim(),
+      });
+      const line = sendSummary(res.sent, res.name);
+      if (andAnother) {
+        setSaved((s) => [line, ...s]);
+        // The building and the unit stay: the next tenant is usually the
+        // other person in the same apartment, or the one next door.
+        setF((x) => ({ ...x, firstName: "", lastName: "", email: "", phone: "" }));
+      } else onDone(line);
+    } catch (e) {
+      console.error("[tenants] add failed:", e);
+      const code = e?.body?.error;
+      setErr(code === "already_a_member" ? "That email address already has a different kind of account here."
+        : code === "bad_email" ? "That email address doesn't look right."
+        : code === "bad_phone" ? "That phone number doesn't look like a US or Canadian number."
+        : code === "contact_required" ? "Give an email address or a phone number — we need one to send the invite."
+        : "Could not add them. Try again.");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="form">
+      <h2>Add a tenant</h2>
+      <p className="form-sub prose">
+        They'll get an invite by email, by text, or both — whichever you give us. Two people in
+        one {unitWord.toLowerCase()} is fine: add them one at a time.
+      </p>
+
+      <label className="fld">Building
+        <select value={f.propertyId} onChange={(e) => set("propertyId", e.target.value)}>
+          <option value="">Choose…</option>
+          {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </label>
+      <div className="fld-row">
+        <label className="fld">First name
+          <input value={f.firstName} onChange={(e) => set("firstName", e.target.value)} placeholder="Rosa" />
+        </label>
+        <label className="fld">Last name
+          <input value={f.lastName} onChange={(e) => set("lastName", e.target.value)} placeholder="Lane" />
+        </label>
+      </div>
+      <div className="fld-row">
+        <label className="fld">Email
+          <input value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="rosa@example.com" />
+        </label>
+        <label className="fld">Cell phone
+          <input value={f.phone} onChange={(e) => set("phone", e.target.value)} placeholder="(206) 555-0134" />
+        </label>
+      </div>
+      <label className="fld">{unitWord} number
+        <input value={f.unit} onChange={(e) => set("unit", e.target.value)}
+          placeholder={unitWord === "Suite" ? "300" : "4B"} />
+      </label>
+
+      {err && <p className="billing-err" role="alert">{err}</p>}
+      {saved.length > 0 && (
+        <div className="tn-saved">
+          {saved.map((line, i) => <p key={i}><Check size={13} /> {line}</p>)}
+        </div>
+      )}
+
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>
+          {saved.length ? "Done" : "Cancel"}
+        </button>
+        <button className="btn-ghost" onClick={() => save(true)} disabled={!ready || busy}>
+          Save &amp; add another
+        </button>
+        <button className="btn-solid" onClick={() => save(false)} disabled={!ready || busy}>
+          <Plus size={15} /> {busy ? "Adding…" : "Add &amp; invite"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Three hundred of them, from the list the account already keeps.
+//
+// The file is read and checked in the browser, shown back row by row, and
+// only then sent -- in batches, because one request carrying three hundred
+// invites is one request that times out halfway and leaves nobody able to say
+// which half went.
+function TenantImport({ properties, unitWord, onCancel, onDone }) {
+  const [parsed, setParsed] = useState(null);
+  const [fallback, setFallback] = useState(properties.length === 1 ? properties[0].id : "");
+  const [raw, setRaw] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);
+  const [progress, setProgress] = useState(0);
+
+  const take = (text) => {
+    const rows = parseCsv(text);
+    setRaw(rows);
+    setParsed(mapTenantRows(rows, properties, fallback));
+  };
+  // Re-map when the fallback building changes, so picking one fixes every
+  // row that had nothing to match on at once.
+  useEffect(() => { if (raw) setParsed(mapTenantRows(raw, properties, fallback)); }, [fallback]);
+
+  const onFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    take(await file.text());
+  };
+
+  const good = (parsed?.rows || []).filter((r) => !r.problems.length);
+  const bad = (parsed?.rows || []).filter((r) => r.problems.length);
+
+  const send = async () => {
+    setBusy(true); setProgress(0);
+    const results = [];
+    for (let i = 0; i < good.length; i += 25) {
+      const batch = good.slice(i, i + 25).map((r) => ({
+        propertyId: r.propertyId, firstName: r.firstName, lastName: r.lastName,
+        email: r.email, phone: r.phone, unit: r.unit,
+      }));
+      try {
+        const res = await api.addTenantsBulk(batch);
+        results.push(...(res.results || []));
+      } catch (err) {
+        console.error("[tenants] batch failed:", err);
+        results.push(...batch.map(() => ({ ok: false, error: "failed" })));
+      }
+      setProgress(Math.min(good.length, i + 25));
+    }
+    setBusy(false);
+    setDone(results);
+  };
+
+  if (done) {
+    const added = done.filter((r) => r.ok).length;
+    const emailed = done.filter((r) => r.sent?.email === "sent").length;
+    const texted = done.filter((r) => r.sent?.sms === "sent").length;
+    const failed = done.filter((r) => !r.ok);
+    return (
+      <div className="form">
+        <h2>Imported</h2>
+        <p className="form-sub">
+          {added} tenant{added === 1 ? "" : "s"} added. {emailed} emailed, {texted} texted.
+        </p>
+        {failed.length > 0 && (
+          <>
+            <p className="billing-err">{failed.length} row{failed.length === 1 ? "" : "s"} didn't go in.</p>
+            <ul className="fine tn-problems">
+              {failed.slice(0, 20).map((r, i) => <li key={i}>{r.error}</li>)}
+            </ul>
+          </>
+        )}
+        <div className="form-actions">
+          <button className="btn-solid" onClick={() => onDone(
+            `Imported ${added} tenant${added === 1 ? "" : "s"}.`)}>Back to tenants</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="form">
+      <h2>Import tenants</h2>
+      <p className="form-sub prose">
+        A CSV from whatever you already use. Export it from Excel or Google Sheets with
+        <b> Save as CSV</b>. Columns can be named however yours are named — first name, last name,
+        email, phone, {unitWord.toLowerCase()}, building — and anything we can't match, you'll see
+        before anything is sent.
+      </p>
+
+      <label className="fld">The file
+        <input type="file" accept=".csv,.tsv,.txt,text/csv" onChange={onFile} />
+      </label>
+      {properties.length > 1 && (
+        <label className="fld">If a row doesn't name a building, use
+          <select value={fallback} onChange={(e) => setFallback(e.target.value)}>
+            <option value="">Nothing — flag those rows</option>
+            {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </label>
+      )}
+
+      {parsed && (
+        <>
+          <p className="rollup-note">
+            {good.length} row{good.length === 1 ? "" : "s"} ready
+            {bad.length > 0 && `, ${bad.length} need${bad.length === 1 ? "s" : ""} a look`}.
+            {parsed.matched?.length
+              ? ` Matched columns: ${parsed.matched.join(", ")}.`
+              : " No columns matched — check the first row has headers."}
+          </p>
+          {bad.length > 0 && (
+            <ul className="fine tn-problems">
+              {bad.slice(0, 12).map((r) => (
+                <li key={r.line}>
+                  Line {r.line}: {[r.firstName, r.lastName].filter(Boolean).join(" ") || "(no name)"}
+                  {" — "}{r.problems.join(", ")}
+                </li>
+              ))}
+              {bad.length > 12 && <li>…and {bad.length - 12} more.</li>}
+            </ul>
+          )}
+          {good.length > 0 && (
+            <div className="tn-preview">
+              {good.slice(0, 6).map((r) => (
+                <div key={r.line} className="tn-preview-row">
+                  <b>{[r.firstName, r.lastName].filter(Boolean).join(" ")}</b>
+                  <span>{[properties.find((p) => p.id === r.propertyId)?.name,
+                    r.unit ? `${unitWord} ${r.unit}` : null, r.email || r.phone]
+                    .filter(Boolean).join(" · ")}</span>
                 </div>
               ))}
-            </>
+              {good.length > 6 && <p className="fine">…and {good.length - 6} more.</p>}
+            </div>
           )}
         </>
       )}
-    </>
+
+      {busy && <p className="rollup-note">Sending… {progress} of {good.length}.</p>}
+
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
+        <button className="btn-solid" onClick={send} disabled={!good.length || busy}>
+          <Plus size={15} /> {busy ? "Importing…" : `Add & invite ${good.length || ""}`.trim()}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -6382,11 +6736,11 @@ function TenantInvites({ properties, tenants }) {
 // Three questions and no more. A tenant is not applying for anything; they
 // are being told where to report a broken boiler.
 function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
-  const [f, setF] = useState({ name: "", email: "", unit: "", propertyId: "" });
+  const [password, setPassword] = useState("");
+  const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
+  const [done, setDone] = useState(null);
   const [err, setErr] = useState("");
-  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
 
   // Until the lookup lands there is no branding to wear, so the page stays
   // blank rather than flashing SubSub's own and then repainting.
@@ -6416,24 +6770,22 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
   };
   const t = themeOf(brand);
   const office = tenantWhere(acct.kind) === "office";
-  // A link that names the building does not ask; one that does not, must.
-  const mustChoose = !invite.fixedProperty && invite.properties.length > 1;
-  const propertyId = invite.fixedProperty || (invite.properties.length === 1
-    ? invite.properties[0].id : f.propertyId);
-  const ready = f.name.trim() && validEmail(f.email) && propertyId;
+  const place = [invite.propertyName, invite.unit ? `${office ? "Suite" : "Unit"} ${invite.unit}` : null]
+    .filter(Boolean).join(", ");
+  const ready = password.length >= 8;
 
   const go = async () => {
     setBusy(true); setErr("");
     try {
-      await onSubmit({ name: f.name.trim(), email: f.email.trim(), unit: f.unit.trim(), propertyId });
-      setDone(true);
+      const res = await onSubmit({ password });
+      setDone(res);
     } catch (e) {
       console.error("[tenant-signup] failed:", e);
-      setErr(e?.body?.error === "already_a_member"
-        ? "That email address already has a different kind of account here. Ask your building manager for help."
-        : e?.body?.error === "rate_limited"
-        ? "Too many attempts from this connection. Wait an hour and try again."
-        : "That didn't go through. Check the email address and try again.");
+      const code = e?.body?.error;
+      setErr(code === "weak_password" ? "Use at least 8 characters."
+        : code === "no_email_on_file" ? "There's no email address on your record, so there's nothing to sign in with. Ask your building manager to add one."
+        : code === "rate_limited" ? "Too many attempts from this connection. Wait an hour and try again."
+        : "That didn't go through. Try again in a moment.");
     } finally { setBusy(false); }
   };
 
@@ -6443,55 +6795,49 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
         <div className="wl-brand"><BrandMark brand={brand} height={30} />
           <span className="wl-brand-name">{brand.name}</span></div>
         <div className="wl-tick"><CheckCircle2 size={34} /></div>
-        <h1>You're set up.</h1>
-        <p>We've sent an email to <b>{f.email}</b> with a link to choose a password. After that
-          you can report anything that needs fixing and see what's happening with it.</p>
+        <h1>{done.existed ? "You already have a login." : "You're all set."}</h1>
+        <p>{done.existed
+          ? <>This email address already has a password here. Sign in with the one you have — or use <b>Forgot password?</b> on the sign-in page.</>
+          : done.needsConfirmation
+          ? <>Check <b>{done.email}</b> for a message confirming your address. After that you can sign in and report anything that needs fixing.</>
+          : <>Sign in with <b>{done.email}</b> and the password you just chose, and you can report anything that needs fixing at {place || "your building"}.</>}</p>
         <button className="wl-btn" onClick={onBackToLogin}>Go to sign in</button>
       </div>
       <PoweredBy className="wl-foot" height={15} />
     </div>
   );
 
-  const where = invite.properties.find((p) => p.id === propertyId);
-
   return (
     <div className="wl-page" style={themeVars(t)}>
       <div className="wl-card">
         <div className="wl-brand"><BrandMark brand={brand} height={30} />
           <span className="wl-brand-name">{brand.name}</span></div>
-        <h1>Report repairs at {where ? where.name : "your building"}</h1>
+        <h1>{invite.firstName ? `Hi ${invite.firstName} — ` : ""}choose a password</h1>
         <p className="wl-sub">
-          {brand.name} manages {where ? where.name : "your building"}. Set yourself up here and you can
-          report anything that needs fixing, and follow what happens to it, without calling anyone.
-          {invite.label ? ` This link was sent for ${invite.label}.` : ""}
+          {brand.name} has set you up to report repairs at {place || "your building"}.
+          {needsEmail ? " Give us an email address and pick a password, and you're in." : " Pick a password and you're in."} After that you can report anything that needs fixing
+          and see what's happening with it, without calling anybody.
         </p>
 
-        {mustChoose && (
-          <label className="wl-fld">Which building do you live in?
-            <select value={f.propertyId} onChange={(e) => set("propertyId", e.target.value)}>
-              <option value="">Choose…</option>
-              {invite.properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+        {needsEmail && (
+          <label className="wl-fld">Your email address
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email" placeholder="you@example.com" />
+            <span className="wl-opt">This is what you'll sign in with.</span>
           </label>
         )}
-        <label className="wl-fld">Your name
-          <input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Jane Doe" />
+        <label className="wl-fld">Password
+          <input type={show ? "text" : "password"} value={password}
+            autoComplete="new-password"
+            onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" />
         </label>
-        <label className="wl-fld">Email
-          <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)}
-            placeholder="jane@example.com" />
-        </label>
-        {/* An office says "Suite 300" and an apartment says "Apt 4B". Asking
-            for the wrong one reads as a form written for somebody else. */}
-        <label className="wl-fld">{office ? "Suite or unit" : "Apartment or unit"}
-          <span className="wl-opt">optional</span>
-          <input value={f.unit} onChange={(e) => set("unit", e.target.value)}
-            placeholder={office ? "Suite 300" : "Apt 4B"} />
-        </label>
+        <button type="button" className="wl-reveal" onClick={() => setShow((v) => !v)}>
+          {show ? "Hide" : "Show"} password
+        </button>
 
         {err && <p className="wl-err" role="alert">{err}</p>}
         <button className="wl-btn" onClick={go} disabled={!ready || busy}>
-          {busy ? "Setting you up…" : "Set me up"}
+          {busy ? "Setting you up…" : "Set my password"}
         </button>
         <p className="wl-fine">
           You'll only ever see what you report yourself. Nobody else's repairs, and none of
@@ -6745,7 +7091,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
     <main className="ss-main tn-main">
       <div className="form tn-form">
         <h2>Report a problem</h2>
-        <p className="form-sub">
+        <p className="form-sub prose">
           This goes to {brand.name}. They arrange the repair and you can follow it here.
         </p>
 
@@ -8048,7 +8394,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       )}
 
       {pane === "tenants" && canManage && (
-        <TenantInvites properties={properties} tenants={tenantSeats} />
+        <TenantsPane properties={properties} accountKind={accountKind} />
       )}
 
       {pane === "billing" && canManage && (
@@ -11687,6 +12033,10 @@ body{background:var(--paper)}
 
 .form h2{margin:0 0 4px;font-size:20px;letter-spacing:-.01em}
 .form-sub{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-soft);margin:0 0 20px}
+/* The flex above is for a one-line lead with an icon beside it. A paragraph
+   with a bold phrase or an interpolated word in it becomes three items sitting
+   in a row instead of a sentence, so prose opts out of it. */
+.form-sub.prose{display:block;line-height:1.55}
 .fld{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin-bottom:14px}
 .fld input,.fld select,.fld textarea{width:100%;margin-top:6px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:14px;color:var(--ink);background:var(--card);font-family:inherit}
 .fld textarea{resize:vertical}
@@ -12177,6 +12527,26 @@ body{background:var(--paper)}
 .tn-chosen span{font-size:13.5px;font-weight:600;line-height:1.35}
 .tn-change{flex:none;background:none;border:0;color:var(--brand);font:700 12px Inter,sans-serif;cursor:pointer}
 .tn-when{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
+
+/* ---- tenants, on the manager's side ---- */
+.tn-head-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tn-saved{margin:10px 0 0;border-top:1px solid var(--line);padding-top:10px}
+.tn-saved p{display:flex;align-items:center;gap:7px;margin:0 0 5px;font-size:12.5px;color:var(--ink-soft)}
+.tn-saved svg{color:var(--brand);flex:none}
+.tn-problems{margin:8px 0 0;padding-left:18px;line-height:1.6}
+.tn-preview{margin-top:10px;border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.tn-preview-row{display:flex;justify-content:space-between;gap:12px;padding:9px 12px;
+  font-size:12.5px;background:var(--card);border-bottom:1px solid var(--line)}
+.tn-preview-row:last-child{border-bottom:0}
+.tn-preview-row span{color:var(--ink-soft);text-align:right}
+/* The reveal under a password field: a tenant typing on a phone, once, needs
+   to be able to see what they typed. */
+.tn-reveal,.wl-reveal{background:none;border:0;padding:6px 0 0;cursor:pointer;
+  font:600 12px Inter,sans-serif;color:var(--wl-accent,var(--brand))}
+@media(max-width:640px){
+  .tn-preview-row{flex-direction:column;gap:2px}
+  .tn-preview-row span{text-align:left}
+}
 @media(max-width:560px){
   .tn-groups{grid-template-columns:1fr}
 }

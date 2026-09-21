@@ -137,9 +137,14 @@ export const api = {
 
   // Tenants. The first two need a signed-in manager; the last two are how
   // somebody holding a link becomes a tenant, before they have any account.
-  listTenantInvites: () => request("/tenant-invites"),
-  createTenantInvite: (body) => request("/tenant-invites", { method: "POST", body: JSON.stringify(body) }),
-  revokeTenantInvite: (id) => request(`/tenant-invites/${id}`, { method: "DELETE" }),
+  listTenants: () => request("/tenants"),
+  addTenant: (body) => request("/tenants", { method: "POST", body: JSON.stringify(body) }),
+  // Up to 25 rows per call; the import screen sends a spreadsheet in batches
+  // so a long list cannot time out a single request.
+  addTenantsBulk: (rows) => request("/tenants/bulk", { method: "POST", body: JSON.stringify({ rows }) }),
+  resendTenantInvite: (userId, channels) =>
+    request(`/tenants/${userId}/resend`, { method: "POST", body: JSON.stringify({ channels }) }),
+  removeTenant: (userId) => request(`/tenants/${userId}`, { method: "DELETE" }),
   // No auth header to add when signed out; authHeaders() simply returns none,
   // which is how the subcontractor invite lookup above works too.
   lookupTenantInvite: (token) => request(`/tenant-invite/${encodeURIComponent(token)}`),

@@ -1,0 +1,16 @@
+-- Migration 017 — when a tenant's invite actually went out.
+--
+-- 015 created tenant_invites for a link somebody copied and sent themselves,
+-- so there was nothing to record: the account knew when it had sent one,
+-- because it had done the sending. Now SubSub sends it, and "was this person
+-- ever told" is a question the roster has to be able to answer -- along with
+-- the one that follows it, which is "send it again".
+--
+--   npx wrangler d1 execute subsub-db --config=wrangler.toml \
+--     --file=./worker/migrations/017_tenant_invite_sent.sql
+--
+-- Re-running stops with "duplicate column name", which is safe to ignore.
+--
+-- Deliberately only set when something actually left: an invite marked sent
+-- that never went is worse than one marked nothing, because nobody chases it.
+ALTER TABLE tenant_invites ADD COLUMN sent_at TEXT;
