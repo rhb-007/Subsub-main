@@ -124,3 +124,46 @@ console.log("cloudflare unreachable");
 globalThis.fetch = async () => { throw new Error("connect ETIMEDOUT"); };
 r = await provisionHostname(env, "newco");
 eq("network failure reported", { ok: r.ok, status: r.status }, { ok: false, status: "failed" });
+
+console.log("diagnose pinpoints the wrong setting");
+{
+  const { diagnose } = await import("../worker/hostnames.js");
+
+  // Missing settings are named, not guessed at.
+  let d = await diagnose({ CF_API_TOKEN: "t", CF_ZONE_ID: "z1" });
+  eq("names what is unset", { configured: d.configured, missing: d.missing },
+     { configured: false, missing: ["CF_ACCOUNT_ID", "CF_PAGES_PROJECT"] });
+
+  // A bad token stops the run: the later probes would fail for the same
+  // reason and saying it three times buries the one that matters.
+  globalThis.fetch = async (url) =>
+    new URL(url).pathname === "/client/v4/user/tokens/verify"
+      ? json({ success: false, errors: [{ code: 1000, message: "Invalid API Token" }] }, 401)
+      : json({ success: true, result: [] });
+  d = await diagnose(env);
+  eq("bad token stops at the token", d.checks.map(c => [c.id, c.ok]), [["token", false]]);
+  eq("quotes Cloudflare verbatim", d.checks[0].detail.startsWith("Invalid API Token (HTTP 401)"), true);
+
+  // Token fine, zone wrong -- the case where the account id got pasted into
+  // CF_ZONE_ID, which is the one nobody spots by eye.
+  globalThis.fetch = async (url) => {
+    const path = new URL(url).pathname;
+    if (path === "/client/v4/user/tokens/verify") return json({ success: true, result: { status: "active" } });
+    if (path.includes("/dns_records")) return json({ success: false, errors: [{ code: 7003, message: "Could not route to /zones/.../dns_records" }] }, 400);
+    return json({ success: true, result: { name: "subsub-app" } });
+  };
+  d = await diagnose(env);
+  eq("finds the zone", d.checks.map(c => [c.id, c.ok]), [["token", true], ["dns", false], ["pages", true]]);
+
+  // All good.
+  globalThis.fetch = async () => json({ success: true, result: [] });
+  d = await diagnose(env);
+  eq("all clear", d.checks.every(c => c.ok), true);
+}
+
+console.log("pasted values are trimmed");
+{
+  const { hostnameConfig } = await import("../worker/hostnames.js");
+  const cfg = hostnameConfig({ CF_API_TOKEN: " tok\n", CF_ZONE_ID: "z1 ", CF_ACCOUNT_ID: " a1", CF_PAGES_PROJECT: "subsub-app\n" });
+  eq("no stray whitespace", [cfg.token, cfg.zoneId, cfg.accountId, cfg.project], ["tok", "z1", "a1", "subsub-app"]);
+}

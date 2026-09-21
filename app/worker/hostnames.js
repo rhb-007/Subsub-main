@@ -35,11 +35,16 @@ const NEVER_PROVISION = new Set([
 const SUB_RE = /^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])?$/;
 
 export function hostnameConfig(env) {
-  const token = env.CF_API_TOKEN;
-  const zoneId = env.CF_ZONE_ID;
-  const accountId = env.CF_ACCOUNT_ID;
-  const project = env.CF_PAGES_PROJECT;
-  const domain = (env.APP_DOMAIN || "subsub.work").trim().toLowerCase();
+  // Trimmed, every one. These are pasted by hand into a dashboard, often on
+  // a phone or tablet, and a trailing newline on the token turns into an
+  // Authorization header Cloudflare rejects with a message about
+  // authentication -- which sends you looking at permissions for an hour.
+  const clean = (v) => String(v ?? "").trim();
+  const token = clean(env.CF_API_TOKEN);
+  const zoneId = clean(env.CF_ZONE_ID);
+  const accountId = clean(env.CF_ACCOUNT_ID);
+  const project = clean(env.CF_PAGES_PROJECT);
+  const domain = (clean(env.APP_DOMAIN) || "subsub.work").toLowerCase();
   if (!token || !zoneId || !accountId || !project) return null;
   return { token, zoneId, accountId, project, domain };
 }
@@ -139,6 +144,56 @@ export async function checkHostname(env, subdomain) {
     status: state === "active" ? "active" : (state === "error" || state === "blocked" ? "failed" : "pending"),
     error: detail,
   };
+}
+
+// Which of the four settings is wrong.
+//
+// A provisioning failure reads as one line -- "Authentication failed" --
+// and that one line is true of a mistyped token, a token whose permissions
+// are too narrow, a zone id that belongs to a different zone, and an account
+// id pasted where a zone id goes. Four causes, one message, and the only way
+// to tell them apart by hand is to try each in turn. So try each in turn.
+//
+// Each probe uses exactly the permission provisioning needs, so a probe that
+// passes is evidence the real call will too.
+export async function diagnose(env) {
+  const cfg = hostnameConfig(env);
+  if (!cfg) {
+    const missing = ["CF_API_TOKEN", "CF_ZONE_ID", "CF_ACCOUNT_ID", "CF_PAGES_PROJECT"]
+      .filter((k) => !env[k]);
+    return {
+      configured: false, missing,
+      checks: [{ id: "config", label: "Settings present", ok: false,
+        detail: `Not set on this Worker: ${missing.join(", ")}` }],
+    };
+  }
+
+  const probes = [
+    ["token", "API token is valid", "/user/tokens/verify",
+      "The token was rejected outright. Check you copied the token itself and not its ID, and that there is no stray space or line break at the end."],
+    ["dns", `DNS access to the zone (${cfg.domain})`,
+      `/zones/${cfg.zoneId}/dns_records?per_page=1`,
+      "The token cannot read DNS in this zone. Either CF_ZONE_ID is not this zone's id — it is easy to paste the account id here, they look identical — or the token is missing Zone → DNS → Edit for subsub.work."],
+    ["pages", `Pages project "${cfg.project}"`,
+      `/accounts/${cfg.accountId}/pages/projects/${cfg.project}`,
+      "The project could not be read. Either CF_PAGES_PROJECT is not its exact name, CF_ACCOUNT_ID is wrong, or the token is missing Account → Cloudflare Pages → Edit."],
+  ];
+
+  const checks = [];
+  for (const [id, label, path, hint] of probes) {
+    const r = await cf(cfg, path);
+    checks.push({
+      id, label, ok: r.ok,
+      // Cloudflare's own words first: a paraphrase is not something anyone
+      // can search for. The hint is what to do about them.
+      detail: r.ok ? null : `${errText(r)} (HTTP ${r.status}) — ${hint}`,
+    });
+    // A bad token fails every probe after it for the same reason; saying so
+    // three times buries the one that matters.
+    if (!r.ok && id === "token") break;
+  }
+
+  return { configured: true, zone: cfg.domain, project: cfg.project, checks };
 }
 
 // Make the address real. Safe to call repeatedly -- both steps no-op once

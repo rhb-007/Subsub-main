@@ -213,6 +213,9 @@ export const api = {
       request(`/platform/companies/${encodeURIComponent(id)}`,
         { method: "DELETE", body: JSON.stringify({ confirmName }) }),
 
+    // Read-only: probes each Cloudflare setting and says which one is wrong.
+    hostnameCheck: () => request("/platform/hostname-check"),
+
     // Re-run branded-hostname setup now. The Worker's sweep does this on its
     // own every ten minutes; this is the "don't make me wait" button.
     syncHostname: (accountId) =>

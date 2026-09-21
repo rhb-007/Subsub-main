@@ -2443,6 +2443,8 @@ export default function SubSub() {
           onSyncHostname={async (id) =>
             platformWrite(() => api.platform.syncHostname(id),
               "Could not set up that address.")}
+          // Read-only, so it does not reload the console the way a write does.
+          onCheckHostnameSetup={() => api.platform.hostnameCheck()}
           onDeleteAccount={async (id, confirmName) => {
             await platformWrite(() => api.platform.deleteAccount(id, confirmName),
               "Could not delete that account.");
@@ -3957,7 +3959,7 @@ const monthKey = (iso) => (iso || "").slice(0, 7);
 function SuperadminConsole({ me, admin, accounts, users, memberships, companies, engagements,
   jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
-  onResetPassword, onSyncHostname }) {
+  onResetPassword, onSyncHostname, onCheckHostnameSetup }) {
   const [screen, setScreen] = useState("dashboard");
   const [openId, setOpenId] = useState(null);
   const [menu, setMenu] = useState(false);
@@ -4592,7 +4594,8 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
               </p>
             </div>
 
-            <HostnamePanel account={open.a} onSync={() => onSyncHostname(open.a.id)} />
+            <HostnamePanel account={open.a} onSync={() => onSyncHostname(open.a.id)}
+              onCheckSetup={onCheckHostnameSetup} />
 
             <CompPanel account={open.a} onSave={(patch) => onPatchAccount(open.a.id, patch)} />
 
@@ -5306,11 +5309,13 @@ const HOSTNAME_STATE = {
     say: "This Worker has no Cloudflare API credentials, so no hostname can be provisioned." },
 };
 
-function HostnamePanel({ account, onSync }) {
+function HostnamePanel({ account, onSync, onCheckSetup }) {
   const [busy, setBusy] = useState(false);
   const [justRan, setJustRan] = useState(null);
+  const [diag, setDiag] = useState(null);
+  const [diagBusy, setDiagBusy] = useState(false);
 
-  useEffect(() => { setJustRan(null); }, [account.id]);
+  useEffect(() => { setJustRan(null); setDiag(null); }, [account.id]);
 
   const scale = account.plan === "scale";
   const status = justRan?.status || account.hostnameStatus || null;
@@ -5354,8 +5359,40 @@ function HostnamePanel({ account, onSync }) {
         <p className="pf-host-when">Last checked {niceWhen(account.hostnameCheckedAt)}</p>
       )}
 
+      {/* One message -- "Authentication failed" -- is true of four different
+          mistakes, so offer the thing that tells them apart rather than
+          leaving somebody to try each in turn. */}
+      {diag && (
+        <ul className="pf-diag">
+          {diag.checks.map((ch) => (
+            <li key={ch.id} className={ch.ok ? "ok" : "bad"}>
+              <span className="pf-diag-mark">{ch.ok ? "✓" : "✕"}</span>
+              <span className="pf-diag-body">
+                <b>{ch.label}</b>
+                {ch.detail && <em>{ch.detail}</em>}
+              </span>
+            </li>
+          ))}
+          {diag.checks.every((ch) => ch.ok) && (
+            <li className="ok"><span className="pf-diag-mark">✓</span>
+              <span className="pf-diag-body"><b>All four settings are good.</b>
+                <em>Whatever failed was not the credentials — try setting it up again.</em></span></li>
+          )}
+        </ul>
+      )}
+
       {scale && (
         <div className="form-actions">
+          {(status === "failed" || status === "unconfigured") && (
+            <button className="pf-mini" onClick={async () => {
+              setDiagBusy(true);
+              try { setDiag(await onCheckSetup()); }
+              catch { /* the console has already said why */ }
+              finally { setDiagBusy(false); }
+            }} disabled={diagBusy}>
+              <Shield size={13} /> {diagBusy ? "Checking…" : "Check the Cloudflare setup"}
+            </button>
+          )}
           <button className="pf-mini" onClick={run} disabled={busy}>
             <RefreshCw size={13} /> {busy ? "Checking…" : status === "active" ? "Re-check" : "Set it up now"}
           </button>
@@ -12042,7 +12079,14 @@ body{background:var(--paper)}
 .pf-host-err{font:600 12px ui-monospace,monospace;background:#fdf1ef;border:1px solid #e9c4bd;
   color:#8a2f1c;border-radius:8px;padding:9px 11px;margin:10px 0 0;word-break:break-word;line-height:1.5}
 .pf-host-when{font-size:11.5px;color:var(--ink-soft);margin:9px 0 0}
-.pf-host .form-actions{margin-top:12px}
+.pf-host .form-actions{margin-top:12px;flex-wrap:wrap;gap:8px}
+.pf-diag{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:9px}
+.pf-diag li{display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.5}
+.pf-diag-mark{flex:none;width:16px;font-weight:800;text-align:center}
+.pf-diag li.ok .pf-diag-mark{color:var(--brand)}
+.pf-diag li.bad .pf-diag-mark{color:var(--red)}
+.pf-diag-body{display:flex;flex-direction:column;min-width:0}
+.pf-diag-body em{font-style:normal;font-size:12.5px;color:var(--ink-soft);margin-top:2px}
 
 /* ---- dashboard: range picker ------------------------------------------
    Presets as rows with a check, custom behind a rule in the footer. Nobody

@@ -12,7 +12,7 @@ import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEm
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
 import {
-  hostnameConfig, brandedHost, provisionHostname, deprovisionHostname, checkHostname,
+  hostnameConfig, brandedHost, provisionHostname, deprovisionHostname, checkHostname, diagnose,
 } from "./hostnames.js";
 
 const app = new Hono();
@@ -3012,6 +3012,17 @@ app.delete("/api/platform/companies/:id", async (c) => {
     `${staff.name} deleted company ${co.company}`, { companyId: id, name: co.company });
   await c.env.DB.prepare(`DELETE FROM companies WHERE id = ?`).bind(id).run();
   return c.json({ ok: true });
+});
+
+// Which of the four Cloudflare settings is wrong, when one of them is.
+// Read-only: every probe is a GET, so this is safe to hit repeatedly while
+// somebody is fixing a value in the dashboard.
+app.get("/api/platform/hostname-check", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+  return c.json(await diagnose(c.env));
 });
 
 // Re-run provisioning for one account, now. The sweep gets there on its own
