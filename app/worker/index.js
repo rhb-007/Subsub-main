@@ -2614,6 +2614,22 @@ app.get("/api/platform/bootstrap", async (c) => {
           ORDER BY a.at DESC LIMIT 500`).all(),
     ]);
 
+  // SMS, rolled up by day rather than row by row. The console only ever
+  // reports totals over a window, and a year of individual messages is a
+  // payload nobody reads. The table may not exist on a database that has not
+  // run migration 011, which must not take the whole console down.
+  let smsDaily = [];
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT substr(at, 1, 10) AS day, COUNT(*) AS sent, SUM(segments) AS segments,
+              SUM(cost_cents) AS cost, SUM(billed_cents) AS billed
+         FROM sms_log WHERE status = 'sent' GROUP BY day ORDER BY day`
+    ).all();
+    smsDaily = results;
+  } catch (err) {
+    console.warn("[platform] sms_log unavailable:", err?.message || err);
+  }
+
   // The last work order per job is what the console's "expired response"
   // count walks, so hand back enough of it to compute that.
   const { results: wos } = await c.env.DB.prepare(
@@ -2663,6 +2679,12 @@ app.get("/api/platform/bootstrap", async (c) => {
     activity: activity.results.map((r) => ({
       id: r.id, accountId: r.account_id, at: r.at, userId: r.user_id,
       userName: r.user_name, kind: r.kind, text: r.text,
+    })),
+    // Usage is operational, cost and revenue are not: a standard console user
+    // sees how much is being sent and not what it earns.
+    smsDaily: smsDaily.map((r) => ({
+      day: r.day, sent: r.sent || 0, segments: r.segments || 0,
+      ...(staff.finance ? { cost: r.cost || 0, billed: r.billed || 0 } : {}),
     })),
   });
 });

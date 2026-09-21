@@ -2421,7 +2421,7 @@ export default function SubSub() {
         <style>{CSS}</style>
         <SuperadminConsole me={me} admin={admin} accounts={P.accounts} users={P.users} memberships={P.memberships}
           companies={P.companies} engagements={P.engagements} jobs={P.jobs} subEvents={P.subEvents}
-          activity={P.activity} err={platformErr}
+          activity={P.activity} smsDaily={P.smsDaily || []} err={platformErr}
           // Every write goes to the server, which re-checks the staff role,
           // writes the audit row and then changes the data. The console then
           // re-reads rather than patching local state: a console showing what
@@ -3955,7 +3955,7 @@ const fmtC = (cents) => "$" + (Math.round(cents) / 100).toLocaleString("en-US", 
 const monthKey = (iso) => (iso || "").slice(0, 7);
 
 function SuperadminConsole({ me, admin, accounts, users, memberships, companies, engagements,
-  jobs, subEvents, activity, err, onPatchAccount, onAddUser, onImpersonate, onSignOut,
+  jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
   onResetPassword, onSyncHostname }) {
   const [screen, setScreen] = useState("dashboard");
@@ -4049,18 +4049,123 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
     inactive14: live.filter((r) => daysSince(r.a.lastActive, now.getTime()) > 14).length,
   };
 
+  // ---- one walk of the event log, and everything reads from it ----------
+  //
+  // MRR and the paying-account count are both cumulative: what they are on a
+  // given day is every event up to that day, not a snapshot anyone stored.
+  // Deriving them twice -- once for a tile, once for the chart -- is how a
+  // dashboard ends up showing two numbers for the same thing, so this walks
+  // the log once and hands out days.
+  const today = now.toISOString().slice(0, 10);
+  const dailySeries = useMemo(() => {
+    const evs = [...subEvents].filter((e) => e.at).sort((x, y) => (x.at < y.at ? -1 : 1));
+    if (!evs.length) return [];
+
+    // Per-account paying state, not a running +1/-1: a comp moves an account
+    // onto Scale without paying, and counting the plan change would report a
+    // free account as revenue.
+    const paying = {};
+    const paidNow = () => Object.values(paying).filter(Boolean).length;
+
+    const out = [];
+    let mrr = 0, i = 0;
+    const start = new Date(evs[0].at.slice(0, 10) + "T00:00:00Z");
+    const end = new Date(today + "T00:00:00Z");
+    for (let d = start; d <= end; d = new Date(d.getTime() + 86400000)) {
+      const day = d.toISOString().slice(0, 10);
+      let newAccounts = 0, conversions = 0, churned = 0;
+      while (i < evs.length && evs[i].at.slice(0, 10) <= day) {
+        const e = evs[i++];
+        mrr += e.mrrDelta || 0;
+        if (e.kind === "created") newAccounts++;
+        if (e.kind === "upgraded" || e.kind === "reactivated") { paying[e.accountId] = true; conversions++; }
+        else if (e.kind === "comped") paying[e.accountId] = false;
+        else if (e.kind === "downgraded" || e.kind === "canceled") {
+          if (paying[e.accountId]) churned++;
+          paying[e.accountId] = false;
+        }
+      }
+      out.push({ day, mrr, paid: paidNow(), newAccounts, conversions, churned });
+    }
+    return out;
+  }, [subEvents, today]);
+
+  const seriesAt = (day) => {
+    // The last point on or before `day` -- the level carries forward on a
+    // day nothing happened, which is most days.
+    let found = null;
+    for (const p of dailySeries) { if (p.day <= day) found = p; else break; }
+    return found;
+  };
+
+  // GMV is per job, not per subscription event, so it is filtered rather
+  // than accumulated. Same acceptance rule the per-account figure uses.
+  const jobGmv = (j) => Object.values(j.assignments || {})
+    .filter((x) => x.status === "accepted" || x.auto)
+    .reduce((m, x) => m + Number(moneyRaw(x.value) || 0) * 100, 0);
+
+  // Everything a period is judged on, for any window. Both sections of the
+  // dashboard call this, which is what makes them comparable.
+  const metricsFor = (from, to) => {
+    const within = (iso) => { const d = (iso || "").slice(0, 10); return d && d >= from && d <= to; };
+    const ev = subEvents.filter((e) => within(e.at));
+    const sum = (f) => ev.filter(f).reduce((n, e) => n + e.mrrDelta, 0);
+
+    const signups = accounts.filter((a) => within(a.createdAt)).length;
+    const conversions = ev.filter((e) => e.kind === "upgraded").length;
+    const canceled = ev.filter((e) => e.kind === "canceled").length;
+    const downgraded = ev.filter((e) => e.kind === "downgraded").length;
+
+    const newMrr = sum((e) => e.kind === "upgraded" && e.fromPlan === "basic");
+    const expansion = sum((e) => e.kind === "cycle" && e.mrrDelta > 0);
+    const contraction = sum((e) => (e.kind === "cycle" && e.mrrDelta < 0) || e.kind === "downgraded");
+    const churnMrr = sum((e) => e.kind === "canceled");
+
+    // The denominator is who was paying when the window opened. Dividing by
+    // today's count instead flatters every month in which anyone joined.
+    const dayBefore = new Date(new Date(from + "T00:00:00Z").getTime() - 86400000)
+      .toISOString().slice(0, 10);
+    const paidAtStart = seriesAt(dayBefore)?.paid || 0;
+    const lost = canceled + downgraded;
+
+    const sms = smsDaily.filter((r) => within(r.day)).reduce((acc, r) => ({
+      sent: acc.sent + (r.sent || 0), segments: acc.segments + (r.segments || 0),
+      cost: acc.cost + (r.cost || 0), billed: acc.billed + (r.billed || 0),
+    }), { sent: 0, segments: 0, cost: 0, billed: 0 });
+
+    return {
+      from, to, signups, conversions, canceled, downgraded, lost, paidAtStart,
+      newMrr, expansion, contraction, churnMrr,
+      netMrr: newMrr + expansion + contraction + churnMrr,
+      gmv: jobs.filter((j) => within(j.createdAt)).reduce((n, j) => n + jobGmv(j), 0),
+      // Conversions over signups in the same window. Not a cohort rate --
+      // somebody who signed up in March can convert in April -- so it is
+      // labelled by what it is rather than presented as one.
+      convRate: signups ? conversions / signups : null,
+      churnRate: paidAtStart ? lost / paidAtStart : null,
+      sms,
+    };
+  };
+
   // ---- this month, kept apart from all time ------------------------------
   // The dashboard answers two questions -- "what moved this month" and "how
   // big is the platform" -- and they were sharing one row of tiles. Numbers
   // that mean different things do not belong in the same group.
   const monthLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
+  const monthStart = thisMonth + "-01";
+  const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0))
+    .toISOString().slice(0, 10);
+  const thisMonthM = metricsFor(monthStart, today);
   const moNow = running.find((r) => r.m === thisMonth)
     || { signups: 0, conversions: 0, newMrr: 0, expansion: 0, contraction: 0, churn: 0 };
   const lostMrr = moNow.contraction + moNow.churn;            // already negative
   const netNewMrr = moNow.newMrr + moNow.expansion + lostMrr;
-  const newAccountsMo = accounts.filter((a) => monthKey(a.createdAt) === thisMonth).length;
   const jobsMoTotal = rows.reduce((n, r) => n + r.jobsMo, 0);
   const attention = health.atLimit + health.licFail + health.dups + health.expired;
+
+  // ---- the window the second half of the dashboard is scoped to ---------
+  const [range, setRange] = useState(() => defaultRange());
+  const rangeM = metricsFor(range.from, range.to);
   // What the append-only log says MRR should be, versus what the accounts
   // actually bill. They agree unless a plan was changed outside the webhook.
   const loggedMrr = running.length ? running[running.length - 1].mrr : 0;
@@ -4172,32 +4277,42 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
               </div>
             </div>
 
-            {/* What moved this month. Kept apart from the totals below, because
-                a number that resets on the 1st and a number that only ever
-                grows are not comparable and should not sit side by side. */}
+            {/* What moved this month. Kept apart from the window below,
+                because a number that resets on the 1st and one measured over
+                an arbitrary window are not comparable at a glance. */}
             <section className="pf-section">
-              <div className="pf-section-hd"><h3>This month</h3><span>{monthLabel}</span></div>
-              <div className="pf-kpis">
-                <Kpi label="New accounts" value={newAccountsMo} />
-                {admin.finance && <Kpi label="Conversions to paid" value={moNow.conversions} />}
-                {admin.finance && <Kpi label="Net new MRR" value={(netNewMrr >= 0 ? "+" : "−") + fmtC(Math.abs(netNewMrr))} accent />}
-                {admin.finance && <Kpi label="ARR contribution" value={(netNewMrr >= 0 ? "+" : "−") + fmtC(Math.abs(netNewMrr * 12))} sub="net new MRR × 12" />}
-                <Kpi label="Jobs created" value={jobsMoTotal} />
-                <Kpi label="Needs attention" value={attention} warn={attention > 0} />
+              <div className="pf-section-hd">
+                <h3>This month</h3>
+                <span>{monthLabel} · day {Number(today.slice(8))} of {Number(monthEnd.slice(8))}</span>
               </div>
+              <PeriodStats m={thisMonthM} finance={admin.finance} showSms />
             </section>
 
-            {/* Everything up to and including this month. */}
+            {/* One picker, above everything it scopes -- the chart and the
+                tiles under it are the same window, so the two cannot
+                disagree about what period is being read. */}
             <section className="pf-section">
-              <div className="pf-section-hd"><h3>All time</h3><span>through {monthLabel}</span></div>
-              <div className="pf-kpis">
-                <Kpi label="Live accounts" value={live.length} />
-                <Kpi label="Subcontractor companies" value={companies.length} />
-                {admin.finance && <Kpi label="MRR" value={fmtC(mrr)} accent />}
-                {admin.finance && <Kpi label="ARR" value={fmtC(mrr * 12)} />}
-                {admin.finance && <Kpi label="GMV to date" value={fmtC(gmvTotal)} />}
+              <div className="pf-section-hd">
+                <h3>Range</h3>
+                <RangePicker value={range} onChange={setRange} />
+                <span>{niceDay(range.from)} — {niceDay(range.to)}</span>
               </div>
 
+              {/* The only place a projection belongs: a level over time is
+                  the shape a tile cannot show. */}
+              {admin.finance && (
+                <TrendChart series={dailySeries} from={range.from} to={range.to}
+                  projectTo={range.to >= today ? monthEnd : null} />
+              )}
+
+              <PeriodStats m={rangeM} finance={admin.finance} showSms />
+            </section>
+
+            {/* Where things stand right now, which is a different question
+                from what moved. These four are also the way in to each
+                screen, so they carry the totals the tiles above do not. */}
+            <section className="pf-section">
+              <div className="pf-section-hd"><h3>Right now</h3><span>current state</span></div>
               <div className="pf-dash-grid">
                 <div className="pf-panel pf-dash-card" onClick={() => go("accounts")}>
                   <h3><Building2 size={15} /> Accounts</h3>
@@ -4227,18 +4342,20 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                     <div className="pf-dash-stat"><b>{fmtC(mrr)}</b><span>MRR</span></div>
                     <p className="pf-note">
                       {fmtC(mrr * 12)} ARR ·{" "}
-                      {live.filter((r) => r.mrr > 0).length} paying account{live.filter((r) => r.mrr > 0).length === 1 ? "" : "s"}
+                      {live.filter((r) => r.mrr > 0).length} paying account{live.filter((r) => r.mrr > 0).length === 1 ? "" : "s"} ·{" "}
+                      {fmtC(gmvTotal)} GMV to date
                     </p>
                   </div>
                 )}
 
-                {isSuper && (
-                  <div className="pf-panel pf-dash-card" onClick={() => go("health")}>
-                    <h3><Activity size={15} /> Health</h3>
-                    <div className="pf-dash-stat"><b>{health.signups7d}</b><span>signups, 7 days</span></div>
-                    <p className="pf-note">{health.inactive14} account{health.inactive14 === 1 ? "" : "s"} inactive 14+ days</p>
-                  </div>
-                )}
+                <div className="pf-panel pf-dash-card" onClick={() => go("health")}>
+                  <h3><Activity size={15} /> Health</h3>
+                  <div className="pf-dash-stat"><b>{attention}</b><span>needing attention</span></div>
+                  <p className="pf-note">
+                    {health.signups7d} signup{health.signups7d === 1 ? "" : "s"} in 7 days ·{" "}
+                    {health.inactive14} inactive 14+ days
+                  </p>
+                </div>
               </div>
 
               <div className="pf-split">
@@ -4881,6 +4998,272 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
   );
 }
 
+
+// ---- dashboard: date range -----------------------------------------------
+// Presets as rows, because nobody fights a calendar grid for "last 30 days".
+// Custom sits behind a rule at the bottom, where it does not compete.
+const isoDay = (d) => d.toISOString().slice(0, 10);
+const daysAgo = (n) => isoDay(new Date(Date.now() - n * 86400000));
+
+const RANGE_PRESETS = [
+  ["30d", "Last 30 days", () => ({ from: daysAgo(29), to: isoDay(new Date()) })],
+  ["90d", "Last 90 days", () => ({ from: daysAgo(89), to: isoDay(new Date()) })],
+  ["ytd", "Year to date", () => ({ from: `${new Date().getUTCFullYear()}-01-01`, to: isoDay(new Date()) })],
+  ["12m", "Last 12 months", () => ({ from: daysAgo(364), to: isoDay(new Date()) })],
+  ["all", "All time", () => ({ from: "2000-01-01", to: isoDay(new Date()) })],
+];
+function defaultRange() {
+  const p = RANGE_PRESETS.find(([id]) => id === "90d");
+  return { id: "90d", ...p[2]() };
+}
+const rangeLabel = (r) => {
+  const preset = RANGE_PRESETS.find(([id]) => id === r.id);
+  if (preset) return preset[1];
+  return `${niceDay(r.from)} — ${niceDay(r.to)}`;
+};
+
+function RangePicker({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [from, setFrom] = useState(value.from);
+  const [to, setTo] = useState(value.to);
+
+  useEffect(() => { setFrom(value.from); setTo(value.to); }, [value.from, value.to]);
+
+  const pick = (id, make) => { onChange({ id, ...make() }); setOpen(false); };
+
+  return (
+    <div className="pf-range">
+      <button className="pf-range-btn" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <Calendar size={13} /> {rangeLabel(value)} <ChevronDown size={13} />
+      </button>
+      {open && (
+        <>
+          <div className="pf-range-scrim" onClick={() => setOpen(false)} />
+          <div className="pf-range-menu">
+            {RANGE_PRESETS.map(([id, label, make]) => (
+              <button key={id} className={value.id === id ? "on" : ""} onClick={() => pick(id, make)}>
+                <span className="pf-range-tick">{value.id === id ? "✓" : ""}</span>{label}
+              </button>
+            ))}
+            <div className="pf-range-custom">
+              <label><span>From</span>
+                <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} /></label>
+              <label><span>To</span>
+                <input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} /></label>
+              <button className="pf-mini" disabled={!from || !to || from > to}
+                onClick={() => { onChange({ id: "custom", from, to }); setOpen(false); }}>Apply</button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- dashboard: the trend, with the rest of the period projected ---------
+//
+// Least squares over the window that is already drawn, extended to the end of
+// the period. It is a straight line through what happened, not a forecast
+// with a model behind it, so it is drawn dashed and labelled "projected" and
+// never given the same weight as the measured part.
+function projectLine(points, steps) {
+  const n = points.length;
+  if (n < 3 || steps < 1) return [];
+  const xs = points.map((_, i) => i);
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = points.reduce((a, b) => a + b.v, 0) / n;
+  let num = 0, den = 0;
+  points.forEach((p, i) => { num += (i - mx) * (p.v - my); den += (i - mx) ** 2; });
+  const slope = den ? num / den : 0;
+  const out = [];
+  for (let k = 1; k <= steps; k++) {
+    // A projection below zero is arithmetic, not a prediction: nobody has
+    // negative MRR or minus two customers.
+    out.push(Math.max(0, my + slope * (n - 1 + k - mx)));
+  }
+  return out;
+}
+
+const CHART_METRICS = [
+  { id: "mrr",  label: "MRR",           money: true,  pick: (p) => p.mrr },
+  { id: "paid", label: "Paying accounts", money: false, pick: (p) => p.paid },
+];
+
+function TrendChart({ series, from, to, projectTo, money }) {
+  const [metric, setMetric] = useState("mrr");
+  const [hover, setHover] = useState(null);
+  const wrap = useRef(null);
+  const [w, setW] = useState(760);
+
+  // Real pixels, measured. A viewBox stretched to fit would distort the
+  // stroke weight, which is the one thing the mark spec fixes.
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([e]) => setW(Math.max(280, e.contentRect.width)));
+    ro.observe(el);
+    setW(Math.max(280, el.clientWidth || 760));
+    return () => ro.disconnect();
+  }, []);
+
+  const m = CHART_METRICS.find((x) => x.id === metric) || CHART_METRICS[0];
+  const fmt = (v) => (m.money ? fmtC(v) : Math.round(v).toLocaleString());
+
+  const pts = series.filter((p) => p.day >= from && p.day <= to).map((p) => ({ day: p.day, v: m.pick(p) }));
+
+  const H = 210, padL = 54, padR = 58, padT = 14, padB = 26;
+  const plotW = Math.max(40, w - padL - padR), plotH = H - padT - padB;
+
+  // How many days are left to project, and how far along the period we are.
+  const steps = projectTo && pts.length
+    ? Math.max(0, Math.round((new Date(projectTo + "T00:00:00Z") - new Date(pts[pts.length - 1].day + "T00:00:00Z")) / 86400000))
+    : 0;
+  const proj = projectLine(pts, steps);
+
+  const all = [...pts.map((p) => p.v), ...proj];
+  const peak = Math.max(1, ...all);
+  const lo = 0;                               // a value axis that does not start at zero lies about proportion
+  const total = pts.length + proj.length;
+  const x = (i) => padL + (total <= 1 ? plotW / 2 : (i / (total - 1)) * plotW);
+
+  // Four ticks, rounded to something a person would say out loud, and the
+  // top of the scale raised to the last of them -- otherwise the highest
+  // point sits on the frame with no gridline above it to read against.
+  const magnitude = Math.pow(10, Math.floor(Math.log10(peak)));
+  const nice = [1, 2, 2.5, 5, 10].map((f) => f * magnitude).find((t) => peak / t <= 4) || peak;
+  const hi = Math.ceil(peak / nice) * nice;
+  const ticks = [];
+  for (let t = 0; t <= hi + 1e-9; t += nice) ticks.push(t);
+
+  const y = (v) => padT + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
+  const path = (vals, i0) => vals.map((v, k) => `${k ? "L" : "M"}${x(i0 + k).toFixed(1)},${y(v).toFixed(1)}`).join("");
+
+  const last = pts.length ? pts[pts.length - 1].v : 0;
+  const end = proj.length ? proj[proj.length - 1] : last;
+
+  const onMove = (e) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const px = e.clientX - box.left;
+    if (!total) return;
+    const i = Math.max(0, Math.min(total - 1, Math.round(((px - padL) / plotW) * (total - 1))));
+    const projected = i >= pts.length;
+    setHover({
+      i, projected,
+      day: projected
+        ? isoDay(new Date(new Date(pts[pts.length - 1].day + "T00:00:00Z").getTime() + (i - pts.length + 1) * 86400000))
+        : pts[i].day,
+      v: projected ? proj[i - pts.length] : pts[i].v,
+    });
+  };
+
+  return (
+    <div className="pf-panel pf-chart">
+      <div className="pf-panel-hd">
+        <h3>{m.label} over time</h3>
+        <div className="pf-chart-tabs" role="tablist">
+          {CHART_METRICS.map((c) => (
+            <button key={c.id} role="tab" aria-selected={metric === c.id}
+              className={metric === c.id ? "on" : ""} onClick={() => { setMetric(c.id); setHover(null); }}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {pts.length < 2 ? (
+        <p className="pf-note">Not enough history in this range to draw a line yet.</p>
+      ) : (
+        <>
+          <div className="pf-chart-wrap" ref={wrap}>
+            <svg width={w} height={H} role="img"
+              aria-label={`${m.label} from ${from} to ${to}${proj.length ? ", with the rest of the period projected" : ""}`}
+              onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
+              {ticks.map((t) => (
+                <g key={t}>
+                  {/* Hairline, solid. Dashing a gridline reads as a
+                      projection, which here is a thing that actually exists. */}
+                  <line x1={padL} x2={w - padR} y1={y(t)} y2={y(t)} stroke="var(--line)" strokeWidth="1" />
+                  <text x={padL - 8} y={y(t) + 4} textAnchor="end" className="pf-chart-tick">{fmt(t)}</text>
+                </g>
+              ))}
+
+              {proj.length > 0 && (
+                <>
+                  <path d={path([last, ...proj], pts.length - 1)} fill="none" stroke="var(--brand)"
+                    strokeWidth="2" strokeLinecap="round" strokeDasharray="5 5" opacity=".45" />
+                  {/* Only where it fits. On a phone this label lands on the
+                      measured line, and a label that collides is worse than
+                      none -- the caption below carries the same number. */}
+                  {w >= 560 && (
+                    <text x={x(total - 1)} y={y(end) - 9} textAnchor="end" className="pf-chart-proj">
+                      {fmt(end)} projected
+                    </text>
+                  )}
+                </>
+              )}
+
+              <path d={path(pts.map((p) => p.v), 0)} fill="none" stroke="var(--brand)"
+                strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+              {/* The measured end, ringed in the surface colour so it stays
+                  legible where the projection leaves it. */}
+              <circle cx={x(pts.length - 1)} cy={y(last)} r="4.5" fill="var(--brand)"
+                stroke="var(--card)" strokeWidth="2" />
+
+              {hover && (
+                <>
+                  <line x1={x(hover.i)} x2={x(hover.i)} y1={padT} y2={padT + plotH}
+                    stroke="var(--ink-soft)" strokeWidth="1" opacity=".45" />
+                  <circle cx={x(hover.i)} cy={y(hover.v)} r="4.5"
+                    fill={hover.projected ? "var(--card)" : "var(--brand)"}
+                    stroke="var(--brand)" strokeWidth="2" />
+                </>
+              )}
+            </svg>
+
+            {hover && (
+              <div className="pf-chart-tip" style={{ left: Math.min(Math.max(x(hover.i), 70), w - 70) }}>
+                <b>{fmt(hover.v)}</b>
+                <span>{niceDay(hover.day)}{hover.projected ? " · projected" : ""}</span>
+              </div>
+            )}
+          </div>
+
+          <p className="pf-note">
+            {fmt(last)} today.
+            {proj.length > 0 && ` On the last ${pts.length} days' trend, ${fmt(end)} by ${niceDay(projectTo)} — a straight line through what has happened, not a forecast.`}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- dashboard: one period's numbers -------------------------------------
+// Both sections render through this, which is what makes them comparable:
+// the same metric means the same thing in both, computed the same way.
+function PeriodStats({ m, finance, showSms }) {
+  const signed = (c) => (c >= 0 ? "+" : "−") + fmtC(Math.abs(c));
+  const pct = (r) => (r === null ? "—" : `${Math.round(r * 100)}%`);
+  return (
+    <div className="pf-kpis pf-kpis-period">
+      <Kpi label="New accounts" value={m.signups} />
+      <Kpi label="Free → paid" value={m.conversions} sub={`${pct(m.convRate)} of ${m.signups} signup${m.signups === 1 ? "" : "s"}`} />
+      <Kpi label="Churned" value={m.lost} warn={m.lost > 0}
+        sub={`${pct(m.churnRate)} of ${m.paidAtStart} paying at start`} />
+      {finance && <Kpi label="Net new MRR" value={signed(m.netMrr)} accent />}
+      {finance && <Kpi label="ARR contribution" value={signed(m.netMrr * 12)} sub="net new MRR × 12" />}
+      <Kpi label="GMV" value={fmtC(m.gmv)} sub="work-order value accepted" />
+      {showSms && (
+        <Kpi label="SMS sent" value={m.sms.sent.toLocaleString()}
+          sub={finance
+            ? (m.sms.billed || m.sms.cost
+              ? `${fmtC(m.sms.billed)} billed · ${fmtC(m.sms.cost)} cost`
+              : "not billing for SMS yet")
+            : `${m.sms.segments.toLocaleString()} segments`} />
+      )}
+    </div>
+  );
+}
 
 // A ranked magnitude list: one hue, sorted, value in a column of its own so
 // the numbers line up. Six rows at most -- past that it stops being a picture
@@ -11593,7 +11976,7 @@ body{background:var(--paper)}
   padding-bottom:9px;margin-bottom:12px;border-bottom:1px solid var(--line)}
 .pf-section-hd h3{margin:0;font-size:11.5px;font-weight:800;text-transform:uppercase;
   letter-spacing:.08em;color:var(--ink-soft)}
-.pf-section-hd span{font-size:12.5px;color:var(--ink-soft);margin-left:auto}
+.pf-section-hd > span{font-size:12.5px;color:var(--ink-soft);margin-left:auto}
 
 /* Two panels that read together, side by side while there is room for both. */
 .pf-split{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px;align-items:start}
@@ -11660,4 +12043,58 @@ body{background:var(--paper)}
   color:#8a2f1c;border-radius:8px;padding:9px 11px;margin:10px 0 0;word-break:break-word;line-height:1.5}
 .pf-host-when{font-size:11.5px;color:var(--ink-soft);margin:9px 0 0}
 .pf-host .form-actions{margin-top:12px}
+
+/* ---- dashboard: range picker ------------------------------------------
+   Presets as rows with a check, custom behind a rule in the footer. Nobody
+   fights a calendar grid for "last 30 days". */
+.pf-range{position:relative}
+.pf-range-btn{display:inline-flex;align-items:center;gap:7px;background:var(--card);
+  border:1px solid var(--line);border-radius:8px;padding:7px 11px;cursor:pointer;
+  font:600 12.5px Inter,sans-serif;color:var(--ink)}
+.pf-range-btn:hover{border-color:var(--brand);color:var(--brand)}
+.pf-range-scrim{position:fixed;inset:0;z-index:40}
+.pf-range-menu{position:absolute;left:0;top:calc(100% + 6px);z-index:50;width:250px;
+  background:var(--card);border:1px solid var(--line);border-radius:11px;padding:5px;
+  box-shadow:0 18px 44px rgba(26,43,35,.18)}
+.pf-range-menu > button{display:flex;align-items:center;gap:8px;width:100%;background:none;
+  border:0;padding:9px 10px;border-radius:7px;cursor:pointer;text-align:left;
+  font:600 13px Inter,sans-serif;color:var(--ink)}
+.pf-range-menu > button:hover{background:var(--paper)}
+.pf-range-menu > button.on{color:var(--brand)}
+.pf-range-tick{width:14px;flex:none;font-size:13px;font-weight:800;color:var(--brand)}
+.pf-range-custom{border-top:1px solid var(--line);margin-top:5px;padding:11px 10px 6px;
+  display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pf-range-custom label{display:flex;flex-direction:column;gap:4px;min-width:0}
+.pf-range-custom span{font-size:10px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--ink-soft)}
+.pf-range-custom input{width:100%;min-width:0;border:1px solid var(--line);border-radius:7px;
+  padding:7px 8px;font:500 12.5px Inter,sans-serif;background:var(--card);color:var(--ink)}
+.pf-range-custom .pf-mini{grid-column:1 / -1;justify-content:center}
+.pf-section-hd .pf-range{margin-left:8px}
+
+/* ---- dashboard: the trend ---------------------------------------------- */
+@media (min-width:1000px){
+  .pf-kpis-period{grid-template-columns:repeat(4,minmax(0,1fr))}
+}
+@media (min-width:640px) and (max-width:999px){
+  .pf-kpis-period{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+
+.pf-chart{margin-top:16px}
+.pf-chart-wrap{position:relative;margin-top:6px;touch-action:pan-y}
+.pf-chart-wrap svg{display:block;max-width:100%;cursor:crosshair}
+.pf-chart-tick{font:500 10.5px Inter,sans-serif;fill:var(--ink-soft)}
+.pf-chart-proj{font:700 11px Inter,sans-serif;fill:var(--ink-soft)}
+.pf-chart-tabs{display:flex;gap:3px;background:var(--paper);border:1px solid var(--line);
+  border-radius:9px;padding:3px}
+.pf-chart-tabs button{border:0;background:none;padding:6px 12px;border-radius:6px;cursor:pointer;
+  font:600 12.5px Inter,sans-serif;color:var(--ink-soft)}
+.pf-chart-tabs button.on{background:var(--card);color:var(--ink);box-shadow:var(--shadow)}
+/* Value leads, date follows: the reader already knows which line they are on. */
+.pf-chart-tip{position:absolute;top:2px;transform:translateX(-50%);pointer-events:none;
+  background:var(--ink);color:#fff;border-radius:8px;padding:6px 10px;
+  display:flex;flex-direction:column;line-height:1.3;white-space:nowrap;
+  box-shadow:0 8px 22px rgba(26,43,35,.25)}
+.pf-chart-tip b{font-size:13.5px;font-weight:800}
+.pf-chart-tip span{font-size:11px;opacity:.72}
 `;

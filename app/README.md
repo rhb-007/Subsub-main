@@ -228,6 +228,40 @@ license verification, work-order immutability, suggested phased rollout).
     it publicly yet, but do this before a real GC puts this URL on their
     website.
 
+## The platform console's dashboard
+
+Two periods and one picture, all derived from the same walk of the
+append-only `subscription_events` log — MRR and the paying-account count are
+cumulative, so computing them twice is how a dashboard ends up showing two
+numbers for the same thing.
+
+- **This month** is fixed. **Range** is scoped by a picker that sits above
+  everything it controls, so the chart and the tiles under it are always the
+  same window. Both render through the same `PeriodStats`, which is what
+  makes them comparable: new accounts, free → paid (count and rate), churn
+  (count and rate), net new MRR, ARR contribution, GMV, SMS.
+- **Rates carry their denominator on the tile.** Free → paid is conversions
+  over signups *in the same window*, not a cohort rate — somebody who signed
+  up in March can convert in April — so it says "of N signups" rather than
+  implying otherwise. Churn divides by who was paying when the window
+  opened; dividing by today's count flatters every month in which anyone
+  joined.
+- **The chart** toggles between MRR and paying accounts and projects the rest
+  of the month with a least-squares line over the drawn window. It is drawn
+  dashed, labelled "projected", never given the weight of the measured part,
+  and clamped at zero — nobody has minus two customers. It is a straight line
+  through what happened, not a forecast, and the caption says so.
+- **`right now`** keeps the four cards that are also the way into each
+  screen. A level (MRR) and a change (net new MRR) are not redundant; the
+  all-time tile row that restated those cards was, and is gone.
+
+SMS usage reads from `sms_log` (migration 011). Nothing writes to it yet —
+SMS is not wired up — so the tile reads zero and starts being true the moment
+the first message is sent, with no further console work. It records
+`cost_cents` (what the carrier charges) separately from `billed_cents` (what
+the account is charged), because the margin between them is the only reason
+to record either.
+
 ## Branded hostnames (`outerhome.subsub.work`) — provisioned automatically
 
 A Scale account is sold its own address, and it used to be a dead link until
