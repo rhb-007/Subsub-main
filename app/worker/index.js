@@ -1122,7 +1122,20 @@ async function supabaseSignUp(env, email, password) {
   // Only whether one exists is reported: the tokens themselves are
   // deliberately not passed on. Signup does not sign anyone in -- see the
   // note on needsConfirmation below.
-  return { ok: true, authId: body?.user?.id || body?.id || null, session: !!body?.access_token };
+  //
+  // `existed` is Supabase's enumeration protection showing through: with
+  // confirmation on, signing up an address that is already registered
+  // answers 200 with a user object whose id is fabricated and whose
+  // identities list is empty, rather than admitting the address is taken.
+  // Storing that id would overwrite a real auth_id with one that matches
+  // nobody, so it has to be detected rather than trusted.
+  const user = body?.user || body;
+  const existed = Array.isArray(user?.identities) && user.identities.length === 0;
+  return {
+    ok: true, existed,
+    authId: existed ? null : (user?.id || null),
+    session: !!body?.access_token,
+  };
 }
 
 // A password nobody will ever use or see. It exists because Supabase needs
@@ -1148,7 +1161,10 @@ function throwawayPassword() {
 async function ensureAuthUser(env, email) {
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return { ok: false, error: "auth_not_configured" };
   const signed = await supabaseSignUp(env, email, throwawayPassword());
-  if (signed.ok) return { ok: true, created: true, authId: signed.authId };
+  // `existed` and `email_in_use` are the same answer wearing two faces --
+  // whether Supabase admits the address is taken depends on its enumeration
+  // setting. Both mean there was nothing to do.
+  if (signed.ok) return { ok: true, created: !signed.existed, authId: signed.authId };
   if (signed.error === "email_in_use") return { ok: true, created: false, authId: null };
   return { ok: false, error: signed.error, detail: signed.detail };
 }
@@ -3110,13 +3126,30 @@ app.post("/api/platform/users/:id/reset-password", async (c) => {
   if (!user?.email) return c.json({ error: "not_found" }, 404);
 
   // Somebody added from the console has no Supabase account yet, and recover
-  // on an unknown address succeeds without sending anything. Create it first
-  // so the mail below has somewhere to go.
-  const auth = await ensureAuthUser(c.env, user.email);
-  if (!auth.ok) return c.json({ error: auth.error, detail: auth.detail }, 502);
-  if (auth.authId && !user.auth_id) {
-    await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ?`)
-      .bind(auth.authId, user.id).run();
+  // on an unknown address succeeds without sending anything -- so one has to
+  // be created first or the mail has nowhere to go.
+  //
+  // Only when there is no evidence of one, though. An auth_id means they have
+  // signed in before, and signing them up again would send a confirmation
+  // mail nobody asked for and spend a send against the project's hourly
+  // limit -- the limit the reset itself needs.
+  let created = false, authNote = null;
+  if (!user.auth_id) {
+    const auth = await ensureAuthUser(c.env, user.email);
+    if (auth.ok) {
+      created = auth.created;
+      if (auth.authId) {
+        await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ?`)
+          .bind(auth.authId, user.id).run();
+      }
+    } else {
+      // Not fatal. The account may well exist already and this may have
+      // failed for an unrelated reason -- a send limit, most likely -- in
+      // which case recover below still works. Let the recover decide, and
+      // keep the reason in case it does not.
+      authNote = [auth.error, auth.detail].filter(Boolean).join(": ");
+      console.warn("[reset] could not ensure auth user:", user.email, authNote);
+    }
   }
 
   const res = await fetch(`${c.env.SUPABASE_URL}/auth/v1/recover`, {
@@ -3124,8 +3157,24 @@ app.post("/api/platform/users/:id/reset-password", async (c) => {
     headers: { "Content-Type": "application/json", apikey: c.env.SUPABASE_ANON_KEY },
     body: JSON.stringify({ email: user.email }),
   }).catch(() => null);
+
   if (!res || !res.ok) {
-    return c.json({ error: "reset_failed", detail: res ? `supabase_${res.status}` : "unreachable" }, 502);
+    // Supabase's own words. "supabase_429" is not something anyone can act
+    // on; "email rate limit exceeded" tells you to wait rather than to go
+    // looking for a bug.
+    let said = null;
+    if (res) {
+      const body = await res.json().catch(() => null);
+      said = body?.msg || body?.error_description || body?.error || null;
+    }
+    return c.json({
+      error: "reset_failed",
+      detail: [said || (res ? `HTTP ${res.status}` : "Supabase was unreachable"), authNote]
+        .filter(Boolean).join(" · "),
+      // A send limit is worth naming as itself: it is the one failure here
+      // that fixes itself, and the answer is to wait rather than to retry.
+      rateLimited: !!(res && (res.status === 429 || /rate limit/i.test(said || ""))),
+    }, 502);
   }
 
   const b = await c.req.json().catch(() => ({}));
@@ -3136,7 +3185,7 @@ app.post("/api/platform/users/:id/reset-password", async (c) => {
   // the property that makes this safe to do on somebody's behalf. `created`
   // says a Supabase account had to be made first, which is worth telling the
   // operator: with confirmation on, that sends a second mail of its own.
-  return c.json({ ok: true, email: user.email, created: !!auth.created });
+  return c.json({ ok: true, email: user.email, created });
 });
 
 // ---------------------------------------------------------------------------

@@ -3985,6 +3985,7 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
   const [confirmDelete, setConfirmDelete] = useState(null); // { kind: "account"|"company", id, name }
   const [resetFor, setResetFor] = useState(null);        // { userId, name, email }
   const [resetLink, setResetLink] = useState(null);      // { email } once the API confirms it sent
+  const [resetErr, setResetErr] = useState("");          // and why, when it did not
   const [sending, setSending] = useState(false);
   const now = new Date();
   const thisMonth = now.toISOString().slice(0, 7);
@@ -4640,13 +4641,24 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                       <p>Send a password reset link to <b>{resetFor.name}</b> ({resetFor.email})?
                         You will not see or set their password — only they can choose a new one, from a
                         link that expires and can be used once.</p>
+                      {resetErr && <p className="pf-host-err">{resetErr}</p>}
                       <div className="form-actions">
-                        <button className="btn-ghost" onClick={() => setResetFor(null)}>Cancel</button>
+                        <button className="btn-ghost" onClick={() => { setResetFor(null); setResetErr(""); }}>Cancel</button>
                         <button className="btn-solid" disabled={sending}
                           onClick={async () => {
-                            setSending(true);
+                            setSending(true); setResetErr("");
                             try { setResetLink(await onResetPassword(resetFor, resetFor.accountId)); }
-                            catch { /* the parent has already said what went wrong */ }
+                            catch (err) {
+                              // The console-wide banner for this sits at the
+                              // top of the page, which is nowhere near the
+                              // button that was pressed -- so a failed send
+                              // read as a button that did nothing at all.
+                              setResetErr(err?.body?.rateLimited
+                                ? "Supabase is limiting how many of these it will send in an hour. Wait a few minutes and try again — nothing is broken."
+                                : err?.body?.detail
+                                  ? `Supabase refused: ${err.body.detail}`
+                                  : "That did not send. Check the Worker log for the reason.");
+                            }
                             finally { setSending(false); }
                           }}>
                           <Key size={14} /> {sending ? "Sending…" : "Send reset link"}
@@ -4679,7 +4691,7 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                     <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
                     <span className="pf-line-main"><b>{u.name}</b><span className="pf-sub">{u.email}</span></span>
                     <span className={`role-badge r-${m.role}`}>{ROLES[m.role].label}</span>
-                    <button className="pf-mini" onClick={() => setResetFor({ userId: u.id, name: u.name, email: u.email, accountId: open.a.id })}>
+                    <button className="pf-mini" onClick={() => { setResetErr(""); setResetLink(null); setResetFor({ userId: u.id, name: u.name, email: u.email, accountId: open.a.id }); }}>
                       <Key size={12} /> Reset password
                     </button>
                   </div>
