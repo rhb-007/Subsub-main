@@ -2114,6 +2114,7 @@ const tenantRowToJs = (r) => ({
 app.get("/api/tenants", requireRole("admin", "pm"), async (c) => {
   const auth = c.get("auth");
   const scope = scopeClause(auth, "mp.property_id");
+  try {
   const { results } = await c.env.DB.prepare(
     `SELECT u.id AS user_id, u.name, u.email, u.phone,
             m.unit, m.created_at,
@@ -2138,6 +2139,12 @@ app.get("/api/tenants", requireRole("admin", "pm"), async (c) => {
       ORDER BY p.name, m.unit, u.name`
   ).bind(auth.accountId, ...scope.vals).all();
   return c.json((results || []).map(tenantRowToJs));
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    console.error("[tenants] schema not migrated:", err?.message || err);
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
 });
 
 // One tenant, created and invited in a single step. Returns what happened to
@@ -2262,6 +2269,19 @@ async function issueTenantInvite(c, auth, t) {
   return out;
 }
 
+// Which migration a D1 complaint is really about. The message names the
+// column or table, so the answer is in the error and only needs reading.
+function missingSchema(err) {
+  const m = String(err?.message || err || "");
+  if (!/no such (table|column)/i.test(m)) return null;
+  if (/tenant_invites|memberships\.unit|\bunit\b/i.test(m)) {
+    return /sent_at/i.test(m) ? "017_tenant_invite_sent" : "015_tenants";
+  }
+  if (/membership_properties/i.test(m)) return "014_building_owners";
+  if (/cancel_at_period_end/i.test(m)) return "013_cancel_at_period_end";
+  return "unknown";
+}
+
 app.post("/api/tenants", requireRole("admin", "pm"), async (c) => {
   const auth = c.get("auth");
   const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(auth.accountId).first();
@@ -2269,7 +2289,17 @@ app.post("/api/tenants", requireRole("admin", "pm"), async (c) => {
     return c.json({ error: "not_a_property_account" }, 400);
   }
   const b = await c.req.json().catch(() => ({}));
-  const res = await createTenant(c, auth, b, account);
+  let res;
+  try {
+    res = await createTenant(c, auth, b, account);
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) {
+      console.error("[tenants] schema not migrated:", err?.message || err);
+      return c.json({ error: "migration_needed", migration }, 503);
+    }
+    throw err;
+  }
   if (!res.ok) return c.json({ error: res.error }, res.error === "forbidden" ? 403 : 400);
   await logActivity(c.env, auth.accountId, auth.userId, "tenant_added",
     `Added tenant ${res.name}${res.unit ? ` (${res.unit})` : ""} at ${res.propertyName}`);

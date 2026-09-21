@@ -6481,19 +6481,55 @@ function sendSummary(sent, name) {
 // Adding one by hand. Six fields, and the building is remembered between
 // saves -- somebody entering a floor of apartments should not re-pick it
 // fourteen times.
+// Why an add failed, in words somebody can act on. "Could not add them" is
+// what this said before, which is true of every failure and useful for none
+// of them -- and the likeliest cause by far is a migration nobody has run.
+function tenantAddError(e) {
+  const code = e?.body?.error;
+  if (code === "migration_needed") {
+    const m = e?.body?.migration;
+    return m && m !== "unknown"
+      ? `The database isn't migrated yet — run ${m}.sql and try again.`
+      : "The database isn't migrated yet — run the pending migrations in app/worker/migrations and try again.";
+  }
+  return code === "already_a_member" ? "That email address already has a different kind of account here."
+    : code === "bad_email" ? "That email address doesn't look right."
+    : code === "bad_phone" ? "That phone number needs 10 digits."
+    : code === "contact_required" ? "Give an email address — we need somewhere to send the invite."
+    : code === "property_not_found" ? "That building isn't on this account any more. Pick another."
+    : code === "forbidden" ? "You don't have access to that building."
+    : code === "not_a_property_account" ? "This account doesn't keep a building list, so it has no tenants."
+    : "Could not add them. Try again.";
+}
+
+// Adding one by hand. The building is remembered between saves -- somebody
+// entering a floor of apartments should not re-pick it fourteen times.
 function TenantForm({ properties, unitWord, onCancel, onDone }) {
   const [f, setF] = useState({
     propertyId: properties.length === 1 ? properties[0].id : "",
     firstName: "", lastName: "", email: "", phone: "", unit: "",
+    // Email is how a tenant gets a login at all, so it always goes. A text
+    // is the one that actually gets read, and it is opt-in because it costs
+    // money and not everybody has given a mobile number.
+    sms: false,
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [saved, setSaved] = useState([]);
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
-  // A name plus one way to reach them. Either is fine on its own: a tenant
-  // with a phone and no email is ordinary, and so is the reverse.
+
+  // formatPhone and phoneDigits already exist for exactly this and are what
+  // every other form here uses; a second pair would be a second answer to
+  // "what counts as a phone number".
+  const digits = phoneDigits(f.phone).length;
+  const phoneOk = digits === 10;
+  const phoneStarted = digits > 0;
   const ready = f.propertyId && (f.firstName.trim() || f.lastName.trim())
-    && (validEmail(f.email.trim()) || f.phone.trim().replace(/\D/g, "").length >= 10);
+    && validEmail(f.email.trim())
+    // Half a phone number is a mistake, not an omission: either give one or
+    // leave it blank.
+    && (!phoneStarted || phoneOk)
+    && (!f.sms || phoneOk);
 
   const save = async (andAnother) => {
     setBusy(true); setErr("");
@@ -6501,22 +6537,18 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
       const res = await api.addTenant({
         propertyId: f.propertyId, firstName: f.firstName.trim(), lastName: f.lastName.trim(),
         email: f.email.trim(), phone: f.phone.trim(), unit: f.unit.trim(),
+        channels: ["email", ...(f.sms && phoneOk ? ["sms"] : [])],
       });
       const line = sendSummary(res.sent, res.name);
       if (andAnother) {
         setSaved((s) => [line, ...s]);
         // The building and the unit stay: the next tenant is usually the
         // other person in the same apartment, or the one next door.
-        setF((x) => ({ ...x, firstName: "", lastName: "", email: "", phone: "" }));
+        setF((x) => ({ ...x, firstName: "", lastName: "", email: "", phone: "", sms: false }));
       } else onDone(line);
     } catch (e) {
       console.error("[tenants] add failed:", e);
-      const code = e?.body?.error;
-      setErr(code === "already_a_member" ? "That email address already has a different kind of account here."
-        : code === "bad_email" ? "That email address doesn't look right."
-        : code === "bad_phone" ? "That phone number doesn't look like a US or Canadian number."
-        : code === "contact_required" ? "Give an email address or a phone number — we need one to send the invite."
-        : "Could not add them. Try again.");
+      setErr(tenantAddError(e));
     } finally { setBusy(false); }
   };
 
@@ -6524,7 +6556,7 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
     <div className="form">
       <h2>Add a tenant</h2>
       <p className="form-sub prose">
-        They'll get an invite by email, by text, or both — whichever you give us. Two people in
+        They'll get an invite by email, and by text as well if you tick it. Two people in
         one {unitWord.toLowerCase()} is fine: add them one at a time.
       </p>
 
@@ -6544,16 +6576,45 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
       </div>
       <div className="fld-row">
         <label className="fld">Email
-          <input value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="rosa@example.com" />
+          <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)}
+            placeholder="rosa@example.com" />
         </label>
-        <label className="fld">Cell phone
-          <input value={f.phone} onChange={(e) => set("phone", e.target.value)} placeholder="(206) 555-0134" />
+        <label className="fld">Cell phone <span className="fld-note">for texts</span>
+          <input type="tel" inputMode="numeric" value={f.phone}
+            onChange={(e) => set("phone", formatPhone(e.target.value))}
+            placeholder="(206)555-0134" />
+          {phoneStarted && !phoneOk && (
+            <span className="fld-warn">10 digits — {digits} so far.</span>
+          )}
         </label>
       </div>
-      <label className="fld">{unitWord} number
-        <input value={f.unit} onChange={(e) => set("unit", e.target.value)}
-          placeholder={unitWord === "Suite" ? "300" : "4B"} />
-      </label>
+      <div className="fld-row">
+        <label className="fld">{unitWord} number
+          <input value={f.unit} onChange={(e) => set("unit", e.target.value)}
+            placeholder={unitWord === "Suite" ? "300" : "4B"} />
+        </label>
+        {/* The other half of the row, so the unit box is the width of a
+            field rather than the width of the screen. */}
+        <div className="fld fld-spacer" aria-hidden="true" />
+      </div>
+
+      <div className="fld">Send the invite by
+        <div className="tn-channels">
+          <label className="tn-channel is-fixed">
+            <input type="checkbox" checked readOnly disabled />
+            <span>Email <b>always</b></span>
+          </label>
+          <label className={`tn-channel ${phoneOk ? "" : "is-off"}`}>
+            <input type="checkbox" checked={f.sms && phoneOk} disabled={!phoneOk}
+              onChange={(e) => set("sms", e.target.checked)} />
+            <span>Text message{phoneOk ? "" : " — needs a cell phone"}</span>
+          </label>
+        </div>
+        <p className="fld-hint">
+          Email carries the link they set a password with, so it always goes. A text is the one
+          that gets read.
+        </p>
+      </div>
 
       {err && <p className="billing-err" role="alert">{err}</p>}
       {saved.length > 0 && (
@@ -6570,7 +6631,7 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
           Save &amp; add another
         </button>
         <button className="btn-solid" onClick={() => save(false)} disabled={!ready || busy}>
-          <Plus size={15} /> {busy ? "Adding…" : "Add &amp; invite"}
+          <Plus size={15} /> {busy ? "Adding…" : "Add & invite"}
         </button>
       </div>
     </div>
@@ -12530,6 +12591,26 @@ body{background:var(--paper)}
 
 /* ---- tenants, on the manager's side ---- */
 .tn-head-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+/* Which way the invite goes. Email is shown ticked and fixed rather than
+   hidden, because "how will they hear about this" is the question somebody
+   is asking at that moment and an absent control does not answer it. */
+.tn-channels{display:flex;flex-direction:column;gap:9px;margin-top:9px}
+.tn-channel{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:500;
+  color:var(--ink);cursor:pointer}
+.tn-channel input{width:16px;height:16px;accent-color:var(--brand);flex:none}
+.tn-channel b{font-weight:700;color:var(--ink-soft);font-size:11px;text-transform:uppercase;
+  letter-spacing:.05em;margin-left:4px}
+.tn-channel.is-fixed{cursor:default}
+.tn-channel.is-off{color:var(--ink-soft);cursor:default}
+/* Said under the field it is about, while they are still in it. */
+.fld-warn{display:block;margin-top:5px;font-size:11.5px;font-weight:600;color:#a8532f}
+/* A note under a control rather than beside a label. The .fld wrapping it is
+   a label and puts label weight on everything inside; this is a sentence. */
+.fld-hint{margin:9px 0 0;font-size:12px;font-weight:400;line-height:1.5;color:var(--ink-soft)}
+/* Holds the other half of a row open so a single field keeps a field's
+   width instead of running the width of the page. */
+.fld-spacer{visibility:hidden}
+@media(max-width:640px){ .fld-spacer{display:none} }
 .tn-saved{margin:10px 0 0;border-top:1px solid var(--line);padding-top:10px}
 .tn-saved p{display:flex;align-items:center;gap:7px;margin:0 0 5px;font-size:12.5px;color:var(--ink-soft)}
 .tn-saved svg{color:var(--brand);flex:none}
