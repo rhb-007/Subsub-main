@@ -441,7 +441,7 @@ body.nav-open{overflow:hidden}
           <div class="plan-n">Scale<span class="plan-tag">Most common</span></div>
           <div class="plan-sub">For a growing list and a real team</div>
           <div class="plan-p" id="scalePrice">$99 <em>/month</em></div>
-          <p class="plan-bill" id="scaleBill">Billed monthly. Cancel any time.</p>
+          <p class="plan-bill" id="scaleBill">Billed monthly, plus sales tax. Cancel any time.</p>
           <ul class="ticks">
             <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.4"><path d="M3 9.5l4 4 8-9"/></svg><span><b>Unlimited subcontractors</b></span></li>
             <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.4"><path d="M3 9.5l4 4 8-9"/></svg><span><b>Unlimited users</b></span></li>
@@ -463,7 +463,7 @@ body.nav-open{overflow:hidden}
           <tr><th>What you get</th><th>Basic</th><th>Scale</th></tr>
         </thead>
         <tbody>
-          <tr><th>Price</th><td>Free</td><td class="yes">$99/mo · $990/yr</td></tr>
+          <tr><th>Price</th><td>Free</td><td class="yes">$99/mo · $990/yr, plus sales tax</td></tr>
           <tr><th>Subcontractors</th><td>3</td><td class="yes">Unlimited</td></tr>
           <tr><th>Users on your team</th><td>1</td><td class="yes">Unlimited</td></tr>
           <tr><th>Contractor logins</th><td class="yes">Free</td><td class="yes">Free</td></tr>
@@ -583,8 +583,8 @@ body.nav-open{overflow:hidden}
       ? '$82.50 <em>/month</em>'
       : '$99 <em>/month</em>';
     document.getElementById('scaleBill').textContent = annual
-      ? 'Billed $990 once a year — two months free, $198 saved.'
-      : 'Billed monthly. Cancel any time.';
+      ? 'Billed $990 once a year, plus sales tax — two months free, $198 saved.'
+      : 'Billed monthly, plus sales tax. Cancel any time.';
     document.getElementById('scaleCta').setAttribute('href',
       'onboarding.html?plan=scale&billing=' + (annual ? 'annual' : 'monthly'));
   }

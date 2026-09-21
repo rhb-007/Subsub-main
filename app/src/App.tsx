@@ -6426,8 +6426,8 @@ function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, on
           <span className="up-amt">{annual ? next.annualMonthly : next.price}<em>/mo</em></span>
           <span className="up-terms">
             {annual
-              ? `${formatDollars(next.annual)} billed once a year · saves ${formatDollars(next.annualSaving)}`
-              : "Billed monthly · cancel any time"}
+              ? `${formatDollars(next.annual)} billed once a year, plus sales tax · saves ${formatDollars(next.annualSaving)}`
+              : "Billed monthly, plus sales tax · cancel any time"}
           </span>
         </div>
         <button className="btn-solid up-go" onClick={onUpgrade} disabled={busy}>
@@ -7210,7 +7210,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             </div>
             {billing === "annual" && (
               <span className="cycle-note">
-{formatDollars(PLANS.scale.annual)} a year on Scale — saves {formatDollars(PLANS.scale.annualSaving)}
+{formatDollars(PLANS.scale.annual)} a year on Scale, plus sales tax — saves {formatDollars(PLANS.scale.annualSaving)}
               </span>
             )}
           </div>
@@ -7226,9 +7226,14 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 </div>
                 {pl.annual && (
                   <span className="plan-bill">
+                    {/* Sales tax is added at checkout, and it is added
+                        wherever we are registered to collect it. Saying so
+                        here rather than letting the total appear on the
+                        payment form is the difference between a price and a
+                        surprise. */}
                     {billing === "annual"
-                      ? `${formatDollars(pl.annual)} billed once a year`
-                      : "Billed monthly, cancel any time"}
+                      ? `${formatDollars(pl.annual)} billed once a year, plus sales tax`
+                      : "Billed monthly, plus sales tax · cancel any time"}
                   </span>
                 )}
                 <ul className="plan-feats">
