@@ -219,7 +219,7 @@ async function loginResponse(db, user) {
   const { results: memberships } = await db.prepare(
     `SELECT m.*, a.name as account_name, a.subdomain, a.kind, a.plan, a.billing, a.logo_key,
             a.use_default_mark, a.theme, a.trades, a.subscription_status, a.current_period_end,
-            a.comped
+            a.comped, a.hostname_status
      FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
   ).bind(user.id).all();
   return {
@@ -230,7 +230,7 @@ async function loginResponse(db, user) {
       kind: m.kind, plan: m.plan, billing: m.billing, logoKey: m.logo_key, useDefaultMark: !!m.use_default_mark,
       theme: parseJson(m.theme), trades: parseJson(m.trades),
       subscriptionStatus: m.subscription_status, currentPeriodEnd: m.current_period_end,
-      comped: !!m.comped,
+      comped: !!m.comped, hostnameStatus: m.hostname_status || null,
     })),
   };
 }
@@ -978,6 +978,12 @@ app.get("/api/account", async (c) => {
     subscriptionStatus: a.subscription_status,
     currentPeriodEnd: a.current_period_end,
     comped: !!a.comped,
+    // Where their own address got to. The status only -- hostname_error is
+    // Cloudflare's own words about our credentials or our zone, which is
+    // staff's problem to read and nothing a customer can act on. Telling
+    // them "dns: Authentication failed" would be alarming and useless.
+    hostnameStatus: a.hostname_status || null,
+    hostnameCheckedAt: a.hostname_checked_at || null,
     user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone } : null,
   });
 });

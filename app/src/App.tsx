@@ -2196,6 +2196,7 @@ export default function SubSub() {
       result.memberships.forEach((m) => {
         byId[m.accountId] = { id: m.accountId, name: m.accountName, subdomain: m.subdomain,
           kind: m.kind, plan: m.plan, billing: m.billing, theme: m.theme, trades: m.trades,
+          hostnameStatus: m.hostnameStatus,
           logoData: m.logoKey ? logoUrl(m.accountId) : null, useDefaultMark: m.useDefaultMark };
       });
       return Object.values(byId);
@@ -2260,6 +2261,7 @@ export default function SubSub() {
       logoData: acct.logoKey ? logoUrl(acct.id) : null, useDefaultMark: acct.useDefaultMark,
       theme: acct.theme, trades: acct.trades,
       subscriptionStatus: acct.subscriptionStatus, currentPeriodEnd: acct.currentPeriodEnd,
+      hostnameStatus: acct.hostnameStatus, hostnameCheckedAt: acct.hostnameCheckedAt,
     }]);
     if (acct.user) setUsers((prev) => [...prev.filter((u) => u.id !== acct.user.id), acct.user]);
     setCurrentUserId(saved.userId);
@@ -3090,7 +3092,17 @@ export default function SubSub() {
           currentUserId={currentUserId}
           onPatchSub={patchSub} onRequestDocs={requestDocs}
           onSeatLimit={() => setUpgradePrompt({ kind: "user" })}
-          onPreviewSignup={() => { setLoggedIn(false); setPublicView("signup"); }} />
+          onPreviewSignup={() => { setLoggedIn(false); setPublicView("signup"); }}
+          hostnameStatus={account.hostnameStatus}
+          // Re-reads the account and folds the answer back in, so the panel
+          // can go green by itself while somebody is still on the page.
+          onRefreshHostname={async () => {
+            const fresh = await api.getAccount();
+            setAccounts((prev) => prev.map((a) => a.id === fresh.id
+              ? { ...a, hostnameStatus: fresh.hostnameStatus, hostnameCheckedAt: fresh.hostnameCheckedAt }
+              : a));
+            return fresh.hostnameStatus;
+          }} />
       )}
 
       {tab === "uniforms" && can("uniforms") && (
@@ -6174,12 +6186,79 @@ function TradesPanel({ trades, onSave }) {
   );
 }
 
+// Where a customer's own address got to, in their own words.
+//
+// They were sold outerhome.subsub.work and it takes a couple of minutes to
+// become real. Without this they either sit on a dead link wondering, or ring
+// support -- and that is the whole reason the manual version was bad. It
+// polls while setup is running, so the page turns green on its own rather
+// than asking anyone to refresh.
+//
+// Deliberately says nothing about Cloudflare. A customer cannot act on "dns:
+// Authentication failed"; it would only be alarming, and it is our problem
+// to read, in the console where the detail lives.
+const ADDRESS_STATE = {
+  active:  { tone: "ok",   title: "Your address is live",
+             say: "Your team and your contractors can sign in here now." },
+  pending: { tone: "wait", title: "Setting up your address",
+             say: "This usually takes a couple of minutes. You can keep working — we'll switch it on for you." },
+  failed:  { tone: "bad",  title: "We're sorting out your address",
+             say: "Something went wrong setting it up and we've been notified. Everyone can keep signing in at app.subsub.work in the meantime." },
+};
+
+function AddressStatus({ subdomain, status, onRefresh }) {
+  const [live, setLive] = useState(status);
+  useEffect(() => { setLive(status); }, [status]);
+
+  // Poll only while there is something to wait for, and stop the moment
+  // there isn't. A timer that outlives its reason is a battery complaint.
+  useEffect(() => {
+    if (live !== "pending" || !onRefresh) return;
+    let running = true;
+    const id = setInterval(async () => {
+      try {
+        const next = await onRefresh();
+        if (running && next) setLive(next);
+      } catch { /* a failed poll is not worth saying anything about */ }
+    }, 20000);
+    return () => { running = false; clearInterval(id); };
+  }, [live, onRefresh]);
+
+  const host = `${subdomain || "yourcompany"}.subsub.work`;
+  const state = ADDRESS_STATE[live];
+  if (!state) {
+    return (
+      <div className="addr-state t-wait">
+        <div className="addr-head"><Globe size={15} /><b>Your address is being prepared</b></div>
+        <p>{host} will be yours shortly. Until it is, everyone signs in at app.subsub.work.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`addr-state t-${state.tone}`}>
+      <div className="addr-head">
+        <Globe size={15} />
+        <b>{state.title}</b>
+        {live === "pending" && <span className="addr-spin" aria-hidden="true" />}
+      </div>
+      <p className="addr-host">
+        {live === "active"
+          ? <a href={`https://${host}`} target="_blank" rel="noreferrer">{host}</a>
+          : host}
+      </p>
+      <p>{state.say}</p>
+    </div>
+  );
+}
+
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
   accountTrades, onSetAccountTrades, subscriptionStatus, currentPeriodEnd, comped,
   onSaveUser, onSaveBrand, onUpgrade, onManageBilling, billingBusy, billingErr,
   onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
-  onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup }) {
+  onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup,
+  hostnameStatus, onRefreshHostname }) {
   const panes = [["profile", "Profile"]]
     .concat(canManage ? [["company", "Company"], ["users", "Users"], ["billing", "Subscription"]] : []);
   const brandingOn = PLANS[plan].branding;
@@ -6418,6 +6497,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <span className="sd-suffix">.subsub.work</span>
             </div>
           </label>
+
+          <AddressStatus subdomain={brand.subdomain} status={hostnameStatus} onRefresh={onRefreshHostname} />
 
           <div className="fld">Logo mark
             <div className="mark-row">
@@ -12087,6 +12168,28 @@ body{background:var(--paper)}
 .pf-diag li.bad .pf-diag-mark{color:var(--red)}
 .pf-diag-body{display:flex;flex-direction:column;min-width:0}
 .pf-diag-body em{font-style:normal;font-size:12.5px;color:var(--ink-soft);margin-top:2px}
+
+/* ---- customer-facing: where their own address got to -------------------
+   Their words, not Cloudflare's. A customer cannot act on a DNS error and
+   would only be alarmed by one; the detail belongs in the console. */
+.addr-state{border:1px solid var(--line);border-radius:11px;padding:14px 16px;margin:4px 0 18px;background:var(--paper)}
+.addr-state.t-ok{border-color:#bcd9c7;background:#f2f8f4}
+.addr-state.t-wait{border-color:#e6c98f;background:#fffdf6}
+.addr-state.t-bad{border-color:#e9c4bd;background:#fdf1ef}
+.addr-head{display:flex;align-items:center;gap:8px;font-size:14px}
+.addr-state.t-ok .addr-head svg{color:var(--brand)}
+.addr-state.t-wait .addr-head svg{color:var(--amber)}
+.addr-state.t-bad .addr-head svg{color:var(--red)}
+.addr-host{font:700 14px ui-monospace,monospace;margin:9px 0 6px;word-break:break-all}
+.addr-host a{color:var(--brand);text-decoration:none}
+.addr-host a:hover{text-decoration:underline}
+.addr-state p{font-size:13px;color:var(--ink-soft);line-height:1.55;margin:0}
+.addr-spin{width:12px;height:12px;border-radius:50%;border:2px solid #e6c98f;
+  border-top-color:transparent;animation:addr-spin 1s linear infinite;margin-left:2px}
+@keyframes addr-spin{to{transform:rotate(360deg)}}
+/* A spinner that never stops is a distraction for anyone who reads slowly
+   or gets motion-sick; the words already say what is happening. */
+@media (prefers-reduced-motion:reduce){.addr-spin{animation:none;opacity:.5}}
 
 /* ---- dashboard: range picker ------------------------------------------
    Presets as rows with a check, custom behind a rule in the footer. Nobody
