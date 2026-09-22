@@ -24,6 +24,7 @@
     "test:decline": "node scripts/decline-test.mjs",
     "test:addsub": "node scripts/addsub-from-assign-test.mjs",
     "test:subform": "node scripts/subform-guard-test.mjs",
+    "test:poweredby": "node scripts/poweredby-contrast-test.mjs",
     "test:notify": "wrangler d1 execute subsub-db --config=./wrangler.toml --local --file=./scripts/tenant-notify-fixture.sql && node scripts/tenant-notify-test.mjs",
     "lint": "eslint ."
   },

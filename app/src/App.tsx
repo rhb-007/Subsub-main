@@ -1185,8 +1185,13 @@ const themeVars = (t) => ({
   // colours rather than trusted to them.
   "--wl-on-bg": onBackground(t.bg),
 });
-const INK = "#12211C";
-const onBackground = (bg) => contrastRatio("#FFFFFF", bg) >= contrastRatio(INK, bg) ? "#FFFFFF" : INK;
+// Two colours, no third. These pages' backgrounds belong to the customer,
+// so anything of ours sitting on one has to be legible against a colour we
+// have never seen. Pure white and pure black are the two that always are,
+// and picking between them is a measurement, not a taste: whichever has more
+// contrast against their background wins. Not the house ink, which is a very
+// dark green and loses a little of that margin for nothing.
+const onBackground = (bg) => contrastRatio("#FFFFFF", bg) >= contrastRatio("#000000", bg) ? "#FFFFFF" : "#000000";
 // Readable hint: rough relative luminance, used to warn on low contrast.
 function luminance(hex) {
   const h = (hex || "").replace("#", "");
@@ -11736,17 +11741,21 @@ function HomeMark({ height = 26 }) {
 }
 
 // The actual SubSub logo (orange mark + wordmark), matching subsub.work's own
-// nav — used wherever the platform names itself, e.g. "Powered by [mark]" on
-// a white-label login screen. The wordmark uses currentColor so it always
-// matches whatever text color it's dropped into; the mark keeps its own
-// brand orange regardless.
-function SubSubLogo({ height = 16 }) {
+// nav. The wordmark uses currentColor so it always matches whatever text
+// color it's dropped into. The mark keeps its brand orange on our own
+// surfaces, where the background is ours and the orange is known to work.
+//
+// `mono` drops it to currentColor as well, for the one place that isn't:
+// a customer's page, whose background we do not choose and cannot see. A
+// brand colour is worth nothing on a page where it might be invisible.
+function SubSubLogo({ height = 16, mono = false }) {
+  const mark = mono ? "currentColor" : "#E39B32";
   return (
     <svg className="ss-logo" height={height} viewBox="36 62 502 114" xmlns="http://www.w3.org/2000/svg"
       role="img" aria-label="SubSub" style={{ width: "auto", display: "block", flex: "none" }}>
-      <path fill="#E39B32" d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/>
-      <path fill="#E39B32" d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/>
-      <path fill="#E39B32" d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/>
+      <path fill={mark} d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/>
+      <path fill={mark} d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/>
+      <path fill={mark} d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/>
       <path fill="currentColor" d="M159.95,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C178.27,159.09,166.67,155.94,159.95,151.25z"/>
       <path fill="currentColor" d="M281.36,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.82,11.47c5.49,0,10-3.63,10-12.55v-25.59H281.36z"/>
       <path fill="currentColor" d="M345.6,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C333.93,103.69,345.6,114.19,345.6,131.05z M326.78,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S326.78,139.19,326.78,131.05z"/>
@@ -11769,7 +11778,8 @@ function PoweredBy({ height = 15, className = "" }) {
   return (
     <a className={`powered-by ${className}`} href="https://subsub.work/"
       target="_blank" rel="noopener" aria-label="Powered by SubSub — visit subsub.work">
-      <span>Powered by</span><SubSubLogo height={height} />
+      {/* mono, always: this lockup only ever appears on a customer's page. */}
+      <span>Powered by</span><SubSubLogo height={height} mono />
     </a>
   );
 }
@@ -13970,7 +13980,7 @@ body{background:var(--paper)}
 .ss-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
   max-width:1160px;margin:0 auto;padding:18px 24px 28px;font-size:11.5px;color:var(--ink-soft);
   border-top:1px solid var(--line)}
-.ss-foot-by{opacity:.75}
+.ss-foot-by{opacity:1}
 .login-logo-wrap{display:flex;align-items:center;justify-content:center;color:var(--ink);margin-bottom:14px;min-height:40px}
 .login-foot{display:flex;flex-direction:column;align-items:center;gap:5px}
 
@@ -14164,22 +14174,6 @@ body{background:var(--paper)}
 .theme-link{font-size:13px;font-weight:600;color:var(--brand);text-decoration:underline;text-underline-offset:2px}
 @media (max-width:640px){.theme-grid{grid-template-columns:1fr}}
 
-/* "Powered by" + SubSub logo on the white-labeled sign-in / sign-up pages */
-.powered-by{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;
-  letter-spacing:.01em;opacity:.7;text-decoration:none;color:inherit;cursor:pointer;
-  transition:opacity .12s;
-  /* The text is 13px tall and a fingertip is not. The padding makes the tap
-     target reachable on a phone; the matching negative margin means adding
-     it moved nothing on the page. */
-  padding:7px 4px;margin:-7px -4px}
-.powered-by:hover,.powered-by:focus-visible{opacity:1;text-decoration:none}
-.powered-by:focus-visible{outline:2px solid var(--brand);outline-offset:1px;border-radius:5px}
-.powered-by > span{white-space:nowrap}
-.powered-by .ss-logo{position:relative;top:.5px}
-.wl-foot.powered-by{margin-top:20px;opacity:.6;color:var(--wl-on-bg,var(--wl-text))}
-.wl-themed .login-foot{color:var(--wl-on-bg,var(--ink-soft))}
-.login-foot .powered-by{opacity:.75}
-.bp-foot .powered-by{opacity:.85;font-size:10.5px}
 
 /* contractor: who they work for */
 .dash-hello .who-bar{margin-bottom:0;flex:none}
@@ -14876,22 +14870,29 @@ body{background:var(--paper)}
   .prop-stats{gap:12px}
 }
 
-/* "Powered by" + SubSub logo on the white-labeled sign-in / sign-up pages */
+/* "Powered by" + SubSub logo on the white-labeled sign-in / sign-up pages.
+   Binary by rule, because the background under it belongs to the customer
+   and we have never seen it: the whole lockup -- wording, wordmark and mark
+   -- is either white or black, whichever reads against what they chose.
+   No orange, and no opacity. A 60% white on a dark page is grey, which is
+   how this came to be unreadable in the first place; the colour is picked
+   by measurement (--wl-on-bg) and then left alone. */
 .powered-by{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;
-  letter-spacing:.01em;opacity:.7;text-decoration:none;color:inherit;cursor:pointer;
-  transition:opacity .12s;
+  letter-spacing:.01em;text-decoration:none;cursor:pointer;
+  color:var(--wl-on-bg,#000);opacity:1;
   /* The text is 13px tall and a fingertip is not. The padding makes the tap
      target reachable on a phone; the matching negative margin means adding
      it moved nothing on the page. */
   padding:7px 4px;margin:-7px -4px}
-.powered-by:hover,.powered-by:focus-visible{opacity:1;text-decoration:none}
-.powered-by:focus-visible{outline:2px solid var(--brand);outline-offset:1px;border-radius:5px}
+/* Hover cannot brighten what is already at full strength, so it underlines
+   instead -- the link still has to look like one. */
+.powered-by:hover,.powered-by:focus-visible{text-decoration:underline;text-underline-offset:3px}
+.powered-by:focus-visible{outline:2px solid currentColor;outline-offset:1px;border-radius:5px}
 .powered-by > span{white-space:nowrap}
 .powered-by .ss-logo{position:relative;top:.5px}
-.wl-foot.powered-by{margin-top:20px;opacity:.6;color:var(--wl-on-bg,var(--wl-text))}
-.wl-themed .login-foot{color:var(--wl-on-bg,var(--ink-soft))}
-.login-foot .powered-by{opacity:.75}
-.bp-foot .powered-by{opacity:.85;font-size:10.5px}
+.wl-foot.powered-by{margin-top:20px}
+.wl-themed .login-foot{color:var(--wl-on-bg,#000)}
+.bp-foot .powered-by{font-size:10.5px}
 
 /* change orders */
 .co-context{display:grid;grid-template-columns:1fr;gap:0;border:1px solid var(--line);border-radius:10px;
