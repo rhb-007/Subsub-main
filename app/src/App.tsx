@@ -493,6 +493,12 @@ const ROLES = {
 // optional, so they are not here -- ask `isScoped` instead, which reads the
 // seat rather than the role.
 const ALWAYS_SCOPED_ROLES = ["owner", "tenant"];
+// A request an owner or a tenant has raised is not a job until somebody
+// running the account approves it. Until then it needs a decision, not a
+// contractor -- so it belongs under "waiting on approval" and nowhere that
+// counts or offers trade slots. The API already refuses to assign against
+// one; the screens should not offer to.
+const isLiveJob = (j) => !(j.requestedBy && !j.approvedAt);
 // Whether THIS seat is narrowed, which for a manager is a question about
 // their buildings and not about their job title.
 const isScoped = (m) => (m?.propertyIds || []).length > 0;
@@ -9572,7 +9578,9 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
 function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, users = [], runsAccount = true }) {
   const managesProperties = Array.isArray(properties);
   const today = new Date().toISOString().slice(0, 10);
-  const slots = jobs.flatMap((j) => j.trades.map((t) => ({ job: j, trade: t, a: j.assignments[t] })));
+  // Only approved work has trade slots. An unapproved request has its own
+  // section above and must not also be counted as needing a contractor.
+  const slots = jobs.filter(isLiveJob).flatMap((j) => j.trades.map((t) => ({ job: j, trade: t, a: j.assignments[t] })));
   const open = slots.filter((s) => !s.a);
   const pending = slots.filter((s) => s.a && s.a.status === "pending" && !s.a.auto);
   const declined = slots.filter((s) => s.a && s.a.status === "declined");
@@ -10380,7 +10388,7 @@ function PickJobSlot({ sub, jobs, allJobs, accountId, onPick, onNewJob, onNotify
   const ok = docsComplete(sub);
   const off = sub.unavailableDays || [];
   const rank = { free: 0, booked: 1, off: 2, unavailable: 3 };
-  const slots = jobs.flatMap((j) =>
+  const slots = jobs.filter(isLiveJob).flatMap((j) =>
     j.trades
       .filter((t) => !j.assignments[t] && sub.categories.includes(t))
       .map((t) => ({ job: j, trade: t }))

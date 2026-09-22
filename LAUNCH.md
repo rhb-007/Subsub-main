@@ -128,6 +128,11 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- An unapproved request from an owner or a tenant was counted as needing a
+  contractor -- listed under "Needs a contractor", counted in the unassigned
+  trade slots, and offered as somewhere to put a subcontractor, which the
+  API then refused. Until the manager approves it, it has no trade slots
+  anywhere; it sits under "Asked for by owners and tenants" and only that.
 - A tenant is now told when a report of theirs moves -- approved, gone to a
   contractor, contractor assigned, done -- by email by default, by text as
   well if they ask, or not at all. The choice is theirs, under My account,
