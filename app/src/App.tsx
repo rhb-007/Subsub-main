@@ -434,6 +434,13 @@ const DEFAULT_ACCOUNT_KIND = "general_contractor";
 const kindOf = (account) =>
   (account && ACCOUNT_KINDS[account.kind]) ? account.kind : DEFAULT_ACCOUNT_KIND;
 const hasProperties = (account) => ACCOUNT_KINDS[kindOf(account)].properties;
+// What to call this address on the sign-in page. It said "Contractor portal"
+// whoever the account was, which is right for a general contractor and wrong
+// for everyone else: a managing agent's address is where their own staff,
+// their building owners and their tenants sign in, and naming it after
+// subcontractors told most of the people standing on it that they had come
+// to the wrong place.
+const portalLabel = (account) => `${ACCOUNT_KINDS[kindOf(account)].label} portal`;
 
 // Phone numbers are typed in a dozen shapes and then compared, dialled and
 // texted as one, so every field that takes one runs its input through here.
@@ -6449,12 +6456,49 @@ function TenantsPane({ properties, accountKind }) {
   };
   useEffect(() => { load(); }, []);
 
-  const shown = (rows || []).filter((t) => {
+  // Three hundred tenants across a portfolio is the ordinary case, so the
+  // roster needs narrowing by the three things somebody actually works from:
+  // which building, whether they are in yet, and -- for a portfolio spread
+  // across more than one -- which state.
+  const [fProp, setFProp] = useState("");
+  const [fStatus, setFStatus] = useState("");
+  const [fState, setFState] = useState("");
+
+  const stateOf = useMemo(
+    () => Object.fromEntries((properties || []).map((p) => [p.id, String(p.state || "").toUpperCase()])),
+    [properties]);
+  // Only worth a control when there is a choice to make. One state is every
+  // account until it is not, and a dropdown with one option in it is furniture.
+  const states = useMemo(
+    () => [...new Set(Object.values(stateOf).filter(Boolean))].sort(),
+    [stateOf]);
+  // Picking a state narrows the building list to that state, so the two
+  // controls cannot be set to contradict each other.
+  const propsShown = (properties || []).filter((p) => !fState || stateOf[p.id] === fState);
+
+  // The same three words the chip on each row uses, so filtering by a status
+  // returns the rows that say it.
+  const statusOf = (t) => t.status === "active" ? "active" : t.lastSentAt ? "invited" : "unsent";
+  const STATUS_FILTERS = [["active", "Signed in"], ["invited", "Invite sent"], ["unsent", "Not sent yet"]];
+
+  // Narrowed by place first. The status counts are taken from here rather
+  // than from the final list, so "Invite sent (12)" keeps saying how many
+  // there are in this building after Invite sent has been picked, instead of
+  // collapsing to the number already on screen.
+  const inPlace = (rows || []).filter((t) => {
+    if (fProp && t.propertyId !== fProp) return false;
+    if (fState && stateOf[t.propertyId] !== fState) return false;
+    return true;
+  });
+  const filtered = fStatus ? inPlace.filter((t) => statusOf(t) === fStatus) : inPlace;
+  const shown = filtered.filter((t) => {
     const s = q.trim().toLowerCase();
     if (!s) return true;
     return [t.name, t.email, t.phone, t.unit, t.propertyName]
       .some((v) => String(v || "").toLowerCase().includes(s));
   });
+  const narrowed = !!(fProp || fState || fStatus || q.trim());
+  const clearFilters = () => { setFProp(""); setFState(""); setFStatus(""); setQ(""); };
 
   const resend = async (t) => {
     setBusyId(t.userId); setNote("");
@@ -6524,9 +6568,52 @@ function TenantsPane({ properties, accountKind }) {
       {err && <p className="billing-err" role="alert">{err}</p>}
       {note && <p className="rollup-note" role="status">{note}</p>}
 
-      {(rows || []).length > 8 && (
-        <input className="tn-search" value={q} onChange={(e) => setQ(e.target.value)}
-          placeholder="Search by name, unit, building, email or phone" />
+      {(rows || []).length > 0 && (
+        <div className="tn-filters">
+          <input className="tn-search" value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder="Search by name, unit, building, email or phone" />
+          <div className="tn-filter-row">
+            {states.length > 1 && (
+              <label className="tn-filter">State
+                <select value={fState} onChange={(e) => {
+                  setFState(e.target.value);
+                  // A building in the old state would contradict the new one.
+                  if (fProp && stateOf[fProp] !== e.target.value) setFProp("");
+                }}>
+                  <option value="">All states</option>
+                  {states.map((st) => <option key={st} value={st}>{st}</option>)}
+                </select>
+              </label>
+            )}
+            <label className="tn-filter">Building
+              <select value={fProp} onChange={(e) => setFProp(e.target.value)}>
+                <option value="">All buildings</option>
+                {propsShown.map((pr) => <option key={pr.id} value={pr.id}>{pr.name}</option>)}
+              </select>
+            </label>
+            <label className="tn-filter">Status
+              <select value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+                <option value="">Any status</option>
+                {STATUS_FILTERS.map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label} ({inPlace.filter((t) => statusOf(t) === id).length})
+                  </option>
+                ))}
+              </select>
+            </label>
+            {narrowed && (
+              <button className="tn-filter-clear" onClick={clearFilters}>
+                <X size={12} /> Clear
+              </button>
+            )}
+          </div>
+          {narrowed && (
+            <p className="tn-filter-count">
+              Showing {shown.length} of {(rows || []).length}
+              {shown.length === 0 ? " — nothing matches all of those." : ""}
+            </p>
+          )}
+        </div>
       )}
 
       {rows === null ? <p className="fine">Loading…</p> : rows.length === 0 ? (
@@ -8434,7 +8521,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <div className="brand-logo lg"><BrandMark brand={b} height={34} /></div>
               <div>
                 <div className="bp-name">{b.name || "Your company"}</div>
-                <div className="bp-sub">Contractor portal</div>
+                <div className="bp-sub">{portalLabel({ kind: accountKind })}</div>
               </div>
             </div>
             <div className="bp-foot"><PoweredBy height={12} /></div>
@@ -11108,7 +11195,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
         <div className="login-brand">
           <div className="login-logo-wrap"><BrandMark brand={brand} height={38} /></div>
           <h1>{brand.name}</h1>
-          <p>Contractor portal · {brand.subdomain}.subsub.work</p>
+          <p>{portalLabel(brand)} · {brand.subdomain}.subsub.work</p>
         </div>
 
         <div className="login-form">
@@ -11154,6 +11241,23 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
             <span>New subcontractor?</span>
             <b>Apply to work with {brand.name} &#8250;</b>
           </button>
+        )}
+
+        {/* Tenants sign in here too, at the same address and with the same
+            form -- but the page only ever spoke to subcontractors, so
+            somebody who lives in the building had nothing telling them they
+            were in the right place. They cannot sign themselves up: a tenant
+            exists because their building manager added them, so this points
+            at the two ways in rather than offering a third. */}
+        {onSubdomain && hasProperties(brand) && (
+          <div className="login-tenants">
+            <span>For tenants</span>
+            <p>
+              Sign in above with the email address {brand.name} invited you at. No password
+              yet? Open the link in your invite, or use <b>Already invited? Create your
+              password</b>.
+            </p>
+          </div>
         )}
 
       </div>
@@ -12992,6 +13096,33 @@ body{background:var(--paper)}
 .wl-themed .login-signup{background:transparent;border-color:rgba(128,128,128,.32)}
 .wl-themed .login-signup > span{color:var(--wl-text);opacity:.65}
 .wl-themed .login-signup b{color:var(--wl-accent)}
+/* The same block for tenants, who have nothing to click: they are already in
+   the right place and only need telling so. Quieter than the subcontractor
+   one for that reason -- it is a note, not an action. */
+.login-tenants{width:100%;margin-top:10px;padding:12px 16px;border-radius:10px;
+  border:1px dashed var(--line);text-align:left}
+.login-tenants > span{display:block;font-size:12px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--ink-soft)}
+.login-tenants p{margin:4px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
+.login-tenants b{font-weight:700;color:var(--wl-accent,var(--brand))}
+/* tenant roster filters */
+.tn-filters{margin:14px 0 4px}
+.tn-filter-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:10px}
+.tn-filter{display:flex;flex-direction:column;gap:4px;font-size:11.5px;font-weight:700;
+  letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft)}
+.tn-filter select{font:500 13.5px Inter,sans-serif;color:var(--ink);background:var(--card);
+  border:1px solid var(--line);border-radius:9px;padding:9px 11px;min-width:150px;cursor:pointer}
+.tn-filter-clear{display:inline-flex;align-items:center;gap:5px;background:none;border:0;
+  padding:9px 2px;font:700 12.5px Inter,sans-serif;color:var(--brand);cursor:pointer}
+.tn-filter-clear:hover{text-decoration:underline}
+.tn-filter-count{margin:10px 0 0;font-size:12.5px;color:var(--ink-soft)}
+@media(max-width:640px){
+  .tn-filter{flex:1 1 100%}
+  .tn-filter select{width:100%}
+}
+.wl-themed .login-tenants{border-color:rgba(128,128,128,.32)}
+.wl-themed .login-tenants > span,.wl-themed .login-tenants p{color:var(--wl-text);opacity:.7}
+.wl-themed .login-tenants b{color:var(--wl-accent);opacity:1}
 
 .wl-page{min-height:100vh;background:var(--wl-bg);color:var(--wl-text);
   display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -13585,6 +13716,33 @@ body{background:var(--paper)}
 .wl-themed .login-signup{background:transparent;border-color:rgba(128,128,128,.32)}
 .wl-themed .login-signup > span{color:var(--wl-text);opacity:.65}
 .wl-themed .login-signup b{color:var(--wl-accent)}
+/* The same block for tenants, who have nothing to click: they are already in
+   the right place and only need telling so. Quieter than the subcontractor
+   one for that reason -- it is a note, not an action. */
+.login-tenants{width:100%;margin-top:10px;padding:12px 16px;border-radius:10px;
+  border:1px dashed var(--line);text-align:left}
+.login-tenants > span{display:block;font-size:12px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--ink-soft)}
+.login-tenants p{margin:4px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
+.login-tenants b{font-weight:700;color:var(--wl-accent,var(--brand))}
+/* tenant roster filters */
+.tn-filters{margin:14px 0 4px}
+.tn-filter-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:10px}
+.tn-filter{display:flex;flex-direction:column;gap:4px;font-size:11.5px;font-weight:700;
+  letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft)}
+.tn-filter select{font:500 13.5px Inter,sans-serif;color:var(--ink);background:var(--card);
+  border:1px solid var(--line);border-radius:9px;padding:9px 11px;min-width:150px;cursor:pointer}
+.tn-filter-clear{display:inline-flex;align-items:center;gap:5px;background:none;border:0;
+  padding:9px 2px;font:700 12.5px Inter,sans-serif;color:var(--brand);cursor:pointer}
+.tn-filter-clear:hover{text-decoration:underline}
+.tn-filter-count{margin:10px 0 0;font-size:12.5px;color:var(--ink-soft)}
+@media(max-width:640px){
+  .tn-filter{flex:1 1 100%}
+  .tn-filter select{width:100%}
+}
+.wl-themed .login-tenants{border-color:rgba(128,128,128,.32)}
+.wl-themed .login-tenants > span,.wl-themed .login-tenants p{color:var(--wl-text);opacity:.7}
+.wl-themed .login-tenants b{color:var(--wl-accent);opacity:1}
 
 .wl-page{min-height:100vh;background:var(--wl-bg);color:var(--wl-text);
   display:flex;flex-direction:column;align-items:center;justify-content:center;

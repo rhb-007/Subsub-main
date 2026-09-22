@@ -128,6 +128,17 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- Every branded sign-in page called itself a "Contractor portal", whoever
+  the account was. It is named after the account's own type now -- "Property
+  manager portal" -- and the page says tenants belong there too, because
+  until now it only ever spoke to subcontractors.
+- `/api/account-by-subdomain` read `kind` back out of a row it never selected
+  it from, so every branded page thought its account was a general
+  contractor. Nothing showed until the two things above depended on it.
+- The tenant roster can be narrowed by building, by status and -- for a
+  portfolio across more than one -- by state. The status counts are taken
+  before the status filter is applied, so "Invite sent (164)" keeps saying
+  how many there are rather than collapsing to what is on screen.
 - **The tenant sign-up page was a blank screen.** `needsEmail`, `email` and
   `setEmail` were read by it and never declared, so it threw a ReferenceError
   on render: every tenant who followed an invite got nothing. The API half

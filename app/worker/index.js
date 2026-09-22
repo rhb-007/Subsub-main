@@ -1412,7 +1412,10 @@ app.get("/api/logo/:accountId", async (c) => {
 // needs — never anything else about the account.
 app.get("/api/account-by-subdomain/:subdomain", async (c) => {
   const a = await c.env.DB.prepare(
-    `SELECT id, name, subdomain, plan, billing, logo_key, use_default_mark, theme FROM accounts WHERE subdomain = ?`
+    // kind is read back below and was never selected, so every branded
+    // sign-in page thought it belonged to a general contractor.
+    `SELECT id, name, subdomain, kind, plan, billing, logo_key, use_default_mark, theme
+       FROM accounts WHERE subdomain = ?`
   ).bind(c.req.param("subdomain").toLowerCase()).first();
   if (!a) return c.notFound();
   return c.json({
