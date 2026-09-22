@@ -8259,7 +8259,10 @@ function PhotoPicker({ shots, onAdd, onRemove, note, busy }) {
   const left = MAX_REPORT_PHOTOS - shots.length;
   return (
     <div className="fld">Photos
-      <span className="fld-note">Optional. A picture usually saves a visit just to look.</span>
+      {/* A block, not a span: JSX eats the newline between "Photos" and this,
+          so as an inline element it ran straight on from the label with no
+          space -- and left the Add button sharing their line. */}
+      <p className="fld-note">Optional. A picture usually saves a visit just to look.</p>
       {shots.length > 0 && (
         <div className="ph-grid">
           {shots.map((sh) => (
@@ -13639,6 +13642,7 @@ body{background:var(--paper)}
    leave it and we'll use what you picked" read as the heading for the next
    question instead of a note about the last one. */
 .fld-note{font-weight:400;font-size:11.5px;line-height:1.45;color:var(--ink-soft);opacity:.9}
+p.fld-note{margin:6px 0 0}
 .fld input+.fld-note,.fld select+.fld-note,.fld textarea+.fld-note,
 .fld .subdomain-row+.fld-note,.fld .rating-edit+.fld-note{display:block;margin-top:7px}
 .fld-row{display:flex;gap:12px}.fld-row .fld{flex:1}
@@ -14172,6 +14176,14 @@ body{background:var(--paper)}
 .tn-chip.busy{background:#e8eff8;color:#2b4d7a}
 .tn-chip.ok{background:#e6f2ec;color:#1d5740}
 .tn-form{max-width:none}
+/* This form is read by somebody on a phone with a leak under the sink, not
+   by staff filling in the twentieth record of the day, so its questions get
+   more room than the dense admin forms do. The note under a field keeps its
+   own tight 7px -- it belongs to the field above it, and pushing it down
+   would make it look like a heading for the question below, which is the
+   thing that made it hard to read in the first place. */
+.tn-form .fld{margin-bottom:22px}
+.tn-form .fld-note{margin-bottom:0}
 /* Eighty things is a lot to put in front of somebody, so it is never all of
    them at once: six areas, or whatever a typed word matches. */
 .tn-search{width:100%;margin-top:8px}

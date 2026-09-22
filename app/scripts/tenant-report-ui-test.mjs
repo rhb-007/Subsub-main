@@ -98,6 +98,47 @@ try {
   }, words);
   await wait(300);
 
+  // The note under a field has to read as a note about that field. It used
+  // to render at the label's own weight and size, flush to the input, so
+  // "Optional -- leave it and we'll use what you picked" looked like the
+  // heading for the question below it. Asserted as a relationship rather
+  // than as pixel counts, so restyling the form does not fail this.
+  const spacing = await page.evaluate(() => {
+    const note = [...document.querySelectorAll(".fld-note")].find((n) => /Optional . leave it/i.test(n.textContent));
+    if (!note) return { error: "no note" };
+    const fld = note.closest(".fld");
+    const input = note.previousElementSibling;
+    const next = fld.nextElementSibling;
+    const ns = getComputedStyle(note), ls = getComputedStyle(fld);
+    const r = (el) => el.getBoundingClientRect();
+    return {
+      lighterThanTheLabel: Number(ns.fontWeight) < Number(ls.fontWeight),
+      smallerThanTheLabel: parseFloat(ns.fontSize) < parseFloat(ls.fontSize),
+      above: Math.round(r(note).top - r(input).bottom),
+      below: next ? Math.round(r(next).top - r(note).bottom) : null,
+      nextIs: next ? next.textContent.slice(0, 18) : null,
+    };
+  });
+  ck("the note is lighter and smaller than a label", spacing.lighterThanTheLabel && spacing.smallerThanTheLabel,
+    JSON.stringify(spacing));
+  ck("it is not flush against the field above", spacing.above >= 5, `${spacing.above}px`);
+  ck("and sits nearer its own field than the next question",
+    spacing.below > spacing.above, `${spacing.above}px above, ${spacing.below}px below (${spacing.nextIs})`);
+
+  // Label, note and button each on their own line: JSX drops the newline
+  // between a bare text label and an inline span, so this ran together as
+  // "PhotosOptional. ..." with the button on the same line.
+  const photoBlock = await page.evaluate(() => {
+    const add = document.querySelector(".ph-add");
+    const note = [...document.querySelectorAll(".fld-note")].find((n) => /saves a visit/i.test(n.textContent));
+    if (!add || !note) return { error: "missing" };
+    return { text: note.closest(".fld").innerText.split("\n").map((l) => l.trim()).filter(Boolean),
+      buttonBelowNote: add.getBoundingClientRect().top >= note.getBoundingClientRect().bottom };
+  });
+  ck("the photos label is not run into its note",
+    photoBlock.text?.[0] === "Photos", JSON.stringify(photoBlock.text));
+  ck("and the button is below them, not beside them", photoBlock.buttonBelowNote === true, JSON.stringify(photoBlock));
+
   ck("the form offers photos", await page.evaluate(() => !!document.querySelector(".ph-add")), "");
   const input = await page.$(".tn-form input[type=file]");
   ck("with a real file input behind it", !!input);
