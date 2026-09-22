@@ -10,7 +10,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
-  INVITE_LINK_TOKEN } from "./mail.js";
+  INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
@@ -296,6 +296,9 @@ function scopeClause(auth, column) {
 const OWNER_ALLOWED = [
   [/^\/api\/account$/, ["GET"]],
   [/^\/api\/account-by-subdomain\/[^/]+$/, ["GET"]],
+  // One's own notification choices. The route only ever writes its caller's
+  // row, so there is nothing here a narrow seat could reach that is not theirs.
+  [/^\/api\/me$/, ["PATCH"]],
   [/^\/api\/logo\/[^/]+$/, ["GET"]],
   [/^\/api\/auth\/me$/, ["GET"]],
   [/^\/api\/account-users$/, ["GET"]],     // scoped: themselves only
@@ -312,6 +315,9 @@ const OWNER_ALLOWED = [
 const TENANT_ALLOWED = [
   [/^\/api\/account$/, ["GET"]],
   [/^\/api\/account-by-subdomain\/[^/]+$/, ["GET"]],
+  // One's own notification choices. The route only ever writes its caller's
+  // row, so there is nothing here a narrow seat could reach that is not theirs.
+  [/^\/api\/me$/, ["PATCH"]],
   [/^\/api\/logo\/[^/]+$/, ["GET"]],
   [/^\/api\/auth\/me$/, ["GET"]],
   [/^\/api\/account-users$/, ["GET"]],     // scoped: themselves only
@@ -426,6 +432,13 @@ async function logEvent(env, accountId, actorId, kind, subjectId, payload) {
 // The frontend stores userId + a chosen accountId and sends them as headers.
 // Replace with real session auth (Clerk/Supabase) before shipping.
 // ---------------------------------------------------------------------------
+// A person's own notification choices. Subcontractors choose on the company
+// row; a tenant has no company, so the choice is theirs and lives on the
+// person. NULL is the defaults: told by email when a report moves, which is
+// what they would expect, and able to turn it off.
+const DEFAULT_NOTIFY = { email: true, sms: false, statusChanges: true };
+const notifyOf = (user) => ({ ...DEFAULT_NOTIFY, ...(parseJson(user?.notify, {}) || {}) });
+
 async function loginResponse(db, user) {
   const { results: memberships } = await db.prepare(
     `SELECT m.*, a.name as account_name, a.subdomain, a.kind, a.plan, a.billing, a.logo_key,
@@ -434,7 +447,7 @@ async function loginResponse(db, user) {
      FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
   ).bind(user.id).all();
   return {
-    user: { id: user.id, name: user.name, email: user.email, phone: user.phone },
+    user: { id: user.id, name: user.name, email: user.email, phone: user.phone, notify: notifyOf(user) },
     memberships: memberships.map((m) => ({
       accountId: m.account_id, accountName: m.account_name, subdomain: m.subdomain,
       role: m.role, companyId: m.company_id,
@@ -1388,7 +1401,7 @@ app.get("/api/account", async (c) => {
     cancelAtPeriodEnd: !!a.cancel_at_period_end,
     hostnameStatus: a.hostname_status || null,
     hostnameCheckedAt: a.hostname_checked_at || null,
-    user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone } : null,
+    user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone, notify: notifyOf(user) } : null,
   });
 });
 
@@ -1695,6 +1708,27 @@ function validTheme(theme) {
   }
   return out;
 }
+
+// One's own notification choices. Any signed-in person, their own row only:
+// there is nothing here about anybody else.
+app.patch("/api/me", async (c) => {
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const n = b.notify || {};
+  const notify = {
+    email: !!n.email, sms: !!n.sms,
+    statusChanges: n.statusChanges === undefined ? true : !!n.statusChanges,
+  };
+  try {
+    await c.env.DB.prepare(`UPDATE users SET notify = ? WHERE id = ?`)
+      .bind(JSON.stringify(notify), userId).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+  return c.json({ ok: true, notify });
+});
 
 // Branding/plan/billing for the current account.
 app.patch("/api/account", requireRole("admin"), async (c) => {
@@ -2373,6 +2407,7 @@ function missingSchema(err) {
   // migration 015 -- an INSERT -- threw a plain 500, and the form said
   // "Could not add them. Try again." instead of naming the migration.
   if (!/no such (table|column)|has no column named/i.test(m)) return null;
+  if (/\bnotify\b/i.test(m)) return "018_user_notify";
   if (/tenant_invites|memberships\.unit|\bunit\b/i.test(m)) {
     return /sent_at/i.test(m) ? "017_tenant_invite_sent" : "015_tenants";
   }
@@ -2887,6 +2922,46 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
 
 // Turning an owner's request into a job somebody can be assigned to. Only the
 // account can do this -- that is the entire point of a request.
+// Tell the tenant who reported a job that it has moved, if they asked to be
+// told. Never throws: a message that could not go out must not undo the
+// approval or the assignment that caused it. Owners raise requests too, but
+// they have a dashboard for this; a tenant has an inbox.
+async function notifyTenant(c, jobId, stage) {
+  try {
+    const job = await c.env.DB.prepare(
+      `SELECT id, title, account_id, requested_by FROM jobs WHERE id = ?`).bind(jobId).first();
+    if (!job?.requested_by) return;
+    const [user, seat, account] = await Promise.all([
+      c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(job.requested_by).first(),
+      c.env.DB.prepare(`SELECT role FROM memberships WHERE user_id = ? AND account_id = ?`)
+        .bind(job.requested_by, job.account_id).first(),
+      c.env.DB.prepare(`SELECT id, name, subdomain, hostname_status FROM accounts WHERE id = ?`)
+        .bind(job.account_id).first(),
+    ]);
+    if (!user || seat?.role !== "tenant") return;
+    const prefs = notifyOf(user);
+    if (!prefs.statusChanges) return;
+    const link = `${accountOrigin(account)}/`;
+    const firstName = String(user.name || "").split(" ")[0];
+    const email = realEmail(user.email);
+    const sentBy = c.get("auth")?.userId ?? null;
+    if (prefs.email && email) {
+      const m = tenantStatusEmail({ firstName, account, title: job.title, stage, link });
+      const result = await sendEmail(c.env, { to: email, subject: m.subject, text: m.text, html: m.html });
+      await logMail(c.env, { accountId: job.account_id, to: email, kind: "tenant_status",
+        subject: m.subject, result, sentBy });
+    }
+    if (prefs.sms && user.phone) {
+      const body = tenantStatusSms({ account, title: job.title, stage, link });
+      const result = await sendSms(c.env, { to: user.phone, body });
+      await logSms(c.env, { accountId: job.account_id, to: user.phone, kind: "tenant_status",
+        result: { ...result, body } });
+    }
+  } catch (err) {
+    console.error("[tenant-notify] failed:", err?.message || err);
+  }
+}
+
 app.post("/api/jobs/:id/approve", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const id = c.req.param("id");
@@ -2902,6 +2977,7 @@ app.post("/api/jobs/:id/approve", requireRole("admin", "pm"), async (c) => {
   ).bind(id, accountId).run();
   await logEvent(c.env, accountId, userId, "job.approved", id, { title: job.title });
   await logActivity(c.env, accountId, userId, "job_approved", `Approved requested work: ${job.title}`);
+  await notifyTenant(c, id, "approved");
   return c.json({ ok: true });
 });
 
@@ -2914,6 +2990,7 @@ app.post("/api/jobs/:id/complete", requireRole("admin", "pm"), async (c) => {
   await logEvent(c.env, accountId, userId, "job.completed", id, {});
   { const j = await c.env.DB.prepare(`SELECT title FROM jobs WHERE id = ?`).bind(id).first();
     await logActivity(c.env, accountId, userId, "job_completed", `Completed ${j?.title || "a job"}`); }
+  await notifyTenant(c, id, "done");
   return c.json({ ok: true });
 });
 
@@ -3015,6 +3092,7 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   }
   await logActivity(c.env, accountId, userId, "wo_issued",
     `Issued ${woNumber} to ${await companyName(c.env.DB, companyId)} · ${trade}`);
+  await notifyTenant(c, jobId, autoScheduled ? "booked" : "arranging");
   return c.json({ id, woNumber, status: autoScheduled ? "accepted" : "pending" }, 201);
 });
 
@@ -3069,6 +3147,7 @@ app.post("/api/work-orders/:id/respond", async (c) => {
   ).bind(wo.engagement_id).run();
 
   await logEvent(c.env, accountId, userId, `wo.${status}`, id, {});
+  if (status === "accepted") await notifyTenant(c, wo.job_id, "booked");
   return c.json({ ok: true });
 });
 

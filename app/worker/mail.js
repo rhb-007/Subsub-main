@@ -214,6 +214,38 @@ export function tenantInviteSms({ account, propertyName, unit, link }) {
     + `Set your password: ${link}`;
 }
 
+// What a tenant is told when something they reported moves. One sentence
+// per stage, in the stage's own words -- the same words the portal shows,
+// so the message and the screen never disagree about where a report is.
+export const TENANT_STAGE_WORDS = {
+  approved: "has been approved, and a contractor is being arranged",
+  arranging: "has gone to a contractor, who is finding a time",
+  booked: "has a contractor assigned",
+  done: "is done",
+};
+export function tenantStatusEmail({ firstName, account, title, stage, link }) {
+  const who = account?.name || "Your building manager";
+  const what = TENANT_STAGE_WORDS[stage] || "has been updated";
+  const text = `Hi ${firstName || "there"},
+
+Your report "${title}" ${what}.
+
+You can see where it is, and anything else you've reported, here:
+  ${link}
+
+-- ${who}
+
+You're getting this because you asked to be told when a report changes.
+You can switch it off under My account. This is an automated message from
+an unmonitored address. Replies aren't received.`;
+  return { subject: `${who}: "${title}" ${stage === "done" ? "is done" : "has moved"}`, text, html: textToHtml(text, link) };
+}
+export function tenantStatusSms({ account, title, stage, link }) {
+  const who = account?.name || "Your building manager";
+  const what = TENANT_STAGE_WORDS[stage] || "has been updated";
+  return `${who}: your report "${title}" ${what}. ${link}`;
+}
+
 // Where the link goes in a draft somebody is editing. The token is
 // substituted at the moment of sending, not when the draft is composed,
 // because the link does not exist yet: sending mints a fresh token and

@@ -1,0 +1,15 @@
+-- Migration 018 — a person's own notification choices.
+--
+-- Subcontractors already choose email or text, on the company row. A tenant
+-- has no company: the choice is theirs alone, and it follows them if they are
+-- a tenant of two different managers' buildings. So it lives on the person.
+--
+-- JSON: {"email":true,"sms":false,"statusChanges":true}. NULL means those
+-- defaults -- an existing tenant is told by email when a report moves,
+-- which is what they would expect, and can turn it off.
+--
+--   npx wrangler d1 execute subsub-db --config=wrangler.toml \
+--     --file=./worker/migrations/018_user_notify.sql
+--
+-- Re-running stops with "duplicate column name", which is safe to ignore.
+ALTER TABLE users ADD COLUMN notify TEXT;

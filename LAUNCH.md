@@ -128,6 +128,11 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- A tenant is now told when a report of theirs moves -- approved, gone to a
+  contractor, contractor assigned, done -- by email by default, by text as
+  well if they ask, or not at all. The choice is theirs, under My account,
+  and lives on the person (migration 018: `users.notify`), not the account.
+  The tenant nav had nothing in it; it has Dashboard and File a report.
 - A tenant who set a password from their invite and then signed in was
   refused with Supabase's own words, "Email not confirmed" -- because the
   project has Confirm email on, so setting a password also sends a second

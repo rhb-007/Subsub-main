@@ -1543,6 +1543,14 @@ export default function SubSub() {
   // White-label tenant branding — one GC per instance (outerhome.subsub.work)
 
   const [pane, setPane] = useState("jobs"); // contractor portal pane
+  // Bumped by "File a report" in the nav; the tenant screen opens its form
+  // when it changes. A counter rather than a flag, so pressing it twice
+  // opens the form twice.
+  const [reportKey, setReportKey] = useState(0);
+  // And its opposite: Dashboard, or the logo, while the form is open. The
+  // tab is already the tenant's, so changing it does nothing; this says
+  // "close the form" without the app having to own the form.
+  const [homeKey, setHomeKey] = useState(0);
   const [userMenu, setUserMenu] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [userForm, setUserForm] = useState(false);
@@ -1627,6 +1635,7 @@ export default function SubSub() {
     // modal, a half-opened menu, the mobile drawer. Home means home.
     setSelected(null); setAddMenu(false); setUserMenu(false); setMobileNav(false);
     if (homeTab === "portal") setPane("jobs");
+    if (homeTab === "tenant") setHomeKey((k) => k + 1);
     setTab(homeTab);
   };
 
@@ -2421,7 +2430,10 @@ export default function SubSub() {
 
       setUsers((prev) => {
         const byId = Object.fromEntries(prev.map((u) => [u.id, u]));
-        members.forEach((m) => { byId[m.id] = { id: m.id, name: m.name, email: m.email, phone: m.phone }; });
+        // Over the row, not in place of it: the signed-in person's own row
+        // carries things the roster does not (their notification choices),
+        // and rebuilding it from the roster threw those away on every load.
+        members.forEach((m) => { byId[m.id] = { ...(byId[m.id] || {}), id: m.id, name: m.name, email: m.email, phone: m.phone }; });
         return Object.values(byId);
       });
       setMemberships((prev) => {
@@ -3087,6 +3099,20 @@ export default function SubSub() {
               <Globe size={13} /> <span>{portalUrl(brand)}</span>
             </a>
           )}
+          {/* A tenant's two jobs, as two links: see what you've reported,
+              and report something. Without them the nav was empty and the
+              only way to the form was the button on the home screen. */}
+          {can("tenant") && (
+            <>
+              <button className={tab === "tenant" ? "on" : ""}
+                onClick={() => { setTab("tenant"); setHomeKey((k) => k + 1); }}>
+                Dashboard
+              </button>
+              <button onClick={() => { setTab("tenant"); setReportKey((k) => k + 1); }}>
+                File a report
+              </button>
+            </>
+          )}
           {can("dashboard") && (
             <button className={tab === "dashboard" ? "on" : ""} onClick={() => setTab("dashboard")}>
               Dashboard
@@ -3564,6 +3590,18 @@ export default function SubSub() {
           currentUserId={currentUserId}
           onPatchSub={patchSub} onRequestDocs={requestDocs}
           onSeatLimit={() => setUpgradePrompt({ kind: "user" })}
+          onSaveNotify={async (notify) => {
+            try {
+              const res = await api.patchMe({ notify });
+              setUsers((us) => us.map((u) => u.id === me.id ? { ...u, notify: res.notify || notify } : u));
+              return null;
+            } catch (err) {
+              console.error("[notify] save failed:", err);
+              return err?.body?.error === "migration_needed"
+                ? `The database isn't migrated yet — run ${err.body.migration || "018_user_notify"}.sql and try again.`
+                : "Couldn't save. Check your connection and try again.";
+            }
+          }}
           hostnameStatus={account.hostnameStatus}
           // Re-reads the account and folds the answer back in, so the panel
           // can go green by itself while somebody is still on the page.
@@ -3586,7 +3624,7 @@ export default function SubSub() {
 
       {can("tenant") && tab !== "account" && (
         <TenantPortal me={me} brand={brand} jobs={jobs} properties={accountProperties}
-          unit={membership.unit} accountKind={kindOf(account)}
+          unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey}
           onReport={(r) => createJob({ ...r, trades: r.trades || [] })} />
       )}
 
@@ -7597,11 +7635,24 @@ const TENANT_WHEN = [
   { id: "longer", label: "Longer than that" },
 ];
 
-function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport }) {
+function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0 }) {
   // null until they start. `group` and `query` are how the list of eighty
   // things gets down to the six worth reading: pick the area, or type a word.
   const [form, setForm] = useState(null);
   const [sent, setSent] = useState(false);
+  // "File a report" in the nav. Same as the button on this screen, reachable
+  // from anywhere in the tenant's view.
+  useEffect(() => {
+    if (!reportKey) return;
+    setSent(false);
+    setForm({ propertyId: (properties[0] || {}).id || "", group: "", query: "",
+      problem: null, title: "", when: "", scope: "" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportKey]);
+  useEffect(() => {
+    if (!homeKey) return;
+    setForm(null); setSent(false);
+  }, [homeKey]);
   const mine = [...jobs].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   const building = properties[0] || null;
   const where = tenantWhere(accountKind);
@@ -8583,7 +8634,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   onSaveUser, onSaveBrand, onUpgrade, onManageBilling, billingBusy, billingErr,
   onCancelSubscription, onResumeSubscription, cancelBusy,
   onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
-  onPatchSub, onRequestDocs, onSeatLimit,
+  onPatchSub, onRequestDocs, onSeatLimit, onSaveNotify,
   hostnameStatus, onRefreshHostname, properties = [] }) {
   // accountKind is already a prop; the user form needs it to know which
   // scoped roles this account has anybody to hand out.
@@ -8617,6 +8668,12 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   const [th, setTh] = useState(() => themeOf(brand));
   const [bSaved, setBSaved] = useState(false);
   const [bErr, setBErr] = useState("");
+  // A tenant's own notification choices. Defaults fill whatever the row has
+  // not said yet, so an old row reads the same as a new one.
+  const [tn, setTn] = useState(() => ({ email: true, sms: false, statusChanges: true, ...(me?.notify || {}) }));
+  const [tnSaved, setTnSaved] = useState(false);
+  const [tnBusy, setTnBusy] = useState(false);
+  const [tnErr, setTnErr] = useState("");
   const [bBusy, setBBusy] = useState(false);
   const setBrandField = (k, v) => { setB((x) => ({ ...x, [k]: v })); setBSaved(false); setBErr(""); };
   // Instant local preview via a data URI (unchanged UX), plus a real upload
@@ -8650,6 +8707,66 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           {panes.map(([id, l]) => (
             <button key={id} className={pane === id ? "on" : ""} onClick={() => setPane(id)}>{l}</button>
           ))}
+        </div>
+      )}
+
+      {pane === "profile" && role === "tenant" && (
+        <div className="portal-panel settings-panel">
+          <h4>Notifications</h4>
+          <p className="panel-note">
+            When something you've reported moves — approved, a contractor assigned, done — we can
+            tell you, so you're not checking back here to find out.
+          </p>
+          <label className={`notify-opt ${tn.statusChanges ? "on" : ""}`} style={{ marginBottom: 10 }}>
+            <input type="checkbox" checked={tn.statusChanges}
+              onChange={(e) => { setTn({ ...tn, statusChanges: e.target.checked }); setTnSaved(false); setTnErr(""); }} />
+            <Bell size={17} />
+            <span className="no-txt">
+              <span className="no-name">Tell me when a report's status changes</span>
+              <span className="no-sub">Off means you check here yourself.</span>
+            </span>
+          </label>
+          <div className="notify-grid" style={{ opacity: tn.statusChanges ? 1 : .5 }}>
+            <label className={`notify-opt ${tn.email && me.email && !String(me.email).endsWith("@no-email.invalid") ? "on" : ""}`}>
+              <input type="checkbox" checked={tn.email} disabled={!tn.statusChanges || !me.email || String(me.email).endsWith("@no-email.invalid")}
+                onChange={(e) => { setTn({ ...tn, email: e.target.checked }); setTnSaved(false); setTnErr(""); }} />
+              <Mail size={17} />
+              <span className="no-txt">
+                <span className="no-name">Email</span>
+                <span className="no-sub">{me.email && !String(me.email).endsWith("@no-email.invalid") ? me.email : "no email on file"}</span>
+              </span>
+            </label>
+            <label className={`notify-opt ${tn.sms && me.phone ? "on" : ""}`}>
+              <input type="checkbox" checked={tn.sms} disabled={!tn.statusChanges || !me.phone}
+                onChange={(e) => { setTn({ ...tn, sms: e.target.checked }); setTnSaved(false); setTnErr(""); }} />
+              <Phone size={17} />
+              <span className="no-txt">
+                <span className="no-name">Text message (SMS)</span>
+                <span className="no-sub">{me.phone || "no phone on file — ask your building manager to add one"}</span>
+              </span>
+            </label>
+          </div>
+          {tn.statusChanges && !tn.email && !tn.sms && (
+            <div className="doc-block" style={{ marginTop: 12, marginBottom: 0 }}>
+              <AlertTriangle size={15} />
+              <div><strong>Pick at least one</strong>, or nothing can reach you.</div>
+            </div>
+          )}
+          {tnErr && <p className="billing-err" role="alert">{tnErr}</p>}
+          <div className="panel-actions">
+            <span className="panel-count">
+              {!tn.statusChanges ? "Off" : tn.email && tn.sms ? "Email + SMS" : tn.sms ? "SMS only" : tn.email ? "Email only" : "Nothing selected"}
+            </span>
+            {tnSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+              : <button className="btn-solid" disabled={tnBusy || (tn.statusChanges && !tn.email && !tn.sms)}
+                  onClick={async () => {
+                    setTnBusy(true); setTnErr("");
+                    const err = await onSaveNotify(tn);
+                    setTnBusy(false);
+                    if (err) setTnErr(err); else setTnSaved(true);
+                  }}>
+                  <Check size={15} /> {tnBusy ? "Saving…" : "Save notifications"}</button>}
+          </div>
         </div>
       )}
 

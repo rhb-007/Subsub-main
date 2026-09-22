@@ -178,6 +178,8 @@ export const api = {
   resumeSubscription: () => request("/billing/resume", { method: "POST" }),
 
   getAccount: () => request("/account"),
+  // One's own notification choices.
+  patchMe: (body) => request("/me", { method: "PATCH", body: JSON.stringify(body) }),
   // Public — no auth required, used to brand a login screen before signin.
   getAccountBySubdomain: (subdomain) => request(`/account-by-subdomain/${encodeURIComponent(subdomain)}`),
   patchAccount: (patch) => request("/account", { method: "PATCH", body: JSON.stringify(patch) }),
