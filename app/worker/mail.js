@@ -220,12 +220,31 @@ export function tenantInviteSms({ account, propertyName, unit, link }) {
 export const TENANT_STAGE_WORDS = {
   approved: "has been approved, and a contractor is being arranged",
   arranging: "has gone to a contractor, who is finding a time",
-  booked: "has a contractor assigned",
+  booked: "has a contractor assigned -- a time still needs arranging with you",
+  visit: (when) => `has a visit proposed for ${when}. Please confirm it in the app, or say if it doesn't work`,
+  scheduled: (when) => `is scheduled for ${when}`,
   done: "is done",
 };
-export function tenantStatusEmail({ firstName, account, title, stage, link }) {
+const stageWords = (stage, when) => {
+  const w = TENANT_STAGE_WORDS[stage];
+  return typeof w === "function" ? w(when || "a time to be confirmed") : (w || "has been updated");
+};
+// "Thu, Oct 2, 2026, 9 AM–11 AM": the date the way niceDate says it, the
+// window in 12-hour clock, because that is how somebody says it aloud.
+const clock12 = (hhmm) => {
+  const [h, m] = String(hhmm || "").split(":").map(Number);
+  if (Number.isNaN(h)) return "";
+  return `${((h + 11) % 12) + 1}${m ? ":" + String(m).padStart(2, "0") : ""} ${h >= 12 ? "PM" : "AM"}`;
+};
+export function visitWhen(v) {
+  if (!v?.date) return "";
+  const win = v.start_time || v.startTime
+    ? `, ${clock12(v.start_time || v.startTime)}${(v.end_time || v.endTime) ? `–${clock12(v.end_time || v.endTime)}` : ""}` : "";
+  return `${niceDate(v.date)}${win}`;
+}
+export function tenantStatusEmail({ firstName, account, title, stage, link, when }) {
   const who = account?.name || "Your building manager";
-  const what = TENANT_STAGE_WORDS[stage] || "has been updated";
+  const what = stageWords(stage, when);
   const text = `Hi ${firstName || "there"},
 
 Your report "${title}" ${what}.
@@ -238,12 +257,14 @@ You can see where it is, and anything else you've reported, here:
 You're getting this because you asked to be told when a report changes.
 You can switch it off under My account. This is an automated message from
 an unmonitored address. Replies aren't received.`;
-  return { subject: `${who}: "${title}" ${stage === "done" ? "is done" : "has moved"}`, text, html: textToHtml(text, link) };
+  const subject = stage === "visit" ? `${who}: a time for "${title}" — please confirm`
+    : stage === "done" ? `${who}: "${title}" is done`
+    : `${who}: "${title}" has moved`;
+  return { subject, text, html: textToHtml(text, link) };
 }
-export function tenantStatusSms({ account, title, stage, link }) {
+export function tenantStatusSms({ account, title, stage, link, when }) {
   const who = account?.name || "Your building manager";
-  const what = TENANT_STAGE_WORDS[stage] || "has been updated";
-  return `${who}: your report "${title}" ${what}. ${link}`;
+  return `${who}: your report "${title}" ${stageWords(stage, when)}. ${link}`;
 }
 
 // Where the link goes in a draft somebody is editing. The token is

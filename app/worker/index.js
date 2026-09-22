@@ -10,7 +10,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
-  INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms } from "./mail.js";
+  INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
@@ -306,6 +306,7 @@ const OWNER_ALLOWED = [
   [/^\/api\/jobs$/, ["GET", "POST"]],      // scoped; POST creates a request
   [/^\/api\/subs$/, ["GET"]],              // scoped: who works their buildings
   [/^\/api\/service-calls$/, ["GET"]],     // scoped: on their own jobs
+  [/^\/api\/visits$/, ["GET"]],
 ];
 
 // A tenant's is narrower again. They report problems and watch what happens
@@ -323,6 +324,9 @@ const TENANT_ALLOWED = [
   [/^\/api\/account-users$/, ["GET"]],     // scoped: themselves only
   [/^\/api\/properties$/, ["GET"]],        // scoped: their building
   [/^\/api\/jobs$/, ["GET", "POST"]],      // scoped: their own reports
+  // The proposed time for a repair of theirs, and their answer to it.
+  [/^\/api\/visits$/, ["GET"]],
+  [/^\/api\/visits\/[^/]+\/respond$/, ["POST"]],
 ];
 
 app.use("/api/*", async (c, next) => {
@@ -2408,6 +2412,7 @@ function missingSchema(err) {
   // "Could not add them. Try again." instead of naming the migration.
   if (!/no such (table|column)|has no column named/i.test(m)) return null;
   if (/\bnotify\b/i.test(m)) return "018_user_notify";
+  if (/\bvisits\b/i.test(m)) return "019_visits";
   if (/tenant_invites|memberships\.unit|\bunit\b/i.test(m)) {
     return /sent_at/i.test(m) ? "017_tenant_invite_sent" : "015_tenants";
   }
@@ -2926,7 +2931,7 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
 // told. Never throws: a message that could not go out must not undo the
 // approval or the assignment that caused it. Owners raise requests too, but
 // they have a dashboard for this; a tenant has an inbox.
-async function notifyTenant(c, jobId, stage) {
+async function notifyTenant(c, jobId, stage, when = null) {
   try {
     const job = await c.env.DB.prepare(
       `SELECT id, title, account_id, requested_by FROM jobs WHERE id = ?`).bind(jobId).first();
@@ -2946,13 +2951,13 @@ async function notifyTenant(c, jobId, stage) {
     const email = realEmail(user.email);
     const sentBy = c.get("auth")?.userId ?? null;
     if (prefs.email && email) {
-      const m = tenantStatusEmail({ firstName, account, title: job.title, stage, link });
+      const m = tenantStatusEmail({ firstName, account, title: job.title, stage, link, when });
       const result = await sendEmail(c.env, { to: email, subject: m.subject, text: m.text, html: m.html });
       await logMail(c.env, { accountId: job.account_id, to: email, kind: "tenant_status",
         subject: m.subject, result, sentBy });
     }
     if (prefs.sms && user.phone) {
-      const body = tenantStatusSms({ account, title: job.title, stage, link });
+      const body = tenantStatusSms({ account, title: job.title, stage, link, when });
       const result = await sendSms(c.env, { to: user.phone, body });
       await logSms(c.env, { accountId: job.account_id, to: user.phone, kind: "tenant_status",
         result: { ...result, body } });
@@ -2992,6 +2997,132 @@ app.post("/api/jobs/:id/complete", requireRole("admin", "pm"), async (c) => {
     await logActivity(c.env, accountId, userId, "job_completed", `Completed ${j?.title || "a job"}`); }
   await notifyTenant(c, id, "done");
   return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Visits: the proposed time for a repair, confirmed by the tenant
+// ---------------------------------------------------------------------------
+//
+// A report went from "contractor assigned" to "done" with the person who
+// lives there told nothing about when anybody would turn up. The manager or
+// the contractor proposes a date and a window; the tenant confirms it or
+// says it doesn't work, in the app; only a confirmed visit puts a date on
+// the job and reads as "Scheduled" to them. One live visit per job.
+
+const visitRowToJs = (v) => ({
+  id: v.id, jobId: v.job_id, date: v.date, startTime: v.start_time || null, endTime: v.end_time || null,
+  note: v.note || null, status: v.status, tenantNote: v.tenant_note || null,
+  proposedBy: v.proposed_by || null, createdAt: v.created_at, respondedAt: v.responded_at || null,
+});
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/, TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+app.get("/api/visits", async (c) => {
+  const auth = c.get("auth");
+  const scope = scopeClause(auth, "j.property_id");
+  const mine = auth.role === "tenant" ? " AND j.requested_by = ? " : "";
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT v.* FROM visits v JOIN jobs j ON j.id = v.job_id
+        WHERE v.account_id = ? ${scope.sql} ${mine} AND v.status != 'superseded'
+        ORDER BY v.created_at DESC`
+    ).bind(auth.accountId, ...scope.vals, ...(auth.role === "tenant" ? [auth.userId] : [])).all();
+    return c.json((results || []).map(visitRowToJs));
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+});
+
+// Propose one. The manager, or a contractor who holds a live work order on
+// the job -- they are the one who knows when they can come.
+app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async (c) => {
+  const auth = c.get("auth");
+  const jobId = c.req.param("id");
+  const b = await c.req.json().catch(() => ({}));
+  const job = await c.env.DB.prepare(
+    `SELECT id, title, requested_by, approved_at FROM jobs WHERE id = ? AND account_id = ?`
+  ).bind(jobId, auth.accountId).first();
+  if (!job) return c.json({ error: "job_not_found" }, 404);
+  if (job.requested_by && !job.approved_at) return c.json({ error: "not_approved" }, 409);
+  if (auth.role === "contractor") {
+    const wo = await c.env.DB.prepare(
+      `SELECT id FROM work_orders WHERE job_id = ? AND company_id = ? AND voided_at IS NULL`
+    ).bind(jobId, auth.companyId).first();
+    if (!wo) return c.json({ error: "forbidden" }, 403);
+  }
+  const date = String(b.date || "").trim();
+  const start = b.startTime ? String(b.startTime).trim() : null;
+  const end = b.endTime ? String(b.endTime).trim() : null;
+  if (!DATE_RE.test(date)) return c.json({ error: "bad_date" }, 400);
+  if ((start && !TIME_RE.test(start)) || (end && !TIME_RE.test(end))) return c.json({ error: "bad_time" }, 400);
+  if (start && end && end <= start) return c.json({ error: "bad_window" }, 400);
+  const note = String(b.note || "").trim().slice(0, 500) || null;
+
+  // Who has to agree. A tenant's repair needs the tenant; anything else has
+  // nobody to ask, so the proposal stands.
+  const seat = job.requested_by ? await c.env.DB.prepare(
+    `SELECT role FROM memberships WHERE user_id = ? AND account_id = ?`).bind(job.requested_by, auth.accountId).first() : null;
+  const needsTenant = seat?.role === "tenant";
+  const id = uid();
+  try {
+    await c.env.DB.prepare(
+      `UPDATE visits SET status = 'superseded' WHERE job_id = ? AND status IN ('proposed', 'declined')`
+    ).bind(jobId).run();
+    await c.env.DB.prepare(
+      `INSERT INTO visits (id, account_id, job_id, proposed_by, date, start_time, end_time, note, status, responded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, auth.accountId, jobId, auth.userId, date, start, end, note,
+      needsTenant ? "proposed" : "confirmed", needsTenant ? null : new Date().toISOString()).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  const when = visitWhen({ date, start_time: start, end_time: end });
+  if (needsTenant) {
+    await logActivity(c.env, auth.accountId, auth.userId, "visit_proposed",
+      `Proposed a visit for "${job.title}": ${when}`);
+    await notifyTenant(c, jobId, "visit", when);
+  } else {
+    await c.env.DB.prepare(`UPDATE jobs SET date = ?, time = ? WHERE id = ?`).bind(date, start || "07:00", jobId).run();
+    await logActivity(c.env, auth.accountId, auth.userId, "visit_set", `Set a visit for "${job.title}": ${when}`);
+  }
+  const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(id).first();
+  return c.json(visitRowToJs(row), 201);
+});
+
+// The tenant's answer. Only the person who reported it; only while it is
+// still open. Confirming puts the date on the job -- that is the moment it
+// becomes scheduled, not the moment somebody proposed it.
+app.post("/api/visits/:id/respond", async (c) => {
+  const auth = c.get("auth");
+  if (auth.role !== "tenant") return c.json({ error: "forbidden" }, 403);
+  const b = await c.req.json().catch(() => ({}));
+  const status = b.status === "confirmed" ? "confirmed" : b.status === "declined" ? "declined" : null;
+  if (!status) return c.json({ error: "bad_status" }, 400);
+  const v = await c.env.DB.prepare(
+    `SELECT v.*, j.requested_by, j.title FROM visits v JOIN jobs j ON j.id = v.job_id
+      WHERE v.id = ? AND v.account_id = ?`).bind(c.req.param("id"), auth.accountId).first();
+  if (!v) return c.json({ error: "not_found" }, 404);
+  if (v.requested_by !== auth.userId) return c.json({ error: "forbidden" }, 403);
+  if (v.status !== "proposed") return c.json({ error: "not_open", status: v.status }, 409);
+  const note = String(b.note || "").trim().slice(0, 500) || null;
+  await c.env.DB.prepare(
+    `UPDATE visits SET status = ?, tenant_note = ?, responded_at = ? WHERE id = ?`
+  ).bind(status, note, new Date().toISOString(), v.id).run();
+  const when = visitWhen(v);
+  if (status === "confirmed") {
+    await c.env.DB.prepare(`UPDATE jobs SET date = ?, time = ? WHERE id = ?`)
+      .bind(v.date, v.start_time || "07:00", v.job_id).run();
+    await logActivity(c.env, auth.accountId, auth.userId, "visit_confirmed",
+      `Confirmed the visit for "${v.title}": ${when}`);
+  } else {
+    await logActivity(c.env, auth.accountId, auth.userId, "visit_declined",
+      `Can't make the visit for "${v.title}" (${when})${note ? `: ${note}` : ""}`);
+  }
+  const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(v.id).first();
+  return c.json(visitRowToJs(row));
 });
 
 app.post("/api/jobs/:id/reopen", requireRole("admin", "pm"), async (c) => {

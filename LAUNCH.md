@@ -128,6 +128,12 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- A report went from "contractor assigned" to "done" with the tenant told
+  nothing about when anybody would turn up. There is a visit now (migration
+  019): the manager or the contractor proposes a date and a window, the
+  tenant confirms it or says it doesn't work -- with why -- in the app, and
+  only a confirmed visit puts a date on the job or reads as "Scheduled" to
+  them. A declined one lands on the manager's dashboard with the reason.
 - An unapproved request from an owner or a tenant was counted as needing a
   contractor -- listed under "Needs a contractor", counted in the unassigned
   trade slots, and offered as somewhere to put a subcontractor, which the

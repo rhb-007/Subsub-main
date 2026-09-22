@@ -208,6 +208,10 @@ export const api = {
   createUniformOrder: (order) => request("/uniform-orders", { method: "POST", body: JSON.stringify(order) }),
   decideUniformOrder: (id, status) => request(`/uniform-orders/${id}/decide`, { method: "POST", body: JSON.stringify({ status }) }),
 
+  // Visits: the proposed time for a repair, and the tenant's answer to it.
+  listVisits: () => request("/visits"),
+  proposeVisit: (jobId, body) => request(`/jobs/${jobId}/visits`, { method: "POST", body: JSON.stringify(body) }),
+  respondVisit: (id, body) => request(`/visits/${id}/respond`, { method: "POST", body: JSON.stringify(body) }),
   listServiceCalls: () => request("/service-calls"),
   raiseServiceCall: (call) => request("/service-calls", { method: "POST", body: JSON.stringify(call) }),
   confirmServiceCall: (id, patch) => request(`/service-calls/${id}/confirm`, { method: "POST", body: JSON.stringify(patch || {}) }),

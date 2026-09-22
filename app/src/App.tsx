@@ -1241,6 +1241,18 @@ function niceDay(iso) {
 
 // "4 minutes ago" rather than an ISO timestamp: the only thing anyone wants
 // from this field is whether the answer beside it is fresh.
+// "9 AM" / "9:30 AM": how a time is said, not how it is stored.
+function niceTime(hhmm) {
+  const [h, m] = String(hhmm || "").split(":").map(Number);
+  if (Number.isNaN(h)) return "";
+  return `${((h + 11) % 12) + 1}${m ? ":" + String(m).padStart(2, "0") : ""} ${h >= 12 ? "PM" : "AM"}`;
+}
+// "Thu, Oct 2 · 9 AM–11 AM"
+function visitWhen(v) {
+  if (!v?.date) return "";
+  const win = v.startTime ? ` · ${niceTime(v.startTime)}${v.endTime ? `–${niceTime(v.endTime)}` : ""}` : "";
+  return `${niceDay(v.date)}${win}`;
+}
 function niceWhen(iso) {
   if (!iso) return "";
   const then = new Date(iso);
@@ -1578,6 +1590,9 @@ export default function SubSub() {
   const [reviewing, setReviewing] = useState(null); // { sub, kind }
   // Callbacks and warranty claims raised against a completed job.
   const [serviceCalls, setServiceCalls] = useState([]);
+  // Proposed and confirmed visits, one live per job. Scoped by the API: a
+  // tenant gets their own reports', an owner their buildings'.
+  const [visits, setVisits] = useState([]);
   const [raising, setRaising] = useState(null);   // { job, trade, a, kind }
   const [changeOrders, setChangeOrders] = useState([]);
   const [coForm, setCoForm] = useState(null);     // { job, trade, a, origin }
@@ -2353,6 +2368,25 @@ export default function SubSub() {
       ? { ...c, status: "void", respondedAt: new Date().toISOString() } : c));
 
   // Sub confirms (or proposes a different date) from their portal.
+  // Propose a time for a repair. The API decides whether it needs the tenant
+  // (then it is "proposed") or stands at once (then the job gets its date).
+  const proposeVisit = async (jobId, body) => {
+    const v = await api.proposeVisit(jobId, body);
+    setVisits((vs) => [v, ...vs.filter((x) => x.jobId !== jobId)]);
+    if (v.status === "confirmed") {
+      setJobs((js) => js.map((j) => j.id === jobId ? { ...j, date: v.date, time: v.startTime || j.time } : j));
+    }
+    return v;
+  };
+  // The tenant's answer. Confirming is what puts the date on the job.
+  const respondVisit = async (id, body) => {
+    const v = await api.respondVisit(id, body);
+    setVisits((vs) => vs.map((x) => x.id === id ? v : x));
+    if (v.status === "confirmed") {
+      setJobs((js) => js.map((j) => j.id === v.jobId ? { ...j, date: v.date, time: v.startTime || j.time } : j));
+    }
+    return v;
+  };
   const confirmServiceCall = (id, patch = {}) => {
     persist("confirmServiceCall", api.confirmServiceCall(id, patch));
     setServiceCalls((cs) => cs.map((c) => c.id !== id ? c : {
@@ -2403,16 +2437,17 @@ export default function SubSub() {
       // see the thing.
       const settled = await Promise.allSettled([
         api.listSubs(), api.listJobs(), api.listAllBookings(), api.listAccountUsers(),
-        api.listUniformOrders(), api.listServiceCalls(), api.listProperties(),
+        api.listUniformOrders(), api.listServiceCalls(), api.listProperties(), api.listVisits(),
       ]);
       settled.forEach((r, i) => {
         if (r.status === "rejected") console.warn("[hydrate] call", i, "failed:", r.reason);
       });
       const [flatSubs, ownJobs, bookings, members, uniformOrderRows, serviceCallRows,
-             propertyRows] = settled.map((r) => (r.status === "fulfilled" && Array.isArray(r.value)) ? r.value : []);
+             propertyRows, visitRows] = settled.map((r) => (r.status === "fulfilled" && Array.isArray(r.value)) ? r.value : []);
       setUniformOrders(uniformOrderRows);
       setServiceCalls(serviceCallRows);
       setProperties(propertyRows);
+      setVisits(visitRows);
 
       const cos = [], ens = [];
       flatSubs.forEach((flat) => {
@@ -3179,7 +3214,7 @@ export default function SubSub() {
       </header>
 
       {tab === "dashboard" && can("dashboard") && (
-        <AdminDashboard subs={subs} jobs={jobs} role={role} me={me} now={now}
+        <AdminDashboard visits={visits} subs={subs} jobs={jobs} role={role} me={me} now={now}
           accountId={account.id} trades={account.trades} subLimit={PLANS[plan].limit}
           onGoAccount={() => setTab("account")}
           onInvite={() => setInviteOpen(true)}
@@ -3523,6 +3558,10 @@ export default function SubSub() {
                           ))}
                       </div>
                     )}
+                    {j.requestedBy && j.approvedAt && j.status !== "completed" && (
+                      <VisitBlock job={j} visit={visits.find((v) => v.jobId === j.id) || null}
+                        who={users.find((u) => u.id === j.requestedBy)} onPropose={proposeVisit} />
+                    )}
                     {serviceCalls.filter((c) => c.jobId === j.id).length > 0 && (
                       <div className="sc-block">
                         <div className="form-sec">Callbacks &amp; warranty claims</div>
@@ -3631,6 +3670,7 @@ export default function SubSub() {
       {can("tenant") && tab !== "account" && (
         <TenantPortal me={me} brand={brand} jobs={jobs} properties={accountProperties}
           unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey}
+          visits={visits} onRespondVisit={respondVisit}
           onReport={(r) => createJob({ ...r, trades: r.trades || [] })} />
       )}
 
@@ -7481,12 +7521,16 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
 // use here: "requested_by set, approved_at null, no work orders issued" is
 // four states to somebody running the building and one sentence to the person
 // waiting in the apartment.
-function tenantStage(job) {
+function tenantStage(job, visit) {
   if (job.status === "completed") return { key: "done", label: "Done", tone: "ok" };
+  // A date on the job is not a date with the tenant. Only a visit they have
+  // confirmed reads as scheduled; one waiting on them asks them.
+  if (visit?.status === "proposed") return { key: "confirm", label: "Confirm a time", tone: "wait" };
+  if (visit?.status === "confirmed") return { key: "scheduled", label: `Scheduled — ${visitWhen(visit)}`, tone: "ok" };
   const assigned = Object.values(job.assignments || {});
   const accepted = assigned.filter((a) => a.status === "accepted" || a.auto);
   if (accepted.length) {
-    return { key: "booked", label: job.date ? "Scheduled" : "Contractor assigned", tone: "ok" };
+    return { key: "booked", label: visit?.status === "declined" ? "Finding another time" : "Contractor assigned — time to be arranged", tone: "busy" };
   }
   if (assigned.length) return { key: "arranging", label: "Finding a time", tone: "busy" };
   if (job.requestedBy && !job.approvedAt) return { key: "sent", label: "With the manager", tone: "wait" };
@@ -7641,7 +7685,109 @@ const TENANT_WHEN = [
   { id: "longer", label: "Longer than that" },
 ];
 
-function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0 }) {
+// The question a tenant is asked when a time has been proposed: does this
+// work? Two answers, and room to say why not -- "I'm at work until 6" is
+// the thing the manager needs to propose the next one.
+function TenantVisitAsk({ visit, brandName, onRespond }) {
+  const [saying, setSaying] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const answer = async (status) => {
+    setBusy(status); setErr("");
+    try { await onRespond(visit.id, { status, note: note.trim() }); }
+    catch (e) { console.error("[visit] respond failed:", e); setErr("That didn't go through. Try again in a moment."); }
+    finally { setBusy(""); }
+  };
+  return (
+    <div className="tn-visit">
+      <div className="tn-visit-when"><Calendar size={15} /> {brandName} proposes <b>{visitWhen(visit)}</b></div>
+      {visit.note && <p className="tn-visit-note">“{visit.note}”</p>}
+      <p className="tn-visit-q">Someone will need to be in. Does that work for you?</p>
+      {saying ? (
+        <>
+          <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
+            placeholder="When would work instead? e.g. weekday mornings, or any time after 5" />
+          <div className="tn-visit-actions">
+            <button className="btn-ghost" onClick={() => setSaying(false)} disabled={!!busy}>Back</button>
+            <button className="btn-solid" onClick={() => answer("declined")} disabled={!!busy}>
+              {busy === "declined" ? "Sending…" : "Send — that time doesn't work"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="tn-visit-actions">
+          <button className="btn-ghost" onClick={() => setSaying(true)} disabled={!!busy}>That doesn't work</button>
+          <button className="btn-solid" onClick={() => answer("confirmed")} disabled={!!busy}>
+            <Check size={15} /> {busy === "confirmed" ? "Confirming…" : "Yes, confirm"}
+          </button>
+        </div>
+      )}
+      {err && <p className="billing-err" role="alert">{err}</p>}
+    </div>
+  );
+}
+
+// On the manager's side of the same thing: where the visit stands, and the
+// form to propose one (or the next one).
+function VisitBlock({ job, visit, who, onPropose }) {
+  const [f, setF] = useState({ date: job.date || "", startTime: "09:00", endTime: "11:00", note: "" });
+  const [open, setOpen] = useState(!visit || visit.status === "declined");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const name = who?.name || "the tenant";
+  const send = async () => {
+    if (!f.date) { setErr("Pick a date."); return; }
+    if (f.startTime && f.endTime && f.endTime <= f.startTime) { setErr("The window ends before it starts."); return; }
+    setBusy(true); setErr("");
+    try { await onPropose(job.id, f); setOpen(false); }
+    catch (e) {
+      console.error("[visit] propose failed:", e);
+      setErr(e?.body?.error === "migration_needed" ? `The database isn't migrated yet — run ${e.body.migration || "019_visits"}.sql and try again.`
+        : e?.body?.error === "not_approved" ? "Approve the request first."
+        : "Couldn't propose that. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="visit-block">
+      <div className="form-sec">Visit</div>
+      {visit?.status === "proposed" && (
+        <p className="visit-state wait"><Clock size={14} /> Proposed <b>{visitWhen(visit)}</b> — waiting on {name} to confirm.</p>
+      )}
+      {visit?.status === "confirmed" && (
+        <p className="visit-state ok"><CheckCircle2 size={14} /> {name} confirmed <b>{visitWhen(visit)}</b>.</p>
+      )}
+      {visit?.status === "declined" && (
+        <p className="visit-state bad"><AlertTriangle size={14} /> {name} can't make <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."} Propose another.</p>
+      )}
+      {!visit && <p className="visit-state">No time proposed yet. {name} has to confirm one before this reads as scheduled.</p>}
+      {open ? (
+        <div className="visit-form">
+          <div className="fld-row">
+            <label className="fld">Date<input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
+            <label className="fld">From<input type="time" value={f.startTime} onChange={(e) => setF({ ...f, startTime: e.target.value })} /></label>
+            <label className="fld">To<input type="time" value={f.endTime} onChange={(e) => setF({ ...f, endTime: e.target.value })} /></label>
+          </div>
+          <label className="fld">Note for {name} <span className="fld-note">optional</span>
+            <input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} placeholder="e.g. The plumber needs access to the unit below too" />
+          </label>
+          {err && <p className="fld-err"><AlertTriangle size={12} /> {err}</p>}
+          <div className="form-actions">
+            {visit && <button className="btn-ghost" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>}
+            <button className="btn-solid" onClick={send} disabled={busy}>
+              <Calendar size={14} /> {busy ? "Proposing…" : visit ? "Propose this time instead" : "Propose this time"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="btn-ghost sm" onClick={() => setOpen(true)}>Propose a different time</button>
+      )}
+    </div>
+  );
+}
+
+function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit }) {
+  const visitOf = (jobId) => visits.find((v) => v.jobId === jobId) || null;
   // null until they start. `group` and `query` are how the list of eighty
   // things gets down to the six worth reading: pick the area, or type a word.
   const [form, setForm] = useState(null);
@@ -7863,18 +8009,22 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
       ) : (
         <div className="tn-list">
           {mine.map((j) => {
-            const st = tenantStage(j);
+            const v = visitOf(j.id);
+            const st = tenantStage(j, v);
             const who = Object.values(j.assignments || {})
               .map((a) => a.subId).filter(Boolean);
             return (
-              <div key={j.id} className="tn-row">
+              <div key={j.id} className={`tn-row ${st.key === "confirm" ? "needs-you" : ""}`}>
                 <div className="tn-row-main">
                   <div className="tn-row-title">{j.title}</div>
                   <span className="tn-row-meta">
                     Reported {j.createdAt ? niceDay(j.createdAt) : "recently"}
-                    {j.date ? ` · booked for ${niceDay(j.date)}` : ""}
-                    {who.length ? " · a contractor is assigned" : ""}
+                    {v?.status === "confirmed" ? ` · visit ${visitWhen(v)}` : ""}
+                    {who.length && !v ? " · a contractor is assigned" : ""}
                   </span>
+                  {st.key === "confirm" && (
+                    <TenantVisitAsk visit={v} brandName={brand.name} onRespond={onRespondVisit} />
+                  )}
                 </div>
                 <span className={`tn-chip ${st.tone}`}>{st.label}</span>
               </div>
@@ -9575,7 +9725,11 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
 // `properties` is null for an account that keeps no building list -- a general
 // contractor -- and an array for the rest, so it is both the data and the
 // answer to "does this account think in buildings at all".
-function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, users = [], runsAccount = true }) {
+function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, users = [], runsAccount = true, visits = [] }) {
+  // A tenant said the proposed time doesn't work: somebody has to propose
+  // another, and nothing else on this screen would say so.
+  const timeDeclined = visits.filter((v) => v.status === "declined")
+    .map((v) => ({ v, job: jobs.find((j) => j.id === v.jobId) })).filter((x) => x.job && x.job.status !== "completed");
   const managesProperties = Array.isArray(properties);
   const today = new Date().toISOString().slice(0, 10);
   // Only approved work has trade slots. An unapproved request has its own
@@ -9725,6 +9879,27 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             <p className="rollup-note">Approving turns a request into a job you can price and
               assign. Nothing reaches a contractor until you do.</p>
           )}
+        </section>
+      )}
+
+      {!isOwner && timeDeclined.length > 0 && (
+        <section className="dash-sec">
+          <h3><Calendar size={15} /> Tenant can't make the proposed time
+            <span className="sec-count amber">{timeDeclined.length}</span></h3>
+          {timeDeclined.map(({ v, job }) => {
+            const who = users.find((u) => u.id === job.requestedBy);
+            return (
+              <div key={v.id} className="dash-row">
+                <div className="dash-row-main">
+                  <div className="dr-title">{job.title}</div>
+                  <span className="dr-meta">
+                    {who ? who.name : "The tenant"} can't make {visitWhen(v)}{v.tenantNote ? ` — “${v.tenantNote}”` : ""}
+                  </span>
+                </div>
+                <button className="btn-solid sm" onClick={onGoJobs}><Calendar size={13} /> Propose another</button>
+              </div>
+            );
+          })}
         </section>
       )}
 
@@ -13573,6 +13748,23 @@ body{background:var(--paper)}
   text-transform:uppercase;color:var(--ink-soft)}
 .login-tenants p{margin:4px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
 .login-tenants b{font-weight:700;color:var(--wl-accent,var(--brand))}
+/* a proposed visit, on the tenant's report */
+.tn-row.needs-you{border-color:var(--gold-dk);box-shadow:0 0 0 3px rgba(192,125,28,.12)}
+.tn-visit{margin-top:12px;padding:14px 16px;border:1px solid var(--line);border-radius:11px;background:var(--paper)}
+.tn-visit-when{display:flex;align-items:center;gap:8px;font-size:14px}
+.tn-visit-note{margin:6px 0 0;font-size:13px;color:var(--ink-soft);font-style:italic}
+.tn-visit-q{margin:8px 0 10px;font-size:13.5px}
+.tn-visit textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;font-size:14px;margin-bottom:10px}
+.tn-visit-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+/* and on the manager's job */
+.visit-block{margin-top:14px}
+.visit-state{display:flex;align-items:center;gap:8px;margin:6px 0 10px;font-size:13.5px;color:var(--ink-soft)}
+.visit-state.ok{color:var(--brand-dk)}
+.visit-state.wait{color:#8a5a12}
+.visit-state.bad{color:#b1391f}
+.visit-form{padding:12px 14px;border:1px dashed var(--line);border-radius:11px}
+.visit-form .form-actions{margin-top:4px}
+@media(max-width:640px){.tn-visit-actions button{flex:1 1 100%}}
 /* tenant roster filters */
 .tn-filters{margin:14px 0 4px}
 .tn-filter-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:10px}
@@ -14214,6 +14406,23 @@ body{background:var(--paper)}
   text-transform:uppercase;color:var(--ink-soft)}
 .login-tenants p{margin:4px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
 .login-tenants b{font-weight:700;color:var(--wl-accent,var(--brand))}
+/* a proposed visit, on the tenant's report */
+.tn-row.needs-you{border-color:var(--gold-dk);box-shadow:0 0 0 3px rgba(192,125,28,.12)}
+.tn-visit{margin-top:12px;padding:14px 16px;border:1px solid var(--line);border-radius:11px;background:var(--paper)}
+.tn-visit-when{display:flex;align-items:center;gap:8px;font-size:14px}
+.tn-visit-note{margin:6px 0 0;font-size:13px;color:var(--ink-soft);font-style:italic}
+.tn-visit-q{margin:8px 0 10px;font-size:13.5px}
+.tn-visit textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;font-size:14px;margin-bottom:10px}
+.tn-visit-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+/* and on the manager's job */
+.visit-block{margin-top:14px}
+.visit-state{display:flex;align-items:center;gap:8px;margin:6px 0 10px;font-size:13.5px;color:var(--ink-soft)}
+.visit-state.ok{color:var(--brand-dk)}
+.visit-state.wait{color:#8a5a12}
+.visit-state.bad{color:#b1391f}
+.visit-form{padding:12px 14px;border:1px dashed var(--line);border-radius:11px}
+.visit-form .form-actions{margin-top:4px}
+@media(max-width:640px){.tn-visit-actions button{flex:1 1 100%}}
 /* tenant roster filters */
 .tn-filters{margin:14px 0 4px}
 .tn-filter-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:10px}
