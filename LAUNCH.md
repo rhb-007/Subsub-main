@@ -128,6 +128,10 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- Adding a tenant replaced the roster with a full page. It opens over the
+  list now, the way every other short form in the app does. Importing a
+  spreadsheet is still a page of its own: it puts a file's worth of rows on
+  screen to be checked before any are sent, and those do not fit in a box.
 - Adding a tenant on a database that had not had migration 015 run failed
   with "Could not add them. Try again." SQLite has two ways of saying a
   column is missing and they share no words -- a SELECT says "no such

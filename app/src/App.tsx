@@ -6481,11 +6481,15 @@ function TenantsPane({ properties, accountKind }) {
     );
   }
 
-  if (adding) return (
-    <TenantForm properties={properties} unitWord={unitWord}
-      onCancel={() => setAdding(false)}
-      onDone={(msg) => { setAdding(false); setNote(msg); load(); }} />
-  );
+  // Adding one is a short form, so it opens over the roster rather than
+  // replacing it -- the list is the thing you are working against, and
+  // losing it to add a name to it reads as having navigated away.
+  //
+  // Importing stays a page of its own: it puts a file's worth of rows on
+  // screen to be checked one by one before any of them are sent, and three
+  // hundred of those do not belong in a box.
+  const closeAdd = (msg) => { setAdding(false); if (msg) setNote(msg); load(); };
+
   if (importing) return (
     <TenantImport properties={properties} unitWord={unitWord}
       onCancel={() => setImporting(false)}
@@ -6494,6 +6498,12 @@ function TenantsPane({ properties, accountKind }) {
 
   return (
     <>
+      {adding && (
+        <Modal onClose={() => closeAdd()} wide>
+          <TenantForm properties={properties} unitWord={unitWord}
+            onCancel={() => setAdding(false)} onDone={closeAdd} />
+        </Modal>
+      )}
       <div className="jobs-head">
         <h3>{(rows || []).length} tenant{(rows || []).length === 1 ? "" : "s"}</h3>
         <div className="tn-head-actions">
@@ -6722,7 +6732,12 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
       )}
 
       <div className="form-actions">
-        <button className="btn-ghost" onClick={onCancel}>
+        {/* Closing after a run of "save & add another" has to report what
+            was added, not just shut: the roster is right behind this now,
+            and it would otherwise still be showing the old count. */}
+        <button className="btn-ghost" onClick={() => saved.length
+          ? onDone(saved.length === 1 ? saved[0] : `${saved.length} tenants added.`)
+          : onCancel()}>
           {saved.length ? "Done" : "Cancel"}
         </button>
         <button className="btn-ghost" onClick={() => save(true)} disabled={!ready || busy}>
