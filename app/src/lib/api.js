@@ -142,8 +142,16 @@ export const api = {
   // Up to 25 rows per call; the import screen sends a spreadsheet in batches
   // so a long list cannot time out a single request.
   addTenantsBulk: (rows) => request("/tenants/bulk", { method: "POST", body: JSON.stringify({ rows }) }),
-  resendTenantInvite: (userId, channels) =>
-    request(`/tenants/${userId}/resend`, { method: "POST", body: JSON.stringify({ channels }) }),
+  // What is about to be sent, before it is sent: the wording, and whether
+  // there is still an invite outstanding.
+  getTenantInvite: (userId) => request(`/tenants/${userId}/invite`),
+  patchTenant: (userId, body) =>
+    request(`/tenants/${userId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  revokeTenantInvite: (userId) => request(`/tenants/${userId}/revoke`, { method: "POST" }),
+  // `body` carries the channels and, when the manager has changed it, the
+  // subject, the email and the text message.
+  resendTenantInvite: (userId, body = {}) =>
+    request(`/tenants/${userId}/resend`, { method: "POST", body: JSON.stringify(body) }),
   removeTenant: (userId) => request(`/tenants/${userId}`, { method: "DELETE" }),
   // No auth header to add when signed out; authHeaders() simply returns none,
   // which is how the subcontractor invite lookup above works too.

@@ -18,6 +18,7 @@
     "test:tenants": "node scripts/tenants-test.mjs",
     "test:subdomain": "node scripts/subdomain-test.mjs",
     "test:migrations": "node --no-warnings scripts/migration-message-test.mjs",
+    "test:invites": "node scripts/tenant-invite-test.mjs",
     "lint": "eslint ."
   },
   "dependencies": {

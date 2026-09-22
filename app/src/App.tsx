@@ -6431,6 +6431,7 @@ function TenantsPane({ properties, accountKind }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState("");
   const [adding, setAdding] = useState(false);
+  const [opened, setOpened] = useState(null);
   const [importing, setImporting] = useState(false);
   const [q, setQ] = useState("");
   const [busyId, setBusyId] = useState(null);
@@ -6500,16 +6501,6 @@ function TenantsPane({ properties, accountKind }) {
   const narrowed = !!(fProp || fState || fStatus || q.trim());
   const clearFilters = () => { setFProp(""); setFState(""); setFStatus(""); setQ(""); };
 
-  const resend = async (t) => {
-    setBusyId(t.userId); setNote("");
-    try {
-      const res = await api.resendTenantInvite(t.userId);
-      setNote(sendSummary(res.sent, t.name));
-      load();
-    } catch (e) { console.error("[tenants] resend failed:", e); setNote("That didn't send."); }
-    finally { setBusyId(null); }
-  };
-
   const remove = async (t) => {
     setBusyId(t.userId);
     try { await api.removeTenant(t.userId); setRows((cur) => cur.filter((x) => x.userId !== t.userId)); }
@@ -6533,6 +6524,7 @@ function TenantsPane({ properties, accountKind }) {
   // screen to be checked one by one before any of them are sent, and three
   // hundred of those do not belong in a box.
   const closeAdd = (msg) => { setAdding(false); if (msg) setNote(msg); load(); };
+  const closeEditor = () => { setOpened(null); load(); };
 
   if (importing) return (
     <TenantImport properties={properties} unitWord={unitWord}
@@ -6546,6 +6538,13 @@ function TenantsPane({ properties, accountKind }) {
         <Modal onClose={() => closeAdd()} wide>
           <TenantForm properties={properties} unitWord={unitWord}
             onCancel={() => setAdding(false)} onDone={closeAdd} />
+        </Modal>
+      )}
+      {opened && (
+        <Modal onClose={closeEditor} wide>
+          <TenantEditor tenant={opened} properties={properties} unitWord={unitWord}
+            onClose={closeEditor} onSaved={load}
+            onRemoved={(t) => { setOpened(null); remove(t); }} />
         </Modal>
       )}
       <div className="jobs-head">
@@ -6623,7 +6622,10 @@ function TenantsPane({ properties, accountKind }) {
       ) : (
         <div className="user-list">
           {shown.map((t) => (
-            <div key={t.userId} className="user-row">
+            <div key={t.userId} className="user-row is-open"
+              role="button" tabIndex={0}
+              onClick={() => setOpened(t)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpened(t); } }}>
               <span className="user-avatar lg">
                 {String(t.name || "?").split(" ").map((w) => w[0]).join("").slice(0, 2)}
               </span>
@@ -6640,11 +6642,13 @@ function TenantsPane({ properties, accountKind }) {
                     t.phone].filter(Boolean).join(" · ")}
                 </p>
               </div>
-              <div className="user-row-actions">
+              {/* The row opens the invite, so anything inside it that does
+                  something else has to say so and stop there. */}
+              <div className="user-row-actions" onClick={(e) => e.stopPropagation()}>
                 {t.status !== "active" && (
                   <button className="btn-notify sm" disabled={busyId === t.userId}
-                    onClick={() => resend(t)}>
-                    <Mail size={12} /> {busyId === t.userId ? "Sending…" : "Resend invite"}
+                    onClick={() => setOpened(t)}>
+                    <Mail size={12} /> Open invite
                   </button>
                 )}
                 <button className="icon-x" title="Remove this tenant"
@@ -6703,6 +6707,271 @@ function tenantAddError(e) {
     : "Could not add them. Try again.";
 }
 
+// Opening an invite that has already gone out -- to correct it, to read what
+// it says, to change the wording, to send it again, or to call it off.
+//
+// The commonest reason an invite goes nowhere is that it was addressed
+// wrongly, and re-sending it unchanged sends it to the same wrong place. So
+// the record is editable here, and the message with it: a managing agent
+// chasing somebody for the third time has something of their own to say by
+// then, and the default wording is not it.
+function TenantEditor({ tenant, properties, unitWord, onClose, onSaved, onRemoved }) {
+  const [inv, setInv] = useState(null);
+  const [loadErr, setLoadErr] = useState("");
+  const [f, setF] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [ch, setCh] = useState({ email: true, sms: false });
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    api.getTenantInvite(tenant.userId).then((res) => {
+      if (!live) return;
+      setInv(res);
+      setF({
+        firstName: String(res.name || "").split(" ")[0] || "",
+        lastName: String(res.name || "").split(" ").slice(1).join(" "),
+        email: res.email || "", phone: res.phone ? formatPhone(res.phone) : "",
+        unit: res.unit || "", propertyId: res.propertyId || "",
+      });
+      setDraft(res.draft);
+      setCh({ email: !!res.email, sms: !!res.phone });
+    }).catch((e) => {
+      console.error("[tenants] could not open:", e);
+      if (live) setLoadErr(tenantAddError(e));
+    });
+    return () => { live = false; };
+  }, [tenant.userId]);
+
+  if (loadErr) return (
+    <div className="form"><h2>{tenant.name}</h2>
+      <p className="billing-err" role="alert">{loadErr}</p>
+      <div className="form-actions"><button className="btn-ghost" onClick={onClose}>Close</button></div>
+    </div>
+  );
+  if (!inv || !f) return <div className="form"><h2>{tenant.name}</h2><p className="fine">Loading…</p></div>;
+
+  const set = (k, v) => { setF((x) => ({ ...x, [k]: v })); setErr(""); setNote(""); };
+  const digits = phoneDigits(f.phone).length;
+  const phoneOk = digits === 10;
+  const phoneStarted = digits > 0;
+  const hasEmail = validEmail(f.email.trim());
+  const canSave = f.propertyId && (f.firstName.trim() || f.lastName.trim())
+    && (hasEmail || (phoneOk && !f.email.trim()));
+
+  const problem = () => {
+    if (phoneStarted && !phoneOk) return "That phone number needs 10 digits.";
+    if (f.email.trim() && !hasEmail) return "That email address doesn't look right.";
+    if (!f.email.trim() && !phoneOk) return "Give an email address or a cell phone — there has to be somewhere to send it.";
+    return null;
+  };
+
+  const save = async () => {
+    const p = problem();
+    if (p) { setErr(p); return null; }
+    setBusy("save"); setErr("");
+    try {
+      const res = await api.patchTenant(tenant.userId, {
+        firstName: f.firstName.trim(), lastName: f.lastName.trim(),
+        email: f.email.trim(), phone: f.phone.trim(),
+        unit: f.unit.trim(), propertyId: f.propertyId,
+      });
+      onSaved();
+      return res;
+    } catch (e) {
+      console.error("[tenants] save failed:", e);
+      setErr(tenantEditError(e));
+      return null;
+    } finally { setBusy(""); }
+  };
+
+  const saveOnly = async () => { const r = await save(); if (r) setNote("Saved."); };
+
+  const send = async () => {
+    // Saving first, always: the whole point of opening this is that
+    // something about the record was wrong, and sending before saving would
+    // send to the version that was wrong.
+    const saved = await save();
+    if (!saved) return;
+    setBusy("send"); setErr("");
+    try {
+      const res = await api.resendTenantInvite(tenant.userId, {
+        channels: [...(ch.email ? ["email"] : []), ...(ch.sms && phoneOk ? ["sms"] : [])],
+        ...(editing ? { subject: draft.subject, message: draft.message, sms: draft.sms } : {}),
+      });
+      setNote(sendSummary(res.sent, f.firstName.trim() || tenant.name));
+      setInv((x) => ({ ...x, openInvite: true }));
+      onSaved();
+    } catch (e) {
+      console.error("[tenants] resend failed:", e);
+      setErr(tenantEditError(e));
+    } finally { setBusy(""); }
+  };
+
+  const revoke = async () => {
+    setBusy("revoke"); setErr("");
+    try {
+      const res = await api.revokeTenantInvite(tenant.userId);
+      setNote(res.revoked
+        ? "Called off. Their link has stopped working — they stay on the roster, so you can send again when you're ready."
+        : "There was nothing outstanding to call off.");
+      setInv((x) => ({ ...x, openInvite: false }));
+      onSaved();
+    } catch (e) {
+      console.error("[tenants] revoke failed:", e);
+      setErr(tenantEditError(e));
+    } finally { setBusy(""); }
+  };
+
+  const signedIn = inv.status === "active";
+  const anyChannel = (ch.email && hasEmail) || (ch.sms && phoneOk);
+
+  return (
+    <div className="form">
+      <h2>{inv.name}</h2>
+      <p className="form-sub prose">
+        {signedIn
+          ? <>Signed in and reporting repairs. Their details are editable here; there is no invite left to send.</>
+          : inv.openInvite
+          ? <>Invited{inv.lastSentAt ? <> — last sent {niceWhen(inv.lastSentAt)}</> : null}, not signed in yet.
+             Correct anything that is wrong and send it again, or call it off.</>
+          : <>No invite outstanding. Their link was used up or called off — send a fresh one when you're ready.</>}
+      </p>
+
+      <label className="fld">Building
+        <select value={f.propertyId} onChange={(e) => set("propertyId", e.target.value)}>
+          {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </label>
+      <div className="fld-row">
+        <label className="fld">First name
+          <input value={f.firstName} onChange={(e) => set("firstName", e.target.value)} placeholder="Rosa" />
+        </label>
+        <label className="fld">Last name
+          <input value={f.lastName} onChange={(e) => set("lastName", e.target.value)} placeholder="Lane" />
+        </label>
+      </div>
+      <div className="fld-row">
+        <label className="fld">Email
+          <input type="email" value={f.email} disabled={inv.emailLocked}
+            onChange={(e) => set("email", e.target.value)} placeholder="rosa@example.com" />
+        </label>
+        <label className="fld">Cell phone <span className="fld-note">for texts</span>
+          <input type="tel" inputMode="numeric" value={f.phone}
+            onChange={(e) => set("phone", formatPhone(e.target.value))} placeholder="(206)555-0134" />
+        </label>
+      </div>
+      {inv.emailLocked && (
+        <p className="cov-hint">
+          Their sign-in is that address, so it can't be changed from here — moving it would
+          leave them with a password for an account this one no longer points at.
+        </p>
+      )}
+      <div className="fld-row">
+        <label className="fld">{unitWord} number
+          <input value={f.unit} onChange={(e) => set("unit", e.target.value)}
+            placeholder={unitWord === "Suite" ? "300" : "4B"} />
+        </label>
+        <div className="fld fld-spacer" aria-hidden="true" />
+      </div>
+
+      {!signedIn && (
+        <>
+          <div className="fld">Send by
+            <div className="tn-channels">
+              <label className={`tn-channel ${hasEmail ? "" : "is-off"}`}>
+                <input type="checkbox" checked={ch.email && hasEmail} disabled={!hasEmail}
+                  onChange={(e) => setCh((x) => ({ ...x, email: e.target.checked }))} />
+                <span>Email{hasEmail ? "" : " — needs an address"}</span>
+              </label>
+              <label className={`tn-channel ${phoneOk ? "" : "is-off"}`}>
+                <input type="checkbox" checked={ch.sms && phoneOk} disabled={!phoneOk}
+                  onChange={(e) => setCh((x) => ({ ...x, sms: e.target.checked }))} />
+                <span>Text message{phoneOk ? "" : " — needs a cell phone"}</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="tn-msg">
+            <div className="tn-msg-head">
+              <span>The message</span>
+              <button type="button" className="tn-reveal" onClick={() => setEditing((v) => !v)}>
+                {editing ? "Use the standard wording" : "Edit the wording"}
+              </button>
+            </div>
+            {editing ? (
+              <>
+                <label className="fld">Subject
+                  <input value={draft.subject} onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))} />
+                </label>
+                <label className="fld">Email
+                  <textarea rows={10} value={draft.message}
+                    onChange={(e) => setDraft((d) => ({ ...d, message: e.target.value }))} />
+                </label>
+                {ch.sms && phoneOk && (
+                  <label className="fld">Text message
+                    <textarea rows={3} value={draft.sms}
+                      onChange={(e) => setDraft((d) => ({ ...d, sms: e.target.value }))} />
+                    <span className="fld-note">{draft.sms.length} characters — over 160 is charged as more than one.</span>
+                  </label>
+                )}
+                <p className="cov-hint">
+                  Leave <b>{inv.linkToken}</b> where you want the sign-in link. It's the only way in,
+                  so if you take it out it gets added at the end anyway.
+                </p>
+              </>
+            ) : (
+              <pre className="tn-msg-preview">{draft.subject + "\n\n" + draft.message}</pre>
+            )}
+          </div>
+        </>
+      )}
+
+      {err && <p className="billing-err" role="alert">{err}</p>}
+      {note && <p className="rollup-note" role="status">{note}</p>}
+
+      <div className="form-actions tn-editor-actions">
+        <button className="btn-ghost danger" disabled={!!busy}
+          onClick={() => onRemoved(tenant)}>
+          <Trash2 size={13} /> Remove
+        </button>
+        <span className="tn-actions-gap" />
+        {!signedIn && inv.openInvite && (
+          <button className="btn-ghost" disabled={!!busy} onClick={revoke}>
+            {busy === "revoke" ? "Calling off…" : "Call off the invite"}
+          </button>
+        )}
+        <button className="btn-ghost" disabled={!!busy || !canSave} onClick={saveOnly}>
+          {busy === "save" ? "Saving…" : "Save"}
+        </button>
+        {!signedIn && (
+          <button className="btn-solid" disabled={!!busy || !canSave || !anyChannel} onClick={send}>
+            <Mail size={14} /> {busy === "send" ? "Sending…" : inv.openInvite ? "Save & send again" : "Save & send invite"}
+          </button>
+        )}
+        {signedIn && <button className="btn-solid" onClick={onClose}>Done</button>}
+      </div>
+    </div>
+  );
+}
+
+// Why an edit or a resend was refused, in words. Shares the add form's list
+// where the codes are the same, and adds the two only this can hit.
+function tenantEditError(e) {
+  const code = e?.body?.error;
+  if (code === "email_locked") {
+    return "They've already signed in with that address, so it can't be changed here.";
+  }
+  if (code === "email_taken") return "Another person here already uses that email address.";
+  if (code === "already_accepted") return "They've already used their invite, so there's nothing to call off.";
+  if (code === "empty_subject") return "Give the email a subject.";
+  if (code === "empty_message") return "The message can't be empty.";
+  return tenantAddError(e);
+}
+
 // Adding one by hand. The building is remembered between saves -- somebody
 // entering a floor of apartments should not re-pick it fourteen times.
 function TenantForm({ properties, unitWord, onCancel, onDone }) {
@@ -6725,8 +6994,13 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
   const digits = phoneDigits(f.phone).length;
   const phoneOk = digits === 10;
   const phoneStarted = digits > 0;
+  // An email OR a cell phone, not an email always. The rest of the system has
+  // handled somebody reachable only by phone from the start -- the sign-up
+  // page asks such a person for an address at the moment they arrive -- and
+  // this form was the one place refusing to create them.
+  const hasEmail = validEmail(f.email.trim());
   const ready = f.propertyId && (f.firstName.trim() || f.lastName.trim())
-    && validEmail(f.email.trim());
+    && (hasEmail || phoneOk);
 
   const save = async (andAnother) => {
     // Half a phone number is a mistake, not an omission: either give one or
@@ -6734,12 +7008,13 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
     // running count of the digits typed so far is noise on every keystroke
     // and this is only a problem at the moment somebody tries to save.
     if (phoneStarted && !phoneOk) { setErr("That phone number needs 10 digits."); return; }
+    if (f.email.trim() && !hasEmail) { setErr("That email address doesn't look right."); return; }
     setBusy(true); setErr("");
     try {
       const res = await api.addTenant({
         propertyId: f.propertyId, firstName: f.firstName.trim(), lastName: f.lastName.trim(),
         email: f.email.trim(), phone: f.phone.trim(), unit: f.unit.trim(),
-        channels: ["email", ...(f.sms && phoneOk ? ["sms"] : [])],
+        channels: [...(hasEmail ? ["email"] : []), ...((f.sms || !hasEmail) && phoneOk ? ["sms"] : [])],
       });
       const line = sendSummary(res.sent, res.name);
       if (andAnother) {
@@ -6758,8 +7033,9 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
     <div className="form">
       <h2>Add a tenant</h2>
       <p className="form-sub prose">
-        They'll get an invite by email, and by text as well if you tick it. Two people in
-        one {unitWord.toLowerCase()} is fine: add them one at a time.
+        They'll get an invite by email, and by text as well if you tick it. An email or a
+        cell phone is enough — either one. Two people in one {unitWord.toLowerCase()} is
+        fine: add them one at a time.
       </p>
 
       <label className="fld">Building
@@ -6799,9 +7075,9 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
 
       <div className="fld">Send the invite by
         <div className="tn-channels">
-          <label className="tn-channel is-fixed">
-            <input type="checkbox" checked readOnly disabled />
-            <span>Email <b>always</b></span>
+          <label className={`tn-channel ${hasEmail ? "is-fixed" : "is-off"}`}>
+            <input type="checkbox" checked={hasEmail} readOnly disabled />
+            <span>Email{hasEmail ? <> <b>always</b></> : " — needs an address"}</span>
           </label>
           <label className={`tn-channel ${phoneOk ? "" : "is-off"}`}>
             <input type="checkbox" checked={f.sms && phoneOk} disabled={!phoneOk}
@@ -13116,6 +13392,26 @@ body{background:var(--paper)}
   padding:9px 2px;font:700 12.5px Inter,sans-serif;color:var(--brand);cursor:pointer}
 .tn-filter-clear:hover{text-decoration:underline}
 .tn-filter-count{margin:10px 0 0;font-size:12.5px;color:var(--ink-soft)}
+/* A roster row opens the invite, so it has to look like it does something. */
+.user-row.is-open{cursor:pointer}
+.user-row.is-open:hover{border-color:var(--brand);background:var(--card)}
+.user-row.is-open:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+/* the message, read or edited, inside the invite */
+.tn-msg{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+.tn-msg-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:10px}
+.tn-msg-head > span{font-size:11.5px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--ink-soft)}
+.tn-msg-preview{margin:0;padding:14px 16px;border:1px solid var(--line);border-radius:10px;
+  background:var(--paper);font:13px/1.6 Inter,sans-serif;color:var(--ink-soft);
+  white-space:pre-wrap;word-break:break-word;max-height:220px;overflow-y:auto}
+.tn-editor-actions{flex-wrap:wrap;margin-top:18px}
+.tn-actions-gap{flex:1}
+.btn-ghost.danger{color:#b1391f;border-color:rgba(177,57,31,.35)}
+.btn-ghost.danger:hover{background:rgba(177,57,31,.06)}
+@media(max-width:640px){
+  .tn-editor-actions{flex-direction:row}
+  .tn-actions-gap{display:none}
+}
 @media(max-width:640px){
   .tn-filter{flex:1 1 100%}
   .tn-filter select{width:100%}
@@ -13736,6 +14032,26 @@ body{background:var(--paper)}
   padding:9px 2px;font:700 12.5px Inter,sans-serif;color:var(--brand);cursor:pointer}
 .tn-filter-clear:hover{text-decoration:underline}
 .tn-filter-count{margin:10px 0 0;font-size:12.5px;color:var(--ink-soft)}
+/* A roster row opens the invite, so it has to look like it does something. */
+.user-row.is-open{cursor:pointer}
+.user-row.is-open:hover{border-color:var(--brand);background:var(--card)}
+.user-row.is-open:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+/* the message, read or edited, inside the invite */
+.tn-msg{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+.tn-msg-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:10px}
+.tn-msg-head > span{font-size:11.5px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--ink-soft)}
+.tn-msg-preview{margin:0;padding:14px 16px;border:1px solid var(--line);border-radius:10px;
+  background:var(--paper);font:13px/1.6 Inter,sans-serif;color:var(--ink-soft);
+  white-space:pre-wrap;word-break:break-word;max-height:220px;overflow-y:auto}
+.tn-editor-actions{flex-wrap:wrap;margin-top:18px}
+.tn-actions-gap{flex:1}
+.btn-ghost.danger{color:#b1391f;border-color:rgba(177,57,31,.35)}
+.btn-ghost.danger:hover{background:rgba(177,57,31,.06)}
+@media(max-width:640px){
+  .tn-editor-actions{flex-direction:row}
+  .tn-actions-gap{display:none}
+}
 @media(max-width:640px){
   .tn-filter{flex:1 1 100%}
   .tn-filter select{width:100%}

@@ -128,6 +128,15 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- An invite that has gone out can be opened: the record corrected, the
+  wording changed, the whole thing sent again or called off. Correcting it
+  matters most -- the commonest reason an invite goes nowhere is that it was
+  addressed wrongly, and re-sending it unchanged sends it to the same wrong
+  place. Calling one off stops the link without removing the person.
+- Adding a tenant demanded an email address, although the rest of the system
+  has handled somebody reachable only by phone from the start -- the sign-up
+  page asks such a person for an address the moment they arrive. An email or
+  a cell phone is enough now, either one.
 - Every branded sign-in page called itself a "Contractor portal", whoever
   the account was. It is named after the account's own type now -- "Property
   manager portal" -- and the page says tenants belong there too, because

@@ -9,7 +9,8 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail,
-  tenantInviteEmail, tenantInviteSms } from "./mail.js";
+  tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
+  INVITE_LINK_TOKEN } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
@@ -2315,17 +2316,28 @@ async function issueTenantInvite(c, auth, t) {
   const out = { email: null, sms: null };
 
   if (want.includes("email") && t.email && !t.email.endsWith("@no-email.invalid")) {
-    const mail = tenantInviteEmail({
-      firstName: t.first || t.name, account: t.account,
-      propertyName: t.property.name, unit: t.unit, link,
-    });
+    // Whatever the manager edited, if they edited anything. The link is put
+    // in here rather than in the draft, because the draft was written before
+    // this token existed.
+    const mail = t.draft?.message
+      ? customInviteEmail({
+          subject: t.draft.subject
+            || tenantInviteEmail({ firstName: t.first || t.name, account: t.account,
+                 propertyName: t.property.name, unit: t.unit, link }).subject,
+          text: t.draft.message, link })
+      : tenantInviteEmail({
+          firstName: t.first || t.name, account: t.account,
+          propertyName: t.property.name, unit: t.unit, link,
+        });
     const res = await sendEmail(c.env, { to: t.email, subject: mail.subject, text: mail.text, html: mail.html });
     out.email = res.ok ? "sent" : (res.error || "failed");
     await logMail(c.env, { accountId: auth.accountId, to: t.email, kind: "tenant_invite",
       subject: mail.subject, result: res, sentBy: auth.userId });
   }
   if (want.includes("sms") && t.phone) {
-    const body = tenantInviteSms({ account: t.account, propertyName: t.property.name, unit: t.unit, link });
+    const body = t.draft?.sms
+      ? withInviteLink(t.draft.sms, link)
+      : tenantInviteSms({ account: t.account, propertyName: t.property.name, unit: t.unit, link });
     const res = await sendSms(c.env, { to: t.phone, body });
     out.sms = res.ok ? "sent" : (res.error || "failed");
     await logSms(c.env, { accountId: auth.accountId, to: t.phone, kind: "tenant_invite",
@@ -2424,28 +2436,197 @@ app.post("/api/tenants/bulk", requireRole("admin", "pm"), async (c) => {
   return c.json({ results });
 });
 
+// One tenant's seat, by user id, with the property they are attached to and
+// whether their invite is still outstanding. Shared by the three routes
+// below, all of which have the same two things to check first.
+async function tenantSeat(c, auth, userId) {
+  const row = await c.env.DB.prepare(
+    `SELECT m.id AS membership_id, m.unit, u.id AS user_id, u.name, u.email, u.phone, u.auth_id,
+            mp.property_id, p.name AS property_name,
+            ti.used_at, ti.open_invites, ti.last_sent_at
+       FROM memberships m
+       JOIN users u ON u.id = m.user_id
+       LEFT JOIN membership_properties mp ON mp.membership_id = m.id
+       LEFT JOIN properties p ON p.id = mp.property_id
+       LEFT JOIN (
+         SELECT user_id, account_id, MAX(used_at) AS used_at, MAX(sent_at) AS last_sent_at,
+                SUM(CASE WHEN used_at IS NULL AND revoked_at IS NULL THEN 1 ELSE 0 END) AS open_invites
+           FROM tenant_invites GROUP BY user_id, account_id
+       ) ti ON ti.user_id = u.id AND ti.account_id = m.account_id
+      WHERE m.user_id = ? AND m.account_id = ? AND m.role = 'tenant'`
+  ).bind(userId, auth.accountId).first();
+  if (!row) return { error: "not_found", status: 404 };
+  if (!maySeeProperty(auth, row.property_id)) return { error: "forbidden", status: 403 };
+  return { row };
+}
+
+const realEmail = (e) => e && !String(e).endsWith("@no-email.invalid") ? e : null;
+
+// What is about to be sent, before it is sent -- so somebody can read it,
+// change it, or decide not to. The link is a placeholder here: the real one
+// does not exist until the moment of sending, because sending mints a fresh
+// token and revokes whatever came before.
+app.get("/api/tenants/:userId/invite", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status } = await tenantSeat(c, auth, c.req.param("userId"));
+  if (error) return c.json({ error }, status);
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(auth.accountId).first();
+  const first = String(row.name || "").split(" ")[0];
+  const property = { id: row.property_id, name: row.property_name };
+  const mail = tenantInviteEmail({ firstName: first, account,
+    propertyName: property.name, unit: row.unit, link: INVITE_LINK_TOKEN });
+  return c.json({
+    userId: row.user_id, name: row.name, email: realEmail(row.email), phone: row.phone,
+    unit: row.unit, propertyId: row.property_id, propertyName: property.name,
+    status: row.used_at ? "active" : "invited",
+    // Somebody who has already signed in has a login keyed to their address,
+    // so it is not ours to change underneath them.
+    emailLocked: !!(row.used_at || row.auth_id),
+    openInvite: (row.open_invites || 0) > 0,
+    lastSentAt: row.last_sent_at || null,
+    linkToken: INVITE_LINK_TOKEN,
+    draft: {
+      subject: mail.subject,
+      message: mail.text,
+      sms: tenantInviteSms({ account, propertyName: property.name, unit: row.unit, link: INVITE_LINK_TOKEN }),
+    },
+  });
+});
+
+// Correcting the record before chasing it again -- a mistyped address, the
+// wrong unit, the wrong building. The commonest reason an invite goes
+// nowhere is that it was addressed wrongly, and re-sending it unchanged
+// sends it to the same wrong place.
+app.patch("/api/tenants/:userId", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const userId = c.req.param("userId");
+  const { row, error, status } = await tenantSeat(c, auth, userId);
+  if (error) return c.json({ error }, status);
+  const b = await c.req.json().catch(() => ({}));
+
+  const first = String(b.firstName ?? "").trim().slice(0, 60);
+  const last = String(b.lastName ?? "").trim().slice(0, 60);
+  const name = [first, last].filter(Boolean).join(" ") || row.name;
+  if (!name) return c.json({ error: "name_required" }, 400);
+
+  const userSets = ["name = ?"], userVals = [name];
+
+  if (b.email !== undefined) {
+    const email = String(b.email || "").trim().toLowerCase();
+    const current = realEmail(row.email);
+    if (email !== (current || "")) {
+      // Their sign-in is that address. Moving it would leave them holding a
+      // password for an account this one no longer points at.
+      if (row.used_at || row.auth_id) return c.json({ error: "email_locked" }, 409);
+      if (email) {
+        if (!EMAIL_RE.test(email)) return c.json({ error: "bad_email" }, 400);
+        const clash = await c.env.DB.prepare(
+          `SELECT id FROM users WHERE lower(email) = lower(?) AND id != ?`).bind(email, userId).first();
+        if (clash) return c.json({ error: "email_taken" }, 409);
+        userSets.push("email = ?"); userVals.push(email);
+      } else {
+        // Back to no address at all: the placeholder is what the rest of the
+        // code reads as "reachable by phone only".
+        userSets.push("email = ?"); userVals.push(`${userId}@no-email.invalid`);
+      }
+    }
+  }
+
+  if (b.phone !== undefined) {
+    const raw = String(b.phone || "").trim();
+    const phone = raw ? normalizePhone(raw) : null;
+    if (raw && !phone) return c.json({ error: "bad_phone" }, 400);
+    userSets.push("phone = ?"); userVals.push(phone);
+  }
+
+  // Neither an address nor a number leaves nobody to tell.
+  const nextEmail = b.email !== undefined
+    ? realEmail(String(b.email || "").trim().toLowerCase() || null) : realEmail(row.email);
+  const nextPhone = b.phone !== undefined
+    ? (String(b.phone || "").trim() ? normalizePhone(String(b.phone)) : null) : row.phone;
+  if (!nextEmail && !nextPhone) return c.json({ error: "contact_required" }, 400);
+
+  if (b.propertyId !== undefined && b.propertyId !== row.property_id) {
+    if (!b.propertyId) return c.json({ error: "property_required" }, 400);
+    if (!maySeeProperty(auth, b.propertyId)) return c.json({ error: "forbidden" }, 403);
+    const prop = await c.env.DB.prepare(
+      `SELECT id FROM properties WHERE id = ? AND account_id = ?`).bind(b.propertyId, auth.accountId).first();
+    if (!prop) return c.json({ error: "property_not_found" }, 400);
+    await c.env.DB.prepare(`DELETE FROM membership_properties WHERE membership_id = ?`)
+      .bind(row.membership_id).run();
+    await c.env.DB.prepare(
+      `INSERT OR IGNORE INTO membership_properties (membership_id, property_id) VALUES (?, ?)`
+    ).bind(row.membership_id, b.propertyId).run();
+  }
+
+  if (b.unit !== undefined) {
+    await c.env.DB.prepare(`UPDATE memberships SET unit = ? WHERE id = ?`)
+      .bind(String(b.unit || "").trim().slice(0, 60) || null, row.membership_id).run();
+  }
+
+  userVals.push(userId);
+  try {
+    await c.env.DB.prepare(`UPDATE users SET ${userSets.join(", ")} WHERE id = ?`).bind(...userVals).run();
+  } catch (err) {
+    if (/UNIQUE|constraint/i.test(String(err?.message || err))) return c.json({ error: "email_taken" }, 409);
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+
+  const after = await tenantSeat(c, auth, userId);
+  return c.json({ ok: true, name, unit: after.row?.unit ?? null,
+    email: realEmail(after.row?.email), phone: after.row?.phone ?? null,
+    propertyId: after.row?.property_id ?? null, propertyName: after.row?.property_name ?? null });
+});
+
+// Calling it off without removing the person. Their outstanding link stops
+// working; they stay on the roster, so somebody can fix the record and send
+// again rather than adding them from scratch.
+app.post("/api/tenants/:userId/revoke", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const userId = c.req.param("userId");
+  const { row, error, status } = await tenantSeat(c, auth, userId);
+  if (error) return c.json({ error }, status);
+  if (row.used_at) return c.json({ error: "already_accepted" }, 409);
+  const res = await c.env.DB.prepare(
+    `UPDATE tenant_invites SET revoked_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND account_id = ? AND used_at IS NULL AND revoked_at IS NULL`
+  ).bind(userId, auth.accountId).run();
+  const revoked = res?.meta?.changes ?? 0;
+  if (revoked) {
+    await logActivity(c.env, auth.accountId, auth.userId, "tenant_invite_revoked",
+      `Revoked the invite for ${row.name}`);
+  }
+  return c.json({ ok: true, revoked });
+});
+
 app.post("/api/tenants/:userId/resend", requireRole("admin", "pm"), async (c) => {
   const auth = c.get("auth");
   const userId = c.req.param("userId");
   const b = await c.req.json().catch(() => ({}));
+  const { row, error, status } = await tenantSeat(c, auth, userId);
+  if (error) return c.json({ error }, status);
   const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(auth.accountId).first();
-  const row = await c.env.DB.prepare(
-    `SELECT u.name, u.email, u.phone, m.unit, mp.property_id, p.name AS property_name
-       FROM memberships m JOIN users u ON u.id = m.user_id
-       LEFT JOIN membership_properties mp ON mp.membership_id = m.id
-       LEFT JOIN properties p ON p.id = mp.property_id
-      WHERE m.user_id = ? AND m.account_id = ? AND m.role = 'tenant'`
-  ).bind(userId, auth.accountId).first();
-  if (!row) return c.json({ error: "not_found" }, 404);
-  if (!maySeeProperty(auth, row.property_id)) return c.json({ error: "forbidden" }, 403);
+
+  // Wording the manager changed, if they changed any. Bounded because it is
+  // going out over somebody else's mail server and somebody else's phone
+  // bill; an SMS beyond this is several messages and several charges.
+  const draft = {
+    subject: b.subject == null ? null : String(b.subject).trim().slice(0, 200),
+    message: b.message == null ? null : String(b.message).slice(0, 4000),
+    sms: b.sms == null ? null : String(b.sms).slice(0, 480),
+  };
+  if (draft.message !== null && !draft.message.trim()) return c.json({ error: "empty_message" }, 400);
+  if (draft.message !== null && !draft.subject) return c.json({ error: "empty_subject" }, 400);
 
   const sent = await issueTenantInvite(c, auth, {
     userId, name: row.name, first: String(row.name || "").split(" ")[0],
     email: row.email, phone: row.phone, unit: row.unit, account,
     property: { id: row.property_id, name: row.property_name },
-    channels: b.channels,
+    channels: b.channels, draft,
   });
-  return c.json({ ok: true, sent });
+  return c.json({ ok: true, sent, edited: !!draft.message });
 });
 
 // Removing a tenant drops their seat here, not the person: the same address

@@ -214,6 +214,31 @@ export function tenantInviteSms({ account, propertyName, unit, link }) {
     + `Set your password: ${link}`;
 }
 
+// Where the link goes in a draft somebody is editing. The token is
+// substituted at the moment of sending, not when the draft is composed,
+// because the link does not exist yet: sending mints a fresh token and
+// revokes whatever came before it.
+export const INVITE_LINK_TOKEN = "{link}";
+
+// Put the link back into wording somebody has edited. An invite with no way
+// in is not an invite, so a draft that no longer mentions the token gets it
+// appended rather than sent without one.
+export function withInviteLink(text, link) {
+  const body = String(text || "").trim();
+  if (!body) return link;
+  return body.includes(INVITE_LINK_TOKEN)
+    ? body.split(INVITE_LINK_TOKEN).join(link)
+    : `${body}\n\n${link}`;
+}
+
+// A manager's own wording, delivered exactly the way the default is: same
+// plain text, same minimal HTML. An edited invite must not arrive looking
+// like a different kind of message from an unedited one.
+export function customInviteEmail({ subject, text, link }) {
+  const body = withInviteLink(text, link);
+  return { subject: String(subject || "").trim(), text: body, html: textToHtml(body, link) };
+}
+
 // A plain-text message rendered as minimal HTML. Deliberately not a designed
 // template: these are operational notices, they have to survive every client,
 // and the text part stays the source of truth.
