@@ -2461,6 +2461,8 @@ function missingSchema(err) {
   if (/declined_(at|note)/i.test(m)) return "021_declined_requests";
   if (/\bphotos\b|report_detail/i.test(m)) return "022_report_photos";
   if (/\bseverity\b|emergency_company_id/i.test(m)) return "023_emergencies";
+  if (/pay_kind|rate_cents|cap_hours/i.test(m)) return "024_hourly_work_orders";
+  if (/updated_at/i.test(m)) return "025_job_activity";
   if (/tenant_invites|memberships\.unit|\bunit\b/i.test(m)) {
     return /sent_at/i.test(m) ? "017_tenant_invite_sent" : "015_tenants";
   }
@@ -2862,7 +2864,8 @@ app.get("/api/jobs", async (c) => {
   const scope = scopeClause(auth, "property_id");
   const mine = auth.role === "tenant" ? ` AND requested_by = ? ` : "";
   const { results: jobs } = await c.env.DB.prepare(
-    `SELECT * FROM jobs WHERE account_id = ? ${scope.sql} ${mine} ORDER BY created_at DESC`
+    `SELECT * FROM jobs WHERE account_id = ? ${scope.sql} ${mine}
+      ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC`
   ).bind(accountId, ...scope.vals, ...(auth.role === "tenant" ? [auth.userId] : [])).all();
 
   const { results: wos } = await c.env.DB.prepare(
@@ -2887,12 +2890,40 @@ app.get("/api/jobs/all-bookings", async (c) => {
   return c.json(results);
 });
 
+// Mark a job as having just moved.
+//
+// Called from everywhere that changes a job or anything hanging off it --
+// its work orders, its visits -- so that "moved" means what a person means
+// by it rather than "the jobs row happened to be written to". Deliberately
+// swallows its own failure: a job that could not be timestamped is still a
+// job, and losing an assignment because the clock write failed would be a
+// far worse trade than a row that sorts a little low.
+async function touchJob(env, jobId) {
+  if (!jobId) return;
+  try {
+    // datetime('now'), not a JS ISO string. The column is sorted as text and
+    // falls back to created_at, which SQLite writes as "2026-09-22 19:28:16".
+    // An ISO value carries a "T" where that has a space, and "T" sorts above
+    // every digit -- so one job updated at one in the morning would outrank
+    // another created at eleven at night. Same format, or no ordering.
+    await env.DB.prepare(`UPDATE jobs SET updated_at = datetime('now') WHERE id = ?`)
+      .bind(jobId).run();
+  } catch (err) {
+    if (!missingSchema(err)) throw err;      // a real error is still an error
+  }
+}
+
 function jobRowToJs(j, workOrders) {
   const assignments = {};
   for (const w of workOrders) {
     assignments[w.trade] = {
       id: w.id, subId: w.company_id, wo: w.wo_number, woIssued: w.issued_at?.slice(0, 10),
       crewName: w.crew_name, tradeScope: w.trade_scope, value: w.value_cents != null ? String(w.value_cents / 100) : "",
+      // How it is priced. value stays the ceiling either way, so anything
+      // that only cares what this might cost need not know the difference.
+      payKind: w.pay_kind || "fixed",
+      rate: w.rate_cents != null ? String(w.rate_cents / 100) : "",
+      capHours: w.cap_hours != null ? w.cap_hours : null,
       status: w.status, auto: !!w.auto_scheduled, responseWindow: w.response_window, respondBy: w.respond_by,
       respondedAt: w.responded_at, rating: w.rating, distance: w.distance, inRange: !!w.in_range,
       signedWO: w.signed_file_key,
@@ -2931,6 +2962,10 @@ function jobRowToJs(j, workOrders) {
     // The full timestamp, for the ten minutes in which a report can still be
     // corrected. createdAt above is the date alone and always was.
     createdAtIso: j.created_at || null,
+    // When it last moved, by any route: assigned, replied to, scheduled,
+    // corrected, approved. What the list sorts on, and what "just updated"
+    // is measured from.
+    updatedAtIso: j.updated_at || j.created_at || null,
   };
 }
 
@@ -3088,6 +3123,7 @@ app.post("/api/jobs/:id/approve", requireRole("admin", "pm"), async (c) => {
     `UPDATE jobs SET approved_at = datetime('now'), declined_at = NULL, declined_note = NULL
       WHERE id = ? AND account_id = ?`
   ).bind(id, accountId).run();
+  await touchJob(c.env, id);
   await logEvent(c.env, accountId, userId, "job.approved", id, { title: job.title });
   await logActivity(c.env, accountId, userId, "job_approved", `Approved requested work: ${job.title}`);
   await notifyTenant(c, id, "approved");
@@ -3124,6 +3160,7 @@ app.post("/api/jobs/:id/decline", requireRole("admin", "pm"), async (c) => {
   }
   await logEvent(c.env, accountId, userId, "job.declined", id, { title: job.title, note });
   await logActivity(c.env, accountId, userId, "job_declined", `Didn't approve "${job.title}": ${note}`);
+  await touchJob(c.env, id);
   await notifyTenant(c, id, "declined", note);
   return c.json({ ok: true });
 });
@@ -3137,6 +3174,7 @@ app.post("/api/jobs/:id/complete", requireRole("admin", "pm"), async (c) => {
   await logEvent(c.env, accountId, userId, "job.completed", id, {});
   { const j = await c.env.DB.prepare(`SELECT title FROM jobs WHERE id = ?`).bind(id).first();
     await logActivity(c.env, accountId, userId, "job_completed", `Completed ${j?.title || "a job"}`); }
+  await touchJob(c.env, id);
   await notifyTenant(c, id, "done");
   return c.json({ ok: true });
 });
@@ -3230,6 +3268,7 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
     await c.env.DB.prepare(`UPDATE jobs SET date = ?, time = ? WHERE id = ?`).bind(date, start || "07:00", jobId).run();
     await logActivity(c.env, auth.accountId, auth.userId, "visit_set", `Set a visit for "${job.title}": ${when}`);
   }
+  await touchJob(c.env, jobId);
   const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(id).first();
   return c.json(visitRowToJs(row), 201);
 });
@@ -3264,6 +3303,7 @@ app.post("/api/visits/:id/respond", async (c) => {
       `Can't make the visit for "${v.title}" (${when})${note ? `: ${note}` : ""}`);
   }
   const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(v.id).first();
+  await touchJob(c.env, v.job_id);
   return c.json(visitRowToJs(row));
 });
 
@@ -3396,6 +3436,7 @@ app.post("/api/jobs/:id/withdraw", async (c) => {
   try {
     await c.env.DB.prepare(`UPDATE visits SET status = 'superseded' WHERE job_id = ? AND status IN ('proposed', 'declined')`).bind(id).run();
   } catch { /* no visits table yet is not a reason to refuse the withdrawal */ }
+  await touchJob(c.env, id);
   await logEvent(c.env, auth.accountId, auth.userId, "job.withdrawn", id, { title: job.title, note });
   await logActivity(c.env, auth.accountId, auth.userId, "job_withdrawn",
     `Withdrew the report "${job.title}"${note ? `: ${note}` : ""}${voided?.meta?.changes ? ` (${voided.meta.changes} work order${voided.meta.changes === 1 ? "" : "s"} voided)` : ""}`);
@@ -3431,6 +3472,7 @@ app.post("/api/jobs/:id/photos", async (c) => {
     if (!migration) throw err;
     return c.json({ error: "migration_needed", migration }, 503);
   }
+  await touchJob(c.env, id);
   await logActivity(c.env, auth.accountId, auth.userId, "job_photos",
     `Added ${added.length} photo${added.length === 1 ? "" : "s"} to "${job.title}"`);
   return c.json({ ok: true, photos: next.map((x) => ({ id: x.id, name: x.name, type: x.type, size: x.size, at: x.at })) });
@@ -3524,6 +3566,7 @@ app.patch("/api/jobs/:id/report", async (c) => {
     if (!migration) throw err;
     return c.json({ error: "migration_needed", migration }, 503);
   }
+  await touchJob(c.env, id);
   await logActivity(c.env, auth.accountId, auth.userId, "job_edited", `Corrected the report "${b.title || job.title}"`);
   const row = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(id).first();
   return c.json(jobRowToJs(row, []));
@@ -3534,6 +3577,7 @@ app.post("/api/jobs/:id/reopen", requireRole("admin", "pm"), async (c) => {
   await c.env.DB.prepare(
     `UPDATE jobs SET status = 'active', completed_at = NULL WHERE id = ? AND account_id = ?`
   ).bind(c.req.param("id"), accountId).run();
+  await touchJob(c.env, c.req.param("id"));
   return c.json({ ok: true });
 });
 
@@ -3566,7 +3610,8 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
 app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const jobId = c.req.param("jobId");
-  const { trade, companyId, crewName, tradeScope, value, responseWindow } = await c.req.json();
+  const { trade, companyId, crewName, tradeScope, value, responseWindow,
+    payKind, rate, capHours } = await c.req.json();
 
   const job = await c.env.DB.prepare(
     `SELECT id, requested_by, approved_at FROM jobs WHERE id = ? AND account_id = ?`
@@ -3592,18 +3637,35 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   const autoScheduled = !!engagement.auto_schedule;
   const woNumber = "WO-" + Math.floor(1000 + Math.random() * 9000);
   const id = uid();
-  const valueCents = value ? Math.round(Number(String(value).replace(/[^0-9.]/g, "")) * 100) : null;
+  const cents = (v) => (v || v === 0) && String(v).trim() !== ""
+    ? Math.round(Number(String(v).replace(/[^0-9.]/g, "")) * 100) : null;
+
+  // Hourly needs both halves or it is not an offer: a rate with no ceiling
+  // is an open cheque, and a ceiling with no rate is nothing. Refused here
+  // rather than stored half-formed, because the contractor is about to be
+  // sent whatever this says.
+  const hourly = payKind === "hourly";
+  const rateCents = hourly ? cents(rate) : null;
+  const cap = hourly ? Number(capHours) : null;
+  if (hourly) {
+    if (!rateCents || rateCents <= 0) return c.json({ error: "rate_required" }, 400);
+    if (!Number.isFinite(cap) || cap <= 0) return c.json({ error: "cap_required" }, 400);
+  }
+  // value_cents goes on meaning the most this can cost, whichever way it is
+  // priced, so every total and spend figure written against it still adds up.
+  const valueCents = hourly ? Math.round(rateCents * cap) : cents(value);
   const respondBy = autoScheduled ? null
     : new Date(Date.now() + windowMins(responseWindow) * 60000).toISOString();
 
   await c.env.DB.prepare(
     `INSERT INTO work_orders
       (id, wo_number, job_id, trade, company_id, engagement_id, crew_name, trade_scope, value_cents,
-       status, auto_scheduled, response_window, respond_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       status, auto_scheduled, response_window, respond_by, pay_kind, rate_cents, cap_hours)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(id, woNumber, jobId, trade, companyId, engagement.id, crewName || null, tradeScope || "",
     valueCents, autoScheduled ? "accepted" : "pending", autoScheduled ? 1 : 0,
-    autoScheduled ? null : (responseWindow || "24h"), respondBy).run();
+    autoScheduled ? null : (responseWindow || "24h"), respondBy,
+    hourly ? "hourly" : "fixed", rateCents, cap).run();
 
   await logEvent(c.env, accountId, userId, "wo.issued", id, { jobId, trade, companyId, woNumber });
 
@@ -3627,6 +3689,7 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   }
   await logActivity(c.env, accountId, userId, "wo_issued",
     `Issued ${woNumber} to ${await companyName(c.env.DB, companyId)} · ${trade}`);
+  await touchJob(c.env, jobId);
   await notifyTenant(c, jobId, autoScheduled ? "booked" : "arranging");
   return c.json({ id, woNumber, status: autoScheduled ? "accepted" : "pending" }, 201);
 });
@@ -3752,6 +3815,7 @@ app.post("/api/work-orders/:id/reissue", requireRole("admin", "pm"), async (c) =
   ).bind(newId, woNumber, wo.job_id, wo.trade, wo.company_id, wo.engagement_id,
     b.crewName ?? wo.crew_name, b.tradeScope ?? wo.trade_scope, valueCents).run();
 
+  await touchJob(c.env, wo.job_id);
   await logEvent(c.env, accountId, userId, "wo.reissued", newId, { voided: id });
   return c.json({ id: newId, woNumber }, 201);
 });
@@ -3777,6 +3841,7 @@ app.post("/api/work-orders/:id/respond", async (c) => {
   ).bind(wo.engagement_id).run();
 
   await logEvent(c.env, accountId, userId, `wo.${status}`, id, {});
+  await touchJob(c.env, wo.job_id);
   if (status === "accepted") await notifyTenant(c, wo.job_id, "booked");
   return c.json({ ok: true });
 });

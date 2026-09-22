@@ -511,6 +511,28 @@ const isLiveJob = (j) => !j.withdrawnAt && !j.declinedAt && !(j.requestedBy && !
 // The Jobs tab files all three under Completed -- none is going anywhere.
 const isClosed = (j) => j.status === "completed" || !!j.withdrawnAt || !!j.declinedAt;
 // How long a report can still be corrected by whoever made it.
+// How long ago a job last moved, in words, or null once it stops being news.
+//
+// Six hours is the window on purpose: long enough that a manager coming
+// back after lunch still sees what happened while they were out, short
+// enough that the badge means something. A marker that never expires is
+// wallpaper, and every row wearing one is the same as no row wearing one.
+const MOVED_RECENTLY_MS = 6 * 60 * 60 * 1000;
+const movedAgo = (j) => {
+  const iso = j?.updatedAtIso || j?.createdAtIso;
+  if (!iso) return null;
+  const t = new Date(String(iso).replace(" ", "T") + (String(iso).endsWith("Z") ? "" : "Z")).getTime();
+  if (!Number.isFinite(t)) return null;
+  const ago = Date.now() - t;
+  // A clock a little ahead of ours is not a reason to hide the badge.
+  if (ago > MOVED_RECENTLY_MS) return null;
+  if (ago < 90 * 1000) return "just now";
+  const mins = Math.round(ago / 60000);
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  return `${hrs} hour${hrs === 1 ? "" : "s"} ago`;
+};
+
 const REPORT_EDIT_WINDOW_MS = 10 * 60 * 1000;
 const reportEditableFor = (j) => {
   if (!j?.createdAtIso || j.approvedAt || isClosed(j)) return 0;
@@ -874,6 +896,23 @@ function countdown(ms) {
 const urgencyOf = (ms) => ms === null ? "" : ms <= 0 ? "expired"
   : ms < 3600000 ? "soon" : ms < 14400000 ? "today" : "ok";
 
+// What a work order pays, in words.
+//
+// The contractor is the one accepting it, so "$240" on its own would be a
+// lie by omission where the deal is thirty an hour up to eight. One
+// function, used by the screen, the printed order and the text export,
+// because those three disagreeing about the price is the worst possible
+// place for a discrepancy.
+function payTerms(a) {
+  if (!a) return "—";
+  if (a.payKind === "hourly" && a.rate) {
+    const h = Number(a.capHours);
+    const hrs = Number.isFinite(h) ? `${h} hour${h === 1 ? "" : "s"}` : "a capped number of hours";
+    return `${formatMoney(a.rate)}/hr, up to ${hrs} (${formatMoney(a.value)} max)`;
+  }
+  return a.value ? formatMoney(a.value) : "—";
+}
+
 function issueWO(sub, job, trade, details = {}) {
   const prox = job.zip ? coversZip(sub, job.zip) : null;
   return {
@@ -882,7 +921,11 @@ function issueWO(sub, job, trade, details = {}) {
     wo: "WO-" + Math.floor(1000 + Math.random() * 9000),
     woIssued: new Date().toISOString().slice(0, 10),
     tradeScope: details.tradeScope || "",
+    // The ceiling, whichever way it is priced, so totals add up the same.
     value: details.value || "",
+    payKind: details.payKind === "hourly" ? "hourly" : "fixed",
+    rate: details.rate || "",
+    capHours: details.capHours ?? null,
     signedWO: null,
     status: sub.autoSchedule ? "accepted" : "pending",
     auto: !!sub.autoSchedule,
@@ -2067,6 +2110,7 @@ export default function SubSub() {
     wanted.forEach((ln) => {
       persist("assign", api.assign(jobId, {
         trade: ln.trade, companyId: sub.id, tradeScope: ln.tradeScope, value: ln.value,
+        payKind: ln.payKind || "fixed", rate: ln.rate || "", capHours: ln.capHours ?? null,
         crewName: details.crewName, responseWindow: details.responseWindow,
       }));
     });
@@ -2082,6 +2126,9 @@ export default function SubSub() {
           responseWindow: details.responseWindow,
           tradeScope: ln.tradeScope,
           value: ln.value,
+          payKind: ln.payKind || "fixed",
+          rate: ln.rate || "",
+          capHours: ln.capHours ?? null,
         });
       });
       return { ...j, assignments: next };
@@ -3501,9 +3548,16 @@ export default function SubSub() {
       )}
 
       {tab === "jobs" && can("jobs") && (() => {
+      // Newest movement first. The API already orders by it, but the list is
+      // filtered and re-derived here, and a sort that lives in only one of
+      // the two places is a sort that disagrees with itself the first time
+      // anything is added optimistically.
       const shownJobs = jobs
         .filter((j) => !jobProperty || j.propertyId === jobProperty)
-        .filter((j) => jobPhase === "all" || isClosed(j) === (jobPhase === "completed"));
+        .filter((j) => jobPhase === "all" || isClosed(j) === (jobPhase === "completed"))
+        .slice()
+        .sort((a, b) => String(b.updatedAtIso || b.createdAtIso || "")
+          .localeCompare(String(a.updatedAtIso || a.createdAtIso || "")));
       return (
         <main className="ss-main">
           {jobProperty && (
@@ -3542,13 +3596,18 @@ export default function SubSub() {
                 const filled = j.trades.filter((t) => j.assignments[t]).length;
                 const allAssigned = filled === j.trades.length;
                 const done = isClosed(j);
+                const moved = movedAgo(j);
                 return (
-                  <div key={j.id} className={`job-card ${done ? "done" : ""}`}>
+                  <div key={j.id} data-job-id={j.id}
+                    className={`job-card ${done ? "done" : ""} ${moved ? "just-moved" : ""}`}>
                     <div className="job-card-head">
                       <div>
                         <div className="job-title-row">
                           <h3>{j.title}</h3>
                           <span className={`job-phase ${done ? "done" : ""}`}>{j.withdrawnAt ? "withdrawn by tenant" : j.declinedAt ? "not approved" : done ? "completed" : "active"}</span>
+                          {/* Only while it is genuinely news. A badge that
+                              never expires is wallpaper. */}
+                          {moved && <span className="job-moved"><Zap size={11} /> Updated {moved}</span>}
                         </div>
                         {j.withdrawnAt && (
                           <div className="job-withdrawn">
@@ -3602,7 +3661,8 @@ export default function SubSub() {
                                       })}
                                     </select>
                                   ) : a.crewName ? <span className="ta-crew-flat"><Users size={11} /> {a.crewName}</span> : null}
-                                  {a.value && <span className="ta-val">{formatMoney(a.value)}
+                                  {a.value && <span className="ta-val" title={payTerms(a)}>
+                                    {formatMoney(a.value)}{a.payKind === "hourly" && <span className="ta-hr"> max</span>}
                                     <RevisedValue a={a} cos={changeOrders} jobId={j.id} trade={t} /></span>}
                                   <button className="ta-wo-link" onClick={() => setViewWO({ job: j, trade: t, a })}>
                                     <ScrollText size={11} /> {a.wo}
@@ -3996,7 +4056,7 @@ function ChangeOrderForm({ job, trade, a, origin, existing, onSubmit, onCancel }
         ))}
       </div>
 
-      <label className="fld">Describe the change
+      <label className="fld">Describe the change{" "}
         <span className="fld-note">this becomes {coSeq(existing.length + 1)} on the work order</span>
         <textarea rows={3} value={scope} onChange={(e) => setScope(e.target.value)}
           placeholder={kind === "add" ? "e.g. replace 6 sheets of rotten sheathing found on tear-off, north slope"
@@ -4005,14 +4065,14 @@ function ChangeOrderForm({ job, trade, a, origin, existing, onSubmit, onCancel }
       </label>
 
       {kind !== "nocost" && (
-        <label className="fld">{kind === "add" ? "Added value" : "Deducted value"}
+        <label className="fld">{kind === "add" ? "Added value" : "Deducted value"}{" "}
           <span className="fld-note">the change only, not the new total</span>
           <MoneyInput value={value} onChange={setValue} />
         </label>
       )}
 
       {isGC && (
-        <label className="fld">Response deadline
+        <label className="fld">Response deadline{" "}
           <span className="fld-note">{a.company} has this long to accept</span>
           <select value={respWindow} onChange={(e) => setRespWindow(e.target.value)}>
             {RESPONSE_WINDOWS.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
@@ -4170,7 +4230,7 @@ function ServiceCallForm({ job, trade, a, sub, now, onSubmit, onCancel }) {
               placeholder="e.g. two ridge caps lifted on the north slope, homeowner reports a drip in the upstairs hall" />
           </label>
 
-          <label className="fld">Requested return date
+          <label className="fld">Requested return date{" "}
             <span className="fld-note">they can confirm or propose another</span>
             <input type="date" value={returnDate} onChange={(e) => setReturnDate(e.target.value)} />
           </label>
@@ -4419,7 +4479,7 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
           </div>
           {kind === "bond" && (
             <>
-              <label className="fld" style={{ marginTop: 14 }}>Bond amount
+              <label className="fld" style={{ marginTop: 14 }}>Bond amount{" "}
                 <span className="fld-note">min {formatMoney(BOND_MIN)}</span>
                 <MoneyInput value={amount} onChange={setAmount} />
               </label>
@@ -9774,7 +9834,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                   <input value={co} onChange={(e) => { setCo(e.target.value); setPSaved(false); }} placeholder="Your company" />
                 </label>
                 <div className="fld-row">
-                  <label className="fld">WA L&amp;I license #
+                  <label className="fld">WA L&amp;I license #{" "}
                     <span className="fld-note">checked against the state registry</span>
                     <input value={lic} onChange={(e) => { setLic(e.target.value.toUpperCase().trim()); setPSaved(false); }} placeholder="ABCDEF123GH" />
                   </label>
@@ -11381,7 +11441,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
       <div className="form-sec">1 · Project</div>
       {(properties || []).length > 0 && (
         <label className="fld">
-          {asOwner ? "Which building" : "Property"}
+          {asOwner ? "Which building" : "Property"}{" "}
           <span className="fld-note">{asOwner
             ? "Only the buildings you have access to"
             : "fills the address and scopes vendor matching"}</span>
@@ -11500,7 +11560,20 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
   const openLines = chosen
     ? [trade, ...bundleable(chosen).filter((t) => lines[t]?.on)]
     : [trade];
-  const lineTotal = openLines.reduce((n, t) => n + Number(moneyRaw(lines[t]?.value || "") || 0), 0);
+  // Fixed unless they say otherwise, which keeps every work order issued
+  // before this existed reading exactly as it did.
+  const payKindOf = (t) => lines[t]?.payKind === "hourly" ? "hourly" : "fixed";
+  // The ceiling on one line: the fixed price, or rate x cap. Null while
+  // either half of an hourly line is still missing.
+  const lineMax = (t) => {
+    if (payKindOf(t) === "fixed") return Number(moneyRaw(lines[t]?.value || "") || 0) || null;
+    const rate = Number(moneyRaw(lines[t]?.rate || "") || 0);
+    const cap = Number(lines[t]?.capHours);
+    return rate > 0 && Number.isFinite(cap) && cap > 0 ? rate * cap : null;
+  };
+  // A line is ready when its ceiling is known, whichever way it is priced.
+  const lineReady = (t) => lineMax(t) !== null;
+  const lineTotal = openLines.reduce((n, t) => n + (lineMax(t) || 0), 0);
   const pickSub = (sb) => {
     const init = { [trade]: { on: true, scope: "", value: "" } };
     bundleable(sb).forEach((t) => { init[t] = { on: false, scope: "", value: "" }; });
@@ -11549,7 +11622,7 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
       <div className="form">
         <h2>Work order details</h2>
         <p className="form-sub">{chosen.company} · {M.label} · {job.title}</p>
-        <label className="fld">Response deadline
+        <label className="fld">Response deadline{" "}
         <span className="fld-note">how long they have to accept before the offer expires</span>
         <select value={respWindow} onChange={(e) => setRespWindow(e.target.value)}>
           {RESPONSE_WINDOWS.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
@@ -11609,8 +11682,11 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
                     <span className="wol-tag alt">also available</span>
                   </label>
                 )}
-                {on && lines[t]?.value && (
-                  <span className="wol-val">{formatMoney(lines[t].value)}</span>
+                {on && lineMax(t) && (
+                  <span className="wol-val">
+                    {formatMoney(String(lineMax(t)))}
+                    {payKindOf(t) === "hourly" && <span className="wol-max"> max</span>}
+                  </span>
                 )}
               </div>
               {on && (
@@ -11620,11 +11696,50 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
                       onChange={(e) => setLine(t, { scope: e.target.value })}
                       placeholder={`${TM.label} work included in this work order…`} />
                   </label>
-                  <label className="fld">Subcontractor value for {TM.label.toLowerCase()}
-                    <span className="fld-note">their pay for this trade only</span>
-                    <MoneyInput value={lines[t]?.value || ""}
-                      onChange={(v) => setLine(t, { value: v })} />
-                  </label>
+                  {/* Fixed, or by the hour with a ceiling. The work nobody
+                      can price in advance -- a leak somebody has to open a
+                      wall to find -- was being guessed at as a fixed figure
+                      and re-issued when the guess turned out wrong. */}
+                  <div className="fld">How they're paid for {TM.label.toLowerCase()}
+                    <div className="pay-toggle">
+                      <button type="button" className={payKindOf(t) === "fixed" ? "on" : ""}
+                        onClick={() => setLine(t, { payKind: "fixed" })}>Fixed price</button>
+                      <button type="button" className={payKindOf(t) === "hourly" ? "on" : ""}
+                        onClick={() => setLine(t, { payKind: "hourly" })}>By the hour</button>
+                    </div>
+                  </div>
+
+                  {payKindOf(t) === "fixed" ? (
+                    <label className="fld">Subcontractor value for {TM.label.toLowerCase()}{" "}
+                      <span className="fld-note">their pay for this trade only</span>
+                      <MoneyInput value={lines[t]?.value || ""}
+                        onChange={(v) => setLine(t, { value: v })} />
+                    </label>
+                  ) : (
+                    <>
+                      <div className="fld-row">
+                        <label className="fld">Rate{" "}
+                          <span className="fld-note">per hour</span>
+                          <MoneyInput value={lines[t]?.rate || ""}
+                            onChange={(v) => setLine(t, { rate: v })} />
+                        </label>
+                        <label className="fld">Not to exceed{" "}
+                          <span className="fld-note">hours</span>
+                          <input inputMode="decimal" value={lines[t]?.capHours ?? ""}
+                            placeholder="8"
+                            onChange={(e) => setLine(t, { capHours: e.target.value.replace(/[^0-9.]/g, "") })} />
+                        </label>
+                      </div>
+                      {/* The number that actually matters to both sides, worked
+                          out rather than left to be worked out. */}
+                      <p className={`pay-max ${lineMax(t) ? "" : "waiting"}`}>
+                        {lineMax(t)
+                          ? <>Most this can cost: <strong>{formatMoney(String(lineMax(t)))}</strong>{" "}
+                              — {lines[t].capHours} hour{Number(lines[t].capHours) === 1 ? "" : "s"} at {formatMoney(lines[t].rate)} an hour.</>
+                          : "Set a rate and a cap. An hourly rate with no ceiling is an open cheque."}
+                      </p>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -11641,18 +11756,29 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
         <div className="form-actions">
           <button className="btn-ghost" onClick={() => setChosen(null)}>Back</button>
           <button className="btn-solid"
-            disabled={openLines.some((t) => !lines[t]?.value)}
+            disabled={openLines.some((t) => !lineReady(t))}
             onClick={() => onPick(chosen, {
               crewName: crewPick || freeForDay[0]?.name || null,
               responseWindow: respWindow,
               trades: openLines.map((t) => ({
-                trade: t, tradeScope: lines[t]?.scope || "", value: lines[t]?.value || "" })),
+                trade: t, tradeScope: lines[t]?.scope || "",
+                payKind: payKindOf(t),
+                // The ceiling travels as the value whichever way it is
+                // priced, so totals and spend keep adding up.
+                value: String(lineMax(t) || ""),
+                rate: payKindOf(t) === "hourly" ? (lines[t]?.rate || "") : "",
+                capHours: payKindOf(t) === "hourly" ? Number(lines[t]?.capHours) : null,
+              })),
             })}>
             <Send size={15} /> Issue {openLines.length > 1 ? `${openLines.length} work orders` : "work order"}
           </button>
         </div>
-        {openLines.some((t) => !lines[t]?.value) && (
-          <p className="cov-hint">Enter a value for each trade you're issuing.</p>
+        {openLines.some((t) => !lineReady(t)) && (
+          <p className="cov-hint">
+            {openLines.some((t) => payKindOf(t) === "hourly" && !lineReady(t))
+              ? "An hourly trade needs both a rate and a cap."
+              : "Enter a value for each trade you're issuing."}
+          </p>
         )}
       </div>
     );
@@ -13121,7 +13247,7 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
       "SCOPE OF WORK",
       a.tradeScope || job.scope || "—",
       "",
-      `Subcontractor value: ${a.value ? formatMoney(a.value) : "—"}`,
+      `Subcontractor value: ${payTerms(a)}`,
       ...(coList.length ? [
         "",
         "CHANGE ORDERS (accepted)",
@@ -13182,7 +13308,10 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
       <p className="wo-doc-scope">{a.tradeScope || job.scope || "No scope recorded."}</p>
 
       <div className="wo-doc-sec">Compensation</div>
-      <div className="wo-value">{a.value ? formatMoney(a.value) : "—"}<span> subcontractor value</span></div>
+      <div className="wo-value">{a.payKind === "hourly" && a.rate ? formatMoney(a.rate) : (a.value ? formatMoney(a.value) : "—")}
+        <span> {a.payKind === "hourly" && a.rate
+          ? `per hour, up to ${a.capHours} hour${Number(a.capHours) === 1 ? "" : "s"} — ${formatMoney(a.value)} maximum`
+          : "subcontractor value"}</span></div>
       {coList.length > 0 && (
         <div className="wo-co-sched">
           <div className="wo-co-hd">Change orders</div>
@@ -14233,10 +14362,39 @@ body{background:var(--paper)}
    sat flush against it. On the tenant's report form that made "Optional --
    leave it and we'll use what you picked" read as the heading for the next
    question instead of a note about the last one. */
-.fld-note{font-weight:400;font-size:11.5px;line-height:1.45;color:var(--ink-soft);opacity:.9}
+/* The quiet half of a field's label.
+   JSX drops the whitespace between a bare text label and a span on the next
+   line, so "Response deadline" and "how long they have to accept" rendered
+   as one word -- and read as one word to a screen reader too, which no
+   amount of margin fixes. The markup carries an explicit space now; this
+   couple of pixels is only the visual breathing room on top of it. */
+.fld-note{font-weight:400;font-size:11.5px;line-height:1.45;color:var(--ink-soft);opacity:.9;
+  margin-left:2px}
 p.fld-note{margin:6px 0 0}
 .fld input+.fld-note,.fld select+.fld-note,.fld textarea+.fld-note,
-.fld .subdomain-row+.fld-note,.fld .rating-edit+.fld-note{display:block;margin-top:7px}
+.fld .subdomain-row+.fld-note,.fld .rating-edit+.fld-note{display:block;margin-top:7px;margin-left:0}
+/* Fixed price, or by the hour. Two choices, so a segmented pair rather
+   than a select nobody would open. */
+/* A job that has just moved. Marked rather than merely sorted first,
+   because "why is this at the top" is otherwise a guess -- and the badge
+   says how long ago, so somebody coming back after lunch can tell the
+   difference between five minutes and five hours. */
+.job-card.just-moved{border-color:var(--brand);box-shadow:0 0 0 3px rgba(31,107,74,.10)}
+.job-moved{display:inline-flex;align-items:center;gap:4px;background:#E6F2EC;color:#1D5740;
+  font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.job-moved svg{flex:none}
+
+.pay-toggle{display:flex;gap:0;margin-top:6px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.pay-toggle button{flex:1;background:var(--card);border:0;padding:9px 12px;font:inherit;font-size:12.5px;
+  font-weight:650;color:var(--ink-soft);cursor:pointer}
+.pay-toggle button+button{border-left:1px solid var(--line)}
+.pay-toggle button.on{background:var(--brand);color:#fff}
+.pay-toggle button:not(.on):hover{background:var(--paper);color:var(--ink)}
+.pay-max{margin:2px 0 12px;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
+.pay-max strong{color:var(--ink);font-weight:700}
+.pay-max.waiting{color:var(--amber-ink,#7A5410)}
+.wol-max,.ta-hr{font-weight:600;opacity:.65;font-size:.85em}
+
 .fld-row{display:flex;gap:12px}.fld-row .fld{flex:1}
 .pick-grid{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
 .pick{border:1px solid var(--line);background:var(--card);font-size:12.5px;padding:6px 11px;border-radius:7px;cursor:pointer;color:var(--ink-soft);font-weight:600}
