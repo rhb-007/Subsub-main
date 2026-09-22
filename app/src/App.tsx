@@ -10694,6 +10694,34 @@ function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], su
           {rows.map(([k, v]) => <div key={k} className="tn-fact"><dt>{k}</dt><dd>{v}</dd></div>)}
         </dl>
 
+        {/* How to reach them, as links rather than as text to copy out. The
+            case this is for is a manager reading a report about water coming
+            through a ceiling and wanting to ask one question before deciding
+            anything -- retyping a phone number off a screen is exactly the
+            friction that turns a two-minute call into a next-day email.
+            Whichever they do not have is left out rather than shown blank:
+            a tenant added by phone alone has no address, and a mailto: link
+            to nowhere is worse than no link. */}
+        {(who?.phone || who?.email) && (
+          <div className="reach">
+            <span className="reach-lab">Reach {who.name?.split(" ")[0] || "them"}</span>
+            {who.phone && (
+              <a className="reach-btn" href={`tel:${phoneDigits(who.phone)}`}>
+                <Phone size={14} /> {who.phone}
+              </a>
+            )}
+            {who.email && (
+              <a className="reach-btn" href={`mailto:${who.email}?subject=${encodeURIComponent(job.title)}`}>
+                <Mail size={14} /> {who.email}
+              </a>
+            )}
+          </div>
+        )}
+        {who && !who.phone && !who.email && (
+          <p className="fine">No phone or email on file for {who.name}. You can add one on
+            their row under My account.</p>
+        )}
+
         {words && (
           <div className="tn-said">
             <h4>What they wrote</h4>
@@ -14757,6 +14785,21 @@ p.fld-note{margin:6px 0 0}
 .sos-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px}
 .sos-actions .btn-ghost{background:#fff;border-color:#D8A29E;color:#8C1D18;font-size:13px}
 .sos-actions .btn-ghost:hover{border-color:#B3261E}
+
+/* Reaching the person who reported it. Sized as something to tap, because
+   half the time this is read on a phone and the point is to ring them
+   before deciding anything. */
+.reach{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0 2px}
+.reach-lab{font-size:11.5px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;
+  letter-spacing:.04em;margin-right:2px}
+.reach-btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);
+  background:var(--card);border-radius:9px;padding:9px 13px;font-size:13px;font-weight:650;
+  color:var(--ink);text-decoration:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.reach-btn svg{flex:none;color:var(--brand)}
+.reach-btn:hover,.reach-btn:focus-visible{border-color:var(--brand);color:var(--brand);text-decoration:none}
+@media(max-width:520px){.reach{flex-direction:column;align-items:stretch}
+  .reach-btn{justify-content:center}}
 
 /* The emergency section, and the rows in it. */
 .sec-sos > h3{color:#8C1D18}

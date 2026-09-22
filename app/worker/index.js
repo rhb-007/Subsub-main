@@ -1308,7 +1308,10 @@ app.get("/api/account-users", async (c) => {
   for (const r of scopes || []) (byUser[r.user_id] ||= []).push(r.property_id);
 
   return c.json(results.map((r) => ({
-    id: r.id, name: r.name, email: r.email, phone: r.phone, role: r.role, subId: r.company_id,
+    // A tenant added by phone alone carries a placeholder address. It exists
+    // so the row has a unique key, and it is nobody's address: handing it to
+    // the browser gets it printed next to a mailto: link that goes nowhere.
+    id: r.id, name: r.name, email: realEmail(r.email), phone: r.phone, role: r.role, subId: r.company_id,
     propertyIds: byUser[r.id] || [], unit: r.unit || null,
   })));
 });

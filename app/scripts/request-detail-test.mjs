@@ -31,8 +31,10 @@ const TITLE = `Ceiling stain ${S}`;
 const WORDS = `Brown ring over the bed, about a foot across, and it grew after Tuesday's rain ${S}`;
 const pm = await tok("pm@example.test");
 const H = (t) => ({ Authorization: `Bearer ${t}`, "X-Account-Id": ACCOUNT, "content-type": "application/json" });
+const PHONE = "(206)555-0188";
 await fetch(`${API}/tenants`, { method: "POST", headers: H(pm),
-  body: JSON.stringify({ propertyId: "p1", firstName: "Ivo", lastName: "Sand", email: EMAIL, unit: "11C", channels: ["email"] }) });
+  body: JSON.stringify({ propertyId: "p1", firstName: "Ivo", lastName: "Sand", email: EMAIL,
+    phone: PHONE, unit: "11C", channels: ["email"] }) });
 const sent = await (await fetch("http://127.0.0.1:8904/__sent")).json();
 const inv = sent[sent.length - 1]?.text.match(/\/\?tenant=([0-9a-f]{64})/)?.[1];
 await fetch(`${API}/tenant-invite/${inv}`, { method: "POST", headers: { "content-type": "application/json" },
@@ -91,6 +93,24 @@ try {
   ck("and the photo they sent, loaded",
     await page.evaluate(() => [...document.querySelectorAll(".tn-detail .ph-thumb img")].some((i) => i.naturalWidth > 0)));
 
+  console.log("\n-- and can reach them without leaving it --");
+  // The case: a manager reading about water coming through a ceiling who
+  // wants to ask one question before deciding anything. Retyping a number
+  // off a screen is what turns a two-minute call into a next-day email.
+  const reach = await page.evaluate(() =>
+    [...document.querySelectorAll(".tn-detail .reach-btn")].map((a) => ({
+      href: a.getAttribute("href"), text: a.textContent.trim() })));
+  ck("their phone is there, as something to tap",
+    reach.some((r) => r.href?.startsWith("tel:")), JSON.stringify(reach));
+  ck("dialling the digits only, not the brackets",
+    reach.find((r) => r.href?.startsWith("tel:"))?.href === "tel:2065550188",
+    reach.find((r) => r.href?.startsWith("tel:"))?.href);
+  ck("and their email, as something to open",
+    reach.some((r) => r.href?.startsWith("mailto:")), JSON.stringify(reach.map((r) => r.href)));
+  ck("with the report's title already in the subject",
+    decodeURIComponent(reach.find((r) => r.href?.startsWith("mailto:"))?.href || "").includes(TITLE),
+    reach.find((r) => r.href?.startsWith("mailto:"))?.href?.slice(0, 80));
+
   console.log("\n-- and can act on it there --");
   const acts = await page.evaluate(() =>
     [...document.querySelectorAll(".tn-detail .form-actions button")].map((b) => b.textContent.trim()));
@@ -129,6 +149,24 @@ try {
   // The API is the record, not the screen.
   const saved = (await (await fetch(`${API}/jobs`, { headers: H(pm) })).json()).find((j) => j.id === made.id);
   ck("the approval really was written down", !!saved?.approvedAt, saved?.approvedAt || "not approved");
+
+  console.log("\n-- a tenant added by phone alone --");
+  // They carry a placeholder address so their row has a unique key. It is
+  // nobody's address, and printing it beside a mailto: link that goes
+  // nowhere is worse than printing nothing.
+  const P = `${Date.now().toString(36)}`;
+  const noMail = await (await fetch(`${API}/tenants`, { method: "POST", headers: H(pm),
+    body: JSON.stringify({ propertyId: "p1", firstName: "Rhoda", lastName: "Pike",
+      phone: "(206)555-0177", unit: "1A", channels: ["sms"] }) })).json();
+  ck("they can be added with no email", !!noMail?.userId || !!noMail?.id, JSON.stringify(noMail).slice(0, 90));
+  const roster = await (await fetch(`${API}/account-users`, { headers: H(pm) })).json();
+  const rhoda = roster.find((u) => u.name === "Rhoda Pike");
+  ck("and the roster hands the browser no address at all",
+    rhoda && (rhoda.email === null || rhoda.email === undefined), JSON.stringify(rhoda?.email));
+  ck("no placeholder address reaches the browser for anyone",
+    !roster.some((u) => String(u.email || "").includes("no-email.invalid")),
+    roster.filter((u) => String(u.email || "").includes("no-email.invalid")).length + " leaking");
+  void P;
 
   ck("nothing threw along the way", crashes.length === 0, crashes.join(" ; "));
 } catch (err) {
