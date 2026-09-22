@@ -128,6 +128,10 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- The sign-in address sat under the company name in the app header, where
+  it repeated the address bar. It is in the profile menu now (and in the
+  drawer on a narrow screen), as a link, for the moment somebody needs to
+  copy it.
 - "Powered by SubSub" vanished on a dark-themed branded page. It took the
   customer's text colour, which they chose to read on the card, and sat on
   the page behind the card -- Outerhome's black page, white card, dark text

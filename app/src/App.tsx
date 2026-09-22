@@ -2935,9 +2935,11 @@ export default function SubSub() {
           <h1 className="brand">
             <button className="brand-home" onClick={goHome} title={homeTitle}>
               <span className="brand-logo"><BrandMark brand={brand} height={26} /></span>
+              {/* The name alone. The address used to sit under it, and it is
+                  the address they are already on; it lives in the profile
+                  menu now, for the moment somebody needs to copy it. */}
               <span className="brand-txt">
                 <span className="brand-name">{brand.name}</span>
-                <span className="brand-url">{portalUrl(brand)}</span>
               </span>
             </button>
           </h1>
@@ -3005,6 +3007,15 @@ export default function SubSub() {
                     <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
                       <UserCog size={14} /> My account
                     </button>
+                    {brand.subdomain && brand.subdomain !== "app" && (
+                      <>
+                        <div className="um-sec">Your sign-in address</div>
+                        <a className="um-link" href={`https://${portalUrl(brand)}/`} target="_blank" rel="noreferrer"
+                          onClick={() => setUserMenu(false)}>
+                          <Globe size={13} /> <span>{portalUrl(brand)}</span>
+                        </a>
+                      </>
+                    )}
                     {myMemberships.length > 1 && (
                       <>
                         <div className="um-sec">Switch account</div>
@@ -3071,6 +3082,11 @@ export default function SubSub() {
                 here it only cost the role the room to be read. */}
             <span className="drawer-user-txt"><b>{me.name}</b><span>{roleLabel}</span></span>
           </div>
+          {brand.subdomain && brand.subdomain !== "app" && (
+            <a className="drawer-addr" href={`https://${portalUrl(brand)}/`} target="_blank" rel="noreferrer">
+              <Globe size={13} /> <span>{portalUrl(brand)}</span>
+            </a>
+          )}
           {can("dashboard") && (
             <button className={tab === "dashboard" ? "on" : ""} onClick={() => setTab("dashboard")}>
               Dashboard
@@ -12886,6 +12902,13 @@ body{background:var(--paper)}
 .ua-role{font-size:11px;color:var(--ink-soft)}
 .ua-tick{margin-left:auto;color:var(--brand);flex:none}
 .um-account{border-bottom:1px solid var(--line);border-radius:8px 8px 0 0 !important;margin-bottom:3px;color:var(--brand) !important;font-weight:700 !important}
+.um-link{display:flex;align-items:center;gap:8px;padding:8px 12px 10px;font-size:12.5px;
+  color:var(--ink);text-decoration:none;border-bottom:1px solid var(--line);margin-bottom:3px}
+.um-link span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.um-link:hover{background:var(--paper);text-decoration:underline}
+.drawer-addr{display:flex;align-items:center;gap:8px;padding:12px 20px;font-size:13px;
+  color:var(--ink-soft);text-decoration:none;border-bottom:1px solid var(--line);background:var(--paper)}
+.drawer-addr span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .role-locked{display:flex;align-items:center;gap:10px;margin-top:8px;background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
 .rl-note{font-size:11.5px;color:var(--ink-soft);font-weight:400}
 
@@ -14331,6 +14354,8 @@ body{background:var(--paper)}
   .ss-header .tabs > button.on{background:#f2f8f4;color:var(--brand)}
   .drawer-user{display:flex;align-items:center;gap:11px;padding:18px 20px;border-bottom:1px solid var(--line);background:var(--paper)}
   .drawer-user .user-avatar{width:36px;height:36px;font-size:13px}
+  /* The address, drawer only: on a wide screen it is in the profile menu. */
+  .drawer-addr{display:flex}
   .drawer-user-txt{display:flex;flex-direction:column;line-height:1.2;min-width:0}
   .drawer-user-txt b{font-size:15px}
   .drawer-user-txt span{font-size:12px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -14888,7 +14913,7 @@ body{background:var(--paper)}
    them. Reachable only by rotating to landscape, where the desktop chip
    takes over. */
 @media (min-width:1001px){
-  .drawer-user,.drawer-actions,.pf-drawer-user,.pf-drawer-actions{display:none}
+  .drawer-user,.drawer-addr,.drawer-actions,.pf-drawer-user,.pf-drawer-actions{display:none}
 }
 @media (max-width:1000px){
   /* platform console */
