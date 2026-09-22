@@ -179,16 +179,32 @@ verified it now round-trips through the API the same as insurance/bond/contract.
    |---|---|
    | Root directory | `app` |
    | Build command | `npm ci --include=dev` |
-   | Deploy command | `npx wrangler deploy -c wrangler.toml` |
+   | Deploy command | `npx wrangler deploy --config=wrangler.toml` |
+   | Version command | `npx wrangler versions upload --config=wrangler.toml` |
+   | Production branch | the repository's only branch |
 
-   **`-c wrangler.toml` is not optional.** Wrangler looks for its config in
-   the working directory and then walks *up*, and the repository root holds
-   `wrangler.jsonc` — the marketing site, whose assets directory is the whole
-   repo. A bare `npx wrangler deploy` from `app/` finds that one, not this
-   one, and deploys the wrong project. Locally it fails loudly, on a 126 MiB
-   file in `node_modules`; with credentials in hand it can succeed at the
-   wrong thing. Same reason the console Worker's deploy command names
-   `wrangler.admin.toml`.
+   The **build command is not `npm run build`**, which the dashboard offers by
+   default. That is `vite build`, the frontend, and it has nothing to do with
+   this Worker: it deploys the same either way, but a frontend that fails to
+   build would then block an API deploy that never needed it.
+
+   The **version command needs `--config` as much as the deploy command
+   does.** It runs for non-production branches once Worker Previews are on,
+   and without it uploads a version of the wrong project.
+
+   **`--config` is not optional, on any wrangler command run from `app/`.**
+   Wrangler looks for its config in the working directory and then walks *up*,
+   and the repository root holds `wrangler.jsonc` — the marketing site, whose
+   assets directory is the whole repo. A bare `npx wrangler deploy` from
+   `app/` finds that one, not this one, and deploys the wrong project.
+   Locally it fails loudly, on a 126 MiB file in `node_modules`; with
+   credentials in hand it can succeed at the wrong thing. Same reason the
+   console Worker's deploy command names `wrangler.admin.toml`.
+
+   This is not only about deploys. `npm run db:migrate:local` sat broken for
+   the same reason — the root config declares no D1 binding, so it failed
+   with "Couldn't find a D1 DB with the name or binding 'subsub-db'". Every
+   script in `package.json` now names the file.
 
    **`--include=dev` is not optional either.** `hono` and `wrangler` are both
    devDependencies, so a build environment with `NODE_ENV=production` would
