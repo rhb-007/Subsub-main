@@ -109,6 +109,25 @@ Fixed as encountered, because each one blocked something on the list:
 - The role called "Project Manager" is now "Property manager" throughout.
   These accounts are property businesses; project-manager was general
   contractor language that had been left on the role everywhere.
+- The sign-in address could be typed into but never saved. The account page
+  sent name, logo and colours and silently left the subdomain out, and
+  `PATCH /api/account` did not read the field at all — so it said "Saved",
+  showed the new address, and was back to the old one after a reload. It now
+  saves, refuses a reserved or already-taken name in words, takes the old
+  hostname down at Cloudflare and puts the new one up, and writes the change
+  into the account's activity so support can see it.
+- "Open the live application form" signed you out and showed SubSub's own
+  generic sign-up instead of the company's. It now opens the real form at the
+  company's own address in a new tab, and that address serves it directly
+  (`/?apply=1`) rather than only via the sign-in page.
+- Back out of the application form left the site altogether — to whatever the
+  tab held before, which after an upgrade is Stripe's checkout page. The
+  public views now push a history entry, so Back returns to the sign-in page.
+- The "address is setting up" panel never went green by itself. Its poll
+  depended on a callback the parent rewrote on every render, and the parent
+  re-renders once a second off the clock, so the twenty-second timer was
+  destroyed and rebuilt before it could ever fire.
+- The three cards on My account -> Company sat flush against each other.
 
 ## Known, not blocking
 
@@ -123,6 +142,10 @@ Fixed as encountered, because each one blocked something on the list:
   section. They fail on the commit before this work too, and branded hostnames
   provision correctly in production, so this is test drift rather than a live
   fault. Worth a look before anyone trusts that file again.
+- `scripts/e2e-smoke.mjs` waits for `.ld-row`, the demo account picker the
+  sign-in page had before it took an email and a password. Nothing renders
+  that class any more, so the script times out — on the commit before this
+  work too. It needs rewriting against the real sign-in, or deleting.
 - The Add menu has a "User" entry behind `can("users")`, and no role grants
   `users`, so it never renders. Users are managed from My account -> Users,
   which works. Dead branch, harmless.

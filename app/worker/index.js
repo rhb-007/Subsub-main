@@ -1621,6 +1621,29 @@ function syncHostnameAfter(c, account, opts) {
   return run;
 }
 
+// Changing an address is two operations, and the order matters. The old
+// hostname comes down first: leaving it up means a name the account has given
+// up still answers for them, and whoever claims it next cannot have it. Taking
+// it down is best-effort -- a Cloudflare refusal there must not stop the new
+// address being set up, because the account is already on the new name in the
+// database and an account with no address at all is the worse outcome.
+async function moveHostnameAfter(c, account, from) {
+  const run = (async () => {
+    if (!hostnameConfig(c.env)) return null;
+    if (from && from !== account.subdomain) {
+      try {
+        const gone = await deprovisionHostname(c.env, from);
+        if (!gone.ok) console.error("[hostname] could not take down", from, gone.error);
+      } catch (err) {
+        console.error("[hostname] take-down threw:", from, err?.message || err);
+      }
+    }
+    return syncHostname(c.env, account, { reason: "subdomain_changed" });
+  })();
+  try { c.executionCtx.waitUntil(run); } catch { /* no ctx in tests; it still runs */ }
+  return run;
+}
+
 const ACCOUNT_KINDS = ["general_contractor", "property_manager", "building_owner", "portfolio_manager"];
 // The kinds that keep a building list, and so are the only ones with anything
 // for a tenant or a building owner to be attached to.
@@ -1666,9 +1689,33 @@ function validTheme(theme) {
 // Branding/plan/billing for the current account.
 app.patch("/api/account", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
-  const b = await c.req.json(); // { name, kind, plan, billing, logoKey, useDefaultMark, theme, trades }
+  const b = await c.req.json(); // { name, subdomain, kind, plan, billing, logoKey, useDefaultMark, theme, trades }
   const sets = [], vals = [];
   if (b.name != null) { sets.push("name = ?"); vals.push(b.name); }
+
+  // Moving to a different address. Held separately from the other fields
+  // because it is the only one that changes something outside this database:
+  // a hostname at Cloudflare, which has to be taken down at the old name and
+  // put up at the new one once the row is written.
+  let movedFrom = null, current = null;
+  if (b.subdomain != null) {
+    current = await c.env.DB.prepare(
+      `SELECT subdomain, plan FROM accounts WHERE id = ?`).bind(accountId).first();
+    const next = validSubdomain(b.subdomain);
+    if (!next) return c.json({ error: "invalid_subdomain" }, 400);
+    if (current && next !== current.subdomain) {
+      const taken = await c.env.DB.prepare(
+        `SELECT id FROM accounts WHERE subdomain = ? AND id <> ?`).bind(next, accountId).first();
+      if (taken) return c.json({ error: "subdomain_taken" }, 409);
+      sets.push("subdomain = ?"); vals.push(next);
+      // The old address is no longer theirs and the new one is not live yet.
+      // Carrying "active" across the gap would have the account page telling
+      // somebody their address works while it points at nothing.
+      sets.push("hostname_status = ?"); vals.push(null);
+      sets.push("hostname_error = ?"); vals.push(null);
+      movedFrom = current.subdomain;
+    }
+  }
   if (b.kind != null) {
     if (!ACCOUNT_KINDS.includes(b.kind)) return c.json({ error: "invalid_kind" }, 400);
     sets.push("kind = ?"); vals.push(b.kind);
@@ -1689,9 +1736,31 @@ app.patch("/api/account", requireRole("admin"), async (c) => {
   }
   if (sets.length) {
     vals.push(accountId);
-    await c.env.DB.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
+    try {
+      await c.env.DB.prepare(`UPDATE accounts SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
+    } catch (err) {
+      // Two accounts claiming one address race past the check above and are
+      // caught here by the unique index instead. Same answer either way.
+      if (movedFrom && /UNIQUE|constraint/i.test(String(err?.message || err))) {
+        return c.json({ error: "subdomain_taken" }, 409);
+      }
+      throw err;
+    }
   }
-  return c.json({ ok: true });
+
+  const after = await c.env.DB.prepare(
+    `SELECT subdomain, hostname_status FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (movedFrom) {
+    await logActivity(c.env, accountId, c.get("auth").userId, "subdomain_changed",
+      `Sign-in address changed from ${movedFrom}.subsub.work to ${after?.subdomain}.subsub.work`,
+      { from: movedFrom, to: after?.subdomain });
+    moveHostnameAfter(c, { id: accountId, subdomain: after?.subdomain, plan: current?.plan }, movedFrom);
+  }
+  // The saved address goes back, not the one that was asked for: the browser
+  // should show what the database holds, so a rejected or tidied-up value
+  // cannot sit on screen looking saved.
+  return c.json({ ok: true, subdomain: after?.subdomain || null,
+                  hostnameStatus: after?.hostname_status || null });
 });
 
 // ---------------------------------------------------------------------------

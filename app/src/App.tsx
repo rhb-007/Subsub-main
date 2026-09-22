@@ -25,7 +25,7 @@ import {
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
-  Globe, RefreshCw,
+  Globe, RefreshCw, ExternalLink,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, logoUrl } from "./lib/api";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
@@ -1091,6 +1091,42 @@ function detectSubdomain() {
   return sub;
 }
 
+// The same rules the API enforces, kept in step with RESERVED_SUBDOMAINS and
+// SUBDOMAIN_RE in worker/index.js. Checked here as well so the answer comes
+// back while they type rather than after a save that looked like it worked;
+// the API is still the one that decides, and it is the one that knows whether
+// somebody else already holds the name.
+const RESERVED_SUBDOMAINS = new Set([
+  "app", "www", "admin", "api", "platform", "dashboard", "portal", "status",
+  "mail", "smtp", "ftp", "cdn", "assets", "static", "help", "support",
+  "docs", "blog", "billing", "account", "accounts", "login", "signup",
+  "subsub", "test", "staging", "dev", "demo",
+]);
+function subdomainProblem(s) {
+  if (!s) return "Pick an address.";
+  if (s.length < 3) return "Too short — use at least 3 characters.";
+  if (s.length > 40) return "Too long — 40 characters at most.";
+  if (!/^[a-z0-9]/.test(s) || !/[a-z0-9]$/.test(s)) return "It can't start or end with a dash.";
+  if (s.includes("--")) return "Two dashes in a row aren't allowed.";
+  if (RESERVED_SUBDOMAINS.has(s)) return `“${s}” is reserved by SubSub. Try another.`;
+  return null;
+}
+// What went wrong saving branding, said in words rather than a status code.
+function brandSaveError(err) {
+  switch (err?.body?.error) {
+    case "subdomain_taken":
+      return "That address is already taken by another company. Try another one.";
+    case "invalid_subdomain":
+      return "That address can't be used. Use 3–40 letters, numbers and dashes.";
+    case "invalid_theme":
+      return "One of the colors isn't a valid hex value.";
+    default:
+      return err?.status === 403
+        ? "Only an admin on this account can change branding."
+        : "Couldn't save. Check your connection and try again.";
+  }
+}
+
 // ---- White-label theming -------------------------------------------------
 // Applies to the two pages a subcontractor sees before they're inside the app:
 // the sign-in page and the public application form a GC links to from their
@@ -1348,7 +1384,42 @@ export default function SubSub() {
   }, []);
   const [loading, setLoading] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
-  const [publicView, setPublicView] = useState(BUILD === "platform" ? "superadmin" : "login"); // login | signup | superadmin
+  // A general contractor links to their own application form from their own
+  // website, and the account page's "open the live application form" link
+  // points at the same place. A query string rather than a path, for the same
+  // reason the invite token is one: Pages resolves /?apply=1 without depending
+  // on SPA-fallback configuration.
+  // Only on a company's own address: the form applies to a specific account,
+  // and app.subsub.work is nobody's, so there is nothing to apply to there.
+  const openingApplication = typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).has("apply")
+    && !!detectSubdomain();
+  const [publicView, setPublicView] = useState(
+    BUILD === "platform" ? "superadmin" : openingApplication ? "signup" : "login"); // login | signup | superadmin
+
+  // The public views are not separate pages, so without this the browser's
+  // Back button leaves the app altogether -- to whatever the tab held before,
+  // which after an upgrade is Stripe's checkout page. Going to the application
+  // form pushes an entry, so Back comes back to the sign-in screen, which is
+  // what it looks like it should do.
+  const pushedSignup = useRef(false);
+  const showSignup = () => {
+    try { window.history.pushState({ ssView: "signup" }, ""); pushedSignup.current = true; }
+    catch { /* the view still changes; only Back is worse off */ }
+    setPublicView("signup");
+  };
+  const leaveSignup = () => {
+    if (pushedSignup.current) { pushedSignup.current = false; window.history.back(); }
+    else setPublicView("login");
+  };
+  useEffect(() => {
+    const onPop = (e) => {
+      if (e.state && e.state.ssView === "signup") { pushedSignup.current = true; setPublicView("signup"); }
+      else { pushedSignup.current = false; setPublicView((v) => (v === "signup" ? "login" : v)); }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // Somebody arriving on a link their general contractor sent them. Read once
   // on mount; the token is a query string rather than a path because this is
@@ -1596,14 +1667,34 @@ export default function SubSub() {
     persist("patchAccount.billing", api.patchAccount({ billing: c }));
     setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, billing: c } : a));
   };
-  const setBrand = (patch) => {
+  // Saving branding is the one settings write that can be refused -- an
+  // address somebody else already holds, or one that is not a legal hostname
+  // -- so it reports back rather than firing and forgetting. Returns null on
+  // success and a sentence to show otherwise; the local copy is only updated
+  // once the server has actually taken it, because an optimistic subdomain is
+  // an address on screen that nothing answers at.
+  const setBrand = async (patch) => {
     const resolved = typeof patch === "function" ? patch(account) : patch;
-    // Logo upload isn't wired to a real file picker yet (see README), so only
-    // name/useDefaultMark/theme persist for now — logoData stays local-only.
-    persist("patchAccount.brand", api.patchAccount({
-      name: resolved.name, useDefaultMark: resolved.useDefaultMark, theme: resolved.theme,
-    }));
-    setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, ...resolved } : a));
+    try {
+      // Logo upload has its own request (it needs the file), so only
+      // name/subdomain/useDefaultMark/theme go here.
+      const res = await api.patchAccount({
+        name: resolved.name, subdomain: resolved.subdomain,
+        useDefaultMark: resolved.useDefaultMark, theme: resolved.theme,
+      });
+      setAccounts((as) => as.map((a) => a.id === account.id ? {
+        ...a, ...resolved,
+        subdomain: res?.subdomain || resolved.subdomain,
+        // Changing the address takes the old hostname down and puts a new one
+        // up, so whatever the old one's status was no longer describes
+        // anything. The API sends back the status the account now really has.
+        hostnameStatus: res?.hostnameStatus ?? null,
+      } : a));
+      return null;
+    } catch (err) {
+      console.error("[persist] patchAccount.brand failed:", err);
+      return brandSaveError(err);
+    }
   };
   // Upgrading is a payment, so it leaves for Stripe rather than flipping a
   // column. Nothing in this app decides that somebody is on Scale -- Stripe
@@ -2504,6 +2595,11 @@ export default function SubSub() {
   };
 
   useEffect(() => {
+    // ?apply=1 is somebody asking for the public application form. Resuming a
+    // session would put them in the app instead, which is the opposite of what
+    // the link says -- and it is the link the account page uses to look at
+    // what a subcontractor actually sees. "Back to sign in" gets them in.
+    if (openingApplication) return;
     resumeSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -2632,10 +2728,10 @@ export default function SubSub() {
             onSubmit={(data) => inviteToken
               ? api.acceptInvite(inviteToken, data)
               : api.applyToAccount(brand.subdomain, data)}
-            onBackToLogin={() => setPublicView("login")} />
+            onBackToLogin={leaveSignup} />
         ) : (
           <LoginPage users={users} brand={brand} accounts={accounts} memberships={memberships}
-            onSignup={() => setPublicView("signup")}
+            onSignup={showSignup}
             onLogin={(email) => handleLogin(email)} />
         )}
       </div>
@@ -3435,7 +3531,6 @@ export default function SubSub() {
           currentUserId={currentUserId}
           onPatchSub={patchSub} onRequestDocs={requestDocs}
           onSeatLimit={() => setUpgradePrompt({ kind: "user" })}
-          onPreviewSignup={() => { setLoggedIn(false); setPublicView("signup"); }}
           hostnameStatus={account.hostnameStatus}
           // Re-reads the account and folds the answer back in, so the panel
           // can go green by itself while somebody is still on the page.
@@ -8006,24 +8101,42 @@ function AddressStatus({ subdomain, status, onRefresh }) {
 
   // Poll only while there is something to wait for, and stop the moment
   // there isn't. A timer that outlives its reason is a battery complaint.
+  //
+  // No status at all counts as waiting: that is the state a just-changed
+  // address is in, between the row being saved and Cloudflare answering, and
+  // it is exactly when somebody is sitting here watching. Give up after five
+  // minutes rather than polling forever on a Worker that has no Cloudflare
+  // credentials and so will never have anything to report.
+  //
+  // Through a ref, because onRefresh is written inline by the parent and so is
+  // a different function on every render -- and the parent re-renders once a
+  // second off the clock. Depending on its identity tore the interval down and
+  // built it again before it could ever reach twenty seconds, which is why
+  // this panel never went green by itself.
+  const refresh = useRef(onRefresh);
+  useEffect(() => { refresh.current = onRefresh; });
+
+  const waiting = live === "pending" || !live;
   useEffect(() => {
-    if (live !== "pending" || !onRefresh) return;
-    let running = true;
+    if (!waiting) return;
+    let running = true, tries = 0;
     const id = setInterval(async () => {
+      if (++tries > 15) { clearInterval(id); return; }
       try {
-        const next = await onRefresh();
+        const next = await refresh.current?.();
         if (running && next) setLive(next);
       } catch { /* a failed poll is not worth saying anything about */ }
     }, 20000);
     return () => { running = false; clearInterval(id); };
-  }, [live, onRefresh]);
+  }, [waiting]);
 
   const host = `${subdomain || "yourcompany"}.subsub.work`;
   const state = ADDRESS_STATE[live];
   if (!state) {
     return (
       <div className="addr-state t-wait">
-        <div className="addr-head"><Globe size={15} /><b>Your address is being prepared</b></div>
+        <div className="addr-head"><Globe size={15} /><b>Your address is being prepared</b>
+          <span className="addr-spin" aria-hidden="true" /></div>
         <p>{host} will be yours shortly. Until it is, everyone signs in at app.subsub.work.</p>
       </div>
     );
@@ -8052,7 +8165,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   onSaveUser, onSaveBrand, onUpgrade, onManageBilling, billingBusy, billingErr,
   onCancelSubscription, onResumeSubscription, cancelBusy,
   onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
-  onPatchSub, onRequestDocs, onSeatLimit, onPreviewSignup,
+  onPatchSub, onRequestDocs, onSeatLimit,
   hostnameStatus, onRefreshHostname, properties = [] }) {
   // accountKind is already a prop; the user form needs it to know which
   // scoped roles this account has anybody to hand out.
@@ -8085,7 +8198,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   const [b, setB] = useState({ ...brand });
   const [th, setTh] = useState(() => themeOf(brand));
   const [bSaved, setBSaved] = useState(false);
-  const setBrandField = (k, v) => { setB((x) => ({ ...x, [k]: v })); setBSaved(false); };
+  const [bErr, setBErr] = useState("");
+  const [bBusy, setBBusy] = useState(false);
+  const setBrandField = (k, v) => { setB((x) => ({ ...x, [k]: v })); setBSaved(false); setBErr(""); };
   // Instant local preview via a data URI (unchanged UX), plus a real upload
   // to R2 that persists independently of the rest of the "Save" flow below —
   // the same immediate-on-pick pattern the document uploads use.
@@ -8105,6 +8220,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   };
   const [adding, setAdding] = useState(false);
   const slug = (b.subdomain || "").toLowerCase().replace(/[^a-z0-9-]/g, "");
+  // Only complain once there is something to complain about: an empty field
+  // somebody has not reached yet is not an error, it is an empty field.
+  const subProblem = slug ? subdomainProblem(slug) : null;
   const active = PLANS[plan];
 
   return (
@@ -8167,7 +8285,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           </div>
 
           {mySub && (
-            <div className="portal-panel settings-panel" style={{ marginTop: 16 }}>
+            <div className="portal-panel settings-panel">
               <h4>Notifications</h4>
               <p className="panel-note">How you hear about job requests, work orders, and document reminders. Pick at least one.</p>
               <div className="notify-opts">
@@ -8210,7 +8328,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           )}
 
           {mySub && addr && (
-            <div className="portal-panel settings-panel" style={{ marginTop: 16 }}>
+            <div className="portal-panel settings-panel">
               <h4>Mailing address</h4>
               <p className="panel-note">Where uniforms and paperwork get shipped.</p>
               <label className="fld">Street<input value={addr.mailStreet} onChange={(e) => { setAddr({ ...addr, mailStreet: e.target.value }); setASaved(false); }} placeholder="1234 Industrial Way, Suite B" /></label>
@@ -8296,10 +8414,19 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           <label className="fld">Company name<input value={b.name} onChange={(e) => setBrandField("name", e.target.value)} placeholder="Outerhome" /></label>
           <label className="fld">Subdomain <span className="fld-note">where your team and contractors sign in</span>
             <div className="subdomain-row">
-              <input value={b.subdomain} onChange={(e) => setBrandField("subdomain", e.target.value)} placeholder="yourcompany" />
+              <input value={b.subdomain} onChange={(e) => setBrandField("subdomain", e.target.value)}
+                autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="yourcompany" />
               <span className="sd-suffix">.subsub.work</span>
             </div>
           </label>
+          {subProblem
+            ? <p className="fld-err"><AlertTriangle size={12} /> {subProblem}</p>
+            : slug !== brand.subdomain && (
+              <p className="cov-hint">
+                Not saved yet. Saving moves everyone to <b>{slug}.subsub.work</b> — the old
+                address stops working, so tell your team and your contractors before you do.
+              </p>
+            )}
 
           <AddressStatus subdomain={brand.subdomain} status={hostnameStatus} onRefresh={onRefreshHostname} />
 
@@ -8335,7 +8462,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 <span className="theme-label">{tf.label}</span>
                 <span className="theme-input">
                   <input type="color" value={th[tf.id]}
-                    onChange={(e) => { setTh({ ...th, [tf.id]: e.target.value }); setBSaved(false); }} />
+                    onChange={(e) => { setTh({ ...th, [tf.id]: e.target.value }); setBSaved(false); setBErr(""); }} />
                   <input className="theme-hex" value={th[tf.id]}
                     onChange={(e) => {
                       const v = e.target.value.trim();
@@ -8384,20 +8511,36 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
 
           <div className="theme-actions">
             <button type="button" className="btn-ghost"
-              onClick={() => { setTh({ ...DEFAULT_THEME }); setBSaved(false); }}>Reset to default</button>
-            {onPreviewSignup && (
-              <a className="theme-link" href="#" onClick={(e) => { e.preventDefault(); onPreviewSignup(); }}>
-                Open the live application form
+              onClick={() => { setTh({ ...DEFAULT_THEME }); setBSaved(false); setBErr(""); }}>Reset to default</button>
+            {/* The real form on the real address, in a new tab. It used to
+                open a copy inside this tab, which meant signing out of the
+                app to look at it and coming back to generic SubSub branding
+                -- the one thing this page exists to replace. */}
+            {hostnameStatus === "active" && brand.subdomain ? (
+              <a className="theme-link" href={`https://${brand.subdomain}.subsub.work/?apply=1`}
+                target="_blank" rel="noreferrer">
+                Open the live application form <ExternalLink size={12} />
               </a>
+            ) : (
+              <span className="theme-note">
+                The live form opens once {brand.subdomain || "your"}.subsub.work is ready.
+              </span>
             )}
           </div>
+
+          {bErr && <p className="fld-err"><AlertTriangle size={12} /> {bErr}</p>}
 
           <div className="panel-actions">
             <span className="panel-count">{slug || "yourcompany"}.subsub.work</span>
             {bSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
-              : <button className="btn-solid" disabled={!b.name || !slug}
-                  onClick={() => { onSaveBrand({ ...b, subdomain: slug, theme: th }); setBSaved(true); }}>
-                  <Check size={15} /> Save branding</button>}
+              : <button className="btn-solid" disabled={bBusy || !b.name || !slug || !!subProblem}
+                  onClick={async () => {
+                    setBBusy(true); setBErr("");
+                    const err = await onSaveBrand({ ...b, subdomain: slug, theme: th });
+                    setBBusy(false);
+                    if (err) setBErr(err); else { setBSaved(true); setB((x) => ({ ...x, subdomain: slug })); }
+                  }}>
+                  <Check size={15} /> {bBusy ? "Saving…" : "Save branding"}</button>}
           </div>
         </div>
       )}
@@ -12937,6 +13080,15 @@ body{background:var(--paper)}
    tab were a narrow column and the rest were not. The cap is gone; the
    fields inside already collapse to one column on a narrow screen. */
 .settings-panel{max-width:none}
+/* Each of these is a separate decision -- what kind of account this is, which
+   trades it hires, what its contractors see -- so they need the gap that says
+   so. Set on the panel rather than at each render site, where half of them
+   were carrying it inline and half were not. */
+.settings-panel + .settings-panel{margin-top:18px}
+/* Said where the link to the live form would be, when there is no live form
+   to link to yet. */
+.theme-note{font-size:12.5px;color:var(--ink-soft);text-align:right}
+.theme-link{display:inline-flex;align-items:center;gap:5px}
 .pc-renew{display:block;margin-top:5px;font-size:12.5px;color:var(--ink-soft)}
 .pc-renew.warn{color:#8a2f1c;font-weight:600}
 .pc-renew.comp{color:#8a5a12;font-weight:600}
