@@ -37,6 +37,8 @@
     "test:scheduled": "node scripts/tenant-scheduled-test.mjs",
     "test:migration-gap": "node scripts/migration-gap-test.mjs",
     "test:whitescreen": "node scripts/whitescreen-test.mjs",
+    "test:license-shape": "node scripts/license-shape-test.mjs",
+    "test:wo-number": "node scripts/wo-number-test.mjs",
     "test:sevmap": "node scripts/emergency-map-test.mjs",
     "test:emergency": "node scripts/emergency-test.mjs",
     "test:emergencyui": "node scripts/emergency-ui-test.mjs",

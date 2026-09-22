@@ -1118,6 +1118,52 @@ function licenseOk(sub) {
   if (c.status !== "ACTIVE" || c.suspendDate) return false;
   return !c.expirationDate || c.expirationDate >= new Date().toISOString().slice(0, 10);
 }
+// How to talk about a registration check -- for every shape one can really
+// have, not just the happy one.
+//
+// A check that ran and found nothing has no `status` at all: the state
+// registry simply had no such number. Three screens read
+// `.status.toLowerCase()` straight off it, and one of them is the admin
+// dashboard's "Registration problems" section, which exists to list exactly
+// these contractors. So a single mistyped license number threw during
+// render, React unmounted the whole tree, and the account's admin got a
+// white page with nothing on it. That is how this was found: from a
+// photograph of an empty screen.
+//
+// Nothing reads `.status` directly any more. These three answer instead.
+
+// A phrase that fits mid-sentence: "... — expired", "... — not found in the
+// state registry".
+function licenseStatusText(check) {
+  if (!check) return "not yet verified";
+  if (check.found) return String(check.status || "unknown").toLowerCase();
+  return check.status === "CHECK_FAILED" ? "could not be checked just now"
+    : check.status === "UNSUPPORTED_STATE" ? "not checkable in that state yet"
+    : "not found in the state registry";
+}
+
+// The short label in the chip. Never the raw stored value: that would put
+// "NOT_FOUND" and "CHECK_FAILED" in front of a customer.
+function licenseBadge(check) {
+  if (!check) return "Not checked";
+  if (check.found) {
+    const st = String(check.status || "").trim();
+    return st ? st[0].toUpperCase() + st.slice(1).toLowerCase() : "Verified";
+  }
+  return check.status === "CHECK_FAILED" ? "Check failed"
+    : check.status === "UNSUPPORTED_STATE" ? "Not checkable"
+    : "Not found";
+}
+
+// Which of the three chip styles it gets. Grey means we do not know; red
+// means we do know and it is a problem. A registry that has no record of the
+// number is the second kind, not the first.
+function licenseTone(check) {
+  if (!check) return "s-unknown";
+  if (check.found) return String(check.status || "").toUpperCase() === "ACTIVE" ? "s-active" : "s-bad";
+  return (check.status === "CHECK_FAILED" || check.status === "UNSUPPORTED_STATE") ? "s-unknown" : "s-bad";
+}
+
 // What an admin/PM must confirm for bond and agreement. Insurance uses the
 // coverage schedule above instead of a flat checklist.
 const DOC_CHECKS = {
@@ -9916,9 +9962,17 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 </div>
                 {mySub.licenseCheck && (
                   <p className={licenseOk(mySub) ? "cov-hint" : "fld-err"}>
+                    {/* Three different things, and only one of them is the
+                        contractor's to act on. Being told to "renew" a number
+                        the registry has never heard of sends somebody to the
+                        wrong place entirely. */}
                     {licenseOk(mySub)
-                      ? <>Verified with L&amp;I · {mySub.licenseCheck.status} · expires {mySub.licenseCheck.expirationDate}</>
-                      : <><AlertTriangle size={12} /> L&amp;I shows this registration as {mySub.licenseCheck.status.toLowerCase()} — renew it to keep receiving work.</>}
+                      ? <>Verified with L&amp;I · {licenseBadge(mySub.licenseCheck)} · expires {mySub.licenseCheck.expirationDate}</>
+                      : mySub.licenseCheck.found
+                        ? <><AlertTriangle size={12} /> L&amp;I shows this registration as {licenseStatusText(mySub.licenseCheck)} — renew it to keep receiving work.</>
+                        : mySub.licenseCheck.status === "CHECK_FAILED" || mySub.licenseCheck.status === "UNSUPPORTED_STATE"
+                          ? <><AlertTriangle size={12} /> This registration {licenseStatusText(mySub.licenseCheck)}. Nothing for you to do — it will be tried again.</>
+                          : <><AlertTriangle size={12} /> L&amp;I has no record of this number. Check it against your license and save again.</>}
                   </p>
                 )}
               </>
@@ -11238,7 +11292,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
                 <span className="dr-meta">
                   {!s.license ? "No L&I license number on file"
                     : !s.licenseCheck ? `${s.license} — not yet verified`
-                    : `${s.license} — ${s.licenseCheck.status.toLowerCase()}${s.licenseCheck.expirationDate ? `, expired ${s.licenseCheck.expirationDate}` : ""}`}
+                    : `${s.license} — ${licenseStatusText(s.licenseCheck)}${s.licenseCheck.expirationDate ? `, expired ${s.licenseCheck.expirationDate}` : ""}`}
                 </span>
               </div>
               <button className="btn-solid dash-row-btn" onClick={() => onVerifyLicense(s)}>
@@ -12310,8 +12364,8 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, servi
               {licenseOk(sub) ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
               <div className="lic-main">
                 <span className="lic-num">WA registration {sub.license}
-                  <span className={`lic-status s-${(sub.licenseCheck?.status || "unknown").toLowerCase()}`}>
-                    {sub.licenseCheck?.status || "Not checked"}
+                  <span className={`lic-status ${licenseTone(sub.licenseCheck)}`}>
+                    {licenseBadge(sub.licenseCheck)}
                   </span>
                 </span>
                 <span className="lic-meta">
@@ -13592,7 +13646,7 @@ function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, 
               {ok ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
               <div className="lic-main">
                 <span className="lic-num">{sub.license}
-                  <span className={`lic-status s-${(c?.status || "unknown").toLowerCase()}`}>{c?.status || "Not checked"}</span>
+                  <span className={`lic-status ${licenseTone(c)}`}>{licenseBadge(c)}</span>
                 </span>
                 {c?.found ? (
                   <span className="lic-meta">
@@ -13620,7 +13674,7 @@ function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, 
         })()}
         {sub.licenseCheck?.found && !licenseOk(sub) && (
           <p className="rollup-note" style={{ color: "var(--red)" }}>
-            Registration is {sub.licenseCheck.status.toLowerCase()} — this contractor can't be assigned until it's renewed.
+            Registration is {licenseStatusText(sub.licenseCheck)} — this contractor can't be assigned until it's renewed.
           </p>
         )}
       </section>
@@ -15647,7 +15701,7 @@ p.fld-note{margin:6px 0 0}
 .lic-num{font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .lic-status{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:20px}
 .lic-status.s-active{background:#e8f2ea;color:#1f6b4a}
-.lic-status.s-expired,.lic-status.s-suspended,.lic-status.s-revoked{background:#faece7;color:var(--red)}
+.lic-status.s-expired,.lic-status.s-suspended,.lic-status.s-revoked,.lic-status.s-bad{background:#faece7;color:var(--red)}
 .lic-status.s-unknown{background:var(--line);color:var(--ink-soft)}
 .lic-meta{font-size:11.5px;color:var(--ink-soft);line-height:1.4}
 .lic-state{font-size:11px;color:var(--ink-soft);font-style:italic;margin-top:2px}

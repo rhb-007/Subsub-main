@@ -2147,7 +2147,9 @@ async function verifySocrataState(cfg, licenseNumber) {
     rows[key] = res.data;
   }
   const lic = rows.general?.[0];
-  if (!lic) return { found: false, fieldMappingVerified: cfg.fieldMappingVerified };
+  // Say so explicitly. A bare { found: false } has no status at all, and the
+  // screens that describe a check used to read .status straight off it.
+  if (!lic) return { found: false, status: "NOT_FOUND", fieldMappingVerified: cfg.fieldMappingVerified };
   return { found: true, fieldMappingVerified: cfg.fieldMappingVerified, raw: lic, ...cfg.map(lic, rows.insurance || [], rows.bond || []) };
 }
 
@@ -2159,7 +2161,7 @@ async function verifyDC(licenseNumber) {
   const res = await fetchJsonSafe(url);
   if (!res.ok) return { found: false, status: "CHECK_FAILED", error: res.error, fieldMappingVerified: false };
   const attrs = res.data?.features?.[0]?.attributes;
-  if (!attrs) return { found: false, fieldMappingVerified: false };
+  if (!attrs) return { found: false, status: "NOT_FOUND", fieldMappingVerified: false };
   const esriDate = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : null);
   return {
     found: true, fieldMappingVerified: false, raw: attrs,
@@ -3627,6 +3629,31 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
 // ---------------------------------------------------------------------------
 // Work orders — issuing one is atomic and server-side authoritative.
 // ---------------------------------------------------------------------------
+// A work order number a person can read out on the phone, and one the
+// database will accept.
+//
+// It used to be four random digits. That is 9,000 possibilities against a
+// UNIQUE column shared by every account, so it is fine for a demo and a coin
+// flip by the time there are a few thousand work orders: around one in nine
+// at 1,000 rows, better than even at 4,000. It surfaced here first, on a test
+// database that has run up thousands of them, as an unexplained 500 on
+// assign -- which is precisely how it would have surfaced for a customer,
+// with "couldn't assign" on screen and nothing to act on.
+//
+// Six digits for headroom, and a retry because headroom is not a guarantee.
+async function withWoNumber(run) {
+  for (let attempt = 0; ; attempt++) {
+    const n = "WO-" + Math.floor(100000 + Math.random() * 900000);
+    try {
+      await run(n);
+      return n;
+    } catch (err) {
+      const taken = /UNIQUE constraint failed:\s*work_orders\.wo_number/i.test(String(err?.message || err));
+      if (!taken || attempt >= 5) throw err;
+    }
+  }
+}
+
 app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const jobId = c.req.param("jobId");
@@ -3655,7 +3682,6 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   }
 
   const autoScheduled = !!engagement.auto_schedule;
-  const woNumber = "WO-" + Math.floor(1000 + Math.random() * 9000);
   const id = uid();
   const cents = (v) => (v || v === 0) && String(v).trim() !== ""
     ? Math.round(Number(String(v).replace(/[^0-9.]/g, "")) * 100) : null;
@@ -3682,16 +3708,17 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   // read on screen as the assignment simply not working -- with nothing to
   // say why. Name the file instead: it is the one thing that turns this into
   // a two-minute fix.
+  let woNumber;
   try {
-    await c.env.DB.prepare(
+    woNumber = await withWoNumber((n) => c.env.DB.prepare(
       `INSERT INTO work_orders
         (id, wo_number, job_id, trade, company_id, engagement_id, crew_name, trade_scope, value_cents,
          status, auto_scheduled, response_window, respond_by, pay_kind, rate_cents, cap_hours)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, woNumber, jobId, trade, companyId, engagement.id, crewName || null, tradeScope || "",
+    ).bind(id, n, jobId, trade, companyId, engagement.id, crewName || null, tradeScope || "",
       valueCents, autoScheduled ? "accepted" : "pending", autoScheduled ? 1 : 0,
       autoScheduled ? null : (responseWindow || "24h"), respondBy,
-      hourly ? "hourly" : "fixed", rateCents, cap).run();
+      hourly ? "hourly" : "fixed", rateCents, cap).run());
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;
@@ -3777,19 +3804,18 @@ async function dispatchEmergency(c, jobId, accountId) {
 
     const trade = parseJson(job.trades, [])[0] || "general";
     const autoScheduled = !!engagement.auto_schedule;
-    const woNumber = "WO-" + Math.floor(1000 + Math.random() * 9000);
     const id = uid();
     // Two hours, not the usual day. If they cannot take it the manager needs
     // to know while it still matters.
     const respondBy = autoScheduled ? null : new Date(Date.now() + windowMins("2h") * 60000).toISOString();
-    await c.env.DB.prepare(
+    const woNumber = await withWoNumber((n) => c.env.DB.prepare(
       `INSERT INTO work_orders
         (id, wo_number, job_id, trade, company_id, engagement_id, crew_name, trade_scope, value_cents,
          status, auto_scheduled, response_window, respond_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, woNumber, jobId, trade, companyId, engagement.id, null, job.scope || "", null,
+    ).bind(id, n, jobId, trade, companyId, engagement.id, null, job.scope || "", null,
       autoScheduled ? "accepted" : "pending", autoScheduled ? 1 : 0,
-      autoScheduled ? null : "2h", respondBy).run();
+      autoScheduled ? null : "2h", respondBy).run());
 
     const co = await c.env.DB.prepare(
       `SELECT id, company, contact, email, phone, notify FROM companies WHERE id = ?`).bind(companyId).first();
@@ -3838,14 +3864,13 @@ app.post("/api/work-orders/:id/reissue", requireRole("admin", "pm"), async (c) =
   await c.env.DB.prepare(`UPDATE work_orders SET voided_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(id).run();
 
   const newId = uid();
-  const woNumber = "WO-" + Math.floor(1000 + Math.random() * 9000);
   const valueCents = b.value ? Math.round(Number(String(b.value).replace(/[^0-9.]/g, "")) * 100) : wo.value_cents;
-  await c.env.DB.prepare(
+  const woNumber = await withWoNumber((n) => c.env.DB.prepare(
     `INSERT INTO work_orders
       (id, wo_number, job_id, trade, company_id, engagement_id, crew_name, trade_scope, value_cents, status, auto_scheduled)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0)`
-  ).bind(newId, woNumber, wo.job_id, wo.trade, wo.company_id, wo.engagement_id,
-    b.crewName ?? wo.crew_name, b.tradeScope ?? wo.trade_scope, valueCents).run();
+  ).bind(newId, n, wo.job_id, wo.trade, wo.company_id, wo.engagement_id,
+    b.crewName ?? wo.crew_name, b.tradeScope ?? wo.trade_scope, valueCents).run());
 
   await touchJob(c.env, wo.job_id);
   await logEvent(c.env, accountId, userId, "wo.reissued", newId, { voided: id });
