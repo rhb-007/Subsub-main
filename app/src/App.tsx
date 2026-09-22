@@ -434,13 +434,6 @@ const DEFAULT_ACCOUNT_KIND = "general_contractor";
 const kindOf = (account) =>
   (account && ACCOUNT_KINDS[account.kind]) ? account.kind : DEFAULT_ACCOUNT_KIND;
 const hasProperties = (account) => ACCOUNT_KINDS[kindOf(account)].properties;
-// What to call this address on the sign-in page. It said "Contractor portal"
-// whoever the account was, which is right for a general contractor and wrong
-// for everyone else: a managing agent's address is where their own staff,
-// their building owners and their tenants sign in, and naming it after
-// subcontractors told most of the people standing on it that they had come
-// to the wrong place.
-const portalLabel = (account) => `${ACCOUNT_KINDS[kindOf(account)].label} portal`;
 
 // Phone numbers are typed in a dozen shapes and then compared, dialled and
 // texted as one, so every field that takes one runs its input through here.
@@ -8797,7 +8790,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <div className="brand-logo lg"><BrandMark brand={b} height={34} /></div>
               <div>
                 <div className="bp-name">{b.name || "Your company"}</div>
-                <div className="bp-sub">{portalLabel({ kind: accountKind })}</div>
+                <div className="bp-sub">Subcontractor Management Platform</div>
               </div>
             </div>
             <div className="bp-foot"><PoweredBy height={12} /></div>
@@ -11471,7 +11464,10 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
         <div className="login-brand">
           <div className="login-logo-wrap"><BrandMark brand={brand} height={38} /></div>
           <h1>{brand.name}</h1>
-          <p>{portalLabel(brand)} · {brand.subdomain}.subsub.work</p>
+          {/* What this is, not where it is. The address was printed here
+              too, and it is the address they are already standing on -- it
+              said nothing, and took the room a description needs. */}
+          <p>Subcontractor Management Platform</p>
         </div>
 
         <div className="login-form">

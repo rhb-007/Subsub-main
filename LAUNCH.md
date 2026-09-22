@@ -137,10 +137,12 @@ Fixed as encountered, because each one blocked something on the list:
   has handled somebody reachable only by phone from the start -- the sign-up
   page asks such a person for an address the moment they arrive. An email or
   a cell phone is enough now, either one.
-- Every branded sign-in page called itself a "Contractor portal", whoever
-  the account was. It is named after the account's own type now -- "Property
-  manager portal" -- and the page says tenants belong there too, because
-  until now it only ever spoke to subcontractors.
+- Every branded sign-in page called itself a "Contractor portal", with the
+  address printed after it -- the address the person was already standing
+  on. It reads "Subcontractor Management Platform" now, and nothing else:
+  the URL said nothing and took the room a description needs. The page also
+  says tenants belong there, because until now it only spoke to
+  subcontractors.
 - `/api/account-by-subdomain` read `kind` back out of a row it never selected
   it from, so every branded page thought its account was a general
   contractor. Nothing showed until the two things above depended on it.
