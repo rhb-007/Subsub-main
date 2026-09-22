@@ -2146,6 +2146,8 @@ export default function SubSub() {
       ...en, status: "active", rating: 0, ratedJobs: 0, accepted: 0, declined: 0,
     }, ...es]);
     setAdding(false);
+    // Straight back to the work order they were in the middle of.
+    if (resumeAssign) { setAssigning(resumeAssign); setResumeAssign(null); }
   };
   // Called instead of opening the form when the plan is maxed out.
   // Persists first so the id is the real one, then applies the optimistic
@@ -2180,6 +2182,16 @@ export default function SubSub() {
   };
   const tryAddContractor = () => {
     if (atContractorLimit) { setAddMenu(false); setUpgradePrompt({ kind: "contractor" }); return; }
+    setAdding(true);
+  };
+  // Adding a subcontractor from inside the assign screen, because there was
+  // nobody to assign. Where to go back to once they exist: without this the
+  // manager is dropped on the contractor list and has to find the job again.
+  const [resumeAssign, setResumeAssign] = useState(null);
+  const addContractorForSlot = (job, trade) => {
+    if (atContractorLimit) { setAssigning(null); setUpgradePrompt({ kind: "contractor" }); return; }
+    setResumeAssign({ job, trade });
+    setAssigning(null);
     setAdding(true);
   };
   // The new-property form lives inside PropertiesView, which owns it because
@@ -3778,6 +3790,7 @@ export default function SubSub() {
           replacing={assigning.replacing} subs={subs} jobs={jobs}
           onPick={(sub, details) => assignContractor(assigning.job.id, assigning.trade, sub, details)}
           onNotify={(sub) => requestDocs(sub, assigning.job, assigning.trade)}
+          onAddSub={() => addContractorForSlot(assigning.job, assigning.trade)}
           onCancel={() => setAssigning(null)} /></Modal>}
       {assignSub && <Modal onClose={() => setAssignSub(null)} wide>
         <PickJobSlot allJobs={allJobs} accountId={account.id} sub={assignSub.sub} jobs={jobs}
@@ -3829,8 +3842,9 @@ export default function SubSub() {
           existing={editUser} isSelf={editUser.id === currentUserId}
           canChangeRole={can("users") && editUser.id !== currentUserId}
           onSubmit={updateUser} onCancel={() => setEditUser(null)} /></Modal>}
-      {adding && <Modal onClose={() => setAdding(false)} wide>
-        <SubForm properties={accountProperties} onSubmit={addSub} onCancel={() => setAdding(false)} /></Modal>}
+      {adding && <Modal onClose={() => { setAdding(false); setResumeAssign(null); }} wide>
+        <SubForm properties={accountProperties} onSubmit={addSub}
+          onCancel={() => { setAdding(false); setResumeAssign(null); }} /></Modal>}
 
       {inviteOpen && <Modal onClose={() => setInviteOpen(false)}>
         <InviteLinks canRevoke={role === "admin"} onClose={() => setInviteOpen(false)} /></Modal>}
@@ -10509,7 +10523,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
   );
 }
 // ---- Pick a contractor for one trade slot --------------------------------
-function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing, onPick, onNotify, onCancel }) {
+function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing, onPick, onNotify, onAddSub, onCancel }) {
   // When re-matching after an expiry, the sub who didn't reply drops off the list.
   const pool = replacing ? subs.filter((x) => x.id !== replacing) : subs;
   const lapsed = replacing ? subs.find((x) => x.id === replacing) : null;
@@ -10701,7 +10715,22 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
         {job.zip ? ` · from ${job.zip}` : ""}</p>
       {job.date && <p className="pick-hint">Contractors free on this date are ranked first.</p>}
       {ranked.length === 0 ? (
-        <div className="empty"><Search size={26} /><p>No contractors cover {M.label.toLowerCase()}.</p></div>
+        /* This was a dead end: it said nobody covered the trade and offered
+           nothing to do about it. The two reasons need different words --
+           an empty roster is not the same problem as a roster with nobody
+           for this trade -- and both need the same way out. */
+        <div className="empty"><Search size={26} />
+          {subs.length === 0 ? (
+            <p>No subcontractors on this account yet. Add one and you can put them
+              on this job straight away.</p>
+          ) : (
+            <p>None of your {subs.length} subcontractor{subs.length === 1 ? "" : "s"} cover{subs.length === 1 ? "s" : ""}{" "}
+              {M.label.toLowerCase()}. Add one who does, or edit the job's trades.</p>
+          )}
+          {onAddSub && (
+            <button onClick={onAddSub}><Plus size={14} /> Subcontractor</button>
+          )}
+        </div>
       ) : (
         <div className="pick-list">
           {ranked.map(({ sub, prox, docs, day, covers, dup }, i) => (
