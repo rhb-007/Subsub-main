@@ -1608,6 +1608,11 @@ export default function SubSub() {
   const [readyOnly, setReadyOnly] = useState(false);
   const [autoOnly, setAutoOnly] = useState(false);
   const [jobPhase, setJobPhase] = useState("active");
+  // Arriving from a property card: which building the contractor list and
+  // the jobs list are narrowed to. Held here rather than inside each view
+  // because the property page is what sets it, on the way out.
+  const [fProperty, setFProperty] = useState("");
+  const [jobProperty, setJobProperty] = useState("");
 
   const [uniformOrders, setUniformOrders] = useState([]);
   const [upgradePrompt, setUpgradePrompt] = useState(null); // { kind: "contractor" | "user" }
@@ -1895,6 +1900,11 @@ export default function SubSub() {
     : null;
   const filtered = useMemo(() => {
     const list = subs.filter((s) => {
+      // Scoped to a building. A vendor with no buildings listed works them
+      // all, so they belong in every building's list rather than in none --
+      // which is what "every vendor on the account can work it" means on
+      // the property card.
+      if (fProperty && !servesProperty(s, fProperty)) return false;
       if (fCats.length && !s.categories.some((c) => fCats.includes(c))) return false;
       if (fCaps.length && !s.caps.some((c) => fCaps.includes(c))) return false;
       if (fAreas.length) {
@@ -1952,15 +1962,16 @@ export default function SubSub() {
           (b.rating - a.rating));
     }
     return sorted;
-  }, [subs, fCats, fCaps, fAreas, fRatings, minRating, fCrew, fAvail, readyOnly, autoOnly, fEarn, fDone, jobs, query, jobZip, inRangeOnly, sortBy]);
+  }, [subs, fProperty, fCats, fCaps, fAreas, fRatings, minRating, fCrew, fAvail, readyOnly, autoOnly, fEarn, fDone, jobs, query, jobZip, inRangeOnly, sortBy]);
 
   const clearFilters = () => {
     setQuery(""); setFCats([]); setFCaps([]); setFAreas([]); setFRatings([]); setFCrew([]); setFAvail([]);
     setReadyOnly(false); setAutoOnly(false); setFEarn([]); setFDone([]); setJobZip(""); setInRangeOnly(false);
+    setFProperty("");
   };
   const activeCount = fCats.length + fCaps.length + fAreas.length + fRatings.length +
     fCrew.length + fAvail.length + fEarn.length + fDone.length + (readyOnly ? 1 : 0) + (autoOnly ? 1 : 0) + (query.trim() ? 1 : 0) +
-    (jobZip ? 1 : 0) + (inRangeOnly ? 1 : 0);
+    (jobZip ? 1 : 0) + (inRangeOnly ? 1 : 0) + (fProperty ? 1 : 0);
 
   // --- Jobs: a job has multiple trades, each trade gets its own contractor ---
   const createJob = async (job, forSub) => {
@@ -3319,6 +3330,17 @@ export default function SubSub() {
 
       {tab === "network" && can("contractors") && (
         <main className="ss-main">
+          {/* Arriving from a building's card. A filtered list that does not
+              say it is filtered is how somebody concludes they have three
+              contractors when they have thirty. */}
+          {fProperty && (
+            <div className="scoped-to">
+              <Building2 size={14} />
+              <span>Showing contractors who work <strong>{propName(fProperty)}</strong>,
+                including everyone available at every building.</span>
+              <button onClick={() => setFProperty("")}><X size={13} /> Show all</button>
+            </div>
+          )}
           <div className="searchbar">
             <div className="search-input">
               <Search size={18} />
@@ -3462,6 +3484,8 @@ export default function SubSub() {
               : (sub.propertyIds || []).filter((x) => x !== propertyId),
           })}
           onAdd={addProperty} onPatch={patchProperty} onRemove={removeProperty}
+          onGoVendors={(p) => { setFProperty(p.id); setTab("network"); }}
+          onGoJobs={(p, phase) => { setJobProperty(p.id); setJobPhase(phase || "active"); setTab("jobs"); }}
           onOpenSub={(s) => { setSelected(s); setTab("contractors"); }}
           onNewJob={(p) => tryAddJob(null, p)} newAt={newPropertyAt}
           canManage={runsTheAccount(role, membership)} asOwner={role === "owner"} />
@@ -3476,8 +3500,19 @@ export default function SubSub() {
           onRequestDocs={requestDocs} />
       )}
 
-      {tab === "jobs" && can("jobs") && (
+      {tab === "jobs" && can("jobs") && (() => {
+      const shownJobs = jobs
+        .filter((j) => !jobProperty || j.propertyId === jobProperty)
+        .filter((j) => jobPhase === "all" || isClosed(j) === (jobPhase === "completed"));
+      return (
         <main className="ss-main">
+          {jobProperty && (
+            <div className="scoped-to">
+              <Building2 size={14} />
+              <span>Showing jobs at <strong>{propName(jobProperty)}</strong>.</span>
+              <button onClick={() => setJobProperty("")}><X size={13} /> Show all</button>
+            </div>
+          )}
           {jobs.length === 0 ? (
             <div className="empty"><ClipboardList size={28} /><p>No jobs yet.</p>
               <button onClick={() => tryAddJob()}>Create a job</button></div>
@@ -3486,7 +3521,10 @@ export default function SubSub() {
               <div className="jobs-head">
                 <div className="seg-tabs sm">
                   {[["active", "Active"], ["completed", "Completed"], ["all", "All"]].map(([id, l]) => {
-                    const n = id === "all" ? jobs.length : jobs.filter((x) => isClosed(x) === (id === "completed")).length;
+                    // Counted within the building being looked at, so the tab
+                    // numbers agree with the list underneath them.
+                    const here = jobs.filter((x) => !jobProperty || x.propertyId === jobProperty);
+                    const n = id === "all" ? here.length : here.filter((x) => isClosed(x) === (id === "completed")).length;
                     return (
                       <button key={id} className={jobPhase === id ? "on" : ""} onClick={() => setJobPhase(id)}>
                         {l} <span className="seg-n">{n}</span>
@@ -3496,11 +3534,11 @@ export default function SubSub() {
                 </div>
                 <button className="add-btn small" onClick={() => tryAddJob()}><Plus size={14} /> New job</button>
               </div>
-              {jobs.filter((j) => jobPhase === "all" || isClosed(j) === (jobPhase === "completed")).length === 0 && (
+              {shownJobs.length === 0 && (
                 <div className="dash-empty"><ClipboardList size={24} />
-                  <p>No {jobPhase === "all" ? "" : jobPhase} jobs.</p></div>
+                  <p>No {jobPhase === "all" ? "" : jobPhase} jobs{jobProperty ? ` at ${propName(jobProperty)}` : ""}.</p></div>
               )}
-              {jobs.filter((j) => jobPhase === "all" || isClosed(j) === (jobPhase === "completed")).map((j) => {
+              {shownJobs.map((j) => {
                 const filled = j.trades.filter((t) => j.assignments[t]).length;
                 const allAssigned = filled === j.trades.length;
                 const done = isClosed(j);
@@ -3703,7 +3741,7 @@ export default function SubSub() {
             </div>
           )}
         </main>
-      )}
+      ); })()}
 
       {tab === "account" && (
         <AccountView me={me} users={accountUsers} subs={subs} jobs={jobs} brand={brand} plan={plan} role={role}
@@ -8728,7 +8766,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
 // ---- Properties (portfolio / property managers) -------------------------
 // Vendors can be scoped to specific properties. A vendor with none listed is
 // treated as available across the whole account, which is how a GC uses it.
-function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, newAt, canManage = true, asOwner = false }) {
+function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, onGoVendors, onGoJobs, newAt, canManage = true, asOwner = false }) {
   const [form, setForm] = useState(null);   // null | {} | property
   const [assigning, setAssigning] = useState(null);   // the property whose vendor list is open
   const vendorsFor = (pid) => subs.filter((s) => (s.propertyIds || []).includes(pid));
@@ -8853,10 +8891,37 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                   )}
                 </div>
 
+                {/* The two counts were the answer to a question and no way
+                    to ask the next one: "five open jobs" and then nowhere to
+                    go. Both lead to the list they are counting, narrowed to
+                    this building. Units is not a link because there is
+                    nothing on the other side of it. */}
                 <div className="prop-stats">
                   <span><strong>{p.units || "—"}</strong> units</span>
-                  {canManage && <span><strong>{vs.length}</strong> assigned vendor{vs.length === 1 ? "" : "s"}</span>}
-                  <span><strong>{open}</strong> open job{open === 1 ? "" : "s"}</span>
+                  {canManage && (
+                    vs.length > 0 ? (
+                      <button className="stat-link" onClick={() => onGoVendors(p)}>
+                        <strong>{vs.length}</strong> assigned vendor{vs.length === 1 ? "" : "s"}
+                      </button>
+                    ) : (
+                      // Nothing to look at, so this offers the thing they
+                      // would want instead.
+                      <button className="stat-link" onClick={() => setAssigning(p)}>
+                        <strong>0</strong> assigned vendors
+                      </button>
+                    )
+                  )}
+                  {open > 0 ? (
+                    <button className="stat-link" onClick={() => onGoJobs(p)}>
+                      <strong>{open}</strong> open job{open === 1 ? "" : "s"}
+                    </button>
+                  ) : js.length > 0 ? (
+                    <button className="stat-link" onClick={() => onGoJobs(p, "all")}>
+                      <strong>0</strong> open jobs<span className="stat-sub"> · {js.length} finished</span>
+                    </button>
+                  ) : (
+                    <span><strong>0</strong> open jobs</span>
+                  )}
                 </div>
 
                 {/* The vendor list is the account's roster and its compliance
@@ -15646,6 +15711,28 @@ p.fld-note{margin:6px 0 0}
   border-top:1px solid var(--line);border-bottom:1px solid var(--line);
   font-size:12.5px;color:var(--ink-soft)}
 .prop-stats strong{font-size:15px;color:var(--ink);font-weight:700}
+/* A stat you can follow. Styled as itself rather than as a link, so the row
+   still reads as figures -- the underline on hover is what says it goes
+   somewhere. */
+.stat-link{background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;
+  display:inline-flex;align-items:baseline;gap:5px;border-radius:5px}
+.stat-link:hover,.stat-link:focus-visible{color:var(--brand);text-decoration:underline;text-underline-offset:3px}
+.stat-link:hover strong,.stat-link:focus-visible strong{color:var(--brand)}
+.stat-link:focus-visible{outline:2px solid var(--brand);outline-offset:3px;text-decoration:none}
+.stat-sub{opacity:.75}
+
+/* "You are looking at one building." A filtered list that does not say it is
+   filtered is how somebody concludes they have three contractors. */
+.scoped-to{display:flex;align-items:center;gap:9px;flex-wrap:wrap;background:var(--paper);
+  border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:14px;
+  font-size:12.5px;color:var(--ink-soft)}
+.scoped-to svg{flex:none;color:var(--brand)}
+.scoped-to strong{color:var(--ink);font-weight:700}
+.scoped-to > span{flex:1;min-width:180px}
+.scoped-to button{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
+  background:var(--card);color:var(--ink);font-size:12px;font-weight:650;padding:6px 11px;
+  border-radius:8px;cursor:pointer;font-family:inherit;flex:none}
+.scoped-to button:hover{border-color:var(--brand);color:var(--brand)}
 .prop-vendors{display:flex;flex-wrap:wrap;gap:6px;margin-top:13px}
 .prop-vendor{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
   background:var(--paper);border-radius:20px;padding:5px 11px;font:600 12px Inter,sans-serif;
