@@ -153,6 +153,48 @@ try {
   ck("it lands on the list", after.includes(picked), picked);
   ck("and the list says a photo came with it", /1 photo\b/.test(after), after.split("\n").find((l) => /photo/.test(l)) || "");
 
+  console.log("\n-- when the send does not go through --");
+  // The report used to be shown as sent whatever the server said: a failed
+  // save invented an id in the browser and the row sat there looking real
+  // until the next reload. For a tenant reporting a leak that is the worst
+  // possible failure -- told it was sent, and it went nowhere.
+  await page.setRequestInterception(true);
+  const breakSave = (req) => {
+    if (req.method() === "POST" && /\/api\/jobs$/.test(req.url())) {
+      return req.respond({ status: 503, contentType: "application/json",
+        body: JSON.stringify({ error: "migration_needed", migration: "022_report_photos" }) });
+    }
+    req.continue();
+  };
+  page.on("request", breakSave);
+  await hit(/Report a problem/);
+  await wait(1200);
+  await page.evaluate(() => document.querySelector(".tn-group")?.click());
+  await wait(500);
+  await page.evaluate(() => document.querySelector(".tn-pick")?.click());
+  await wait(700);
+  const doomed = `Will not save ${S}`;
+  await page.evaluate((w) => {
+    const ta = document.querySelector(".tn-form textarea");
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+    setter.call(ta, w); ta.dispatchEvent(new Event("input", { bubbles: true }));
+  }, doomed);
+  await hit(/Send it/);
+  await wait(2500);
+  const failed = await body();
+  ck("it does not claim to have sent it", !/Sent to Cascade Management/i.test(failed),
+    failed.split("\n").find((l) => /Sent to/i.test(l)) || "");
+  ck("the form is still open", await page.evaluate(() => !!document.querySelector(".tn-form")));
+  ck("with what they typed still in it",
+    await page.evaluate((w) => document.querySelector(".tn-form textarea")?.value === w, doomed));
+  ck("and it says what went wrong", /not finished being set up|didn't send/i.test(failed),
+    failed.split("\n").find((l) => /set up|didn't send/i.test(l)) || "nothing said");
+  page.off("request", breakSave);
+  await page.setRequestInterception(false);
+  await page.reload({ waitUntil: "networkidle0" });
+  await wait(2800);
+  ck("and nothing phantom was left on the list", !(await body()).includes(doomed));
+
   console.log("\n-- reading it back --");
   await page.evaluate(() => document.querySelector(".tn-row-open")?.click());
   await wait(1800);

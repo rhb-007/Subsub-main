@@ -1955,7 +1955,16 @@ export default function SubSub() {
   const createJob = async (job, forSub) => {
     let id, requested = false, saved = null;
     try { ({ id, requested, job: saved } = await api.createJob(job)); }
-    catch (err) { console.error("[persist] createJob failed:", err); id = Date.now(); }
+    catch (err) {
+      // This used to invent an id and carry on, which put the job on the
+      // screen looking saved when nothing had been written. For a manager
+      // that is a job that vanishes on reload; for a tenant reporting a leak
+      // it is being told "Sent to your manager" when it was sent nowhere.
+      // The caller decides what to say -- it knows whose screen it is on --
+      // but nobody gets told it worked.
+      console.error("[persist] createJob failed:", err);
+      throw err;
+    }
     logEvent(requested ? "job_requested" : "job_created",
       requested ? `Requested work: ${job.title}` : `Created job ${job.title}`);
 
@@ -8346,6 +8355,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
   const [form, setForm] = useState(null);
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
+  const [sendErr, setSendErr] = useState("");
   // Which report is open. Held by id rather than by object so the modal
   // follows the row as it updates -- an edit or a new photo re-renders the
   // list, and a captured object would keep showing what it used to say.
@@ -8396,12 +8406,11 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
     // photo, not the report -- somebody who has just described a leak should
     // not be handed their own form back because the second picture timed out.
     let photos = [];
-    if (shots.length) {
-      setSending(true);
-      photos = await uploadShots();
-      setSending(false);
-    }
-    onReport({
+    setSending(true);
+    setSendErr("");
+    if (shots.length) photos = await uploadShots();
+    try {
+      await onReport({
       title,
       propertyId: form.propertyId,
       // No trade when it cannot be told from the description; the account
@@ -8420,7 +8429,19 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         words: form.scope.trim(),
         unit: unit || "",
       },
-    });
+      });
+    } catch (e) {
+      // The form stays open with everything still in it. Somebody who has
+      // just described a leak and picked a photo should not have to do it
+      // again to find out whether it went.
+      console.error("[report] send failed:", e);
+      setSendErr(e?.body?.error === "migration_needed"
+        ? `${brand.name}'s account is not finished being set up — tell them to run ${e.body.migration || "022_report_photos"}.sql.`
+        : "That didn't send. Check your connection and try again — nothing has been lost.");
+      setSending(false);
+      return;
+    }
+    setSending(false);
     clearShots();
     setForm(null);
     setSent(true);
@@ -8474,10 +8495,11 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
           </>
         )}
 
+        {sendErr && <p className="billing-err" role="alert">{sendErr}</p>}
         <div className="form-actions">
           <button className="btn-ghost" onClick={() => { clearShots(); setForm(null); }} disabled={sending}>Cancel</button>
           <button className="btn-solid" onClick={submit} disabled={!ready || sending}>
-            <Plus size={15} /> {sending ? "Sending the photos…" : "Send it"}
+            <Plus size={15} /> {sending ? "Sending…" : "Send it"}
           </button>
         </div>
       </div>
@@ -10756,6 +10778,8 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
 // ---- Create job ----------------------------------------------------------
 // The job holds every project fact. Work orders are derived from it on assign.
 function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, properties, forProperty, asOwner = false }) {
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState("");
   // An owner with one building never has a choice to make, so it is made for
   // them rather than presented as an empty select they must fill in.
   const onlyOne = asOwner && (properties || []).length === 1 ? properties[0] : null;
@@ -10785,6 +10809,18 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
   // A request has to name a building: it is the only thing that decides whose
   // it is, and the server refuses one without.
   const valid = f.title && f.trades.length && f.address && (!asOwner || f.propertyId);
+
+  const save = async () => {
+    setSaving(true); setSaveErr("");
+    try { await onSubmit(f); }
+    catch (e) {
+      console.error("[job] create failed:", e);
+      setSaveErr(e?.body?.error === "migration_needed"
+        ? `The database isn't migrated yet — run ${e.body.migration}.sql and try again.`
+        : "That didn't save. Check your connection and try again — nothing here has been lost.");
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="form">
@@ -10891,10 +10927,14 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
         </label>
       </div>
 
+      {/* The modal used to close on click whatever the server said, so a
+          job that failed to save looked created until the next reload. */}
+      {saveErr && <p className="billing-err" role="alert">{saveErr}</p>}
       <div className="form-actions">
-        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
-        <button className="btn-solid" onClick={() => onSubmit(f)} disabled={!valid}>
-          <Plus size={15} /> {asOwner ? "Send this request" : <>Create job &amp; find contractors</>}
+        <button className="btn-ghost" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button className="btn-solid" onClick={save} disabled={!valid || saving}>
+          <Plus size={15} /> {saving ? "Saving…"
+            : asOwner ? "Send this request" : <>Create job &amp; find contractors</>}
         </button>
       </div>
     </div>
