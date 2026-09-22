@@ -10311,7 +10311,7 @@ function DeclineBox({ who, onCancel, onDecline }) {
       <div className="form-actions">
         <button className="btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
         <button className="btn-solid danger" onClick={send} disabled={busy}>
-          {busy ? "Sending…" : "Not approving — tell them why"}
+          {busy ? "Sending…" : "Decline and tell them why"}
         </button>
       </div>
     </div>
@@ -10467,7 +10467,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
                 {!isOwner && declining !== j.id && (
                   <div className="dash-row-btns">
                     <button className="btn-ghost sm" onClick={() => setDeclining(j.id)}>
-                      <X size={13} /> Not approving</button>
+                      <X size={13} /> Decline</button>
                     <button className="btn-solid dash-row-btn" onClick={() => onApproveJob(j.id)}>
                       <Check size={14} /> Approve</button>
                   </div>
@@ -10482,7 +10482,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
           {!isOwner && (
             <p className="rollup-note">Approving turns a request into a job you can price and
               assign. Nothing reaches a contractor until you do — and if you are not going to,
-              say so, so it stops waiting and they are told why.</p>
+              decline it, so it stops waiting and they are told why.</p>
           )}
         </section>
       )}
@@ -13590,7 +13590,11 @@ body{background:var(--paper)}
 .blocked-note.big{font-size:13px;background:#faece7;padding:10px;border-radius:8px;margin-top:14px}
 
 .empty{text-align:center;padding:70px 20px;color:var(--ink-soft)}
-.empty svg{opacity:.5;margin-bottom:12px}
+/* Direct child only. As a descendant rule this also caught the icon inside
+   the button underneath, which then wore a 12px bottom margin -- half of it
+   lifting the icon above the words in a centred flex row -- and half the
+   opacity meant for a decorative glyph. */
+.empty > svg{opacity:.5;margin-bottom:12px}
 .empty p{margin:0 0 14px;font-size:15px}
 .empty button{border:1px solid var(--line);background:var(--card);padding:9px 18px;border-radius:9px;font-weight:600;color:var(--brand);cursor:pointer}
 
@@ -13730,7 +13734,10 @@ p.fld-note{margin:6px 0 0}
 .wo-check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink)}
 .wo-check input{accent-color:var(--brand)}
 .form-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:8px}
-.btn-ghost{border:1px solid var(--line);background:var(--card);color:var(--ink);font-weight:600;font-size:13.5px;padding:10px 18px;border-radius:10px;cursor:pointer}
+/* Matches btn-solid. Without the flex row an icon sat on the text baseline
+   rather than beside it, so every ghost button with one -- Decline, All
+   jobs, Withdraw -- had its icon riding about 3px high. */
+.btn-ghost{border:1px solid var(--line);background:var(--card);color:var(--ink);font-weight:600;font-size:13.5px;padding:10px 18px;border-radius:10px;cursor:pointer;display:inline-flex;align-items:center;gap:7px}
 .btn-solid{border:0;background:var(--brand);color:#fff;font-weight:600;font-size:13.5px;padding:10px 20px;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:7px}
 .btn-solid:hover{background:var(--brand-dk)}
 .btn-solid:disabled{opacity:.45;cursor:not-allowed}
@@ -14315,7 +14322,7 @@ p.fld-note{margin:6px 0 0}
 .jr-card.past{opacity:.72}
 .dash-empty{text-align:center;padding:28px 16px;color:var(--ink-soft);background:var(--card);
   border:1px dashed var(--line);border-radius:12px}
-.dash-empty svg{opacity:.5;margin-bottom:8px}
+.dash-empty > svg{opacity:.5;margin-bottom:8px}   /* same trap, 8px and the New job button */
 .dash-empty p{margin:0;font-size:13.5px}
 .dash-empty-btn{display:inline-flex;align-items:center;gap:7px;margin-top:13px}
 
