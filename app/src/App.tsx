@@ -3290,6 +3290,7 @@ export default function SubSub() {
       {tab === "dashboard" && can("dashboard") && (
         <AdminDashboard visits={visits} subs={subs} jobs={jobs} role={role} me={me} now={now}
           accountId={account.id} trades={account.trades} subLimit={PLANS[plan].limit}
+          unitWord={tenantWhere(kindOf(account)) === "office" ? "Suite" : "Unit"}
           onGoAccount={() => setTab("account")}
           onInvite={() => setInviteOpen(true)}
           onAddSub={() => tryAddContractor()}
@@ -10363,10 +10364,133 @@ function DeclineBox({ who, onCancel, onDecline }) {
   );
 }
 
-function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [] }) {
+// A request, opened.
+//
+// The dashboard row could only ever be a title, a building and two buttons,
+// and the two buttons were the whole decision. Everything the person
+// actually said -- which unit, what they picked from the list, when it
+// started, what they wrote, and by now the photographs they sent -- had
+// nowhere to appear, so the choice between Approve and Decline was being
+// made on a headline.
+//
+// Approve and Decline live in here too, because the moment you have read it
+// is the moment you know, and going back to the row to act would be a step
+// for nothing.
+function RequestDetail({ job, who, where, unitWord = "Unit", onApprove, onDecline, onClose, readOnly = false }) {
+  const d = job.reportDetail || null;
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [declining, setDeclining] = useState(false);
+  const [lightbox, setLightbox] = useState(null);
+  const photos = job.photos || [];
+
+  const approve = async () => {
+    setBusy(true); setErr("");
+    try { await onApprove(job.id); onClose(); }
+    catch (e) {
+      console.error("[request] approve failed:", e);
+      setErr("That didn't go through. Try again in a moment.");
+      setBusy(false);
+    }
+  };
+
+  const askedBy = who
+    ? `${who.name}${who.role === "tenant" ? ` (tenant${who.unit ? `, ${unitWord.toLowerCase()} ${who.unit}` : ""})`
+      : who.role === "owner" ? " (owner)" : ""}`
+    : "someone";
+
+  const rows = [
+    ["Reported", job.createdAt ? niceDay(job.createdAt) : "recently"],
+    ["Asked for by", askedBy],
+    where ? ["Building", where.name] : null,
+    d?.unit ? [unitWord, d.unit] : (who?.unit ? [unitWord, who.unit] : null),
+    d?.problem ? ["What it is", d.problem] : null,
+    d?.started ? ["Started", d.started] : null,
+    job.trades?.length ? ["Trade", job.trades.map((t) => catMeta(t).label).join(", ")] : null,
+    job.date ? ["Date asked for", niceDay(job.date)] : null,
+    job.zip ? ["Where", [job.address, job.zip].filter(Boolean).join(", ")] : null,
+  ].filter(Boolean);
+
+  // Reports raised before the answers were kept apart only have the composed
+  // sentence, which is still the best thing to show.
+  const words = d?.words || (!d && job.scope) || "";
+
+  return (
+    <Modal onClose={onClose} wide>
+      <div className="form tn-detail">
+        <div className="tn-detail-head">
+          <h2>{job.title}</h2>
+          <span className="tn-chip wait">Waiting on you</span>
+        </div>
+
+        <dl className="tn-facts">
+          {rows.map(([k, v]) => <div key={k} className="tn-fact"><dt>{k}</dt><dd>{v}</dd></div>)}
+        </dl>
+
+        {words && (
+          <div className="tn-said">
+            <h4>What they wrote</h4>
+            <p>{words}</p>
+          </div>
+        )}
+
+        {photos.length > 0 && (
+          <div className="tn-said">
+            <h4>Photos they sent <span className="sec-count">{photos.length}</span></h4>
+            <div className="ph-grid">
+              {photos.map((ph) => (
+                <ReportPhoto key={ph.id} jobId={job.id} photo={ph}
+                  onOpen={(u) => setLightbox({ url: u, name: ph.name })} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!words && photos.length === 0 && (
+          <p className="fine">They picked this from the list and added nothing else.</p>
+        )}
+
+        {readOnly ? (
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={onClose}>Close</button>
+          </div>
+        ) : declining ? (
+          <DeclineBox who={who} onCancel={() => setDeclining(false)}
+            onDecline={async (note) => { await onDecline(job.id, note); onClose(); }} />
+        ) : (
+          <>
+            {err && <p className="billing-err" role="alert">{err}</p>}
+            <p className="fine">Approving turns this into a job you can price and assign.
+              Nothing reaches a contractor until you do.</p>
+            <div className="form-actions">
+              <button className="btn-ghost" onClick={onClose} disabled={busy}>Close</button>
+              <button className="btn-ghost danger" onClick={() => setDeclining(true)} disabled={busy}>
+                <X size={14} /> Decline
+              </button>
+              <button className="btn-solid" onClick={approve} disabled={busy}>
+                <Check size={15} /> {busy ? "Approving…" : "Approve"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {lightbox && (
+          <button type="button" className="ph-lightbox" onClick={() => setLightbox(null)} aria-label="Close photo">
+            <img src={lightbox.url} alt={lightbox.name} />
+          </button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit" }) {
   // Which request is being turned down, and why. One at a time: the reason
   // is the point, and a row of open boxes invites none of them being filled.
   const [declining, setDeclining] = useState(null);
+  // Which request is open, held by id: the list re-renders on every approve,
+  // and a captured object would go stale under the modal.
+  const [openReq, setOpenReq] = useState(null);
   // A tenant said the proposed time doesn't work: somebody has to propose
   // another, and nothing else on this screen would say so.
   const timeDeclined = visits.filter((v) => v.status === "declined")
@@ -10497,7 +10621,10 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             const where = props.find((p) => p.id === j.propertyId);
             return (
               <div key={j.id} className="dash-row">
-                <div className="dash-row-main">
+                {/* The row is the way in. Deciding on a headline was the
+                    only thing it ever allowed; everything they actually
+                    said is a tap away now. */}
+                <button className="dash-row-main dash-row-open" onClick={() => setOpenReq(j.id)}>
                   <div className="dr-title">{j.title}</div>
                   <span className="dr-meta">
                     {where ? where.name : "A building"}
@@ -10507,8 +10634,11 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
                           who?.role === "tenant"
                             ? ` (tenant${who.unit ? `, unit ${who.unit}` : ""})`
                             : who?.role === "owner" ? " (owner)" : ""}`}
+                    {(j.photos?.length || 0) > 0
+                      ? ` · ${j.photos.length} photo${j.photos.length === 1 ? "" : "s"}` : ""}
                   </span>
-                </div>
+                  <span className="dr-open">View details</span>
+                </button>
                 {!isOwner && declining !== j.id && (
                   <div className="dash-row-btns">
                     <button className="btn-ghost sm" onClick={() => setDeclining(j.id)}>
@@ -10529,6 +10659,18 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               assign. Nothing reaches a contractor until you do — and if you are not going to,
               decline it, so it stops waiting and they are told why.</p>
           )}
+          {(() => {
+            const j = awaitingApproval.find((x) => x.id === openReq);
+            if (!j) return null;
+            return (
+              <RequestDetail job={j} unitWord={unitWord}
+                who={users.find((u) => u.id === j.requestedBy)}
+                where={props.find((p) => p.id === j.propertyId)}
+                readOnly={isOwner}
+                onApprove={onApproveJob} onDecline={onDeclineJob}
+                onClose={() => setOpenReq(null)} />
+            );
+          })()}
         </section>
       )}
 
@@ -14416,6 +14558,12 @@ p.fld-note{margin:6px 0 0}
 .dash-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .dr-title{font-size:14px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dr-meta{font-size:11.5px;color:var(--ink-soft)}
+/* The request row opens. A button, not a div with a click, so it is
+   keyboard reachable and announced as doing something. */
+.dash-row-open{background:none;border:0;padding:0;font:inherit;text-align:left;cursor:pointer;align-items:flex-start}
+.dash-row-open:hover .dr-title{text-decoration:underline;text-underline-offset:2px}
+.dash-row-open:focus-visible{outline:2px solid var(--brand);outline-offset:3px;border-radius:6px}
+.dr-open{margin-top:3px;font-size:11.5px;font-weight:700;color:var(--brand)}
 .dash-row-btn{flex:none;padding:8px 13px;font-size:12.5px}
 .dash-avatar{width:34px;height:34px;border-radius:9px;background:var(--paper);border:1px solid var(--line);
   display:grid;place-items:center;font-size:11.5px;font-weight:800;color:var(--ink-soft);flex:none}
