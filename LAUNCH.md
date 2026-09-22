@@ -128,6 +128,19 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- **The tenant sign-up page was a blank screen.** `needsEmail`, `email` and
+  `setEmail` were read by it and never declared, so it threw a ReferenceError
+  on render: every tenant who followed an invite got nothing. The API half
+  had been finished all along -- the lookup returns `needsEmail`, the accept
+  route takes an address -- and only the page was left unwired. Both paths
+  now work end to end, checked in a browser: somebody added with an email
+  picks a password, somebody added by phone alone gives an address first.
+  Also `Show password` and `Set my password` were both inline buttons sharing
+  a line, so one printed over the other.
+- Nothing in the build catches an identifier that is used and never declared
+  -- esbuild only checks syntax -- which is how the above shipped. `npm run
+  lint` now runs ESLint with `no-undef` and nothing else; put the bug back
+  and it names all three identifiers.
 - Adding a tenant replaced the roster with a full page. It opens over the
   list now, the way every other short form in the app does. Importing a
   spreadsheet is still a page of its own: it puts a file's worth of rows on

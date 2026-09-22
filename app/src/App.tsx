@@ -6911,6 +6911,14 @@ function TenantImport({ properties, unitWord, onCancel, onDone }) {
 // are being told where to report a broken boiler.
 function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
   const [password, setPassword] = useState("");
+  // Somebody added by phone alone has a placeholder address on file, which
+  // is fine for texting them and no use as a login, so the page asks for a
+  // real one here -- the one moment they are already looking at it. The API
+  // has always said which case this is (`needsEmail` on the lookup) and
+  // taken an address on accept; this side read both without ever declaring
+  // them, so the page threw on render and every tenant following an invite
+  // got a blank screen.
+  const [email, setEmail] = useState("");
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(null);
@@ -6946,17 +6954,20 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
   const office = tenantWhere(acct.kind) === "office";
   const place = [invite.propertyName, invite.unit ? `${office ? "Suite" : "Unit"} ${invite.unit}` : null]
     .filter(Boolean).join(", ");
-  const ready = password.length >= 8;
+  const needsEmail = !!invite.needsEmail;
+  const ready = password.length >= 8 && (!needsEmail || validEmail(email.trim()));
 
   const go = async () => {
     setBusy(true); setErr("");
     try {
-      const res = await onSubmit({ password });
+      const res = await onSubmit(needsEmail ? { password, email: email.trim() } : { password });
       setDone(res);
     } catch (e) {
       console.error("[tenant-signup] failed:", e);
       const code = e?.body?.error;
       setErr(code === "weak_password" ? "Use at least 8 characters."
+        : code === "email_required" ? "That email address doesn't look right."
+        : code === "email_in_use_here" ? "That address is already in use here. Try another, or use Forgot password on the sign-in page."
         : code === "no_email_on_file" ? "There's no email address on your record, so there's nothing to sign in with. Ask your building manager to add one."
         : code === "rate_limited" ? "Too many attempts from this connection. Wait an hour and try again."
         : "That didn't go through. Try again in a moment.");
@@ -12783,7 +12794,10 @@ body{background:var(--paper)}
 .tn-preview-row span{color:var(--ink-soft);text-align:right}
 /* The reveal under a password field: a tenant typing on a phone, once, needs
    to be able to see what they typed. */
-.tn-reveal,.wl-reveal{background:none;border:0;padding:6px 0 0;cursor:pointer;
+/* Both of these are buttons, so both are inline by default and they shared a
+   line -- "Show password" ran underneath "Set my password". Each gets its
+   own row. */
+.tn-reveal,.wl-reveal{display:block;background:none;border:0;padding:6px 0 0;cursor:pointer;
   font:600 12px Inter,sans-serif;color:var(--wl-accent,var(--brand))}
 @media(max-width:640px){
   .tn-preview-row{flex-direction:column;gap:2px}
@@ -13016,8 +13030,8 @@ body{background:var(--paper)}
 .wl-summary span{opacity:.65}
 .wl-summary b{text-align:right;font-weight:600}
 .wl-actions{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:24px;flex-wrap:wrap}
-.wl-btn{background:var(--wl-accent);color:var(--wl-btn-text);border:0;border-radius:9px;
-  padding:14px 22px;font:700 15px inherit;cursor:pointer}
+.wl-btn{display:block;margin-top:16px;background:var(--wl-accent);color:var(--wl-btn-text);
+  border:0;border-radius:9px;padding:14px 22px;font:700 15px inherit;cursor:pointer}
 .wl-btn:disabled{opacity:.45;cursor:not-allowed}
 .wl-btn-ghost{background:none;border:1px solid rgba(128,128,128,.4);color:var(--wl-text);
   border-radius:9px;padding:13px 18px;font:600 14px inherit;cursor:pointer}
@@ -13609,8 +13623,8 @@ body{background:var(--paper)}
 .wl-summary span{opacity:.65}
 .wl-summary b{text-align:right;font-weight:600}
 .wl-actions{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:24px;flex-wrap:wrap}
-.wl-btn{background:var(--wl-accent);color:var(--wl-btn-text);border:0;border-radius:9px;
-  padding:14px 22px;font:700 15px inherit;cursor:pointer}
+.wl-btn{display:block;margin-top:16px;background:var(--wl-accent);color:var(--wl-btn-text);
+  border:0;border-radius:9px;padding:14px 22px;font:700 15px inherit;cursor:pointer}
 .wl-btn:disabled{opacity:.45;cursor:not-allowed}
 .wl-btn-ghost{background:none;border:1px solid rgba(128,128,128,.4);color:var(--wl-text);
   border-radius:9px;padding:13px 18px;font:600 14px inherit;cursor:pointer}
