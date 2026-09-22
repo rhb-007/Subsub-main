@@ -166,10 +166,48 @@ verified it now round-trips through the API the same as insurance/bond/contract.
 4. **Connect this repo to a new Cloudflare Pages/Workers project** for
    `app.subsub.work`, same pattern as `subsub-main` — but with **root
    directory set to `/app`**, build command `npm run build`, output
-   directory `dist`. The Worker API (`worker/index.js`) deploys separately
-   via `wrangler deploy` (or its own Workers Build), and the frontend calls
-   it at whatever URL that Worker gets — update the `/api` proxy target
-   accordingly (currently only configured for local dev in `vite.config.js`).
+   directory `dist`.
+
+5. **Give the API Worker its own Workers Build.** `worker/index.js` is a
+   separate deploy from the frontend, and for a long time it had no
+   automated one at all: it was deployed by hand with `wrangler deploy`,
+   so every push left the app live and the API a commit behind, with no
+   button anywhere to fix it. In the Cloudflare dashboard, open the
+   `subsub-api` Worker → Settings → Build, connect this repository, and set:
+
+   | Setting | Value |
+   |---|---|
+   | Root directory | `app` |
+   | Build command | `npm ci --include=dev` |
+   | Deploy command | `npx wrangler deploy -c wrangler.toml` |
+
+   **`-c wrangler.toml` is not optional.** Wrangler looks for its config in
+   the working directory and then walks *up*, and the repository root holds
+   `wrangler.jsonc` — the marketing site, whose assets directory is the whole
+   repo. A bare `npx wrangler deploy` from `app/` finds that one, not this
+   one, and deploys the wrong project. Locally it fails loudly, on a 126 MiB
+   file in `node_modules`; with credentials in hand it can succeed at the
+   wrong thing. Same reason the console Worker's deploy command names
+   `wrangler.admin.toml`.
+
+   **`--include=dev` is not optional either.** `hono` and `wrangler` are both
+   devDependencies, so a build environment with `NODE_ENV=production` would
+   install neither and fail with a missing module.
+
+   Deploys leave dashboard variables alone — see `keep_vars` in
+   `wrangler.toml`. D1 migrations are **not** run by this and stay manual.
+
+   `.github/workflows/deploy-api.yml` does the same job from GitHub Actions,
+   for anyone who would rather not use Workers Builds. It only uploads when
+   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set as repository
+   secrets; without them it still lints and builds the Worker on every push,
+   which is worth having either way. **Do not set those secrets while Workers
+   Builds is connected** — two deployers on the same push is a race with no
+   winner.
+
+   The frontend calls the API at whatever URL that Worker gets — update the
+   `/api` proxy target accordingly (currently only configured for local dev
+   in `vite.config.js`).
 
 ## Local development
 
