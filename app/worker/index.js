@@ -307,6 +307,8 @@ const OWNER_ALLOWED = [
   [/^\/api\/subs$/, ["GET"]],              // scoped: who works their buildings
   [/^\/api\/service-calls$/, ["GET"]],     // scoped: on their own jobs
   [/^\/api\/visits$/, ["GET"]],
+  [/^\/api\/jobs\/[^/]+\/withdraw$/, ["POST"]],
+  [/^\/api\/jobs\/[^/]+\/report$/, ["PATCH"]],
 ];
 
 // A tenant's is narrower again. They report problems and watch what happens
@@ -324,6 +326,9 @@ const TENANT_ALLOWED = [
   [/^\/api\/account-users$/, ["GET"]],     // scoped: themselves only
   [/^\/api\/properties$/, ["GET"]],        // scoped: their building
   [/^\/api\/jobs$/, ["GET", "POST"]],      // scoped: their own reports
+  // Their own report: taken back, or corrected within ten minutes.
+  [/^\/api\/jobs\/[^/]+\/withdraw$/, ["POST"]],
+  [/^\/api\/jobs\/[^/]+\/report$/, ["PATCH"]],
   // The proposed time for a repair of theirs, and their answer to it.
   [/^\/api\/visits$/, ["GET"]],
   [/^\/api\/visits\/[^/]+\/respond$/, ["POST"]],
@@ -2413,6 +2418,7 @@ function missingSchema(err) {
   if (!/no such (table|column)|has no column named/i.test(m)) return null;
   if (/\bnotify\b/i.test(m)) return "018_user_notify";
   if (/\bvisits\b/i.test(m)) return "019_visits";
+  if (/withdrawn_(at|note)/i.test(m)) return "020_withdrawn_reports";
   if (/tenant_invites|memberships\.unit|\bunit\b/i.test(m)) {
     return /sent_at/i.test(m) ? "017_tenant_invite_sent" : "015_tenants";
   }
@@ -2863,6 +2869,12 @@ function jobRowToJs(j, workOrders) {
     // Set when a building owner asked for the work. Until approved_at is
     // filled in it is a request, and nothing may be assigned against it.
     requestedBy: j.requested_by || null, approvedAt: j.approved_at || null,
+    // Taken back by whoever reported it. Not a status, because the status
+    // column has a CHECK on it; a withdrawn job is out of everything live.
+    withdrawnAt: j.withdrawn_at || null, withdrawnNote: j.withdrawn_note || null,
+    // The full timestamp, for the ten minutes in which a report can still be
+    // corrected. createdAt above is the date alone and always was.
+    createdAtIso: j.created_at || null,
   };
 }
 
@@ -2934,8 +2946,8 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
 async function notifyTenant(c, jobId, stage, when = null) {
   try {
     const job = await c.env.DB.prepare(
-      `SELECT id, title, account_id, requested_by FROM jobs WHERE id = ?`).bind(jobId).first();
-    if (!job?.requested_by) return;
+      `SELECT id, title, account_id, requested_by, withdrawn_at FROM jobs WHERE id = ?`).bind(jobId).first();
+    if (!job?.requested_by || job.withdrawn_at) return;
     const [user, seat, account] = await Promise.all([
       c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(job.requested_by).first(),
       c.env.DB.prepare(`SELECT role FROM memberships WHERE user_id = ? AND account_id = ?`)
@@ -3123,6 +3135,86 @@ app.post("/api/visits/:id/respond", async (c) => {
   }
   const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(v.id).first();
   return c.json(visitRowToJs(row));
+});
+
+// ---------------------------------------------------------------------------
+// A tenant's own report: taken back, or corrected while it is still fresh
+// ---------------------------------------------------------------------------
+
+// Whose report, and is it still theirs to change. Owners raise requests the
+// same way, so they get the same two things.
+async function ownReport(c, auth, jobId) {
+  if (auth.role !== "tenant" && auth.role !== "owner") return { error: "forbidden", status: 403 };
+  const job = await c.env.DB.prepare(
+    `SELECT * FROM jobs WHERE id = ? AND account_id = ?`).bind(jobId, auth.accountId).first();
+  if (!job) return { error: "not_found", status: 404 };
+  if (job.requested_by !== auth.userId) return { error: "forbidden", status: 403 };
+  return { job };
+}
+
+// It fixed itself, or it was never really a problem. Anything live on it
+// comes down: the work orders are voided so nobody turns up, the open visit
+// is superseded so nobody is asked to confirm it.
+app.post("/api/jobs/:id/withdraw", async (c) => {
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const { job, error, status } = await ownReport(c, auth, id);
+  if (error) return c.json({ error }, status);
+  if (job.status === "completed") return c.json({ error: "already_completed" }, 409);
+  if (job.withdrawn_at) return c.json({ ok: true, alreadyWithdrawn: true });
+  const b = await c.req.json().catch(() => ({}));
+  const note = String(b.note || "").trim().slice(0, 500) || null;
+  try {
+    await c.env.DB.prepare(`UPDATE jobs SET withdrawn_at = ?, withdrawn_note = ? WHERE id = ?`)
+      .bind(new Date().toISOString(), note, id).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  const voided = await c.env.DB.prepare(
+    `UPDATE work_orders SET voided_at = CURRENT_TIMESTAMP WHERE job_id = ? AND voided_at IS NULL`).bind(id).run();
+  try {
+    await c.env.DB.prepare(`UPDATE visits SET status = 'superseded' WHERE job_id = ? AND status IN ('proposed', 'declined')`).bind(id).run();
+  } catch { /* no visits table yet is not a reason to refuse the withdrawal */ }
+  await logEvent(c.env, auth.accountId, auth.userId, "job.withdrawn", id, { title: job.title, note });
+  await logActivity(c.env, auth.accountId, auth.userId, "job_withdrawn",
+    `Withdrew the report "${job.title}"${note ? `: ${note}` : ""}${voided?.meta?.changes ? ` (${voided.meta.changes} work order${voided.meta.changes === 1 ? "" : "s"} voided)` : ""}`);
+  return c.json({ ok: true, voided: voided?.meta?.changes ?? 0 });
+});
+
+// Ten minutes to fix a typo or add the thing you forgot, and only until the
+// manager has acted on it -- once approved, it is being worked from, and a
+// change underneath that is a new report.
+const REPORT_EDIT_WINDOW_MS = 10 * 60 * 1000;
+app.patch("/api/jobs/:id/report", async (c) => {
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const { job, error, status } = await ownReport(c, auth, id);
+  if (error) return c.json({ error }, status);
+  if (job.withdrawn_at) return c.json({ error: "withdrawn" }, 409);
+  if (job.approved_at || job.status === "completed") return c.json({ error: "already_actioned" }, 409);
+  // SQLite's CURRENT_TIMESTAMP is UTC without a zone marker.
+  const created = new Date(String(job.created_at).replace(" ", "T") + (String(job.created_at).endsWith("Z") ? "" : "Z"));
+  if (Date.now() - created.getTime() > REPORT_EDIT_WINDOW_MS) return c.json({ error: "edit_window_closed" }, 409);
+  const b = await c.req.json().catch(() => ({}));
+  const sets = [], vals = [];
+  if (b.title !== undefined) {
+    const title = String(b.title || "").trim().slice(0, 140);
+    if (!title) return c.json({ error: "title_required" }, 400);
+    sets.push("title = ?"); vals.push(title);
+  }
+  if (b.scope !== undefined) { sets.push("scope = ?"); vals.push(String(b.scope || "").trim().slice(0, 4000) || null); }
+  if (Array.isArray(b.trades)) {
+    const trades = b.trades.filter((t) => TRADE_IDS.has(t));
+    sets.push("trades = ?"); vals.push(JSON.stringify(trades));
+  }
+  if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
+  vals.push(id);
+  await c.env.DB.prepare(`UPDATE jobs SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
+  await logActivity(c.env, auth.accountId, auth.userId, "job_edited", `Corrected the report "${b.title || job.title}"`);
+  const row = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(id).first();
+  return c.json(jobRowToJs(row, []));
 });
 
 app.post("/api/jobs/:id/reopen", requireRole("admin", "pm"), async (c) => {

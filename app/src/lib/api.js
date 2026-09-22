@@ -134,6 +134,9 @@ export const api = {
   patchJob: (jobId, patch) => request(`/jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   // Turns a building owner's or tenant's request into a job that can be assigned.
   approveJob: (jobId) => request(`/jobs/${jobId}/approve`, { method: "POST" }),
+  // A tenant's own report: taken back, or corrected within ten minutes.
+  withdrawReport: (jobId, note) => request(`/jobs/${jobId}/withdraw`, { method: "POST", body: JSON.stringify({ note }) }),
+  editReport: (jobId, body) => request(`/jobs/${jobId}/report`, { method: "PATCH", body: JSON.stringify(body) }),
 
   // Tenants. The first two need a signed-in manager; the last two are how
   // somebody holding a link becomes a tenant, before they have any account.

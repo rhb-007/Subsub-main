@@ -498,7 +498,18 @@ const ALWAYS_SCOPED_ROLES = ["owner", "tenant"];
 // contractor -- so it belongs under "waiting on approval" and nowhere that
 // counts or offers trade slots. The API already refuses to assign against
 // one; the screens should not offer to.
-const isLiveJob = (j) => !(j.requestedBy && !j.approvedAt);
+const isLiveJob = (j) => !j.withdrawnAt && !(j.requestedBy && !j.approvedAt);
+// Closed out: finished, or taken back by whoever reported it. The Jobs tab
+// files both under Completed, because neither is going anywhere.
+const isClosed = (j) => j.status === "completed" || !!j.withdrawnAt;
+// How long a report can still be corrected by whoever made it.
+const REPORT_EDIT_WINDOW_MS = 10 * 60 * 1000;
+const reportEditableFor = (j) => {
+  if (!j?.createdAtIso || j.approvedAt || j.withdrawnAt || j.status === "completed") return 0;
+  const iso = String(j.createdAtIso);
+  const t = new Date(iso.replace(" ", "T") + (iso.endsWith("Z") ? "" : "Z")).getTime();
+  return Math.max(0, REPORT_EDIT_WINDOW_MS - (Date.now() - t));
+};
 // Whether THIS seat is narrowed, which for a manager is a question about
 // their buildings and not about their job title.
 const isScoped = (m) => (m?.propertyIds || []).length > 0;
@@ -2378,6 +2389,17 @@ export default function SubSub() {
     }
     return v;
   };
+  // A tenant taking their own report back, or correcting it while fresh.
+  const withdrawReport = async (jobId, note) => {
+    await api.withdrawReport(jobId, note);
+    const at = new Date().toISOString();
+    setJobs((js) => js.map((j) => j.id === jobId ? { ...j, withdrawnAt: at, withdrawnNote: note || null, assignments: {} } : j));
+    setVisits((vs) => vs.filter((v) => v.jobId !== jobId));
+  };
+  const editReport = async (jobId, body) => {
+    const j = await api.editReport(jobId, body);
+    setJobs((js) => js.map((x) => x.id === jobId ? { ...x, title: j.title, scope: j.scope, trades: j.trades } : x));
+  };
   // The tenant's answer. Confirming is what puts the date on the job.
   const respondVisit = async (id, body) => {
     const v = await api.respondVisit(id, body);
@@ -3400,7 +3422,7 @@ export default function SubSub() {
               <div className="jobs-head">
                 <div className="seg-tabs sm">
                   {[["active", "Active"], ["completed", "Completed"], ["all", "All"]].map(([id, l]) => {
-                    const n = id === "all" ? jobs.length : jobs.filter((x) => (x.status === "completed") === (id === "completed")).length;
+                    const n = id === "all" ? jobs.length : jobs.filter((x) => isClosed(x) === (id === "completed")).length;
                     return (
                       <button key={id} className={jobPhase === id ? "on" : ""} onClick={() => setJobPhase(id)}>
                         {l} <span className="seg-n">{n}</span>
@@ -3410,22 +3432,27 @@ export default function SubSub() {
                 </div>
                 <button className="add-btn small" onClick={() => tryAddJob()}><Plus size={14} /> New job</button>
               </div>
-              {jobs.filter((j) => jobPhase === "all" || (j.status === "completed") === (jobPhase === "completed")).length === 0 && (
+              {jobs.filter((j) => jobPhase === "all" || isClosed(j) === (jobPhase === "completed")).length === 0 && (
                 <div className="dash-empty"><ClipboardList size={24} />
                   <p>No {jobPhase === "all" ? "" : jobPhase} jobs.</p></div>
               )}
-              {jobs.filter((j) => jobPhase === "all" || (j.status === "completed") === (jobPhase === "completed")).map((j) => {
+              {jobs.filter((j) => jobPhase === "all" || isClosed(j) === (jobPhase === "completed")).map((j) => {
                 const filled = j.trades.filter((t) => j.assignments[t]).length;
                 const allAssigned = filled === j.trades.length;
-                const done = j.status === "completed";
+                const done = isClosed(j);
                 return (
                   <div key={j.id} className={`job-card ${done ? "done" : ""}`}>
                     <div className="job-card-head">
                       <div>
                         <div className="job-title-row">
                           <h3>{j.title}</h3>
-                          <span className={`job-phase ${done ? "done" : ""}`}>{done ? "completed" : "active"}</span>
+                          <span className={`job-phase ${done ? "done" : ""}`}>{j.withdrawnAt ? "withdrawn by tenant" : done ? "completed" : "active"}</span>
                         </div>
+                        {j.withdrawnAt && (
+                          <div className="job-withdrawn">
+                            <X size={12} /> Taken back {niceWhen(j.withdrawnAt)}{j.withdrawnNote ? <> — “{j.withdrawnNote}”</> : null}. Any work order on it was voided.
+                          </div>
+                        )}
                         <div className="job-meta">
                           <span><Calendar size={12} /> {formatWhen(j.date, j.time) || j.date || "No date"}</span>
                           <span><MapPin size={12} /> {[j.address, j.area, j.zip].filter(Boolean).join(", ") || "No address"}</span>
@@ -3671,6 +3698,7 @@ export default function SubSub() {
         <TenantPortal me={me} brand={brand} jobs={jobs} properties={accountProperties}
           unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey}
           visits={visits} onRespondVisit={respondVisit}
+          onWithdraw={withdrawReport} onEdit={editReport}
           onReport={(r) => createJob({ ...r, trades: r.trades || [] })} />
       )}
 
@@ -7522,6 +7550,7 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
 // four states to somebody running the building and one sentence to the person
 // waiting in the apartment.
 function tenantStage(job, visit) {
+  if (job.withdrawnAt) return { key: "withdrawn", label: "Withdrawn", tone: "off" };
   if (job.status === "completed") return { key: "done", label: "Done", tone: "ok" };
   // A date on the job is not a date with the tenant. Only a visit they have
   // confirmed reads as scheduled; one waiting on them asks them.
@@ -7685,6 +7714,92 @@ const TENANT_WHEN = [
   { id: "longer", label: "Longer than that" },
 ];
 
+// One report on the tenant's list, with the two things they can do to it
+// themselves: correct it while it is fresh, or take it back.
+function TenantReportRow({ job, stage, visit, brandName, meta, onRespondVisit, onWithdraw, onEdit }) {
+  const [mode, setMode] = useState(null);          // null | "edit" | "withdraw"
+  const [title, setTitle] = useState(job.title);
+  const [scope, setScope] = useState(job.scope || "");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const editLeft = reportEditableFor(job);
+  const canEdit = editLeft > 0 && !!onEdit;
+  const canWithdraw = !job.withdrawnAt && job.status !== "completed" && !!onWithdraw;
+  const minutes = Math.ceil(editLeft / 60000);
+
+  const saveEdit = async () => {
+    if (!title.trim()) { setErr("Give it a title."); return; }
+    setBusy(true); setErr("");
+    try { await onEdit(job.id, { title: title.trim(), scope: scope.trim() }); setMode(null); }
+    catch (e) {
+      console.error("[report] edit failed:", e);
+      setErr(e?.body?.error === "edit_window_closed" ? "The ten minutes are up — this can't be changed now. Withdraw it and report again if it's wrong."
+        : e?.body?.error === "already_actioned" ? "The manager has already picked this up, so it can't be changed now."
+        : "That didn't save. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+  const withdraw = async () => {
+    setBusy(true); setErr("");
+    try { await onWithdraw(job.id, note.trim()); setMode(null); }
+    catch (e) { console.error("[report] withdraw failed:", e); setErr("That didn't go through. Try again in a moment."); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className={`tn-row ${stage.key === "confirm" ? "needs-you" : ""} ${stage.key === "withdrawn" ? "is-off" : ""}`}>
+      <div className="tn-row-main">
+        {mode === "edit" ? (
+          <div className="tn-edit">
+            <label className="fld">What's wrong
+              <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={140} /></label>
+            <label className="fld">Details
+              <textarea rows={3} value={scope} onChange={(e) => setScope(e.target.value)} /></label>
+            {err && <p className="billing-err" role="alert">{err}</p>}
+            <div className="tn-visit-actions">
+              <button className="btn-ghost" onClick={() => { setMode(null); setErr(""); }} disabled={busy}>Cancel</button>
+              <button className="btn-solid" onClick={saveEdit} disabled={busy}><Check size={15} /> {busy ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="tn-row-title">{job.title}</div>
+            <span className="tn-row-meta">{meta}</span>
+          </>
+        )}
+        {stage.key === "confirm" && mode === null && (
+          <TenantVisitAsk visit={visit} brandName={brandName} onRespond={onRespondVisit} />
+        )}
+        {mode === "withdraw" && (
+          <div className="tn-edit">
+            <p className="tn-visit-q">Take this report back? {Object.keys(job.assignments || {}).length ? "The contractor will be told not to come. " : ""}You can always report it again.</p>
+            <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="Why? (optional) — e.g. it fixed itself, or it's no longer a problem" />
+            {err && <p className="billing-err" role="alert">{err}</p>}
+            <div className="tn-visit-actions">
+              <button className="btn-ghost" onClick={() => { setMode(null); setErr(""); }} disabled={busy}>Keep it</button>
+              <button className="btn-solid danger" onClick={withdraw} disabled={busy}>{busy ? "Withdrawing…" : "Yes, withdraw it"}</button>
+            </div>
+          </div>
+        )}
+        {mode === null && (canEdit || canWithdraw) && (
+          <div className="tn-row-actions">
+            {canEdit && (
+              <button className="tn-link" onClick={() => setMode("edit")}>
+                <Pencil size={12} /> Edit <span className="tn-link-sub">· {minutes} min left</span>
+              </button>
+            )}
+            {canWithdraw && (
+              <button className="tn-link" onClick={() => setMode("withdraw")}><X size={12} /> Withdraw</button>
+            )}
+          </div>
+        )}
+      </div>
+      <span className={`tn-chip ${stage.tone}`}>{stage.label}</span>
+    </div>
+  );
+}
+
 // The question a tenant is asked when a time has been proposed: does this
 // work? Two answers, and room to say why not -- "I'm at work until 6" is
 // the thing the manager needs to propose the next one.
@@ -7786,8 +7901,13 @@ function VisitBlock({ job, visit, who, onPropose }) {
   );
 }
 
-function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit }) {
+function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onWithdraw, onEdit }) {
   const visitOf = (jobId) => visits.find((v) => v.jobId === jobId) || null;
+  // Closed-out reports -- done, or taken back -- keep out of the way of the
+  // live ones but stay reachable: "did they ever fix the fan" is a question
+  // somebody asks months later.
+  const [showPast, setShowPast] = useState(false);
+  const isPast = (j) => j.status === "completed" || !!j.withdrawnAt;
   // null until they start. `group` and `query` are how the list of eighty
   // things gets down to the six worth reading: pick the area, or type a word.
   const [form, setForm] = useState(null);
@@ -8000,38 +8120,46 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         <Plus size={18} /> Report a problem
       </button>
 
-      <h3 className="tn-h3">{mine.length ? "What you've reported" : ""}</h3>
-      {mine.length === 0 ? (
-        <div className="dash-empty">
-          <ClipboardList size={24} />
-          <p>Nothing reported yet. When you do, it will show up here with where it has got to.</p>
-        </div>
-      ) : (
-        <div className="tn-list">
-          {mine.map((j) => {
-            const v = visitOf(j.id);
-            const st = tenantStage(j, v);
-            const who = Object.values(j.assignments || {})
-              .map((a) => a.subId).filter(Boolean);
-            return (
-              <div key={j.id} className={`tn-row ${st.key === "confirm" ? "needs-you" : ""}`}>
-                <div className="tn-row-main">
-                  <div className="tn-row-title">{j.title}</div>
-                  <span className="tn-row-meta">
-                    Reported {j.createdAt ? niceDay(j.createdAt) : "recently"}
-                    {v?.status === "confirmed" ? ` · visit ${visitWhen(v)}` : ""}
-                    {who.length && !v ? " · a contractor is assigned" : ""}
-                  </span>
-                  {st.key === "confirm" && (
-                    <TenantVisitAsk visit={v} brandName={brand.name} onRespond={onRespondVisit} />
-                  )}
-                </div>
-                <span className={`tn-chip ${st.tone}`}>{st.label}</span>
+      {(() => {
+        const current = mine.filter((j) => !isPast(j));
+        const past = mine.filter(isPast);
+        const row = (j) => {
+          const v = visitOf(j.id);
+          const st = tenantStage(j, v);
+          const who = Object.values(j.assignments || {}).map((a) => a.subId).filter(Boolean);
+          return (
+            <TenantReportRow key={j.id} job={j} stage={st} visit={v} brandName={brand.name}
+              meta={[
+                `Reported ${j.createdAt ? niceDay(j.createdAt) : "recently"}`,
+                v?.status === "confirmed" ? `visit ${visitWhen(v)}` : null,
+                who.length && !v && !isPast(j) ? "a contractor is assigned" : null,
+                j.status === "completed" && j.completedAt ? `done ${niceDay(j.completedAt)}` : null,
+                j.withdrawnAt ? `withdrawn${j.withdrawnNote ? ` — “${j.withdrawnNote}”` : ""}` : null,
+              ].filter(Boolean).join(" · ")}
+              onRespondVisit={onRespondVisit} onWithdraw={onWithdraw} onEdit={onEdit} />
+          );
+        };
+        return (
+          <>
+            <h3 className="tn-h3">{mine.length ? "What you've reported" : ""}</h3>
+            {current.length === 0 ? (
+              <div className="dash-empty">
+                <ClipboardList size={24} />
+                <p>{mine.length ? "Nothing open right now." : "Nothing reported yet. When you do, it will show up here with where it has got to."}</p>
               </div>
-            );
-          })}
-        </div>
-      )}
+            ) : <div className="tn-list">{current.map(row)}</div>}
+            {past.length > 0 && (
+              <div className="tn-past">
+                <button className="tn-past-toggle" onClick={() => setShowPast((v) => !v)} aria-expanded={showPast}>
+                  <ChevronRight size={15} className={showPast ? "open" : ""} />
+                  Past reports <span className="sec-count">{past.length}</span>
+                </button>
+                {showPast && <div className="tn-list">{past.map(row)}</div>}
+              </div>
+            )}
+          </>
+        );
+      })()}
     </main>
   );
 }
@@ -9729,7 +9857,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // A tenant said the proposed time doesn't work: somebody has to propose
   // another, and nothing else on this screen would say so.
   const timeDeclined = visits.filter((v) => v.status === "declined")
-    .map((v) => ({ v, job: jobs.find((j) => j.id === v.jobId) })).filter((x) => x.job && x.job.status !== "completed");
+    .map((v) => ({ v, job: jobs.find((j) => j.id === v.jobId) })).filter((x) => x.job && x.job.status !== "completed" && !x.job.withdrawnAt);
   const managesProperties = Array.isArray(properties);
   const today = new Date().toISOString().slice(0, 10);
   // Only approved work has trade slots. An unapproved request has its own
@@ -9738,7 +9866,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   const open = slots.filter((s) => !s.a);
   const pending = slots.filter((s) => s.a && s.a.status === "pending" && !s.a.auto);
   const declined = slots.filter((s) => s.a && s.a.status === "declined");
-  const upcoming = jobs.filter((j) => j.status !== "completed" && j.date).sort((a, b) => a.date.localeCompare(b.date));
+  const upcoming = jobs.filter((j) => j.status !== "completed" && !j.withdrawnAt && j.date).sort((a, b) => a.date.localeCompare(b.date));
   const nonCompliant = subs.filter((s) => DOC_KINDS.some((k) => !s[k]));
   const toReview = subs.map((s) => ({ sub: s, kinds: pendingReviewDocs(s) })).filter((x) => x.kinds.length);
   const licenseIssues = subs.filter((s) => !licenseOk(s));
@@ -9753,7 +9881,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
     && s.job.status === "completed");
   const committed = slots.filter((s) => s.a && (s.a.status === "accepted" || s.a.auto))
     .reduce((n, s) => n + Number(moneyRaw(s.a.value) || 0), 0);
-  const readyToComplete = jobs.filter((j) => j.status !== "completed"
+  const readyToComplete = jobs.filter((j) => j.status !== "completed" && !j.withdrawnAt
     && j.trades.every((t) => j.assignments[t] && (j.assignments[t].status === "accepted" || j.assignments[t].auto)));
 
   const first = me.name.split(" ")[0];
@@ -9766,7 +9894,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   const props = properties || [];
   // A request nobody has agreed to yet. The owner watches for it to clear;
   // the account has to do something about it.
-  const awaitingApproval = jobs.filter((j) => j.requestedBy && !j.approvedAt);
+  const awaitingApproval = jobs.filter((j) => j.requestedBy && !j.approvedAt && !j.withdrawnAt);
 
   return (
     <main className="ss-main">
@@ -13748,6 +13876,23 @@ body{background:var(--paper)}
   text-transform:uppercase;color:var(--ink-soft)}
 .login-tenants p{margin:4px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
 .login-tenants b{font-weight:700;color:var(--wl-accent,var(--brand))}
+.tn-chip.off{background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
+.job-withdrawn{display:flex;align-items:center;gap:6px;margin:4px 0 6px;font-size:12.5px;color:#b1391f}
+.tn-row.is-off{opacity:.72}
+.tn-row-actions{display:flex;gap:14px;margin-top:8px}
+.tn-link{display:inline-flex;align-items:center;gap:5px;background:none;border:0;padding:0;
+  font:700 12.5px Inter,sans-serif;color:var(--brand);cursor:pointer}
+.tn-link:hover{text-decoration:underline}
+.tn-link-sub{font-weight:500;color:var(--ink-soft)}
+.tn-edit{margin-top:10px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;background:var(--paper)}
+.tn-edit .fld{margin-bottom:10px}
+.tn-edit textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;font-size:14px}
+.btn-solid.danger{background:#b1391f}
+.tn-past{margin-top:18px}
+.tn-past-toggle{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:6px 0;margin-bottom:8px;
+  font:700 12.5px Inter,sans-serif;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);cursor:pointer}
+.tn-past-toggle svg{transition:transform .15s}
+.tn-past-toggle svg.open{transform:rotate(90deg)}
 /* a proposed visit, on the tenant's report */
 .tn-row.needs-you{border-color:var(--gold-dk);box-shadow:0 0 0 3px rgba(192,125,28,.12)}
 .tn-visit{margin-top:12px;padding:14px 16px;border:1px solid var(--line);border-radius:11px;background:var(--paper)}
@@ -14406,6 +14551,23 @@ body{background:var(--paper)}
   text-transform:uppercase;color:var(--ink-soft)}
 .login-tenants p{margin:4px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
 .login-tenants b{font-weight:700;color:var(--wl-accent,var(--brand))}
+.tn-chip.off{background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
+.job-withdrawn{display:flex;align-items:center;gap:6px;margin:4px 0 6px;font-size:12.5px;color:#b1391f}
+.tn-row.is-off{opacity:.72}
+.tn-row-actions{display:flex;gap:14px;margin-top:8px}
+.tn-link{display:inline-flex;align-items:center;gap:5px;background:none;border:0;padding:0;
+  font:700 12.5px Inter,sans-serif;color:var(--brand);cursor:pointer}
+.tn-link:hover{text-decoration:underline}
+.tn-link-sub{font-weight:500;color:var(--ink-soft)}
+.tn-edit{margin-top:10px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;background:var(--paper)}
+.tn-edit .fld{margin-bottom:10px}
+.tn-edit textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;font-size:14px}
+.btn-solid.danger{background:#b1391f}
+.tn-past{margin-top:18px}
+.tn-past-toggle{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:6px 0;margin-bottom:8px;
+  font:700 12.5px Inter,sans-serif;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);cursor:pointer}
+.tn-past-toggle svg{transition:transform .15s}
+.tn-past-toggle svg.open{transform:rotate(90deg)}
 /* a proposed visit, on the tenant's report */
 .tn-row.needs-you{border-color:var(--gold-dk);box-shadow:0 0 0 3px rgba(192,125,28,.12)}
 .tn-visit{margin-top:12px;padding:14px 16px;border:1px solid var(--line);border-radius:11px;background:var(--paper)}

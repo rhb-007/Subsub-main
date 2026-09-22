@@ -128,6 +128,12 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- A tenant can now see their closed-out reports (done, or taken back) under
+  "Past reports", take a live one back -- it fixed itself -- with a reason,
+  which voids any work order on it so nobody turns up, and correct one
+  within ten minutes of making it, until the manager has acted on it.
+  Withdrawn jobs sit with completed ones on the manager's Jobs tab, marked
+  as withdrawn by the tenant with the reason (migration 020).
 - A report went from "contractor assigned" to "done" with the tenant told
   nothing about when anybody would turn up. There is a visit now (migration
   019): the manager or the contractor proposes a date and a window, the
