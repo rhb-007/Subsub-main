@@ -462,6 +462,11 @@ const formatPhone = (v) => {
 // as an address.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const validEmail = (v) => EMAIL_RE.test(String(v ?? "").trim());
+// "a trade and a coverage area", not "a trade, a coverage area" -- a form
+// telling someone what is still wrong should read like a sentence.
+const andList = (xs) => xs.length < 2 ? (xs[0] || "")
+  : xs.length === 2 ? `${xs[0]} and ${xs[1]}`
+  : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
 
 const ROLES = {
   admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
@@ -12757,6 +12762,13 @@ function SubForm({ onSubmit, onCancel, existing, properties }) {
   const step1Ok = !!(f.company.trim() && f.contact.trim()
     && (f.notifyEmail || f.notifySms) && subEmailOk && subPhoneOk);
   const step2Ok = !!(f.categories.length && f.caps.length && coverageOk);
+  // Naming all three every time is the same as naming none of them: the one
+  // that is actually unmet is the only useful thing to say.
+  const step2Missing = [
+    !f.categories.length && "pick a trade",
+    caps.length > 0 && !f.caps.length && "pick a capability",
+    !coverageOk && "set a coverage area",
+  ].filter(Boolean);
   const step3Ok = cleanCrews.length > 0;
   const stepOk = step === 1 ? step1Ok : step === 2 ? step2Ok : step3Ok;
 
@@ -12891,11 +12903,23 @@ function SubForm({ onSubmit, onCancel, existing, properties }) {
           <button key={c.id} type="button" className={`pick ${f.categories.includes(c.id) ? "on" : ""}`}
             onClick={() => toggleCategory(c.id)}>{c.label}</button>
         ))}</div>
+        {!f.categories.length && (
+          <p className="fld-err"><AlertTriangle size={12} /> Pick at least one trade.</p>
+        )}
       </div>
       {caps.length > 0 && (
-        <div className="fld">Capabilities<div className="pick-grid">
-          {caps.map((c) => <button key={c} type="button" className={`pick ${f.caps.includes(c) ? "on" : ""}`} onClick={() => toggle("caps", c)}>{c}</button>)}
-        </div></div>
+        /* Pick a trade or six and this becomes forty-odd chips between the
+           trades and the coverage box. With nothing chosen it looks finished,
+           so the requirement has to be stated here, where the fix is, and not
+           only in a line under a greyed-out Continue. */
+        <div className="fld">Capabilities <span className="fld-note">what they actually do within those trades</span>
+          <div className="pick-grid">
+            {caps.map((c) => <button key={c} type="button" className={`pick ${f.caps.includes(c) ? "on" : ""}`} onClick={() => toggle("caps", c)}>{c}</button>)}
+          </div>
+          {f.caps.length === 0
+            ? <p className="fld-err"><AlertTriangle size={12} /> Pick at least one — this is what jobs are matched on.</p>
+            : <p className="cov-hint">{f.caps.length} chosen.</p>}
+        </div>
       )}
       <div className="fld">Coverage
         <div className="cov-toggle">
@@ -12925,6 +12949,11 @@ function SubForm({ onSubmit, onCancel, existing, properties }) {
               <Plus size={12} /> Add another radius
             </button>
           </div>
+        )}
+        {!coverageOk && (
+          <p className="fld-err"><AlertTriangle size={12} /> {f.covMode === "cities"
+            ? "Pick at least one city."
+            : "A radius needs both a ZIP and a distance."}</p>
         )}
         <p className="cov-hint">Coverage is either named cities or one-or-more ZIP radii — not both.</p>
       </div>
@@ -12979,7 +13008,7 @@ function SubForm({ onSubmit, onCancel, existing, properties }) {
                 ? "Add a mobile number, or turn off text notifications."
                 : "A mobile number needs 10 digits.")
             : "Company, contact and at least one notification method are needed."
-            : step === 2 ? "Pick at least one trade, one capability, and set a coverage area."
+            : step === 2 ? `Still to do: ${andList(step2Missing)}.`
             : "Add at least one crew with a named member."}
         </p>
       )}
