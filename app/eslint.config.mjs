@@ -6,8 +6,15 @@
 // no-undef is the check that would have caught it in a second. The rest of
 // ESLint's opinions are deliberately left off: this is a guard against a
 // class of bug that has already cost a release, not a style argument.
+//
+// no-undef alone turned out to be half the net. It reads `<Foo />` as JSX
+// rather than as a reference to Foo, so an icon used and never imported
+// passed lint and then threw on render -- the same blank screen, by the
+// same route, found by hand again. react/jsx-no-undef is the half that
+// covers components, and is here for that and nothing else.
 import globals from "globals";
 import reactHooks from "eslint-plugin-react-hooks";
+import react from "eslint-plugin-react";
 
 export default [
   { ignores: ["dist/**", ".wrangler/**", "node_modules/**"] },
@@ -26,8 +33,8 @@ export default [
     // react-hooks/exhaustive-deps` comments name a rule that exists. Its
     // rules stay off: turning them on is a separate piece of work with a
     // long tail, and this config is here for one bug.
-    plugins: { "react-hooks": reactHooks },
-    rules: { "no-undef": "error" },
+    plugins: { "react-hooks": reactHooks, react },
+    rules: { "no-undef": "error", "react/jsx-no-undef": "error" },
   },
   {
     files: ["worker/**/*.js", "scripts/**/*.mjs"],

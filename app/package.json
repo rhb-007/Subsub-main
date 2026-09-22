@@ -25,6 +25,8 @@
     "test:addsub": "node scripts/addsub-from-assign-test.mjs",
     "test:subform": "node scripts/subform-guard-test.mjs",
     "test:poweredby": "node scripts/poweredby-contrast-test.mjs",
+    "test:reportdetail": "node scripts/report-detail-test.mjs",
+    "test:tenantui": "node scripts/tenant-report-ui-test.mjs",
     "test:notify": "wrangler d1 execute subsub-db --config=./wrangler.toml --local --file=./scripts/tenant-notify-fixture.sql && node scripts/tenant-notify-test.mjs",
     "lint": "eslint ."
   },
@@ -39,6 +41,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
     "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.12.0",
     "hono": "^4.6.11",

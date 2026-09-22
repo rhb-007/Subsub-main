@@ -140,6 +140,24 @@ export const api = {
   withdrawReport: (jobId, note) => request(`/jobs/${jobId}/withdraw`, { method: "POST", body: JSON.stringify({ note }) }),
   editReport: (jobId, body) => request(`/jobs/${jobId}/report`, { method: "PATCH", body: JSON.stringify(body) }),
 
+  // Photos on a report. Uploading is two steps on purpose: the bytes go to
+  // R2 first and the report is told about them after, so a failed upload
+  // leaves a report with one fewer photo rather than a row pointing at
+  // something that is not there.
+  uploadReportPhoto: (file) => uploadFile("report-photo", file),
+  addReportPhotos: (jobId, photos) =>
+    request(`/jobs/${jobId}/photos`, { method: "POST", body: JSON.stringify({ photos }) }),
+  removeReportPhoto: (jobId, photoId) =>
+    request(`/jobs/${jobId}/photos/${photoId}`, { method: "DELETE" }),
+  // An <img> tag cannot send an Authorization header, so the bytes are
+  // fetched like any other call and handed to the page as a blob URL. The
+  // caller owns revoking it -- see ReportPhoto in App.tsx.
+  reportPhotoBlob: async (jobId, photoId) => {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/photos/${photoId}`, { headers: await authHeaders() });
+    if (!res.ok) throw new Error(`photo_${res.status}`);
+    return URL.createObjectURL(await res.blob());
+  },
+
   // Tenants. The first two need a signed-in manager; the last two are how
   // somebody holding a link becomes a tenant, before they have any account.
   listTenants: () => request("/tenants"),

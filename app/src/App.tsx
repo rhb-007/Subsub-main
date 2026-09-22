@@ -25,7 +25,7 @@ import {
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
-  Globe, RefreshCw, ExternalLink,
+  Globe, RefreshCw, ExternalLink, ImageOff,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, logoUrl } from "./lib/api";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
@@ -1582,7 +1582,7 @@ export default function SubSub() {
   // White-label tenant branding — one GC per instance (outerhome.subsub.work)
 
   const [pane, setPane] = useState("jobs"); // contractor portal pane
-  // Bumped by "File a report" in the nav; the tenant screen opens its form
+  // Bumped by "Report a problem" in the nav; the tenant screen opens its form
   // when it changes. A counter rather than a flag, so pressing it twice
   // opens the form twice.
   const [reportKey, setReportKey] = useState(0);
@@ -1953,8 +1953,8 @@ export default function SubSub() {
 
   // --- Jobs: a job has multiple trades, each trade gets its own contractor ---
   const createJob = async (job, forSub) => {
-    let id, requested = false;
-    try { ({ id, requested } = await api.createJob(job)); }
+    let id, requested = false, saved = null;
+    try { ({ id, requested, job: saved } = await api.createJob(job)); }
     catch (err) { console.error("[persist] createJob failed:", err); id = Date.now(); }
     logEvent(requested ? "job_requested" : "job_created",
       requested ? `Requested work: ${job.title}` : `Created job ${job.title}`);
@@ -1974,7 +1974,12 @@ export default function SubSub() {
       createdAt: new Date().toISOString().slice(0, 10), assignments,
       // Mirrors what the server just decided, so the row reads as a request
       // straight away rather than looking like a live job until the next load.
-      requestedBy: requested ? currentUserId : null, approvedAt: null }, ...js]);
+      requestedBy: requested ? currentUserId : null, approvedAt: null,
+      // Then whatever the server actually wrote wins. The browser cannot
+      // know the created_at that the edit window is measured from, or the
+      // ids the photos were given, and guessing both made two working
+      // features look broken until the page was reloaded.
+      ...(saved || {}), assignments }, ...js]);
     setJobForm(null);
     setTab("jobs");
     return id;
@@ -2426,7 +2431,17 @@ export default function SubSub() {
   };
   const editReport = async (jobId, body) => {
     const j = await api.editReport(jobId, body);
-    setJobs((js) => js.map((x) => x.id === jobId ? { ...x, title: j.title, scope: j.scope, trades: j.trades } : x));
+    setJobs((js) => js.map((x) => x.id === jobId
+      ? { ...x, title: j.title, scope: j.scope, trades: j.trades, reportDetail: j.reportDetail } : x));
+  };
+  // Photos arriving or leaving. One call for both, because the server
+  // answers each with the report's whole list and the caller wants the same
+  // thing either way: what is on it now.
+  const changeReportPhotos = async (jobId, added, removeId) => {
+    const r = removeId
+      ? await api.removeReportPhoto(jobId, removeId)
+      : await api.addReportPhotos(jobId, added);
+    setJobs((js) => js.map((x) => x.id === jobId ? { ...x, photos: r.photos || [] } : x));
   };
   // The tenant's answer. Confirming is what puts the date on the job.
   const respondVisit = async (id, body) => {
@@ -3200,7 +3215,7 @@ export default function SubSub() {
                 Dashboard
               </button>
               <button onClick={() => { setTab("tenant"); setReportKey((k) => k + 1); }}>
-                File a report
+                Report a problem
               </button>
             </>
           )}
@@ -3731,7 +3746,7 @@ export default function SubSub() {
         <TenantPortal me={me} brand={brand} jobs={jobs} properties={accountProperties}
           unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey}
           visits={visits} onRespondVisit={respondVisit}
-          onWithdraw={withdrawReport} onEdit={editReport}
+          onWithdraw={withdrawReport} onEdit={editReport} onPhotosChanged={changeReportPhotos}
           onReport={(r) => createJob({ ...r, trades: r.trades || [] })} />
       )}
 
@@ -7752,84 +7767,297 @@ const TENANT_WHEN = [
 
 // One report on the tenant's list, with the two things they can do to it
 // themselves: correct it while it is fresh, or take it back.
-function TenantReportRow({ job, stage, visit, brandName, meta, onRespondVisit, onWithdraw, onEdit }) {
-  const [mode, setMode] = useState(null);          // null | "edit" | "withdraw"
-  const [title, setTitle] = useState(job.title);
-  const [scope, setScope] = useState(job.scope || "");
-  const [note, setNote] = useState("");
+// One photo, fetched rather than linked.
+//
+// The route needs an Authorization header and an <img src> cannot carry
+// one, so the bytes come back through the same client as every other call
+// and go on the page as a blob URL. Revoked on unmount, because a tenant
+// scrolling their reports would otherwise hold every photo they had opened.
+function ReportPhoto({ jobId, photo, onOpen }) {
+  const [url, setUrl] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true, made = null;
+    api.reportPhotoBlob(jobId, photo.id)
+      .then((u) => { if (live) { made = u; setUrl(u); } else URL.revokeObjectURL(u); })
+      .catch((e) => { console.error("[photo] load failed:", e); if (live) setFailed(true); });
+    return () => { live = false; if (made) URL.revokeObjectURL(made); };
+  }, [jobId, photo.id]);
+  if (failed) return <div className="ph-thumb is-gone"><ImageOff size={16} /><span>Couldn't load</span></div>;
+  if (!url) return <div className="ph-thumb is-loading" aria-label="Loading photo" />;
+  return (
+    <button type="button" className="ph-thumb" onClick={() => onOpen?.(url, photo)}>
+      <img src={url} alt={photo.name} />
+    </button>
+  );
+}
+
+// Everything one report says, in one place.
+//
+// The list row can only ever be a line and a chip. What a tenant actually
+// wants -- what did I say was wrong, when did I say it started, what did I
+// write, what did I send a picture of, and what has happened since -- did
+// not fit anywhere, so it was simply not shown. Editing had the same
+// problem from the other side: it swapped the row for a title and a
+// textarea, which is two of the five things they had answered.
+//
+// So: one modal, read-only until they ask to change something, and the same
+// fields either way.
+function TenantReportModal({
+  job, stage, visit, brandName, where, unit, assignedTo,
+  onEdit, onWithdraw, onPhotosChanged, onClose,
+}) {
+  const detail = job.reportDetail || null;
+  const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [lightbox, setLightbox] = useState(null);
+  const [confirmWithdraw, setConfirmWithdraw] = useState(false);
+  const [withdrawNote, setWithdrawNote] = useState("");
+
   const editLeft = reportEditableFor(job);
   const canEdit = editLeft > 0 && !!onEdit;
-  const canWithdraw = !isClosed(job) && !!onWithdraw;
-  const minutes = Math.ceil(editLeft / 60000);
+  const canWithdraw = !isClosed(job) && !assignedTo.length && !!onWithdraw;
+  const photos = job.photos || [];
 
-  const saveEdit = async () => {
+  // Edit state, seeded from what they answered. An older report has no
+  // parts kept, so the prose it does have goes in the words box rather than
+  // being dropped on the floor.
+  const [title, setTitle] = useState(job.title);
+  const [problem, setProblem] = useState(detail?.problem ? { label: detail.problem } : null);
+  const [started, setStarted] = useState(detail?.started || "");
+  const [words, setWords] = useState(detail?.words ?? (detail ? "" : job.scope || ""));
+  const { shots, note: shotNote, add: addShots, remove: removeShot, clear: clearShots, upload: uploadShots } = useShots();
+
+  const startEdit = () => {
+    setTitle(job.title);
+    setProblem(detail?.problem ? { label: detail.problem } : null);
+    setStarted(detail?.started || "");
+    setWords(detail?.words ?? (detail ? "" : job.scope || ""));
+    setErr(""); setEditing(true);
+  };
+  const stopEdit = () => { clearShots(); setErr(""); setEditing(false); };
+
+  const save = async () => {
     if (!title.trim()) { setErr("Give it a title."); return; }
     setBusy(true); setErr("");
-    try { await onEdit(job.id, { title: title.trim(), scope: scope.trim() }); setMode(null); }
-    catch (e) {
+    try {
+      if (shots.length) {
+        const done = await uploadShots();
+        if (done.length) await onPhotosChanged(job.id, done);
+        clearShots();
+      }
+      await onEdit(job.id, {
+        title: title.trim(),
+        reportDetail: { problem: problem?.label || "", started, words: words.trim(), unit: detail?.unit || unit || "" },
+      });
+      setEditing(false);
+    } catch (e) {
       console.error("[report] edit failed:", e);
-      setErr(e?.body?.error === "edit_window_closed" ? "The ten minutes are up — this can't be changed now. Withdraw it and report again if it's wrong."
-        : e?.body?.error === "already_actioned" ? "The manager has already picked this up, so it can't be changed now."
+      setErr(e?.body?.error === "edit_window_closed"
+          ? "The ten minutes are up — this can't be changed now. Withdraw it and report again if it's wrong."
+        : e?.body?.error === "already_actioned"
+          ? `${brandName} has already picked this up, so it can't be changed now.`
         : "That didn't save. Try again in a moment.");
     } finally { setBusy(false); }
   };
-  const withdraw = async () => {
+
+  const dropPhoto = async (photoId) => {
     setBusy(true); setErr("");
-    try { await onWithdraw(job.id, note.trim()); setMode(null); }
-    catch (e) { console.error("[report] withdraw failed:", e); setErr("That didn't go through. Try again in a moment."); }
+    try { await onPhotosChanged(job.id, null, photoId); }
+    catch (e) { console.error("[photo] remove failed:", e); setErr("Couldn't take that photo off. Try again."); }
     finally { setBusy(false); }
   };
 
+  const doWithdraw = async () => {
+    setBusy(true); setErr("");
+    try { await onWithdraw(job.id, withdrawNote.trim()); onClose(); }
+    catch (e) {
+      console.error("[report] withdraw failed:", e);
+      setErr(e?.body?.error === "contractor_assigned"
+        ? `A contractor has been booked for this since you opened it. Ask ${brandName} to call it off.`
+        : "That didn't go through. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+
+  const rows = [
+    ["Reported", job.createdAt ? niceDay(job.createdAt) : "recently"],
+    detail?.unit || unit ? ["Unit", detail?.unit || unit] : null,
+    detail?.problem ? ["What it is", detail.problem] : null,
+    detail?.started ? ["Started", detail.started] : null,
+    job.approvedAt ? ["Approved", niceDay(job.approvedAt)] : null,
+    visit?.status === "confirmed" ? ["Visit", visitWhen(visit)] : null,
+    visit?.status === "proposed" ? ["Time proposed", visitWhen(visit)] : null,
+    job.status === "completed" && job.completedAt ? ["Finished", niceDay(job.completedAt)] : null,
+    job.withdrawnAt ? ["Taken back", job.withdrawnNote || "no reason given"] : null,
+    job.declinedAt ? ["Not approved", job.declinedNote || "no reason given"] : null,
+  ].filter(Boolean);
+
+  return (
+    <Modal onClose={onClose} wide>
+      <div className="form tn-detail">
+        <div className="tn-detail-head">
+          <h2>{editing ? "Correct your report" : job.title}</h2>
+          <span className={`tn-chip ${stage.tone}`}>{stage.label}</span>
+        </div>
+
+        {editing ? (
+          <>
+            <label className="fld">What's wrong
+              <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={140} />
+              <span className="fld-note">The one line {brandName} sees first.</span>
+            </label>
+            <ProblemPicker where={where} chosen={problem} label="What is it?"
+              onPick={(x) => setProblem(x)} onClear={() => setProblem(null)} />
+            <div className="fld">When did it start?
+              <div className="tn-when">
+                {TENANT_WHEN.map((w) => (
+                  <button key={w.id} type="button" className={`pick ${started === w.label ? "on" : ""}`}
+                    onClick={() => setStarted(started === w.label ? "" : w.label)}>{w.label}</button>
+                ))}
+              </div>
+            </div>
+            <label className="fld">Tell us more, in your own words
+              <textarea rows={5} value={words} onChange={(e) => setWords(e.target.value)} />
+            </label>
+
+            {photos.length > 0 && (
+              <div className="fld">Photos already sent
+                <div className="ph-grid">
+                  {photos.map((ph) => (
+                    <div key={ph.id} className="ph-holder">
+                      <ReportPhoto jobId={job.id} photo={ph} onOpen={(u) => setLightbox({ url: u, name: ph.name })} />
+                      <button type="button" className="ph-x" disabled={busy}
+                        onClick={() => dropPhoto(ph.id)} aria-label={`Remove ${ph.name}`}><X size={12} /></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {photos.length < MAX_REPORT_PHOTOS && (
+              <PhotoPicker shots={shots} onAdd={addShots} onRemove={removeShot} note={shotNote} busy={busy} />
+            )}
+
+            {err && <p className="billing-err" role="alert">{err}</p>}
+            <div className="form-actions">
+              <button className="btn-ghost" onClick={stopEdit} disabled={busy}>Cancel</button>
+              <button className="btn-solid" onClick={save} disabled={busy}>
+                <Check size={15} /> {busy ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <dl className="tn-facts">
+              {rows.map(([k, v]) => (
+                <div key={k} className="tn-fact"><dt>{k}</dt><dd>{v}</dd></div>
+              ))}
+            </dl>
+
+            {(detail?.words || (!detail && job.scope)) && (
+              <div className="tn-said">
+                <h4>What you wrote</h4>
+                <p>{detail?.words || job.scope}</p>
+              </div>
+            )}
+
+            {photos.length > 0 && (
+              <div className="tn-said">
+                <h4>Photos you sent <span className="sec-count">{photos.length}</span></h4>
+                <div className="ph-grid">
+                  {photos.map((ph) => (
+                    <ReportPhoto key={ph.id} jobId={job.id} photo={ph}
+                      onOpen={(u) => setLightbox({ url: u, name: ph.name })} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {stage.key === "confirm" && (
+              <p className="tn-visit-q">A time has been proposed. Close this and confirm it on your dashboard.</p>
+            )}
+
+            {confirmWithdraw ? (
+              <div className="tn-edit">
+                <p className="tn-visit-q">Take this report back? Nobody has been booked for it yet,
+                  so nothing is cancelled. You can always report it again.</p>
+                <textarea rows={2} value={withdrawNote} onChange={(e) => setWithdrawNote(e.target.value)}
+                  placeholder="Why? (optional) — e.g. it fixed itself, or it's no longer a problem" />
+                {err && <p className="billing-err" role="alert">{err}</p>}
+                <div className="tn-visit-actions">
+                  <button className="btn-ghost" onClick={() => { setConfirmWithdraw(false); setErr(""); }} disabled={busy}>Keep it</button>
+                  <button className="btn-solid danger" onClick={doWithdraw} disabled={busy}>
+                    {busy ? "Withdrawing…" : "Yes, withdraw it"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {err && <p className="billing-err" role="alert">{err}</p>}
+                {/* Why the obvious button is not here. A tenant who cannot
+                    find Withdraw should be told who can, not left looking. */}
+                {!isClosed(job) && assignedTo.length > 0 && (
+                  <p className="fine">A contractor has been booked for this, so it is no longer
+                    yours to take back. Ask {brandName} if it needs calling off.</p>
+                )}
+                {!isClosed(job) && !canEdit && !assignedTo.length && (
+                  <p className="fine">Reports can be corrected for ten minutes after sending.
+                    After that, withdraw it and report it again if something is wrong.</p>
+                )}
+                <div className="form-actions">
+                  <button className="btn-ghost" onClick={onClose}>Close</button>
+                  {canWithdraw && (
+                    <button className="btn-ghost danger" onClick={() => setConfirmWithdraw(true)}>
+                      <X size={14} /> Withdraw
+                    </button>
+                  )}
+                  {canEdit && (
+                    <button className="btn-solid" onClick={startEdit}>
+                      <Pencil size={14} /> Edit · {Math.ceil(editLeft / 60000)} min left
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {lightbox && (
+          <button type="button" className="ph-lightbox" onClick={() => setLightbox(null)}
+            aria-label="Close photo">
+            <img src={lightbox.url} alt={lightbox.name} />
+          </button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// One report, as a line. Everything it cannot say -- what they answered,
+// what they wrote, what they photographed -- is a tap away in the modal
+// above, which is also where correcting and withdrawing now happen. This
+// used to carry both forms inline and could show two of the five things a
+// tenant had actually filled in.
+function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRespondVisit, onOpen }) {
+  const photos = job.photos || [];
   return (
     <div className={`tn-row ${stage.key === "confirm" ? "needs-you" : ""} ${stage.key === "withdrawn" ? "is-off" : ""}`}>
       <div className="tn-row-main">
-        {mode === "edit" ? (
-          <div className="tn-edit">
-            <label className="fld">What's wrong
-              <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={140} /></label>
-            <label className="fld">Details
-              <textarea rows={3} value={scope} onChange={(e) => setScope(e.target.value)} /></label>
-            {err && <p className="billing-err" role="alert">{err}</p>}
-            <div className="tn-visit-actions">
-              <button className="btn-ghost" onClick={() => { setMode(null); setErr(""); }} disabled={busy}>Cancel</button>
-              <button className="btn-solid" onClick={saveEdit} disabled={busy}><Check size={15} /> {busy ? "Saving…" : "Save"}</button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="tn-row-title">{job.title}</div>
-            <span className="tn-row-meta">{meta}</span>
-          </>
-        )}
-        {stage.key === "confirm" && mode === null && (
+        <button type="button" className="tn-row-open" onClick={onOpen}>
+          <span className="tn-row-title">{job.title}</span>
+          <span className="tn-row-meta">
+            {meta}
+            {photos.length ? ` · ${photos.length} photo${photos.length === 1 ? "" : "s"}` : ""}
+          </span>
+        </button>
+        {stage.key === "confirm" && (
           <TenantVisitAsk visit={visit} brandName={brandName} onRespond={onRespondVisit} />
         )}
-        {mode === "withdraw" && (
-          <div className="tn-edit">
-            <p className="tn-visit-q">Take this report back? {Object.keys(job.assignments || {}).length ? "The contractor will be told not to come. " : ""}You can always report it again.</p>
-            <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
-              placeholder="Why? (optional) — e.g. it fixed itself, or it's no longer a problem" />
-            {err && <p className="billing-err" role="alert">{err}</p>}
-            <div className="tn-visit-actions">
-              <button className="btn-ghost" onClick={() => { setMode(null); setErr(""); }} disabled={busy}>Keep it</button>
-              <button className="btn-solid danger" onClick={withdraw} disabled={busy}>{busy ? "Withdrawing…" : "Yes, withdraw it"}</button>
-            </div>
-          </div>
-        )}
-        {mode === null && (canEdit || canWithdraw) && (
-          <div className="tn-row-actions">
-            {canEdit && (
-              <button className="tn-link" onClick={() => setMode("edit")}>
-                <Pencil size={12} /> Edit <span className="tn-link-sub">· {minutes} min left</span>
-              </button>
-            )}
-            {canWithdraw && (
-              <button className="tn-link" onClick={() => setMode("withdraw")}><X size={12} /> Withdraw</button>
-            )}
-          </div>
-        )}
+        <div className="tn-row-actions">
+          <button className="tn-link" onClick={onOpen}>
+            <ChevronRight size={12} /> {reportEditableFor(job) > 0 && !assignedTo.length ? "View or change" : "View details"}
+          </button>
+        </div>
       </div>
       <span className={`tn-chip ${stage.tone}`}>{stage.label}</span>
     </div>
@@ -7937,7 +8165,173 @@ function VisitBlock({ job, visit, who, onPropose }) {
   );
 }
 
-function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onWithdraw, onEdit }) {
+// "What is it?" -- eighty things, shown six at a time.
+//
+// Lifted out of the report form because the edit modal needs exactly the
+// same behaviour: a person correcting a report an hour after sending it is
+// doing the same job as one writing it, and two copies of this would have
+// drifted the first time either changed.
+//
+// Browsing respects the home/office split -- an apartment has no server room
+// to scroll past. Searching does not: one management company's portfolio can
+// hold an apartment building and a strip of storefronts, and somebody who
+// types "server" has said which one they are in more clearly than the
+// account type ever could.
+function ProblemPicker({ where, chosen, onPick, onClear, label = "What is it?" }) {
+  const [query, setQuery] = useState("");
+  const [group, setGroup] = useState("");
+  const q = query.trim().toLowerCase();
+  const forHere = TENANT_PROBLEMS.filter((x) => x.where === "both" || x.where === where);
+  const matches = q
+    ? TENANT_PROBLEMS.filter((x) => x.label.toLowerCase().includes(q) || x.g.toLowerCase().includes(q))
+    : group ? forHere.filter((x) => x.g === group)
+    : [];
+
+  // Chosen, and done with -- a line they can change rather than eighty
+  // buttons they have to scroll past to reach the rest of the form.
+  if (chosen) return (
+    <div className="fld">{label}
+      <div className="tn-chosen">
+        <span>{chosen.label}</span>
+        <button type="button" className="tn-change"
+          onClick={() => { setQuery(""); setGroup(""); onClear(); }}>Change</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="fld">{label}
+      <input className="tn-search" value={query} onChange={(e) => setQuery(e.target.value)}
+        placeholder="Type what's wrong — 'toilet', 'no heat', 'window'" />
+
+      {/* Nothing typed and no area chosen: offer the areas. Six big targets
+          beats eighty small ones on a phone. */}
+      {!q && !group && (
+        <div className="tn-groups">
+          {tenantGroups(where).map((g) => (
+            <button key={g} type="button" className="tn-group" onClick={() => setGroup(g)}>{g}</button>
+          ))}
+        </div>
+      )}
+
+      {(q || group) && (
+        <>
+          {group && !q && (
+            <button type="button" className="tn-back" onClick={() => setGroup("")}>← All areas</button>
+          )}
+          <div className="tn-picks">
+            {matches.map((x) => (
+              <button key={`${x.g}-${x.label}`} type="button" className="tn-pick"
+                onClick={() => { setQuery(""); onPick(x); }}>
+                <span className="tn-pick-l">{x.label}</span>
+                {q && <span className="tn-pick-h">{x.g}</span>}
+              </button>
+            ))}
+          </div>
+          {matches.length === 0 && (
+            <p className="fine">
+              Nothing matches that. Pick <b>Something else</b> below and describe it in
+              your own words — it goes to the same place.
+            </p>
+          )}
+          {q && (
+            <button type="button" className="tn-back" onClick={() => setQuery("")}>← Back to the list</button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Pictures a tenant is about to send, before the report exists.
+//
+// Two limits, and both are said out loud rather than enforced silently: a
+// person who picks nine photos and sees six should be told which three were
+// dropped and why. The previews are object URLs off the chosen File, so
+// nothing has been uploaded yet and cancelling the form costs nothing.
+const MAX_REPORT_PHOTOS = 6;
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/gif"];
+const niceBytes = (n) => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+
+function PhotoPicker({ shots, onAdd, onRemove, note, busy }) {
+  const inputRef = useRef(null);
+  const left = MAX_REPORT_PHOTOS - shots.length;
+  return (
+    <div className="fld">Photos
+      <span className="fld-note">Optional. A picture usually saves a visit just to look.</span>
+      {shots.length > 0 && (
+        <div className="ph-grid">
+          {shots.map((sh) => (
+            <div key={sh.id} className="ph-thumb">
+              <img src={sh.url} alt={sh.name} />
+              <button type="button" className="ph-x" onClick={() => onRemove(sh.id)}
+                aria-label={`Remove ${sh.name}`} disabled={busy}><X size={12} /></button>
+              <span className="ph-size">{niceBytes(sh.size)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {left > 0 ? (
+        <>
+          <button type="button" className="ph-add" onClick={() => inputRef.current?.click()} disabled={busy}>
+            <Upload size={14} /> {shots.length ? "Add another" : "Add a photo"}
+          </button>
+          <input ref={inputRef} type="file" hidden multiple accept={PHOTO_TYPES.join(",")}
+            onChange={(e) => { onAdd([...e.target.files]); e.target.value = ""; }} />
+        </>
+      ) : (
+        <p className="fld-note">That is the most we can take ({MAX_REPORT_PHOTOS}).</p>
+      )}
+      {note && <p className="fld-err"><AlertTriangle size={12} /> {note}</p>}
+    </div>
+  );
+}
+
+// Holds the files a person has chosen, the reasons any were turned away, and
+// the upload itself. Shared by the report form and the edit modal, which
+// want exactly the same behaviour on either side of the report existing.
+function useShots() {
+  const [shots, setShots] = useState([]);
+  const [note, setNote] = useState("");
+  const add = (files) => {
+    const skipped = [];
+    setShots((cur) => {
+      const next = [...cur];
+      for (const f of files) {
+        if (next.length >= MAX_REPORT_PHOTOS) { skipped.push(`${f.name} (only ${MAX_REPORT_PHOTOS} allowed)`); continue; }
+        if (!PHOTO_TYPES.includes((f.type || "").toLowerCase())) { skipped.push(`${f.name} (not a photo)`); continue; }
+        if (f.size > MAX_PHOTO_BYTES) { skipped.push(`${f.name} (over ${niceBytes(MAX_PHOTO_BYTES)})`); continue; }
+        next.push({ id: `${f.name}-${f.size}-${f.lastModified}`, file: f, name: f.name, size: f.size,
+          url: URL.createObjectURL(f) });
+      }
+      return next;
+    });
+    setNote(skipped.length ? `Not added: ${skipped.join(", ")}.` : "");
+  };
+  const remove = (id) => setShots((cur) => {
+    const gone = cur.find((x) => x.id === id);
+    if (gone) URL.revokeObjectURL(gone.url);
+    return cur.filter((x) => x.id !== id);
+  });
+  const clear = () => setShots((cur) => { cur.forEach((x) => URL.revokeObjectURL(x.url)); return []; });
+  // One failed upload costs that photo and says so; the rest still go.
+  const upload = async () => {
+    const done = [];
+    const failed = [];
+    for (const sh of shots) {
+      try {
+        const r = await api.uploadReportPhoto(sh.file);
+        done.push({ key: r.key, name: sh.name, type: sh.file.type, size: r.size ?? sh.size });
+      } catch (e) { console.error("[photo] upload failed:", e); failed.push(sh.name); }
+    }
+    setNote(failed.length ? `Could not send: ${failed.join(", ")}. The rest went.` : "");
+    return done;
+  };
+  return { shots, note, setNote, add, remove, clear, upload };
+}
+
+function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onWithdraw, onEdit, onPhotosChanged }) {
   const visitOf = (jobId) => visits.find((v) => v.jobId === jobId) || null;
   // Closed-out reports -- done, or taken back -- keep out of the way of the
   // live ones but stay reachable: "did they ever fix the fan" is a question
@@ -7948,7 +8342,14 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
   // things gets down to the six worth reading: pick the area, or type a word.
   const [form, setForm] = useState(null);
   const [sent, setSent] = useState(false);
-  // "File a report" in the nav. Same as the button on this screen, reachable
+  const [sending, setSending] = useState(false);
+  // Which report is open. Held by id rather than by object so the modal
+  // follows the row as it updates -- an edit or a new photo re-renders the
+  // list, and a captured object would keep showing what it used to say.
+  const [openId, setOpenId] = useState(null);
+  const { shots, note: shotNote, add: addShots, remove: removeShot,
+    clear: clearShots, upload: uploadShots } = useShots();
+  // "Report a problem" in the nav. Same as the button on this screen, reachable
   // from anywhere in the tenant's view.
   useEffect(() => {
     if (!reportKey) return;
@@ -7961,11 +8362,13 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
     if (!homeKey) return;
     setForm(null); setSent(false);
   }, [homeKey]);
+  // A declined work order is not a booking: the contractor said no, so the
+  // report is back to needing one and is the tenant's to take back again.
+  const assignedOn = (j) => Object.values(j.assignments || {})
+    .filter((a) => a && a.subId && a.status !== "declined");
   const mine = [...jobs].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   const building = properties[0] || null;
   const where = tenantWhere(accountKind);
-  const forHere = TENANT_PROBLEMS.filter((x) => x.where === "both" || x.where === where);
-
   const start = () => setForm({
     propertyId: building?.id || "", group: "", query: "",
     problem: null, title: "", when: "", scope: "",
@@ -7979,24 +8382,22 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
   const pick = (problem) => setForm((f) => ({ ...f, problem, query: "" }));
   const titleOf = (f) => (f.title.trim() || f.problem?.label || "");
 
-  const q = (form?.query || "").trim().toLowerCase();
-  // Browsing respects the split -- an apartment has no server room to scroll past.
-  // Searching does not: one management company's portfolio can hold both an
-  // apartment building and a strip of storefronts, and somebody who types
-  // "server" has said which one they are in more clearly than the account
-  // type ever could.
-  const matches = q
-    ? TENANT_PROBLEMS.filter((x) => x.label.toLowerCase().includes(q) || x.g.toLowerCase().includes(q))
-    : form?.group ? forHere.filter((x) => x.g === form.group)
-    : [];
-
   // Nothing to type: picking something is enough to send it.
   const ready = form && form.propertyId && form.problem;
 
-  const submit = () => {
+  const submit = async () => {
     const at = properties.find((p) => p.id === form.propertyId);
     const when = TENANT_WHEN.find((w) => w.id === form.when);
     const title = titleOf(form);
+    // The photos go up first. A photo that fails to upload should cost the
+    // photo, not the report -- somebody who has just described a leak should
+    // not be handed their own form back because the second picture timed out.
+    let photos = [];
+    if (shots.length) {
+      setSending(true);
+      photos = await uploadShots();
+      setSending(false);
+    }
     onReport({
       title,
       propertyId: form.propertyId,
@@ -8006,16 +8407,18 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
       address: at?.address || "",
       area: at?.city || "",
       zip: at?.zip || "",
-      // Everything the person doing the work needs and nowhere else to put
-      // it: which unit, what they picked, when it started, and their own
-      // words -- in that order, because that is the order it gets read in.
-      scope: [
-        unit ? `Unit ${unit}.` : null,
-        form.problem.label !== title ? `Reported as: ${form.problem.label}.` : null,
-        when ? `Started: ${when.label.toLowerCase()}.` : null,
-        form.scope.trim(),
-      ].filter(Boolean).join(" "),
+      photos,
+      // The parts, not a sentence. The server composes the sentence a
+      // contractor reads from exactly these, so the two cannot drift, and
+      // keeps them so the tenant can see and correct what they said.
+      reportDetail: {
+        problem: form.problem.label,
+        started: when ? when.label : "",
+        words: form.scope.trim(),
+        unit: unit || "",
+      },
     });
+    clearShots();
     setForm(null);
     setSent(true);
   };
@@ -8037,68 +8440,8 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
           </label>
         )}
 
-        {/* Chosen, and done with -- shown as a line they can change rather
-            than eighty buttons they have to scroll past to reach the rest of
-            the form. */}
-        {form.problem ? (
-          <div className="fld">What is it?
-            <div className="tn-chosen">
-              <span>{form.problem.label}</span>
-              <button type="button" className="tn-change"
-                onClick={() => setForm((f) => ({ ...f, problem: null, group: "", query: "" }))}>
-                Change
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="fld">What is it?
-            <input className="tn-search" value={form.query}
-              onChange={(e) => set("query", e.target.value)}
-              placeholder="Type what's wrong — 'toilet', 'no heat', 'window'" />
-
-            {/* Nothing typed and no area chosen: offer the areas. Six big
-                targets beats eighty small ones on a phone. */}
-            {!q && !form.group && (
-              <div className="tn-groups">
-                {tenantGroups(where).map((g) => (
-                  <button key={g} type="button" className="tn-group" onClick={() => set("group", g)}>
-                    {g}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {(q || form.group) && (
-              <>
-                {form.group && !q && (
-                  <button type="button" className="tn-back" onClick={() => set("group", "")}>
-                    ← All areas
-                  </button>
-                )}
-                <div className="tn-picks">
-                  {matches.map((x) => (
-                    <button key={`${x.g}-${x.label}`} type="button" className="tn-pick"
-                      onClick={() => pick(x)}>
-                      <span className="tn-pick-l">{x.label}</span>
-                      {q && <span className="tn-pick-h">{x.g}</span>}
-                    </button>
-                  ))}
-                </div>
-                {matches.length === 0 && (
-                  <p className="fine">
-                    Nothing matches that. Pick <b>Something else</b> below and describe it in
-                    your own words — it goes to the same place.
-                  </p>
-                )}
-                {q && (
-                  <button type="button" className="tn-back" onClick={() => set("query", "")}>
-                    ← Back to the list
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        )}
+        <ProblemPicker where={where} chosen={form.problem}
+          onPick={pick} onClear={() => setForm((f) => ({ ...f, problem: null }))} />
 
         {form.problem && (
           <>
@@ -8122,13 +8465,16 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
               <textarea rows={5} value={form.scope} onChange={(e) => set("scope", e.target.value)}
                 placeholder="Where exactly it is, whether it's getting worse, whether anything has been done about it before, and when someone can get in." />
             </label>
+
+            <PhotoPicker shots={shots} onAdd={addShots} onRemove={removeShot}
+              note={shotNote} busy={sending} />
           </>
         )}
 
         <div className="form-actions">
-          <button className="btn-ghost" onClick={() => setForm(null)}>Cancel</button>
-          <button className="btn-solid" onClick={submit} disabled={!ready}>
-            <Plus size={15} /> Send it
+          <button className="btn-ghost" onClick={() => { clearShots(); setForm(null); }} disabled={sending}>Cancel</button>
+          <button className="btn-solid" onClick={submit} disabled={!ready || sending}>
+            <Plus size={15} /> {sending ? "Sending the photos…" : "Send it"}
           </button>
         </div>
       </div>
@@ -8162,9 +8508,10 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         const row = (j) => {
           const v = visitOf(j.id);
           const st = tenantStage(j, v);
-          const who = Object.values(j.assignments || {}).map((a) => a.subId).filter(Boolean);
+          const who = assignedOn(j);
           return (
             <TenantReportRow key={j.id} job={j} stage={st} visit={v} brandName={brand.name}
+              assignedTo={who}
               meta={[
                 `Reported ${j.createdAt ? niceDay(j.createdAt) : "recently"}`,
                 v?.status === "confirmed" ? `visit ${visitWhen(v)}` : null,
@@ -8173,7 +8520,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
                 j.withdrawnAt ? `withdrawn${j.withdrawnNote ? ` — “${j.withdrawnNote}”` : ""}` : null,
                 j.declinedAt ? `not approved${j.declinedNote ? ` — “${j.declinedNote}”` : ""}` : null,
               ].filter(Boolean).join(" · ")}
-              onRespondVisit={onRespondVisit} onWithdraw={onWithdraw} onEdit={onEdit} />
+              onRespondVisit={onRespondVisit} onOpen={() => setOpenId(j.id)} />
           );
         };
         return (
@@ -8195,6 +8542,19 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
               </div>
             )}
           </>
+        );
+      })()}
+
+      {(() => {
+        const open = mine.find((j) => j.id === openId);
+        if (!open) return null;
+        const v = visitOf(open.id);
+        return (
+          <TenantReportModal
+            job={open} stage={tenantStage(open, v)} visit={v} brandName={brand.name}
+            where={where} unit={unit} assignedTo={assignedOn(open)}
+            onEdit={onEdit} onWithdraw={onWithdraw} onPhotosChanged={onPhotosChanged}
+            onClose={() => setOpenId(null)} />
         );
       })()}
     </main>
@@ -13272,6 +13632,15 @@ body{background:var(--paper)}
 .fld{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin-bottom:14px}
 .fld input,.fld select,.fld textarea{width:100%;margin-top:6px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:14px;color:var(--ink);background:var(--card);font-family:inherit}
 .fld textarea{resize:vertical}
+/* The quiet half of a field's label. It had no rule at all, so it inherited
+   the label's own 12.5px semibold and was indistinguishable from one -- and
+   where it follows the input rather than sitting beside the label, it also
+   sat flush against it. On the tenant's report form that made "Optional --
+   leave it and we'll use what you picked" read as the heading for the next
+   question instead of a note about the last one. */
+.fld-note{font-weight:400;font-size:11.5px;line-height:1.45;color:var(--ink-soft);opacity:.9}
+.fld input+.fld-note,.fld select+.fld-note,.fld textarea+.fld-note,
+.fld .subdomain-row+.fld-note,.fld .rating-edit+.fld-note{display:block;margin-top:7px}
 .fld-row{display:flex;gap:12px}.fld-row .fld{flex:1}
 .pick-grid{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
 .pick{border:1px solid var(--line);background:var(--card);font-size:12.5px;padding:6px 11px;border-radius:7px;cursor:pointer;color:var(--ink-soft);font-weight:600}
@@ -13739,6 +14108,64 @@ body{background:var(--paper)}
   border-radius:12px;padding:14px 15px;box-shadow:var(--shadow)}
 .tn-row-main{flex:1;min-width:0}
 .tn-row-title{font-size:14.5px;font-weight:700;letter-spacing:-.01em}
+/* The whole line is the way in, so it is a button rather than a div with a
+   click on it: keyboard reachable, and announced as something that does
+   something. */
+.tn-row-open{display:block;width:100%;text-align:left;background:none;border:0;padding:0;
+  font:inherit;color:inherit;cursor:pointer}
+.tn-row-open:hover .tn-row-title{text-decoration:underline;text-underline-offset:2px}
+.tn-row-open .tn-row-meta{display:block;margin-top:3px}
+
+/* ---- photos on a report ---- */
+.ph-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.ph-holder{position:relative;display:inline-flex}
+.ph-thumb{position:relative;width:84px;height:84px;border-radius:9px;overflow:hidden;
+  border:1px solid var(--line);background:var(--paper);padding:0;cursor:pointer;flex:none;
+  display:flex;align-items:center;justify-content:center}
+.ph-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.ph-thumb.is-loading{background:linear-gradient(90deg,var(--paper),var(--line),var(--paper));
+  background-size:200% 100%;animation:ph-shimmer 1.1s linear infinite;cursor:default}
+@keyframes ph-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.ph-thumb.is-gone{flex-direction:column;gap:4px;font-size:10px;color:var(--ink-soft);cursor:default}
+/* Sits on the image, so it needs its own contrast rather than the page's. */
+.ph-x{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;
+  border:0;background:rgba(18,33,28,.78);color:#fff;display:flex;align-items:center;
+  justify-content:center;cursor:pointer;padding:0}
+.ph-x:hover{background:rgba(18,33,28,.95)}
+.ph-size{position:absolute;left:0;right:0;bottom:0;background:rgba(18,33,28,.66);color:#fff;
+  font-size:9.5px;font-weight:600;text-align:center;padding:2px 0;letter-spacing:.02em}
+.ph-add{display:inline-flex;align-items:center;gap:6px;margin-top:9px;padding:9px 13px;
+  border:1px dashed var(--line);border-radius:9px;background:var(--card);color:var(--ink);
+  font-size:12.5px;font-weight:650;cursor:pointer;font-family:inherit}
+.ph-add:hover{border-color:var(--brand);color:var(--brand)}
+.ph-add:disabled{opacity:.55;cursor:default}
+.ph-lightbox{position:fixed;inset:0;z-index:80;background:rgba(10,18,15,.88);border:0;padding:24px;
+  display:flex;align-items:center;justify-content:center;cursor:zoom-out}
+.ph-lightbox img{max-width:100%;max-height:100%;border-radius:10px;display:block}
+
+/* ---- one report, in full ---- */
+/* The modal's close button is absolutely positioned at top right, so
+   anything else on that line has to be told to keep out of its way -- the
+   stage chip ran straight under it and lost its last letter. */
+.tn-detail-head{display:flex;align-items:flex-start;justify-content:space-between;
+  gap:12px;margin-bottom:6px;padding-right:38px}
+.tn-detail-head .tn-chip{flex:none}
+.tn-detail-head h2{margin:0}
+.tn-facts{display:grid;grid-template-columns:auto 1fr;gap:7px 16px;margin:16px 0 4px}
+.tn-fact{display:contents}
+.tn-facts dt{font-size:11.5px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;
+  letter-spacing:.04em;padding-top:1px}
+.tn-facts dd{margin:0;font-size:13.5px;color:var(--ink)}
+.tn-said{margin-top:18px}
+.tn-said h4{margin:0 0 7px;font-size:12px;font-weight:700;color:var(--ink-soft);
+  text-transform:uppercase;letter-spacing:.04em}
+.tn-said p{margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap}
+.btn-ghost.danger{color:var(--danger,#B3261E);border-color:currentColor}
+@media (max-width:520px){
+  .tn-facts{grid-template-columns:1fr;gap:2px}
+  .tn-facts dd{margin-bottom:9px}
+  .ph-thumb{width:72px;height:72px}
+}
 .tn-row-meta{display:block;margin-top:3px;font-size:12px;color:var(--ink-soft)}
 .tn-chip{flex:none;font-size:11.5px;font-weight:700;padding:5px 10px;border-radius:20px;white-space:nowrap}
 .tn-chip.wait{background:#fbf0dd;color:#8a5a12}

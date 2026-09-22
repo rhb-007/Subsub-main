@@ -309,6 +309,13 @@ const OWNER_ALLOWED = [
   [/^\/api\/visits$/, ["GET"]],
   [/^\/api\/jobs\/[^/]+\/withdraw$/, ["POST"]],
   [/^\/api\/jobs\/[^/]+\/report$/, ["PATCH"]],
+  // Photos on their own report: attach after uploading, view, take one off.
+  // A photo is reached by job and photo id, never by R2 key.
+  [/^\/api\/jobs\/[^/]+\/photos$/, ["POST"]],
+  [/^\/api\/jobs\/[^/]+\/photos\/[^/]+$/, ["GET", "DELETE"]],
+  // The upload itself. Narrowed to this one kind: the generic route would
+  // otherwise let a tenant write any prefix under the account.
+  [/^\/api\/uploads\/report-photo\/.+$/, ["PUT"]],
 ];
 
 // A tenant's is narrower again. They report problems and watch what happens
@@ -329,6 +336,13 @@ const TENANT_ALLOWED = [
   // Their own report: taken back, or corrected within ten minutes.
   [/^\/api\/jobs\/[^/]+\/withdraw$/, ["POST"]],
   [/^\/api\/jobs\/[^/]+\/report$/, ["PATCH"]],
+  // Photos on their own report: attach after uploading, view, take one off.
+  // A photo is reached by job and photo id, never by R2 key.
+  [/^\/api\/jobs\/[^/]+\/photos$/, ["POST"]],
+  [/^\/api\/jobs\/[^/]+\/photos\/[^/]+$/, ["GET", "DELETE"]],
+  // The upload itself. Narrowed to this one kind: the generic route would
+  // otherwise let a tenant write any prefix under the account.
+  [/^\/api\/uploads\/report-photo\/.+$/, ["PUT"]],
   // The proposed time for a repair of theirs, and their answer to it.
   [/^\/api\/visits$/, ["GET"]],
   [/^\/api\/visits\/[^/]+\/respond$/, ["POST"]],
@@ -2420,6 +2434,7 @@ function missingSchema(err) {
   if (/\bvisits\b/i.test(m)) return "019_visits";
   if (/withdrawn_(at|note)/i.test(m)) return "020_withdrawn_reports";
   if (/declined_(at|note)/i.test(m)) return "021_declined_requests";
+  if (/\bphotos\b|report_detail/i.test(m)) return "022_report_photos";
   if (/tenant_invites|memberships\.unit|\bunit\b/i.test(m)) {
     return /sent_at/i.test(m) ? "017_tenant_invite_sent" : "015_tenants";
   }
@@ -2862,6 +2877,14 @@ function jobRowToJs(j, workOrders) {
     sqft: j.sqft, stories: j.stories, date: j.date, time: j.time,
     trades: parseJson(j.trades, []), scope: j.scope, materialSource: j.material_source,
     materialsPaidBy: j.materials_paid_by, measurementDocs: parseJson(j.measurement_docs, []),
+    // Only what is needed to list and fetch them -- the R2 key stays on the
+    // server, so a photo is only ever reachable through the route below,
+    // which re-checks who is asking.
+    photos: parseJson(j.photos, []).map((p) => ({ id: p.id, name: p.name, type: p.type, size: p.size, at: p.at })),
+    // What the tenant actually answered, for showing back and for editing.
+    // Null on anything not raised through the tenant's form, and on reports
+    // made before this was kept -- the composed scope is all those have.
+    reportDetail: parseJson(j.report_detail, null),
     status: j.status, completedAt: j.completed_at, notes: j.notes, createdAt: j.created_at?.slice(0, 10), assignments,
     // The column has been on jobs since the beginning and was cleared when a
     // property was deleted, but nothing ever wrote it and nothing ever read
@@ -2921,15 +2944,28 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   // Owners and tenants raise requests; a scoped property manager is there to
   // run the work, so what they create is a job like any other manager's.
   const requestedBy = (auth.role === "owner" || auth.role === "tenant") ? userId : null;
-  await c.env.DB.prepare(
-    `INSERT INTO jobs (id, account_id, title, client, address, area, zip, sqft, stories, date, time,
-       trades, scope, material_source, materials_paid_by, measurement_docs, created_by,
-       property_id, requested_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, accountId, b.title, b.client || null, b.address || null, b.area || null, b.zip || null,
-    b.sqft || null, b.stories || null, b.date || null, b.time || "07:00",
-    JSON.stringify(b.trades || []), b.scope || null, b.materialSource || null, b.materialsPaidBy || null,
-    JSON.stringify(b.measurementDocs || []), userId, propertyId, requestedBy).run();
+  const photos = cleanPhotos(b.photos, accountId);
+  // A tenant's report sends its answers; everything else sends a scope it
+  // wrote itself. Composing here rather than in the browser means the
+  // sentence and the parts cannot disagree, whichever of the two edits it.
+  const detail = b.reportDetail ? cleanDetail({ ...b.reportDetail, title: b.title }) : null;
+  const scope = detail ? composeScope({ ...detail, title: b.title }) : (b.scope || null);
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO jobs (id, account_id, title, client, address, area, zip, sqft, stories, date, time,
+         trades, scope, material_source, materials_paid_by, measurement_docs, created_by,
+         property_id, requested_by, photos, report_detail)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, accountId, b.title, b.client || null, b.address || null, b.area || null, b.zip || null,
+      b.sqft || null, b.stories || null, b.date || null, b.time || "07:00",
+      JSON.stringify(b.trades || []), scope, b.materialSource || null, b.materialsPaidBy || null,
+      JSON.stringify(b.measurementDocs || []), userId, propertyId, requestedBy,
+      photos.length ? JSON.stringify(photos) : null, detail ? JSON.stringify(detail) : null).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
 
   if (requestedBy) {
     await logEvent(c.env, accountId, userId, "job.requested", id, { title: b.title });
@@ -2938,7 +2974,13 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
     await logEvent(c.env, accountId, userId, "job.created", id, { title: b.title });
     await logActivity(c.env, accountId, userId, "job_created", `Created job ${b.title}`);
   }
-  return c.json({ id, requested: !!requestedBy }, 201);
+  // The row as stored, not just its id. What the browser can guess about a
+  // job it has just created is not the same as what was written: it has no
+  // created_at to the second, so the ten-minute edit window read as already
+  // over, and no ids for the photos it just sent, so they could not be
+  // fetched back. Both looked like features that did not work.
+  const saved = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(id).first();
+  return c.json({ id, requested: !!requestedBy, job: saved ? jobRowToJs(saved, []) : null }, 201);
 });
 
 // Turning an owner's request into a job somebody can be assigned to. Only the
@@ -3185,6 +3227,81 @@ app.post("/api/visits/:id/respond", async (c) => {
 
 // Whose report, and is it still theirs to change. Owners raise requests the
 // same way, so they get the same two things.
+// Photos on a report. The numbers are deliberate rather than generous: six
+// is more than enough to show one problem from every useful angle, and a
+// phone photo is two to four megabytes, so ten leaves room for an
+// unprocessed one without leaving room for a video renamed .jpg.
+// The sentence a contractor reads, built from what the tenant answered.
+// Kept in one function because it is written on create and rewritten on
+// every edit, and two copies of this would drift the first time one changed.
+// Order matters: it is the order somebody reads it in.
+function composeScope(d = {}) {
+  return [
+    d.unit ? `Unit ${d.unit}.` : null,
+    d.problem && d.problem !== d.title ? `Reported as: ${d.problem}.` : null,
+    d.started ? `Started: ${String(d.started).toLowerCase()}.` : null,
+    String(d.words || "").trim(),
+  ].filter(Boolean).join(" ");
+}
+// What is kept of the tenant's answers, apart from the prose above.
+const cleanDetail = (d = {}) => ({
+  problem: String(d.problem || "").slice(0, 140) || null,
+  started: String(d.started || "").slice(0, 60) || null,
+  words: String(d.words || "").slice(0, 4000),
+  unit: String(d.unit || "").slice(0, 40) || null,
+});
+
+const MAX_REPORT_PHOTOS = 6;
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+const PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/gif"]);
+// A filename becomes part of an R2 key and comes straight off a phone, so
+// it is rewritten rather than trusted: no slashes to climb out of the
+// account's prefix, no dot-dot, nothing that is not plainly a name.
+const safeFileName = (raw) => {
+  let n = raw;
+  try { n = decodeURIComponent(raw); } catch { /* already literal */ }
+  return (n.replace(/[^\w.\-]+/g, "_").replace(/\.{2,}/g, ".").replace(/^[.\-]+/, "").slice(-80) || "photo.jpg");
+};
+
+// What the client sends back after uploading is a claim, not a fact: it says
+// which key it wrote and what was in it. The key is checked to be inside
+// this account's own prefix -- without that, one account could attach
+// another's file by guessing a key and then read it through the route below,
+// which serves whatever the row points at.
+function cleanPhotos(raw, accountId, existing = []) {
+  const out = [];
+  for (const p of Array.isArray(raw) ? raw : []) {
+    const key = String(p?.key || "");
+    if (!key.startsWith(`${accountId}/report-photo/`)) continue;
+    if (key.includes("..")) continue;
+    if (existing.some((e) => e.key === key) || out.some((e) => e.key === key)) continue;
+    const type = String(p?.type || "").toLowerCase();
+    out.push({
+      id: uid(),
+      key,
+      name: String(p?.name || "photo").slice(0, 120),
+      type: PHOTO_TYPES.has(type) ? type : "image/jpeg",
+      size: Number.isFinite(+p?.size) ? Math.max(0, Math.min(MAX_PHOTO_BYTES, +p.size)) : null,
+      at: new Date().toISOString(),
+    });
+    if (existing.length + out.length >= MAX_REPORT_PHOTOS) break;
+  }
+  return out;
+}
+
+// Every route that touches a job's photos needs the same three answers: does
+// the job exist on this account, may this caller see it, and what is on it
+// now. A tenant or owner only ever reaches their own report; everybody else
+// on the account is staff and sees the account's work.
+async function jobForPhotos(c, auth, jobId) {
+  if (auth.role === "tenant" || auth.role === "owner") return ownReport(c, auth, jobId);
+  const job = await c.env.DB.prepare(
+    `SELECT * FROM jobs WHERE id = ? AND account_id = ?`).bind(jobId, auth.accountId).first();
+  if (!job) return { error: "not_found", status: 404 };
+  if (auth.propertyIds && !maySeeProperty(auth, job.property_id)) return { error: "forbidden", status: 403 };
+  return { job };
+}
+
 async function ownReport(c, auth, jobId) {
   if (auth.role !== "tenant" && auth.role !== "owner") return { error: "forbidden", status: 403 };
   const job = await c.env.DB.prepare(
@@ -3204,6 +3321,20 @@ app.post("/api/jobs/:id/withdraw", async (c) => {
   if (error) return c.json({ error }, status);
   if (job.status === "completed") return c.json({ error: "already_completed" }, 409);
   if (job.withdrawn_at) return c.json({ ok: true, alreadyWithdrawn: true });
+  // Once a contractor is on it, taking it back is not the tenant's call any
+  // more. Somebody has been booked, may have turned work away for the slot,
+  // and may already be on the way. The tenant asks the manager, who can
+  // still void the work order -- this refuses the silent version of that,
+  // where the contractor finds out by arriving.
+  //
+  // Checked here and not only in the browser: the route is reachable with a
+  // job id and nothing else.
+  const live = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM work_orders
+      WHERE job_id = ? AND voided_at IS NULL AND status != 'declined'`).bind(id).first();
+  if ((live?.n || 0) > 0 && auth.role === "tenant") {
+    return c.json({ error: "contractor_assigned" }, 409);
+  }
   const b = await c.req.json().catch(() => ({}));
   const note = String(b.note || "").trim().slice(0, 500) || null;
   try {
@@ -3223,6 +3354,82 @@ app.post("/api/jobs/:id/withdraw", async (c) => {
   await logActivity(c.env, auth.accountId, auth.userId, "job_withdrawn",
     `Withdrew the report "${job.title}"${note ? `: ${note}` : ""}${voided?.meta?.changes ? ` (${voided.meta.changes} work order${voided.meta.changes === 1 ? "" : "s"} voided)` : ""}`);
   return c.json({ ok: true, voided: voided?.meta?.changes ?? 0 });
+});
+
+// ---- Photos on a report --------------------------------------------------
+//
+// The file itself goes to R2 through /api/uploads/report-photo/... first;
+// this attaches what came back to the report. Two steps rather than one
+// multipart POST because the Worker is already the data path for the upload
+// and streaming a file straight into R2 costs it nothing to hold.
+app.post("/api/jobs/:id/photos", async (c) => {
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const { job, error, status } = await jobForPhotos(c, auth, id);
+  if (error) return c.json({ error }, status);
+  if (job.withdrawn_at || job.declined_at || job.status === "completed") {
+    return c.json({ error: "closed" }, 409);
+  }
+  let existing;
+  try { existing = parseJson(job.photos, []); }
+  catch { existing = []; }
+  if (existing.length >= MAX_REPORT_PHOTOS) return c.json({ error: "too_many", max: MAX_REPORT_PHOTOS }, 409);
+  const b = await c.req.json().catch(() => ({}));
+  const added = cleanPhotos(b.photos, auth.accountId, existing);
+  if (!added.length) return c.json({ error: "nothing_to_add" }, 400);
+  const next = [...existing, ...added];
+  try {
+    await c.env.DB.prepare(`UPDATE jobs SET photos = ? WHERE id = ?`).bind(JSON.stringify(next), id).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  await logActivity(c.env, auth.accountId, auth.userId, "job_photos",
+    `Added ${added.length} photo${added.length === 1 ? "" : "s"} to "${job.title}"`);
+  return c.json({ ok: true, photos: next.map((x) => ({ id: x.id, name: x.name, type: x.type, size: x.size, at: x.at })) });
+});
+
+// Taking one off does not delete the object in R2. A withdrawn photo is
+// still evidence of what was reported, and an accidental removal a minute
+// after uploading is the likelier event by far. Nothing points at it any
+// more, which is what the tenant asked for.
+app.delete("/api/jobs/:id/photos/:photoId", async (c) => {
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const { job, error, status } = await jobForPhotos(c, auth, id);
+  if (error) return c.json({ error }, status);
+  const existing = parseJson(job.photos, []);
+  const next = existing.filter((p) => p.id !== c.req.param("photoId"));
+  if (next.length === existing.length) return c.json({ error: "not_found" }, 404);
+  await c.env.DB.prepare(`UPDATE jobs SET photos = ? WHERE id = ?`)
+    .bind(next.length ? JSON.stringify(next) : null, id).run();
+  return c.json({ ok: true, photos: next.map((x) => ({ id: x.id, name: x.name, type: x.type, size: x.size, at: x.at })) });
+});
+
+// Serving one back. The caller names a job and a photo on it, never a key:
+// the key is read from the row after the same permission check every other
+// route on that job makes. An <img src> cannot carry an Authorization
+// header, so the browser fetches this like any other call and renders the
+// blob -- which keeps one way in rather than inventing a second, weaker one
+// on a query string.
+app.get("/api/jobs/:id/photos/:photoId", async (c) => {
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const { job, error, status } = await jobForPhotos(c, auth, id);
+  if (error) return c.json({ error }, status);
+  const photo = parseJson(job.photos, []).find((p) => p.id === c.req.param("photoId"));
+  if (!photo) return c.notFound();
+  const obj = await c.env.FILES.get(photo.key);
+  if (!obj) return c.notFound();
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": photo.type || "image/jpeg",
+      // The key carries a uid, so a given photo id never changes content.
+      "Cache-Control": "private, max-age=3600",
+      "Content-Disposition": `inline; filename="${photo.name.replace(/[^\w.\- ]/g, "_")}"`,
+    },
+  });
 });
 
 // Ten minutes to fix a typo or add the thing you forgot, and only until the
@@ -3246,14 +3453,31 @@ app.patch("/api/jobs/:id/report", async (c) => {
     if (!title) return c.json({ error: "title_required" }, 400);
     sets.push("title = ?"); vals.push(title);
   }
-  if (b.scope !== undefined) { sets.push("scope = ?"); vals.push(String(b.scope || "").trim().slice(0, 4000) || null); }
+  // The tenant's own answers. Sending these rewrites the scope sentence from
+  // them, so the prose a contractor reads and the parts the tenant sees can
+  // never drift apart -- which they would if the browser sent both.
+  if (b.reportDetail !== undefined) {
+    const was = parseJson(job.report_detail, {}) || {};
+    const detail = cleanDetail({ ...was, ...b.reportDetail });
+    const title = b.title !== undefined ? String(b.title || "").trim() : job.title;
+    sets.push("report_detail = ?"); vals.push(JSON.stringify(detail));
+    sets.push("scope = ?"); vals.push(composeScope({ ...detail, title }) || null);
+  } else if (b.scope !== undefined) {
+    sets.push("scope = ?"); vals.push(String(b.scope || "").trim().slice(0, 4000) || null);
+  }
   if (Array.isArray(b.trades)) {
     const trades = b.trades.filter((t) => TRADE_IDS.has(t));
     sets.push("trades = ?"); vals.push(JSON.stringify(trades));
   }
   if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
   vals.push(id);
-  await c.env.DB.prepare(`UPDATE jobs SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
+  try {
+    await c.env.DB.prepare(`UPDATE jobs SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
   await logActivity(c.env, auth.accountId, auth.userId, "job_edited", `Corrected the report "${b.title || job.title}"`);
   const row = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(id).first();
   return c.json(jobRowToJs(row, []));
@@ -3574,10 +3798,27 @@ app.delete("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "c
 app.put("/api/uploads/:kind/:fileName", async (c) => {
   const { accountId } = c.get("auth");
   const { kind, fileName } = c.req.param();
+  const type = (c.req.header("Content-Type") || "application/octet-stream").split(";")[0].trim().toLowerCase();
+
+  // Report photos come from people outside the company -- every tenant in
+  // every building -- so this one kind is checked rather than trusted. The
+  // declared length is refused early so a large body is never streamed at
+  // all; the real length is checked after, because Content-Length can lie
+  // and a chunked upload does not send one.
+  if (kind === "report-photo") {
+    if (!PHOTO_TYPES.has(type)) return c.json({ error: "not_an_image", type }, 415);
+    const declared = Number(c.req.header("Content-Length") || 0);
+    if (declared > MAX_PHOTO_BYTES) return c.json({ error: "too_big", max: MAX_PHOTO_BYTES }, 413);
+    const body = await c.req.arrayBuffer();
+    if (body.byteLength > MAX_PHOTO_BYTES) return c.json({ error: "too_big", max: MAX_PHOTO_BYTES }, 413);
+    if (body.byteLength === 0) return c.json({ error: "empty" }, 400);
+    const key = `${accountId}/report-photo/${uid()}-${safeFileName(fileName)}`;
+    await c.env.FILES.put(key, body, { httpMetadata: { contentType: type } });
+    return c.json({ key, size: body.byteLength, type });
+  }
+
   const key = `${accountId}/${kind}/${uid()}-${decodeURIComponent(fileName)}`;
-  await c.env.FILES.put(key, c.req.raw.body, {
-    httpMetadata: { contentType: c.req.header("Content-Type") || "application/octet-stream" },
-  });
+  await c.env.FILES.put(key, c.req.raw.body, { httpMetadata: { contentType: type } });
   return c.json({ key });
 });
 

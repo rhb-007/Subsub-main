@@ -54,23 +54,37 @@ const oldRow = (await call(tenant, "/jobs")).body.find((j) => j.id === old.body.
 const ageMs = Date.now() - new Date(String(oldRow.createdAtIso).replace(" ", "T") + "Z").getTime();
 ck("a just-made report reads as seconds old, in UTC, so the window can be computed", ageMs >= 0 && ageMs < 60000, `${Math.round(ageMs / 1000)}s`);
 
-console.log("\n-- taking one back --");
+console.log("\n-- once somebody is booked, it is not theirs to take back --");
+// This used to be allowed, and unwound the booking. It should not be: a
+// contractor has been given a slot and may have turned other work away for
+// it, and the first they would know is arriving to be told it was cancelled
+// by someone they have never spoken to. The tenant asks the manager, who
+// can still call it off.
 const as = await call(pm, `/jobs/${jobId}/assign`, { method: "POST", body: JSON.stringify({ trade: "plumbing", companyId: "cmp_r", responseWindow: "24h" }) });
-ck("assigned first, so there is something to unwind", as.status === 201, JSON.stringify(as.body));
+ck("assigned first", as.status === 201, JSON.stringify(as.body));
 await call(pm, `/jobs/${jobId}/visits`, { method: "POST", body: JSON.stringify({ date: "2026-10-10", startTime: "09:00" }) });
 ck("with a visit waiting on them", (await call(tenant, "/visits")).body.some((v) => v.jobId === jobId && v.status === "proposed"));
-ck("the manager cannot withdraw it for them", (await call(pm, `/jobs/${jobId}/withdraw`, { method: "POST", body: JSON.stringify({}) })).status === 403);
-const wd = await call(tenant, `/jobs/${jobId}/withdraw`, { method: "POST", body: JSON.stringify({ note: "It stopped on its own" }) });
-ck("withdrawn, with the reason", wd.status === 200 && wd.body?.ok, JSON.stringify(wd.body));
-ck("the work order is voided so nobody turns up", wd.body?.voided === 1);
-const after = (await call(pm, "/jobs")).body.find((j) => j.id === jobId);
-ck("the manager's copy says withdrawn, and why", !!after.withdrawnAt && after.withdrawnNote === "It stopped on its own");
-ck("and has no live assignment left", Object.keys(after.assignments || {}).length === 0);
-ck("the open visit is gone with it", !(await call(pm, "/visits")).body.some((v) => v.jobId === jobId));
-ck("withdrawing again is harmless", (await call(tenant, `/jobs/${jobId}/withdraw`, { method: "POST", body: JSON.stringify({}) })).body?.alreadyWithdrawn === true);
-ck("and it cannot be edited afterwards", (await call(tenant, `/jobs/${jobId}/report`, { method: "PATCH", body: JSON.stringify({ title: "x" }) })).body?.error === "withdrawn");
+ck("the manager cannot withdraw it for them either", (await call(pm, `/jobs/${jobId}/withdraw`, { method: "POST", body: JSON.stringify({}) })).status === 403);
+const blocked = await call(tenant, `/jobs/${jobId}/withdraw`, { method: "POST", body: JSON.stringify({ note: "It stopped on its own" }) });
+ck("and the tenant is refused, by name", blocked.status === 409 && blocked.body?.error === "contractor_assigned", JSON.stringify(blocked.body));
+const stillOn = (await call(pm, "/jobs")).body.find((j) => j.id === jobId);
+ck("nothing was taken back", !stillOn.withdrawnAt);
+ck("the work order still stands", Object.keys(stillOn.assignments || {}).length === 1);
+ck("and the visit is still waiting", (await call(pm, "/visits")).body.some((v) => v.jobId === jobId));
+
+console.log("\n-- taking back one nobody is booked for --");
+const free = await call(tenant, "/jobs", { method: "POST", body: JSON.stringify({ title: `Nobody booked ${S}`, propertyId: "p1", address: "101 Main St", trades: [] }) });
+const freeId = free.body.id;
 await clear();
-await call(pm, `/jobs/${jobId}/complete`, { method: "POST" });
+const wd = await call(tenant, `/jobs/${freeId}/withdraw`, { method: "POST", body: JSON.stringify({ note: "It stopped on its own" }) });
+ck("withdrawn, with the reason", wd.status === 200 && wd.body?.ok, JSON.stringify(wd.body));
+ck("and nothing had to be unwound", wd.body?.voided === 0, String(wd.body?.voided));
+const after = (await call(pm, "/jobs")).body.find((j) => j.id === freeId);
+ck("the manager's copy says withdrawn, and why", !!after.withdrawnAt && after.withdrawnNote === "It stopped on its own");
+ck("withdrawing again is harmless", (await call(tenant, `/jobs/${freeId}/withdraw`, { method: "POST", body: JSON.stringify({}) })).body?.alreadyWithdrawn === true);
+ck("and it cannot be edited afterwards", (await call(tenant, `/jobs/${freeId}/report`, { method: "PATCH", body: JSON.stringify({ title: "x" }) })).body?.error === "withdrawn");
+await clear();
+await call(pm, `/jobs/${freeId}/complete`, { method: "POST" });
 ck("completing a withdrawn job tells the tenant nothing", (await emails()).length === 0);
 
 console.log("\n-- a finished one cannot be taken back --");
