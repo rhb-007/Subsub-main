@@ -8343,12 +8343,51 @@ function useShots() {
   return { shots, note, setNote, add, remove, clear, upload };
 }
 
+// A section of the tenant's dashboard, which folds away.
+//
+// Two reports fit on a phone; a year of them does not, and the thing they
+// came to do -- confirm a time, or report the next problem -- ends up below
+// a wall of finished work. Each section closes, and stays closed: a tenant
+// who folds away their history has said something about how they use this,
+// and reopening it on every visit would be ignoring them.
+//
+// The remembered state is a convenience, not data. Private windows, cleared
+// site data and a few other cases make localStorage throw on read as well as
+// on write, so both are guarded and the section simply opens as it would
+// have on a first visit.
+function TenantSection({ id, title, count, defaultOpen = true, children }) {
+  const key = `subsub.tn.open.${id}`;
+  const [open, setOpen] = useState(() => {
+    try {
+      const saved = localStorage.getItem(key);
+      return saved === null ? defaultOpen : saved === "1";
+    } catch { return defaultOpen; }
+  });
+  const toggle = () => setOpen((wasOpen) => {
+    const next = !wasOpen;
+    try { localStorage.setItem(key, next ? "1" : "0"); } catch { /* nothing to remember it with */ }
+    return next;
+  });
+  const bodyId = `tn-sec-${id}`;
+  return (
+    <section className="tn-sec">
+      <button className="tn-sec-head" onClick={toggle} aria-expanded={open} aria-controls={bodyId}>
+        <ChevronRight size={15} className={open ? "open" : ""} />
+        <span className="tn-sec-title">{title}</span>
+        {count > 0 && <span className="sec-count">{count}</span>}
+      </button>
+      {/* Unmounted rather than hidden: a closed section should not be
+          fetching the photos of forty old reports. */}
+      {open && <div id={bodyId}>{children}</div>}
+    </section>
+  );
+}
+
 function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onWithdraw, onEdit, onPhotosChanged }) {
   const visitOf = (jobId) => visits.find((v) => v.jobId === jobId) || null;
   // Closed-out reports -- done, or taken back -- keep out of the way of the
   // live ones but stay reachable: "did they ever fix the fan" is a question
   // somebody asks months later.
-  const [showPast, setShowPast] = useState(false);
   const isPast = isClosed;
   // null until they start. `group` and `query` are how the list of eighty
   // things gets down to the six worth reading: pick the area, or type a word.
@@ -8550,21 +8589,27 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         };
         return (
           <>
-            <h3 className="tn-h3">{mine.length ? "What you've reported" : ""}</h3>
-            {current.length === 0 ? (
+            {/* Nothing at all yet: a heading over an empty box says less than
+                the box does, so the section only appears once there is one. */}
+            {mine.length === 0 ? (
               <div className="dash-empty">
                 <ClipboardList size={24} />
-                <p>{mine.length ? "Nothing open right now." : "Nothing reported yet. When you do, it will show up here with where it has got to."}</p>
+                <p>Nothing reported yet. When you do, it will show up here with where it has got to.</p>
               </div>
-            ) : <div className="tn-list">{current.map(row)}</div>}
+            ) : (
+              <TenantSection id="open" title="What you've reported" count={current.length}>
+                {current.length === 0 ? (
+                  <div className="dash-empty">
+                    <ClipboardList size={24} />
+                    <p>Nothing open right now.</p>
+                  </div>
+                ) : <div className="tn-list">{current.map(row)}</div>}
+              </TenantSection>
+            )}
             {past.length > 0 && (
-              <div className="tn-past">
-                <button className="tn-past-toggle" onClick={() => setShowPast((v) => !v)} aria-expanded={showPast}>
-                  <ChevronRight size={15} className={showPast ? "open" : ""} />
-                  Past reports <span className="sec-count">{past.length}</span>
-                </button>
-                {showPast && <div className="tn-list">{past.map(row)}</div>}
-              </div>
+              <TenantSection id="past" title="Past reports" count={past.length} defaultOpen={false}>
+                <div className="tn-list">{past.map(row)}</div>
+              </TenantSection>
             )}
           </>
         );
@@ -14158,8 +14203,6 @@ p.fld-note{margin:6px 0 0}
 .tn-cta:hover{background:var(--brand-dk)}
 .tn-sent{display:flex;align-items:flex-start;gap:9px;background:#eef6f1;border:1px solid #cfe4d8;
   color:#1d5740;border-radius:11px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.45}
-.tn-h3{margin:26px 0 10px;font-size:12.5px;font-weight:800;text-transform:uppercase;
-  letter-spacing:.06em;color:var(--ink-soft)}
 .tn-list{display:flex;flex-direction:column;gap:9px}
 .tn-row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
   border-radius:12px;padding:14px 15px;box-shadow:var(--shadow)}
@@ -14983,11 +15026,17 @@ p.fld-note{margin:6px 0 0}
 .tn-edit .fld{margin-bottom:10px}
 .tn-edit textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;font-size:14px}
 .btn-solid.danger{background:#b1391f}
-.tn-past{margin-top:18px}
-.tn-past-toggle{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:6px 0;margin-bottom:8px;
-  font:700 12.5px Inter,sans-serif;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);cursor:pointer}
-.tn-past-toggle svg{transition:transform .15s}
-.tn-past-toggle svg.open{transform:rotate(90deg)}
+/* A dashboard section that folds away. Replaces the one-off Past reports
+   toggle, which was the same thing built for one section only. The whole
+   header is the control -- on a phone a 15px chevron is not a target. */
+.tn-sec{margin-top:22px}
+.tn-sec-head{display:flex;align-items:center;gap:7px;width:100%;background:none;border:0;
+  padding:7px 0;margin-bottom:6px;font:inherit;color:var(--ink-soft);cursor:pointer;text-align:left}
+.tn-sec-title{font-size:12.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+.tn-sec-head svg{flex:none;transition:transform .15s}
+.tn-sec-head svg.open{transform:rotate(90deg)}
+.tn-sec-head:hover .tn-sec-title{color:var(--ink)}
+.tn-sec-head:focus-visible{outline:2px solid var(--brand);outline-offset:3px;border-radius:6px}
 /* a proposed visit, on the tenant's report */
 .tn-row.needs-you{border-color:var(--gold-dk);box-shadow:0 0 0 3px rgba(192,125,28,.12)}
 .tn-visit{margin-top:12px;padding:14px 16px;border:1px solid var(--line);border-radius:11px;background:var(--paper)}

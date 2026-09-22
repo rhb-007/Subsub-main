@@ -29,6 +29,7 @@
     "test:tenantui": "node scripts/tenant-report-ui-test.mjs",
     "test:applyform": "node scripts/apply-form-test.mjs",
     "test:buttons": "node scripts/button-align-test.mjs",
+    "test:chrome": "node scripts/favicon-sections-test.mjs",
     "test:notify": "wrangler d1 execute subsub-db --config=./wrangler.toml --local --file=./scripts/tenant-notify-fixture.sql && node scripts/tenant-notify-test.mjs",
     "lint": "eslint ."
   },
