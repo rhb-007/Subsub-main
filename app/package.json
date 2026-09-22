@@ -36,6 +36,7 @@
     "test:activity": "node scripts/job-activity-test.mjs",
     "test:scheduled": "node scripts/tenant-scheduled-test.mjs",
     "test:migration-gap": "node scripts/migration-gap-test.mjs",
+    "test:whitescreen": "node scripts/whitescreen-test.mjs",
     "test:sevmap": "node scripts/emergency-map-test.mjs",
     "test:emergency": "node scripts/emergency-test.mjs",
     "test:emergencyui": "node scripts/emergency-ui-test.mjs",
