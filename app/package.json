@@ -16,7 +16,8 @@
     "test:setup": "node scripts/setup-check-test.mjs",
     "test:owner": "node scripts/owner-scope-test.mjs",
     "test:tenants": "node scripts/tenants-test.mjs",
-    "test:subdomain": "node scripts/subdomain-test.mjs"
+    "test:subdomain": "node scripts/subdomain-test.mjs",
+    "test:migrations": "node --no-warnings scripts/migration-message-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

@@ -6439,8 +6439,11 @@ function TenantsPane({ properties, accountKind }) {
       // The one failure worth naming precisely. Everything else is "try
       // again"; this one is a migration nobody has run, and saying so is the
       // difference between a five-second fix and an afternoon.
-      setErr(/no such table|D1_ERROR/i.test(String(e?.body?.error || e?.message || ""))
-        ? "The tenants tables aren't in the database yet — migrations 015 and 017 need running."
+      // The API says migration_needed and names the file; this used to look
+      // for the raw SQLite wording instead, which the API never sends, so a
+      // missing migration read as an ordinary failure here.
+      setErr(e?.body?.error === "migration_needed"
+        ? `The tenants tables aren't in the database yet — run ${e.body.migration && e.body.migration !== "unknown" ? e.body.migration + ".sql" : "the pending migrations in app/worker/migrations"}.`
         : "Could not load your tenants.");
     }
   };
@@ -6591,9 +6594,15 @@ function tenantAddError(e) {
     : code === "bad_email" ? "That email address doesn't look right."
     : code === "bad_phone" ? "That phone number needs 10 digits."
     : code === "contact_required" ? "Give an email address — we need somewhere to send the invite."
+    : code === "name_required" ? "Give a first or last name."
+    : code === "property_required" ? "Pick the building they live in."
     : code === "property_not_found" ? "That building isn't on this account any more. Pick another."
     : code === "forbidden" ? "You don't have access to that building."
     : code === "not_a_property_account" ? "This account doesn't keep a building list, so it has no tenants."
+    // Anything else is the server having a bad moment. Say which moment: a
+    // screenshot of "Could not add them" tells nobody anything, and the
+    // status is the one thing that narrows it down.
+    : e?.status >= 500 ? `The server couldn't add them (error ${e.status}). If it keeps happening, the database may still need its migrations run.`
     : "Could not add them. Try again.";
 }
 
@@ -6620,13 +6629,14 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
   const phoneOk = digits === 10;
   const phoneStarted = digits > 0;
   const ready = f.propertyId && (f.firstName.trim() || f.lastName.trim())
-    && validEmail(f.email.trim())
-    // Half a phone number is a mistake, not an omission: either give one or
-    // leave it blank.
-    && (!phoneStarted || phoneOk)
-    && (!f.sms || phoneOk);
+    && validEmail(f.email.trim());
 
   const save = async (andAnother) => {
+    // Half a phone number is a mistake, not an omission: either give one or
+    // leave it blank. Said here rather than under the field, because a
+    // running count of the digits typed so far is noise on every keystroke
+    // and this is only a problem at the moment somebody tries to save.
+    if (phoneStarted && !phoneOk) { setErr("That phone number needs 10 digits."); return; }
     setBusy(true); setErr("");
     try {
       const res = await api.addTenant({
@@ -6678,9 +6688,6 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
           <input type="tel" inputMode="numeric" value={f.phone}
             onChange={(e) => set("phone", formatPhone(e.target.value))}
             placeholder="(206)555-0134" />
-          {phoneStarted && !phoneOk && (
-            <span className="fld-warn">10 digits — {digits} so far.</span>
-          )}
         </label>
       </div>
       <div className="fld-row">
@@ -6705,10 +6712,6 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
             <span>Text message{phoneOk ? "" : " — needs a cell phone"}</span>
           </label>
         </div>
-        <p className="fld-hint">
-          Email carries the link they set a password with, so it always goes. A text is the one
-          that gets read.
-        </p>
       </div>
 
       {err && <p className="billing-err" role="alert">{err}</p>}

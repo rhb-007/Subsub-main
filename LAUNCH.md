@@ -128,6 +128,14 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- Adding a tenant on a database that had not had migration 015 run failed
+  with "Could not add them. Try again." SQLite has two ways of saying a
+  column is missing and they share no words -- a SELECT says "no such
+  column: unit", an INSERT says "table memberships has no column named
+  unit" -- and the detector knew only the first. Reading the roster named
+  the migration; adding one threw a plain 500. Both now say which file to
+  run. The roster's own message had the matching half of the same bug: it
+  looked for raw SQLite wording in a response that carries a code.
 
 ## Known, not blocking
 

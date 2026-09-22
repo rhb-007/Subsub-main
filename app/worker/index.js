@@ -2341,8 +2341,16 @@ async function issueTenantInvite(c, auth, t) {
 // Which migration a D1 complaint is really about. The message names the
 // column or table, so the answer is in the error and only needs reading.
 function missingSchema(err) {
-  const m = String(err?.message || err || "");
-  if (!/no such (table|column)/i.test(m)) return null;
+  // D1 sometimes carries the real message on the cause rather than the error
+  // itself, so both are read.
+  const m = [err?.message, err?.cause?.message, err].map((x) => String(x || "")).join(" | ");
+  // SQLite has two ways of saying the same thing and they do not share a
+  // word: a SELECT or UPDATE against a column that is not there says "no such
+  // column: unit", while an INSERT says "table memberships has no column
+  // named unit". Matching only the first meant adding a tenant before
+  // migration 015 -- an INSERT -- threw a plain 500, and the form said
+  // "Could not add them. Try again." instead of naming the migration.
+  if (!/no such (table|column)|has no column named/i.test(m)) return null;
   if (/tenant_invites|memberships\.unit|\bunit\b/i.test(m)) {
     return /sent_at/i.test(m) ? "017_tenant_invite_sent" : "015_tenants";
   }
