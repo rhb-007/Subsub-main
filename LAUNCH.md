@@ -139,8 +139,10 @@ Fixed as encountered, because each one blocked something on the list:
   a cell phone is enough now, either one.
 - Every branded sign-in page called itself a "Contractor portal", with the
   address printed after it -- the address the person was already standing
-  on. It reads "Subcontractor Management Platform" now, and nothing else:
-  the URL said nothing and took the room a description needs. The page also
+  on. SubSub's own page at app.subsub.work reads "Subcontractor Management
+  Platform"; a company's reads its account type -- "Property manager
+  portal". Neither prints the URL: it said nothing and took the room a
+  description needs. The page also
   says tenants belong there, because until now it only spoke to
   subcontractors.
 - `/api/account-by-subdomain` read `kind` back out of a row it never selected

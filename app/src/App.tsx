@@ -434,6 +434,14 @@ const DEFAULT_ACCOUNT_KIND = "general_contractor";
 const kindOf = (account) =>
   (account && ACCOUNT_KINDS[account.kind]) ? account.kind : DEFAULT_ACCOUNT_KIND;
 const hasProperties = (account) => ACCOUNT_KINDS[kindOf(account)].properties;
+// The line under the name on a sign-in page. SubSub's own address describes
+// the product; a company's address describes what the company is -- the
+// people signing in there are its staff, its owners, its tenants, its
+// subcontractors, and "Property manager portal" is what all of them would
+// call it. Neither prints the address: it is the one they are standing on.
+const signInTagline = (brand) => brand?.isSubSub
+  ? "Subcontractor Management Platform"
+  : `${ACCOUNT_KINDS[kindOf(brand)].label} portal`;
 
 // Phone numbers are typed in a dozen shapes and then compared, dialled and
 // texted as one, so every field that takes one runs its input through here.
@@ -8790,7 +8798,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <div className="brand-logo lg"><BrandMark brand={b} height={34} /></div>
               <div>
                 <div className="bp-name">{b.name || "Your company"}</div>
-                <div className="bp-sub">Subcontractor Management Platform</div>
+                <div className="bp-sub">{signInTagline({ kind: accountKind })}</div>
               </div>
             </div>
             <div className="bp-foot"><PoweredBy height={12} /></div>
@@ -11464,10 +11472,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
         <div className="login-brand">
           <div className="login-logo-wrap"><BrandMark brand={brand} height={38} /></div>
           <h1>{brand.name}</h1>
-          {/* What this is, not where it is. The address was printed here
-              too, and it is the address they are already standing on -- it
-              said nothing, and took the room a description needs. */}
-          <p>Subcontractor Management Platform</p>
+          <p>{signInTagline(brand)}</p>
         </div>
 
         <div className="login-form">
