@@ -83,8 +83,18 @@ try {
   console.log("\n-- reporting one, with a photo --");
   await hit(/Report a problem/);
   await wait(1200);
-  await page.evaluate(() => [...document.querySelectorAll(".tn-group")].find((g) => /plumb|water|kitchen|bath/i.test(g.textContent))?.click()
-    || document.querySelector(".tn-group")?.click());
+  // Explicitly not the Emergency group. `find(...)?.click() || fallback()`
+  // always ran the fallback -- click() returns undefined -- so this quietly
+  // picked whatever was first, which became a fire the day emergencies were
+  // added, and then failed on a form that is deliberately gated behind a
+  // 911 notice.
+  const group = await page.evaluate(() => {
+    const g = [...document.querySelectorAll(".tn-group")].find((x) => /water\s*&\s*plumbing/i.test(x.textContent));
+    if (!g) return null;
+    g.click();
+    return g.textContent.trim();
+  });
+  if (!group) throw new Error("could not find the Water & plumbing group");
   await wait(600);
   const picked = await page.evaluate(() => { const b = document.querySelector(".tn-pick"); b?.click(); return b?.textContent.trim(); });
   await wait(700);
@@ -169,7 +179,11 @@ try {
   page.on("request", breakSave);
   await hit(/Report a problem/);
   await wait(1200);
-  await page.evaluate(() => document.querySelector(".tn-group")?.click());
+  // Again, not the Emergency group: this one is checking that a failed send
+  // keeps the form open, which a 911 pick would confuse by hiding the form
+  // for its own reasons.
+  await page.evaluate(() => [...document.querySelectorAll(".tn-group")]
+    .find((x) => /water\s*&\s*plumbing/i.test(x.textContent))?.click());
   await wait(500);
   await page.evaluate(() => document.querySelector(".tn-pick")?.click());
   await wait(700);

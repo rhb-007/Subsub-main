@@ -12,6 +12,11 @@ import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEm
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
+// The same file the browser reads, so the two cannot disagree about what an
+// emergency is. Severity is decided here from the problem the tenant picked,
+// never taken from what the browser claims -- otherwise a dripping tap could
+// be labelled urgent and call somebody out at the account's expense.
+import { severityOf } from "../shared/emergency.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
 import {
@@ -1424,6 +1429,9 @@ app.get("/api/account", async (c) => {
     cancelAtPeriodEnd: !!a.cancel_at_period_end,
     hostnameStatus: a.hostname_status || null,
     hostnameCheckedAt: a.hostname_checked_at || null,
+    // Who an urgent report goes straight to. Null means nothing dispatches
+    // itself, which is how every account starts.
+    emergencyCompanyId: a.emergency_company_id || null,
     user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone, notify: notifyOf(user) } : null,
   });
 });
@@ -1800,6 +1808,20 @@ app.patch("/api/account", requireRole("admin"), async (c) => {
     const trades = validTrades(b.trades);
     if (!trades) return c.json({ error: "invalid_trades" }, 400);
     sets.push("trades = ?"); vals.push(JSON.stringify(trades));
+  }
+  // Who takes an emergency call-out. Checked rather than stored as given:
+  // this is the one setting that lets a tenant's tap commit the account to
+  // a contractor, so it has to name somebody the account actually works
+  // with. Clearing it turns automatic dispatch off, which is the default.
+  if (b.emergencyCompanyId !== undefined) {
+    const want = b.emergencyCompanyId || null;
+    if (want) {
+      const eng = await c.env.DB.prepare(
+        `SELECT id, status FROM engagements WHERE account_id = ? AND company_id = ?`)
+        .bind(accountId, want).first();
+      if (!eng || eng.status === "ended") return c.json({ error: "not_engaged" }, 400);
+    }
+    sets.push("emergency_company_id = ?"); vals.push(want);
   }
   if (sets.length) {
     vals.push(accountId);
@@ -2435,6 +2457,7 @@ function missingSchema(err) {
   if (/withdrawn_(at|note)/i.test(m)) return "020_withdrawn_reports";
   if (/declined_(at|note)/i.test(m)) return "021_declined_requests";
   if (/\bphotos\b|report_detail/i.test(m)) return "022_report_photos";
+  if (/\bseverity\b|emergency_company_id/i.test(m)) return "023_emergencies";
   if (/tenant_invites|memberships\.unit|\bunit\b/i.test(m)) {
     return /sent_at/i.test(m) ? "017_tenant_invite_sent" : "015_tenants";
   }
@@ -2885,6 +2908,9 @@ function jobRowToJs(j, workOrders) {
     // Null on anything not raised through the tenant's form, and on reports
     // made before this was kept -- the composed scope is all those have.
     reportDetail: parseJson(j.report_detail, null),
+    // "911" or "urgent", or null for the great majority. Decided from what
+    // they picked -- see shared/emergency.js.
+    severity: j.severity || null,
     status: j.status, completedAt: j.completed_at, notes: j.notes, createdAt: j.created_at?.slice(0, 10), assignments,
     // The column has been on jobs since the beginning and was cleared when a
     // property was deleted, but nothing ever wrote it and nothing ever read
@@ -2950,17 +2976,22 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   // sentence and the parts cannot disagree, whichever of the two edits it.
   const detail = b.reportDetail ? cleanDetail({ ...b.reportDetail, title: b.title }) : null;
   const scope = detail ? composeScope({ ...detail, title: b.title }) : (b.scope || null);
+  // Worked out here from what they picked, never taken from the request.
+  // Only a tenant's or owner's report can be an emergency: a manager
+  // creating their own job already knows how to prioritise it.
+  const severity = requestedBy ? severityOf(detail?.problem) : null;
   try {
     await c.env.DB.prepare(
       `INSERT INTO jobs (id, account_id, title, client, address, area, zip, sqft, stories, date, time,
          trades, scope, material_source, materials_paid_by, measurement_docs, created_by,
-         property_id, requested_by, photos, report_detail)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         property_id, requested_by, photos, report_detail, severity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(id, accountId, b.title, b.client || null, b.address || null, b.area || null, b.zip || null,
       b.sqft || null, b.stories || null, b.date || null, b.time || "07:00",
       JSON.stringify(b.trades || []), scope, b.materialSource || null, b.materialsPaidBy || null,
       JSON.stringify(b.measurementDocs || []), userId, propertyId, requestedBy,
-      photos.length ? JSON.stringify(photos) : null, detail ? JSON.stringify(detail) : null).run();
+      photos.length ? JSON.stringify(photos) : null, detail ? JSON.stringify(detail) : null,
+      severity).run();
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;
@@ -2979,8 +3010,20 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   // created_at to the second, so the ten-minute edit window read as already
   // over, and no ids for the photos it just sent, so they could not be
   // fetched back. Both looked like features that did not work.
+  // Urgent, and somebody named to take it: send them, now, and say so in
+  // the answer so the tenant is told a contractor is already coming rather
+  // than being left to wonder. A fire never reaches this -- emergency
+  // services are not a subcontractor.
+  let emergency = null;
+  if (severity === "urgent") {
+    emergency = await dispatchEmergency(c, id, accountId);
+  }
+
   const saved = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(id).first();
-  return c.json({ id, requested: !!requestedBy, job: saved ? jobRowToJs(saved, []) : null }, 201);
+  const wos = saved ? (await c.env.DB.prepare(
+    `SELECT * FROM work_orders WHERE job_id = ? AND voided_at IS NULL`).bind(id).all()).results : [];
+  return c.json({ id, requested: !!requestedBy, severity,
+    emergency, job: saved ? jobRowToJs(saved, wos) : null }, 201);
 });
 
 // Turning an owner's request into a job somebody can be assigned to. Only the
@@ -3584,6 +3627,101 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   await notifyTenant(c, jobId, autoScheduled ? "booked" : "arranging");
   return c.json({ id, woNumber, status: autoScheduled ? "accepted" : "pending" }, 201);
 });
+
+// Sending somebody out, without waiting for a manager to wake up.
+//
+// A burst pipe at two in the morning is the case this exists for: the
+// difference between a plumber in an hour and a plumber at nine is a
+// ceiling. So an urgent report approves itself and issues a work order to
+// the one subcontractor the account has named for this.
+//
+// Everything about it is deliberately conservative, because it spends
+// somebody's money without asking:
+//
+//   * It only fires when the account has named a contractor. Nothing
+//     dispatches itself out of the box.
+//   * It only fires for "urgent". A fire is not a subcontractor's problem
+//     and never dispatches -- emergency services are not something this
+//     system can route to.
+//   * The usual document rule still applies. Sending an uninsured
+//     contractor into an emergency is how an emergency becomes a lawsuit,
+//     so a company whose paperwork is not verified is not dispatched and
+//     the manager is told why rather than left to assume somebody is on
+//     the way.
+//
+// Never throws. A report that cannot be dispatched is still a report, and
+// losing it because the call-out failed would be the worse outcome by far.
+async function dispatchEmergency(c, jobId, accountId) {
+  const say = (reason, extra = {}) => ({ dispatched: false, reason, ...extra });
+  try {
+    const account = await c.env.DB.prepare(
+      `SELECT id, name, subdomain, emergency_company_id FROM accounts WHERE id = ?`).bind(accountId).first();
+    const companyId = account?.emergency_company_id;
+    if (!companyId) return say("no_emergency_contractor");
+
+    const engagement = await c.env.DB.prepare(
+      `SELECT * FROM engagements WHERE account_id = ? AND company_id = ?`).bind(accountId, companyId).first();
+    if (!engagement || engagement.status === "ended") return say("not_engaged");
+
+    const docReview = parseJson(engagement.doc_review, {});
+    const verified = (k) => docReview[k]?.status === "verified";
+    if (!verified("insurance") || !verified("bond") || !verified("contract")) {
+      return say("documents_incomplete", { companyId });
+    }
+
+    const job = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(jobId).first();
+    if (!job) return say("job_not_found");
+
+    // Approving is part of dispatching: a work order cannot be issued
+    // against a request nobody has agreed to, and for this one the agreeing
+    // is what the account did when it named an emergency contractor.
+    await c.env.DB.prepare(`UPDATE jobs SET approved_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(jobId).run();
+
+    const trade = parseJson(job.trades, [])[0] || "general";
+    const autoScheduled = !!engagement.auto_schedule;
+    const woNumber = "WO-" + Math.floor(1000 + Math.random() * 9000);
+    const id = uid();
+    // Two hours, not the usual day. If they cannot take it the manager needs
+    // to know while it still matters.
+    const respondBy = autoScheduled ? null : new Date(Date.now() + windowMins("2h") * 60000).toISOString();
+    await c.env.DB.prepare(
+      `INSERT INTO work_orders
+        (id, wo_number, job_id, trade, company_id, engagement_id, crew_name, trade_scope, value_cents,
+         status, auto_scheduled, response_window, respond_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, woNumber, jobId, trade, companyId, engagement.id, null, job.scope || "", null,
+      autoScheduled ? "accepted" : "pending", autoScheduled ? 1 : 0,
+      autoScheduled ? null : "2h", respondBy).run();
+
+    const co = await c.env.DB.prepare(
+      `SELECT id, company, contact, email, phone, notify FROM companies WHERE id = ?`).bind(companyId).first();
+    const where = [job.address, job.zip].filter(Boolean).join(", ");
+    const line = `EMERGENCY call-out from ${account.name}: ${job.title}${where ? ` at ${where}` : ""}. ${woNumber}.`;
+    // Email and text, both, regardless of what they normally chose. Somebody
+    // who opted out of texts did so about job offers, not about this.
+    if (co?.email) {
+      const result = await sendEmail(c.env, { to: co.email,
+        subject: `Emergency call-out — ${job.title}`,
+        text: `${line}\n\n${job.scope || ""}\n\nThis was sent automatically because ${account.name} named you their emergency contractor. Please respond within two hours.` });
+      await logMail(c.env, { accountId, companyId, to: co.email, kind: "emergency_dispatch",
+        subject: `Emergency call-out — ${job.title}`, result, sentBy: null });
+    }
+    if (co?.phone) {
+      await sendSms(c.env, { to: co.phone, body: line.slice(0, 300) }).catch(() => {});
+    }
+
+    await logEvent(c.env, accountId, null, "wo.emergency_dispatched", id, { jobId, companyId, woNumber });
+    await logActivity(c.env, accountId, job.requested_by, "emergency_dispatched",
+      `Emergency: ${woNumber} went straight to ${co?.company || "the emergency contractor"} for "${job.title}"`);
+    await notifyTenant(c, jobId, autoScheduled ? "booked" : "arranging");
+    return { dispatched: true, companyId, woNumber, company: co?.company || null,
+      status: autoScheduled ? "accepted" : "pending" };
+  } catch (err) {
+    // A failed dispatch must never cost the report.
+    console.error("[emergency] dispatch failed:", err);
+    return say("dispatch_failed");
+  }
+}
 
 const RESPONSE_WINDOW_MINS = { "2h": 120, "8h": 480, "24h": 1440, "48h": 2880 };
 const windowMins = (id) => RESPONSE_WINDOW_MINS[id] ?? 1440;

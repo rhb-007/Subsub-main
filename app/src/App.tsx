@@ -28,6 +28,9 @@ import {
   Globe, RefreshCw, ExternalLink, ImageOff,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, logoUrl } from "./lib/api";
+// The same file the Worker imports, so a problem cannot be an emergency in
+// the browser and ordinary work on the server, or the other way round.
+import { severityOf, severityRank } from "../shared/emergency.js";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
 
 // What a confirmation or reset link left in the address bar.
@@ -1845,6 +1848,14 @@ export default function SubSub() {
   const setAccountTrades = (trades) => {
     persist("patchAccount.trades", api.patchAccount({ trades }));
     setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, trades } : a));
+  };
+  // Who takes an emergency call-out. Awaited rather than fired and forgotten
+  // like the others: this is the setting that lets a tenant's tap send a
+  // contractor, so "Saved" has to mean the server agreed, not that the
+  // request left the browser.
+  const setEmergencyContractor = async (companyId) => {
+    await api.patchAccount({ emergencyCompanyId: companyId });
+    setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, emergencyCompanyId: companyId } : a));
   };
 
   // Flatten company + engagement into the "sub" shape the UI consumes.
@@ -3702,6 +3713,8 @@ export default function SubSub() {
           billing={billing} onSetBilling={setBilling}
           accountKind={kindOf(account)} onSetAccountKind={setAccountKind}
           accountTrades={account.trades} onSetAccountTrades={setAccountTrades}
+          emergencyCompanyId={account.emergencyCompanyId || null}
+          onSetEmergencyContractor={setEmergencyContractor}
           subscriptionStatus={account.subscriptionStatus} currentPeriodEnd={account.currentPeriodEnd}
           comped={account.comped} cancelAtPeriodEnd={account.cancelAtPeriodEnd}
           canManage={can("account") && role === "admin"} mySub={mySub}
@@ -7647,6 +7660,23 @@ function tenantStage(job, visit) {
 // the account picks when they approve it -- better than guessing wrong and
 // sending the request to a plumber because the list had to say something.
 const TENANT_PROBLEMS = [
+  // ---- Get out and call emergency services ----
+  // Listed first so they are the first thing a search turns up, and given
+  // their own group so nobody scrolling for a dripping tap has to read them.
+  // Their severity lives in shared/emergency.js, next to the Worker's copy
+  // of the same decision.
+  { g: "Emergency", trade: null, where: "both", label: "There's a fire, or I can smell smoke" },
+  { g: "Emergency", trade: null, where: "both", label: "I can smell gas" },
+  { g: "Emergency", trade: "electrical", where: "both", label: "An outlet or switch is sparking" },
+  { g: "Emergency", trade: null, where: "both", label: "The carbon monoxide alarm is going off" },
+  { g: "Emergency", trade: null, where: "both", label: "Someone is trapped in the elevator" },
+  { g: "Emergency", trade: "plumbing", where: "both", label: "Water is flooding in" },
+  { g: "Emergency", trade: "plumbing", where: "both", label: "A pipe has burst" },
+  { g: "Emergency", trade: "plumbing", where: "both", label: "My toilet is overflowing" },
+  { g: "Emergency", trade: "hvac", where: "both", label: "It's dangerously cold in here" },
+  { g: "Emergency", trade: "hvac", where: "both", label: "It's dangerously hot in here" },
+  { g: "Emergency", trade: "electrical", where: "both", label: "I have no power at all" },
+
   // ---- Water, drains and plumbing ----
   { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My sink is leaking" },
   { g: "Water & plumbing", trade: "plumbing", where: "both", label: "There's water under the sink" },
@@ -8175,6 +8205,53 @@ function VisitBlock({ job, visit, who, onPropose }) {
   );
 }
 
+// What a tenant sees the moment they pick something nobody here can help
+// with: fire, gas, live electricity, carbon monoxide, somebody shut in a
+// lift.
+//
+// The one thing this must not do is look like help arriving. A maintenance
+// form that accepts "there's a fire" with a cheerful "sent!" is worse than
+// one that refuses it -- somebody could stand in a smoke-filled hallway
+// waiting for a plumber. So it says what to do, says plainly that sending
+// this is not calling for help, and then gets out of the way.
+//
+// It does not block the report. Telling somebody their fire is not a valid
+// form entry would be its own kind of failure, and the manager does need to
+// know. It just cannot be the first thing that happens.
+function Call911({ brandName, onBack, onContinue }) {
+  return (
+    <div className="sos" role="alert">
+      <div className="sos-head"><AlertTriangle size={22} /> Call 911 first</div>
+      <p className="sos-lead">
+        Get yourself and anyone with you somewhere safe, then call 911.
+      </p>
+      <a className="sos-call" href="tel:911"><Phone size={17} /> Call 911</a>
+      <p className="sos-fine">
+        Sending this report is <b>not</b> the same as calling for help. It goes to
+        {" "}{brandName} as a message, and nobody is watching it right now.
+        Please only fill it in once you are safe.
+      </p>
+      <div className="sos-actions">
+        <button className="btn-ghost" onClick={onBack}>Pick something else</button>
+        <button className="btn-ghost" onClick={onContinue}>I'm safe — report it too</button>
+      </div>
+    </div>
+  );
+}
+
+// The quieter one. Water coming in, no heat, a door that will not lock:
+// somebody here can help, and the point is telling them it will be treated
+// that way rather than sitting in a queue until Tuesday.
+function UrgentNote({ brandName }) {
+  return (
+    <div className="urg" role="status">
+      <AlertTriangle size={16} />
+      <p>This one goes to {brandName} as urgent, ahead of everything else.
+        If they have an emergency contractor on call, it goes straight to them.</p>
+    </div>
+  );
+}
+
 // "What is it?" -- eighty things, shown six at a time.
 //
 // Lifted out of the report form because the edit modal needs exactly the
@@ -8396,6 +8473,10 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendErr, setSendErr] = useState("");
+  // Whether they have seen the call-911 notice for what they picked and
+  // said they are safe. Reset by picking anything else, so it cannot be
+  // acknowledged once and then silently skipped for a different emergency.
+  const [safeAck, setSafeAck] = useState(false);
   // Which report is open. Held by id rather than by object so the modal
   // follows the row as it updates -- an edit or a new photo re-renders the
   // list, and a captured object would keep showing what it used to say.
@@ -8432,11 +8513,16 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
   // showed the same sentence twice in a row and made people wonder which one
   // counted; now the box is empty and only used by somebody who wants to say
   // it differently.
-  const pick = (problem) => setForm((f) => ({ ...f, problem, query: "" }));
+  const pick = (problem) => { setSafeAck(false); setForm((f) => ({ ...f, problem, query: "" })); };
   const titleOf = (f) => (f.title.trim() || f.problem?.label || "");
 
-  // Nothing to type: picking something is enough to send it.
-  const ready = form && form.propertyId && form.problem;
+  const sev = form?.problem ? severityOf(form.problem.label) : null;
+  // Nothing to type: picking something is enough to send it. The one
+  // exception is a life-safety pick, where the rest of the form stays out of
+  // the way until they have seen the notice and said they are safe -- not to
+  // stop them reporting it, but so that filling in a form is never the first
+  // thing they do about a fire.
+  const ready = form && form.propertyId && form.problem && (sev !== "911" || safeAck);
 
   const submit = async () => {
     const at = properties.find((p) => p.id === form.propertyId);
@@ -8505,9 +8591,16 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         )}
 
         <ProblemPicker where={where} chosen={form.problem}
-          onPick={pick} onClear={() => setForm((f) => ({ ...f, problem: null }))} />
+          onPick={pick} onClear={() => { setSafeAck(false); setForm((f) => ({ ...f, problem: null })); }} />
 
-        {form.problem && (
+        {sev === "911" && (
+          <Call911 brandName={brand.name}
+            onBack={() => { setSafeAck(false); setForm((f) => ({ ...f, problem: null })); }}
+            onContinue={() => setSafeAck(true)} />
+        )}
+        {sev === "urgent" && <UrgentNote brandName={brand.name} />}
+
+        {form.problem && (sev !== "911" || safeAck) && (
           <>
             <label className="fld">Want to put it differently?
               <input value={form.title} onChange={(e) => set("title", e.target.value)}
@@ -9385,6 +9478,84 @@ function AddressStatus({ subdomain, status, onRefresh }) {
   );
 }
 
+// Who takes an emergency call-out.
+//
+// This is the only setting in the product that lets somebody else's tap
+// commit the account to a contractor, so it arrives switched off and says
+// exactly what turning it on means. Nothing is worse here than a manager
+// who thinks a plumber is on the way because a feature sounded like it was
+// on.
+//
+// Only contractors whose paperwork is verified can be chosen, for the same
+// reason the dispatch itself checks: an uninsured contractor sent into a
+// flood is how a flood becomes a lawsuit. The rest are listed but
+// unselectable, with the reason, rather than quietly missing -- "why isn't
+// my emergency guy in this list" is otherwise unanswerable.
+function EmergencyContractorPanel({ subs, current, onSave }) {
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [saved, setSaved] = useState(false);
+  const ready = (s) => docsComplete(s);
+  const eligible = (subs || []).filter(ready);
+  const notReady = (subs || []).filter((s) => !ready(s));
+  const chosen = (subs || []).find((s) => s.id === current) || null;
+
+  const set = async (id) => {
+    setSaving(true); setErr(""); setSaved(false);
+    try { await onSave(id || null); setSaved(true); }
+    catch (e) {
+      console.error("[emergency] save failed:", e);
+      setErr(e?.body?.error === "migration_needed"
+        ? `The database isn't migrated yet — run ${e.body.migration || "023_emergencies"}.sql and try again.`
+        : e?.body?.error === "not_engaged" ? "That contractor isn't on this account any more."
+        : "Couldn't save that. Try again in a moment.");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="portal-panel settings-panel">
+      <h4>Emergency contractor</h4>
+      <p className="panel-note">
+        Who gets sent, automatically, when somebody reports flooding, a burst pipe, no
+        heat or anything else we treat as urgent. They are emailed and texted straight
+        away and have two hours to respond.
+      </p>
+
+      {eligible.length === 0 ? (
+        <div className="doc-block">
+          <AlertTriangle size={15} />
+          <div><strong>Nobody is eligible yet.</strong> A contractor can take emergency
+            call-outs once their insurance, bond and agreement are all approved. Until
+            then urgent reports still reach you at the top of your dashboard — nothing
+            is sent on its own.</div>
+        </div>
+      ) : (
+        <label className="fld">Send urgent reports to
+          <select value={current || ""} disabled={saving}
+            onChange={(e) => set(e.target.value)}>
+            <option value="">Nobody — I'll decide each time</option>
+            {eligible.map((s) => <option key={s.id} value={s.id}>{s.company}</option>)}
+          </select>
+          <span className="fld-note">
+            {chosen
+              ? `${chosen.company} is sent automatically. Fires and gas leaks are never dispatched — those tell the person to call 911.`
+              : "Nothing is sent automatically. Urgent reports wait for you at the top of your dashboard."}
+          </span>
+        </label>
+      )}
+
+      {notReady.length > 0 && (
+        <p className="cov-hint">
+          Not available: {notReady.map((s) => s.company).join(", ")} — paperwork still
+          to approve.
+        </p>
+      )}
+      {err && <p className="billing-err" role="alert">{err}</p>}
+      {saved && !err && <p className="cov-hint"><Check size={12} /> Saved.</p>}
+    </div>
+  );
+}
+
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
   accountTrades, onSetAccountTrades, subscriptionStatus, currentPeriodEnd, comped, cancelAtPeriodEnd,
@@ -9392,7 +9563,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   onCancelSubscription, onResumeSubscription, cancelBusy,
   onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onSaveNotify,
-  hostnameStatus, onRefreshHostname, properties = [] }) {
+  hostnameStatus, onRefreshHostname, properties = [],
+  emergencyCompanyId = null, onSetEmergencyContractor }) {
   // accountKind is already a prop; the user form needs it to know which
   // scoped roles this account has anybody to hand out.
   const tenantSeats = users.filter((u) => u.role === "tenant");
@@ -9666,6 +9838,11 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
 
       {pane === "company" && canManage && (
         <TradesPanel trades={accountTrades} onSave={onSetAccountTrades} />
+      )}
+
+      {pane === "company" && canManage && (
+        <EmergencyContractorPanel subs={subs} current={emergencyCompanyId}
+          onSave={onSetEmergencyContractor} />
       )}
 
       {pane === "company" && canManage && !canBrand && (
@@ -10376,7 +10553,7 @@ function DeclineBox({ who, onCancel, onDecline }) {
 // Approve and Decline live in here too, because the moment you have read it
 // is the moment you know, and going back to the row to act would be a step
 // for nothing.
-function RequestDetail({ job, who, where, unitWord = "Unit", onApprove, onDecline, onClose, readOnly = false }) {
+function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], subs = [], onApprove, onDecline, onClose, readOnly = false }) {
   const d = job.reportDetail || null;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -10420,8 +10597,33 @@ function RequestDetail({ job, who, where, unitWord = "Unit", onApprove, onDeclin
       <div className="form tn-detail">
         <div className="tn-detail-head">
           <h2>{job.title}</h2>
-          <span className="tn-chip wait">Waiting on you</span>
+          <span className={`tn-chip ${job.severity === "911" ? "sos" : job.severity === "urgent" ? "wait" : readOnly ? "ok" : "wait"}`}>
+            {job.severity === "911" ? "Life safety"
+              : job.severity === "urgent" ? "Urgent"
+              : readOnly ? "Approved" : "Waiting on you"}
+          </span>
         </div>
+
+        {/* What the person was told, and what has already happened without
+            anybody here doing it. Both are things a manager would otherwise
+            have to guess at. */}
+        {job.severity === "911" && (
+          <div className="sos-brief">
+            <AlertTriangle size={16} />
+            <p>They were shown a notice telling them to get somewhere safe and call 911
+              before sending this. Nothing has been dispatched: emergency services are
+              not something this can call for them.</p>
+          </div>
+        )}
+        {job.severity === "urgent" && (
+          <div className="urg">
+            <AlertTriangle size={16} />
+            <p>{assignedTo.length
+              ? `Sent automatically to ${subs.find((x) => x.id === assignedTo[0].subId)?.company || "your emergency contractor"}${assignedTo[0].wo ? ` on ${assignedTo[0].wo}` : ""}. They have two hours to respond.`
+              : job.approvedAt ? "Approved and waiting for a contractor."
+              : "Nobody has been sent. Name an emergency contractor in Account settings and the next one goes out on its own."}</p>
+          </div>
+        )}
 
         <dl className="tn-facts">
           {rows.map(([k, v]) => <div key={k} className="tn-fact"><dt>{k}</dt><dd>{v}</dd></div>)}
@@ -10532,6 +10734,14 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // A request nobody has agreed to yet. The owner watches for it to clear;
   // the account has to do something about it.
   const awaitingApproval = jobs.filter((j) => j.requestedBy && !j.approvedAt && !j.withdrawnAt && !j.declinedAt);
+  // Emergencies, above everything. An urgent one that has already been
+  // dispatched stays here until somebody has marked it done: "a contractor
+  // is on the way" is exactly the thing a manager wants in front of them,
+  // not filed away as handled.
+  const emergencies = jobs
+    .filter((j) => j.severity && !isClosed(j))
+    .sort((a, b) => (severityRank(a.severity) - severityRank(b.severity))
+      || String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || "")));
 
   return (
     <main className="ss-main">
@@ -10552,6 +10762,70 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             <ClipboardList size={15} /> {isOwner ? "All work" : "All jobs"}</button>
         </div>
       </div>
+
+      {(() => {
+        // Looked up across every job rather than only the ones waiting:
+        // an urgent report that dispatched itself is approved already, and
+        // is exactly the one a manager most wants to open.
+        const j = jobs.find((x) => x.id === openReq);
+        if (!j) return null;
+        const decided = !!j.approvedAt || !!j.declinedAt || isClosed(j);
+        return (
+          <RequestDetail job={j} unitWord={unitWord}
+            who={users.find((u) => u.id === j.requestedBy)}
+            where={props.find((p) => p.id === j.propertyId)}
+            assignedTo={Object.values(j.assignments || {}).filter((a) => a && a.subId && a.status !== "declined")}
+            subs={subs}
+            readOnly={isOwner || decided}
+            onApprove={onApproveJob} onDecline={onDeclineJob}
+            onClose={() => setOpenReq(null)} />
+        );
+      })()}
+
+      {emergencies.length > 0 && (
+        <section className="dash-sec sec-sos">
+          <h3><AlertTriangle size={15} /> Needs attention now
+            <span className="sec-count red">{emergencies.length}</span></h3>
+          {emergencies.map((j) => {
+            const who = users.find((u) => u.id === j.requestedBy);
+            const at = props.find((p) => p.id === j.propertyId);
+            const onIt = Object.values(j.assignments || {})
+              .filter((a) => a && a.subId && a.status !== "declined");
+            const sub = onIt.length ? subs.find((x) => x.id === onIt[0].subId) : null;
+            return (
+              <div key={j.id} className={`dash-row em-row ${j.severity === "911" ? "is-911" : "is-urgent"}`}>
+                <span className={`tn-chip ${j.severity === "911" ? "sos" : "wait"}`}>
+                  {j.severity === "911" ? "Life safety" : "Urgent"}
+                </span>
+                <button className="dash-row-main dash-row-open" onClick={() => setOpenReq(j.id)}>
+                  <div className="dr-title">{j.title}</div>
+                  <span className="dr-meta">
+                    {at ? at.name : "A building"}
+                    {who ? ` · ${who.name}${who.unit ? `, ${unitWord.toLowerCase()} ${who.unit}` : ""}` : ""}
+                    {(j.photos?.length || 0) > 0 ? ` · ${j.photos.length} photo${j.photos.length === 1 ? "" : "s"}` : ""}
+                  </span>
+                  {/* What has already happened, so nobody chases a call-out
+                      that went out by itself twenty minutes ago -- or assumes
+                      one did when it did not. */}
+                  <span className="dr-open">
+                    {j.severity === "911"
+                      ? "They were told to call 911 — read it"
+                      : sub ? `${sub.company} was sent automatically — read it`
+                      : j.approvedAt ? "Approved, needs a contractor — read it"
+                      : "Nobody sent yet — read it"}
+                  </span>
+                </button>
+              </div>
+            );
+          })}
+          <p className="rollup-note">
+            {emergencies.some((j) => j.severity === "911")
+              ? "A life-safety report means the person was shown a 911 notice before they sent it. Nothing here is dispatched automatically — emergency services are not something this can call. "
+              : ""}
+            Urgent reports go straight to your emergency contractor when you have named one, in Account settings.
+          </p>
+        </section>
+      )}
 
       {runsAccount && <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
         subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
@@ -10659,18 +10933,6 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               assign. Nothing reaches a contractor until you do — and if you are not going to,
               decline it, so it stops waiting and they are told why.</p>
           )}
-          {(() => {
-            const j = awaitingApproval.find((x) => x.id === openReq);
-            if (!j) return null;
-            return (
-              <RequestDetail job={j} unitWord={unitWord}
-                who={users.find((u) => u.id === j.requestedBy)}
-                where={props.find((p) => p.id === j.propertyId)}
-                readOnly={isOwner}
-                onApprove={onApproveJob} onDecline={onDeclineJob}
-                onClose={() => setOpenReq(null)} />
-            );
-          })()}
         </section>
       )}
 
@@ -14413,6 +14675,43 @@ p.fld-note{margin:6px 0 0}
 .tn-chip.wait{background:#fbf0dd;color:#8a5a12}
 .tn-chip.busy{background:#e8eff8;color:#2b4d7a}
 .tn-chip.ok{background:#e6f2ec;color:#1d5740}
+/* Get out and call 911. Deliberately the loudest thing this product can
+   draw: it has to survive being read by somebody who is frightened, on a
+   phone, in the dark. Its own colours rather than the theme's, because a
+   customer who picked a red brand must not end up with a red warning that
+   blends in. */
+.sos{border:2px solid #B3261E;background:#FDECEA;border-radius:12px;padding:18px;margin:4px 0 18px}
+.sos-head{display:flex;align-items:center;gap:9px;font-size:19px;font-weight:800;color:#8C1D18;letter-spacing:-.01em}
+.sos-lead{margin:10px 0 0;font-size:15px;line-height:1.5;color:#1A1A1A;font-weight:600}
+.sos-call{display:flex;align-items:center;justify-content:center;gap:9px;margin-top:14px;
+  background:#B3261E;color:#fff;text-decoration:none;font-size:17px;font-weight:800;
+  padding:15px;border-radius:10px;letter-spacing:.01em}
+.sos-call:hover,.sos-call:focus-visible{background:#8C1D18;text-decoration:none}
+.sos-fine{margin:14px 0 0;font-size:12.5px;line-height:1.55;color:#5C1E1A}
+.sos-fine b{font-weight:800}
+.sos-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px}
+.sos-actions .btn-ghost{background:#fff;border-color:#D8A29E;color:#8C1D18;font-size:13px}
+.sos-actions .btn-ghost:hover{border-color:#B3261E}
+
+/* The emergency section, and the rows in it. */
+.sec-sos > h3{color:#8C1D18}
+.em-row{gap:10px}
+.em-row.is-911{border-color:#E7A9A4;background:#FEF7F6}
+.em-row.is-urgent{border-color:#E8CE95;background:#FEFBF3}
+.tn-chip.sos{background:#B3261E;color:#fff}
+.sos-brief{display:flex;align-items:flex-start;gap:9px;border:1px solid #E7A9A4;background:#FDECEA;
+  border-radius:10px;padding:12px 14px;margin:4px 0 14px;color:#8C1D18}
+.sos-brief svg{flex:none;margin-top:2px}
+.sos-brief p{margin:0;font-size:13px;line-height:1.5}
+@media(max-width:640px){.em-row{flex-wrap:wrap}.em-row .tn-chip{order:-1}}
+
+/* Urgent: real, handled, and not an emergency. Quieter on purpose -- if it
+   shouted as loudly as the one above, neither would mean anything. */
+.urg{display:flex;align-items:flex-start;gap:9px;border:1px solid var(--amber,#C98A1B);
+  background:#FDF6E7;border-radius:10px;padding:12px 14px;margin:2px 0 16px;color:#7A5410}
+.urg svg{flex:none;margin-top:2px}
+.urg p{margin:0;font-size:13px;line-height:1.5}
+
 .tn-form{max-width:none}
 /* This form is read by somebody on a phone with a leak under the sink, not
    by staff filling in the twentieth record of the day, so its questions get

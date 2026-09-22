@@ -1,0 +1,21 @@
+-- Emergencies.
+--
+-- Two levels, decided from what the tenant picked rather than from anything
+-- they typed -- see shared/emergency.js, which the browser and this Worker
+-- both import so they cannot disagree about what counts.
+--
+--   '911'     Fire, gas, live electricity, carbon monoxide, somebody shut
+--             in a lift. Nobody at the management company can help and
+--             delay is dangerous; the app says so and gets out of the way.
+--             Never auto-dispatched: emergency services are not a
+--             subcontractor.
+--
+--   'urgent'  Water coming in, no heat, a door that will not lock. Wants a
+--             contractor tonight rather than on Tuesday.
+--
+-- emergency_company_id is the subcontractor an account has named to take
+-- urgent call-outs. Nothing dispatches itself until an account has
+-- deliberately set it: a feature that spends somebody's money on its own
+-- should not arrive switched on.
+ALTER TABLE jobs ADD COLUMN severity TEXT;
+ALTER TABLE accounts ADD COLUMN emergency_company_id TEXT;
