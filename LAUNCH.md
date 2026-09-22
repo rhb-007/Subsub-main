@@ -128,6 +128,18 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- A tenant who set a password from their invite and then signed in was
+  refused with Supabase's own words, "Email not confirmed" -- because the
+  project has Confirm email on, so setting a password also sends a second
+  message that has to be clicked first, and the page had not made that
+  clear. Sign-in now says what happened and offers the message again; the
+  "all set" screen says sign-in will not work until it is clicked; and the
+  confirmation link brings them back to their building's address rather
+  than the shared one (which needs `https://*.subsub.work/**` on the
+  Supabase redirect allow-list -- still to do). Whether Confirm email
+  should stay on at all is a decision for the owner: the invite link has
+  already proved the address, and three hundred tenants each clicking two
+  emails is where tenants get lost.
 - The sign-in address sat under the company name in the app header, where
   it repeated the address bar. It is in the profile menu now (and in the
   drawer on a narrow screen), as a link, for the moment somebody needs to

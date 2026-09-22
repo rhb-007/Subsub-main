@@ -1498,13 +1498,19 @@ const normalizePhone = (v) => {
 // Create the auth user with Supabase's own signup endpoint. The anon key is
 // the public one and this is exactly what it is for, so no service_role key
 // is needed anywhere in this codebase.
-async function supabaseSignUp(env, email, password) {
+// `redirectTo` is where the confirmation link brings them back to. Without
+// it Supabase uses the project's Site URL -- the shared address -- so a
+// tenant who set a password on their building's branded page confirmed it
+// on a page that had never heard of their building. It has to be on the
+// project's redirect allow-list (https://*.subsub.work/**) or Supabase
+// quietly falls back to the Site URL again.
+async function supabaseSignUp(env, email, password, { redirectTo } = {}) {
   let res, body;
   try {
     res = await fetch(`${env.SUPABASE_URL}/auth/v1/signup`, {
       method: "POST",
       headers: { "Content-Type": "application/json", apikey: env.SUPABASE_ANON_KEY },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, ...(redirectTo ? { email_redirect_to: redirectTo } : {}) }),
     });
     body = await res.json();
   } catch (err) {
@@ -2134,10 +2140,11 @@ app.post("/api/subs/:companyId/verify-license", requireRole("admin", "pm"), asyn
 // Tenants arrive at the account's own address, not app.subsub.work: the whole
 // point is that the letter or noticeboard says their building's name. Falls
 // back to the generic address for an account with no branded hostname yet.
-const tenantInviteUrl = (account, token) =>
-  account.hostname_status === "active" && account.subdomain
-    ? `https://${account.subdomain}.subsub.work/?tenant=${token}`
-    : `https://app.subsub.work/?tenant=${token}`;
+const accountOrigin = (account) =>
+  account?.hostname_status === "active" && account?.subdomain
+    ? `https://${account.subdomain}.subsub.work`
+    : "https://app.subsub.work";
+const tenantInviteUrl = (account, token) => `${accountOrigin(account)}/?tenant=${token}`;
 
 const tenantInviteRowToJs = (r, account, propertyName) => ({
   id: r.id, label: r.label, propertyId: r.property_id, propertyName: propertyName || null,
@@ -2721,7 +2728,7 @@ app.post("/api/tenant-invite/:token", async (c) => {
     await c.env.DB.prepare(`UPDATE users SET email = ? WHERE id = ?`).bind(email, user.id).run();
   }
 
-  const signed = await supabaseSignUp(c.env, email, password);
+  const signed = await supabaseSignUp(c.env, email, password, { redirectTo: `${accountOrigin(account)}/` });
   if (!signed.ok && signed.error !== "email_in_use") {
     return c.json({ error: signed.error, detail: signed.detail }, 400);
   }

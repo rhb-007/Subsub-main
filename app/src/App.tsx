@@ -7373,7 +7373,7 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
         <p>{done.existed
           ? <>This email address already has a password here. Sign in with the one you have — or use <b>Forgot password?</b> on the sign-in page.</>
           : done.needsConfirmation
-          ? <>Check <b>{done.email}</b> for a message confirming your address. After that you can sign in and report anything that needs fixing.</>
+          ? <>One more step: check <b>{done.email}</b> for a message confirming your address and click the link in it. <b>Sign-in won't work until you do.</b> After that you can sign in and report anything that needs fixing.</>
           : <>Sign in with <b>{done.email}</b> and the password you just chose, and you can report anything that needs fixing at {place || "your building"}.</>}</p>
         <button className="wl-btn" onClick={onBackToLogin}>Go to sign in</button>
       </div>
@@ -11442,6 +11442,21 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
   // email on first sign-in — no separate provisioning call needed here.
   const [mode, setMode] = useState("signin"); // "signin" | "signup"
   const [signupSent, setSignupSent] = useState(false);
+  // Signed up, never clicked the confirmation. Sign-in is refused until they
+  // do, so the page offers the message again rather than leaving them to
+  // hunt through a week-old inbox.
+  const [unconfirmed, setUnconfirmed] = useState(false);
+  const [resent, setResent] = useState(false);
+  const resendConfirmation = async () => {
+    setErr(""); setBusy(true);
+    const { error } = await supabase.auth.resend({
+      type: "signup", email: email.trim(),
+      // Back to the address they are standing on, not the shared one.
+      options: { emailRedirectTo: window.location.origin },
+    });
+    setBusy(false);
+    if (error) setErr(error.message); else setResent(true);
+  };
   const onSubdomain = detectSubdomain();
 
   const submit = async () => {
@@ -11472,7 +11487,20 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
     }
 
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pw });
-    if (error) { setBusy(false); setErr(error.message); return; }
+    if (error) {
+      setBusy(false);
+      // Supabase's own words for this are "Email not confirmed", which tells
+      // a tenant nothing about what to do. They set a password from their
+      // invite and were told to expect a second message; this is the moment
+      // they find out they skipped it, so it has to say so and offer another.
+      if (/not confirmed/i.test(error.message || "")) {
+        setUnconfirmed(true);
+        setErr(`Almost there — your address hasn't been confirmed yet. Look for a message from us at ${email.trim()} and click the link in it, then sign in.`);
+      } else {
+        setErr(error.message);
+      }
+      return;
+    }
     // The Supabase session is only half of it — the account still has to
     // recognise this person. Show it when it doesn't.
     const msg = await onLogin();
@@ -11509,7 +11537,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
             <>
               <label className="fld">Email
                 <input type="email" inputMode="email" autoComplete="username"
-                  value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); setResetSent(false); }}
+                  value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); setResetSent(false); setUnconfirmed(false); setResent(false); }}
                   placeholder="you@company.com"
                   onKeyDown={(e) => e.key === "Enter" && submit()} />
               </label>
@@ -11521,6 +11549,12 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
               </label>
               {err && <div className="login-err"><AlertTriangle size={13} /> {err}</div>}
               {resetSent && <div className="login-err" style={{ color: "var(--forest-lift)" }}><CheckCircle2 size={13} /> Check your email for a reset link.</div>}
+              {unconfirmed && !resent && (
+                <button className="login-forgot" onClick={resendConfirmation} disabled={busy}>
+                  Didn't get it? Send the confirmation email again
+                </button>
+              )}
+              {resent && <div className="login-err" style={{ color: "var(--forest-lift)" }}><CheckCircle2 size={13} /> Sent again. Click the link in it, then sign in here.</div>}
               <button className="btn-solid login-btn" onClick={submit} disabled={busy}>
                 <Lock size={15} /> {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
               </button>
