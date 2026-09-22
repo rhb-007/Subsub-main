@@ -28,6 +28,17 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       *Done when:* a real card has paid and the account shows Scale.
 - [ ] **4. Two-factor on Cloudflare** — the whole business sits behind that
       one login. Ten minutes, highest value per minute of anything left.
+- [ ] **5. "Book a demo" sends nothing at all.** The form on
+      `book-a-demo.html` picks a day and a slot, validates the three fields,
+      and then shows *"You're booked. We've sent a calendar invite to
+      &lt;email&gt;"* — having made no request of any kind. No fetch, no form
+      action, no mailto. Every demo booked since that page went up was told
+      an invite was on its way and nobody was ever told they asked.
+      `get-started.html` does post to the real API; this one never did.
+      *Found by audit, not by a report, which is the worrying part: nobody
+      complains about a booking they think went through.*
+      *Done when:* a booking reaches something a person reads. See the Cal
+      integration below, or a plain POST to the Worker in the meantime.
       *Done when:* 2FA is on for Cloudflare, and for the Google account if
       it can reach Cloudflare.
 - [x] **5. Send invites, by email and text** — done for tenants: the account
@@ -59,11 +70,64 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
   residential list when browsing; typing finds either. A flag on the property
   itself would settle it properly.
 
+## Asked for, queued
+
+Written down the day they were asked for, with what each actually involves
+from a look at the code rather than a guess. Order is the asking order, not
+a judgement about which matters most.
+
+- [ ] **Google sign-in on user accounts.** The plumbing already exists:
+      `signInWithOAuth` is wired for the platform console and the Supabase
+      client is shared. What is missing is the provider enabled in Supabase,
+      the Google OAuth client, and the button on the customer sign-in
+      screens — including the branded ones, where "Sign in with Google" has
+      to sit sensibly next to a customer's own logo.
+      *Watch for:* a person who signs in with Google on an address that
+      already has a password, and tenants invited at an address that is not
+      the Google one they use.
+
+- [ ] **Cal integration for Book a demo.** Blocking item 5 above is the
+      same thing seen from the other end. The page already has a working
+      day-and-slot picker, so the honest minimum is posting the booking
+      somewhere; the real answer is real availability, a real invite and a
+      real video link.
+
+- [x] **Loose ends audit.** Done — the findings are in this file: blocking
+      item 5, and the two notes added under "Known, not blocking" below.
+      What was checked: every client API call against the Worker's routes
+      (all 76 resolve), every migration against the schema, every
+      environment variable the Worker reads, and the whole test suite.
+
+- [ ] **Contractor licence checks in all 50 states.** Today it is six
+      states and the District of Columbia — WA, OR, CT, IA, IL, TX — each
+      wired directly to that state's own open-data endpoint. Two separate
+      problems hide behind "add the rest": most states publish nothing
+      comparable, which is what a paid aggregator is for, and of the six
+      already here only Washington's field mapping has been verified
+      against real records. The other five are marked
+      `fieldMappingVerified: false` in the code and their status text may be
+      reading the wrong column.
+      *Do the verification before the expansion:* five states quietly
+      wrong is worse than forty-four honestly unsupported.
+
+- [ ] **Hover and CompanyCam on roofing work orders.** Measurement and site
+      photos attached to the work order. Report photos (022) already prove
+      the shape: upload through the Worker into R2, serve back only through
+      a route that re-checks who is asking, never by key. These would be
+      pulled from a third party rather than uploaded, so the new parts are
+      the OAuth per account and deciding what happens when the third party
+      is down — a work order that cannot be issued because CompanyCam is
+      unreachable is the failure to design against.
+
 ## Parked — deliberately not before launch
 
 Bot protection on the signup form (Turnstile) ·
-daily stats rollup in the console · contractor licence verification outside
-Washington.
+daily stats rollup in the console.
+
+(Licence verification outside Washington used to be parked here. Six states
+and DC are wired up now, so it has moved to "Asked for, queued" above as the
+50-state item — with the caveat that five of those six mappings are still
+unverified.)
 
 ## Found along the way
 
@@ -248,3 +312,15 @@ Fixed as encountered, because each one blocked something on the list:
 - The Add menu has a "User" entry behind `can("users")`, and no role grants
   `users`, so it never renders. Users are managed from My account -> Users,
   which works. Dead branch, harmless.
+
+- Licence checking covers six states and DC, and only Washington's field
+  mapping has been verified against real records. Oregon, Connecticut, Iowa,
+  Illinois and Texas are all `fieldMappingVerified: false` — the code says so
+  and stores the flag with every check, so nothing is pretending otherwise,
+  but a status shown from an unverified mapping could be reading the wrong
+  column. See the 50-state item above.
+
+- The gold-as-text contrast item is still open and is now measured: 25 uses
+  of `color:var(--gold-dk)` across 11 marketing pages, at 3.39:1 on white
+  where body text needs 4.5. `--gold-ink` is already defined and measures
+  5.28:1. It is a token swap in eleven files.
