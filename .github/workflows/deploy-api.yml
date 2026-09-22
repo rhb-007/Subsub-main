@@ -107,11 +107,28 @@ jobs:
         working-directory: app
         run: npm run lint
 
+      # Every wrangler call names its config file. Without --config, wrangler
+      # run from app/ resolves to the repository root's wrangler.jsonc -- the
+      # marketing site, whose assets directory is the whole repo -- and not to
+      # app/wrangler.toml at all. The first run of this workflow died on a
+      # 126 MiB file in node_modules for exactly that reason, which is the
+      # harmless version: with credentials in hand it would have deployed the
+      # wrong project instead. The repo's own npm scripts pass it too.
+      - name: Check it is the API's config we are about to use
+        working-directory: app
+        run: |
+          name=$(grep -m1 '^name' wrangler.toml | cut -d'"' -f2)
+          if [ "$name" != "subsub-api" ]; then
+            echo "::error::app/wrangler.toml names '$name', expected 'subsub-api'."
+            exit 1
+          fi
+          echo "deploying $name"
+
       # Build the Worker without uploading it. A bundle that cannot be built
       # should never reach the point of replacing a working one.
       - name: Build it first, upload nothing
         working-directory: app
-        run: npx wrangler deploy --dry-run --outdir=/tmp/worker-build
+        run: npx wrangler deploy --config=./wrangler.toml --dry-run --outdir=/tmp/worker-build
 
       - name: Deploy
         if: steps.creds.outputs.ready == 'true'
@@ -119,7 +136,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy
+        run: npx wrangler deploy --config=./wrangler.toml
 
       - name: Say what happened
         if: success()
