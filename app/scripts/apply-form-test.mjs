@@ -57,8 +57,9 @@ try {
   ck("it is the apply form", /Work with Cascade Management/i.test(apply), apply.split("\n").find((l) => /Work with/.test(l)));
   ck("the sentence naming the required fields is gone",
     !/your name and an email are needed/i.test(apply), apply.split("\n").slice(-3).join(" / "));
-  ck("a key sits at the foot of it instead", /\*\s*=\s*Required/i.test(apply),
-    apply.split("\n").find((l) => /Required/i.test(l)) || "no key");
+  const key = apply.split("\n").find((l) => /Required/i.test(l)) || "";
+  ck("a key sits at the foot of it instead", /\*\s*Required/i.test(key), key || "no key");
+  ck("and it is the mark and the word, with nothing between them", !key.includes("="), key);
 
   console.log("\n-- what is marked, and what is not --");
   const step1 = await marked();
@@ -109,7 +110,7 @@ try {
   const step2 = await marked();
   ck("the trades question is marked too", step2.some((t) => /trades do you cover/i.test(t)), step2.join(" | "));
   ck("but the optional city and ZIP are not", !step2.some((t) => /^City|^ZIP/i.test(t)), step2.join(" | "));
-  ck("the key is on this step as well", /\*\s*=\s*Required/i.test(await text()));
+  ck("the key is on this step as well", /\*\s*Required/i.test(await text()));
 
   ck("nothing threw along the way", crashes.length === 0, crashes.join(" ; "));
 } catch (err) {

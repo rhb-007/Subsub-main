@@ -8959,7 +8959,7 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
             -- the field is filled in and still will not do -- and that
             still needs saying in words. */}
         {!stepOk && malformed && <p className="wl-err">{malformed}</p>}
-        <p className="wl-req-key"><Req /> = Required</p>
+        <p className="wl-req-key"><Req /> Required</p>
       </div>
       <PoweredBy className="wl-foot" height={15} />
     </div>
