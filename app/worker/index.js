@@ -2863,10 +2863,30 @@ app.get("/api/jobs", async (c) => {
   // Sharing a building with somebody is not a reason to see their repairs.
   const scope = scopeClause(auth, "property_id");
   const mine = auth.role === "tenant" ? ` AND requested_by = ? ` : "";
-  const { results: jobs } = await c.env.DB.prepare(
-    `SELECT * FROM jobs WHERE account_id = ? ${scope.sql} ${mine}
-      ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC`
-  ).bind(accountId, ...scope.vals, ...(auth.role === "tenant" ? [auth.userId] : [])).all();
+  const binds = [accountId, ...scope.vals, ...(auth.role === "tenant" ? [auth.userId] : [])];
+  // `order` is interpolated rather than bound because ORDER BY cannot be a
+  // bound parameter. Both callers below pass a literal written here; nothing
+  // from a request reaches it, and nothing may be added that does.
+  const listJobs = (order) => c.env.DB.prepare(
+    `SELECT * FROM jobs WHERE account_id = ? ${scope.sql} ${mine} ORDER BY ${order}`
+  ).bind(...binds).all();
+
+  // The order we want needs the column migration 025 adds. The order is a
+  // nicety; this list is the entire page. A database still waiting on 025
+  // failed the whole query, and the browser -- which treats a failed call
+  // here as an empty result, because a refused one really is empty -- drew
+  // the account as having no jobs at all. Signing in to an empty company is
+  // the worst possible way to be told a migration is pending. So: ask for
+  // the good order, and if the column is not there yet, ask again for the
+  // plain one.
+  let jobs;
+  try {
+    ({ results: jobs } = await listJobs("COALESCE(updated_at, created_at) DESC, created_at DESC"));
+  } catch (err) {
+    if (missingSchema(err) !== "025_job_activity") throw err;
+    console.warn("[jobs] 025_job_activity not applied - falling back to created_at order");
+    ({ results: jobs } = await listJobs("created_at DESC"));
+  }
 
   const { results: wos } = await c.env.DB.prepare(
     `SELECT wo.* FROM work_orders wo JOIN jobs j ON j.id = wo.job_id
@@ -3657,15 +3677,27 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   const respondBy = autoScheduled ? null
     : new Date(Date.now() + windowMins(responseWindow) * 60000).toISOString();
 
-  await c.env.DB.prepare(
-    `INSERT INTO work_orders
-      (id, wo_number, job_id, trade, company_id, engagement_id, crew_name, trade_scope, value_cents,
-       status, auto_scheduled, response_window, respond_by, pay_kind, rate_cents, cap_hours)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, woNumber, jobId, trade, companyId, engagement.id, crewName || null, tradeScope || "",
-    valueCents, autoScheduled ? "accepted" : "pending", autoScheduled ? 1 : 0,
-    autoScheduled ? null : (responseWindow || "24h"), respondBy,
-    hourly ? "hourly" : "fixed", rateCents, cap).run();
+  // Three of these columns arrive with migration 024. Without it this INSERT
+  // threw an unhandled error, which reached the browser as a plain 500 and
+  // read on screen as the assignment simply not working -- with nothing to
+  // say why. Name the file instead: it is the one thing that turns this into
+  // a two-minute fix.
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO work_orders
+        (id, wo_number, job_id, trade, company_id, engagement_id, crew_name, trade_scope, value_cents,
+         status, auto_scheduled, response_window, respond_by, pay_kind, rate_cents, cap_hours)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, woNumber, jobId, trade, companyId, engagement.id, crewName || null, tradeScope || "",
+      valueCents, autoScheduled ? "accepted" : "pending", autoScheduled ? 1 : 0,
+      autoScheduled ? null : (responseWindow || "24h"), respondBy,
+      hourly ? "hourly" : "fixed", rateCents, cap).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    console.error("[assign] schema not migrated:", err?.message || err);
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
 
   await logEvent(c.env, accountId, userId, "wo.issued", id, { jobId, trade, companyId, woNumber });
 

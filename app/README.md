@@ -220,6 +220,21 @@ verified it now round-trips through the API the same as insurance/bond/contract.
    "Did I run that one?" comes up after nearly every round and the honest
    answer from a chat thread is a guess.
 
+   **Run one migration per paste.** D1 stops a multi-statement script at the
+   first statement that errors and never runs the rest — it does not roll the
+   earlier ones back either, so a half-applied script is a normal outcome.
+   Pasting 023, 024 and 025 as one block when 023 was already applied means
+   the first line fails on "duplicate column name", the other five statements
+   never run, and the console shows one error that reads like one problem.
+   That is not hypothetical: it left `jobs.updated_at` missing in production,
+   and the jobs list — which ordered by it — failed for every signed-in
+   person. Paste one file, then re-run `CHECK.sql`, then paste the next.
+
+   The app now survives that particular gap (`/api/jobs` falls back to
+   ordering by `created_at`, and anything that genuinely cannot work names
+   the migration file on screen), which is what `npm run test:migration-gap`
+   holds in place. It is a safety net, not a reason to skip the check.
+
    `.github/workflows/deploy-api.yml` does the same job from GitHub Actions,
    for anyone who would rather not use Workers Builds. It only uploads when
    `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set as repository

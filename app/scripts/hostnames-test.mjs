@@ -134,13 +134,20 @@ console.log("diagnose pinpoints the wrong setting");
   eq("names what is unset", { configured: d.configured, missing: d.missing },
      { configured: false, missing: ["CF_ACCOUNT_ID", "CF_PAGES_PROJECT"] });
 
+  // Everything below asks what Cloudflare answered, so the token has to be
+  // shaped like a real one -- diagnose() checks that before it sends
+  // anything, and the one-character token this file uses elsewhere never got
+  // past it. Three assertions here were quietly asserting the shape message
+  // instead of the 401 they name.
+  const dEnv = { ...env, CF_API_TOKEN: "abcdEFGH1234_-.~+/=abcdEFGH1234abcdEFGH12" };
+
   // A bad token stops the run: the later probes would fail for the same
   // reason and saying it three times buries the one that matters.
   globalThis.fetch = async (url) =>
     new URL(url).pathname === "/client/v4/user/tokens/verify"
       ? json({ success: false, errors: [{ code: 1000, message: "Invalid API Token" }] }, 401)
       : json({ success: true, result: [] });
-  d = await diagnose(env);
+  d = await diagnose(dEnv);
   eq("bad token stops at the token", d.checks.map(c => [c.id, c.ok]), [["token", false]]);
   eq("quotes Cloudflare verbatim", d.checks[0].detail.startsWith("Invalid API Token (HTTP 401)"), true);
 
@@ -152,12 +159,12 @@ console.log("diagnose pinpoints the wrong setting");
     if (path.includes("/dns_records")) return json({ success: false, errors: [{ code: 7003, message: "Could not route to /zones/.../dns_records" }] }, 400);
     return json({ success: true, result: { name: "subsub-app" } });
   };
-  d = await diagnose(env);
+  d = await diagnose(dEnv);
   eq("finds the zone", d.checks.map(c => [c.id, c.ok]), [["token", true], ["dns", false], ["pages", true]]);
 
   // All good.
   globalThis.fetch = async () => json({ success: true, result: [] });
-  d = await diagnose(env);
+  d = await diagnose(dEnv);
   eq("all clear", d.checks.every(c => c.ok), true);
 }
 

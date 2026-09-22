@@ -471,6 +471,26 @@ const andList = (xs) => xs.length < 2 ? (xs[0] || "")
   : xs.length === 2 ? `${xs[0]} and ${xs[1]}`
   : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
 
+// What to say when part of the account did not load.
+//
+// The rule this enforces is that the app never draws an absence it has not
+// confirmed. Showing zero jobs because the jobs call broke is not a display
+// bug; it is the interface asserting something false about a business, and
+// it is indistinguishable from the truth on screen.
+//
+// The migration case gets its own sentence because it is both the likeliest
+// cause and the only one with a two-minute fix.
+function hydrateError(broke) {
+  const migration = broke.map((b) => b.err?.body?.migration).find((m) => m && m !== "unknown");
+  if (migration || broke.some((b) => b.err?.body?.error === "migration_needed")) {
+    return `Some of this account can't load until the database is migrated${
+      migration ? ` — run ${migration}.sql` : ""}. What you see here is incomplete until then.`;
+  }
+  const status = broke.map((b) => b.err?.status).find(Boolean);
+  return `Couldn't load ${andList(broke.map((b) => b.what))}${status ? ` (error ${status})` : ""}. `
+    + `This page is showing less than it should — reload, and if it keeps happening the database may still need its migrations run.`;
+}
+
 const ROLES = {
   admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
   // "Property manager", not "project manager": these accounts are property
@@ -1485,6 +1505,9 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [loading, setLoading] = useState(false);
+  // Set when part of the account could not be loaded for a reason that is not
+  // "you are not allowed to see this". See hydrateAccount().
+  const [loadErr, setLoadErr] = useState(null);
   const [loggedIn, setLoggedIn] = useState(false);
   // A general contractor links to their own application form from their own
   // website, and the account page's "open the live application form" link
@@ -2582,9 +2605,23 @@ export default function SubSub() {
         api.listSubs(), api.listJobs(), api.listAllBookings(), api.listAccountUsers(),
         api.listUniformOrders(), api.listServiceCalls(), api.listProperties(), api.listVisits(),
       ]);
+      // A refusal and a breakage are not the same thing, and treating them
+      // the same is how signing in to a 500 came to look like signing in to
+      // an empty company. 403 means "not yours to see", and an empty list is
+      // the honest answer. Anything else means we do not know what is there,
+      // and the page must say so rather than draw zero and let it be read as
+      // a fact.
+      // In the same order as the eight calls above. Add to both or neither;
+      // the fallback below keeps a mismatch from turning into "undefined".
+      const NAMES = ["contractors", "jobs", "the booking calendar", "the people on this account",
+                     "uniform orders", "service calls", "properties", "visits"];
+      const broke = [];
       settled.forEach((r, i) => {
-        if (r.status === "rejected") console.warn("[hydrate] call", i, "failed:", r.reason);
+        if (r.status !== "rejected") return;
+        console.warn("[hydrate] call", i, "failed:", r.reason);
+        if (r.reason?.status !== 403) broke.push({ what: NAMES[i] || "part of this account", err: r.reason });
       });
+      setLoadErr(broke.length ? hydrateError(broke) : null);
       const [flatSubs, ownJobs, bookings, members, uniformOrderRows, serviceCallRows,
              propertyRows, visitRows] = settled.map((r) => (r.status === "fulfilled" && Array.isArray(r.value)) ? r.value : []);
       setUniformOrders(uniformOrderRows);
@@ -3103,6 +3140,14 @@ export default function SubSub() {
   return (
     <div className="ss-root">
       <style>{CSS}</style>
+      {/* Above everything, because it changes what the rest of the page means. */}
+      {loadErr && (
+        <div className="load-err" role="alert">
+          <AlertTriangle size={14} />
+          <span>{loadErr}</span>
+          <button onClick={() => window.location.reload()}>Reload</button>
+        </div>
+      )}
       {impersonating && (
         <div className="imp-banner">
           <Shield size={14} />
@@ -16060,6 +16105,17 @@ p.fld-note{margin:6px 0 0}
   .wo-co-line{grid-template-columns:auto 1fr;}
   .wo-co-delta{grid-column:2;text-align:right}
 }
+
+/* Same shape as the impersonation banner and a different colour, because it
+   says a different kind of thing: not "you are somewhere unusual" but "what
+   is under this is not the whole truth". */
+.load-err{display:flex;align-items:center;gap:10px;background:#7f1d1d;color:#fff;padding:9px 18px;
+  font-size:13px;font-weight:600}
+.load-err span{flex:1}
+.load-err svg{flex:none}
+.load-err button{background:#fff;color:#7f1d1d;border:0;border-radius:7px;padding:7px 12px;
+  font:700 12.5px Inter,sans-serif;cursor:pointer}
+@media (max-width:700px){ .load-err{flex-wrap:wrap;padding:9px 14px;font-size:12.5px} }
 
 .imp-banner{display:flex;align-items:center;gap:10px;background:var(--amber);color:#1a1207;padding:9px 18px;
   font-size:13px;font-weight:600}
