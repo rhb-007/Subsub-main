@@ -8799,6 +8799,11 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
   // reads as reachable and never is.
   const phoneOk = !f.phone.trim() || phoneDigits(f.phone).length === 10;
   const ok1 = f.company.trim() && f.contact.trim() && validEmail(f.email) && phoneOk;
+  // Filled in and still not right, which the asterisks cannot express.
+  const malformed = !phoneOk ? "A mobile number needs 10 digits."
+    : f.email.trim() && !validEmail(f.email)
+      ? "That email address does not look right — check for a missing @."
+      : "";
   const ok2 = f.categories.length > 0;
   const stepOk = step === 1 ? ok1 : step === 2 ? ok2 : true;
 
@@ -8840,12 +8845,12 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
 
         {step === 1 && (
           <>
-            <label className="wl-fld">Company name
+            <label className="wl-fld">Company name<Req />
               <input value={f.company} onChange={(e) => set("company", e.target.value)} /></label>
-            <label className="wl-fld">Your name
+            <label className="wl-fld">Your name<Req />
               <input value={f.contact} onChange={(e) => set("contact", e.target.value)} /></label>
             <div className="wl-row">
-              <label className="wl-fld">Email
+              <label className="wl-fld">Email<Req />
                 <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)} /></label>
               <label className="wl-fld">Mobile
                 <input type="tel" inputMode="numeric" maxLength={13} value={f.phone}
@@ -8866,7 +8871,7 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
 
         {step === 2 && (
           <>
-            <div className="wl-label">What trades do you cover?</div>
+            <div className="wl-label">What trades do you cover?<Req /></div>
             <div className="wl-picks">
               {CATEGORIES.map((c) => (
                 <button key={c.id} type="button"
@@ -8896,7 +8901,7 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
                 {WARRANTY_OPTIONS.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
               </select>
             </label>
-            <div className="wl-label">How should we reach you?</div>
+            <div className="wl-label">How should we reach you?<Req /></div>
             <div className="wl-checks">
               <label className={`wl-check ${f.notifyEmail ? "on" : ""}`}>
                 <input type="checkbox" checked={f.notifyEmail}
@@ -8925,14 +8930,14 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
             : <button className="wl-btn" disabled={!f.notifyEmail && !f.notifySms}
                 onClick={() => { onSubmit(f); setSent(true); }}>Submit application</button>}
         </div>
-        {!stepOk && (
-          <p className="wl-err">{step !== 1
-            ? "Pick at least one trade."
-            : !phoneOk ? "A mobile number needs 10 digits."
-            : f.email.trim() && !validEmail(f.email)
-              ? "That email address does not look right — check for a missing @."
-              : "Company, your name and an email are needed."}</p>
-        )}
+        {/* Only what is actually wrong. Naming the required fields down here
+            was answering a question the form should answer where they are:
+            a blank required box is now marked at the box, and the key below
+            says what the mark means. A malformed entry is a different thing
+            -- the field is filled in and still will not do -- and that
+            still needs saying in words. */}
+        {!stepOk && malformed && <p className="wl-err">{malformed}</p>}
+        <p className="wl-req-key"><Req /> = Required</p>
       </div>
       <PoweredBy className="wl-foot" height={15} />
     </div>
@@ -12147,6 +12152,16 @@ function PoweredBy({ height = 15, className = "" }) {
   );
 }
 
+// The required-field mark.
+//
+// A component rather than a bare "*" so the key at the foot of the form and
+// the marks beside the fields are literally the same thing, and so screen
+// readers hear "required" instead of "star" -- an asterisk is a convention
+// that only works if you can see it.
+function Req() {
+  return <abbr className="req" title="Required" aria-label="required">*</abbr>;
+}
+
 // ---- Tenant brand mark (custom upload, else default, else initials) -----
 // Just the mark, no wordmark. The login card already prints the name
 // underneath, so the full lockup would say "SubSub" twice.
@@ -12477,22 +12492,13 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
           </button>
         )}
 
-        {/* Tenants sign in here too, at the same address and with the same
-            form -- but the page only ever spoke to subcontractors, so
-            somebody who lives in the building had nothing telling them they
-            were in the right place. They cannot sign themselves up: a tenant
-            exists because their building manager added them, so this points
-            at the two ways in rather than offering a third. */}
-        {onSubdomain && hasProperties(brand) && (
-          <div className="login-tenants">
-            <span>For tenants</span>
-            <p>
-              Sign in above with the email address {brand.name} invited you at. No password
-              yet? Open the link in your invite, or use <b>Already invited? Create your
-              password</b>.
-            </p>
-          </div>
-        )}
+        {/* There was a "For tenants" block here explaining that tenants sign
+            in with the same form, above, using the address they were invited
+            at. It described the page it was on -- the form is right there
+            and takes the address they were invited at because that is the
+            only one they have -- and the two ways in it pointed at are both
+            already on this screen. Explaining a sign-in box to somebody
+            looking at it reads as a warning that something is unusual. */}
 
       </div>
       {/* "Powered by SubSub" belongs on a customer's portal, not on SubSub's own. */}
@@ -14423,197 +14429,6 @@ p.fld-note{margin:6px 0 0}
 .login-logo-wrap{display:flex;align-items:center;justify-content:center;color:var(--ink);margin-bottom:14px;min-height:40px}
 .login-foot{display:flex;flex-direction:column;align-items:center;gap:5px}
 
-/* ===== white-label pages (sign-in + public signup) ===== */
-.wl-themed{background:var(--wl-bg) !important;color:var(--wl-text) !important}
-.wl-themed .login-card{background:var(--wl-surface) !important;color:var(--wl-text) !important}
-.wl-themed .login-card h1,.wl-themed .login-card h2{color:var(--wl-text) !important}
-.wl-themed .btn-solid,.wl-themed .login-btn{background:var(--wl-accent) !important;color:var(--wl-btn-text) !important}
-.login-signup{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;
-  margin-top:16px;padding:14px 16px;border-radius:10px;border:1px solid var(--line);
-  background:var(--paper);font-family:inherit;cursor:pointer;text-align:left}
-.login-signup > span{font-size:12px;color:var(--ink-soft)}
-.login-signup b{font-size:14.5px;font-weight:700;color:var(--wl-accent,var(--brand))}
-.login-signup:hover{border-color:var(--wl-accent,var(--brand));background:var(--card)}
-.wl-themed .login-signup{background:transparent;border-color:rgba(128,128,128,.32)}
-.wl-themed .login-signup > span{color:var(--wl-text);opacity:.65}
-.wl-themed .login-signup b{color:var(--wl-accent)}
-/* The same block for tenants, who have nothing to click: they are already in
-   the right place and only need telling so. Quieter than the subcontractor
-   one for that reason -- it is a note, not an action. */
-.login-tenants{width:100%;margin-top:10px;padding:12px 16px;border-radius:10px;
-  border:1px dashed var(--line);text-align:left}
-.login-tenants > span{display:block;font-size:12px;font-weight:700;letter-spacing:.04em;
-  text-transform:uppercase;color:var(--ink-soft)}
-.login-tenants p{margin:4px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
-.login-tenants b{font-weight:700;color:var(--wl-accent,var(--brand))}
-.tn-chip.off{background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
-.job-withdrawn{display:flex;align-items:center;gap:6px;margin:4px 0 6px;font-size:12.5px;color:#b1391f}
-.dash-row-btns{display:flex;align-items:center;gap:8px;flex:none}
-.decline-box{flex:1 1 320px;min-width:0;padding:12px 14px;border:1px dashed var(--line);border-radius:11px;background:var(--paper)}
-.decline-box .fld{margin-bottom:8px}
-.decline-box .form-actions{margin-top:4px}
-@media(max-width:640px){.dash-row-btns{width:100%}.dash-row-btns button{flex:1}}
-.tn-row.is-off{opacity:.72}
-.tn-row-actions{display:flex;gap:14px;margin-top:8px}
-.tn-link{display:inline-flex;align-items:center;gap:5px;background:none;border:0;padding:0;
-  font:700 12.5px Inter,sans-serif;color:var(--brand);cursor:pointer}
-.tn-link:hover{text-decoration:underline}
-.tn-link-sub{font-weight:500;color:var(--ink-soft)}
-.tn-edit{margin-top:10px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;background:var(--paper)}
-.tn-edit .fld{margin-bottom:10px}
-.tn-edit textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;font-size:14px}
-.btn-solid.danger{background:#b1391f}
-.tn-past{margin-top:18px}
-.tn-past-toggle{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:6px 0;margin-bottom:8px;
-  font:700 12.5px Inter,sans-serif;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);cursor:pointer}
-.tn-past-toggle svg{transition:transform .15s}
-.tn-past-toggle svg.open{transform:rotate(90deg)}
-/* a proposed visit, on the tenant's report */
-.tn-row.needs-you{border-color:var(--gold-dk);box-shadow:0 0 0 3px rgba(192,125,28,.12)}
-.tn-visit{margin-top:12px;padding:14px 16px;border:1px solid var(--line);border-radius:11px;background:var(--paper)}
-.tn-visit-when{display:flex;align-items:center;gap:8px;font-size:14px}
-.tn-visit-note{margin:6px 0 0;font-size:13px;color:var(--ink-soft);font-style:italic}
-.tn-visit-q{margin:8px 0 10px;font-size:13.5px}
-.tn-visit textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;font-size:14px;margin-bottom:10px}
-.tn-visit-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
-/* and on the manager's job */
-.visit-block{margin-top:14px}
-.visit-state{display:flex;align-items:center;gap:8px;margin:6px 0 10px;font-size:13.5px;color:var(--ink-soft)}
-.visit-state.ok{color:var(--brand-dk)}
-.visit-state.wait{color:#8a5a12}
-.visit-state.bad{color:#b1391f}
-.visit-form{padding:12px 14px;border:1px dashed var(--line);border-radius:11px}
-.visit-form .form-actions{margin-top:4px}
-@media(max-width:640px){.tn-visit-actions button{flex:1 1 100%}}
-/* tenant roster filters */
-.tn-filters{margin:14px 0 4px}
-.tn-filter-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-top:10px}
-.tn-filter{display:flex;flex-direction:column;gap:4px;font-size:11.5px;font-weight:700;
-  letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft)}
-.tn-filter select{font:500 13.5px Inter,sans-serif;color:var(--ink);background:var(--card);
-  border:1px solid var(--line);border-radius:9px;padding:9px 11px;min-width:150px;cursor:pointer}
-.tn-filter-clear{display:inline-flex;align-items:center;gap:5px;background:none;border:0;
-  padding:9px 2px;font:700 12.5px Inter,sans-serif;color:var(--brand);cursor:pointer}
-.tn-filter-clear:hover{text-decoration:underline}
-.tn-filter-count{margin:10px 0 0;font-size:12.5px;color:var(--ink-soft)}
-/* A roster row opens the invite, so it has to look like it does something. */
-.user-row.is-open{cursor:pointer}
-.user-row.is-open:hover{border-color:var(--brand);background:var(--card)}
-.user-row.is-open:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
-/* the message, read or edited, inside the invite */
-.tn-msg{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
-.tn-msg-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:10px}
-.tn-msg-head > span{font-size:11.5px;font-weight:700;letter-spacing:.04em;
-  text-transform:uppercase;color:var(--ink-soft)}
-.tn-msg-preview{margin:0;padding:14px 16px;border:1px solid var(--line);border-radius:10px;
-  background:var(--paper);font:13px/1.6 Inter,sans-serif;color:var(--ink-soft);
-  white-space:pre-wrap;word-break:break-word;max-height:220px;overflow-y:auto}
-.tn-editor-actions{flex-wrap:wrap;margin-top:18px}
-.tn-actions-gap{flex:1}
-.btn-ghost.danger{color:#b1391f;border-color:rgba(177,57,31,.35)}
-.btn-ghost.danger:hover{background:rgba(177,57,31,.06)}
-@media(max-width:640px){
-  .tn-editor-actions{flex-direction:row}
-  .tn-actions-gap{display:none}
-}
-@media(max-width:640px){
-  .tn-filter{flex:1 1 100%}
-  .tn-filter select{width:100%}
-}
-.wl-themed .login-tenants{border-color:rgba(128,128,128,.32)}
-.wl-themed .login-tenants > span,.wl-themed .login-tenants p{color:var(--wl-text);opacity:.7}
-.wl-themed .login-tenants b{color:var(--wl-accent);opacity:1}
-
-.wl-page{min-height:100vh;background:var(--wl-bg);color:var(--wl-text);
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  padding:40px 20px;font-family:inherit}
-.wl-card{width:100%;max-width:560px;background:var(--wl-surface);border-radius:14px;
-  padding:34px;box-shadow:0 18px 50px rgba(0,0,0,.12)}
-.wl-brand{display:flex;align-items:center;gap:11px;margin-bottom:22px}
-.wl-brand-name{font-size:17px;font-weight:700;letter-spacing:-.02em;color:var(--wl-text)}
-.wl-card h1{font-size:25px;letter-spacing:-.03em;margin:0;color:var(--wl-text)}
-.wl-lede{font-size:15px;opacity:.72;margin-top:9px;line-height:1.5}
-.wl-steps{display:flex;gap:7px;margin:22px 0 20px;flex-wrap:wrap}
-.wl-step{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;
-  padding:6px 11px;border-radius:20px;border:1px solid currentColor;opacity:.45}
-.wl-step.on{opacity:1;background:var(--wl-accent);color:var(--wl-btn-text);border-color:var(--wl-accent)}
-.wl-step.done{opacity:.85}
-.wl-fld{display:block;margin-bottom:14px;font-size:13.5px;font-weight:600}
-.wl-fld input,.wl-fld select{display:block;width:100%;margin-top:6px;padding:13px 14px;
-  border:1px solid rgba(128,128,128,.35);border-radius:9px;font:400 16px inherit;
-  background:var(--wl-surface);color:var(--wl-text)}
-.wl-fld input:focus,.wl-fld select:focus{outline:2px solid var(--wl-accent);outline-offset:-1px}
-.wl-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.wl-label{font-size:13.5px;font-weight:600;margin:4px 0 9px}
-.wl-picks{display:flex;flex-wrap:wrap;gap:7px}
-.wl-pick{border:1px solid rgba(128,128,128,.35);background:none;color:var(--wl-text);
-  border-radius:20px;padding:8px 13px;font:500 13px inherit;cursor:pointer}
-.wl-pick.on{background:var(--wl-accent);color:var(--wl-btn-text);border-color:var(--wl-accent);font-weight:600}
-.wl-checks{display:flex;gap:9px;flex-wrap:wrap}
-.wl-check{display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(128,128,128,.35);
-  border-radius:9px;padding:12px 15px;font-size:14px;font-weight:600;cursor:pointer}
-.wl-check.on{border-color:var(--wl-accent)}
-.wl-check input{accent-color:var(--wl-accent);width:16px;height:16px;margin:0}
-.wl-summary{margin-top:18px;border:1px solid rgba(128,128,128,.25);border-radius:10px;overflow:hidden}
-.wl-summary div{display:flex;justify-content:space-between;gap:14px;padding:11px 14px;font-size:13.5px;
-  border-bottom:1px solid rgba(128,128,128,.18)}
-.wl-summary div:last-child{border-bottom:0}
-.wl-summary span{opacity:.65}
-.wl-summary b{text-align:right;font-weight:600}
-.wl-actions{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:24px;flex-wrap:wrap}
-.wl-btn{display:block;margin-top:16px;background:var(--wl-accent);color:var(--wl-btn-text);
-  border:0;border-radius:9px;padding:14px 22px;font:700 15px inherit;cursor:pointer}
-.wl-btn:disabled{opacity:.45;cursor:not-allowed}
-.wl-btn-ghost{background:none;border:1px solid rgba(128,128,128,.4);color:var(--wl-text);
-  border-radius:9px;padding:13px 18px;font:600 14px inherit;cursor:pointer}
-.wl-fine{font-size:12.5px;opacity:.6;line-height:1.5;margin-top:10px}
-.wl-err{font-size:12.5px;color:#b1391f;margin-top:10px;font-weight:600}
-.wl-foot{margin-top:20px;font-size:12px;opacity:.5}
-.wl-done{text-align:center}
-.wl-done .wl-brand{justify-content:center}
-.wl-tick{color:var(--wl-accent);margin:6px 0 14px;display:flex;justify-content:center}
-/* A dead link is not a success, so the tick's colour would be a lie. */
-.wl-tick.warn{color:#b5442e}
-/* Lead-in under the heading on the tenant sign-up, and the "optional" tag
-   that keeps somebody from hunting for their unit number. */
-.wl-sub{margin:0 0 18px;font-size:13.5px;line-height:1.5;color:var(--wl-text);opacity:.8}
-.wl-opt{font-weight:500;font-size:11px;opacity:.6;margin-left:6px}
-.wl-done p{font-size:15px;opacity:.78;line-height:1.55;margin-top:10px}
-.wl-done .wl-btn{margin-top:22px}
-@media (max-width:560px){
-  .wl-card{padding:24px 20px}
-  .wl-row{grid-template-columns:1fr}
-  .wl-actions{flex-direction:column-reverse;align-items:stretch}
-  .wl-actions button{width:100%}
-}
-
-/* ===== theme editor ===== */
-.theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
-.theme-row{display:flex;flex-direction:column;gap:6px}
-.theme-label{font-size:12.5px;font-weight:600;color:var(--ink)}
-.theme-input{display:flex;align-items:center;gap:8px;border:1px solid var(--line);
-  border-radius:8px;padding:6px 8px;background:var(--card)}
-.theme-input input[type="color"]{width:30px;height:30px;border:0;padding:0;background:none;cursor:pointer;flex:none}
-.theme-hex{border:0;background:none;font:500 13px ui-monospace,monospace;color:var(--ink);
-  width:100%;min-width:0;text-transform:uppercase;outline:none}
-.theme-preview{margin-top:16px;border:1px solid var(--line);border-radius:11px;overflow:hidden}
-.tp-bar{background:var(--paper);border-bottom:1px solid var(--line);padding:8px 12px;
-  font-size:11.5px;color:var(--ink-soft)}
-.tp-body{background:var(--wl-bg);padding:22px}
-.tp-card{background:var(--wl-surface);color:var(--wl-text);border-radius:10px;padding:18px;
-  box-shadow:0 8px 22px rgba(0,0,0,.10)}
-.tp-brand{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;margin-bottom:12px}
-.tp-h{font-size:16px;font-weight:700;letter-spacing:-.02em}
-.tp-p{font-size:12.5px;opacity:.7;margin-top:5px;line-height:1.45}
-.tp-field{height:32px;border:1px solid rgba(128,128,128,.3);border-radius:7px;margin-top:10px}
-.tp-btn{margin-top:14px;background:var(--wl-accent);color:var(--wl-btn-text);border-radius:8px;
-  padding:11px 16px;font-size:13.5px;font-weight:700;text-align:center}
-.theme-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;
-  margin-top:14px;flex-wrap:wrap}
-.theme-link{font-size:13px;font-weight:600;color:var(--brand);text-decoration:underline;text-underline-offset:2px}
-@media (max-width:640px){.theme-grid{grid-template-columns:1fr}}
-
-
 /* contractor: who they work for */
 .dash-hello .who-bar{margin-bottom:0;flex:none}
 .who-bar{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
@@ -15104,12 +14919,6 @@ p.fld-note{margin:6px 0 0}
 /* The same block for tenants, who have nothing to click: they are already in
    the right place and only need telling so. Quieter than the subcontractor
    one for that reason -- it is a note, not an action. */
-.login-tenants{width:100%;margin-top:10px;padding:12px 16px;border-radius:10px;
-  border:1px dashed var(--line);text-align:left}
-.login-tenants > span{display:block;font-size:12px;font-weight:700;letter-spacing:.04em;
-  text-transform:uppercase;color:var(--ink-soft)}
-.login-tenants p{margin:4px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
-.login-tenants b{font-weight:700;color:var(--wl-accent,var(--brand))}
 .tn-chip.off{background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
 .job-withdrawn{display:flex;align-items:center;gap:6px;margin:4px 0 6px;font-size:12.5px;color:#b1391f}
 .dash-row-btns{display:flex;align-items:center;gap:8px;flex:none}
@@ -15184,9 +14993,6 @@ p.fld-note{margin:6px 0 0}
   .tn-filter{flex:1 1 100%}
   .tn-filter select{width:100%}
 }
-.wl-themed .login-tenants{border-color:rgba(128,128,128,.32)}
-.wl-themed .login-tenants > span,.wl-themed .login-tenants p{color:var(--wl-text);opacity:.7}
-.wl-themed .login-tenants b{color:var(--wl-accent);opacity:1}
 
 .wl-page{min-height:100vh;background:var(--wl-bg);color:var(--wl-text);
   display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -15232,6 +15038,14 @@ p.fld-note{margin:6px 0 0}
   border-radius:9px;padding:13px 18px;font:600 14px inherit;cursor:pointer}
 .wl-fine{font-size:12.5px;opacity:.6;line-height:1.5;margin-top:10px}
 .wl-err{font-size:12.5px;color:#b1391f;margin-top:10px;font-weight:600}
+/* The required mark, and the key that explains it. An <abbr> brings a
+   dotted underline of its own in some browsers, which on a single asterisk
+   reads as damage rather than as a hint, so it is turned off. The colour is
+   the theme's accent, which is picked to read on the customer's own card. */
+.req{margin-left:3px;font-weight:700;text-decoration:none;border:0;cursor:help;
+  color:var(--wl-accent,var(--brand))}
+.wl-req-key{margin-top:14px;font-size:12px;opacity:.65;letter-spacing:.01em}
+.wl-req-key .req{margin:0;cursor:default}
 .wl-foot{margin-top:20px;font-size:12px;opacity:.5}
 .wl-done{text-align:center}
 .wl-done .wl-brand{justify-content:center}
