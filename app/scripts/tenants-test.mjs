@@ -19,6 +19,22 @@
 //   node scripts/tenants-test.mjs
 
 const API=process.env.API_BASE || "http://127.0.0.1:8787/api", AUTH=process.env.AUTH_BASE || "http://127.0.0.1:8902/auth/v1/token", ACCOUNT=process.env.ACCOUNT_ID || "acc_pm";
+// The rate limiter counts real attempts and the local database keeps them
+// between runs, so a suite that redeems invites for a living starts failing
+// with "rate_limited" after it has been run enough times -- which looks
+// exactly like a regression and is not one. It cost a real diagnosis once.
+// Local only: this is a test against a local D1 file, not a way to switch
+// the limiter off.
+const { execFileSync } = await import("node:child_process");
+const clearRateLimits = () => {
+  try {
+    execFileSync("npx", ["wrangler", "d1", "execute", "subsub-db",
+      "--config=./wrangler.toml", "--local", "--command", "DELETE FROM rate_limits"],
+      { stdio: ["ignore", "ignore", "ignore"] });
+  } catch { /* the table may not exist yet; the suite will say so itself */ }
+};
+clearRateLimits();
+
 const tok = async (e)=>(await (await fetch(AUTH,{method:"POST",body:JSON.stringify({email:e})})).json()).access_token;
 const call = async (t,path,opts={})=>{
   const r=await fetch(API+path,{...opts,headers:{"X-Account-Id":ACCOUNT,
