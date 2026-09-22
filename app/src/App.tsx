@@ -8759,7 +8759,19 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
       </button>
 
       {(() => {
-        const current = mine.filter((j) => !isPast(j));
+        // A confirmed visit is the one thing on this page with a date on
+        // it, and the only line a tenant reads to answer "when is somebody
+        // coming". Buried among five reports that all say "reported Sep 21"
+        // it takes finding; at the top it is the answer.
+        const live = mine.filter((j) => !isPast(j));
+        const scheduled = live
+          .filter((j) => visitOf(j.id)?.status === "confirmed")
+          .sort((a, b) => {
+            const at = visitOf(a.id), bt = visitOf(b.id);
+            return `${at.date} ${at.startTime || ""}`.localeCompare(`${bt.date} ${bt.startTime || ""}`);
+          });
+        const scheduledIds = new Set(scheduled.map((j) => j.id));
+        const current = live.filter((j) => !scheduledIds.has(j.id));
         const past = mine.filter(isPast);
         const row = (j) => {
           const v = visitOf(j.id);
@@ -8770,7 +8782,9 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
               assignedTo={who}
               meta={[
                 `Reported ${j.createdAt ? niceDay(j.createdAt) : "recently"}`,
-                v?.status === "confirmed" ? `visit ${visitWhen(v)}` : null,
+                // The chip on the right already reads "Scheduled -- Sep 22,
+                // 10 AM-11 AM". Repeating it here printed the same sentence
+                // twice on one row and wrapped it onto three lines.
                 who.length && !v && !isPast(j) ? "a contractor is assigned" : null,
                 j.status === "completed" && j.completedAt ? `done ${niceDay(j.completedAt)}` : null,
                 j.withdrawnAt ? `withdrawn${j.withdrawnNote ? ` — “${j.withdrawnNote}”` : ""}` : null,
@@ -8789,14 +8803,27 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
                 <p>Nothing reported yet. When you do, it will show up here with where it has got to.</p>
               </div>
             ) : (
-              <TenantSection id="open" title="What you've reported" count={current.length}>
-                {current.length === 0 ? (
-                  <div className="dash-empty">
-                    <ClipboardList size={24} />
-                    <p>Nothing open right now.</p>
-                  </div>
-                ) : <div className="tn-list">{current.map(row)}</div>}
-              </TenantSection>
+              <>
+                {/* Soonest first, because the next one is the one being
+                    asked about. */}
+                {scheduled.length > 0 && (
+                  <TenantSection id="scheduled" title="Somebody is coming" count={scheduled.length}>
+                    <div className="tn-list">{scheduled.map(row)}</div>
+                  </TenantSection>
+                )}
+                <TenantSection id="open"
+                  title={scheduled.length ? "Everything else you've reported" : "What you've reported"}
+                  count={current.length}>
+                  {current.length === 0 ? (
+                    <div className="dash-empty">
+                      <ClipboardList size={24} />
+                      <p>{scheduled.length
+                        ? "Nothing else open — the rest is booked in above."
+                        : "Nothing open right now."}</p>
+                    </div>
+                  ) : <div className="tn-list">{current.map(row)}</div>}
+                </TenantSection>
+              </>
             )}
             {past.length > 0 && (
               <TenantSection id="past" title="Past reports" count={past.length} defaultOpen={false}>
