@@ -213,6 +213,13 @@ verified it now round-trips through the API the same as insurance/bond/contract.
    Deploys leave dashboard variables alone — see `keep_vars` in
    `wrangler.toml`. D1 migrations are **not** run by this and stay manual.
 
+   **Which migrations has a database actually had?** Paste
+   `worker/migrations/CHECK.sql` into the D1 console. One row, one column per
+   migration, 1 for applied and 0 for not. There is no migrations table to
+   consult, so it asks the schema itself, which cannot be wrong about it.
+   "Did I run that one?" comes up after nearly every round and the honest
+   answer from a chat thread is a guess.
+
    `.github/workflows/deploy-api.yml` does the same job from GitHub Actions,
    for anyone who would rather not use Workers Builds. It only uploads when
    `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set as repository
