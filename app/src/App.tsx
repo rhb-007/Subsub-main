@@ -1155,7 +1155,16 @@ const themeOf = (brand) => ({ ...DEFAULT_THEME, ...((brand && brand.theme) || {}
 const themeVars = (t) => ({
   "--wl-bg": t.bg, "--wl-surface": t.surface, "--wl-text": t.text,
   "--wl-accent": t.accent, "--wl-btn-text": t.btnText,
+  // Anything that sits on the page rather than on the card -- the "Powered
+  // by" line -- cannot take the text colour, which the customer chose to
+  // read on the card. Outerhome's page is black, its card white, its text
+  // dark: the footer took the dark and vanished. Whichever of white or ink
+  // reads better against the page background wins, computed from the
+  // colours rather than trusted to them.
+  "--wl-on-bg": onBackground(t.bg),
 });
+const INK = "#12211C";
+const onBackground = (bg) => contrastRatio("#FFFFFF", bg) >= contrastRatio(INK, bg) ? "#FFFFFF" : INK;
 // Readable hint: rough relative luminance, used to warn on low contrast.
 function luminance(hex) {
   const h = (hex || "").replace("#", "");
@@ -13522,7 +13531,8 @@ body{background:var(--paper)}
 .powered-by:focus-visible{outline:2px solid var(--brand);outline-offset:1px;border-radius:5px}
 .powered-by > span{white-space:nowrap}
 .powered-by .ss-logo{position:relative;top:.5px}
-.wl-foot.powered-by{margin-top:20px;opacity:.6;color:var(--wl-text)}
+.wl-foot.powered-by{margin-top:20px;opacity:.6;color:var(--wl-on-bg,var(--wl-text))}
+.wl-themed .login-foot{color:var(--wl-on-bg,var(--ink-soft))}
 .login-foot .powered-by{opacity:.75}
 .bp-foot .powered-by{opacity:.85;font-size:10.5px}
 
@@ -14194,7 +14204,8 @@ body{background:var(--paper)}
 .powered-by:focus-visible{outline:2px solid var(--brand);outline-offset:1px;border-radius:5px}
 .powered-by > span{white-space:nowrap}
 .powered-by .ss-logo{position:relative;top:.5px}
-.wl-foot.powered-by{margin-top:20px;opacity:.6;color:var(--wl-text)}
+.wl-foot.powered-by{margin-top:20px;opacity:.6;color:var(--wl-on-bg,var(--wl-text))}
+.wl-themed .login-foot{color:var(--wl-on-bg,var(--ink-soft))}
 .login-foot .powered-by{opacity:.75}
 .bp-foot .powered-by{opacity:.85;font-size:10.5px}
 

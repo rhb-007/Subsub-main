@@ -128,6 +128,12 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- "Powered by SubSub" vanished on a dark-themed branded page. It took the
+  customer's text colour, which they chose to read on the card, and sat on
+  the page behind the card -- Outerhome's black page, white card, dark text
+  meant dark on black. Themed pages now derive a colour for anything on the
+  page itself, whichever of white or ink reads better against the page
+  background, computed from the colours rather than trusted to them.
 - An invite that has gone out can be opened: the record corrected, the
   wording changed, the whole thing sent again or called off. Correcting it
   matters most -- the commonest reason an invite goes nowhere is that it was
