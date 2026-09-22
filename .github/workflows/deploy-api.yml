@@ -1,0 +1,108 @@
+# Deploy the API Worker (subsub-api).
+#
+# The frontend has had a deploy button all along: subsub-app is a Cloudflare
+# Pages project wired to this repository, so Cloudflare builds it on every
+# push and the dashboard offers Retry. The Worker never had one. It was only
+# ever deployed by running `wrangler deploy` from a terminal, and a terminal
+# is the one thing this project cannot assume. With nothing to rebuild from,
+# the dashboard has nothing to offer -- which is why the API sat behind the
+# app after a push, every time.
+#
+# This is that missing button. Two ways to press it:
+#
+#   * Actions tab -> "Deploy API Worker" -> Run workflow. Works from a phone.
+#   * Automatically, when a push actually changes the Worker. Anything else,
+#     a style tweak, a new test, this file's neighbours, is left alone.
+#
+# It needs two repository secrets (Settings -> Secrets and variables ->
+# Actions -> New repository secret):
+#
+#   CLOUDFLARE_API_TOKEN   dash.cloudflare.com -> My Profile -> API Tokens ->
+#                          Create Token -> use the "Edit Cloudflare Workers"
+#                          template, which already carries the Workers, D1
+#                          and R2 permissions this needs. Nothing wider.
+#   CLOUDFLARE_ACCOUNT_ID  Cloudflare dashboard -> Workers & Pages ->
+#                          right-hand sidebar.
+#
+# It does not touch variables or secrets on the Worker. `keep_vars = true` in
+# app/wrangler.toml means a deploy leaves what the dashboard holds alone, so
+# SUPABASE_URL and the rest survive this the way they survive any deploy.
+#
+# It does not run D1 migrations either. Those are applied by hand in the D1
+# console and the tracking table this repo would need does not exist yet, so
+# automating them here would re-apply everything already applied.
+
+name: Deploy API Worker
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "app/worker/**"
+      - "app/wrangler.toml"
+      - "app/package.json"
+      - "app/package-lock.json"
+      - ".github/workflows/deploy-api.yml"
+
+# A newer deploy makes an older one pointless, but never cancel one that is
+# already talking to Cloudflare -- a half-finished upload is worse than a
+# queue.
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      # Say which one is missing, here, rather than letting wrangler fail
+      # forty seconds later with something about authentication.
+      - name: Check the credentials are set
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          [ -n "$TOKEN" ]   || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "$ACCOUNT" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      # A ReferenceError has shipped from this repository before. It costs
+      # seconds here and a deploy there.
+      - name: Lint
+        working-directory: app
+        run: npm run lint
+
+      # Build the Worker without uploading it. A bundle that cannot be built
+      # should never reach the point of replacing a working one.
+      - name: Build it first, upload nothing
+        working-directory: app
+        run: npx wrangler deploy --dry-run --outdir=/tmp/worker-build
+
+      - name: Deploy
+        working-directory: app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
+
+      - name: Say what is live
+        if: success()
+        run: echo "### subsub-api deployed from \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
