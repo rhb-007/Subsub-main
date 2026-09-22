@@ -21,6 +21,7 @@
     "test:invites": "node scripts/tenant-invite-test.mjs",
     "test:visits": "node scripts/tenant-visit-test.mjs",
     "test:reports": "node scripts/tenant-report-test.mjs",
+    "test:decline": "node scripts/decline-test.mjs",
     "test:notify": "wrangler d1 execute subsub-db --config=./wrangler.toml --local --file=./scripts/tenant-notify-fixture.sql && node scripts/tenant-notify-test.mjs",
     "lint": "eslint ."
   },

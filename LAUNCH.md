@@ -128,6 +128,12 @@ Fixed as encountered, because each one blocked something on the list:
   re-renders once a second off the clock, so the twenty-second timer was
   destroyed and rebuilt before it could ever fire.
 - The three cards on My account -> Company sat flush against each other.
+- A request could only be approved, never refused, so one the manager was
+  never going to do sat on the dashboard forever and the person who asked
+  was never told. There is a decline now (migration 021), with a required
+  reason that goes straight to them -- "declined" with no explanation is
+  what makes somebody phone the office, which is the thing this replaces.
+  Approving a refused one reverses it.
 - A tenant can now see their closed-out reports (done, or taken back) under
   "Past reports", take a live one back -- it fixed itself -- with a reason,
   which voids any work order on it so nobody turns up, and correct one

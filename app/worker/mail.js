@@ -221,13 +221,16 @@ export const TENANT_STAGE_WORDS = {
   approved: "has been approved, and a contractor is being arranged",
   arranging: "has gone to a contractor, who is finding a time",
   booked: "has a contractor assigned -- a time still needs arranging with you",
-  visit: (when) => `has a visit proposed for ${when}. Please confirm it in the app, or say if it doesn't work`,
-  scheduled: (when) => `is scheduled for ${when}`,
+  visit: (detail) => `has a visit proposed for ${detail}. Please confirm it in the app, or say if it doesn't work`,
+  scheduled: (detail) => `is scheduled for ${detail}`,
+  declined: (detail) => `hasn't been approved: ${detail}`,
   done: "is done",
 };
-const stageWords = (stage, when) => {
+// `detail` is whatever that stage needs said with it -- the time for a
+// visit, the reason for a decline.
+const stageWords = (stage, detail) => {
   const w = TENANT_STAGE_WORDS[stage];
-  return typeof w === "function" ? w(when || "a time to be confirmed") : (w || "has been updated");
+  return typeof w === "function" ? w(detail || "a time to be confirmed") : (w || "has been updated");
 };
 // "Thu, Oct 2, 2026, 9 AM–11 AM": the date the way niceDate says it, the
 // window in 12-hour clock, because that is how somebody says it aloud.
@@ -242,9 +245,9 @@ export function visitWhen(v) {
     ? `, ${clock12(v.start_time || v.startTime)}${(v.end_time || v.endTime) ? `–${clock12(v.end_time || v.endTime)}` : ""}` : "";
   return `${niceDate(v.date)}${win}`;
 }
-export function tenantStatusEmail({ firstName, account, title, stage, link, when }) {
+export function tenantStatusEmail({ firstName, account, title, stage, link, detail }) {
   const who = account?.name || "Your building manager";
-  const what = stageWords(stage, when);
+  const what = stageWords(stage, detail);
   const text = `Hi ${firstName || "there"},
 
 Your report "${title}" ${what}.
@@ -259,12 +262,13 @@ You can switch it off under My account. This is an automated message from
 an unmonitored address. Replies aren't received.`;
   const subject = stage === "visit" ? `${who}: a time for "${title}" — please confirm`
     : stage === "done" ? `${who}: "${title}" is done`
+    : stage === "declined" ? `${who}: "${title}" wasn't approved`
     : `${who}: "${title}" has moved`;
   return { subject, text, html: textToHtml(text, link) };
 }
-export function tenantStatusSms({ account, title, stage, link, when }) {
+export function tenantStatusSms({ account, title, stage, link, detail }) {
   const who = account?.name || "Your building manager";
-  return `${who}: your report "${title}" ${stageWords(stage, when)}. ${link}`;
+  return `${who}: your report "${title}" ${stageWords(stage, detail)}. ${link}`;
 }
 
 // Where the link goes in a draft somebody is editing. The token is

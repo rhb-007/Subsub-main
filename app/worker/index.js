@@ -2419,6 +2419,7 @@ function missingSchema(err) {
   if (/\bnotify\b/i.test(m)) return "018_user_notify";
   if (/\bvisits\b/i.test(m)) return "019_visits";
   if (/withdrawn_(at|note)/i.test(m)) return "020_withdrawn_reports";
+  if (/declined_(at|note)/i.test(m)) return "021_declined_requests";
   if (/tenant_invites|memberships\.unit|\bunit\b/i.test(m)) {
     return /sent_at/i.test(m) ? "017_tenant_invite_sent" : "015_tenants";
   }
@@ -2872,6 +2873,9 @@ function jobRowToJs(j, workOrders) {
     // Taken back by whoever reported it. Not a status, because the status
     // column has a CHECK on it; a withdrawn job is out of everything live.
     withdrawnAt: j.withdrawn_at || null, withdrawnNote: j.withdrawn_note || null,
+    // Turned down by the manager, with the reason they gave. A request that
+    // is neither approved nor declined is still waiting on them.
+    declinedAt: j.declined_at || null, declinedNote: j.declined_note || null,
     // The full timestamp, for the ten minutes in which a report can still be
     // corrected. createdAt above is the date alone and always was.
     createdAtIso: j.created_at || null,
@@ -2943,7 +2947,7 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
 // told. Never throws: a message that could not go out must not undo the
 // approval or the assignment that caused it. Owners raise requests too, but
 // they have a dashboard for this; a tenant has an inbox.
-async function notifyTenant(c, jobId, stage, when = null) {
+async function notifyTenant(c, jobId, stage, detail = null) {
   try {
     const job = await c.env.DB.prepare(
       `SELECT id, title, account_id, requested_by, withdrawn_at FROM jobs WHERE id = ?`).bind(jobId).first();
@@ -2963,13 +2967,13 @@ async function notifyTenant(c, jobId, stage, when = null) {
     const email = realEmail(user.email);
     const sentBy = c.get("auth")?.userId ?? null;
     if (prefs.email && email) {
-      const m = tenantStatusEmail({ firstName, account, title: job.title, stage, link, when });
+      const m = tenantStatusEmail({ firstName, account, title: job.title, stage, link, detail });
       const result = await sendEmail(c.env, { to: email, subject: m.subject, text: m.text, html: m.html });
       await logMail(c.env, { accountId: job.account_id, to: email, kind: "tenant_status",
         subject: m.subject, result, sentBy });
     }
     if (prefs.sms && user.phone) {
-      const body = tenantStatusSms({ account, title: job.title, stage, link, when });
+      const body = tenantStatusSms({ account, title: job.title, stage, link, detail });
       const result = await sendSms(c.env, { to: user.phone, body });
       await logSms(c.env, { accountId: job.account_id, to: user.phone, kind: "tenant_status",
         result: { ...result, body } });
@@ -2983,18 +2987,56 @@ app.post("/api/jobs/:id/approve", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const id = c.req.param("id");
   const job = await c.env.DB.prepare(
-    `SELECT id, title, requested_by, approved_at FROM jobs WHERE id = ? AND account_id = ?`
+    `SELECT id, title, requested_by, approved_at, withdrawn_at FROM jobs WHERE id = ? AND account_id = ?`
   ).bind(id, accountId).first();
   if (!job) return c.json({ error: "job_not_found" }, 404);
   if (!job.requested_by) return c.json({ error: "not_a_request" }, 400);
+  if (job.withdrawn_at) return c.json({ error: "withdrawn" }, 409);
   if (job.approved_at) return c.json({ ok: true, alreadyApproved: true });
 
+  // Clearing the decline as well: approving one that was turned down is
+  // changing your mind about it, and it must not read as both.
   await c.env.DB.prepare(
-    `UPDATE jobs SET approved_at = datetime('now') WHERE id = ? AND account_id = ?`
+    `UPDATE jobs SET approved_at = datetime('now'), declined_at = NULL, declined_note = NULL
+      WHERE id = ? AND account_id = ?`
   ).bind(id, accountId).run();
   await logEvent(c.env, accountId, userId, "job.approved", id, { title: job.title });
   await logActivity(c.env, accountId, userId, "job_approved", `Approved requested work: ${job.title}`);
   await notifyTenant(c, id, "approved");
+  return c.json({ ok: true });
+});
+
+// Saying no. A request that cannot be said no to sits on the dashboard
+// forever and the person who asked is never told, which is worse than a
+// refusal. The reason is required: "declined" on its own is what makes
+// somebody pick up the phone, and not having to pick up the phone is the
+// point of all this.
+app.post("/api/jobs/:id/decline", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = c.req.param("id");
+  const b = await c.req.json().catch(() => ({}));
+  const note = String(b.note || "").trim().slice(0, 500);
+  if (!note) return c.json({ error: "reason_required" }, 400);
+  const job = await c.env.DB.prepare(
+    `SELECT id, title, requested_by, approved_at, withdrawn_at, declined_at, status
+       FROM jobs WHERE id = ? AND account_id = ?`).bind(id, accountId).first();
+  if (!job) return c.json({ error: "job_not_found" }, 404);
+  if (!job.requested_by) return c.json({ error: "not_a_request" }, 400);
+  if (job.withdrawn_at) return c.json({ error: "withdrawn" }, 409);
+  if (job.status === "completed") return c.json({ error: "already_completed" }, 409);
+  if (job.approved_at) return c.json({ error: "already_approved" }, 409);
+  if (job.declined_at) return c.json({ ok: true, alreadyDeclined: true });
+  try {
+    await c.env.DB.prepare(`UPDATE jobs SET declined_at = ?, declined_note = ? WHERE id = ?`)
+      .bind(new Date().toISOString(), note, id).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  await logEvent(c.env, accountId, userId, "job.declined", id, { title: job.title, note });
+  await logActivity(c.env, accountId, userId, "job_declined", `Didn't approve "${job.title}": ${note}`);
+  await notifyTenant(c, id, "declined", note);
   return c.json({ ok: true });
 });
 

@@ -134,6 +134,8 @@ export const api = {
   patchJob: (jobId, patch) => request(`/jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   // Turns a building owner's or tenant's request into a job that can be assigned.
   approveJob: (jobId) => request(`/jobs/${jobId}/approve`, { method: "POST" }),
+  // Saying no to a request, with the reason the person who asked will see.
+  declineJob: (jobId, note) => request(`/jobs/${jobId}/decline`, { method: "POST", body: JSON.stringify({ note }) }),
   // A tenant's own report: taken back, or corrected within ten minutes.
   withdrawReport: (jobId, note) => request(`/jobs/${jobId}/withdraw`, { method: "POST", body: JSON.stringify({ note }) }),
   editReport: (jobId, body) => request(`/jobs/${jobId}/report`, { method: "PATCH", body: JSON.stringify(body) }),

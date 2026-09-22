@@ -498,14 +498,14 @@ const ALWAYS_SCOPED_ROLES = ["owner", "tenant"];
 // contractor -- so it belongs under "waiting on approval" and nowhere that
 // counts or offers trade slots. The API already refuses to assign against
 // one; the screens should not offer to.
-const isLiveJob = (j) => !j.withdrawnAt && !(j.requestedBy && !j.approvedAt);
-// Closed out: finished, or taken back by whoever reported it. The Jobs tab
-// files both under Completed, because neither is going anywhere.
-const isClosed = (j) => j.status === "completed" || !!j.withdrawnAt;
+const isLiveJob = (j) => !j.withdrawnAt && !j.declinedAt && !(j.requestedBy && !j.approvedAt);
+// Closed out: finished, taken back by whoever reported it, or turned down.
+// The Jobs tab files all three under Completed -- none is going anywhere.
+const isClosed = (j) => j.status === "completed" || !!j.withdrawnAt || !!j.declinedAt;
 // How long a report can still be corrected by whoever made it.
 const REPORT_EDIT_WINDOW_MS = 10 * 60 * 1000;
 const reportEditableFor = (j) => {
-  if (!j?.createdAtIso || j.approvedAt || j.withdrawnAt || j.status === "completed") return 0;
+  if (!j?.createdAtIso || j.approvedAt || isClosed(j)) return 0;
   const iso = String(j.createdAtIso);
   const t = new Date(iso.replace(" ", "T") + (iso.endsWith("Z") ? "" : "Z")).getTime();
   return Math.max(0, REPORT_EDIT_WINDOW_MS - (Date.now() - t));
@@ -2389,6 +2389,12 @@ export default function SubSub() {
     }
     return v;
   };
+  // Saying no to a request. The reason goes to whoever asked.
+  const declineJob = async (jobId, note) => {
+    await api.declineJob(jobId, note);
+    setJobs((js) => js.map((j) => j.id === jobId
+      ? { ...j, declinedAt: new Date().toISOString(), declinedNote: note } : j));
+  };
   // A tenant taking their own report back, or correcting it while fresh.
   const withdrawReport = async (jobId, note) => {
     await api.withdrawReport(jobId, note);
@@ -3249,7 +3255,7 @@ export default function SubSub() {
           onRequestDocs={requestDocs} onOpenSub={(sb) => setSelected(sb)}
           onReviewDoc={(sb, kind) => setReviewing({ sub: sb, kind })}
           onVerifyLicense={(sb) => verifyLicense(sb.id)}
-          onApproveJob={approveJob} users={accountUsers}
+          onApproveJob={approveJob} onDeclineJob={declineJob} users={accountUsers}
           runsAccount={runsTheAccount(role, membership)} />
       )}
 
@@ -3446,11 +3452,16 @@ export default function SubSub() {
                       <div>
                         <div className="job-title-row">
                           <h3>{j.title}</h3>
-                          <span className={`job-phase ${done ? "done" : ""}`}>{j.withdrawnAt ? "withdrawn by tenant" : done ? "completed" : "active"}</span>
+                          <span className={`job-phase ${done ? "done" : ""}`}>{j.withdrawnAt ? "withdrawn by tenant" : j.declinedAt ? "not approved" : done ? "completed" : "active"}</span>
                         </div>
                         {j.withdrawnAt && (
                           <div className="job-withdrawn">
                             <X size={12} /> Taken back {niceWhen(j.withdrawnAt)}{j.withdrawnNote ? <> — “{j.withdrawnNote}”</> : null}. Any work order on it was voided.
+                          </div>
+                        )}
+                        {j.declinedAt && !j.withdrawnAt && (
+                          <div className="job-withdrawn">
+                            <X size={12} /> Not approved {niceWhen(j.declinedAt)}{j.declinedNote ? <> — “{j.declinedNote}”</> : null}
                           </div>
                         )}
                         <div className="job-meta">
@@ -3585,7 +3596,7 @@ export default function SubSub() {
                           ))}
                       </div>
                     )}
-                    {j.requestedBy && j.approvedAt && j.status !== "completed" && (
+                    {j.requestedBy && j.approvedAt && !isClosed(j) && (
                       <VisitBlock job={j} visit={visits.find((v) => v.jobId === j.id) || null}
                         who={users.find((u) => u.id === j.requestedBy)} onPropose={proposeVisit} />
                     )}
@@ -7551,6 +7562,7 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
 // waiting in the apartment.
 function tenantStage(job, visit) {
   if (job.withdrawnAt) return { key: "withdrawn", label: "Withdrawn", tone: "off" };
+  if (job.declinedAt) return { key: "declined", label: "Not approved", tone: "off" };
   if (job.status === "completed") return { key: "done", label: "Done", tone: "ok" };
   // A date on the job is not a date with the tenant. Only a visit they have
   // confirmed reads as scheduled; one waiting on them asks them.
@@ -7725,7 +7737,7 @@ function TenantReportRow({ job, stage, visit, brandName, meta, onRespondVisit, o
   const [err, setErr] = useState("");
   const editLeft = reportEditableFor(job);
   const canEdit = editLeft > 0 && !!onEdit;
-  const canWithdraw = !job.withdrawnAt && job.status !== "completed" && !!onWithdraw;
+  const canWithdraw = !isClosed(job) && !!onWithdraw;
   const minutes = Math.ceil(editLeft / 60000);
 
   const saveEdit = async () => {
@@ -7907,7 +7919,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
   // live ones but stay reachable: "did they ever fix the fan" is a question
   // somebody asks months later.
   const [showPast, setShowPast] = useState(false);
-  const isPast = (j) => j.status === "completed" || !!j.withdrawnAt;
+  const isPast = isClosed;
   // null until they start. `group` and `query` are how the list of eighty
   // things gets down to the six worth reading: pick the area, or type a word.
   const [form, setForm] = useState(null);
@@ -8135,6 +8147,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
                 who.length && !v && !isPast(j) ? "a contractor is assigned" : null,
                 j.status === "completed" && j.completedAt ? `done ${niceDay(j.completedAt)}` : null,
                 j.withdrawnAt ? `withdrawn${j.withdrawnNote ? ` — “${j.withdrawnNote}”` : ""}` : null,
+                j.declinedAt ? `not approved${j.declinedNote ? ` — “${j.declinedNote}”` : ""}` : null,
               ].filter(Boolean).join(" · ")}
               onRespondVisit={onRespondVisit} onWithdraw={onWithdraw} onEdit={onEdit} />
           );
@@ -9853,11 +9866,52 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
 // `properties` is null for an account that keeps no building list -- a general
 // contractor -- and an array for the rest, so it is both the data and the
 // answer to "does this account think in buildings at all".
-function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, users = [], runsAccount = true, visits = [] }) {
+// Turning a request down. The reason is required and goes straight to the
+// person who asked: a refusal they cannot see the reason for is the thing
+// that makes them phone the office, which is what this replaces.
+function DeclineBox({ who, onCancel, onDecline }) {
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const send = async () => {
+    if (!note.trim()) { setErr("Say why — they'll see it."); return; }
+    setBusy(true); setErr("");
+    try { await onDecline(note.trim()); }
+    catch (e) {
+      console.error("[decline] failed:", e);
+      setErr(e?.body?.error === "migration_needed"
+        ? `The database isn't migrated yet — run ${e.body.migration || "021_declined_requests"}.sql and try again.`
+        : e?.body?.error === "already_approved" ? "That one has already been approved."
+        : "That didn't go through. Try again in a moment.");
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="decline-box">
+      <label className="fld">Why not? <span className="fld-note">{who ? who.name.split(" ")[0] : "They"} will see this</span>
+        <input value={note} onChange={(e) => { setNote(e.target.value); setErr(""); }} autoFocus
+          placeholder="e.g. That's covered by your own contents insurance, not the building"
+          onKeyDown={(e) => e.key === "Enter" && send()} />
+      </label>
+      {err && <p className="fld-err"><AlertTriangle size={12} /> {err}</p>}
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
+        <button className="btn-solid danger" onClick={send} disabled={busy}>
+          {busy ? "Sending…" : "Not approving — tell them why"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [] }) {
+  // Which request is being turned down, and why. One at a time: the reason
+  // is the point, and a row of open boxes invites none of them being filled.
+  const [declining, setDeclining] = useState(null);
   // A tenant said the proposed time doesn't work: somebody has to propose
   // another, and nothing else on this screen would say so.
   const timeDeclined = visits.filter((v) => v.status === "declined")
-    .map((v) => ({ v, job: jobs.find((j) => j.id === v.jobId) })).filter((x) => x.job && x.job.status !== "completed" && !x.job.withdrawnAt);
+    .map((v) => ({ v, job: jobs.find((j) => j.id === v.jobId) })).filter((x) => x.job && !isClosed(x.job));
   const managesProperties = Array.isArray(properties);
   const today = new Date().toISOString().slice(0, 10);
   // Only approved work has trade slots. An unapproved request has its own
@@ -9866,13 +9920,13 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   const open = slots.filter((s) => !s.a);
   const pending = slots.filter((s) => s.a && s.a.status === "pending" && !s.a.auto);
   const declined = slots.filter((s) => s.a && s.a.status === "declined");
-  const upcoming = jobs.filter((j) => j.status !== "completed" && !j.withdrawnAt && j.date).sort((a, b) => a.date.localeCompare(b.date));
+  const upcoming = jobs.filter((j) => !isClosed(j) && j.date).sort((a, b) => a.date.localeCompare(b.date));
   const nonCompliant = subs.filter((s) => DOC_KINDS.some((k) => !s[k]));
   const toReview = subs.map((s) => ({ sub: s, kinds: pendingReviewDocs(s) })).filter((x) => x.kinds.length);
   const licenseIssues = subs.filter((s) => !licenseOk(s));
   // Offers that ran out of time need a different action from ones still ticking.
   const expiredOffers = [];
-  jobs.filter((j) => j.status !== "completed").forEach((j) =>
+  jobs.filter((j) => !isClosed(j)).forEach((j) =>
     Object.entries(j.assignments || {}).forEach(([t, a]) => {
       if (isExpired(a, now)) expiredOffers.push({ job: j, trade: t, a });
     }));
@@ -9881,7 +9935,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
     && s.job.status === "completed");
   const committed = slots.filter((s) => s.a && (s.a.status === "accepted" || s.a.auto))
     .reduce((n, s) => n + Number(moneyRaw(s.a.value) || 0), 0);
-  const readyToComplete = jobs.filter((j) => j.status !== "completed" && !j.withdrawnAt
+  const readyToComplete = jobs.filter((j) => !isClosed(j)
     && j.trades.every((t) => j.assignments[t] && (j.assignments[t].status === "accepted" || j.assignments[t].auto)));
 
   const first = me.name.split(" ")[0];
@@ -9894,7 +9948,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   const props = properties || [];
   // A request nobody has agreed to yet. The owner watches for it to clear;
   // the account has to do something about it.
-  const awaitingApproval = jobs.filter((j) => j.requestedBy && !j.approvedAt && !j.withdrawnAt);
+  const awaitingApproval = jobs.filter((j) => j.requestedBy && !j.approvedAt && !j.withdrawnAt && !j.declinedAt);
 
   return (
     <main className="ss-main">
@@ -9996,16 +10050,25 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
                             : who?.role === "owner" ? " (owner)" : ""}`}
                   </span>
                 </div>
-                {!isOwner && (
-                  <button className="btn-solid dash-row-btn" onClick={() => onApproveJob(j.id)}>
-                    <Check size={14} /> Approve</button>
+                {!isOwner && declining !== j.id && (
+                  <div className="dash-row-btns">
+                    <button className="btn-ghost sm" onClick={() => setDeclining(j.id)}>
+                      <X size={13} /> Not approving</button>
+                    <button className="btn-solid dash-row-btn" onClick={() => onApproveJob(j.id)}>
+                      <Check size={14} /> Approve</button>
+                  </div>
+                )}
+                {!isOwner && declining === j.id && (
+                  <DeclineBox who={who} onCancel={() => setDeclining(null)}
+                    onDecline={async (note) => { await onDeclineJob(j.id, note); setDeclining(null); }} />
                 )}
               </div>
             );
           })}
           {!isOwner && (
             <p className="rollup-note">Approving turns a request into a job you can price and
-              assign. Nothing reaches a contractor until you do.</p>
+              assign. Nothing reaches a contractor until you do — and if you are not going to,
+              say so, so it stops waiting and they are told why.</p>
           )}
         </section>
       )}
@@ -13878,6 +13941,11 @@ body{background:var(--paper)}
 .login-tenants b{font-weight:700;color:var(--wl-accent,var(--brand))}
 .tn-chip.off{background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
 .job-withdrawn{display:flex;align-items:center;gap:6px;margin:4px 0 6px;font-size:12.5px;color:#b1391f}
+.dash-row-btns{display:flex;align-items:center;gap:8px;flex:none}
+.decline-box{flex:1 1 320px;min-width:0;padding:12px 14px;border:1px dashed var(--line);border-radius:11px;background:var(--paper)}
+.decline-box .fld{margin-bottom:8px}
+.decline-box .form-actions{margin-top:4px}
+@media(max-width:640px){.dash-row-btns{width:100%}.dash-row-btns button{flex:1}}
 .tn-row.is-off{opacity:.72}
 .tn-row-actions{display:flex;gap:14px;margin-top:8px}
 .tn-link{display:inline-flex;align-items:center;gap:5px;background:none;border:0;padding:0;
@@ -14553,6 +14621,11 @@ body{background:var(--paper)}
 .login-tenants b{font-weight:700;color:var(--wl-accent,var(--brand))}
 .tn-chip.off{background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
 .job-withdrawn{display:flex;align-items:center;gap:6px;margin:4px 0 6px;font-size:12.5px;color:#b1391f}
+.dash-row-btns{display:flex;align-items:center;gap:8px;flex:none}
+.decline-box{flex:1 1 320px;min-width:0;padding:12px 14px;border:1px dashed var(--line);border-radius:11px;background:var(--paper)}
+.decline-box .fld{margin-bottom:8px}
+.decline-box .form-actions{margin-top:4px}
+@media(max-width:640px){.dash-row-btns{width:100%}.dash-row-btns button{flex:1}}
 .tn-row.is-off{opacity:.72}
 .tn-row-actions{display:flex;gap:14px;margin-top:8px}
 .tn-link{display:inline-flex;align-items:center;gap:5px;background:none;border:0;padding:0;
