@@ -110,14 +110,34 @@ a judgement about which matters most.
       *Do the verification before the expansion:* five states quietly
       wrong is worse than forty-four honestly unsupported.
 
-- [ ] **Hover and CompanyCam on roofing work orders.** Measurement and site
-      photos attached to the work order. Report photos (022) already prove
-      the shape: upload through the Worker into R2, serve back only through
-      a route that re-checks who is asking, never by key. These would be
-      pulled from a third party rather than uploaded, so the new parts are
-      the OAuth per account and deciding what happens when the third party
-      is down — a work order that cannot be issued because CompanyCam is
-      unreachable is the failure to design against.
+- [ ] **Hover.to and CompanyCam pulled into roofing work orders.** Not
+      links out: the measurements and the site photos land *on* the work
+      order, so the contractor opens one page. Report photos (022) already
+      prove half the shape — through the Worker into R2, served back only by
+      a route that re-checks who is asking, never by key. What is new is
+      that these arrive from somebody else's system.
+      *Three things that shape the work:* each customer connects their own
+      Hover and CompanyCam account, so it is OAuth per account, not one
+      platform key. Hover's measurements are a report per property that has
+      to be matched to a job — probably by address, which will not always
+      be clean. And a work order that cannot be issued because CompanyCam
+      is unreachable is the failure to design against: pull in the
+      background, attach when it arrives, never block issuing on it.
+
+- [ ] **Material suppliers as a list, not a typed guess.** The job form's
+      "Material source / supplier" is a free-text input today
+      (`jobs.material_source`, TEXT), so the same yard is spelled four ways
+      across an account and nothing can ever be counted or compared. Make
+      it a chooser: **QXO · ABC Supply · SRS Building Materials · Home
+      Depot**, plus the branch, plus an "Other" that still takes typing —
+      local yards are real and a closed list would be a lie.
+      *Watch for:* existing rows hold free text. A plain `<select>` would
+      drop any value not in the list the moment somebody edited an old job,
+      silently, which is the same class of bug as the blank dashboard. The
+      old value has to survive being looked at.
+      *Sizing:* the chooser itself is small and needs nothing from anyone
+      outside. Pulling real pricing or placing orders is a different
+      project and needs a partner agreement with each supplier.
 
 ## Parked — deliberately not before launch
 
