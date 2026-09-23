@@ -28,6 +28,8 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       *Done when:* a real card has paid and the account shows Scale.
 - [ ] **4. Two-factor on Cloudflare** — the whole business sits behind that
       one login. Ten minutes, highest value per minute of anything left.
+      *Done when:* 2FA is on for Cloudflare, and for the Google account if
+      it can reach Cloudflare.
 - [x] **5. "Book a demo" sends nothing at all.** Fixed. The form picked a
       day and a slot, validated three fields, and showed *"You're booked.
       We've sent a calendar invite to &lt;email&gt;"* having made no request
@@ -41,26 +43,26 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       and `CAL_EVENT_TYPE_ID` on the Worker; until they are set the page
       says booking is not switched on and gives an email address, which is
       an honest state rather than this one.
-      *Done when:* 2FA is on for Cloudflare, and for the Google account if
-      it can reach Cloudflare.
-- [x] **5. Send invites, by email and text** — done for tenants: the account
+- [x] **6. Send invites, by email and text** — done for tenants: the account
       types in who lives where, or uploads the list it already keeps, and
       SubSub sends the invite. Email works today (Resend is configured).
-      **Text needs Twilio credentials** — `TWILIO_ACCOUNT_SID`,
-      `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` — and until they are set, a text is
-      reported as not sent rather than silently dropped.
+      **Text is parked**, and not on a code problem: Twilio would not
+      register the company for A2P 10DLC, and the account has moved to
+      Telnyx — which submits to the same registry, so the same company
+      filings have to be cleared either way. `worker/sms.js` still speaks
+      Twilio and needs porting when that unblocks. Until credentials exist,
+      a text is reported as not sent rather than silently dropped.
       Still to do: the same for **subcontractor** invites, which are still a
       link the account copies.
-- [ ] **6. Subcontractor invites, sent the same way** — the tenant side is
+- [ ] **7. Subcontractor invites, sent the same way** — the tenant side is
       done; a subcontractor invite is still a link somebody copies. Same
       machinery, one audience along.
-- [ ] **7. Photos on a tenant report** — a picture of the leak is worth more
-      than the paragraph describing it: it decides which trade goes out, and
-      often whether anyone needs to go out twice. Jobs already carry uploaded
-      files and the bucket is already there, so this is a camera button on the
-      report form, thumbnails on the job, and nothing new underneath.
-      *Done when:* a tenant can attach photos from a phone, and they appear on
-      the job the contractor is sent.
+- [x] **8. Photos on a tenant report** — done (migration 022). A picture of
+      the leak decides which trade goes out, and often whether anyone has to
+      go out twice. A tenant attaches them from a phone on the report form
+      or from the edit modal afterwards, and they appear on the job the
+      contractor is sent. Held by `npm run test:reportdetail` and
+      `npm run test:tenantui`.
 
 ## Worth doing when tenants are in real use
 
