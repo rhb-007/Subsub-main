@@ -24,6 +24,7 @@ import {
   hostnameConfig, brandedHost, provisionHostname, deprovisionHostname, checkHostname, diagnose,
 } from "./hostnames.js";
 import { setupCheck } from "./setup-check.js";
+import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 
 const app = new Hono();
 app.use("/api/*", cors());
@@ -159,6 +160,9 @@ app.use("/api/*", async (c, next) => {
   if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path === "/api/signup"
     || c.req.path.startsWith("/api/platform/")
     || c.req.path.startsWith("/api/apply/")
+    // Booking a demo, from the marketing site. Nobody has an account yet --
+    // getting one is what the meeting is for.
+    || c.req.path.startsWith("/api/demo/")
     || c.req.path.startsWith("/api/invite/")
     // The tenant equivalent, and public for the same reason: somebody
     // holding the link has no account yet -- getting one is the point. The
@@ -1486,6 +1490,83 @@ const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 // is a floor, not a wall: it stops one script hammering an endpoint. It does
 // not stop a distributed flood — put Cloudflare's own rate limiting rules and
 // a CAPTCHA in front of these paths too before linking them publicly.
+// ---------------------------------------------------------------------------
+// Booking a demo. Public, because the whole point is that the person has no
+// account yet.
+//
+// Unlike nearly everything else here these two are reachable by anyone, so
+// they never let an error reach the global handler above -- that one puts
+// the underlying message in the response on purpose, which is right for a
+// signed-in person debugging their own account and wrong for a form on the
+// open internet. Everything below answers in fixed words and logs the rest.
+// ---------------------------------------------------------------------------
+
+// Times that are actually free, from the calendar that actually owns them.
+// The page used to offer eight fixed hours every weekday whether or not
+// anybody was available, so half of what it promised could not be kept.
+app.get("/api/demo/slots", async (c) => {
+  if (!calConfigured(c.env)) return c.json({ error: "not_configured" }, 503);
+  const rl = await rateLimit(c.env, "demo-slots", clientIp(c), { limit: 120, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+
+  const start = String(c.req.query("start") || "");
+  const end = String(c.req.query("end") || "");
+  const timeZone = String(c.req.query("timeZone") || "America/Los_Angeles");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    return c.json({ error: "bad_range" }, 400);
+  }
+  try {
+    const r = await fetchSlots(c.env, { start, end, timeZone });
+    if (!r.ok) return c.json({ error: "unavailable" }, 502);
+    return c.json({ timeZone, slots: r.slots });
+  } catch (err) {
+    console.error("[demo] slots failed:", err?.stack || err);
+    return c.json({ error: "unavailable" }, 502);
+  }
+});
+
+// And the booking itself. The answer to this call is the only thing that may
+// put "You're booked" on the screen.
+app.post("/api/demo/book", async (c) => {
+  if (!calConfigured(c.env)) return c.json({ error: "not_configured" }, 503);
+  // Twelve rather than a handful: a shared office comes from one address,
+  // and turning a real prospect away is a worse outcome than a wasted
+  // booking. It is still a wall against a script.
+  const rl = await rateLimit(c.env, "demo-book", clientIp(c), { limit: 12, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+
+  const b = await c.req.json().catch(() => ({}));
+  const name = String(b.name || "").trim();
+  const email = String(b.email || "").trim();
+  const start = String(b.start || "").trim();
+  if (!name) return c.json({ error: "name_required" }, 400);
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return c.json({ error: "bad_email" }, 400);
+  // An instant, not a day and a label. The browser sends the exact slot it
+  // was given back, so there is no re-parsing of "2:00 pm" against a time
+  // zone here -- which is where a demo lands an hour out.
+  if (!/^\d{4}-\d{2}-\d{2}T[\d:.]+(Z|[+-]\d{2}:\d{2})$/.test(start)) {
+    return c.json({ error: "bad_start" }, 400);
+  }
+  try {
+    const r = await createBooking(c.env, {
+      start, name, email,
+      timeZone: String(b.timeZone || "America/Los_Angeles"),
+      company: String(b.company || "").trim(),
+      phone: String(b.phone || "").trim(),
+      role: String(b.role || "").trim(),
+      subs: String(b.subs || "").trim(),
+      notes: String(b.notes || "").trim(),
+    });
+    if (!r.ok) return c.json({ error: r.reason === "taken" ? "slot_taken" : "unavailable" },
+      r.reason === "taken" ? 409 : 502);
+    console.log("[demo] booked", r.uid || "(no uid)", "for", email);
+    return c.json({ booked: true, uid: r.uid }, 201);
+  } catch (err) {
+    console.error("[demo] booking failed:", err?.stack || err);
+    return c.json({ error: "unavailable" }, 502);
+  }
+});
+
 async function rateLimit(env, kind, key, { limit, windowMinutes }) {
   const now = new Date();
   const slot = Math.floor(now.getTime() / (windowMinutes * 60_000));

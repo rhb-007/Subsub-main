@@ -41,6 +41,8 @@
     "test:wo-number": "node scripts/wo-number-test.mjs",
     "test:suppliers": "node scripts/supplier-test.mjs",
     "test:google": "node scripts/google-signin-test.mjs",
+    "test:bookdemo": "node scripts/book-demo-test.mjs",
+    "cal:check": "node scripts/cal-check.mjs",
     "test:sevmap": "node scripts/emergency-map-test.mjs",
     "test:emergency": "node scripts/emergency-test.mjs",
     "test:emergencyui": "node scripts/emergency-ui-test.mjs",

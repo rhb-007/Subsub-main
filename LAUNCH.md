@@ -28,17 +28,19 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       *Done when:* a real card has paid and the account shows Scale.
 - [ ] **4. Two-factor on Cloudflare** — the whole business sits behind that
       one login. Ten minutes, highest value per minute of anything left.
-- [ ] **5. "Book a demo" sends nothing at all.** The form on
-      `book-a-demo.html` picks a day and a slot, validates the three fields,
-      and then shows *"You're booked. We've sent a calendar invite to
-      &lt;email&gt;"* — having made no request of any kind. No fetch, no form
-      action, no mailto. Every demo booked since that page went up was told
-      an invite was on its way and nobody was ever told they asked.
-      `get-started.html` does post to the real API; this one never did.
+- [x] **5. "Book a demo" sends nothing at all.** Fixed. The form picked a
+      day and a slot, validated three fields, and showed *"You're booked.
+      We've sent a calendar invite to &lt;email&gt;"* having made no request
+      of any kind — no fetch, no form action, no mailto. Every demo booked
+      since that page went up was told an invite was on its way and nobody
+      was ever told they asked.
       *Found by audit, not by a report, which is the worrying part: nobody
       complains about a booking they think went through.*
-      *Done when:* a booking reaches something a person reads. See the Cal
-      integration below, or a plain POST to the Worker in the meantime.
+      It now reads real availability and creates a real booking through
+      Cal, and the confirmation appears only on a 201. Needs `CAL_API_KEY`
+      and `CAL_EVENT_TYPE_ID` on the Worker; until they are set the page
+      says booking is not switched on and gives an email address, which is
+      an honest state rather than this one.
       *Done when:* 2FA is on for Cloudflare, and for the Google account if
       it can reach Cloudflare.
 - [x] **5. Send invites, by email and text** — done for tenants: the account
@@ -97,11 +99,17 @@ a judgement about which matters most.
       `https://app.subsub.work/**` and `https://*.subsub.work/**` in
       Supabase's redirect list. See app/README.md.
 
-- [ ] **Cal integration for Book a demo.** Blocking item 5 above is the
-      same thing seen from the other end. The page already has a working
-      day-and-slot picker, so the honest minimum is posting the booking
-      somewhere; the real answer is real availability, a real invite and a
-      real video link.
+- [x] **Cal integration for Book a demo.** Done, and it took blocking item
+      5 with it. Real availability from the calendar that owns it — days
+      with nothing free are closed rather than offered — a real booking, and
+      the form's answers carried on it so whoever takes the call has them.
+      Times are shown in the reader's own zone and the exact instant is what
+      travels, rather than "2:00 pm" re-parsed against a zone at the far end.
+      *Two things are worth knowing:* the confirmation screen is gated on a
+      201 and nothing else, which is what `npm run test:bookdemo` exists to
+      hold; and the `cal-api-version` values in `worker/demo.js` were taken
+      from documentation, not from a live key, so `npm run cal:check` asks
+      the real API whether they are right. Run it once when the key exists.
 
 - [x] **Loose ends audit.** Done — the findings are in this file: blocking
       item 5, and the two notes added under "Known, not blocking" below.

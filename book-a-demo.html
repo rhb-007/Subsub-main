@@ -437,7 +437,7 @@ body.nav-open{overflow:hidden}
 
         <div id="stepTime">
           <h2 class="h-md" style="font-size:22px">Pick a time</h2>
-          <p class="fine" style="margin-top:8px">Weekdays, Pacific time. Thirty minutes.</p>
+          <p class="fine" style="margin-top:8px">Thirty minutes. Times are shown in your own time zone.</p>
 
         <div class="cal">
           <div class="cal-hd">
@@ -553,30 +553,110 @@ body.nav-open{overflow:hidden}
 </footer>
 
 <script>
+/* Where the API lives.
+   The marketing site is static and has no build step, so this is the one
+   place the hostname is written down. It must match the subsub-api Worker's
+   own address -- if it does not, the page cannot load times, says so, and
+   offers an email address instead. It does not quietly show made-up hours,
+   which is what it did before. */
+window.SUBSUB_API = window.SUBSUB_API || 'https://api.subsub.work/api';
+</script>
+<script>
 (function(){
-  var SLOTS = ['8:00 am','9:00 am','10:00 am','11:00 am','1:00 pm','2:00 pm','3:00 pm','4:00 pm'];
+  /* Booking a demo.
+
+     This page used to show eight fixed hours on every weekday, take the
+     form, swap two divs and say "You're booked. We've sent a calendar
+     invite." It sent nothing at all -- no request, no action, not even a
+     mailto. Everybody who used it went away believing a meeting existed.
+
+     So there is one rule here, and the rest of this file serves it: the
+     confirmation screen appears if and only if the server said a booking
+     was created. Every other outcome keeps the form on screen, with what
+     went wrong and what to do about it. */
+
+  var API = window.SUBSUB_API;
+  var TZ = 'America/Los_Angeles';
+  try { TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || TZ; } catch (e) { /* older browser */ }
+
   var today = new Date(); today.setHours(0,0,0,0);
   var view = new Date(today.getFullYear(), today.getMonth(), 1);
-  var chosenDay = null, chosenSlot = null;
+  var chosenDay = null;      /* a Date, midnight local */
+  var chosenSlot = null;     /* the exact instant Cal gave us, as an ISO string */
+  var byDay = {};            /* 'YYYY-MM-DD' -> [iso, iso, ...] */
+  var loading = false, loadErr = '';
+  var loadedMonths = {};
 
   var dowWrap = document.getElementById('dow');
-  ['S','M','T','W','T','F','S'].forEach(function(d,i){
+  ['S','M','T','W','T','F','S'].forEach(function(d){
     var e = document.createElement('div');
     e.className = 'cal-dow'; e.textContent = d;
     e.setAttribute('aria-hidden','true');
     dowWrap.appendChild(e);
   });
 
+  function key(d){
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  }
   function fmtLong(d){
     return d.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
   }
-  function bookable(d){
-    if(d < today) return false;
-    var wd = d.getDay();
-    if(wd===0 || wd===6) return false;
-    var diff = (d - today)/86400000;
-    return diff >= 1 && diff <= 45;   // next-day out to ~6 weeks
+  /* The slot is an instant, so it is shown in the reader's own zone and
+     labelled with it. A demo agreed as "2pm" by somebody three time zones
+     away is the oldest booking bug there is. */
+  function fmtTime(iso){
+    try {
+      return new Date(iso).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
+    } catch (e) { return iso; }
   }
+  function zoneLabel(){
+    try {
+      var parts = new Intl.DateTimeFormat(undefined,{timeZoneName:'short'}).formatToParts(new Date());
+      for (var i=0;i<parts.length;i++) if (parts[i].type === 'timeZoneName') return parts[i].value;
+    } catch (e) { /* fall through */ }
+    return TZ;
+  }
+
+  function monthRange(v){
+    var first = new Date(v.getFullYear(), v.getMonth(), 1);
+    var last  = new Date(v.getFullYear(), v.getMonth()+1, 0);
+    /* Never ask about days already gone; Cal would only answer nothing. */
+    if (first < today) first = today;
+    return { start: key(first), end: key(last) };
+  }
+
+  function loadMonth(){
+    var mk = view.getFullYear() + '-' + view.getMonth();
+    if (loadedMonths[mk]) return;
+    var r = monthRange(view);
+    if (r.start > r.end) { loadedMonths[mk] = true; render(); return; }
+    loading = true; loadErr = ''; render(); showSlots();
+    fetch(API + '/demo/slots?start=' + r.start + '&end=' + r.end + '&timeZone=' + encodeURIComponent(TZ))
+      .then(function(res){ return res.json().then(function(j){ return { s: res.status, j: j }; }); })
+      .then(function(out){
+        loading = false;
+        if (out.s === 200 && out.j && out.j.slots) {
+          Object.keys(out.j.slots).forEach(function(day){ byDay[day] = out.j.slots[day]; });
+          loadedMonths[mk] = true;
+        } else if (out.s === 503) {
+          /* The key is not set yet. Saying "no times available" would be a
+             lie of the same kind this page used to tell. */
+          loadErr = 'not_configured';
+        } else {
+          loadErr = 'unavailable';
+        }
+        render(); showSlots();
+      })
+      .catch(function(){
+        loading = false; loadErr = 'unavailable'; render(); showSlots();
+      });
+  }
+
+  function bookable(d){
+    if (d < today) return false;
+    return (byDay[key(d)] || []).length > 0;
+  }
+
   function render(){
     document.getElementById('monthLabel').textContent =
       view.toLocaleDateString(undefined,{month:'long',year:'numeric'});
@@ -584,16 +664,14 @@ body.nav-open{overflow:hidden}
     var days = new Date(view.getFullYear(), view.getMonth()+1, 0).getDate();
     var grid = document.getElementById('days');
     grid.innerHTML = '';
-    for(var i=0;i<first.getDay();i++){
-      grid.appendChild(document.createElement('div'));
-    }
-    for(var n=1;n<=days;n++){
+    for (var i=0;i<first.getDay();i++) grid.appendChild(document.createElement('div'));
+    for (var n=1;n<=days;n++){
       var d = new Date(view.getFullYear(), view.getMonth(), n);
       var b = document.createElement('button');
       b.type='button'; b.className='cal-day'; b.textContent=n;
       var ok = bookable(d);
       b.disabled = !ok;
-      if(ok){
+      if (ok){
         b.setAttribute('aria-label', fmtLong(d));
         b.setAttribute('aria-pressed', chosenDay && d.getTime()===chosenDay.getTime() ? 'true':'false');
         b.addEventListener('click', (function(dd){ return function(){
@@ -605,23 +683,53 @@ body.nav-open{overflow:hidden}
     var atStart = view.getFullYear()===today.getFullYear() && view.getMonth()===today.getMonth();
     document.getElementById('prevM').disabled = atStart;
   }
+
   function showSlots(){
     var wrap = document.getElementById('slots');
     var note = document.getElementById('pickNote');
-    if(!chosenDay){ wrap.classList.add('hide'); note.classList.add('hide'); return; }
+    note.classList.remove('hide');
+
+    if (loading){
+      wrap.classList.add('hide');
+      note.textContent = 'Finding times…';
+      return;
+    }
+    if (loadErr === 'not_configured'){
+      wrap.classList.add('hide');
+      note.innerHTML = 'Online booking isn\u2019t switched on yet. Email '
+        + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a> '
+        + 'and we\u2019ll set a time by hand.';
+      return;
+    }
+    if (loadErr){
+      wrap.classList.add('hide');
+      note.innerHTML = 'We couldn\u2019t load available times just now. Try again in a moment, or email '
+        + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a>.';
+      return;
+    }
+    if (!chosenDay){
+      wrap.classList.add('hide');
+      var any = Object.keys(byDay).some(function(k){ return byDay[k].length; });
+      note.textContent = any ? 'Pick a day with times available.'
+        : 'No times free this month — try the next one.';
+      return;
+    }
+
+    var list = byDay[key(chosenDay)] || [];
     wrap.classList.remove('hide'); wrap.innerHTML='';
-    SLOTS.forEach(function(s){
+    list.forEach(function(iso){
       var b=document.createElement('button');
-      b.type='button'; b.className='slot'; b.textContent=s;
-      b.setAttribute('aria-pressed', chosenSlot===s ? 'true':'false');
-      b.addEventListener('click', function(){ chosenSlot=s; showSlots(); toStep(2); });
+      b.type='button'; b.className='slot'; b.textContent=fmtTime(iso);
+      b.setAttribute('data-start', iso);
+      b.setAttribute('aria-pressed', chosenSlot===iso ? 'true':'false');
+      b.addEventListener('click', function(){ chosenSlot=iso; showSlots(); toStep(2); });
       wrap.appendChild(b);
     });
-    note.classList.remove('hide');
     note.innerHTML = chosenSlot
-      ? 'Booking <b>' + fmtLong(chosenDay) + ' at ' + chosenSlot + '</b>, Pacific time.'
-      : 'Pick a time on <b>' + fmtLong(chosenDay) + '</b>.';
+      ? 'Booking <b>' + fmtLong(chosenDay) + ' at ' + fmtTime(chosenSlot) + '</b>, ' + zoneLabel() + '.'
+      : 'Pick a time on <b>' + fmtLong(chosenDay) + '</b>. Times are in ' + zoneLabel() + '.';
   }
+
   function toStep(n){
     var a=document.getElementById('stepTime'), b=document.getElementById('stepDetails');
     var tabs=document.querySelectorAll('.bk-step');
@@ -630,8 +738,8 @@ body.nav-open{overflow:hidden}
       tabs[0].removeAttribute('data-on'); tabs[1].setAttribute('data-on','');
       document.getElementById('bkChosen').innerHTML =
         '<svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2">'
-        + '<path d="M3 9.5l4 4 8-9"/></svg><span><b>' + fmtLong(chosenDay) + ' at ' + chosenSlot
-        + '</b> · 30 minutes, Pacific time</span>';
+        + '<path d="M3 9.5l4 4 8-9"/></svg><span><b>' + fmtLong(chosenDay) + ' at ' + fmtTime(chosenSlot)
+        + '</b> \u00b7 30 minutes, ' + zoneLabel() + '</span>';
     } else {
       b.classList.add('hide'); a.classList.remove('hide');
       tabs[1].removeAttribute('data-on'); tabs[0].setAttribute('data-on','');
@@ -642,11 +750,26 @@ body.nav-open{overflow:hidden}
   document.getElementById('bkBack').addEventListener('click', function(){ toStep(1); });
 
   document.getElementById('prevM').addEventListener('click', function(){
-    view = new Date(view.getFullYear(), view.getMonth()-1, 1); render();
+    view = new Date(view.getFullYear(), view.getMonth()-1, 1);
+    chosenDay = null; chosenSlot = null; render(); showSlots(); loadMonth();
   });
   document.getElementById('nextM').addEventListener('click', function(){
-    view = new Date(view.getFullYear(), view.getMonth()+1, 1); render();
+    view = new Date(view.getFullYear(), view.getMonth()+1, 1);
+    chosenDay = null; chosenSlot = null; render(); showSlots(); loadMonth();
   });
+
+  /* Said where the person is looking, not in a console. */
+  function submitErr(msg){
+    var el = document.getElementById('bookErr');
+    if (!el){
+      el = document.createElement('p');
+      el.id = 'bookErr'; el.className = 'fine'; el.setAttribute('role','alert');
+      el.style.color = '#B3261E'; el.style.fontWeight = '600';
+      var btn = document.querySelector('#stepDetails button[type=submit]');
+      btn.parentNode.insertBefore(el, btn.nextSibling);
+    }
+    el.innerHTML = msg;
+  }
 
   document.getElementById('demoForm').addEventListener('submit', function(e){
     e.preventDefault();
@@ -656,14 +779,64 @@ body.nav-open{overflow:hidden}
       var el=document.getElementById(need[i]);
       if(!el.value.trim()){ el.focus(); return; }
     }
-    document.getElementById('doneWhen').innerHTML =
-      'We\u2019ve sent a calendar invite to <b>' + document.getElementById('email').value.trim() +
-      '</b> for <b>' + fmtLong(chosenDay) + ' at ' + chosenSlot + '</b>, Pacific time.';
-    document.getElementById('demoForm').classList.add('hide');
-    document.getElementById('done').classList.add('on');
+    var btn = document.querySelector('#stepDetails button[type=submit]');
+    var label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Booking…';
+    submitErr('');
+
+    var val = function(id){ var e2=document.getElementById(id); return e2 ? e2.value.trim() : ''; };
+    fetch(API + '/demo/book', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        start: chosenSlot, timeZone: TZ,
+        name: val('name'), company: val('company'), email: val('email'),
+        phone: val('phone'), role: val('role'), subs: val('subs'), notes: val('notes')
+      })
+    })
+      .then(function(res){ return res.json().catch(function(){ return {}; })
+        .then(function(j){ return { s: res.status, j: j }; }); })
+      .then(function(out){
+        btn.disabled = false; btn.textContent = label;
+        /* The only branch that may show the confirmation. */
+        if (out.s === 201 && out.j && out.j.booked){
+          document.getElementById('doneWhen').innerHTML =
+            'We\u2019ve sent a calendar invite to <b>' + val('email') +
+            '</b> for <b>' + fmtLong(chosenDay) + ' at ' + fmtTime(chosenSlot) + '</b>, ' + zoneLabel() + '.';
+          document.getElementById('demoForm').classList.add('hide');
+          document.getElementById('done').classList.add('on');
+          return;
+        }
+        if (out.s === 409){
+          /* Somebody took it while this form was being filled in. "Try
+             again" would be wrong advice; the time is gone. */
+          delete loadedMonths[view.getFullYear() + '-' + view.getMonth()];
+          chosenSlot = null;
+          submitErr('That time was taken while you were filling this in. Pick another one.');
+          toStep(1); loadMonth();
+          return;
+        }
+        if (out.s === 503){
+          submitErr('Online booking isn\u2019t switched on yet. Email '
+            + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a> and we\u2019ll set a time by hand.');
+          return;
+        }
+        if (out.s === 429){
+          submitErr('That\u2019s a lot of attempts from this connection. Wait a few minutes, or email '
+            + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a>.');
+          return;
+        }
+        submitErr('We couldn\u2019t book that just now \u2014 nothing has been sent. Try again, or email '
+          + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a>.');
+      })
+      .catch(function(){
+        btn.disabled = false; btn.textContent = label;
+        submitErr('We couldn\u2019t reach SubSub \u2014 nothing has been sent. Check your connection and try again, or email '
+          + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a>.');
+      });
   });
 
-  render();
+  render(); showSlots(); loadMonth();
 })();
 </script>
 <script>

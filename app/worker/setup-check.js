@@ -54,6 +54,13 @@ const GROUPS = [
     matters: "How this console verifies that a request really came through Access.",
   },
   {
+    id: "demo", label: "Book a demo (Cal)",
+    vars: ["CAL_API_KEY", "CAL_EVENT_TYPE_ID"],
+    matters: "Real availability and real bookings on the marketing site's demo form. "
+      + "Unset, the form says booking is not switched on and offers an email address -- "
+      + "it never shows times nobody can keep, which is what it did before it had an upstream.",
+  },
+  {
     id: "cron", label: "Scheduled jobs",
     vars: ["CRON_SECRET"],
     matters: "Only needed to run a nightly sweep by hand; the schedule itself does not use it.",

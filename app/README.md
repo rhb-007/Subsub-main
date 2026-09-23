@@ -789,6 +789,65 @@ a provider sign-in comes back with a session and no form submit, so the app
 has to notice it on load. Without that it draws the sign-in screen at
 somebody who has just authenticated.
 
+## Book a demo (Cal)
+
+The form at `book-a-demo.html` used to show eight fixed hours on every
+weekday, take the details, and print "You're booked. We've sent a calendar
+invite to you@company.com." It sent nothing — no request, no form action, not
+even a mailto. Everybody who used it went away believing a meeting existed.
+
+It now reads real availability and creates a real booking, and the
+confirmation screen appears if and only if the server said one was made.
+
+**Set up:**
+
+1. **Cal.com** — an event type for the demo (30 minutes), with your calendar
+   connected so availability is real, and a video location (Cal Video or
+   Google Meet) so the invite carries a link.
+2. **Settings → Developer → API keys** — create one.
+3. **Worker variables** on `subsub-api`:
+
+   | Variable | Value |
+   |---|---|
+   | `CAL_API_KEY` | the key (a **secret**, not plain text) |
+   | `CAL_EVENT_TYPE_ID` | the event type's numeric id, from its URL |
+
+4. **`window.SUBSUB_API` in `book-a-demo.html`** must be the API Worker's own
+   address. The marketing site is static and has no build step, so that line
+   is the only place it is written down. Get it wrong and the page says it
+   cannot load times and offers an email address — which is the right failure,
+   but it is still a failure.
+
+**Unset is a supported state.** With no key the endpoints answer
+`503 not_configured`, the page says booking is not switched on yet and gives
+an email address, and no time is ever offered. That matters more than it
+sounds: "no times available" would be the same lie as before in a quieter
+voice, and would send a prospect away thinking SubSub has no availability for
+six weeks.
+
+**The API version is assumed, not verified.** `worker/demo.js` was written
+from Cal's documentation rather than against a live key — there was none at
+the time, and that sandbox could not reach cal.com. Two things are therefore
+believed rather than known: the `cal-api-version` each endpoint wants, and the
+shape of the slots payload (the parser accepts both documented arrangements,
+and logs anything else in full rather than guessing).
+
+So confirm it once, when the key exists:
+
+```
+CAL_API_KEY=cal_live_... CAL_EVENT_TYPE_ID=123 npm run cal:check
+```
+
+It makes one real slots request, prints what arrived against what `demo.js`
+expects, and says which line to change if they differ. Add
+`-- --book you@example.com` to check the booking half too — that creates a
+real booking, so cancel it afterwards. The key is read from the environment
+and never printed.
+
+`npm run test:bookdemo` drives the real page against a Cal stand-in, including
+the two failures that matter: a slot taken while the form was being filled in,
+and no key configured at all. Neither may reach the confirmation screen.
+
 ## Email (Resend)
 
 The compliance loop depends on telling a subcontractor to upload something.
