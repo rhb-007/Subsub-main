@@ -744,6 +744,51 @@ worker; both are gitignored. Running without them leaves you with a sign-in
 form that has nothing to talk to, which is the correct behavior rather than a
 gap to fill with a shortcut.
 
+### Continue with Google, on a customer's sign-in page
+
+The button is on every customer sign-in screen, branded ones included, above
+the email box. It is dark until Google is turned on in Supabase — pressing it
+before that returns an error from Supabase rather than doing nothing, but
+nobody should see it in that state, so turn it on before the first customer
+does.
+
+1. **Google Cloud Console → APIs & Services → Credentials** — an OAuth 2.0
+   Client ID, type *Web application*. Its one authorised redirect URI is
+   Supabase's, not ours: `https://<project>.supabase.co/auth/v1/callback`.
+2. **Supabase → Authentication → Providers → Google** — on, with that client
+   ID and secret.
+3. **Supabase → Authentication → URL Configuration → Redirect URLs** — add
+   both `https://app.subsub.work/**` **and** `https://*.subsub.work/**`.
+
+**Step 3 is the one that breaks quietly.** The button asks to come back to
+`window.location.origin`, which on a customer's own address is
+`https://theircompany.subsub.work`. If that is not in the allowed list,
+Supabase does not refuse — it sends them to the project's Site URL instead.
+So somebody signs in at their own company's page and lands on SubSub's
+generic one, which looks like the button sending people to the wrong company
+rather than like a missing line in a settings box. The wildcard covers every
+customer, including ones who do not exist yet.
+
+**The consent screen has a lead time.** While the OAuth app is unverified,
+Google caps it at 100 users and shows a warning before the account chooser.
+Verification wants a privacy policy URL, a terms URL, a logo and a verified
+domain, and takes days to weeks. Start it before it is needed.
+
+**Two cases worth knowing about.** Somebody who already has a password on the
+same address is the same person to SubSub either way:
+`resolveSupabaseUser()` matches the internal `users` row on `auth_id` and,
+failing that, on email — so whichever identity Supabase hands over lands on
+the same row. And somebody invited at an address that is not their Google
+one gets a session with no membership; the sign-in screen says so, says that
+an invite to a different address will not recognise this one, and offers to
+forget the Google account rather than leaving them stuck with a refusal that
+survives every reload.
+
+Held by `npm run test:google`, including the part that has no button in it:
+a provider sign-in comes back with a session and no form submit, so the app
+has to notice it on load. Without that it draws the sign-in screen at
+somebody who has just authenticated.
+
 ## Email (Resend)
 
 The compliance loop depends on telling a subcontractor to upload something.

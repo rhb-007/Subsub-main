@@ -76,15 +76,26 @@ Written down the day they were asked for, with what each actually involves
 from a look at the code rather than a guess. Order is the asking order, not
 a judgement about which matters most.
 
-- [ ] **Google sign-in on user accounts.** The plumbing already exists:
-      `signInWithOAuth` is wired for the platform console and the Supabase
-      client is shared. What is missing is the provider enabled in Supabase,
-      the Google OAuth client, and the button on the customer sign-in
-      screens — including the branded ones, where "Sign in with Google" has
-      to sit sensibly next to a customer's own logo.
-      *Watch for:* a person who signs in with Google on an address that
-      already has a password, and tenants invited at an address that is not
-      the Google one they use.
+- [x] **Google sign-in on user accounts.** Built. "Continue with Google"
+      is on every customer sign-in screen, branded ones included, above the
+      email box, at Google's own wording and colours and the same width as
+      the rest of the form so it does not read as a foreign object under
+      somebody else's logo.
+      *The half that was not a button:* every other way into this app ends
+      in a form submit, and the rest of signing in hangs off that submit. A
+      provider sign-in has none — the browser comes back from Google with a
+      session already in place — so the app now looks for one on load.
+      Without that it drew the sign-in screen at somebody who had just
+      authenticated, which is indistinguishable from the button not working.
+      Both watch-outs are handled: the same address with a password is the
+      same person, because the Worker matches the internal row on email when
+      the auth id is new; and an invite to a different address than the
+      Google one now says exactly that, with a way to forget the account
+      rather than a refusal that survives every reload.
+      *Still needs you:* the Google OAuth client, the provider switched on in
+      Supabase, and — the one that fails silently — both
+      `https://app.subsub.work/**` and `https://*.subsub.work/**` in
+      Supabase's redirect list. See app/README.md.
 
 - [ ] **Cal integration for Book a demo.** Blocking item 5 above is the
       same thing seen from the other end. The page already has a working

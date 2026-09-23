@@ -2845,9 +2845,41 @@ export default function SubSub() {
   // costs nothing. Nothing here ends a session for being away.
   const [resumeFailed, setResumeFailed] = useState(false);
 
+  // What a provider sign-in leaves behind, and why it needs its own path.
+  //
+  // Coming back from Google, supabase-js has put a session in this browser
+  // before any of this code runs. But getAuth() is written by
+  // enterAccount(), at the end of signing in — and on a first Google
+  // sign-in that has never happened. So there is a fully authenticated
+  // person and nothing here knows it, and resumeSession() below returns
+  // empty-handed and draws the sign-in screen. From the outside that is the
+  // button not working.
+  //
+  // It also covers a browser that lost the smaller key and kept the
+  // session, which used to sign somebody out for no reason they could see.
+  const [entryErr, setEntryErr] = useState("");
+
+  const resumeFromProvider = async () => {
+    if (!supabaseEnabled) return;
+    const { data } = await supabase.auth.getSession().catch(() => ({ data: null }));
+    if (!data?.session) return;
+    // Same path as any other sign-in from here: the session is the identity,
+    // and the account still has to recognise it.
+    const msg = await handleLogin();
+    // Said out loud, because the alternative is bouncing somebody who just
+    // authenticated back to a sign-in form with no explanation. The likeliest
+    // cause by far is the second sentence.
+    if (msg) {
+      setEntryErr(msg.startsWith("Your login works")
+        ? msg + " If you were invited, check it was this email address — an "
+          + "invite sent to a different address won't recognise this one."
+        : msg);
+    }
+  };
+
   const resumeSession = async () => {
     const saved = getAuth();
-    if (!saved?.userId || !saved?.accountId) return;
+    if (!saved?.userId || !saved?.accountId) return resumeFromProvider();
     // Never resume somebody else's seat. The banner lives in memory, so a
     // refresh would put a staff member back inside a customer's account with
     // nothing on screen saying so -- which is the one state this whole
@@ -3029,6 +3061,16 @@ export default function SubSub() {
         ) : (
           <LoginPage users={users} brand={brand} accounts={accounts} memberships={memberships}
             onSignup={showSignup}
+            entryErr={entryErr}
+            // Otherwise a Google account that is on no SubSub account is a
+            // dead end: the session survives every reload, so the same
+            // refusal comes back for ever with no way to try another.
+            onForgetProvider={async () => {
+              setEntryErr("");
+              if (supabaseEnabled) await supabase.auth.signOut().catch(() => {});
+              clearStoredAuth();
+              window.location.reload();
+            }}
             onLogin={(email) => handleLogin(email)} />
         )}
       </div>
@@ -13219,7 +13261,21 @@ function CheckoutPanel({ clientSecret, onClose }) {
 }
 
 // ---- Login / splash ------------------------------------------------------
-function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
+// Google's mark, drawn here rather than fetched: a sign-in button that
+// waits on a third-party image is a sign-in button that is sometimes blank,
+// and their brand guidelines require these four colours exactly.
+function GoogleG({ size = 17 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+      <path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h11.8c-.5 2.7-2.1 5-4.4 6.6v5.5h7.1c4.1-3.8 6.6-9.4 6.6-16.1z" />
+      <path fill="#34A853" d="M24 46c6 0 11-2 14.6-5.4l-7.1-5.5c-2 1.3-4.5 2.1-7.5 2.1-5.8 0-10.7-3.9-12.5-9.1H4.2v5.7C7.8 41.1 15.3 46 24 46z" />
+      <path fill="#FBBC05" d="M11.5 28.1c-.5-1.3-.7-2.7-.7-4.1s.3-2.8.7-4.1V14.2H4.2C2.8 17.1 2 20.4 2 24s.8 6.9 2.2 9.8l7.3-5.7z" />
+      <path fill="#EA4335" d="M24 10.8c3.3 0 6.2 1.1 8.5 3.3l6.3-6.3C35 4.3 30 2 24 2 15.3 2 7.8 6.9 4.2 14.2l7.3 5.7c1.8-5.2 6.7-9.1 12.5-9.1z" />
+    </svg>
+  );
+}
+
+function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, entryErr, onForgetProvider }) {
   const wl = themeOf(brand);
   // Show which account each demo login lands in — the same person can hold
   // memberships in several.
@@ -13260,6 +13316,28 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
     if (error) setErr(error.message); else setResent(true);
   };
   const onSubdomain = detectSubdomain();
+
+  // Back to whichever address they started on. Somebody who began at their
+  // own company's sign-in page should return to it, not be handed to the
+  // shared one -- which means every branded hostname has to be in
+  // Supabase's allowed redirect list. A wildcard covers them; see
+  // app/README.md, because the failure is silent and looks like the button
+  // sending people to the wrong company.
+  const signInWithGoogle = async () => {
+    if (!supabaseEnabled) {
+      setErr("This build has no sign-in configured, so nothing can sign you in.");
+      return;
+    }
+    setErr(""); setBusy(true);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    // On success the browser leaves for Google. It comes back to this origin
+    // with a session already in place, and the app picks it up on load --
+    // there is no form submit to hang the rest of signing in on.
+    if (error) { setBusy(false); setErr("Could not start Google sign-in. Try your email and password."); }
+  };
 
   const submit = async () => {
     if (!supabaseEnabled) {
@@ -13330,7 +13408,29 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup }) {
           <p>{signInTagline(brand)}</p>
         </div>
 
+        {/* What somebody who arrived back from Google needs to read. It is
+            above the form because it explains why they are looking at a
+            form again at all, having just signed in successfully. */}
+        {entryErr && (
+          <div className="login-form">
+            <div className="login-err"><AlertTriangle size={13} /> {entryErr}</div>
+            {onForgetProvider && (
+              <button className="login-forgot" onClick={onForgetProvider}>
+                Use a different Google account
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="login-form">
+          {supabaseEnabled && !signupSent && (
+            <>
+              <button className="btn-google" onClick={signInWithGoogle} disabled={busy}>
+                <GoogleG /> <span>Continue with Google</span>
+              </button>
+              <div className="login-or"><span>or use your email</span></div>
+            </>
+          )}
           {supabaseEnabled && signupSent ? (
             <div className="login-err" style={{ color: "var(--forest-lift)" }}>
               <CheckCircle2 size={13} /> Check {email} for a confirmation link, then come back and sign in.
@@ -16225,6 +16325,24 @@ p.fld-note{margin:6px 0 0}
 .load-err button{background:#fff;color:#7f1d1d;border:0;border-radius:7px;padding:7px 12px;
   font:700 12.5px Inter,sans-serif;cursor:pointer}
 @media (max-width:700px){ .load-err{flex-wrap:wrap;padding:9px 14px;font-size:12.5px} }
+
+/* Google's button, to Google's rules: white surface, their mark at its own
+   colours, and the wording they allow. White rather than a themed colour
+   because this sits on a customer's own sign-in page, under their logo and
+   over their palette -- a button tinted to match the brand would be
+   claiming Google is part of it. */
+.btn-google{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;
+  background:#fff;color:#1f1f1f;border:1px solid #dadce0;border-radius:10px;padding:11px 14px;
+  font:600 14.5px Inter,system-ui,sans-serif;cursor:pointer;transition:background .12s,box-shadow .12s}
+.btn-google:hover{background:#f8f9fa;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.btn-google:disabled{opacity:.6;cursor:default;box-shadow:none}
+.btn-google svg{flex:none}
+
+/* A line with the word in it, rather than a bare rule: "or" alone reads as
+   a second option, and this has to read as the same door. */
+.login-or{display:flex;align-items:center;gap:10px;margin:14px 0 2px;color:var(--ink-soft);
+  font-size:11.5px;font-weight:600;letter-spacing:.02em}
+.login-or::before,.login-or::after{content:"";flex:1;height:1px;background:var(--line)}
 
 .imp-banner{display:flex;align-items:center;gap:10px;background:var(--amber);color:#1a1207;padding:9px 18px;
   font-size:13px;font-weight:600}
