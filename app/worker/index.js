@@ -17,6 +17,7 @@ import { sendSms, toE164 } from "./sms.js";
 // never taken from what the browser claims -- otherwise a dripping tap could
 // be labelled urgent and call somebody out at the account's expense.
 import { severityOf } from "../shared/emergency.js";
+import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
 import {
@@ -2465,6 +2466,7 @@ function missingSchema(err) {
   if (/\bseverity\b|emergency_company_id/i.test(m)) return "023_emergencies";
   if (/pay_kind|rate_cents|cap_hours/i.test(m)) return "024_hourly_work_orders";
   if (/updated_at/i.test(m)) return "025_job_activity";
+  if (/material_supplier|material_branch/i.test(m)) return "026_material_supplier";
   if (/tenant_invites|memberships\.unit|\bunit\b/i.test(m)) {
     return /sent_at/i.test(m) ? "017_tenant_invite_sent" : "015_tenants";
   }
@@ -2955,6 +2957,7 @@ function jobRowToJs(j, workOrders) {
     id: j.id, accountId: j.account_id, title: j.title, client: j.client, address: j.address, area: j.area, zip: j.zip,
     sqft: j.sqft, stories: j.stories, date: j.date, time: j.time,
     trades: parseJson(j.trades, []), scope: j.scope, materialSource: j.material_source,
+    materialSupplier: j.material_supplier || null, materialBranch: j.material_branch || null,
     materialsPaidBy: j.materials_paid_by, measurementDocs: parseJson(j.measurement_docs, []),
     // Only what is needed to list and fetch them -- the R2 key stays on the
     // server, so a photo is only ever reachable through the route below,
@@ -3040,18 +3043,47 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   // Only a tenant's or owner's report can be an emergency: a manager
   // creating their own job already knows how to prioritise it.
   const severity = requestedBy ? severityOf(detail?.problem) : null;
+  // Materials. The supplier id is checked against the shared list and the
+  // line is composed here, never taken from the request: what a contractor
+  // reads on a work order should be something this list produced, not
+  // whatever a client sent. An older build sends only materialSource, and
+  // that still works.
+  const supplier = isSupplier(b.materialSupplier) ? b.materialSupplier : null;
+  const branch = supplier && supplier !== OTHER
+    ? (String(b.materialBranch || "").trim() || null) : null;
+  const materialSource = (supplier
+    ? materialLine({ supplier, branch, other: b.materialOther })
+    : String(b.materialSource || "").trim()) || null;
+
+  const cols = ["id", "account_id", "title", "client", "address", "area", "zip", "sqft", "stories",
+    "date", "time", "trades", "scope", "material_source", "materials_paid_by", "measurement_docs",
+    "created_by", "property_id", "requested_by", "photos", "report_detail", "severity"];
+  const vals = [id, accountId, b.title, b.client || null, b.address || null, b.area || null,
+    b.zip || null, b.sqft || null, b.stories || null, b.date || null, b.time || "07:00",
+    JSON.stringify(b.trades || []), scope, materialSource, b.materialsPaidBy || null,
+    JSON.stringify(b.measurementDocs || []), userId, propertyId, requestedBy,
+    photos.length ? JSON.stringify(photos) : null, detail ? JSON.stringify(detail) : null, severity];
+
+  const insertJob = (extraCols, extraVals) => {
+    const all = [...cols, ...extraCols];
+    return c.env.DB.prepare(
+      `INSERT INTO jobs (${all.join(", ")}) VALUES (${all.map(() => "?").join(", ")})`
+    ).bind(...vals, ...extraVals).run();
+  };
+
   try {
-    await c.env.DB.prepare(
-      `INSERT INTO jobs (id, account_id, title, client, address, area, zip, sqft, stories, date, time,
-         trades, scope, material_source, materials_paid_by, measurement_docs, created_by,
-         property_id, requested_by, photos, report_detail, severity)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, accountId, b.title, b.client || null, b.address || null, b.area || null, b.zip || null,
-      b.sqft || null, b.stories || null, b.date || null, b.time || "07:00",
-      JSON.stringify(b.trades || []), scope, b.materialSource || null, b.materialsPaidBy || null,
-      JSON.stringify(b.measurementDocs || []), userId, propertyId, requestedBy,
-      photos.length ? JSON.stringify(photos) : null, detail ? JSON.stringify(detail) : null,
-      severity).run();
+    try {
+      await insertJob(["material_supplier", "material_branch"], [supplier, branch]);
+    } catch (err) {
+      // 026 only adds the counting. The line a person reads is already in
+      // material_source, so a database that has not had it yet must still
+      // be able to take a job -- refusing to create one over a column that
+      // exists for reporting would be a far worse failure than the one it
+      // is guarding.
+      if (missingSchema(err) !== "026_material_supplier") throw err;
+      console.warn("[jobs] 026_material_supplier not applied - saving without the supplier columns");
+      await insertJob([], []);
+    }
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;

@@ -31,6 +31,7 @@ import { api, getAuth, setAuth, clearAuth, clearStoredAuth, logoUrl } from "./li
 // The same file the Worker imports, so a problem cannot be an emergency in
 // the browser and ordinary work on the server, or the other way round.
 import { severityOf, severityRank } from "../shared/emergency.js";
+import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
 
 // What a confirmation or reset link left in the address bar.
@@ -11503,6 +11504,52 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
   );
 }
 
+// Where the materials come from.
+//
+// This was a text box, so one account held "ABC", "abc supply", "ABC Supply
+// Ballard" and "ABC - ballard" for one yard, and no question about
+// suppliers could be answered. A list fixes the spelling. It is not a
+// closed world though: local yards are ordinary, so "Somewhere else" is a
+// first-class answer with its own name field rather than an escape hatch
+// bolted on.
+//
+// `value` is whatever is already stored, which for every job written before
+// today is free text. It is parsed back into the chooser rather than
+// ignored -- a control that cannot show its own starting value quietly
+// rewrites it the first time somebody opens an old record.
+function MaterialSource({ value, onChange }) {
+  const [pick, setPick] = useState(() => parseMaterialSource(value));
+  const push = (next) => { setPick(next); onChange(next); };
+  const line = materialLine(pick);
+  return (
+    <>
+      <label className="fld">Material source / supplier
+        <select value={pick.supplier} onChange={(e) => push({ ...pick, supplier: e.target.value })}>
+          <option value="">Not decided yet</option>
+          {SUPPLIERS.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
+          <option value={OTHER}>Somewhere else…</option>
+        </select>
+      </label>
+      {pick.supplier === OTHER && (
+        <label className="fld">Which supplier?{" "}
+          <span className="fld-note">a local yard, or anyone not on the list</span>
+          <input value={pick.other} onChange={(e) => push({ ...pick, other: e.target.value })}
+            placeholder="e.g. Ballard Lumber" />
+        </label>
+      )}
+      {pick.supplier && pick.supplier !== OTHER && (
+        <label className="fld">Branch{" "}
+          <span className="fld-note">optional — which yard they collect from</span>
+          <input value={pick.branch} onChange={(e) => push({ ...pick, branch: e.target.value })}
+            placeholder="e.g. Ballard" />
+        </label>
+      )}
+      {/* What the contractor will actually read, shown before it is saved. */}
+      {line && <p className="cov-hint">The work order will say: <b>{line}</b></p>}
+    </>
+  );
+}
+
 // ---- Create job ----------------------------------------------------------
 // The job holds every project fact. Work orders are derived from it on assign.
 function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, properties, forProperty, asOwner = false }) {
@@ -11521,7 +11568,12 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
     sqft: "", stories: "",
     date: "", time: "07:00",
     trades: forSub ? [...forSub.categories] : [],
-    scope: "", materialSource: "", materialsPaidBy: "Outerhome",
+    scope: "",
+    // materialSource is the seed the chooser parses, empty on a new job. The
+    // three below it are what gets sent; the Worker composes the line back
+    // from them, so the browser never decides what the work order says.
+    materialSource: "", materialSupplier: "", materialBranch: "", materialOther: "",
+    materialsPaidBy: "Outerhome",
     measurementDocs: [],
   });
   // Picking a property fills the address, so it isn't retyped per job.
@@ -11630,7 +11682,10 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
       <label className="fld">Overall scope<textarea rows={3} value={f.scope} onChange={(e) => set("scope", e.target.value)} placeholder="What the job covers end to end…" /></label>
 
       <div className="form-sec">4 · Materials</div>
-      <label className="fld">Material source / supplier<input value={f.materialSource} onChange={(e) => set("materialSource", e.target.value)} placeholder="e.g. ABC Supply — Ballard" /></label>
+      <MaterialSource
+        value={f.materialSource}
+        onChange={(pick) => setF((st) => ({ ...st, materialSupplier: pick.supplier,
+          materialBranch: pick.branch, materialOther: pick.other }))} />
       <label className="fld">Materials paid by
         <select value={f.materialsPaidBy} onChange={(e) => set("materialsPaidBy", e.target.value)}>
           <option>Outerhome</option><option>Subcontractor (reimbursed)</option>

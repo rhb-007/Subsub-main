@@ -144,7 +144,9 @@ CREATE TABLE jobs (
   time                TEXT DEFAULT '07:00',
   trades              TEXT NOT NULL DEFAULT '[]',  -- JSON array of trade ids
   scope               TEXT,
-  material_source     TEXT,
+  material_source     TEXT,                       -- the display line: "ABC Supply — Ballard"
+  material_supplier   TEXT,                       -- its id from shared/suppliers.js, or 'other'
+  material_branch     TEXT,
   materials_paid_by   TEXT,
   measurement_docs    TEXT NOT NULL DEFAULT '[]',  -- JSON: [{key,name,uploadedAt}]
   status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','completed')),

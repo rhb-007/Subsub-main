@@ -36,6 +36,20 @@ export default [
     plugins: { "react-hooks": reactHooks, react },
     rules: { "no-undef": "error", "react/jsx-no-undef": "error" },
   },
+  // shared/ is imported by both the browser bundle and the Worker, and was
+  // covered by neither of the blocks around it -- an undefined name in
+  // there passed lint in silence, in the one place a mistake reaches both
+  // halves of the product at once.
+  //
+  // No environment globals on purpose. A file in here that reaches for
+  // `window` or `process` has stopped being shared, and this is what says
+  // so at the moment it happens rather than at runtime in whichever half
+  // does not have it.
+  {
+    files: ["shared/**/*.js"],
+    languageOptions: { ecmaVersion: 2023, sourceType: "module", globals: { ...globals.es2021 } },
+    rules: { "no-undef": "error" },
+  },
   {
     files: ["worker/**/*.js", "scripts/**/*.mjs"],
     languageOptions: {

@@ -95,6 +95,8 @@ WITH expected(tbl, col) AS (VALUES
   ('jobs','trades'),
   ('jobs','scope'),
   ('jobs','material_source'),
+  ('jobs','material_supplier'),
+  ('jobs','material_branch'),
   ('jobs','materials_paid_by'),
   ('jobs','measurement_docs'),
   ('jobs','status'),

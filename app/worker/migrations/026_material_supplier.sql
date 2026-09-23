@@ -1,0 +1,27 @@
+-- Which supplier, as an answer rather than as prose.
+--
+-- material_source is free text and stays that way: it is the line a
+-- contractor reads on their work order, "ABC Supply — Ballard", and every
+-- screen that shows materials already shows it. What it could never be is
+-- data. The same yard arrives as "ABC", "abc supply", "ABC Supply Ballard"
+-- and "ABC - ballard", so no account can answer how much of its work goes
+-- through one supplier, and none of it could be handed to that supplier's
+-- own system later.
+--
+-- So: the display line stays, composed by the Worker from the list in
+-- shared/suppliers.js, and the answer is kept beside it. material_supplier
+-- holds the id -- qxo, abc, srs, homedepot, or 'other' -- and
+-- material_branch the yard. A local supplier is still recorded as a
+-- supplier, with its name in material_source, rather than as an empty
+-- column and the truth hidden in a string.
+--
+-- Not backfilled. Existing rows hold text nobody validated, and guessing
+-- which yard somebody meant from a typo is exactly the kind of tidying that
+-- invents facts. They keep their material_source and answer NULL here,
+-- which is true: nobody has said which supplier those jobs used.
+--
+-- The Worker works without this. A job saved before it is applied still
+-- records the composed line in material_source, so the chooser is useful
+-- from the moment it deploys and this only adds the counting.
+ALTER TABLE jobs ADD COLUMN material_supplier TEXT;
+ALTER TABLE jobs ADD COLUMN material_branch TEXT;

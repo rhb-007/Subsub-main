@@ -39,6 +39,7 @@
     "test:whitescreen": "node scripts/whitescreen-test.mjs",
     "test:license-shape": "node scripts/license-shape-test.mjs",
     "test:wo-number": "node scripts/wo-number-test.mjs",
+    "test:suppliers": "node scripts/supplier-test.mjs",
     "test:sevmap": "node scripts/emergency-map-test.mjs",
     "test:emergency": "node scripts/emergency-test.mjs",
     "test:emergencyui": "node scripts/emergency-ui-test.mjs",

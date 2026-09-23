@@ -124,7 +124,7 @@ a judgement about which matters most.
       is unreachable is the failure to design against: pull in the
       background, attach when it arrives, never block issuing on it.
 
-- [ ] **Material suppliers as a list, not a typed guess.** The job form's
+- [x] **Material suppliers as a list, not a typed guess.** Done. The job form's
       "Material source / supplier" is a free-text input today
       (`jobs.material_source`, TEXT), so the same yard is spelled four ways
       across an account and nothing can ever be counted or compared. Make
@@ -135,9 +135,14 @@ a judgement about which matters most.
       drop any value not in the list the moment somebody edited an old job,
       silently, which is the same class of bug as the blank dashboard. The
       old value has to survive being looked at.
-      *Sizing:* the chooser itself is small and needs nothing from anyone
-      outside. Pulling real pricing or placing orders is a different
-      project and needs a partner agreement with each supplier.
+      *Built as:* the chooser, plus `material_supplier` and
+      `material_branch` (migration 026) beside the display line, which the
+      Worker now composes from `shared/suppliers.js` rather than taking a
+      client's word for it. A job saved on a database that has not had 026
+      yet is still created, with the line intact — that migration adds the
+      counting, not the feature. `npm run test:suppliers`.
+      Still open: real pricing or placing orders is a different project and
+      needs a partner agreement with each supplier.
 
 ## Parked — deliberately not before launch
 
