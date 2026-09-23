@@ -492,6 +492,12 @@ CREATE TABLE sub_invites (
   -- enforced against what the applicant then types: a link passed on to the
   -- right person at the wrong company is still a real application.
   label       TEXT,
+  -- Where SubSub sent it, and when it went. sent_at stays null for a link
+  -- the account made to hand over itself -- see migration 027.
+  email        TEXT,
+  contact      TEXT,
+  company_name TEXT,
+  sent_at      TEXT,
   created_by  TEXT REFERENCES users(id),
   created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
   expires_at  TEXT NOT NULL,

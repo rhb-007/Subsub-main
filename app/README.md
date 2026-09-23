@@ -789,6 +789,40 @@ a provider sign-in comes back with a session and no form submit, so the app
 has to notice it on load. Without that it draws the sign-in screen at
 somebody who has just authenticated.
 
+## Inviting a subcontractor
+
+The account types in an email address and SubSub sends the invite. The link
+opens the application form part-filled — company, contact and address as the
+account typed them — and the last step takes a password, so the contractor is
+in as soon as they finish.
+
+Before this it was a link the account copied out of SubSub and pasted into
+their own mail client, which put the step that decides whether anybody is
+invited outside the product: nothing here knew who a link was for, whether it
+was ever sent, or whether it bounced. And the old flow created the company,
+the engagement and a `users` row without ever creating a **login** — the
+contractor had to notice "Already invited? Create your password" on the
+sign-in screen and work out that it meant them.
+
+**A link with no address still works.** Leave the email blank and you get one
+to hand over yourself, in a text thread or in person. `sent_at` stays null for
+those, and the list says "Link to send yourself" rather than claiming a
+message went out — created and sent are different facts, and an account that
+confuses them waits on a contractor who was never asked.
+
+**A failed send is said out loud.** The invite still exists and the link still
+works, so the panel says the email did not go and copies the link for you.
+
+Needs `RESEND_API_KEY` and `MAIL_FROM`, the same as every other message.
+Migration **027** stores who an invite went to; without it a link can still be
+made, and the Worker logs that the recipient was not recorded rather than
+refusing to invite anybody.
+
+`npm run test:subinvite` drives the whole journey, including the one that was
+a live bug rather than a missing feature: "Submit application" used to set the
+thank-you screen without waiting for the server, so a spent link or a refusal
+showed "Thanks — we've got it" just the same.
+
 ## Book a demo (Cal)
 
 The form at `book-a-demo.html` used to show eight fixed hours on every

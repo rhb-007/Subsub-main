@@ -52,11 +52,19 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       filings have to be cleared either way. `worker/sms.js` still speaks
       Twilio and needs porting when that unblocks. Until credentials exist,
       a text is reported as not sent rather than silently dropped.
-      Still to do: the same for **subcontractor** invites, which are still a
-      link the account copies.
-- [ ] **7. Subcontractor invites, sent the same way** — the tenant side is
-      done; a subcontractor invite is still a link somebody copies. Same
-      machinery, one audience along.
+      Subcontractor invites now work the same way — see item 7.
+- [x] **7. Subcontractor invites, sent the same way** — done. The account
+      types in an email, SubSub sends it, and the link opens the application
+      form part-filled with a password box on the last step. The old flow
+      created the company, the engagement and a users row and never created
+      a **login**: the contractor had to find "Already invited? Create your
+      password" on the sign-in screen and work out it was for them.
+      A link with no address still works, for handing over in person, and
+      says so rather than claiming a message went out.
+      *Found while doing it:* "Submit application" set the thank-you screen
+      without waiting for the server, so a spent link or a refusal showed
+      "Thanks — we've got it" just the same. Same lie the demo booking page
+      told, in a different room. `npm run test:subinvite`.
 - [x] **8. Photos on a tenant report** — done (migration 022). A picture of
       the leak decides which trade goes out, and often whether anyone has to
       go out twice. A tenant attaches them from a phone on the report form

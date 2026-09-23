@@ -19,6 +19,7 @@
     "test:subdomain": "node scripts/subdomain-test.mjs",
     "test:migrations": "node --no-warnings scripts/migration-message-test.mjs",
     "test:invites": "node scripts/tenant-invite-test.mjs",
+    "test:subinvite": "node scripts/sub-invite-test.mjs",
     "test:visits": "node scripts/tenant-visit-test.mjs",
     "test:reports": "node scripts/tenant-report-test.mjs",
     "test:decline": "node scripts/decline-test.mjs",

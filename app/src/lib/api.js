@@ -219,7 +219,10 @@ export const api = {
   // One-time subcontractor invite links. The first three need a session; the
   // last two are how somebody holding a link uses it, before they have one.
   listInvites: () => request("/invites"),
-  createInvite: (label) => request("/invites", { method: "POST", body: JSON.stringify({ label }) }),
+  // Takes an object now: an address means SubSub sends it, a label alone
+  // still makes a link for the account to hand over itself.
+  createInvite: (body) => request("/invites", { method: "POST",
+    body: JSON.stringify(typeof body === "string" || body == null ? { label: body } : body) }),
   revokeInvite: (id) => request(`/invites/${id}`, { method: "DELETE" }),
   lookupInvite: (token) => request(`/invite/${encodeURIComponent(token)}`),
   acceptInvite: (token, data) =>

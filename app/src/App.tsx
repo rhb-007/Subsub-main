@@ -554,6 +554,29 @@ const movedAgo = (j) => {
   return `${hrs} hour${hrs === 1 ? "" : "s"} ago`;
 };
 
+// "Sent 3 days ago", for a row in a list rather than a badge on a card, so
+// unlike movedAgo() above it never gives up and returns null -- an invite
+// sent in March still wants a date next to it.
+//
+// The space-vs-T fix is the same one: the database writes "2026-09-23
+// 19:28:16" with no zone, which Safari parses as Invalid Date and Chrome
+// parses as local time. Both are wrong; it is UTC.
+const relTime = (iso) => {
+  if (!iso) return "";
+  const str = String(iso);
+  const t = new Date(str.replace(" ", "T") + (/[Z+]|\d{2}:\d{2}$/.test(str.slice(11)) ? "" : "Z")).getTime();
+  if (!Number.isFinite(t)) return "";
+  const ago = Date.now() - t;
+  if (ago < 90 * 1000) return "just now";
+  const mins = Math.round(ago / 60000);
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? "" : "s"} ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 30) return `${days} day${days === 1 ? "" : "s"} ago`;
+  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+};
+
 const REPORT_EDIT_WINDOW_MS = 10 * 60 * 1000;
 const reportEditableFor = (j) => {
   if (!j?.createdAtIso || j.approvedAt || isClosed(j)) return 0;
@@ -3054,6 +3077,9 @@ export default function SubSub() {
             onBackToLogin={() => setPublicView("login")} />
         ) : publicView === "signup" ? (
           <SubSignup brand={brand}
+            // Only on the invite path: the password box, and the company and
+            // address whoever invited them already typed.
+            invite={inviteToken ? invite : null}
             onSubmit={(data) => inviteToken
               ? api.acceptInvite(inviteToken, data)
               : api.applyToAccount(brand.subdomain, data)}
@@ -9224,15 +9250,27 @@ function PropertyForm({ existing, onSubmit, onCancel }) {
 // ---- Public subcontractor signup (white-labeled, linked from the GC's site) ----
 // The GC drops this URL on their "work with us" page. A sub fills it in, and
 // lands in that GC's account as an invited engagement awaiting approval.
-function SubSignup({ brand, onSubmit, onBackToLogin }) {
+function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
   const t = themeOf(brand);
   const [step, setStep] = useState(1);
+  // Part-filled from the invite. Whoever sent it already typed the company
+  // and the address; asking a contractor to type them again is asking them
+  // to prove they read the email.
   const [f, setF] = useState({
-    company: "", contact: "", email: "", phone: "", license: "", ubi: "",
+    company: invite?.companyName || "", contact: invite?.contact || "",
+    email: invite?.invitedEmail || "", phone: "", license: "", ubi: "",
     city: "", state: "WA", zip: "",
     categories: [], warranty: "", crewCount: "1",
     notifyEmail: true, notifySms: false,
+    password: "",
   });
+  // Only when they arrived through an invite. The public application form is
+  // open to anybody who finds it, and a password box on that is an invitation
+  // to create logins nobody asked for.
+  const canSetPassword = !!invite;
+  const [saving, setSaving] = useState(false);
+  const [sendErr, setSendErr] = useState("");
+  const [madeLogin, setMadeLogin] = useState(null);
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const toggleCat = (id) => setF((x) => ({
     ...x,
@@ -9252,7 +9290,11 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
       ? "That email address does not look right — check for a missing @."
       : "";
   const ok2 = f.categories.length > 0;
-  const stepOk = step === 1 ? ok1 : step === 2 ? ok2 : true;
+  // Supabase refuses under eight, so saying so here beats a refusal after
+  // the application has already been sent.
+  const pwOk = !canSetPassword || !f.password || f.password.length >= 8;
+  const ok3 = (f.notifyEmail || f.notifySms) && pwOk;
+  const stepOk = step === 1 ? ok1 : step === 2 ? ok2 : ok3;
 
   if (sent) return (
     <div className="wl-page" style={themeVars(t)}>
@@ -9261,9 +9303,21 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
           <span className="wl-brand-name">{brand.name}</span></div>
         <div className="wl-tick"><CheckCircle2 size={34} /></div>
         <h1>Thanks — we've got it.</h1>
-        <p>{brand.name} will review your details. You'll get an email at <b>{f.email}</b> with a
-          link to set a password, then you can upload your insurance, bond, W-9 and signed
-          agreement.</p>
+        {madeLogin?.created && !madeLogin.needsConfirmation && !madeLogin.existed ? (
+          <p>{brand.name} will review your details. Your password is set — sign in with
+            <b> {f.email}</b> and you can upload your insurance, bond, W-9 and signed
+            agreement now.</p>
+        ) : madeLogin?.needsConfirmation ? (
+          <p>{brand.name} will review your details. Check <b>{f.email}</b> for a message
+            confirming your address — click the link in it and your password works.</p>
+        ) : madeLogin?.existed ? (
+          <p>{brand.name} will review your details. That address already had a SubSub login,
+            so sign in with the password you already use — the new one wasn't needed.</p>
+        ) : (
+          <p>{brand.name} will review your details. You'll get an email at <b>{f.email}</b> with a
+            link to set a password, then you can upload your insurance, bond, W-9 and signed
+            agreement.</p>
+        )}
         <p className="wl-fine">Nothing gets assigned to you until those are approved, so there's
           no rush today — but the sooner they're in, the sooner you can be scheduled.</p>
         <button className="wl-btn" onClick={onBackToLogin}>Go to sign in</button>
@@ -9359,6 +9413,17 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
             </div>
             <p className="wl-fine">Job offers and document reminders only. One-way messages — you
               reply inside your account, not to the text.</p>
+            {canSetPassword && (
+              <>
+                <div className="wl-label" style={{ marginTop: 18 }}>Choose a password</div>
+                <label className="wl-fld">Password{" "}
+                  <span className="fld-note">at least 8 characters — this is how you sign in</span>
+                  <input type="password" autoComplete="new-password" value={f.password}
+                    onChange={(e) => set("password", e.target.value)} /></label>
+                <p className="wl-fine">You can skip this and set one later from the sign-in
+                  page, but doing it now means you are in as soon as this is sent.</p>
+              </>
+            )}
             <div className="wl-summary">
               <div><span>Company</span><b>{f.company || "—"}</b></div>
               <div><span>Trades</span><b>{f.categories.length
@@ -9374,8 +9439,34 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
             : <button className="wl-btn-ghost" onClick={onBackToLogin}>I already have an account</button>}
           {step < 3
             ? <button className="wl-btn" disabled={!stepOk} onClick={() => setStep(step + 1)}>Continue</button>
-            : <button className="wl-btn" disabled={!f.notifyEmail && !f.notifySms}
-                onClick={() => { onSubmit(f); setSent(true); }}>Submit application</button>}
+            : <button className="wl-btn" disabled={!stepOk || saving}
+                onClick={async () => {
+                  // This used to call onSubmit and set "sent" in the same
+                  // breath, without waiting. An application that failed --
+                  // a spent link, a dropped connection, a refusal from the
+                  // server -- showed "Thanks, we've got it" just the same,
+                  // and the contractor went away believing a general
+                  // contractor had their details. Same lie the demo booking
+                  // page used to tell, in a different room.
+                  setSaving(true); setSendErr("");
+                  try {
+                    const r = await onSubmit(f);
+                    setMadeLogin(r?.login || null);
+                    setSent(true);
+                  } catch (e) {
+                    console.error("[apply] failed:", e);
+                    const code = e?.body?.error;
+                    setSendErr(
+                      code === "used" ? "That invite has already been used. Ask for a new one."
+                      : code === "expired" ? "That invite has expired. Ask for a new one."
+                      : code === "revoked" ? "That invite was withdrawn. Ask whoever sent it."
+                      : code === "invalid" ? "That invite link isn't valid. Check you copied all of it."
+                      : code === "weak_password" ? "That password is too short — eight characters or more."
+                      : code === "rate_limited" ? "Too many attempts from this connection. Wait a few minutes."
+                      : e?.status >= 500 ? "SubSub had a problem saving that — nothing was sent. Try again in a moment."
+                      : "We couldn't send that just now — nothing was sent. Try again.");
+                  } finally { setSaving(false); }
+                }}>{saving ? "Sending…" : "Submit application"}</button>}
         </div>
         {/* Only what is actually wrong. Naming the required fields down here
             was answering a question the form should answer where they are:
@@ -9384,6 +9475,8 @@ function SubSignup({ brand, onSubmit, onBackToLogin }) {
             -- the field is filled in and still will not do -- and that
             still needs saying in words. */}
         {!stepOk && malformed && <p className="wl-err">{malformed}</p>}
+        {step === 3 && !pwOk && <p className="wl-err">A password needs at least 8 characters.</p>}
+        {sendErr && <p className="wl-err" role="alert">{sendErr}</p>}
         <p className="wl-req-key"><Req /> Required</p>
       </div>
       <PoweredBy className="wl-foot" height={15} />
@@ -9516,8 +9609,11 @@ const SIZES = ["S", "M", "L", "XL", "2XL", "3XL"];
 function InviteLinks({ canRevoke, onClose }) {
   const [rows, setRows] = useState(null);   // null = still loading
   const [label, setLabel] = useState("");
+  const [email, setEmail] = useState("");
+  const [contact, setContact] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [sentTo, setSentTo] = useState("");
   const [copied, setCopied] = useState(null);
 
   const load = async () => {
@@ -9527,15 +9623,33 @@ function InviteLinks({ canRevoke, onClose }) {
   useEffect(() => { load(); }, []);
 
   const create = async () => {
-    setBusy(true); setErr("");
+    const to = email.trim();
+    if (to && !validEmail(to)) { setErr("That email address doesn't look right."); return; }
+    setBusy(true); setErr(""); setSentTo("");
     try {
-      const made = await api.createInvite(label.trim() || null);
+      const made = await api.createInvite({
+        label: label.trim() || null, email: to || null,
+        contact: contact.trim() || null, companyName: label.trim() || null,
+      });
       setRows((cur) => [made, ...(cur || [])]);
-      setLabel("");
-      copy(made.url, made.id);
+      // Said out loud when the send failed, rather than letting a row that
+      // says "invite sent" stand for a message that bounced. The link still
+      // exists and still works, so the answer is to copy it.
+      if (made.sendFailed) {
+        setErr("The invite was created but the email couldn't be sent. Copy the link below and send it yourself.");
+        copy(made.url, made.id);
+      } else if (to) {
+        setSentTo(to);
+        setLabel(""); setEmail(""); setContact("");
+      } else {
+        setLabel("");
+        copy(made.url, made.id);
+      }
     } catch (e) {
       console.error("[invites] create failed:", e);
-      setErr("Could not create a link. Try again.");
+      setErr(e?.body?.error === "bad_email"
+        ? "That email address doesn't look right."
+        : "Could not create the invite. Try again.");
     } finally { setBusy(false); }
   };
 
@@ -9564,22 +9678,39 @@ function InviteLinks({ canRevoke, onClose }) {
     <div className="inv-panel">
       <h2>Invite a subcontractor</h2>
       <p className="panel-note">
-        Creates a link you send them yourself — text, email, however you already
-        talk to them. They fill in their own profile and documents, then you approve.
-        Each link works once and expires after 30 days.
+        Give us their email and we'll send the invite. They set their own password,
+        fill in their profile and upload their documents, then you approve.
+        Each invite works once and expires after 30 days.
       </p>
 
       <div className="inv-make">
-        <label className="fld">Who is it for? <span className="fld-note">optional, so you can tell your links apart</span>
-          <input value={label} maxLength={120} placeholder="Cascade Roofworks — Miguel"
+        <label className="fld">Their email{" "}
+          <span className="fld-note">leave blank for a link you send yourself</span>
+          <input type="email" inputMode="email" value={email} maxLength={160}
+            placeholder="miguel@cascaderoofworks.com"
+            onChange={(e) => { setEmail(e.target.value); setErr(""); setSentTo(""); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && !busy) create(); }} />
+        </label>
+        <label className="fld">Company{" "}
+          <span className="fld-note">optional — so the email names them</span>
+          <input value={label} maxLength={120} placeholder="Cascade Roofworks"
             onChange={(e) => setLabel(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !busy) create(); }} />
         </label>
+        <label className="fld">Their name{" "}
+          <span className="fld-note">optional</span>
+          <input value={contact} maxLength={120} placeholder="Miguel Alvarez"
+            onChange={(e) => setContact(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !busy) create(); }} />
+        </label>
         <button className="btn-solid" disabled={busy} onClick={create}>
-          <Link2 size={15} /> {busy ? "Creating…" : "Create link"}
+          {email.trim() ? <Send size={15} /> : <Link2 size={15} />}
+          {busy ? (email.trim() ? "Sending…" : "Creating…") : email.trim() ? "Send invite" : "Create link"}
         </button>
       </div>
 
+      {sentTo && <p className="cov-hint" role="status">
+        <CheckCircle2 size={13} /> Invite sent to <b>{sentTo}</b>.</p>}
       {err && <p className="cov-hint">{err}</p>}
 
       {rows === null ? <p className="cov-hint">Loading…</p> : (
@@ -9588,7 +9719,15 @@ function InviteLinks({ canRevoke, onClose }) {
           {open.map((r) => (
             <div key={r.id} className="inv-row-out">
               <div className="inv-main">
-                <b>{r.label || "Unnamed link"}</b>
+                <b>{r.companyName || r.label || r.email || "Unnamed invite"}</b>
+                {/* Sent and merely created are different facts. A row that
+                    says "sent" over a link nobody ever sent is how an account
+                    ends up waiting on a contractor who was never asked. */}
+                <span className="inv-who">
+                  {r.sentAt ? <>Sent to {r.email} · {relTime(r.sentAt)}</>
+                    : r.email ? <>Not sent — copy the link and send it yourself</>
+                    : <>Link to send yourself</>}
+                </span>
                 <code className="inv-url">{r.url}</code>
               </div>
               <div className="inv-acts">
@@ -16343,6 +16482,10 @@ p.fld-note{margin:6px 0 0}
 .login-or{display:flex;align-items:center;gap:10px;margin:14px 0 2px;color:var(--ink-soft);
   font-size:11.5px;font-weight:600;letter-spacing:.02em}
 .login-or::before,.login-or::after{content:"";flex:1;height:1px;background:var(--line)}
+
+/* Who the invite went to, under its name and above the link. Quiet, because
+   it is a fact about the row rather than the row itself. */
+.inv-who{display:block;font-size:11.5px;color:var(--ink-soft);margin:2px 0 4px}
 
 .imp-banner{display:flex;align-items:center;gap:10px;background:var(--amber);color:#1a1207;padding:9px 18px;
   font-size:13px;font-weight:600}

@@ -179,6 +179,47 @@ This is an automated message from an unmonitored address. Replies aren't receive
 // It has one job, and it is not to explain a product: somebody who has just
 // been told they can report a leak online needs to know who it is from, what
 // it is for, and where to click. Everything else can wait until they are in.
+// Inviting a subcontractor to join an account.
+//
+// This used to be a link the account copied out of SubSub and pasted into
+// their own email, which put the one step that matters -- the message
+// actually arriving -- outside the product, and left the contractor to
+// discover a password screen they were never told about. SubSub sends it
+// now, and the link lands on a form that takes their profile and their
+// password together.
+//
+// Written to be read by somebody who has never heard of SubSub and has been
+// asked for paperwork by a general contractor they do know. So it leads with
+// who is asking, says what is wanted, and says what it is for.
+export function subInviteEmail({ contact, companyName, account, link }) {
+  const who = account?.name || "A general contractor";
+  const text = `Hi ${contact || "there"},
+
+${who} uses SubSub to keep subcontractor paperwork in one place, and has
+invited ${companyName || "your company"} to join theirs.
+
+Set up your account here:
+  ${link}
+
+It takes a few minutes: your company details, the trades you cover, and
+your insurance, bond and W-9. Once ${who} has approved them you'll be sent
+work orders through SubSub and can accept or decline them from your phone.
+
+Your documents stay yours -- keep them current here and they are current for
+every contractor you work with on SubSub, not just this one.
+
+This link works once and expires in 30 days.
+
+-- ${who}, through SubSub
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+  return {
+    subject: `${who} has invited ${companyName || "you"} to join SubSub`,
+    text,
+    html: textToHtml(text, link),
+  };
+}
+
 export function tenantInviteEmail({ firstName, account, propertyName, unit, link }) {
   const who = account?.name || "your building manager";
   const place = [propertyName, unit ? `Unit ${unit}` : null].filter(Boolean).join(", ");

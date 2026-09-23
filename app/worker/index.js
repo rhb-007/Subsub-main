@@ -10,7 +10,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
-  INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen } from "./mail.js";
+  INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
+  subInviteEmail } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -1176,12 +1177,21 @@ function newInviteToken() {
 // path, because the app is a single page served by Pages: an unknown path
 // depends on SPA-fallback configuration to resolve, and a query string
 // always does.
-const inviteUrl = (token) => `https://app.subsub.work/?invite=${token}`;
+// A Scale account with its own address invites people to *their* page, not
+// to SubSub's. Tenant invites already did this; subcontractor ones were
+// hardcoded to app.subsub.work, so a contractor invited by a branded
+// account landed somewhere that did not look like the company that asked.
+const inviteUrl = (account, token) => `${accountOrigin(account)}/?invite=${token}`;
 
-const inviteRowToJs = (r) => ({
+const inviteRowToJs = (r, account) => ({
   id: r.id, label: r.label, createdAt: r.created_at, expiresAt: r.expires_at,
   usedAt: r.used_at, revokedAt: r.revoked_at, companyId: r.company_id,
-  url: inviteUrl(r.token),
+  email: r.email || null, contact: r.contact || null, companyName: r.company_name || null,
+  // Null for a link the account made to hand over itself. "Created" and
+  // "sent" are different facts and a list that conflates them is a list
+  // that says a message went out when none did.
+  sentAt: r.sent_at || null,
+  url: inviteUrl(account, r.token),
   status: r.revoked_at ? "revoked"
     : r.used_at ? "accepted"
     : new Date(r.expires_at) < new Date() ? "expired"
@@ -1194,27 +1204,71 @@ app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
   const label = String(b.label || "").trim().slice(0, 120) || null;
+  const email = String(b.email || "").trim().toLowerCase();
+  const contact = String(b.contact || "").trim().slice(0, 120) || null;
+  const companyName = String(b.companyName || "").trim().slice(0, 160) || null;
+  if (email && !EMAIL_RE.test(email)) return c.json({ error: "bad_email" }, 400);
 
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
   const id = uid(), token = newInviteToken();
   const expires = new Date(Date.now() + INVITE_TTL_DAYS * 86400_000).toISOString();
-  await c.env.DB.prepare(
-    `INSERT INTO sub_invites (id, account_id, token, label, created_by, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(id, accountId, token, label, userId, expires).run();
+
+  // 027 only records who it went to. An account that has not had it yet must
+  // still be able to make a link -- refusing to invite anybody over a
+  // reporting column would be worse than the gap it fills.
+  let recorded = true;
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO sub_invites (id, account_id, token, label, email, contact, company_name, created_by, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, accountId, token, label, email || null, contact, companyName, userId, expires).run();
+  } catch (err) {
+    if (missingSchema(err) !== "027_sub_invite_email") throw err;
+    console.warn("[invites] 027_sub_invite_email not applied - link made, recipient not recorded");
+    recorded = false;
+    await c.env.DB.prepare(
+      `INSERT INTO sub_invites (id, account_id, token, label, created_by, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(id, accountId, token, label, userId, expires).run();
+  }
+
+  // Sent by SubSub, when there is somebody to send it to. This is the whole
+  // point of the change: the step that decides whether anybody is invited
+  // used to happen in the account's own mail client, where nothing here
+  // could see it succeed or fail.
+  let sent = null;
+  if (email) {
+    const mail = subInviteEmail({ contact, companyName, account, link: inviteUrl(account, token) });
+    sent = await sendEmail(c.env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
+    await logMail(c.env, { accountId, companyId: null, to: email, kind: "sub_invite",
+      subject: mail.subject, result: sent, sentBy: userId });
+    // Only on a real send. A failed one leaves sent_at null so the row reads
+    // as a link that exists rather than a message somebody is waiting on.
+    if (sent?.ok && recorded) {
+      await c.env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(id).run();
+    }
+  }
 
   await logActivity(c.env, accountId, userId, "invite_created",
-    label ? `Invite link created for ${label}` : "Invite link created");
+    email ? `Invite sent to ${email}` : label ? `Invite link created for ${label}` : "Invite link created");
 
   const row = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(id).first();
-  return c.json(inviteRowToJs(row), 201);
+  return c.json({
+    ...inviteRowToJs(row, account),
+    // Said plainly, because "invite sent" over a bounced send is the same
+    // class of lie as a booking page that confirms nothing.
+    sendFailed: !!(email && !sent?.ok),
+    sendError: email && !sent?.ok ? (sent?.error || "send_failed") : null,
+  }, 201);
 });
 
 app.get("/api/invites", async (c) => {
   const { accountId } = c.get("auth");
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
   const { results } = await c.env.DB.prepare(
     `SELECT * FROM sub_invites WHERE account_id = ? ORDER BY created_at DESC LIMIT 100`
   ).bind(accountId).all();
-  return c.json(results.map(inviteRowToJs));
+  return c.json(results.map((r) => inviteRowToJs(r, account)));
 });
 
 app.delete("/api/invites/:id", requireRole("admin"), async (c) => {
@@ -1254,6 +1308,13 @@ app.get("/api/invite/:token", async (c) => {
   if (error) return c.json({ error }, error === "invalid" ? 404 : 410);
   return c.json({
     label: invite.label,
+    // What the account typed when inviting, so the form opens part-filled
+    // rather than asking a contractor to retype what somebody already knew.
+    // Not enforced: a link passed to the right person at the wrong desk is
+    // still a real application, and locking the address would break that.
+    invitedEmail: invite.email || null,
+    contact: invite.contact || null,
+    companyName: invite.company_name || null,
     account: {
       name: account.name, subdomain: account.subdomain,
       theme: parseJson(account.theme),
@@ -1274,8 +1335,15 @@ app.post("/api/invite/:token", async (c) => {
   const problem = applicationProblem(body);
   if (problem) return c.json({ error: problem }, 400);
 
-  const { companyId } = await createApplication(c.env, account, body,
-    invite.label ? `Applied through an invite link sent to ${invite.label}.`
+  // The password, if they set one here. Optional so the older flow -- apply
+  // now, discover the password screen later -- still works for a link that
+  // was already out when this shipped.
+  const password = String(body.password || "");
+  if (password && password.length < 8) return c.json({ error: "weak_password" }, 400);
+
+  const { companyId, userId: applicantId } = await createApplication(c.env, account, body,
+    invite.email ? `Invited by email to ${invite.email}.`
+      : invite.label ? `Applied through an invite link sent to ${invite.label}.`
       : "Applied through an invite link.");
 
   // Spent, and only now -- an application that failed halfway should leave
@@ -1287,7 +1355,41 @@ app.post("/api/invite/:token", async (c) => {
   await logActivity(c.env, account.id, null, "invite_accepted",
     `${body.company} joined through an invite link`);
 
-  return c.json({ ok: true });
+  // A login, here, rather than a second screen they have to find. This was
+  // the actual gap: the old flow created the company, the engagement and a
+  // users row, and then left the contractor with no way in -- there is no
+  // password anywhere in it. They had to notice "Already invited? Create
+  // your password" on the sign-in page and work out that it was for them.
+  let login = null;
+  if (password) {
+    const email = String(body.email || "").trim().toLowerCase();
+    const signed = await supabaseSignUp(c.env, email, password,
+      { redirectTo: `${accountOrigin(account)}/` });
+    if (!signed.ok && signed.error !== "email_in_use") {
+      // The application is already saved and the link already spent, so this
+      // cannot fail the request -- it would tell somebody their application
+      // did not go through when it did. Say what happened about the login
+      // only, and let them use "forgot password" from the sign-in screen.
+      console.error("[invite] application saved, login not created:", signed.error, signed.detail || "");
+      login = { created: false, error: signed.error || "signup_failed" };
+    } else {
+      // Same enumeration guard as the tenant path: an address Supabase
+      // already knows answers 200 with a fabricated id and no identities,
+      // and writing that would point auth_id at nobody.
+      const already = signed.error === "email_in_use" || signed.existed;
+      if (signed.ok && !signed.existed && signed.authId && applicantId) {
+        await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ? AND auth_id IS NULL`)
+          .bind(signed.authId, applicantId).run();
+      }
+      login = {
+        created: true,
+        existed: already,
+        needsConfirmation: signed.ok && !signed.session && !already,
+      };
+    }
+  }
+
+  return c.json({ ok: true, login });
 });
 
 // This account's members (admin/pm/contractor), composed with the person's
