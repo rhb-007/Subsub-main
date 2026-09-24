@@ -11,7 +11,8 @@ import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
-  subInviteEmail, subInviteSms, userInviteEmail } from "./mail.js";
+  subInviteEmail, subInviteSms, userInviteEmail,
+  connectRequestEmail, connectRequestSms } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -1491,6 +1492,388 @@ app.post("/api/invite/:token", async (c) => {
 
   const login = await applicantLogin(c, { account, userId: applicantId, email: body.email, password });
   return c.json({ ok: true, login });
+});
+
+
+// ---------------------------------------------------------------------------
+// Connecting to a contractor who is already on SubSub
+// ---------------------------------------------------------------------------
+// The add-a-contractor form has always deduped on the way OUT: type an email
+// or a licence that matches a company already here and the server quietly
+// reuses that company rather than making a second one. Quietly is the
+// problem. Whoever was typing had already filled in the trades, the crews,
+// the coverage and the insurance -- all of it already on file, all of it
+// discarded -- and the contractor was never told that a new company now had
+// their documents.
+//
+// So the match is surfaced before the typing, and the connection is asked
+// for rather than taken. Connecting hands a hiring account that
+// contractor's profile, documents, crews and availability; it is not the
+// hiring account's to grant.
+//
+// Two ways in, one mechanism. Either somebody types an address that matches,
+// or a contractor shows the QR code in their portal and has it scanned.
+
+// Crockford's alphabet minus the letters people mistype off a screen: no
+// I, L, O or U. Ten characters is about 10^15 codes, which is not
+// guessable, and it stays short enough to read aloud down a phone when the
+// camera will not focus.
+const CONNECT_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+function newConnectCode() {
+  const bytes = new Uint8Array(10);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => CONNECT_ALPHABET[b % CONNECT_ALPHABET.length]).join("");
+}
+
+// A contractor's QR has to work whoever scans it, and the scanner is on
+// their own company's address, not this one's -- so it points at the
+// canonical app rather than at any account's branded origin.
+const connectUrl = (code) => `${APP_ORIGIN}/?connect=${code}`;
+
+// Read it, or mint one. Not backfilled by the migration: a code nobody has
+// been told about is just a column, and this is the moment somebody asks
+// to see theirs.
+async function ensureConnectCode(env, companyId) {
+  const row = await env.DB.prepare(`SELECT connect_code FROM companies WHERE id = ?`).bind(companyId).first();
+  if (!row) return null;
+  if (row.connect_code) return row.connect_code;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const code = newConnectCode();
+    try {
+      await env.DB.prepare(`UPDATE companies SET connect_code = ? WHERE id = ?`).bind(code, companyId).run();
+      return code;
+    } catch (err) {
+      // The unique index doing its job. One in 10^15 is not the reason this
+      // loop exists; a rotate racing a mint is.
+      if (!/UNIQUE constraint failed/i.test(String(err?.message || err))) throw err;
+    }
+  }
+  throw new Error("could not mint a connect code");
+}
+
+// Whether anybody can actually answer for this company. A company row is
+// not the same thing as a contractor on SubSub: most of them were typed in
+// by a hiring account and have no login behind them at all. Asking one of
+// those to connect would be a request nobody could ever accept, so the
+// lookup does not offer it -- the ordinary add-them-yourself path still
+// works exactly as before.
+async function companyHasLogin(env, companyId) {
+  const row = await env.DB.prepare(
+    `SELECT 1 AS yes FROM memberships WHERE company_id = ? AND role = 'contractor' LIMIT 1`
+  ).bind(companyId).first();
+  return !!row;
+}
+
+// What a hiring account is allowed to learn about a company it does not
+// work with: the name, roughly where they are, and what they do. Not the
+// email it was found by, not the phone, not a document, not who else they
+// work for. Enough to recognise the company standing in front of you and
+// nothing that would make this worth scraping.
+const connectMatchToJs = (co, { engaged, pending }) => ({
+  companyId: co.id,
+  company: co.company,
+  contact: co.contact || null,
+  where: [co.city, co.state].filter(Boolean).join(", ") || null,
+  license: co.license || null,
+  engaged, pending,
+});
+
+const connectRequestToJs = (r) => ({
+  id: r.id, status: r.status, via: r.via,
+  companyId: r.company_id, company: r.company_name || null,
+  contact: r.contact || null,
+  where: [r.city, r.state].filter(Boolean).join(", ") || null,
+  accountId: r.account_id, account: r.account_name || null,
+  message: r.message || null,
+  createdAt: r.created_at, respondedAt: r.responded_at || null,
+});
+
+// Is this company already on SubSub? Admin and PM only, and rate limited:
+// it answers about an address the caller typed, which is exactly the shape
+// of thing somebody would otherwise feed a list into.
+//
+// It tells them nothing they could not already learn by adding the
+// contractor and reading `reused` off the answer -- that has been true
+// since the dedupe was written. What is new is that they learn it BEFORE
+// typing a profile that would have been thrown away.
+app.get("/api/connect/lookup", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const q = c.req.query();
+  const email = String(q.email || "").trim().toLowerCase();
+  const license = String(q.license || "").trim().toUpperCase();
+  const phone = normalizePhone(q.phone) || "";
+  if (!email && !license && !phone) return c.json({ error: "nothing_to_look_up" }, 400);
+  // Whole values only. No prefixes, no LIKE, nothing that turns this into a
+  // directory somebody can walk.
+  if (email && !EMAIL_RE.test(email)) return c.json({ found: false });
+
+  const limit = await rateLimit(c.env, "connect-lookup", accountId, { limit: 60, windowMinutes: 10 });
+  if (!limit.ok) return c.json({ error: "slow_down" }, 429);
+
+  let co = null;
+  if (license) {
+    co = await c.env.DB.prepare(`SELECT * FROM companies WHERE UPPER(TRIM(license)) = ?`).bind(license).first();
+  }
+  if (!co && email) {
+    co = await c.env.DB.prepare(`SELECT * FROM companies WHERE lower(email) = ?`).bind(email).first();
+  }
+  if (!co && phone) {
+    // normalizePhone() is what every write goes through, so the column holds
+    // exactly one spelling of a number and this is a plain equality rather
+    // than a scan with the punctuation stripped off in SQL.
+    co = await c.env.DB.prepare(`SELECT * FROM companies WHERE phone = ?`).bind(phone).first();
+  }
+  if (!co) return c.json({ found: false });
+  if (!(await companyHasLogin(c.env, co.id))) return c.json({ found: false, reason: "no_account" });
+
+  const engaged = !!(await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(accountId, co.id).first());
+  const pending = !!(await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM connect_requests WHERE account_id = ? AND company_id = ? AND status = 'pending'`
+  ).bind(accountId, co.id).first());
+  return c.json({ found: true, match: connectMatchToJs(co, { engaged, pending }) });
+});
+
+// The same question, asked by a scanned code rather than by an address.
+// Separate from the lookup above because a code is a thing somebody chose
+// to show you, so it does not need the address that found it kept secret.
+app.get("/api/connect/code/:code", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const code = String(c.req.param("code") || "").trim().toUpperCase();
+  if (!/^[0-9A-Z]{10}$/.test(code)) return c.json({ found: false });
+  const limit = await rateLimit(c.env, "connect-code", accountId, { limit: 60, windowMinutes: 10 });
+  if (!limit.ok) return c.json({ error: "slow_down" }, 429);
+
+  const co = await c.env.DB.prepare(`SELECT * FROM companies WHERE connect_code = ?`).bind(code).first();
+  if (!co) return c.json({ found: false });
+  const engaged = !!(await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(accountId, co.id).first());
+  const pending = !!(await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM connect_requests WHERE account_id = ? AND company_id = ? AND status = 'pending'`
+  ).bind(accountId, co.id).first());
+  return c.json({ found: true, match: connectMatchToJs(co, { engaged, pending }) });
+});
+
+// Ask to connect. By company id (from the lookup) or by code (from a scan).
+app.post("/api/connect-requests", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const code = String(b.code || "").trim().toUpperCase();
+  const message = String(b.message || "").trim().slice(0, 500) || null;
+
+  const co = code
+    ? await c.env.DB.prepare(`SELECT * FROM companies WHERE connect_code = ?`).bind(code).first()
+    : await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(String(b.companyId || "")).first();
+  if (!co) return c.json({ error: "not_found" }, 404);
+  if (!(await companyHasLogin(c.env, co.id))) return c.json({ error: "no_account" }, 409);
+
+  const engaged = await c.env.DB.prepare(
+    `SELECT id FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(accountId, co.id).first();
+  if (engaged) return c.json({ error: "already_engaged", companyId: co.id }, 409);
+
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  const id = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO connect_requests (id, account_id, company_id, via, requested_by, message)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(id, accountId, co.id, code ? "code" : "lookup", userId, message).run();
+  } catch (err) {
+    // The partial unique index. Asking twice is not an error worth a 500 --
+    // it means somebody pressed it twice, or two people in the same office
+    // did.
+    if (/UNIQUE constraint failed/i.test(String(err?.message || err))) {
+      return c.json({ error: "already_requested", companyId: co.id }, 409);
+    }
+    throw err;
+  }
+
+  // Tell them. A request sitting in a portal nobody has open is the same as
+  // no request, and this trade answers a text.
+  const link = `${APP_ORIGIN}/?connect-request=${id}`;
+  const mail = connectRequestEmail({ account, company: co, message, link });
+  let mailResult = null, smsResult = null;
+  if (co.email) {
+    mailResult = await sendEmail(c.env, { to: co.email, subject: mail.subject, text: mail.text, html: mail.html });
+    await logMail(c.env, { accountId, companyId: co.id, to: co.email, kind: "connect_request",
+      subject: mail.subject, result: mailResult, sentBy: userId });
+  }
+  if (co.phone) {
+    smsResult = await sendSms(c.env, { to: co.phone, body: connectRequestSms({ account, link }) });
+    await logSms(c.env, { accountId, companyId: co.id, to: co.phone, kind: "connect_request", result: smsResult });
+  }
+  await logActivity(c.env, accountId, userId, "connect_requested",
+    `Asked ${co.company} to connect`);
+
+  const row = await c.env.DB.prepare(
+    `SELECT cr.*, co.company AS company_name, co.contact, co.city, co.state, a.name AS account_name
+       FROM connect_requests cr
+       JOIN companies co ON co.id = cr.company_id
+       JOIN accounts a ON a.id = cr.account_id
+      WHERE cr.id = ?`
+  ).bind(id).first();
+  return c.json({
+    ...connectRequestToJs(row),
+    emailed: !!mailResult?.ok, texted: !!smsResult?.ok,
+    emailError: co.email && !mailResult?.ok ? (mailResult?.error || "send_failed") : null,
+    textError: co.phone && !smsResult?.ok ? (smsResult?.error || "send_failed") : null,
+  }, 201);
+});
+
+// What this account has asked for and not yet had an answer to.
+app.get("/api/connect-requests", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const { results } = await c.env.DB.prepare(
+    `SELECT cr.*, co.company AS company_name, co.contact, co.city, co.state, a.name AS account_name
+       FROM connect_requests cr
+       JOIN companies co ON co.id = cr.company_id
+       JOIN accounts a ON a.id = cr.account_id
+      WHERE cr.account_id = ?
+      ORDER BY cr.created_at DESC LIMIT 100`
+  ).bind(accountId).all();
+  return c.json(results.map(connectRequestToJs));
+});
+
+// Take it back. Only while it is still pending -- a declined or accepted
+// one is a fact about what happened, not a row to tidy away.
+app.delete("/api/connect-requests/:id", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const res = await c.env.DB.prepare(
+    `UPDATE connect_requests SET status = 'cancelled', responded_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND account_id = ? AND status = 'pending'`
+  ).bind(c.req.param("id"), accountId).run();
+  if (!res.meta?.changes) return c.json({ error: "not_found" }, 404);
+  return c.json({ ok: true });
+});
+
+// ---- the contractor's side ------------------------------------------------
+// Scoped by the seat's own company rather than by the account header: a
+// request comes from an account they have no engagement with, so it is not
+// an account they can be "in" yet.
+function contractorCompany(c) {
+  const { role, companyId } = c.get("auth");
+  return role === "contractor" && companyId ? companyId : null;
+}
+
+// Their code, and the URL a QR of it should carry.
+app.get("/api/connect/code", async (c) => {
+  const companyId = contractorCompany(c);
+  if (!companyId) return c.json({ error: "forbidden" }, 403);
+  const code = await ensureConnectCode(c.env, companyId);
+  if (!code) return c.json({ error: "not_found" }, 404);
+  return c.json({ code, url: connectUrl(code) });
+});
+
+// Rotate it. A code is a standing offer to be asked, and the whole point of
+// one printed on a van door is that it gets around -- so it has to be
+// possible to stop the old one working.
+app.post("/api/connect/code/rotate", async (c) => {
+  const companyId = contractorCompany(c);
+  if (!companyId) return c.json({ error: "forbidden" }, 403);
+  await c.env.DB.prepare(`UPDATE companies SET connect_code = NULL WHERE id = ?`).bind(companyId).run();
+  const code = await ensureConnectCode(c.env, companyId);
+  return c.json({ code, url: connectUrl(code) });
+});
+
+// Who has asked to work with them.
+app.get("/api/my-connect-requests", async (c) => {
+  const companyId = contractorCompany(c);
+  if (!companyId) return c.json({ error: "forbidden" }, 403);
+  const { results } = await c.env.DB.prepare(
+    `SELECT cr.*, co.company AS company_name, co.contact, co.city, co.state, a.name AS account_name
+       FROM connect_requests cr
+       JOIN companies co ON co.id = cr.company_id
+       JOIN accounts a ON a.id = cr.account_id
+      WHERE cr.company_id = ?
+      ORDER BY cr.created_at DESC LIMIT 100`
+  ).bind(companyId).all();
+  return c.json(results.map(connectRequestToJs));
+});
+
+// Answer one. Accepting is what creates the engagement -- there is no other
+// way into this account's roster from here, which is the point of the whole
+// exercise.
+app.post("/api/my-connect-requests/:id/respond", async (c) => {
+  const companyId = contractorCompany(c);
+  if (!companyId) return c.json({ error: "forbidden" }, 403);
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const accept = b.accept === true;
+
+  const row = await c.env.DB.prepare(
+    `SELECT * FROM connect_requests WHERE id = ? AND company_id = ?`
+  ).bind(c.req.param("id"), companyId).first();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (row.status !== "pending") return c.json({ error: "already_answered", status: row.status }, 409);
+
+  if (!accept) {
+    await c.env.DB.prepare(
+      `UPDATE connect_requests SET status = 'declined', responded_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).bind(row.id).run();
+    await logActivity(c.env, row.account_id, null, "connect_declined",
+      `${await companyName(c.env.DB, companyId)} declined the connection`);
+    return c.json({ ok: true, status: "declined" });
+  }
+
+  // The trades and capabilities they already work under, copied from an
+  // engagement they already have. Categories live on the engagement rather
+  // than the company, so a connection made with empty ones produces a
+  // contractor who matches no job and cannot be assigned to anything --
+  // which would make "connect and they are ready" untrue in the one way
+  // that matters. The hiring account can change them afterwards like any
+  // other; this is only where they start.
+  const prior = await c.env.DB.prepare(
+    `SELECT categories, caps FROM engagements
+      WHERE company_id = ? AND categories <> '[]'
+      ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, invited_at DESC LIMIT 1`
+  ).bind(companyId).first();
+
+  // Active, not invited. "Invited" is for a company somebody typed in and
+  // has not heard back from; this one has just said yes in person.
+  const engagementId = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO engagements (id, account_id, company_id, status, categories, caps)
+       VALUES (?, ?, ?, 'active', ?, ?)`
+    ).bind(engagementId, row.account_id, companyId,
+      prior?.categories || "[]", prior?.caps || "[]").run();
+  } catch (err) {
+    // They were added by hand in the meantime. The answer they wanted is
+    // still the outcome they wanted, so record it and move on.
+    if (!/UNIQUE constraint failed/i.test(String(err?.message || err))) throw err;
+  }
+  await c.env.DB.prepare(
+    `UPDATE connect_requests SET status = 'accepted', responded_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).bind(row.id).run();
+
+  // Seats in that account, so they can see its jobs. Without this they have
+  // accepted a connection they cannot switch to.
+  //
+  // Everyone at the company, not only whoever happened to tap yes. A
+  // two-person outfit where the owner accepts and the estimator cannot see
+  // the work is a connection that half exists, and the missing half is
+  // invisible from both ends.
+  const { results: seats } = await c.env.DB.prepare(
+    `SELECT DISTINCT user_id FROM memberships WHERE company_id = ? AND role = 'contractor'`
+  ).bind(companyId).all();
+  const userIds = new Set([userId, ...seats.map((r) => r.user_id)].filter(Boolean));
+  for (const uidToSeat of userIds) {
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, 'contractor', ?)`
+      ).bind(uid(), uidToSeat, row.account_id, companyId).run();
+    } catch (err) {
+      if (!/UNIQUE constraint failed/i.test(String(err?.message || err))) throw err;
+    }
+  }
+
+  await logEvent(c.env, row.account_id, userId, "engagement.connected", engagementId, { companyId });
+  await logActivity(c.env, row.account_id, null, "connect_accepted",
+    `${await companyName(c.env.DB, companyId)} accepted the connection`);
+  return c.json({ ok: true, status: "accepted", engagementId });
 });
 
 // This account's members (admin/pm/contractor), composed with the person's

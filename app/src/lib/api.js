@@ -291,6 +291,24 @@ export const api = {
   resendInvite: (id) => request(`/invites/${id}/resend`, { method: "POST" }),
   revokeInvite: (id) => request(`/invites/${id}`, { method: "DELETE" }),
   lookupInvite: (token) => request(`/invite/${encodeURIComponent(token)}`),
+
+  // Connecting to a contractor who is already on SubSub. The first two ask
+  // "is this them?" -- by an address somebody typed, or by a code somebody
+  // scanned -- and answer with a name and a town, never with an address or
+  // a document. The rest are the request itself.
+  connectLookup: (q) => request(`/connect/lookup?${new URLSearchParams(q)}`),
+  connectByCode: (code) => request(`/connect/code/${encodeURIComponent(code)}`),
+  requestConnect: (body) => request("/connect-requests", { method: "POST", body: JSON.stringify(body) }),
+  listConnectRequests: () => request("/connect-requests"),
+  cancelConnectRequest: (id) => request(`/connect-requests/${id}`, { method: "DELETE" }),
+  // The contractor's own side: their code, and who has asked for them.
+  // Scoped by their company rather than by the account header, because a
+  // request comes from an account they are not in yet.
+  myConnectCode: () => request("/connect/code"),
+  rotateConnectCode: () => request("/connect/code/rotate", { method: "POST" }),
+  myConnectRequests: () => request("/my-connect-requests"),
+  respondConnect: (id, accept) =>
+    request(`/my-connect-requests/${id}/respond`, { method: "POST", body: JSON.stringify({ accept }) }),
   acceptInvite: (token, data) =>
     request(`/invite/${encodeURIComponent(token)}`, { method: "POST", body: JSON.stringify(data) }),
 

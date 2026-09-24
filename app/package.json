@@ -23,6 +23,7 @@
     "test:inviteui": "node scripts/invite-ui-test.mjs",
     "test:invitedlist": "node scripts/invited-list-test.mjs",
     "test:rolelabel": "node scripts/role-label-test.mjs",
+    "test:connect": "node scripts/connect-test.mjs",
     "test:licenses": "node scripts/license-provider-test.mjs",
     "test:hero": "node scripts/hero-image-test.mjs",
     "test:session": "node scripts/session-life-test.mjs",
@@ -60,6 +61,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
     "lucide-react": "^0.460.0",
+    "qrcode-generator": "^2.0.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -72,6 +74,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.12.0",
     "hono": "^4.6.11",
+    "jsqr": "^1.4.0",
     "puppeteer-core": "^25.11.0",
     "vite": "^5.4.11",
     "wrangler": "^4.1.0"

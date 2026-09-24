@@ -437,3 +437,51 @@ export async function sendEmail(env, { to, subject, text, html, replyTo }) {
   }
   return { ok: true, id: body?.id || null };
 }
+
+// Somebody wants to work with a contractor who is ALREADY on SubSub.
+//
+// This one is different from the invite above in the way that matters: they
+// do not have to do anything to join, because they already have. Their
+// profile, their crews, their insurance and their licence are on file and
+// current. What is being asked is permission to see them.
+//
+// So the email says that plainly, and it says what accepting hands over.
+// A contractor who cannot tell the difference between this and a signup
+// will read it as more paperwork and leave it.
+export function connectRequestEmail({ account, company, message, link }) {
+  const who = account?.name || "A contractor";
+  const text = `Hi ${company?.contact || "there"},
+
+${who} wants to work with ${company?.company || "your company"} on SubSub.
+
+You are already set up, so there is nothing to fill in. Say yes and they can
+send you work orders; your profile, crews, insurance and licence go with you
+exactly as they are.
+${message ? `\n${who} added: "${message}"\n` : ""}
+Answer here:
+  ${link}
+
+Accepting lets ${who} see your trades, your crews, your availability and the
+compliance documents you keep on SubSub -- the same things every contractor
+you work with here can see. It does not give them anything else, and you can
+end it later.
+
+If you were not expecting this, decline it. Nothing is shared until you accept.
+
+-- ${who}, through SubSub
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+  return {
+    subject: `${who} wants to work with you on SubSub`,
+    text,
+    html: textToHtml(text, link),
+  };
+}
+
+// The same, on a lock screen. The one thing it must carry is that this is a
+// yes/no, not a form.
+export function connectRequestSms({ account, link }) {
+  const who = account?.name || "A contractor";
+  return `${who} wants to work with you on SubSub. You're already set up -- `
+    + `nothing to fill in, just accept or decline: ${link}`;
+}

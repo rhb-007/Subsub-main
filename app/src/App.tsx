@@ -25,13 +25,17 @@ import {
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
-  Globe, RefreshCw, ExternalLink, ImageOff,
+  Globe, RefreshCw, ExternalLink, ImageOff, ScanLine,
+  // Aliased: this file has its own QrCode, which draws one rather than
+  // standing for the idea of one.
+  QrCode as QrCodeIcon,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, logoUrl } from "./lib/api";
 // The same file the Worker imports, so a problem cannot be an emergency in
 // the browser and ordinary work on the server, or the other way round.
 import { severityOf, severityRank } from "../shared/emergency.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
+import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled } from "./lib/supabaseClient";
 
 // What a confirmation or reset link left in the address bar.
@@ -583,10 +587,19 @@ const movedAgo = (j) => {
 // The space-vs-T fix is the same one: the database writes "2026-09-23
 // 19:28:16" with no zone, which Safari parses as Invalid Date and Chrome
 // parses as local time. Both are wrong; it is UTC.
+// D1 hands timestamps back as "2026-09-24 04:47:55" -- UTC, with nothing
+// on it saying so, which a browser reads as local time and gets wrong by
+// however many hours it is from Greenwich. One reading of that, used
+// everywhere, so "an hour ago" means the same thing in every corner.
+const parseWhen = (iso) => {
+  if (!iso) return NaN;
+  const str = String(iso);
+  return new Date(str.replace(" ", "T") + (/[Z+]|\d{2}:\d{2}$/.test(str.slice(11)) ? "" : "Z")).getTime();
+};
+
 const relTime = (iso) => {
   if (!iso) return "";
-  const str = String(iso);
-  const t = new Date(str.replace(" ", "T") + (/[Z+]|\d{2}:\d{2}$/.test(str.slice(11)) ? "" : "Z")).getTime();
+  const t = parseWhen(iso);
   if (!Number.isFinite(t)) return "";
   const ago = Date.now() - t;
   if (ago < 90 * 1000) return "just now";
@@ -1648,6 +1661,15 @@ export default function SubSub() {
   });
   const [invite, setInvite] = useState(null);
   const [inviteErr, setInviteErr] = useState("");
+  // A contractor's QR, just scanned. Unlike the three tokens around it this
+  // one is for somebody who is ALREADY signed in -- the general contractor
+  // doing the scanning -- so it does not open a screen of its own. It waits
+  // until they are in and then asks the one question it is for.
+  const [connectCode, setConnectCode] = useState(() => {
+    if (typeof window === "undefined") return null;
+    const v = new URLSearchParams(window.location.search).get("connect");
+    return v ? v.trim().toUpperCase() : null;
+  });
   // The same idea for tenants, on its own parameter. A separate name rather
   // than a flag on the other one: the two links are accepted by answering
   // completely different questions and land on different screens.
@@ -1812,6 +1834,13 @@ export default function SubSub() {
   // so they live alongside the roster rather than in it.
   const [invites, setInvites] = useState(null);   // null = not loaded yet
   const [invitedOpen, setInvitedOpen] = useState(null);   // an invite being looked at
+  const [requestedOpen, setRequestedOpen] = useState(null);   // a connection request being looked at
+  // Asking a contractor who is ALREADY on SubSub to work with this account.
+  // Two lists, because the two sides of it are different screens: what this
+  // account has asked for, and what has been asked of the contractor signed
+  // in. A seat is only ever one of those, never both.
+  const [connectOut, setConnectOut] = useState(null);   // ours, outgoing
+  const [connectIn, setConnectIn] = useState(null);     // theirs, incoming
   const [addMenu, setAddMenu] = useState(false);
   const [editing, setEditing] = useState(null); // sub being edited
   const [tab, setTab] = useState("dashboard");
@@ -2726,6 +2755,88 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loggedIn, currentAccountId, role]);
 
+  // A scanned code, resolved once there is somebody to resolve it for.
+  const [scanned, setScanned] = useState(null);       // { match } or { error }
+  useEffect(() => {
+    if (!connectCode || !loggedIn) return;
+    if (!can("contractors")) {
+      // A contractor scanning another contractor's code, or a tenant
+      // following a link they were sent. Nothing to offer them, and
+      // silence would leave the code sitting in the address bar forever.
+      setScanned({ error: "This code is for a company that hires subcontractors." });
+      setConnectCode(null);
+      return;
+    }
+    api.connectByCode(connectCode)
+      .then((r) => setScanned(r.found
+        ? { match: r.match }
+        : { error: "That code isn't in use. Ask them to show it again — they may have changed it." }))
+      .catch((err) => {
+        console.error("[connect] code lookup failed:", err);
+        setScanned({ error: "Could not check that code. Try scanning it again." });
+      })
+      .finally(() => {
+        // Out of the address bar either way: a reload should not re-ask, and
+        // the code has no business sitting in browser history.
+        setConnectCode(null);
+        if (typeof window !== "undefined" && window.history?.replaceState) {
+          const u = new URL(window.location.href);
+          u.searchParams.delete("connect");
+          window.history.replaceState({}, "", u.toString());
+        }
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectCode, loggedIn, role]);
+
+  const refreshConnects = useCallback(async () => {
+    if (!loggedIn || !currentAccountId) return;
+    try {
+      // Whichever side this seat is on. A contractor cannot read the
+      // account's outgoing requests and an admin has no incoming ones, so
+      // asking for both would be a guaranteed 403 every time.
+      if (role === "contractor") setConnectIn(await api.myConnectRequests());
+      else setConnectOut(await api.listConnectRequests());
+    } catch (err) {
+      console.warn("[connect] load failed:", err);
+      if (err?.status === 403) { setConnectIn([]); setConnectOut([]); }
+    }
+  }, [loggedIn, currentAccountId, role]);
+
+  useEffect(() => {
+    if (loggedIn && (role === "contractor" || can("contractors"))) refreshConnects();
+    else { setConnectIn([]); setConnectOut([]); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loggedIn, currentAccountId, role]);
+
+  // Waiting on the contractor, and waiting on us. Anything answered is
+  // history: accepted ones are on the roster, declined and cancelled ones
+  // are not waiting on anybody.
+  // Pending, plus anything refused recently. A request that simply vanishes
+  // from the list is indistinguishable from one still being thought about,
+  // and the difference is the whole reason somebody keeps checking. Two
+  // weeks is long enough to be seen and short enough not to become a
+  // permanent list of people who said no.
+  const DECLINED_SHOWN_DAYS = 14;
+  const openConnects = useMemo(() => {
+    const worth = (connectOut || []).filter((r) => {
+      if (r.status === "pending") return true;
+      if (r.status !== "declined") return false;
+      const when = parseWhen(r.respondedAt || r.createdAt);
+      return Number.isFinite(when) && Date.now() - when < DECLINED_SHOWN_DAYS * 86400_000;
+    });
+    // One card per company: asking again after a no leaves both rows on
+    // file, and a list showing the same contractor as "Declined" and
+    // "Asked" at the same time is a list nobody can read. The newest is
+    // what is true now; the older ones are history the list does not tell.
+    const latest = new Map();
+    for (const r of worth) {
+      const seen = latest.get(r.companyId);
+      if (!seen || parseWhen(r.createdAt) > parseWhen(seen.createdAt)) latest.set(r.companyId, r);
+    }
+    return [...latest.values()];
+  }, [connectOut]);
+  const incomingConnects = useMemo(() => (connectIn || []).filter((r) => r.status === "pending"), [connectIn]);
+
   // Only the ones still waiting on somebody. Accepted invites have become
   // contractors and are on the roster already; revoked and expired ones are
   // not waiting on anything.
@@ -2736,6 +2847,13 @@ export default function SubSub() {
   // how somebody invites the same contractor twice. The other filters are
   // about capabilities, ratings and documents, none of which exist for
   // somebody who has not signed up; those do not apply and the strip says so.
+  const requestedMatches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return openConnects;
+    return openConnects.filter((r) =>
+      [r.company, r.contact, r.where].filter(Boolean).join(" ").toLowerCase().includes(q));
+  }, [openConnects, query]);
+
   const invitedMatches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return openInvites;
@@ -3624,11 +3742,18 @@ export default function SubSub() {
           {can("portal") && [
             ["jobs", "My Jobs"], ["settings", "Job Settings"],
             ["crews", "My Crews"], ["docs", "My Documents"], ["uniforms", "Uniforms"],
+            ["connect", "Connect"],
           ].map(([id, label]) => (
             <button key={id} className={tab === "portal" && pane === id ? "on" : ""}
               onClick={() => { setPane(id); setTab("portal"); }}>
               {label}
               {id === "jobs" && pendingCount > 0 && <span className="count amber">{pendingCount}</span>}
+              {/* Somebody is waiting on a yes or a no. Amber for the same
+                  reason a job request is: it is theirs to answer and
+                  nothing moves until they do. */}
+              {id === "connect" && incomingConnects.length > 0 && (
+                <span className="count amber">{incomingConnects.length}</span>
+              )}
               {id === "docs" && mySub && !docsComplete(mySub) && (
                 <span className="count red">{missingDocs(mySub).length}</span>
               )}
@@ -3780,6 +3905,41 @@ export default function SubSub() {
                 <p className="cov-hint">The filters above don’t apply to invited contractors —
                   there are no capabilities, rating or documents to filter on until they join.</p>
               )}
+            </section>
+          )}
+
+          {/* Asked, not invited. The difference matters: an invited
+              contractor has to build an account, and one of these already
+              has everything and is deciding whether to share it. They sit
+              next to each other because from here both mean the same thing
+              -- somebody who is not on the list yet and might be. */}
+          {requestedMatches.length > 0 && (
+            <section className="invited-strip">
+              <h4 className="invited-h">
+                <Send size={13} /> Asked to connect <span className="count">{requestedMatches.length}</span>
+                <span className="invited-sub">
+                  {requestedMatches.every((r) => r.status === "declined")
+                    ? "already on SubSub — they said no"
+                    : "already on SubSub — waiting on their answer"}
+                </span>
+              </h4>
+              <div className="invited-row">
+                {requestedMatches.map((r) => (
+                  <button key={r.id} className="invited-card" onClick={() => setRequestedOpen(r)}>
+                    <span className={`invited-chip ${r.status === "declined" ? "no" : "req"}`}>
+                      {r.status === "declined" ? "Declined" : "Asked"}
+                    </span>
+                    <b>{r.company}</b>
+                    <span className="invited-to">{[r.contact, r.where].filter(Boolean).join(" · ")
+                      || "On SubSub already"}</span>
+                    <span className={`invited-when ${r.status === "declined" ? "unsent" : ""}`}>
+                      {r.status === "declined"
+                        ? `Said no ${relTime(r.respondedAt || r.createdAt)}`
+                        : `Asked ${relTime(r.createdAt)}`}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </section>
           )}
 
@@ -4203,6 +4363,16 @@ export default function SubSub() {
       {can("portal") && tab !== "account" && (
         mySub ? (
           <ContractorPortal sub={mySub} jobs={jobs} pane={pane} mine={myAssignments} brand={brand} me={me} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
+            connectRequests={connectIn || []}
+            onRespondConnect={async (id, accept) => {
+              await api.respondConnect(id, accept);
+              await refreshConnects();
+              // Accepting adds a seat at that account, so the account
+              // switcher is out of date until we ask again. Without this
+              // they have said yes to something they cannot get to.
+              if (accept) await resumeSession();
+            }}
+            onReloadConnects={refreshConnects}
             serviceCalls={serviceCalls.filter((c) => c.subId === mySub.id && c.accountId === account.id)}
             onConfirmCall={confirmServiceCall}
             changeOrders={changeOrders.filter((c) => c.subId === mySub.id && c.accountId === account.id)}
@@ -4320,6 +4490,13 @@ export default function SubSub() {
           onSubmit={updateUser} onCancel={() => setEditUser(null)} /></Modal>}
       {adding && <Modal onClose={() => { setAdding(false); setResumeAssign(null); }} wide>
         <SubForm properties={accountProperties} onSubmit={addSub}
+          onConnect={async (match) => {
+            const made = await api.requestConnect({ companyId: match.companyId });
+            setConnectOut((cur) => [made, ...(cur || [])]);
+            setAdding(false); setResumeAssign(null);
+            setBillingNote(`Asked ${match.company} to connect. They will be on your list `
+              + "as soon as they accept.");
+          }}
           onCancel={() => { setAdding(false); setResumeAssign(null); }} /></Modal>}
 
       {inviteOpen && <Modal onClose={() => setInviteOpen(false)}>
@@ -4332,6 +4509,25 @@ export default function SubSub() {
           }}
           onRevoked={(id) => setInvites((cur) => (cur || []).filter((i) => i.id !== id))}
           onClose={() => setInvitedOpen(null)} /></Modal>}
+      {scanned && <Modal onClose={() => setScanned(null)}>
+        <ScannedPanel scanned={scanned}
+          onConnect={async (match) => {
+            const made = await api.requestConnect({ code: match.code || undefined, companyId: match.companyId });
+            setConnectOut((cur) => [made, ...(cur || [])]);
+            setScanned(null);
+            setBillingNote(`Asked ${match.company} to connect. They will be on your list `
+              + "as soon as they accept.");
+          }}
+          onClose={() => setScanned(null)} /></Modal>}
+      {requestedOpen && <Modal onClose={() => setRequestedOpen(null)}>
+        <RequestedPanel request={requestedOpen}
+          onWithdrawn={(id) => setConnectOut((cur) => (cur || []).filter((r) => r.id !== id))}
+          onAskedAgain={async (r) => {
+            const made = await api.requestConnect({ companyId: r.companyId });
+            setConnectOut((cur) => [made, ...(cur || []).filter((x) => x.id !== r.id)]);
+            setBillingNote(`Asked ${r.company} again.`);
+          }}
+          onClose={() => setRequestedOpen(null)} /></Modal>}
       {editing && <Modal onClose={() => setEditing(null)} wide>
         <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub} onCancel={() => setEditing(null)} /></Modal>}
 
@@ -9920,6 +10116,154 @@ function inviteName(i) {
   return i.contact || i.companyName || i.label || i.email || i.phone || "Unnamed invite";
 }
 
+// What a scan lands on. The general contractor has the contractor standing
+// in front of them, so this says who it is and gets out of the way: one
+// name, one button.
+function ScannedPanel({ scanned, onConnect, onClose }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const match = scanned.match;
+
+  const ask = async () => {
+    setBusy(true); setErr("");
+    try { await onConnect(match); }
+    catch (e) {
+      console.error("[connect] request failed:", e);
+      const code = e?.body?.error;
+      setErr(code === "already_engaged" ? "They are already on your contractor list."
+        : code === "already_requested" ? "You have already asked — they have not answered yet."
+        : "Could not send the request. Try again.");
+      setBusy(false);
+    }
+  };
+
+  if (!match) {
+    return (
+      <div className="invited-panel">
+        <h2>That code didn&rsquo;t work</h2>
+        <p className="panel-note">{scanned.error}</p>
+        <div className="panel-actions">
+          <button className="btn-ghost" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="invited-panel">
+      <span className="invited-chip req"><ScanLine size={12} /> Scanned</span>
+      <h2>{match.company}</h2>
+      <p className="panel-note">
+        {[match.contact, match.where].filter(Boolean).join(" · ") || "Already on SubSub"}
+      </p>
+
+      {match.engaged ? (
+        <p className="cov-hint">They are already on your contractor list.</p>
+      ) : match.pending ? (
+        <p className="cov-hint">You have already asked to connect. It is with them now.</p>
+      ) : (
+        <>
+          <p className="panel-note">
+            They are already set up, so there is nothing to fill in. Their trades, crews,
+            coverage, insurance and licence come with them. Ask, and they accept on their
+            own phone.
+          </p>
+          {err && <p className="cov-hint" role="alert">{err}</p>}
+          <div className="invited-acts">
+            <button className="btn-solid small" disabled={busy} onClick={ask}>
+              <Send size={13} /> {busy ? "Asking…" : "Ask to connect"}
+            </button>
+          </div>
+        </>
+      )}
+
+      <div className="panel-actions">
+        <button className="btn-ghost" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  );
+}
+
+// A connection request this account has sent, opened from the Contractors
+// list. Smaller still than the invite panel: there is nothing to chase and
+// nothing to resend -- it is with them, and the only thing to decide is
+// whether to take it back.
+function RequestedPanel({ request, onWithdrawn, onAskedAgain, onClose }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const declined = request.status === "declined";
+
+  const askAgain = async () => {
+    setBusy(true); setErr("");
+    try { await onAskedAgain(request); onClose(); }
+    catch (e) {
+      console.error("[connect] re-ask failed:", e);
+      setErr(e?.body?.error === "already_engaged" ? "They are on your contractor list already."
+        : e?.body?.error === "already_requested" ? "There is already one waiting on them."
+        : "Could not send it. Try again.");
+      setBusy(false);
+    }
+  };
+
+  const withdraw = async () => {
+    setBusy(true); setErr("");
+    try { await api.cancelConnectRequest(request.id); onWithdrawn(request.id); onClose(); }
+    catch (e) {
+      console.error("[connect] withdraw failed:", e);
+      setErr(e?.status === 404
+        ? "They have already answered this one. Close and reopen the list."
+        : "Could not withdraw it. Try again.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="invited-panel">
+      <span className={`invited-chip ${declined ? "no" : "req"}`}>
+        {declined ? "Declined" : "Asked to connect"}
+      </span>
+      <h2>{request.company}</h2>
+      <p className="panel-note">
+        {declined
+          ? "They turned this down. Nothing was shared — no trades, no crews, no documents."
+          : "They are already on SubSub, so there is nothing for them to fill in. Their "
+            + "trades, crews and documents arrive with them the moment they accept."}
+      </p>
+
+      <dl className="invited-facts">
+        {request.contact && <><dt>Contact</dt><dd>{request.contact}</dd></>}
+        {request.where && <><dt>Where</dt><dd>{request.where}</dd></>}
+        <dt>Asked</dt>
+        <dd>{relTime(request.createdAt)}{request.via === "code" ? " · by scanning their code" : ""}</dd>
+        {request.message && <><dt>You said</dt><dd>&ldquo;{request.message}&rdquo;</dd></>}
+        <dt>Status</dt>
+        <dd>{declined ? `They said no ${relTime(request.respondedAt || request.createdAt)}` : "Waiting on them"}</dd>
+      </dl>
+
+      {err && <p className="cov-hint" role="alert">{err}</p>}
+
+      <div className="invited-acts">
+        {declined ? (
+          // A no today is not a no forever -- they may have been busy, or
+          // it may have been the wrong person's phone.
+          <button className="pick" disabled={busy} onClick={askAgain}>
+            <Send size={13} /> {busy ? "Asking…" : "Ask again"}
+          </button>
+        ) : (
+          <button className="pick danger" disabled={busy} onClick={withdraw}>
+            <X size={13} /> {busy ? "Withdrawing…" : "Withdraw request"}
+          </button>
+        )}
+      </div>
+      {declined && <p className="cov-hint">This drops off your list on its own after a couple of weeks.</p>}
+
+      <div className="panel-actions">
+        <button className="btn-ghost" onClick={onClose}>Done</button>
+      </div>
+    </div>
+  );
+}
+
 // An invite, opened from the Contractors list. Deliberately small: until
 // somebody accepts, all that exists is a name, an address, a link and a
 // date, and a full-width panel of empty sections would imply otherwise.
@@ -12810,7 +13154,170 @@ function PickJobSlot({ sub, jobs, allJobs, accountId, onPick, onNewJob, onNotify
   );
 }
 // ---- Contractor portal (contractor role) ---------------------------------
-function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage }) {
+// ---- Connecting, on both sides -------------------------------------------
+// A QR code, as an SVG. Vector rather than a canvas or an image request:
+// this gets photographed off a phone screen in a car park and printed on a
+// van door, and both want crisp edges at whatever size they end up.
+function QrCode({ value, size = 190, label }) {
+  const { size: modules, path } = useMemo(() => qrPath(value), [value]);
+  return (
+    <svg className="qr" width={size} height={size} viewBox={`0 0 ${modules} ${modules}`}
+      role="img" aria-label={label || "QR code"} shapeRendering="crispEdges">
+      <rect width={modules} height={modules} fill="#fff" />
+      <path d={path} fill="#000" />
+    </svg>
+  );
+}
+
+// The contractor's own screen: their code, and whoever has asked for them.
+//
+// The point of the code is that being added should not require spelling an
+// email address out loud on a job site. They show this, it gets scanned,
+// and a request arrives here.
+function ConnectPane({ requests, onRespond, onReload }) {
+  const [code, setCode] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [confirmRotate, setConfirmRotate] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api.myConnectCode()
+      .then((r) => { if (alive) setCode(r); })
+      .catch((e) => { console.error("[connect] code failed:", e); if (alive) setErr("Could not load your code."); });
+    return () => { alive = false; };
+  }, []);
+
+  const rotate = async () => {
+    setBusy("rotate"); setErr("");
+    try { setCode(await api.rotateConnectCode()); setConfirmRotate(false); }
+    catch (e) { console.error("[connect] rotate failed:", e); setErr("Could not change your code. Try again."); }
+    finally { setBusy(""); }
+  };
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(code.url); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    catch { setCopied(false); setErr("This browser wouldn't let us copy. The code is above — read it out."); }
+  };
+
+  const answer = async (id, accept) => {
+    setBusy(id); setErr("");
+    try { await onRespond(id, accept); }
+    catch (e) {
+      console.error("[connect] respond failed:", e);
+      setErr(e?.body?.error === "already_answered"
+        ? "That one has already been answered."
+        : "Could not send your answer. Try again.");
+      onReload?.();
+    } finally { setBusy(""); }
+  };
+
+  const pending = requests.filter((r) => r.status === "pending");
+  const past = requests.filter((r) => r.status !== "pending").slice(0, 10);
+
+  return (
+    <div className="pane">
+      <h2 className="pane-h">Connect</h2>
+
+      <section className="dash-sec">
+        <h3><Users size={15} /> Asking to work with you
+          {pending.length > 0 && <span className="sec-count">{pending.length}</span>}</h3>
+        {pending.length === 0
+          ? <p className="cov-hint">Nobody is waiting on an answer.</p>
+          : pending.map((r) => (
+            <div key={r.id} className="cx-req">
+              <div className="cx-main">
+                <b>{r.account}</b>
+                <span className="cx-sub">
+                  {r.via === "code" ? "Scanned your code" : "Found you on SubSub"} · {relTime(r.createdAt)}
+                </span>
+                {r.message && <span className="cx-msg">&ldquo;{r.message}&rdquo;</span>}
+                {/* What saying yes actually does. Somebody agreeing to this
+                    on a phone deserves to know it hands over documents. */}
+                <span className="cx-note">
+                  They&rsquo;ll be able to send you work orders and see your trades, crews,
+                  availability and compliance documents. Nothing else, and you can end it later.
+                </span>
+              </div>
+              <div className="cx-acts">
+                <button className="btn-solid small" disabled={!!busy} onClick={() => answer(r.id, true)}>
+                  <Check size={13} /> {busy === r.id ? "…" : "Accept"}
+                </button>
+                <button className="pick" disabled={!!busy} onClick={() => answer(r.id, false)}>
+                  <X size={13} /> Decline
+                </button>
+              </div>
+            </div>
+          ))}
+        {err && <p className="cov-hint" role="alert">{err}</p>}
+      </section>
+
+      <section className="dash-sec">
+        <h3><QrCodeIcon size={15} /> Your code</h3>
+        <p className="cov-hint">
+          Show this to a contractor and have them scan it. They can ask to work with
+          you without you spelling out an email address — you still decide, here.
+        </p>
+        {!code ? <p className="cov-hint">Loading…</p> : (
+          <div className="cx-code">
+            <QrCode value={code.url} label={`Connect code ${code.code}`} />
+            <div className="cx-code-side">
+              {/* The code in words as well as in squares: a camera that will
+                  not focus is the normal case, not the exception. */}
+              <span className="cx-code-txt">{code.code}</span>
+              {/* The camera not focusing is the normal case, not the
+                  exception, so there is a way through without one: send
+                  them the link and it opens the same thing. */}
+              <span className="cov-hint">Camera not cooperating? Send them this link instead —
+                it opens the same request on their side.</span>
+              <div className="cx-code-acts">
+                <button className="pick" onClick={copy}>
+                  <Copy size={13} /> {copied ? "Copied" : "Copy link"}
+                </button>
+                {confirmRotate ? (
+                  <>
+                    <button className="pick danger" disabled={!!busy} onClick={rotate}>
+                      {busy === "rotate" ? "Changing…" : "Yes, change it"}
+                    </button>
+                    <button className="pick" onClick={() => setConfirmRotate(false)}>Keep it</button>
+                  </>
+                ) : (
+                  <button className="pick" onClick={() => setConfirmRotate(true)}>
+                    <RefreshCw size={13} /> Change code
+                  </button>
+                )}
+              </div>
+              {confirmRotate && <p className="cov-hint" role="status">
+                Anything already printed or sent with the old code stops working.
+                Nobody you are already connected to is affected.</p>}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {past.length > 0 && (
+        <section className="dash-sec">
+          <h3><Clock size={15} /> Answered</h3>
+          {past.map((r) => (
+            <div key={r.id} className="cx-req spent">
+              <div className="cx-main">
+                <b>{r.account}</b>
+                <span className="cx-sub">
+                  {r.status === "accepted" ? "You accepted" : r.status === "declined" ? "You declined"
+                    : "They withdrew it"} · {relTime(r.respondedAt || r.createdAt)}
+                </span>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
+  connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage }) {
   const [sub2, setSub2] = useState("trades");
   const caps = [...new Set(sub.categories.flatMap((c) => CAP_LIBRARY[c] || []))];
   const miss = missingDocs(sub);
@@ -12947,6 +13454,10 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now, servi
       )}
 
       {pane === "crews" && <MyCrews crews={sub.crews || []} onSave={onSetCrews} />}
+
+      {pane === "connect" && (
+        <ConnectPane requests={connectRequests} onRespond={onRespondConnect} onReload={onReloadConnects} />
+      )}
 
       {pane === "uniforms" && (
         <UniformOrder sub={sub} orders={orders} onOrder={onOrderUniform} brand={brand} />
@@ -14602,7 +15113,56 @@ function NotifyForm({ data, brand, onClose }) {
 }
 
 // ---- Add / edit sub form -------------------------------------------------
-function SubForm({ onSubmit, onCancel, existing, properties }) {
+// Is the contractor being typed in already on SubSub? Asked as they type,
+// from whichever of the three identifying fields is complete.
+//
+// The server has deduped on these same three since the beginning -- type a
+// matching licence and it quietly reuses the existing company at the end.
+// Quietly is what was wrong: whoever was typing had just filled in trades,
+// crews, coverage and insurance that were already on file and were about to
+// be thrown away, and the contractor was never told a new account now had
+// their documents.
+function useConnectMatch(enabled, { email, phone, license }) {
+  const [match, setMatch] = useState(null);
+  const [checking, setChecking] = useState(false);
+  // Whole values only. A lookup on every keystroke of a half-typed address
+  // is a lot of requests and cannot match anything anyway.
+  const ready = {
+    email: validEmail((email || "").trim()) ? email.trim() : "",
+    phone: phoneDigits(phone || "").length === 10 ? phone : "",
+    license: (license || "").trim().length >= 6 ? license.trim() : "",
+  };
+  const key = `${ready.email}|${ready.phone}|${ready.license}`;
+
+  useEffect(() => {
+    if (!enabled || !(ready.email || ready.phone || ready.license)) { setMatch(null); return; }
+    let alive = true;
+    setChecking(true);
+    // Typing an address is a burst of keystrokes and then a pause. Ask on
+    // the pause.
+    const t = setTimeout(() => {
+      const q = {};
+      if (ready.email) q.email = ready.email;
+      if (ready.phone) q.phone = ready.phone;
+      if (ready.license) q.license = ready.license;
+      api.connectLookup(q)
+        .then((r) => { if (alive) setMatch(r.found ? r.match : null); })
+        .catch((err) => {
+          // A lookup that fails must not block adding somebody by hand --
+          // that is the path that has always worked.
+          console.warn("[connect] lookup failed:", err);
+          if (alive) setMatch(null);
+        })
+        .finally(() => { if (alive) setChecking(false); });
+    }, 500);
+    return () => { alive = false; clearTimeout(t); setChecking(false); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, key]);
+
+  return { match, checking };
+}
+
+function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
   const init = existing ? {
     company: existing.company, contact: existing.contact, phone: existing.phone, email: existing.email,
     categories: existing.categories, caps: existing.caps,
@@ -14695,6 +15255,28 @@ function SubForm({ onSubmit, onCancel, existing, properties }) {
     : (!f.phone.trim() || phoneDigits(f.phone).length === 10);
   const step1Ok = !!(f.company.trim() && f.contact.trim()
     && (f.notifyEmail || f.notifySms) && subEmailOk && subPhoneOk);
+
+  // Only when adding. Editing a contractor already on the roster has
+  // nothing to connect to.
+  const [dismissedMatch, setDismissedMatch] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [connectErr, setConnectErr] = useState("");
+  const { match, checking: matchChecking } =
+    useConnectMatch(!existing && !!onConnect, { email: f.email, phone: f.phone, license: f.license });
+  const showMatch = match && !dismissedMatch;
+
+  const askToConnect = async () => {
+    setConnecting(true); setConnectErr("");
+    try { await onConnect(match); }
+    catch (err) {
+      console.error("[connect] request failed:", err);
+      const code = err?.body?.error;
+      setConnectErr(code === "already_engaged" ? "They are already on your contractor list."
+        : code === "already_requested" ? "You have already asked — they have not answered yet."
+        : "Could not send the request. Try again.");
+      setConnecting(false);
+    }
+  };
   const step2Ok = !!(f.categories.length && f.caps.length && coverageOk);
   // Naming all three every time is the same as naming none of them: the one
   // that is actually unmet is the only useful thing to say.
@@ -14724,6 +15306,45 @@ function SubForm({ onSubmit, onCancel, existing, properties }) {
       </div>
 
       {step === 1 && (<>
+      {/* Found. Everything below this is about to be typed for nothing:
+          their trades, crews, coverage and documents are already on file
+          and stay theirs. What is left to do is ask. */}
+      {showMatch && (
+        <div className="cx-found" role="status">
+          <span className="cx-found-chip"><CheckCircle2 size={12} /> Already on SubSub</span>
+          <b>{match.company}</b>
+          <span className="cx-found-sub">
+            {[match.contact, match.where].filter(Boolean).join(" · ") || "On SubSub already"}
+          </span>
+          {match.engaged ? (
+            <p className="cov-hint">They are already on your contractor list — close this and look for
+              them there.</p>
+          ) : match.pending ? (
+            <p className="cov-hint">You have already asked to connect. It is with them now; they will
+              appear on your list when they accept.</p>
+          ) : (
+            <>
+              <p className="cx-found-note">
+                Nothing to fill in. Their trades, crews, coverage, insurance and licence come with
+                them, kept current by them. Ask to connect and they decide.
+              </p>
+              {connectErr && <p className="cov-hint" role="alert">{connectErr}</p>}
+              <div className="cx-found-acts">
+                <button type="button" className="btn-solid small" disabled={connecting} onClick={askToConnect}>
+                  <Send size={13} /> {connecting ? "Asking…" : "Ask to connect"}
+                </button>
+                {/* Never a trap. Two companies can share a phone number, and
+                    the way that has always worked has to keep working. */}
+                <button type="button" className="pick" onClick={() => setDismissedMatch(true)}>
+                  Not them — keep typing
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      {!showMatch && matchChecking && <p className="cov-hint">Checking whether they are already on SubSub…</p>}
+
       <div className="fld-row">
         <label className="fld">Company<input value={f.company} onChange={(e) => set("company", e.target.value)} placeholder="Company name" /></label>
         <label className="fld">Contact<input value={f.contact} onChange={(e) => set("contact", e.target.value)} placeholder="Primary contact" /></label>
@@ -15113,6 +15734,52 @@ body{background:var(--paper)}
 .invited-facts dt{font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
   color:var(--ink-soft);align-self:center}
 .invited-facts dd{margin:0;min-width:0;word-break:break-word}
+/* Asked to connect, rather than invited. A different colour on the same
+   card, because the two mean different things to whoever is waiting: an
+   invited contractor has an account to build, one of these has only a
+   decision to make. */
+.invited-chip.no{background:color-mix(in srgb,var(--red) 10%,var(--card));
+  border-color:color-mix(in srgb,var(--red) 32%,var(--line));color:var(--red)}
+.invited-chip.req{display:inline-flex;align-items:center;gap:5px;
+  background:color-mix(in srgb,var(--brand) 12%,var(--card));
+  border-color:color-mix(in srgb,var(--brand) 35%,var(--line));color:var(--brand)}
+
+/* The "they are already on SubSub" card, at the top of the add form. It
+   interrupts on purpose: everything under it is about to be typed for
+   nothing. */
+.cx-found{display:flex;flex-direction:column;align-items:flex-start;gap:5px;
+  border:1px solid color-mix(in srgb,var(--brand) 40%,var(--line));border-radius:12px;
+  background:color-mix(in srgb,var(--brand) 6%,var(--card));
+  padding:14px 15px;margin:0 0 16px}
+.cx-found b{font-size:16px}
+.cx-found-chip{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:700;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--forest-lift)}
+.cx-found-sub{font-size:12.5px;color:var(--ink-soft)}
+.cx-found-note{margin:6px 0 0;font-size:13px;line-height:1.5;color:var(--ink)}
+.cx-found-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.cx-found-acts .pick{align-self:center}
+
+/* The contractor's own side: who is asking, and the code they show. */
+.cx-req{display:flex;gap:14px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;
+  border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin-top:9px;background:var(--card)}
+.cx-req.spent{opacity:.6}
+.cx-main{min-width:0;display:flex;flex-direction:column;gap:3px;flex:1 1 260px}
+.cx-main b{font-size:14.5px}
+.cx-sub{font-size:11.5px;color:var(--ink-soft)}
+.cx-msg{font-size:13px;font-style:italic;color:var(--ink);margin-top:3px}
+.cx-note{font-size:11.5px;line-height:1.5;color:var(--ink-soft);margin-top:5px}
+.cx-acts{display:flex;gap:7px;flex:none;align-items:flex-start}
+.cx-acts .pick,.cx-code-acts .pick{display:flex;align-items:center;gap:5px}
+.cx-code{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-top:12px}
+/* A white plate under the code whatever the page is doing, because a QR
+   inverted or tinted is a QR that does not scan. */
+.qr{display:block;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px}
+.cx-code-side{display:flex;flex-direction:column;gap:6px;min-width:200px;flex:1 1 200px}
+.cx-code-txt{font:700 21px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.14em;
+  word-break:break-all}
+.cx-code-acts{display:flex;flex-wrap:wrap;gap:7px;margin-top:4px}
+.cx-code-acts .pick.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 35%,var(--line))}
+
 .invited-acts{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
 .invited-acts .pick{display:flex;align-items:center;gap:5px}
 .invited-acts .pick.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 35%,var(--line))}
