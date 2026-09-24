@@ -194,6 +194,7 @@ try {
     ck("and asking nothing is refused rather than answered", nothing.status === 400, String(nothing.status));
   }
 
+  let ownRoster = null;
   console.log("\n-- a contractor already on our own list --");
   {
     // The report this answers: a general contractor typed the email of a
@@ -229,6 +230,8 @@ try {
     const askBody = await ask.json();
     ck("and asking to connect says they are already engaged, not that they have no account",
       ask.status === 409 && askBody.error === "already_engaged", `${ask.status} ${askBody.error}`);
+    // Kept for the screen half of this, below.
+    ownRoster = { email, company: `Own Roster ${S}`, companyId: mine.companyId };
   }
 
   console.log("\n-- who may ask --");
@@ -553,6 +556,49 @@ try {
     const cards = strip.split(" ~ ").filter((t) => t.includes(THEM.company));
     ck("and only once, not as a declined card and an asked card together",
       cards.length === 1, cards.join(" || ").slice(0, 160));
+
+    // Somebody already on the roster. Telling them where a thing is, while
+    // standing in front of it, is worse than taking them to it -- a roster
+    // of ninety and "look for them there" is not an answer.
+    await openAdd();
+    await typeGate("Email", ownRoster.email);
+    await wait(2800);
+    const ours = await gc.page.evaluate(() => document.querySelector(".cx-found")?.innerText || "");
+    ck("one of our own is named as ours", /already one of your contractors/i.test(ours),
+      ours.replace(/\n/g, " ").slice(0, 110) || "no card");
+    const goBtn = await gc.page.evaluate(() => [...document.querySelectorAll(".cx-found-acts button")]
+      .map((b) => b.innerText.trim()).join(" | "));
+    ck("with a way through to them rather than directions",
+      /go to/i.test(goBtn), goBtn || "no button");
+    await gc.page.evaluate(() => [...document.querySelectorAll(".cx-found-acts button")]
+      .find((b) => /go to/i.test(b.innerText))?.click());
+    await wait(1800);
+    const landed = await gc.page.evaluate(() => {
+      const panel = [...document.querySelectorAll(".modal, [class*=modal]")]
+        .find((m) => m.innerText.trim());
+      return {
+        formGone: !document.querySelector(".form") && !document.querySelector(".cx-gate"),
+        search: document.querySelector(".search-input input")?.value || "",
+        openPanel: panel?.innerText || "",
+        body: document.body.innerText,
+      };
+    });
+    ck("pressing it closes the form", landed.formGone);
+    // Their own card, open, rather than a filtered list to pick out of.
+    ck("and opens that contractor outright",
+      landed.openPanel.includes(ownRoster.company),
+      landed.openPanel.split("\n").slice(0, 3).join(" / ") || "no panel open");
+    ck("so there is nothing left to search for",
+      landed.body.includes(ownRoster.company), `search box: "${landed.search}"`);
+    // Leave the search box as it was found, or the next section sees an
+    // empty roster and reads it as a bug.
+    await gc.page.evaluate(() => {
+      const el = document.querySelector(".search-input input");
+      if (!el) return;
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      set.call(el, ""); el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await wait(600);
 
     // Asked already, and the form says so rather than offering to ask twice.
     await openAdd();

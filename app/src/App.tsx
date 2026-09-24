@@ -25,7 +25,7 @@ import {
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
-  Globe, RefreshCw, ExternalLink, ImageOff, ScanLine,
+  Globe, RefreshCw, ExternalLink, ImageOff, ScanLine, ArrowRight,
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
@@ -2831,6 +2831,20 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectCode, loggedIn, role]);
 
+  // Take them to a contractor they already have, rather than telling them
+  // it is somewhere on a list. Opens the detail card outright when the
+  // roster is already loaded, and otherwise lands on Contractors with the
+  // search box narrowed to them -- a roster of ninety and a sentence saying
+  // "look for them there" is a worse answer than no answer.
+  const openExistingContractor = (match) => {
+    setAdding(false);
+    setResumeAssign(null);
+    setTab("network");
+    const already = subs.find((x) => x.id === match.companyId);
+    if (already) { setSelected(already); return; }
+    setQuery(match.company || "");
+  };
+
   const refreshConnects = useCallback(async () => {
     if (!loggedIn || !currentAccountId) return;
     try {
@@ -4535,6 +4549,7 @@ export default function SubSub() {
           onSubmit={updateUser} onCancel={() => setEditUser(null)} /></Modal>}
       {adding && <Modal onClose={() => { setAdding(false); setResumeAssign(null); }} wide>
         <SubForm properties={accountProperties} onSubmit={addSub}
+          onOpenExisting={(match) => openExistingContractor(match)}
           onConnect={async (match) => {
             const made = await api.requestConnect({ companyId: match.companyId });
             setConnectOut((cur) => [made, ...(cur || [])]);
@@ -4556,6 +4571,7 @@ export default function SubSub() {
           onClose={() => setInvitedOpen(null)} /></Modal>}
       {scanned && <Modal onClose={() => setScanned(null)}>
         <ScannedPanel scanned={scanned}
+          onOpenExisting={(match) => { setScanned(null); openExistingContractor(match); }}
           onConnect={async (match) => {
             const made = await api.requestConnect({ code: match.code || undefined, companyId: match.companyId });
             setConnectOut((cur) => [made, ...(cur || [])]);
@@ -10172,7 +10188,7 @@ function inviteName(i) {
 // What a scan lands on. The general contractor has the contractor standing
 // in front of them, so this says who it is and gets out of the way: one
 // name, one button.
-function ScannedPanel({ scanned, onConnect, onClose }) {
+function ScannedPanel({ scanned, onConnect, onOpenExisting, onClose }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const match = scanned.match;
@@ -10211,7 +10227,14 @@ function ScannedPanel({ scanned, onConnect, onClose }) {
       </p>
 
       {match.engaged ? (
-        <p className="cov-hint">They are already on your contractor list.</p>
+        <>
+          <p className="panel-note">They are already one of your contractors.</p>
+          <div className="invited-acts">
+            <button className="btn-solid small" onClick={() => onOpenExisting?.(match)}>
+              <ArrowRight size={13} /> Go to {match.company}
+            </button>
+          </div>
+        </>
       ) : match.pending ? (
         <p className="cov-hint">You have already asked to connect. It is with them now.</p>
       ) : (
@@ -15223,7 +15246,7 @@ function useConnectMatch(enabled, { email, phone, license }) {
   return { match, checking, searched };
 }
 
-function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
+function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenExisting }) {
   const init = existing ? {
     company: existing.company, contact: existing.contact, phone: existing.phone, email: existing.email,
     categories: existing.categories, caps: existing.caps,
@@ -15412,8 +15435,20 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
               {[match.contact, match.where].filter(Boolean).join(" · ") || "On SubSub already"}
             </span>
             {match.engaged ? (
-              <p className="cov-hint">They are already on your contractor list — close this and
-                look for them there.</p>
+              // Telling somebody where a thing is, while standing in front
+              // of it, is not as good as taking them there. This closes the
+              // form and opens the Contractors list with their name in the
+              // search box, so they land on the row rather than hunting a
+              // roster for it.
+              <>
+                <p className="cx-found-note">They are already one of your contractors.</p>
+                <div className="cx-found-acts">
+                  <button type="button" className="btn-solid small"
+                    onClick={() => onOpenExisting?.(match)}>
+                    <ArrowRight size={13} /> Go to {match.company}
+                  </button>
+                </div>
+              </>
             ) : match.pending ? (
               <p className="cov-hint">You have already asked to connect. It is with them now; they
                 will appear on your list when they accept.</p>
@@ -15495,8 +15530,15 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
             {[match.contact, match.where].filter(Boolean).join(" · ") || "On SubSub already"}
           </span>
           {match.engaged ? (
-            <p className="cov-hint">They are already on your contractor list — close this and look for
-              them there.</p>
+            <>
+              <p className="cx-found-note">They are already one of your contractors.</p>
+              <div className="cx-found-acts">
+                <button type="button" className="btn-solid small"
+                  onClick={() => onOpenExisting?.(match)}>
+                  <ArrowRight size={13} /> Go to {match.company}
+                </button>
+              </div>
+            </>
           ) : match.pending ? (
             <p className="cov-hint">You have already asked to connect. It is with them now; they will
               appear on your list when they accept.</p>
