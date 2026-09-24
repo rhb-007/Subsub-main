@@ -36,6 +36,16 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const sql = (cmd) => execFileSync("npx", ["wrangler", "d1", "execute", "subsub-db",
   "--config=./wrangler.toml", "--local", "--command", cmd], { stdio: ["ignore", "ignore", "ignore"] });
 const scrub = () => {
+  // In reference order. Adding a contractor now also creates a login for
+  // them -- a users row, a seat, and an invite to set a password, because
+  // adding somebody and telling them nothing was the last silent way into
+  // an account. All of that points at the company, so the company cannot go
+  // first without tripping a foreign key.
+  sql(`DELETE FROM user_invites WHERE user_id IN (SELECT user_id FROM memberships
+        WHERE company_id IN (SELECT id FROM companies WHERE company LIKE '${MARK}%'))`);
+  sql(`DELETE FROM users WHERE id IN (SELECT user_id FROM memberships
+        WHERE company_id IN (SELECT id FROM companies WHERE company LIKE '${MARK}%'))`);
+  sql(`DELETE FROM memberships WHERE company_id IN (SELECT id FROM companies WHERE company LIKE '${MARK}%')`);
   sql(`DELETE FROM engagements WHERE company_id IN (SELECT id FROM companies WHERE company LIKE '${MARK}%')`);
   sql(`DELETE FROM companies WHERE company LIKE '${MARK}%'`);
   for (const m of JOB_MARKS) sql(`DELETE FROM jobs WHERE account_id = '${ACCOUNT}' AND title LIKE '${m}%'`);

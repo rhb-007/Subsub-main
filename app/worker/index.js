@@ -11,7 +11,7 @@ import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
-  subInviteEmail, subInviteSms, userInviteEmail,
+  subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
   connectRequestEmail, connectRequestSms } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
@@ -2071,14 +2071,28 @@ async function inviteAccountUser(c, { accountId, user, role, invitedBy }) {
     name: user.name, account, role, invitedBy: invitedBy?.name || null,
     link: userInviteUrl(account, token),
   });
+  const link = userInviteUrl(account, token);
   const result = await sendEmail(c.env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
   await logMail(c.env, { accountId, companyId: null, to: email, kind: "user_invite",
     subject: mail.subject, result, sentBy: invitedBy?.id || null });
-  if (result?.ok) {
-    await c.env.DB.prepare(`UPDATE user_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(id).run();
-    return { invited: true, to: email };
+
+  // And a text, when there is a number. A roofer reads a text on a ladder
+  // and opens email on Sunday night, if at all -- the same reason the
+  // subcontractor invite grew a phone number. Either link finishes the same
+  // invite, so there is nothing to reconcile.
+  const phone = normalizePhone(user.phone) || null;
+  let smsResult = null;
+  if (phone) {
+    smsResult = await sendSms(c.env, { to: phone, body: userInviteSms({ account, role, link }) });
+    await logSms(c.env, { accountId, companyId: null, to: phone, kind: "user_invite", result: smsResult });
   }
-  return { invited: false, reason: "send_failed", error: result?.error || null };
+  const texted = !!smsResult?.ok;
+
+  if (result?.ok || texted) {
+    await c.env.DB.prepare(`UPDATE user_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(id).run();
+    return { invited: true, to: email, emailed: !!result?.ok, texted };
+  }
+  return { invited: false, reason: "send_failed", error: result?.error || null, texted };
 }
 
 app.post("/api/account-users", requireRole("admin"), async (c) => {
@@ -2799,7 +2813,47 @@ app.post("/api/subs", requireRole("admin", "pm"), async (c) => {
   await logEvent(c.env, accountId, userId, "engagement.invited", engagementId, { companyId, reused: !!company });
   await logActivity(c.env, accountId, userId, "sub_added",
     `Added ${await companyName(c.env.DB, companyId)}`);
-  return c.json({ companyId, engagementId, reused: !!company }, 201);
+
+  // And tell them. Adding a subcontractor by hand used to send nothing at
+  // all: a company row, an engagement, silence. They had no login, no
+  // notification and no way to take over their own profile -- the account
+  // that typed them in owned their details forever, and the contractor
+  // found out they had been added by being told over the phone, if at all.
+  //
+  // This is the fourth of the four ways somebody joins an account, and the
+  // last one that was still silent. It goes through the same user-invite
+  // machinery as adding a manager: a seat, then a link that sets a
+  // password.
+  let invite = { invited: false, reason: "no_email" };
+  const inviteEmail = realEmail(body.email);
+  if (inviteEmail) {
+    let user = await c.env.DB.prepare(`SELECT * FROM users WHERE lower(email) = lower(?)`).bind(inviteEmail).first();
+    if (!user) {
+      const newUserId = uid();
+      await c.env.DB.prepare(`INSERT INTO users (id, name, email, phone) VALUES (?, ?, ?, ?)`)
+        .bind(newUserId, body.contact || body.company || inviteEmail, inviteEmail, normalizePhone(body.phone)).run();
+      user = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(newUserId).first();
+    } else if (!user.phone && normalizePhone(body.phone)) {
+      // A number typed on this form is worth keeping, and it is what the
+      // text below is sent to.
+      await c.env.DB.prepare(`UPDATE users SET phone = ? WHERE id = ?`)
+        .bind(normalizePhone(body.phone), user.id).run();
+      user = { ...user, phone: normalizePhone(body.phone) };
+    }
+    // The seat, so the link they follow lands on their own portal rather
+    // than on a sign-in page that does not recognise them.
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, 'contractor', ?)`
+      ).bind(uid(), user.id, accountId, companyId).run();
+    } catch (err) {
+      if (!/UNIQUE constraint failed/i.test(String(err?.message || err))) throw err;
+    }
+    const by = await c.env.DB.prepare(`SELECT id, name FROM users WHERE id = ?`).bind(userId).first();
+    invite = await inviteAccountUser(c, { accountId, user, role: "contractor", invitedBy: by });
+  }
+
+  return c.json({ companyId, engagementId, reused: !!company, invite }, 201);
 });
 
 // Routes a flat patch to companies/engagements exactly like splitPatch() on

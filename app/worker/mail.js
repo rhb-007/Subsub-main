@@ -485,3 +485,15 @@ export function connectRequestSms({ account, link }) {
   return `${who} wants to work with you on SubSub. You're already set up -- `
     + `nothing to fill in, just accept or decline: ${link}`;
 }
+
+// The account-user invite, short enough for one text message. Same rule as
+// the subcontractor one: who is asking, what it is, the link.
+export function userInviteSms({ account, role, link }) {
+  const who = account?.name || "A company";
+  const what = role === "contractor"
+    ? "so you can see and answer your work orders"
+    : role === "owner" ? "so you can see and request work at your buildings"
+    : role === "tenant" ? "so you can report repairs"
+    : "so you can use the account";
+  return `${who} has added you on SubSub, ${what}. Choose a password here: ${link}`;
+}

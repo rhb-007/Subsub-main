@@ -44,6 +44,8 @@ const admin = await tok("admin@example.test");
 const H = { Authorization: `Bearer ${admin}`, "X-Account-Id": ACCOUNT, "content-type": "application/json" };
 const S = Date.now().toString(36);
 const sentMail = async () => (await (await fetch(`${MAIL}/__sent`)).json());
+const SMS = process.env.SMS_STUB || "http://127.0.0.1:8905";
+const sentSms = async () => (await (await fetch(`${SMS}/__sent`)).json().catch(() => []));
 
 // Accepting an invite goes through the public "apply" limiter, ten an hour
 // per address. This file accepts several, so a second run in the same hour
@@ -289,6 +291,59 @@ try {
       JSON.stringify({ user: !!me3.user, memberships: (me3.memberships || []).length }));
     await ctx.close();
   }
+
+  console.log("\n-- the fourth way in, which was silent --");
+  {
+    // Adding a subcontractor by hand sent nothing at all: a company row, an
+    // engagement, and no word to the contractor. They had no login, no
+    // notification and no way to take over their own profile -- so the
+    // account that typed them in owned their details forever, and the
+    // contractor found out by being telephoned, if at all.
+    //
+    // Three of the four ways somebody joins an account were fixed earlier.
+    // This is the fourth.
+    const e4 = `added.${S}@bayviewsiding.test`;
+    const beforeMail = (await sentMail()).length;
+    const beforeSms = (await sentSms()).length;
+    const made = await (await fetch(`${API}/subs`, { method: "POST", headers: H,
+      body: JSON.stringify({ company: `Bayview Siding ${S}`, contact: "Jo Bayview",
+        email: e4, phone: "206-555-0166", categories: ["siding"], caps: [] }) })).json();
+    ck("the contractor is added", !!made.companyId, JSON.stringify(made).slice(0, 80));
+    ck("and an invite goes with it", made.invite?.invited === true, JSON.stringify(made.invite));
+    // Route by route, same as every other send here: an invite reported as
+    // sent over a text that could not go is a message somebody waits on.
+    ck("reported route by route", typeof made.invite?.emailed === "boolean"
+      && typeof made.invite?.texted === "boolean", JSON.stringify(made.invite));
+
+    const mail = (await sentMail()).slice(beforeMail);
+    ck("an email really left", mail.length === 1, `${mail.length} sent`);
+    ck("to them", mail[0]?.to === e4 || (mail[0]?.to || [])[0] === e4, JSON.stringify(mail[0]?.to));
+    ck("naming who added them", /Outerhome/.test(mail[0]?.subject || ""), mail[0]?.subject);
+    ck("and it is a choose-a-password invite, not a notification",
+      /password/i.test(mail[0]?.text || ""), (mail[0]?.text || "").split("\n").find((l) => /password/i.test(l)));
+    ck("a text went too, since that is what gets read",
+      (await sentSms()).length === beforeSms + 1, `${(await sentSms()).length - beforeSms} sent`);
+
+    // The seat is real: the link lands them on their own portal rather than
+    // on a sign-in page that has never heard of them.
+    const theirs = await tok(e4);
+    const me4 = await (await fetch(`${API}/auth/me`, { headers: { Authorization: `Bearer ${theirs}` } })).json();
+    ck("they have a contractor seat at the account that added them",
+      (me4.memberships || []).some((m) => m.accountId === ACCOUNT && m.role === "contractor"),
+      JSON.stringify((me4.memberships || []).map((m) => `${m.accountId}:${m.role}`)));
+    ck("tied to the company that was just created",
+      (me4.memberships || []).some((m) => m.companyId === made.companyId),
+      JSON.stringify((me4.memberships || []).map((m) => m.companyId)));
+
+    // Nobody to send to is said plainly rather than reported as sent.
+    const noEmail = await (await fetch(`${API}/subs`, { method: "POST", headers: H,
+      body: JSON.stringify({ company: `No Address ${S}`, contact: "Nobody", categories: ["siding"] }) })).json();
+    ck("a contractor added with no address is still added",
+      !!noEmail.companyId, JSON.stringify(noEmail).slice(0, 60));
+    ck("and says why nothing was sent rather than claiming it was",
+      noEmail.invite?.invited === false && noEmail.invite?.reason === "no_email",
+      JSON.stringify(noEmail.invite));
+  }
 } finally {
   await browser.close();
   // Put the account back. This file adds real subcontractors to Outerhome,
@@ -300,12 +355,29 @@ try {
     // One statement per call, and in reference order: sub_invites.company_id
     // points at companies, so the invites go first or the last delete fails
     // on a foreign key and leaves the roster half cleared.
-    d1(`DELETE FROM memberships WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%${S}%');`);
-    d1(`DELETE FROM engagements WHERE company_id IN (SELECT id FROM companies WHERE email LIKE '%${S}%');`);
+    // Reference order, and both ways a company from this run can be named:
+    // by the address it was given, and by the name it was given, because
+    // one of them was added with no address at all.
+    //
+    // The order is the whole trick. Adding a contractor now creates a login
+    // -- a users row, a seat and an invite -- so a company cannot be
+    // deleted before the seats pointing at it. Getting that wrong does not
+    // fail loudly: the first statement throws on a foreign key, the catch
+    // below swallows it, and everything after it silently never runs. That
+    // is how one row was left on Outerhome's roster, and test:addsub -- the
+    // suite whose whole subject is an account with nobody on it -- started
+    // failing on a roster that was right until this file ran.
+    const mine = `(SELECT id FROM companies WHERE email LIKE '%${S}%' OR company LIKE '%${S}%')`;
+    d1(`DELETE FROM user_invites WHERE email LIKE '%${S}%'
+        OR user_id IN (SELECT user_id FROM memberships WHERE company_id IN ${mine});`);
     d1(`DELETE FROM sub_invites WHERE email LIKE '%${S}%' OR label LIKE '%${S}%'
-        OR company_id IN (SELECT id FROM companies WHERE email LIKE '%${S}%');`);
+        OR company_id IN ${mine};`);
+    d1(`DELETE FROM memberships WHERE company_id IN ${mine}
+        OR user_id IN (SELECT id FROM users WHERE email LIKE '%${S}%');`);
+    d1(`DELETE FROM engagements WHERE company_id IN ${mine};`);
+    d1(`DELETE FROM activity WHERE text LIKE '%${S}%';`);
     d1(`DELETE FROM users WHERE email LIKE '%${S}%';`);
-    d1(`DELETE FROM companies WHERE email LIKE '%${S}%';`);
+    d1(`DELETE FROM companies WHERE email LIKE '%${S}%' OR company LIKE '%${S}%';`);
   } catch (err) {
     console.error("cleanup failed -- Outerhome may be left with rows from this run:", err?.message || err);
   }
