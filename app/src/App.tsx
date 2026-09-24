@@ -15125,6 +15125,10 @@ function NotifyForm({ data, brand, onClose }) {
 function useConnectMatch(enabled, { email, phone, license }) {
   const [match, setMatch] = useState(null);
   const [checking, setChecking] = useState(false);
+  // Whether an answer has come back for what is currently typed. Without
+  // it there is no way to tell "nobody has looked yet" from "looked, and
+  // they are not here" -- and those want opposite words on screen.
+  const [searched, setSearched] = useState(false);
   // Whole values only. A lookup on every keystroke of a half-typed address
   // is a lot of requests and cannot match anything anyway.
   const ready = {
@@ -15135,9 +15139,11 @@ function useConnectMatch(enabled, { email, phone, license }) {
   const key = `${ready.email}|${ready.phone}|${ready.license}`;
 
   useEffect(() => {
-    if (!enabled || !(ready.email || ready.phone || ready.license)) { setMatch(null); return; }
+    if (!enabled || !(ready.email || ready.phone || ready.license)) {
+      setMatch(null); setSearched(false); return;
+    }
     let alive = true;
-    setChecking(true);
+    setChecking(true); setSearched(false);
     // Typing an address is a burst of keystrokes and then a pause. Ask on
     // the pause.
     const t = setTimeout(() => {
@@ -15146,12 +15152,14 @@ function useConnectMatch(enabled, { email, phone, license }) {
       if (ready.phone) q.phone = ready.phone;
       if (ready.license) q.license = ready.license;
       api.connectLookup(q)
-        .then((r) => { if (alive) setMatch(r.found ? r.match : null); })
+        .then((r) => { if (alive) { setMatch(r.found ? r.match : null); setSearched(true); } })
         .catch((err) => {
           // A lookup that fails must not block adding somebody by hand --
-          // that is the path that has always worked.
+          // that is the path that has always worked. It is reported as
+          // "not found" rather than as an error, because the next thing on
+          // screen is the same either way: carry on and type them in.
           console.warn("[connect] lookup failed:", err);
-          if (alive) setMatch(null);
+          if (alive) { setMatch(null); setSearched(true); }
         })
         .finally(() => { if (alive) setChecking(false); });
     }, 500);
@@ -15159,7 +15167,7 @@ function useConnectMatch(enabled, { email, phone, license }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, key]);
 
-  return { match, checking };
+  return { match, checking, searched };
 }
 
 function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
@@ -15261,9 +15269,21 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
   const [dismissedMatch, setDismissedMatch] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [connectErr, setConnectErr] = useState("");
-  const { match, checking: matchChecking } =
+  const { match, checking: matchChecking, searched } =
     useConnectMatch(!existing && !!onConnect, { email: f.email, phone: f.phone, license: f.license });
   const showMatch = match && !dismissedMatch;
+
+  // The gate: three boxes before the form rather than the form with three
+  // boxes somewhere in it.
+  //
+  // The whole profile -- company, contact, licence, UBI, address, trades,
+  // capabilities, coverage, crews, documents, notifications -- was on
+  // screen from the first keystroke, and the only way to discover that all
+  // of it was already on file was to happen to type an email into the
+  // middle of it. Ask the one question that decides which of two quite
+  // different jobs this is, and ask it on its own.
+  const [gate, setGate] = useState(!existing && !!onConnect);
+  const gateTyped = !!(f.email.trim() || f.phone.trim() || f.license.trim());
 
   const askToConnect = async () => {
     setConnecting(true); setConnectErr("");
@@ -15287,6 +15307,88 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
   ].filter(Boolean);
   const step3Ok = cleanCrews.length > 0;
   const stepOk = step === 1 ? step1Ok : step === 2 ? step2Ok : step3Ok;
+
+  if (gate) {
+    return (
+      <div className="form cx-gate">
+        <h2>Add subcontractor</h2>
+        <p className="form-sub">First — are they already on SubSub?</p>
+        <p className="cx-gate-lede">
+          If they are, there is nothing to fill in: their trades, crews, coverage,
+          insurance and licence come with them, kept current by them. Any one of
+          these finds them.
+        </p>
+
+        <div className="cx-gate-flds">
+          <label className="fld">Email
+            <input type="email" inputMode="email" autoComplete="off" value={f.email} maxLength={160}
+              placeholder="name@company.com"
+              onChange={(e) => { set("email", e.target.value); setDismissedMatch(false); }} />
+          </label>
+          <label className="fld">Mobile
+            <input type="tel" inputMode="numeric" maxLength={13} value={f.phone}
+              placeholder="(206)555-0100"
+              onChange={(e) => { set("phone", formatPhone(e.target.value)); setDismissedMatch(false); }} />
+          </label>
+          <label className="fld">License number
+            <input value={f.license} placeholder="CASCADR842KL"
+              onChange={(e) => { set("license", e.target.value.toUpperCase().trim()); setDismissedMatch(false); }} />
+          </label>
+        </div>
+
+        {matchChecking && <p className="cov-hint">Checking…</p>}
+
+        {match ? (
+          <div className="cx-found" role="status">
+            <span className="cx-found-chip"><CheckCircle2 size={12} /> Already on SubSub</span>
+            <b>{match.company}</b>
+            <span className="cx-found-sub">
+              {[match.contact, match.where].filter(Boolean).join(" · ") || "On SubSub already"}
+            </span>
+            {match.engaged ? (
+              <p className="cov-hint">They are already on your contractor list — close this and
+                look for them there.</p>
+            ) : match.pending ? (
+              <p className="cov-hint">You have already asked to connect. It is with them now; they
+                will appear on your list when they accept.</p>
+            ) : (
+              <>
+                <p className="cx-found-note">
+                  Nothing to fill in. Ask to connect and they decide — everything they already
+                  keep on SubSub comes with them.
+                </p>
+                {connectErr && <p className="cov-hint" role="alert">{connectErr}</p>}
+                <div className="cx-found-acts">
+                  <button type="button" className="btn-solid small" disabled={connecting} onClick={askToConnect}>
+                    <Send size={13} /> {connecting ? "Asking…" : "Ask to connect"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        ) : searched && !matchChecking ? (
+          // Looked, and they are not here. Said plainly rather than left
+          // blank, because a blank space is indistinguishable from a box
+          // that has not finished thinking.
+          <p className="cov-hint">
+            <AlertTriangle size={12} /> Nobody on SubSub matches that. Add them yourself —
+            what you have typed is carried over.
+          </p>
+        ) : null}
+
+        <div className="form-actions cx-gate-acts">
+          <button type="button" className="btn-ghost" onClick={onCancel}>Cancel</button>
+          {/* Never a dead end. Two companies can share a number, plenty of
+              contractors have no email on file at all, and adding one by
+              hand is the way this has always worked. */}
+          <button type="button" className={match ? "btn-ghost" : "btn-solid"}
+            onClick={() => { setGate(false); if (match) setDismissedMatch(true); }}>
+            {match ? "Not them — add by hand" : gateTyped ? "Add them myself" : "Skip — add them myself"}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="form">
@@ -15743,6 +15845,18 @@ body{background:var(--paper)}
 .invited-chip.req{display:inline-flex;align-items:center;gap:5px;
   background:color-mix(in srgb,var(--brand) 12%,var(--card));
   border-color:color-mix(in srgb,var(--brand) 35%,var(--line));color:var(--brand)}
+
+/* The gate: three boxes, asked before the form rather than inside it. The
+   whole profile used to be on screen from the first keystroke, and the only
+   way to find out that all of it was already on file was to happen to type
+   an email into the middle of it. */
+.cx-gate{max-width:520px}
+.cx-gate-lede{margin:2px 0 16px;font-size:13.5px;line-height:1.55;color:var(--ink-soft)}
+.cx-gate-flds{display:flex;flex-direction:column;gap:12px;margin-bottom:14px}
+.cx-gate-flds .fld{margin:0}
+.cx-gate-flds .fld input{width:100%}
+.cx-gate-acts{margin-top:18px}
+.cx-gate .cx-found{margin:0}
 
 /* The "they are already on SubSub" card, at the top of the add form. It
    interrupts on purpose: everything under it is about to be typed for

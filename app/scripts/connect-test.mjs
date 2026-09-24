@@ -384,43 +384,72 @@ try {
       await wait(800);
       await gc.page.evaluate(() => [...document.querySelectorAll(".add-menu button")]
         .find((b) => /contractor/i.test(b.innerText))?.click());
-      await wait(1200);
+      await wait(1400);
     };
-    const typeEmail = (v) => gc.page.evaluate((val) => {
-      const el = [...document.querySelectorAll(".fld")].find((f) => /^Email/.test(f.innerText.trim()))?.querySelector("input");
+    // The gate's three boxes, not the form's -- the form is on the far side
+    // of it now.
+    const typeGate = (label, v) => gc.page.evaluate((l, val) => {
+      const el = [...document.querySelectorAll(".cx-gate-flds .fld")]
+        .find((f) => new RegExp("^" + l, "i").test(f.innerText.trim()))?.querySelector("input");
       const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
       set.call(el, val); el.dispatchEvent(new Event("input", { bubbles: true }));
-    }, v);
+    }, label, v);
+    const gateText = () => gc.page.evaluate(() => document.querySelector(".cx-gate")?.innerText || "");
 
     await openAdd();
-    ck("the add form opens", await gc.page.evaluate(() => /Add subcontractor/i.test(document.querySelector(".form h2")?.innerText || "")));
-    await typeEmail("someone.new@nowhere.test");
-    await wait(2200);
-    ck("an address nobody has says nothing", await gc.page.evaluate(() => !document.querySelector(".cx-found")));
+    // The complaint this answers: the whole profile -- company, contact,
+    // licence, UBI, address, trades, capabilities, coverage, crews,
+    // documents, notifications -- was on screen from the first keystroke,
+    // and the only way to learn it was all already on file was to happen to
+    // type an email into the middle of it.
+    const gate = await gateText();
+    ck("adding opens on a question, not on the form", /already on SubSub\?/i.test(gate),
+      gate.split("\n").slice(0, 2).join(" / ") || "no gate");
+    ck("with three boxes and nothing else to fill in",
+      await gc.page.evaluate(() => document.querySelectorAll(".cx-gate-flds .fld").length) === 3);
+    ck("and none of the profile form is on screen yet",
+      await gc.page.evaluate(() => !document.querySelector(".steps-bar") && !document.querySelector(".sf-steps")));
+    ck("they are the three that can identify somebody",
+      /email/i.test(gate) && /mobile/i.test(gate) && /license/i.test(gate),
+      gate.replace(/\n/g, " ").slice(0, 120));
 
-    await typeEmail(THEM.email);
-    await wait(2500);
+    await typeGate("Email", "someone.new@nowhere.test");
+    await wait(2600);
+    // Looked and found nobody is not the same as not having looked, and a
+    // blank space says the second when it means the first.
+    ck("an address nobody has says so in words", /nobody on subsub matches/i.test(await gateText()),
+      (await gateText()).split("\n").find((l) => /matches/i.test(l)) || "said nothing");
+    ck("and does not pretend to have found somebody",
+      await gc.page.evaluate(() => !document.querySelector(".cx-found")));
+
+    await typeGate("Email", THEM.email);
+    await wait(2800);
     const card = await gc.page.evaluate(() => document.querySelector(".cx-found")?.innerText || "");
     ck("theirs brings up the card", /already on subsub/i.test(card), card.split("\n")[0] || "no card");
     ck("naming the company", card.includes(THEM.company), card.split("\n")[1]);
     ck("and saying there is nothing to fill in", /nothing to fill in/i.test(card),
       (card.match(/.*nothing to fill in.*/i) || ["not said"])[0].slice(0, 70));
 
-    // Never a trap: two companies can share a number, and the way that has
-    // always worked has to keep working.
-    await gc.page.evaluate(() => [...document.querySelectorAll(".cx-found-acts button")]
-      .find((b) => /keep typing/i.test(b.innerText))?.click());
-    await wait(600);
-    ck("it can be waved away to carry on by hand",
-      await gc.page.evaluate(() => !document.querySelector(".cx-found") && !!document.querySelector(".form")));
+    // Never a dead end. Two companies can share a number, and plenty of
+    // contractors have no email on file at all.
+    await gc.page.evaluate(() => [...document.querySelectorAll(".cx-gate .form-actions button")]
+      .find((b) => /by hand/i.test(b.innerText))?.click());
+    await wait(900);
+    ck("it can be waved past into the form the old way",
+      await gc.page.evaluate(() => !document.querySelector(".cx-gate") && !!document.querySelector(".sf-steps")));
+    // What they typed at the gate is in the form, not asked for twice.
+    ck("carrying what was typed at the gate into it", await gc.page.evaluate((em) => {
+      const el = [...document.querySelectorAll(".fld")]
+        .find((f) => /^Email/.test(f.innerText.trim()))?.querySelector("input");
+      return el?.value === em;
+    }, THEM.email));
 
-    // Close it properly and start again -- waving it away is for this one
-    // go at the form, not a decision about that contractor forever.
+    // Start again and take the other road.
     await gc.page.evaluate(() => [...document.querySelectorAll(".form button")]
       .find((b) => /^Cancel$/.test(b.innerText.trim()))?.click());
     await wait(1000);
     await openAdd();
-    await typeEmail(THEM.email);
+    await typeGate("Email", THEM.email);
     await wait(2800);
     ck("and it comes back next time the form is opened",
       await gc.page.evaluate(() => !!document.querySelector(".cx-found")));
@@ -428,7 +457,7 @@ try {
     await gc.page.evaluate(() => [...document.querySelectorAll(".cx-found-acts button")]
       .find((b) => /ask to connect/i.test(b.innerText))?.click());
     await wait(3000);
-    ck("asking closes the form rather than leaving three steps in front of them",
+    ck("asking closes it rather than leaving three steps in front of them",
       await gc.page.evaluate(() => !document.querySelector(".form")));
     await click(gc.page, "^Contractors");
     await wait(1800);
@@ -436,21 +465,18 @@ try {
       [...document.querySelectorAll(".invited-card")].map((c) => c.innerText.replace(/\n/g, " ")).join(" ~ "));
     ck("and they show up as asked, not as a contractor",
       new RegExp(`Asked[^~]*${THEM.company}`, "i").test(strip), strip.slice(0, 200));
-    // There is a declined request for this same company earlier in this
-    // file. Both being on file is right; both being on the list at once,
-    // one saying "Declined" and one saying "Asked", is not.
     const cards = strip.split(" ~ ").filter((t) => t.includes(THEM.company));
     ck("and only once, not as a declined card and an asked card together",
       cards.length === 1, cards.join(" || ").slice(0, 160));
 
     // Asked already, and the form says so rather than offering to ask twice.
     await openAdd();
-    await typeEmail(THEM.email);
+    await typeGate("Email", THEM.email);
     await wait(2800);
     const second = await gc.page.evaluate(() => document.querySelector(".cx-found")?.innerText || "");
-    ck("opening the form again says it is already with them",
+    ck("opening it again says it is already with them",
       /already asked/i.test(second), second.replace(/\n/g, " ").slice(0, 120) || "no card");
-    await gc.page.evaluate(() => [...document.querySelectorAll(".form button")]
+    await gc.page.evaluate(() => [...document.querySelectorAll(".cx-gate .form-actions button")]
       .find((b) => /^Cancel$/.test(b.innerText.trim()))?.click());
     await wait(800);
 

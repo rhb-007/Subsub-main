@@ -115,6 +115,18 @@ try {
   ck("which opens the add-a-contractor form", await seen(/Add subcontractor/i));
   ck("and the assign screen is out of the way", !(await seen(/No subcontractors on this account yet/i)));
 
+  // Adding now opens on a question -- "are they already on SubSub?" -- with
+  // three boxes and nothing else, so that nobody types a whole profile that
+  // was already on file. This account is adding somebody genuinely new, so
+  // the way through is the way past it. See connect-test.mjs for the gate
+  // itself.
+  console.log("\n-- past the are-they-already-here gate --");
+  ck("it opens on the gate rather than the form", await seen(/already on SubSub\?/i));
+  await page.evaluate(() => [...document.querySelectorAll(".cx-gate .form-actions button")]
+    .find((b) => /add them myself/i.test(b.innerText))?.click());
+  await wait(900);
+  ck("and skipping it lands on the form", await seen(/Step 1 of 3/));
+
   console.log("\n-- step 1: who they are --");
   const COMPANY = `Harbour Roofing ${S}`;
   ck("the form starts on step 1 of 3", await seen(/Step 1 of 3/));
