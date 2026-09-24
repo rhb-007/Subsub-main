@@ -56,6 +56,42 @@ export function clearStoredAuth() {
   localStorage.removeItem(AUTH_KEY);
 }
 
+// How close to expiry a token stops being worth sending.
+//
+// Supabase access tokens last an hour. The library refreshes them on a timer
+// while the tab is in front; a backgrounded tab gets its timers throttled,
+// so the one that matters -- the tab you come back to after lunch -- is
+// exactly the one whose token has quietly aged out.
+const REFRESH_MARGIN_SECONDS = 120;
+
+// One refresh at a time, shared by everybody waiting.
+//
+// Signing in fires eight calls at once to hydrate an account. Eight
+// simultaneous refreshes against a rotating refresh token is not a slow way
+// to refresh -- it is how a perfectly good session gets revoked, because
+// seven of them present a token that the first one has already spent.
+let refreshInFlight = null;
+function refreshOnce() {
+  refreshInFlight = refreshInFlight || supabase.auth.refreshSession()
+    .then(({ data }) => data?.session || null)
+    .catch((err) => { console.warn("[auth] refresh failed:", err?.message || err); return null; })
+    .finally(() => { refreshInFlight = null; });
+  return refreshInFlight;
+}
+
+// The session to send, refreshed first if it is about to stop working.
+async function usableSession() {
+  const { data } = await supabase.auth.getSession().catch(() => ({ data: null }));
+  const session = data?.session || null;
+  if (!session) return null;
+  const secondsLeft = (session.expires_at || 0) - Date.now() / 1000;
+  if (secondsLeft > REFRESH_MARGIN_SECONDS) return session;
+  // Falling back to the old token rather than to nothing: an expired token
+  // gets a 401 that request() can retry, where sending none at all gets a
+  // 401 that looks exactly like being signed out.
+  return (await refreshOnce()) || session;
+}
+
 async function authHeaders() {
   const auth = getAuth();
   const headers = {};
@@ -69,18 +105,36 @@ async function authHeaders() {
   if (auth?.impersonation) headers["X-Impersonation-Token"] = auth.impersonation;
 
   if (supabaseEnabled) {
-    const { data } = await supabase.auth.getSession();
-    if (data?.session?.access_token) headers["Authorization"] = `Bearer ${data.session.access_token}`;
+    const session = await usableSession();
+    if (session?.access_token) headers["Authorization"] = `Bearer ${session.access_token}`;
   } else if (auth?.userId) {
     headers["X-User-Id"] = auth.userId;
   }
   return headers;
 }
 
-async function request(path, options = {}) {
+async function request(path, options = {}, retried = false) {
   const headers = { "Content-Type": "application/json", ...(await authHeaders()), ...(options.headers || {}) };
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+
+  // A single 401 is not proof that a session is over. Far more often it is a
+  // token that aged out while the tab sat in the background: the browser
+  // throttles the refresh timer, the first call back carries a dead token,
+  // and the answer is 401. Treating that as "you are signed out" is what has
+  // been ejecting people who never signed out.
+  //
+  // So: force a refresh and send it again, once. If the second one is also
+  // 401, the session really is gone and the caller can act on it.
+  //
+  // Only request() bodies get replayed, and those are always JSON strings.
+  // uploadFile() sends a stream and does not come through here, which is
+  // just as well -- a stream cannot be sent twice.
+  if (res.status === 401 && supabaseEnabled && !retried) {
+    const session = await refreshOnce();
+    if (session?.access_token) return request(path, options, true);
+  }
+
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const err = new Error(body.error || `request_failed_${res.status}`);

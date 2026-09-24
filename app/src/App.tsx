@@ -2960,8 +2960,27 @@ export default function SubSub() {
       // throwing the session away over that is how somebody ends up signed
       // out by a bug they did not cause -- with no way to tell that from
       // having been logged out on purpose.
-      if (err?.status === 401 || err?.status === 403) clearAuth();
-      else setResumeFailed(true);
+      //
+      // 401 used to be on that list, and it was the bug. Coming back to a
+      // tab after an hour, the first call carries a token the browser did
+      // not get around to refreshing, the answer is 401, and this threw the
+      // seat away. request() now refreshes and retries before a 401 ever
+      // reaches here -- so if one still does, check whether there is any
+      // session left at all before acting on it. Somebody who is still
+      // signed in gets "couldn't load your account", which they can retry;
+      // only somebody with nothing left gets signed out.
+      if (err?.status === 403) { clearAuth(); return; }
+      if (err?.status === 401) {
+        let stillSignedIn = false;
+        try {
+          stillSignedIn = supabaseEnabled
+            ? !!(await supabase.auth.getSession())?.data?.session
+            : !!getAuth()?.userId;
+        } catch { /* treat as gone */ }
+        if (stillSignedIn) setResumeFailed(true); else clearAuth();
+        return;
+      }
+      setResumeFailed(true);
       return;
     }
 
