@@ -253,6 +253,7 @@ WITH expected(tbl, col) AS (VALUES
   ('sub_invites','token'),
   ('sub_invites','label'),
   ('sub_invites','email'),
+  ('sub_invites','phone'),
   ('sub_invites','contact'),
   ('sub_invites','company_name'),
   ('sub_invites','sent_at'),

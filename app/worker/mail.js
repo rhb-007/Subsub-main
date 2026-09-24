@@ -260,6 +260,14 @@ This is an automated message from an unmonitored address. Replies aren't receive
   };
 }
 
+// The same invite, short enough to survive one text message. Written to be
+// read on a lock screen on a roof: who is asking, what it is, the link.
+export function subInviteSms({ companyName, account, link }) {
+  const who = account?.name || "A contractor";
+  return `${who} has invited ${companyName || "you"} to join them on SubSub. `
+    + `Set up your account and upload your insurance and licence here: ${link}`;
+}
+
 export function tenantInviteEmail({ firstName, account, propertyName, unit, link }) {
   const who = account?.name || "your building manager";
   const place = [propertyName, unit ? `Unit ${unit}` : null].filter(Boolean).join(", ");

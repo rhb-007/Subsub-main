@@ -63,11 +63,19 @@ try {
   const email = `miguel.${S}@cascaderoofworks.test`;
   const before = (await sentMail()).length;
   const made = await (await fetch(`${API}/invites`, { method: "POST", headers: H,
-    body: JSON.stringify({ email, contact: "Miguel Alvarez", companyName: "Cascade Roofworks", label: "Cascade Roofworks" }) })).json();
+    body: JSON.stringify({ email, phone: "206-555-0142", contact: "Miguel Alvarez",
+      companyName: "Cascade Roofworks", label: "Cascade Roofworks" }) })).json();
 
   ck("the invite records who it is for", made.email === email, made.email);
+  ck("and the number too", !!made.phone, String(made.phone));
   ck("and that it was sent", !!made.sentAt, String(made.sentAt));
-  ck("without claiming a failure", made.sendFailed === false, JSON.stringify(made.sendFailed));
+  // Each route reported on its own: an invite that claims to have gone by
+  // text when texting is not switched on is a message somebody waits on.
+  ck("the email is reported as sent", made.emailed === true, String(made.emailed));
+  ck("and the text separately", typeof made.texted === "boolean", String(made.texted));
+  ck("a text that could not go says why rather than blaming the number",
+    made.texted || made.textError === "sms_not_configured" || !!made.textError,
+    String(made.textError));
 
   const mail = (await sentMail()).slice(before);
   ck("one email left the building", mail.length === 1, `${mail.length} sent`);
@@ -107,6 +115,24 @@ try {
     (me.memberships || []).some((m) => m.accountId === ACCOUNT && m.role === "contractor"),
     JSON.stringify((me.memberships || []).map((m) => `${m.accountId}:${m.role}`)));
 
+  console.log("\n-- when texting is not switched on, nobody is told a text went --");
+  {
+    // The live state today: no Twilio or Telnyx credentials on the Worker.
+    // The invite must still go by email, and the text must be reported as
+    // not sent, with a reason that does not send somebody off to check a
+    // number that is perfectly fine.
+    const UNCONF = process.env.UNCONFIGURED_API || "http://127.0.0.1:8788/api";
+    const r = await (await fetch(`${UNCONF}/invites`, { method: "POST", headers: H,
+      body: JSON.stringify({ email: `nosms.${S}@example.test`, phone: "206-555-0177",
+        contact: "No Texts", companyName: "No Texts Co" }) })).json();
+    ck("the email still goes", r.emailed === true, String(r.emailed));
+    ck("the text is reported as not sent", r.texted === false, String(r.texted));
+    ck("and says texting is not configured, not that the number is wrong",
+      r.textError === "sms_not_configured", String(r.textError));
+    // One route working is still an invite, so it counts as sent.
+    ck("the invite still counts as sent", !!r.sentAt, String(r.sentAt));
+  }
+
   console.log("\n-- a link with nobody to send it to still works --");
   const linkOnly = await (await fetch(`${API}/invites`, { method: "POST", headers: H,
     body: JSON.stringify({ label: `Handed over ${S}` }) })).json();
@@ -114,7 +140,14 @@ try {
   // Created and sent are different facts, and a row that conflates them is
   // how an account ends up waiting on somebody who was never asked.
   ck("and does not claim to have been sent", !linkOnly.sentAt, String(linkOnly.sentAt));
-  ck("nor to have failed", linkOnly.sendFailed === false, String(linkOnly.sendFailed));
+  // `sendFailed` was one flag for one route. There are two routes now, each
+  // reported on its own, and a link nobody asked us to send has neither a
+  // success nor a failure to report.
+  ck("neither route claims to have sent it", !linkOnly.emailed && !linkOnly.texted,
+    `emailed ${linkOnly.emailed}, texted ${linkOnly.texted}`);
+  ck("and neither reports a failure it did not have",
+    !linkOnly.emailError && !linkOnly.textError,
+    `${linkOnly.emailError} / ${linkOnly.textError}`);
 
   console.log("\n-- a bad address is refused before anything is made --");
   const bad = await fetch(`${API}/invites`, { method: "POST", headers: H,

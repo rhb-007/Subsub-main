@@ -11,7 +11,7 @@ import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
-  subInviteEmail, userInviteEmail } from "./mail.js";
+  subInviteEmail, subInviteSms, userInviteEmail } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -1234,7 +1234,8 @@ const inviteUrl = (account, token) => `${accountOrigin(account)}/?invite=${token
 const inviteRowToJs = (r, account) => ({
   id: r.id, label: r.label, createdAt: r.created_at, expiresAt: r.expires_at,
   usedAt: r.used_at, revokedAt: r.revoked_at, companyId: r.company_id,
-  email: r.email || null, contact: r.contact || null, companyName: r.company_name || null,
+  email: r.email || null, phone: r.phone || null,
+  contact: r.contact || null, companyName: r.company_name || null,
   // Null for a link the account made to hand over itself. "Created" and
   // "sent" are different facts and a list that conflates them is a list
   // that says a message went out when none did.
@@ -1255,7 +1256,11 @@ app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
   const email = String(b.email || "").trim().toLowerCase();
   const contact = String(b.contact || "").trim().slice(0, 120) || null;
   const companyName = String(b.companyName || "").trim().slice(0, 160) || null;
+  const phone = normalizePhone(b.phone) || null;
   if (email && !EMAIL_RE.test(email)) return c.json({ error: "bad_email" }, 400);
+  // A half-typed number reads as reachable and never is, and this one is
+  // about to be texted rather than filed.
+  if (b.phone && String(b.phone).trim() && !toE164(phone)) return c.json({ error: "bad_phone" }, 400);
 
   const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
   const id = uid(), token = newInviteToken();
@@ -1267,11 +1272,11 @@ app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
   let recorded = true;
   try {
     await c.env.DB.prepare(
-      `INSERT INTO sub_invites (id, account_id, token, label, email, contact, company_name, created_by, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, accountId, token, label, email || null, contact, companyName, userId, expires).run();
+      `INSERT INTO sub_invites (id, account_id, token, label, email, phone, contact, company_name, created_by, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, accountId, token, label, email || null, phone, contact, companyName, userId, expires).run();
   } catch (err) {
-    if (missingSchema(err) !== "027_sub_invite_email") throw err;
+    if (!missingSchema(err)) throw err;
     console.warn("[invites] 027_sub_invite_email not applied - link made, recipient not recorded");
     recorded = false;
     await c.env.DB.prepare(
@@ -1280,33 +1285,50 @@ app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
     ).bind(id, accountId, token, label, userId, expires).run();
   }
 
-  // Sent by SubSub, when there is somebody to send it to. This is the whole
-  // point of the change: the step that decides whether anybody is invited
-  // used to happen in the account's own mail client, where nothing here
-  // could see it succeed or fail.
-  let sent = null;
+  // Sent by SubSub, by both routes, because this trade answers a text and
+  // opens email on Sunday night. Either link finishes the same invite --
+  // whichever they pick up first -- so there is nothing to reconcile.
+  //
+  // The step that decides whether anybody is invited used to happen in the
+  // account's own mail client, where nothing here could see it succeed or
+  // fail. Now each route reports separately, and neither is assumed.
+  const link = inviteUrl(account, token);
+  let mailResult = null, smsResult = null;
   if (email) {
-    const mail = subInviteEmail({ contact, companyName, account, link: inviteUrl(account, token) });
-    sent = await sendEmail(c.env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
+    const mail = subInviteEmail({ contact, companyName, account, link });
+    mailResult = await sendEmail(c.env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
     await logMail(c.env, { accountId, companyId: null, to: email, kind: "sub_invite",
-      subject: mail.subject, result: sent, sentBy: userId });
-    // Only on a real send. A failed one leaves sent_at null so the row reads
-    // as a link that exists rather than a message somebody is waiting on.
-    if (sent?.ok && recorded) {
-      await c.env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(id).run();
-    }
+      subject: mail.subject, result: mailResult, sentBy: userId });
+  }
+  if (phone) {
+    smsResult = await sendSms(c.env, { to: phone, body: subInviteSms({ companyName, account, link }) });
+    await logSms(c.env, { accountId, companyId: null, to: phone, kind: "sub_invite", result: smsResult });
+  }
+  const emailed = !!mailResult?.ok;
+  const texted = !!smsResult?.ok;
+  // Only when something actually left, by either route. An invite marked
+  // sent that never went is worse than one marked nothing, because somebody
+  // waits on it.
+  if ((emailed || texted) && recorded) {
+    await c.env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(id).run();
   }
 
+  const went = [emailed && email, texted && phone].filter(Boolean).join(" and ");
   await logActivity(c.env, accountId, userId, "invite_created",
-    email ? `Invite sent to ${email}` : label ? `Invite link created for ${label}` : "Invite link created");
+    went ? `Invite sent to ${went}` : label ? `Invite link created for ${label}` : "Invite link created");
 
   const row = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(id).first();
   return c.json({
     ...inviteRowToJs(row, account),
-    // Said plainly, because "invite sent" over a bounced send is the same
-    // class of lie as a booking page that confirms nothing.
-    sendFailed: !!(email && !sent?.ok),
-    sendError: email && !sent?.ok ? (sent?.error || "send_failed") : null,
+    // Each route on its own. "Invite sent" over a bounced email, or over a
+    // text that could not go because texting is not switched on, is the
+    // same class of lie as a booking page that confirms nothing.
+    emailed, texted,
+    emailError: email && !emailed ? (mailResult?.error || "send_failed") : null,
+    // sms_not_configured is its own answer: nothing is wrong with the
+    // number, SubSub simply cannot text yet, and telling somebody to check
+    // the number would send them looking in the wrong place.
+    textError: phone && !texted ? (smsResult?.error || "send_failed") : null,
   }, 201);
 });
 
@@ -1361,6 +1383,7 @@ app.get("/api/invite/:token", async (c) => {
     // Not enforced: a link passed to the right person at the wrong desk is
     // still a real application, and locking the address would break that.
     invitedEmail: invite.email || null,
+    phone: invite.phone || null,
     contact: invite.contact || null,
     companyName: invite.company_name || null,
     account: {

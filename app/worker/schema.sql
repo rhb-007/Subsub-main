@@ -512,6 +512,7 @@ CREATE TABLE sub_invites (
   -- Where SubSub sent it, and when it went. sent_at stays null for a link
   -- the account made to hand over itself -- see migration 027.
   email        TEXT,
+  phone        TEXT,
   contact      TEXT,
   company_name TEXT,
   sent_at      TEXT,

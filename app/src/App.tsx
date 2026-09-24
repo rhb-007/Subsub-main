@@ -9434,7 +9434,8 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
   // to prove they read the email.
   const [f, setF] = useState({
     company: invite?.companyName || "", contact: invite?.contact || "",
-    email: invite?.invitedEmail || "", phone: "", license: "", ubi: "",
+    email: invite?.invitedEmail || "", phone: invite?.phone || "",
+    license: "", ubi: "",
     city: "", state: "WA", zip: "",
     categories: [], warranty: "", crewCount: "1",
     notifyEmail: true, notifySms: false,
@@ -9786,12 +9787,12 @@ const SIZES = ["S", "M", "L", "XL", "2XL", "3XL"];
 // the plans has to stay real.
 function InviteLinks({ canRevoke, onClose }) {
   const [rows, setRows] = useState(null);   // null = still loading
-  const [label, setLabel] = useState("");
-  const [email, setEmail] = useState("");
   const [contact, setContact] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [sentTo, setSentTo] = useState("");
+  const [sentNote, setSentNote] = useState("");
   const [copied, setCopied] = useState(null);
 
   const load = async () => {
@@ -9800,33 +9801,53 @@ function InviteLinks({ canRevoke, onClose }) {
   };
   useEffect(() => { load(); }, []);
 
-  const create = async () => {
-    const to = email.trim();
-    if (to && !validEmail(to)) { setErr("That email address doesn't look right."); return; }
-    setBusy(true); setErr(""); setSentTo("");
+  const to = email.trim();
+  const mobile = phone.trim();
+  const phoneOk = !mobile || phoneDigits(mobile).length === 10;
+  const canSend = (!!to && validEmail(to)) || (!!mobile && phoneOk);
+
+  // `link` true makes one without sending anything, for handing over in
+  // person. Kept, because that is a real way people do this, but out of the
+  // main path -- it used to be an option hidden inside "leave this blank".
+  const create = async (link = false) => {
+    if (!link) {
+      if (to && !validEmail(to)) { setErr("That email address doesn't look right."); return; }
+      if (!phoneOk) { setErr("A mobile number needs 10 digits."); return; }
+    }
+    setBusy(true); setErr(""); setSentNote("");
     try {
-      const made = await api.createInvite({
-        label: label.trim() || null, email: to || null,
-        contact: contact.trim() || null, companyName: label.trim() || null,
+      const made = await api.createInvite(link ? { contact: contact.trim() || null } : {
+        contact: contact.trim() || null,
+        email: to || null,
+        phone: mobile || null,
       });
       setRows((cur) => [made, ...(cur || [])]);
-      // Said out loud when the send failed, rather than letting a row that
-      // says "invite sent" stand for a message that bounced. The link still
-      // exists and still works, so the answer is to copy it.
-      if (made.sendFailed) {
-        setErr("The invite was created but the email couldn't be sent. Copy the link below and send it yourself.");
-        copy(made.url, made.id);
-      } else if (to) {
-        setSentTo(to);
-        setLabel(""); setEmail(""); setContact("");
-      } else {
-        setLabel("");
-        copy(made.url, made.id);
+      if (link) { copy(made.url, made.id); return; }
+
+      // Each route reported on its own. "Invite sent" over a bounced email,
+      // or over a text that could not go because texting is not switched on
+      // yet, is a message somebody waits on that never left.
+      const went = [made.emailed && to, made.texted && mobile].filter(Boolean);
+      if (went.length) {
+        setSentNote(`Invite sent to ${andList(went)}.`);
+        setContact(""); setEmail(""); setPhone("");
+      }
+      const failed = [];
+      if (to && !made.emailed) failed.push("the email didn't go");
+      if (mobile && !made.texted) {
+        failed.push(made.textError === "sms_not_configured"
+          ? "texting isn't switched on yet, so no text was sent"
+          : "the text didn't go");
+      }
+      if (failed.length) {
+        setErr(`${went.length ? "But " : "The invite was created, but "}${andList(failed)}.`
+          + (went.length ? "" : " Copy the link below and send it yourself."));
+        if (!went.length) copy(made.url, made.id);
       }
     } catch (e) {
       console.error("[invites] create failed:", e);
-      setErr(e?.body?.error === "bad_email"
-        ? "That email address doesn't look right."
+      setErr(e?.body?.error === "bad_email" ? "That email address doesn't look right."
+        : e?.body?.error === "bad_phone" ? "That mobile number doesn't look right."
         : "Could not create the invite. Try again.");
     } finally { setBusy(false); }
   };
@@ -9856,40 +9877,44 @@ function InviteLinks({ canRevoke, onClose }) {
     <div className="inv-panel">
       <h2>Invite a subcontractor</h2>
       <p className="panel-note">
-        Give us their email and we'll send the invite. They set their own password,
-        fill in their profile and upload their documents, then you approve.
-        Each invite works once and expires after 30 days.
+        We'll email and text them. They confirm either one, set a password, and
+        finish their own profile — what you type here is already filled in for them.
       </p>
 
+      {/* One per line. These were three boxes and a button on one row inside
+          a 560px panel, which on a phone came out about sixty pixels wide
+          each with the hints wrapping to four lines above them. A form this
+          short has no reason to be dense. */}
       <div className="inv-make">
-        <label className="fld">Their email{" "}
-          <span className="fld-note">leave blank for a link you send yourself</span>
-          <input type="email" inputMode="email" value={email} maxLength={160}
-            placeholder="miguel@cascaderoofworks.com"
-            onChange={(e) => { setEmail(e.target.value); setErr(""); setSentTo(""); }}
-            onKeyDown={(e) => { if (e.key === "Enter" && !busy) create(); }} />
-        </label>
-        <label className="fld">Company{" "}
-          <span className="fld-note">optional — so the email names them</span>
-          <input value={label} maxLength={120} placeholder="Cascade Roofworks"
-            onChange={(e) => setLabel(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !busy) create(); }} />
-        </label>
-        <label className="fld">Their name{" "}
-          <span className="fld-note">optional</span>
+        <label className="fld">Their name
           <input value={contact} maxLength={120} placeholder="Miguel Alvarez"
-            onChange={(e) => setContact(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !busy) create(); }} />
+            onChange={(e) => { setContact(e.target.value); setErr(""); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && canSend && !busy) create(); }} />
         </label>
-        <button className="btn-solid" disabled={busy} onClick={create}>
-          {email.trim() ? <Send size={15} /> : <Link2 size={15} />}
-          {busy ? (email.trim() ? "Sending…" : "Creating…") : email.trim() ? "Send invite" : "Create link"}
+        <label className="fld">Email
+          <input type="email" inputMode="email" autoComplete="off" value={email} maxLength={160}
+            placeholder="miguel@cascaderoofworks.com"
+            onChange={(e) => { setEmail(e.target.value); setErr(""); setSentNote(""); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && canSend && !busy) create(); }} />
+        </label>
+        <label className="fld">Mobile{" "}
+          <span className="fld-note">optional — but it is what gets answered</span>
+          <input type="tel" inputMode="tel" value={phone} maxLength={20}
+            placeholder="206-555-0142"
+            onChange={(e) => { setPhone(e.target.value); setErr(""); setSentNote(""); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && canSend && !busy) create(); }} />
+        </label>
+        <button className="btn-solid inv-send" disabled={busy || !canSend} onClick={() => create()}>
+          <Send size={15} /> {busy ? "Sending…" : "Send invite"}
+        </button>
+        <button className="inv-linkonly" disabled={busy} onClick={() => create(true)}>
+          or create a link to send yourself
         </button>
       </div>
 
-      {sentTo && <p className="cov-hint" role="status">
-        <CheckCircle2 size={13} /> Invite sent to <b>{sentTo}</b>.</p>}
-      {err && <p className="cov-hint">{err}</p>}
+      {sentNote && <p className="cov-hint ok" role="status">
+        <CheckCircle2 size={13} /> {sentNote}</p>}
+      {err && <p className="cov-hint" role="alert">{err}</p>}
 
       {rows === null ? <p className="cov-hint">Loading…</p> : (
         <>
@@ -9897,13 +9922,13 @@ function InviteLinks({ canRevoke, onClose }) {
           {open.map((r) => (
             <div key={r.id} className="inv-row-out">
               <div className="inv-main">
-                <b>{r.companyName || r.label || r.email || "Unnamed invite"}</b>
+                <b>{r.contact || r.companyName || r.label || r.email || r.phone || "Unnamed invite"}</b>
                 {/* Sent and merely created are different facts. A row that
                     says "sent" over a link nobody ever sent is how an account
                     ends up waiting on a contractor who was never asked. */}
                 <span className="inv-who">
-                  {r.sentAt ? <>Sent to {r.email} · {relTime(r.sentAt)}</>
-                    : r.email ? <>Not sent — copy the link and send it yourself</>
+                  {r.sentAt ? <>Sent to {andList([r.email, r.phone].filter(Boolean))} · {relTime(r.sentAt)}</>
+                    : (r.email || r.phone) ? <>Not sent — copy the link and send it yourself</>
                     : <>Link to send yourself</>}
                 </span>
                 <code className="inv-url">{r.url}</code>
@@ -11070,7 +11095,7 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
       note: "Send them a link and they build their own profile and upload their own "
         + "documents. Faster than chasing paperwork, and it stays theirs to keep current.",
       actions: [
-        { label: "Send an invite link", onClick: onInvite, solid: true },
+        { label: "Invite a subcontractor", onClick: onInvite, solid: true },
         { label: "Add one myself", onClick: onAddSub },
       ],
     },
@@ -14814,8 +14839,18 @@ body{background:var(--paper)}
 /* Invite links. The URL stays visible and selectable: clipboard access gets
    refused often enough that "Copy" cannot be the only way to get at it. */
 .inv-panel{max-width:560px}
-.inv-make{display:flex;gap:10px;align-items:flex-end;margin:16px 0 14px}
-.inv-make .fld{flex:1;margin:0}
+/* Stacked. It was a row, which is fine for two short boxes and wrong for
+   three plus a button inside a modal -- each one came out around sixty
+   pixels wide with its hint wrapping above it. */
+.inv-make{display:flex;flex-direction:column;gap:12px;margin:16px 0 14px}
+.inv-make .fld{margin:0}
+.inv-make .fld input{width:100%}
+.inv-send{width:100%;justify-content:center;margin-top:2px}
+.inv-linkonly{background:none;border:0;padding:2px;align-self:center;
+  font:600 12.5px Inter,sans-serif;color:var(--ink-soft);cursor:pointer;text-decoration:underline}
+.inv-linkonly:hover{color:var(--ink)}
+.inv-linkonly:disabled{opacity:.6;cursor:default}
+.cov-hint.ok{color:var(--forest-lift)}
 .inv-row-out{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;
   border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin-top:9px;background:var(--card)}
 .inv-row-out.spent{opacity:.6}

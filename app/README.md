@@ -843,6 +843,14 @@ the engagement and a `users` row without ever creating a **login** — the
 contractor had to notice "Already invited? Create your password" on the
 sign-in screen and work out that it meant them.
 
+**Both routes go.** Email and text, from the same invite, and either link
+finishes it — whichever they pick up first. Email is not how this trade
+answers: a roofer reads a text on a ladder and opens email on Sunday night,
+if at all. Each route is reported separately, because an invite that claims
+to have gone by text when texting is not switched on is a message somebody
+waits on. Until SMS credentials exist the panel says exactly that, and does
+not blame the number.
+
 **A link with no address still works.** Leave the email blank and you get one
 to hand over yourself, in a text thread or in person. `sent_at` stays null for
 those, and the list says "Link to send yourself" rather than claiming a
