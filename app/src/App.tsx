@@ -422,7 +422,12 @@ const seedSubs = [
 // relationships at once. A general contractor has neither, and no buildings
 // to scope them to.
 const ACCOUNT_KINDS = {
-  general_contractor: { label: "General contractor", properties: false, invites: [] },
+  // roleLabels renames a seat for this kind of account WITHOUT changing what
+  // it may do. A general contractor's second seat runs projects, not
+  // property: they have no buildings, so "property manager" describes a job
+  // nobody in the account has. Every other kind keeps the default.
+  general_contractor: { label: "General contractor", properties: false, invites: [],
+                        roleLabels: { pm: "Project manager" } },
   property_manager:   { label: "Property manager", properties: true, invites: ["owner"] },
   // A building owner's account has no owners to invite -- they are the owner.
   // The people they let in are managing agents, which is the ordinary
@@ -494,9 +499,13 @@ function hydrateError(broke) {
 
 const ROLES = {
   admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
-  // "Property manager", not "project manager": these accounts are property
-  // businesses, and project-manager was general-contractor language that had
-  // been left on the role everywhere.
+  // The default label. "Property manager" rather than "project manager",
+  // because three of the four account kinds are property businesses and
+  // project-manager was general-contractor language left on the role
+  // everywhere. The fourth kind is a general contractor, which has no
+  // buildings at all, and renames this seat to "Project manager" through
+  // ACCOUNT_KINDS.roleLabels -- the word only, never what it may do. Read
+  // the label through roleLabelIn() rather than off this object.
   //
   // One role whether they run the whole book or five buildings. A large
   // managing agent assigns each manager to named buildings and a small one
@@ -517,6 +526,19 @@ const ROLES = {
   tenant: { label: "Tenant", can: ["tenant", "account"] },
   contractor: { label: "Contractor", can: ["portal", "account"] },
 };
+// What a seat is called inside a given kind of account. The permissions are
+// ROLES[role].can and nothing here touches them -- this is the word on the
+// badge, the option and the sentence, and only that.
+//
+// Read the kind off the account (or off a membership, which carries it) at
+// every call site rather than assuming the one being looked at: the account
+// switcher lists seats in other people's accounts, and a project manager at
+// a general contractor stays a project manager in that list even while the
+// account on screen is a managing agent.
+const roleLabelIn = (kind, role) =>
+  ((ACCOUNT_KINDS[kind] && ACCOUNT_KINDS[kind].roleLabels) || {})[role]
+  || (ROLES[role] ? ROLES[role].label : role);
+
 // Roles that are always limited to named buildings, and for which an empty
 // list means nothing rather than everything. A property manager's list is
 // optional, so they are not here -- ask `isScoped` instead, which reads the
@@ -1883,7 +1905,7 @@ export default function SubSub() {
   const roleLabel = (() => {
     if (role === "contractor" || role === "tenant") return ROLES[role].label;
     const kind = ACCOUNT_KINDS[kindOf(account)].label;
-    const seat = ROLES[role].label;
+    const seat = roleLabelIn(kindOf(account), role);
     if (kind.toLowerCase() === seat.toLowerCase()) return seat;
     return `${kind} (${seat.toLowerCase()})`;
   })();
@@ -3499,7 +3521,7 @@ export default function SubSub() {
                                 hydrateAccount(m.accountId, currentUserId);
                               }}>
                               <span className="ua-name">{a.name}</span>
-                              <span className="ua-role">{ROLES[m.role].label}</span>
+                              <span className="ua-role">{roleLabelIn(kindOf(a), m.role)}</span>
                               {m.accountId === account.id && <Check size={13} className="ua-tick" />}
                             </button>
                           );
@@ -3526,7 +3548,7 @@ export default function SubSub() {
                                 setTab(ROLES[um.role].can[0]);
                               }}>
                               <span className="um-name">{u.name}</span>
-                              <span className="um-role">{ROLES[um.role].label}</span>
+                              <span className="um-role">{roleLabelIn(kindOf(account), um.role)}</span>
                             </button>
                           );
                         })}
@@ -4262,6 +4284,7 @@ export default function SubSub() {
         <NotifyForm data={notifying} brand={brand} onClose={() => setNotifying(null)} /></Modal>}
       {coForm && <Modal onClose={() => setCoForm(null)}>
         <ChangeOrderForm job={coForm.job} trade={coForm.trade} a={coForm.a} origin={coForm.origin}
+          accountKind={kindOf(account)}
           existing={cosFor(changeOrders, coForm.job.id, coForm.trade)}
           onSubmit={(data) => raiseChangeOrder(coForm.job, coForm.trade, coForm.a,
             { ...data, origin: coForm.origin, raisedBy: coForm.origin === "sub" ? (mySub?.contact || me.name) : me.name })}
@@ -4332,7 +4355,7 @@ export default function SubSub() {
 }
 
 // ---- Change order form (either side can raise one) ----------------------
-function ChangeOrderForm({ job, trade, a, origin, existing, onSubmit, onCancel }) {
+function ChangeOrderForm({ job, trade, a, origin, existing, onSubmit, onCancel, accountKind = DEFAULT_ACCOUNT_KIND }) {
   const M = catMeta(trade);
   const [kind, setKind] = useState("add");
   const [scope, setScope] = useState("");
@@ -4404,7 +4427,8 @@ function ChangeOrderForm({ job, trade, a, origin, existing, onSubmit, onCancel }
       <p className="cov-hint">
         {isGC
           ? `${a.company} is notified by ${notifyLabel({ notify: a.notify || { email: true } }).toLowerCase()} and accepts or declines from their dashboard. The original work order is unchanged either way.`
-          : "Your property manager reviews this and accepts or declines. Don't start the extra work until it's accepted."}
+          : `Your ${roleLabelIn(accountKind, "pm").toLowerCase()} reviews this and accepts or declines. `
+            + "Don't start the extra work until it's accepted."}
       </p>
 
       <div className="form-actions">
@@ -5720,7 +5744,8 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                   <input placeholder="Full name" value={addUser.name} onChange={(e) => setAddUser({ ...addUser, name: e.target.value })} />
                   <input placeholder="Work email" type="email" value={addUser.email} onChange={(e) => setAddUser({ ...addUser, email: e.target.value })} />
                   <select value={addUser.role} onChange={(e) => setAddUser({ ...addUser, role: e.target.value })}>
-                    <option value="admin">Admin</option><option value="pm">Property manager</option>
+                    <option value="admin">Admin</option>
+                    <option value="pm">{roleLabelIn(kindOf(open.a), "pm")}</option>
                   </select>
                   <button className="btn-solid small" disabled={!addUser.name.trim() || !addUser.email.trim()}
                     onClick={async () => {
@@ -5782,7 +5807,7 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
                   <div key={m.userId} className="pf-line">
                     <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
                     <span className="pf-line-main"><b>{u.name}</b><span className="pf-sub">{u.email}</span></span>
-                    <span className={`role-badge r-${m.role}`}>{ROLES[m.role].label}</span>
+                    <span className={`role-badge r-${m.role}`}>{roleLabelIn(kindOf(open.a), m.role)}</span>
                     <button className="pf-mini" onClick={() => { setResetErr(""); setResetLink(null); setResetFor({ userId: u.id, name: u.name, email: u.email, accountId: open.a.id }); }}>
                       <Key size={12} /> Reset password
                     </button>
@@ -10582,7 +10607,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             </div>
             <label className="fld">Phone<input type="tel" inputMode="numeric" maxLength={13} value={p.phone} onChange={(e) => { setP({ ...p, phone: formatPhone(e.target.value) }); setPSaved(false); }} placeholder="(206)555-0100" /></label>
             <div className="role-locked">
-              <span className={`role-badge r-${role}`}>{ROLES[role].label}</span>
+              <span className={`role-badge r-${role}`}>{roleLabelIn(accountKind, role)}</span>
               <span className="rl-note">Only an admin can change roles.</span>
             </div>
             <div className="panel-actions">
@@ -10887,7 +10912,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                   <div className="user-row-main">
                     <div className="user-row-head">
                       <h4>{u.name}</h4>
-                      <span className={`role-badge r-${u.role}`}>{ROLES[u.role].label}</span>
+                      <span className={`role-badge r-${u.role}`}>{roleLabelIn(accountKind, u.role)}</span>
                       {u.id === currentUserId && <span className="you-badge">you</span>}
                     </div>
                     <p className="user-row-sub">{u.email}{linked ? ` · ${linked.company}` : ""}
@@ -13514,21 +13539,21 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
       <p className="form-sub">
         {isSelf ? "Update your own name and email."
           : existing ? "Change this user's details, role, or access."
-          : "Admins manage users; property managers do everything else."}
+          : `Admins manage users; ${roleLabelIn(accountKind, "pm").toLowerCase()}s do everything else.`}
       </p>
       <label className="fld">Full name<input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Jane Doe" /></label>
       <label className="fld">Email<input value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="jane@company.com" /></label>
       <div className="fld">Role
         {roleLocked ? (
           <div className="role-locked">
-            <span className={`role-badge r-${f.role}`}>{ROLES[f.role].label}</span>
+            <span className={`role-badge r-${f.role}`}>{roleLabelIn(accountKind, f.role)}</span>
             <span className="rl-note">{isSelf ? "You can't change your own role." : "Only an admin can change roles."}</span>
           </div>
         ) : (
           <div className="role-pick">
-            {roles.map(([k, r]) => (
+            {roles.map(([k]) => (
               <button key={k} type="button" className={f.role === k ? "on" : ""} onClick={() => set("role", k)}>
-                <span className="rp-label">{r.label}</span>
+                <span className="rp-label">{roleLabelIn(accountKind, k)}</span>
                 <span className="rp-desc">
                   {k === "admin" && "Full access, can manage users"}
                   {k === "pm" && (properties.length > 0
@@ -13726,7 +13751,7 @@ function AccountChooser({ result, brand, onPick, onBack }) {
               </span>
               <span className="ac-txt">
                 <b>{m.accountName}</b>
-                <span>{ROLES[m.role] ? ROLES[m.role].label : m.role}</span>
+                <span>{roleLabelIn(kindOf(m), m.role)}</span>
               </span>
               <ChevronRight size={17} />
             </button>
