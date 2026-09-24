@@ -11382,8 +11382,6 @@ function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], su
         ) : (
           <>
             {err && <p className="billing-err" role="alert">{err}</p>}
-            <p className="fine">Approving turns this into a job you can price and assign.
-              Nothing reaches a contractor until you do.</p>
             <div className="form-actions">
               <button className="btn-ghost" onClick={onClose} disabled={busy}>Close</button>
               <button className="btn-ghost danger" onClick={() => setDeclining(true)} disabled={busy}>
@@ -11393,6 +11391,11 @@ function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], su
                 <Check size={15} /> {busy ? "Approving…" : "Approve"}
               </button>
             </div>
+            {/* Under the buttons, not above them. It is a footnote about what
+                the button does, and sitting in the body at body size it read
+                as another paragraph of the report. */}
+            <p className="modal-note"><span aria-hidden="true">*</span>Approving turns this into a job
+              you can price and assign. Nothing reaches a contractor until you do.</p>
           </>
         )}
 
@@ -14766,7 +14769,12 @@ function SubForm({ onSubmit, onCancel, existing, properties }) {
 // ---- Styles --------------------------------------------------------------
 const CSS = `
 :root{--ink:#1a2b23;--ink-soft:#4a5c53;--paper:#f6f4ee;--card:#fffdf8;--line:#e2ddd0;
-  --brand:#1f6b4a;--brand-dk:#14523a;--amber:#c8871e;--red:#b5442e;--shadow:0 1px 2px rgba(26,43,35,.06)}
+  --brand:#1f6b4a;--brand-dk:#14523a;--amber:#c8871e;--red:#b5442e;--shadow:0 1px 2px rgba(26,43,35,.06);
+  /* --amber is a fill colour. On the card it is 2.98:1, which fails AA for
+     text and fails it worst at the small sizes a note is set in. This is the
+     same amber taken down to 4.91:1 so it can be read as well as seen --
+     the marketing site solved this once already with --gold-ink. */
+  --amber-ink:#9a6412}
 *{box-sizing:border-box}
 /* Without this the browser's default 8px body margin frames every full-bleed
    bar in paper -- most visibly the console header, which is meant to run edge
@@ -15605,6 +15613,29 @@ p.fld-note{margin:6px 0 0}
   background:#B3261E;color:#fff;text-decoration:none;font-size:17px;font-weight:800;
   padding:15px;border-radius:10px;letter-spacing:.01em}
 .sos-call:hover,.sos-call:focus-visible{background:#8C1D18;text-decoration:none}
+/* "fine" is used ten times in this file for asides -- "Loading...", "...and
+   four more", "they added nothing else" -- and had no rule at all, so every
+   one of them rendered at body size and read as another paragraph of the
+   thing it was meant to sit quietly beneath. The marketing site has defined
+   it since the beginning; the app never did, which is why the habit was
+   there and the effect was not. Same gap .fld-note had.
+
+   No backticks in here, ever: this whole block is a JavaScript template
+   literal, and a backtick in a CSS comment ends it. The build does not
+   complain -- it produced a working bundle and the app ran -- and the only
+   symptom was this one rule quietly missing from the stylesheet. */
+.fine{font-size:12.5px;line-height:1.5;color:var(--ink-soft);margin:6px 0 0}
+
+/* A footnote under a modal's buttons: what the button is about to do, in a
+   line that is clearly an aside rather than more of the thing being read.
+   Amber rather than red on purpose -- red in this app means a refusal or an
+   error, and "nothing reaches a contractor until you do" is reassurance, not
+   a warning. The asterisk carries the "note" reading without spending a word
+   on it, and is hidden from screen readers, which would say "asterisk". */
+.modal-note{display:flex;gap:5px;margin:10px 0 0;font-size:11.5px;line-height:1.45;
+  color:var(--amber-ink);font-weight:600}
+.modal-note span{flex:none;opacity:.75}
+
 .sos-fine{margin:14px 0 0;font-size:12.5px;line-height:1.55;color:#5C1E1A}
 .sos-fine b{font-weight:800}
 .sos-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px}
