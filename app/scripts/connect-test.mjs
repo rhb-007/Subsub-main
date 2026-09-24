@@ -67,6 +67,9 @@ globalThis.fetch = async (...args) => {
 // exactly the situation this feature is for.
 const S = Date.now().toString(36);
 const THEM = { companyId: "cmp_r", email: "ana@rainier.test", company: "Rainier Roofing" };
+// A second contractor with a real login and no history with the general
+// contractor, for the cases that must not be coloured by an earlier section.
+const OTHER_SUB = { companyId: "cmp_1", email: "sub@example.test", company: "Cascade Roofing" };
 const GC = "acc_test";      // Outerhome, the general contractor doing the asking
 const THEIRS = "acc_pm";    // where their seat already is
 
@@ -451,8 +454,18 @@ try {
     const gate = await gateText();
     ck("adding opens on a question, not on the form", /already on SubSub\?/i.test(gate),
       gate.split("\n").slice(0, 2).join(" / ") || "no gate");
-    ck("with three boxes and nothing else to fill in",
-      await gc.page.evaluate(() => document.querySelectorAll(".cx-gate-flds .fld").length) === 3);
+    // Four: the three that identify somebody, plus the company name --
+    // which finds nobody (two roofers in one county share a name and
+    // nothing is matched on it) but is needed on the next screen either
+    // way, so asking here saves typing it twice.
+    ck("with four boxes and nothing else to fill in",
+      await gc.page.evaluate(() => document.querySelectorAll(".cx-gate-flds .fld").length) === 4,
+      String(await gc.page.evaluate(() => document.querySelectorAll(".cx-gate-flds .fld").length)));
+    ck("the company name among them", /company name/i.test(gate), gate.replace(/\n/g, " ").slice(0, 100));
+    // And the lede does not claim it is one of the ways in.
+    ck("and the wording does not promise it finds anybody",
+      /an email, a mobile or a licence number finds them/i.test(gate),
+      (gate.match(/.*finds them.*/i) || ["not said"])[0].slice(0, 80));
     ck("and none of the profile form is on screen yet",
       await gc.page.evaluate(() => !document.querySelector(".steps-bar") && !document.querySelector(".sf-steps")));
     ck("they are the three that can identify somebody",
@@ -612,6 +625,70 @@ try {
     await wait(800);
 
     ck("nothing threw", gc.crashes.length === 0, gc.crashes.slice(0, 2).join(" ; "));
+  }
+
+  console.log("\n-- the invite form asks the same question --");
+  {
+    // "Invite a subcontractor" sends "set up your account on SubSub". Sent
+    // to somebody who already has one -- with their trades, crews,
+    // insurance and licence on it -- that is asking them to do work they
+    // did years ago, and following it leaves a second company record
+    // nobody wanted. The add form learned to check; this one had not.
+    const openInvite = async () => {
+      await click(gc.page, "^Add$");
+      await wait(800);
+      await gc.page.evaluate(() => [...document.querySelectorAll(".add-menu button")]
+        .find((b) => /invite/i.test(b.innerText))?.click());
+      await wait(1400);
+    };
+    const typeInvite = (label, v) => gc.page.evaluate((l, val) => {
+      const el = [...document.querySelectorAll(".inv-make .fld")]
+        .find((f) => new RegExp("^" + l, "i").test(f.innerText.trim()))?.querySelector("input");
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      set.call(el, val); el.dispatchEvent(new Event("input", { bubbles: true }));
+    }, label, v);
+
+    await openInvite();
+    const labels = await gc.page.evaluate(() => [...document.querySelectorAll(".inv-make .fld")]
+      .map((f) => f.innerText.trim().split("\n")[0].trim()));
+    ck("the invite form asks for the company too", /^company name/i.test(labels[0] || ""),
+      labels.join(" | "));
+    ck("and calls a person's name a full name", labels.some((l) => /^full name/i.test(l)),
+      labels.join(" | "));
+
+    await typeInvite("Email", "nobody.at.all@nowhere.test");
+    await wait(2500);
+    ck("an address nobody has leaves the invite alone",
+      await gc.page.evaluate(() => !document.querySelector(".cx-found")));
+    ck("and Send is offered", await gc.page.evaluate(() =>
+      document.querySelector(".inv-send")?.disabled === false));
+
+    // A different contractor from the one above: THEM has a request
+    // pending by this point in the file, and a pending request is its own
+    // branch of this card. This one has a login and no history with us,
+    // which is the ordinary case the form has to handle.
+    await typeInvite("Email", OTHER_SUB.email);
+    await wait(2800);
+    const card = await gc.page.evaluate(() => document.querySelector(".cx-found")?.innerText || "");
+    ck("somebody who is already here is caught before the invite goes",
+      /already on subsub/i.test(card), card.split("\n")[0] || "no card");
+    ck("and told there is nothing for them to set up",
+      /nothing for them to set up/i.test(card),
+      (card.match(/.*nothing for them.*/i) || ["not said"])[0].slice(0, 70));
+    ck("Send is held while that is on screen", await gc.page.evaluate(() =>
+      document.querySelector(".inv-send")?.disabled === true));
+    ck("with connecting offered instead", await gc.page.evaluate(() =>
+      [...document.querySelectorAll(".cx-found-acts button")].some((b) => /ask to connect/i.test(b.innerText))));
+    // Never a trap here either.
+    ck("and a way past it, for two companies at one address", await gc.page.evaluate(() =>
+      [...document.querySelectorAll(".cx-found-acts button")].some((b) => /send an invite/i.test(b.innerText))));
+    await gc.page.evaluate(() => [...document.querySelectorAll(".cx-found-acts button")]
+      .find((b) => /send an invite/i.test(b.innerText))?.click());
+    await wait(600);
+    ck("waving it away offers Send again", await gc.page.evaluate(() =>
+      !document.querySelector(".cx-found") && document.querySelector(".inv-send")?.disabled === false));
+    await gc.page.keyboard.press("Escape");
+    await wait(800);
   }
 
   console.log("\n-- and on their phone --");

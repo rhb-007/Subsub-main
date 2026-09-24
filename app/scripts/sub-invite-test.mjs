@@ -84,6 +84,14 @@ try {
   ck("to them", mail[0]?.to === email || (mail[0]?.to || [])[0] === email, JSON.stringify(mail[0]?.to));
   ck("naming who is asking", /Outerhome/.test(mail[0]?.subject || ""), mail[0]?.subject);
   ck("and naming them", /Cascade Roofworks/.test(mail[0]?.subject || ""), mail[0]?.subject);
+  // The company name reaches the email because the form now asks for it.
+  // The API has taken companyName since the beginning and the wording is
+  // built around it -- "has invited <company> to join theirs" -- but the
+  // invite box never had the field, so every invite sent from the UI said
+  // "you" where a company name belonged.
+  ck("and the body names the company rather than saying \"you\"",
+    /invited Cascade Roofworks to join/i.test(mail[0]?.text || ""),
+    (mail[0]?.text || "").split("\n").find((l) => /invited/i.test(l)) || "no such line");
 
   // A Scale account with its own address invites people to their page, not
   // to SubSub's. This was hardcoded to app.subsub.work.

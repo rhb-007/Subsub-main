@@ -4560,7 +4560,16 @@ export default function SubSub() {
           onCancel={() => { setAdding(false); setResumeAssign(null); }} /></Modal>}
 
       {inviteOpen && <Modal onClose={() => setInviteOpen(false)}>
-        <InviteLinks onSent={refreshInvites} onClose={() => setInviteOpen(false)} /></Modal>}
+        <InviteLinks onSent={refreshInvites}
+          onOpenExisting={(m) => { setInviteOpen(false); openExistingContractor(m); }}
+          onConnect={async (m) => {
+            const made = await api.requestConnect({ companyId: m.companyId });
+            setConnectOut((cur) => [made, ...(cur || [])]);
+            setInviteOpen(false);
+            setBillingNote(`Asked ${m.company} to connect. They will be on your list `
+              + "as soon as they accept.");
+          }}
+          onClose={() => setInviteOpen(false)} /></Modal>}
       {invitedOpen && <Modal onClose={() => setInvitedOpen(null)}>
         <InvitedPanel invite={invitedOpen} canRevoke={role === "admin"}
           onChanged={(after) => {
@@ -10445,7 +10454,8 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
 // Deliberately weaker than the public application page that comes with Scale,
 // which is always on and can be found unprompted -- the difference between
 // the plans has to stay real.
-function InviteLinks({ onSent, onClose }) {
+function InviteLinks({ onSent, onClose, onConnect, onOpenExisting }) {
+  const [companyName, setCompanyName] = useState("");
   const [contact, setContact] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -10464,6 +10474,30 @@ function InviteLinks({ onSent, onClose }) {
   const phoneOk = !mobile || phoneDigits(mobile).length === 10;
   const canSend = (!!to && validEmail(to)) || (!!mobile && phoneOk);
 
+  // The same question the add form asks, for the same reason. This form
+  // sends "set up your account on SubSub" -- to somebody who may already
+  // have one, with their trades, crews, insurance and licence on it. That
+  // invite asks them to do work they did years ago, and if they follow it
+  // they end up with a second company record nobody wanted.
+  const [dismissedMatch, setDismissedMatch] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const { match, checking: matchChecking } =
+    useConnectMatch(!!onConnect, { email: to, phone: mobile, license: "" });
+  const showMatch = match && !dismissedMatch;
+
+  const askToConnect = async () => {
+    setConnecting(true); setErr("");
+    try { await onConnect(match); }
+    catch (e) {
+      console.error("[connect] request failed:", e);
+      const code = e?.body?.error;
+      setErr(code === "already_engaged" ? "They are already on your contractor list."
+        : code === "already_requested" ? "You have already asked — they have not answered yet."
+        : "Could not send the request. Try again.");
+      setConnecting(false);
+    }
+  };
+
   // `link` true makes one without sending anything, for handing over in
   // person. Kept, because that is a real way people do this, but out of the
   // main path -- it used to be an option hidden inside "leave this blank".
@@ -10474,11 +10508,17 @@ function InviteLinks({ onSent, onClose }) {
     }
     setBusy(true); setErr(""); setSentNote(""); setMade(null); setCopied(false);
     try {
-      const made = await api.createInvite(link ? { contact: contact.trim() || null } : {
-        contact: contact.trim() || null,
-        email: to || null,
-        phone: mobile || null,
-      });
+      const made = await api.createInvite(link
+        ? { contact: contact.trim() || null, companyName: companyName.trim() || null }
+        : {
+          contact: contact.trim() || null,
+          // The API has taken this since the beginning and the invite email
+          // reads "has invited <company> to join theirs" -- the form simply
+          // never asked for it, so every invite went out saying "you".
+          companyName: companyName.trim() || null,
+          email: to || null,
+          phone: mobile || null,
+        });
       setMade(made);
       // The Contractors list is where it lives from here, so it has to be
       // told there is a new one before this modal closes.
@@ -10532,12 +10572,58 @@ function InviteLinks({ onSent, onClose }) {
         finish their own profile — what you type here is already filled in for them.
       </p>
 
+      {/* Already here. Sending them a "set up your account" invite would be
+          asking somebody to do work they did years ago, and following it
+          would leave a second company record nobody wanted. */}
+      {showMatch && (
+        <div className="cx-found" role="status">
+          <span className="cx-found-chip"><CheckCircle2 size={12} /> Already on SubSub</span>
+          <b>{match.company}</b>
+          <span className="cx-found-sub">
+            {[match.contact, match.where].filter(Boolean).join(" · ") || "On SubSub already"}
+          </span>
+          {match.engaged ? (
+            <>
+              <p className="cx-found-note">They are already one of your contractors.</p>
+              <div className="cx-found-acts">
+                <button type="button" className="btn-solid small" onClick={() => onOpenExisting?.(match)}>
+                  <ArrowRight size={13} /> Go to {match.company}
+                </button>
+              </div>
+            </>
+          ) : match.pending ? (
+            <p className="cov-hint">You have already asked to connect. It is with them now.</p>
+          ) : (
+            <>
+              <p className="cx-found-note">
+                Nothing for them to set up — they have an account already. Ask to connect
+                and everything they keep on SubSub comes with them.
+              </p>
+              <div className="cx-found-acts">
+                <button type="button" className="btn-solid small" disabled={connecting} onClick={askToConnect}>
+                  <Send size={13} /> {connecting ? "Asking…" : "Ask to connect"}
+                </button>
+                <button type="button" className="pick" onClick={() => setDismissedMatch(true)}>
+                  Not them — send an invite
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      {!showMatch && matchChecking && <p className="cov-hint">Checking whether they are already on SubSub…</p>}
+
       {/* One per line. These were three boxes and a button on one row inside
           a 560px panel, which on a phone came out about sixty pixels wide
           each with the hints wrapping to four lines above them. A form this
           short has no reason to be dense. */}
       <div className="inv-make">
-        <label className="fld">Their name
+        <label className="fld">Company name
+          <input value={companyName} maxLength={160} placeholder="Cascade Roofworks"
+            onChange={(e) => { setCompanyName(e.target.value); setErr(""); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && canSend && !busy) create(); }} />
+        </label>
+        <label className="fld">Full name
           <input value={contact} maxLength={120} placeholder="Miguel Alvarez"
             onChange={(e) => { setContact(e.target.value); setErr(""); }}
             onKeyDown={(e) => { if (e.key === "Enter" && canSend && !busy) create(); }} />
@@ -10555,7 +10641,10 @@ function InviteLinks({ onSent, onClose }) {
             onChange={(e) => { setPhone(e.target.value); setErr(""); setSentNote(""); }}
             onKeyDown={(e) => { if (e.key === "Enter" && canSend && !busy) create(); }} />
         </label>
-        <button className="btn-solid inv-send" disabled={busy || !canSend} onClick={() => create()}>
+        {/* Held while a match is on screen: the answer to "is this the
+            right thing to send?" is on the card above, unanswered. */}
+        <button className="btn-solid inv-send" disabled={busy || !canSend || !!showMatch}
+          onClick={() => create()}>
           <Send size={15} /> {busy ? "Sending…" : "Send invite"}
         </button>
         <button className="inv-linkonly" disabled={busy} onClick={() => create(true)}>
@@ -15420,11 +15509,19 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
         <p className="form-sub">First — are they already on SubSub?</p>
         <p className="cx-gate-lede">
           If they are, there is nothing to fill in: their trades, crews, coverage,
-          insurance and licence come with them, kept current by them. Any one of
-          these finds them.
+          insurance and licence come with them, kept current by them. An email,
+          a mobile or a licence number finds them.
         </p>
 
         <div className="cx-gate-flds">
+          {/* Not a way of finding them -- two roofers in one county share a
+              name and nothing is matched on it -- but it is the first thing
+              anybody types and it is needed on the next screen either way,
+              so asking here saves typing it twice. */}
+          <label className="fld">Company name
+            <input value={f.company} maxLength={160} placeholder="Cascade Roofworks"
+              onChange={(e) => set("company", e.target.value)} />
+          </label>
           <label className="fld">Email
             <input type="email" inputMode="email" autoComplete="off" value={f.email} maxLength={160}
               placeholder="name@company.com"

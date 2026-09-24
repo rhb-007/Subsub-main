@@ -33,8 +33,22 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // has to leave the account exactly as it found it -- otherwise the second run
 // tests a different screen than the first and quietly passes. There is no
 // delete endpoint for either, by design, so this goes at the database.
-const sql = (cmd) => execFileSync("npx", ["wrangler", "d1", "execute", "subsub-db",
-  "--config=./wrangler.toml", "--local", "--command", cmd], { stdio: ["ignore", "ignore", "ignore"] });
+// Retried, because the local D1 file is shared with a dev server that
+// reloads whenever a source file changes, and a statement landing in that
+// window fails on a lock rather than on anything about the statement. A
+// scrub that dies there takes the whole run with it and reads as a broken
+// feature. A statement that keeps failing still throws.
+const sql = (cmd) => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return execFileSync("npx", ["wrangler", "d1", "execute", "subsub-db",
+        "--config=./wrangler.toml", "--local", "--command", cmd], { stdio: ["ignore", "ignore", "ignore"] });
+    } catch (err) {
+      if (attempt >= 3) throw err;
+      execFileSync("sleep", ["1"]);
+    }
+  }
+};
 const scrub = () => {
   // In reference order. Adding a contractor now also creates a login for
   // them -- a users row, a seat, and an invite to set a password, because

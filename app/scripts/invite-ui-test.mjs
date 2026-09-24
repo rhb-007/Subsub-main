@@ -78,11 +78,18 @@ try {
     const { ctx, page, crashes } = await openPanel(w, h);
     const s = await shape(page);
     ck(`${name}: the panel opens`, !!s, String(s));
-    ck(`${name}: three fields, no more`, s.fields.length === 3,
+    // Four now. Company name was added because the API has taken it since
+    // the beginning and the invite email reads "has invited <company> to
+    // join theirs" -- the form simply never asked, so every invite went out
+    // saying "you". "Their name" became "Full name", which is what it is.
+    ck(`${name}: four fields, no more`, s.fields.length === 4,
       s.fields.map((f) => f.label).join(" | "));
-    ck(`${name}: name, email, mobile`,
-      /name/i.test(s.fields[0].label) && /email/i.test(s.fields[1].label) && /mobile/i.test(s.fields[2].label),
+    ck(`${name}: company, full name, email, mobile`,
+      /^company name/i.test(s.fields[0].label) && /^full name/i.test(s.fields[1].label)
+      && /^email/i.test(s.fields[2].label) && /^mobile/i.test(s.fields[3].label),
       s.fields.map((f) => f.label).join(" | "));
+    ck(`${name}: nothing still calls it "their name"`,
+      !s.fields.some((f) => /their name/i.test(f.label)), s.fields.map((f) => f.label).join(" | "));
 
     // The actual complaint. Sixty-pixel boxes are what a row of three inside
     // a modal produces; a stacked one gives every box the panel's width.
@@ -93,7 +100,7 @@ try {
       s.fields.map((f) => f.w).join(", "));
     // Stacked means each one starts below the last.
     ck(`${name}: one per line`,
-      s.fields[1].top > s.fields[0].top && s.fields[2].top > s.fields[1].top,
+      s.fields.every((f, i) => i === 0 || f.top > s.fields[i - 1].top),
       s.fields.map((f) => f.top).join(" → "));
     ck(`${name}: nothing spills sideways`, s.overflows === false);
 
@@ -106,8 +113,11 @@ try {
       /link to send yourself/i.test(s.text), s.text.split("\n").slice(-3).join(" / "));
     ck(`${name}: nothing threw`, crashes.length === 0, crashes.join(" | "));
 
-    // And it unlocks on either route, because either one can carry an invite.
-    await page.type(".inv-make .fld:nth-of-type(3) input", "206-555-0142");
+    // And it unlocks on either route, because either one can carry an
+    // invite. The fourth box is Mobile since Company name was added, and
+    // the number belongs to nobody: this form looks a typed number up now,
+    // and finding somebody deliberately holds Send back.
+    await page.type(".inv-make .fld:nth-of-type(4) input", "206-555-0909");
     await wait(400);
     ck(`${name}: a mobile alone is enough`,
       (await page.evaluate(() => !document.querySelector(".inv-send").disabled)) === true);
