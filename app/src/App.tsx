@@ -1700,14 +1700,57 @@ export default function SubSub() {
   // screens never quietly render seed figures as if they were real.
   const [platform, setPlatform] = useState(null);
   const [platformErr, setPlatformErr] = useState("");
+  const [platformAt, setPlatformAt] = useState(null);    // when it was last true
+  const [platformBusy, setPlatformBusy] = useState(false);
+
+  // Read it again. Everything in this console is somebody else's data --
+  // accounts sign up, general contractors add subcontractors, licences
+  // expire -- and none of that happens in this tab.
+  const refreshPlatform = useCallback(async () => {
+    if (!staff) return;
+    setPlatformBusy(true);
+    try {
+      setPlatform(await api.platform.bootstrap());
+      setPlatformErr("");
+      setPlatformAt(Date.now());
+    } catch (e) {
+      console.error("[platform] refresh failed:", e);
+      setPlatformErr(e?.message || "load_failed");
+    } finally { setPlatformBusy(false); }
+  }, [staff]);
+
   useEffect(() => {
-    if (!staff) { setPlatform(null); return; }
+    if (!staff) { setPlatform(null); setPlatformAt(null); return; }
     let live = true;
     api.platform.bootstrap()
-      .then((d) => { if (live) { setPlatform(d); setPlatformErr(""); } })
+      .then((d) => { if (live) { setPlatform(d); setPlatformErr(""); setPlatformAt(Date.now()); } })
       .catch((e) => { if (live) setPlatformErr(e?.message || "load_failed"); });
     return () => { live = false; };
   }, [staff]);
+
+  // Coming back to the tab is the moment somebody expects current figures.
+  // This console was fetched once, at sign-in, and re-read only after one
+  // of its own writes -- so a contractor added in the customer app half an
+  // hour ago was simply not there, and the only cure was a reload nobody
+  // knew to do. It reads as data loss and it is a stale tab.
+  //
+  // Throttled, because switching windows is not a request for a full
+  // platform read every time.
+  useEffect(() => {
+    if (!staff || BUILD !== "platform") return;
+    const STALE_AFTER = 60_000;
+    const onFocus = () => {
+      if (document.visibilityState === "hidden") return;
+      if (platformAt && Date.now() - platformAt < STALE_AFTER) return;
+      refreshPlatform();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [staff, platformAt, refreshPlatform]);
 
   // Every console write runs through here. The server re-checks the staff
   // role and writes the audit row before it changes anything, so the browser
@@ -1718,7 +1761,7 @@ export default function SubSub() {
     setPlatformErr("");
     try {
       const result = await call();
-      if (reload) setPlatform(await api.platform.bootstrap());
+      if (reload) { setPlatform(await api.platform.bootstrap()); setPlatformAt(Date.now()); }
       return result;
     } catch (err) {
       console.error("[platform] write failed:", err);
@@ -3387,7 +3430,9 @@ export default function SubSub() {
     return (
       <div className="ss-root">
         <style>{CSS}</style>
-        <SuperadminConsole me={me} admin={admin} accounts={P.accounts} users={P.users} memberships={P.memberships}
+        <SuperadminConsole me={me} admin={admin}
+          onRefresh={refreshPlatform} refreshing={platformBusy} refreshedAt={platformAt}
+          accounts={P.accounts} users={P.users} memberships={P.memberships}
           companies={P.companies} engagements={P.engagements} jobs={P.jobs} subEvents={P.subEvents}
           activity={P.activity} smsDaily={P.smsDaily || []} err={platformErr}
           // Every write goes to the server, which re-checks the staff role,
@@ -5265,7 +5310,8 @@ function SuperadminLogin({ onLogin }) {
 const fmtC = (cents) => "$" + (Math.round(cents) / 100).toLocaleString("en-US", { maximumFractionDigits: 0 });
 const monthKey = (iso) => (iso || "").slice(0, 7);
 
-function SuperadminConsole({ me, admin, accounts, users, memberships, companies, engagements,
+function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
+  accounts, users, memberships, companies, engagements,
   jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
   onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck }) {
@@ -5555,6 +5601,13 @@ function SuperadminConsole({ me, admin, accounts, users, memberships, companies,
           </div>
         </nav>
         <div className="pf-me">
+          {/* Everything on these screens belongs to somebody else and moves
+              without this tab hearing about it. */}
+          <button className="pf-refresh" onClick={onRefresh} disabled={refreshing}
+            title={refreshedAt ? `Last read ${relTime(new Date(refreshedAt).toISOString())}` : "Read it again"}>
+            <RefreshCw size={14} className={refreshing ? "spin" : ""} />
+            <span className="pf-refresh-txt">{refreshing ? "Reading…" : "Refresh"}</span>
+          </button>
           <button className="pf-user" onClick={() => setMenu((m) => !m)} aria-expanded={menu}>
             <span className="user-avatar pf-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
             <span className="pf-user-txt"><b>{me.name}</b><span>{STAFF_ROLE_LABEL[admin.role] || "Standard"}</span></span>
@@ -15283,6 +15336,20 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
   // middle of it. Ask the one question that decides which of two quite
   // different jobs this is, and ask it on its own.
   const [gate, setGate] = useState(!existing && !!onConnect);
+  // Open if there is already something in there to see -- a licence carried
+  // over from the gate, or an existing contractor being edited, where the
+  // details are the reason the form was opened at all.
+  //
+  // Checked again when the gate hands over, not only at mount: the gate is
+  // this same component, so anything typed there arrives after this state
+  // was first worked out. Getting that wrong hides a licence somebody just
+  // typed behind a closed panel, which reads as having been thrown away --
+  // the exact complaint the gate exists to answer.
+  const hasExtras = (v) => !!(
+    v.license || v.ubi || v.city || v.state || v.zip2
+    || v.mailStreet || v.mailCity || v.mailState || v.mailZip
+    || Number(v.rating) > 0 || v.available === false);
+  const [moreOpen, setMoreOpen] = useState(() => !!existing || hasExtras(init));
   const gateTyped = !!(f.email.trim() || f.phone.trim() || f.license.trim());
 
   const askToConnect = async () => {
@@ -15382,7 +15449,12 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
               contractors have no email on file at all, and adding one by
               hand is the way this has always worked. */}
           <button type="button" className={match ? "btn-ghost" : "btn-solid"}
-            onClick={() => { setGate(false); if (match) setDismissedMatch(true); }}>
+            onClick={() => {
+              setGate(false);
+              if (match) setDismissedMatch(true);
+              // Whatever was typed up here has to be visible down there.
+              setMoreOpen((open) => open || hasExtras(f));
+            }}>
             {match ? "Not them — add by hand" : gateTyped ? "Add them myself" : "Skip — add them myself"}
           </button>
         </div>
@@ -15452,17 +15524,30 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
         <label className="fld">Contact<input value={f.contact} onChange={(e) => set("contact", e.target.value)} placeholder="Primary contact" /></label>
       </div>
       <div className="fld-row">
+        <label className="fld">Phone<input type="tel" inputMode="numeric" maxLength={13} value={f.phone} onChange={(e) => set("phone", formatPhone(e.target.value))} placeholder="(206)555-0100" /></label>
+        <label className="fld">Email<input type="email" inputMode="email" value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="name@company.com" /></label>
+      </div>
+      {/* Everything that is not needed to get a contractor on the list. The
+          step asked for thirteen things and needed four of them; the other
+          nine were licence numbers, two addresses, a status that defaults
+          to the right answer and a rating for somebody who has not done any
+          work yet. They are all still here, one tap away, and the panel
+          opens itself when any of them already has something in it -- a
+          licence typed at the gate must not look like it was thrown away. */}
+      <button type="button" className="sf-more" onClick={() => setMoreOpen((v) => !v)}
+        aria-expanded={moreOpen}>
+        <ChevronDown size={14} className={`sf-more-chev ${moreOpen ? "open" : ""}`} />
+        More details
+        <span className="fld-note">licence, addresses, rating — all optional</span>
+      </button>
+      {moreOpen && (<>
+      <div className="fld-row">
         <label className="fld">WA L&amp;I license # <span className="fld-note">verified against the state registry</span>
           <input value={f.license} onChange={(e) => set("license", e.target.value.toUpperCase().trim())} placeholder="CASCADR842KL" />
         </label>
         <label className="fld">UBI
           <input inputMode="numeric" value={f.ubi} onChange={(e) => set("ubi", e.target.value.trim())} placeholder="603221887" />
         </label>
-      </div>
-
-      <div className="fld-row">
-        <label className="fld">Phone<input type="tel" inputMode="numeric" maxLength={13} value={f.phone} onChange={(e) => set("phone", formatPhone(e.target.value))} placeholder="(206)555-0100" /></label>
-        <label className="fld">Email<input type="email" inputMode="email" value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="name@company.com" /></label>
       </div>
       <div className="fld-row">
         <label className="fld">City<input value={f.city} onChange={(e) => set("city", e.target.value)} placeholder="Seattle" /></label>
@@ -15482,6 +15567,8 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
           </div>
         </div>
       </div>
+      </>)}
+
       <div className="fld">Notifications <span className="fld-note">how they receive automated alerts</span>
         <div className="notify-opts compact">
           <label className={`notify-opt ${f.notifyEmail ? "on" : ""}`}>
@@ -15500,6 +15587,7 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
           : <p className="cov-hint">Email &amp; SMS is for automated notifications only — one-way, no replies. Contractors can change this in their own account.</p>}
       </div>
 
+      {moreOpen && (<>
       <div className="fld">Mailing address <span className="fld-note">for uniforms &amp; paperwork</span>
         <input value={f.mailStreet} onChange={(e) => set("mailStreet", e.target.value)} placeholder="1234 Industrial Way, Suite B" />
       </div>
@@ -15508,7 +15596,7 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
         <label className="fld">State<input value={f.mailState} maxLength={2} onChange={(e) => set("mailState", e.target.value.toUpperCase().slice(0, 2))} placeholder="WA" /></label>
         <label className="fld">ZIP<input inputMode="numeric" value={f.mailZip} onChange={(e) => set("mailZip", e.target.value)} placeholder="98108" /></label>
       </div>
-
+      </>)}
       </>)}
 
       {step === 3 && (<>
@@ -17392,6 +17480,16 @@ p.fld-note{margin:6px 0 0}
   background:#e8f2ea;color:#1f6b4a;padding:3px 8px;border-radius:20px}
 
 /* multi-step contractor form */
+/* "More details" on the add-a-contractor form. The step asked for thirteen
+   things and needed four of them. */
+.sf-more{display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;
+  background:none;border:0;border-top:1px solid var(--line);padding:14px 0 4px;margin-top:6px;
+  font:600 13.5px Inter,sans-serif;color:var(--ink);cursor:pointer;text-align:left}
+.sf-more:hover{color:var(--brand)}
+.sf-more .fld-note{margin-left:auto;font-weight:400}
+.sf-more-chev{transition:transform .15s;flex:none}
+.sf-more-chev.open{transform:rotate(180deg)}
+@media (prefers-reduced-motion:reduce){.sf-more-chev{transition:none}}
 .sf-steps{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;
   margin:14px 0 20px}
 .sf-steps button{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;
@@ -18217,7 +18315,19 @@ p.fld-note{margin:6px 0 0}
   border-radius:8px;font:600 13.5px Inter,sans-serif;color:#12211c;cursor:pointer;text-align:left}
 .pf-menu > button svg{color:#1f6b4a;flex:none}
 .pf-menu > button:hover{background:#f2f8f4;color:#1f6b4a}
-.pf-menu > button.pf-menu-out{border-top:1px solid #e3e8e5;border-radius:0 0 8px 8px;margin-top:4px;color:#b1391f}
+.pf-menu > button/* Read it again. The console is a window onto other people's data, none of
+   which changes in this tab, so it needs a way to catch up that is not a
+   browser reload. */
+.pf-refresh{display:inline-flex;align-items:center;gap:6px;background:none;
+  border:1px solid var(--line);border-radius:9px;padding:7px 11px;cursor:pointer;
+  font:600 12.5px Inter,sans-serif;color:var(--ink-soft)}
+.pf-refresh:hover:not(:disabled){color:var(--ink);border-color:var(--ink-soft)}
+.pf-refresh:disabled{opacity:.6;cursor:default}
+@media (max-width:640px){.pf-refresh-txt{display:none}}
+@keyframes pf-spin{to{transform:rotate(360deg)}}
+.spin{animation:pf-spin 1s linear infinite}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+.pf-menu-out{border-top:1px solid #e3e8e5;border-radius:0 0 8px 8px;margin-top:4px;color:#b1391f}
 .pf-menu > button.pf-menu-out svg{color:#b1391f}
 .pf-menu > button.pf-menu-out:hover{background:#faece7}
 .pf-burger{display:none;margin-left:auto;width:40px;height:40px;border:1px solid rgba(255,255,255,.2);border-radius:9px;

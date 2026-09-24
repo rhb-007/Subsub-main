@@ -444,6 +444,31 @@ try {
       return el?.value === em;
     }, THEM.email));
 
+    // Most of step 1 is behind "More details" now. A licence typed at the
+    // gate lives in there, so the panel has to open itself -- otherwise it
+    // reads as having been thrown away, which is the exact complaint the
+    // gate was built to answer.
+    await gc.page.evaluate(() => [...document.querySelectorAll(".form button")]
+      .find((b) => /^Cancel$/.test(b.innerText.trim()))?.click());
+    await wait(900);
+    await openAdd();
+    await typeGate("License", "GATECARRY99");
+    await wait(2500);
+    await gc.page.evaluate(() => [...document.querySelectorAll(".cx-gate .form-actions button")]
+      .find((b) => /add them myself/i.test(b.innerText))?.click());
+    await wait(1000);
+    const carried = await gc.page.evaluate(() => {
+      const more = document.querySelector(".sf-more");
+      const lic = [...document.querySelectorAll(".fld")]
+        .find((f) => /license/i.test(f.innerText))?.querySelector("input");
+      return { open: more?.getAttribute("aria-expanded") === "true", value: lic?.value || "" };
+    });
+    ck("a licence typed at the gate opens the details panel on its own", carried.open === true);
+    ck("and is still in it", carried.value === "GATECARRY99", carried.value || "gone");
+    await gc.page.evaluate(() => [...document.querySelectorAll(".form button")]
+      .find((b) => /^Cancel$/.test(b.innerText.trim()))?.click());
+    await wait(900);
+
     // Start again and take the other road.
     await gc.page.evaluate(() => [...document.querySelectorAll(".form button")]
       .find((b) => /^Cancel$/.test(b.innerText.trim()))?.click());

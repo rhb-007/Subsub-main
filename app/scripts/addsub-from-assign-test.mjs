@@ -137,6 +137,40 @@ try {
   await wait(900);
   ck("and skipping it lands on the form", await seen(/Step 1 of 3/));
 
+  // The step asked for thirteen things and needed four of them. The other
+  // nine -- two licence numbers, two addresses, a status that defaults to
+  // the right answer and a rating for somebody who has not done any work
+  // yet -- are behind one tap now.
+  console.log("\n-- step 1 asks for what it needs, and offers the rest --");
+  {
+    const shown = await page.evaluate(() => ({
+      labels: [...document.querySelectorAll(".form .fld")]
+        .map((f) => f.innerText.trim().split("\n")[0].trim()).filter(Boolean),
+      more: !!document.querySelector(".sf-more"),
+      open: document.querySelector(".sf-more")?.getAttribute("aria-expanded") === "true",
+    }));
+    for (const need of ["Company", "Contact", "Phone", "Email", "Notifications"]) {
+      ck(`${need} is asked for straight away`, shown.labels.some((l) => l.startsWith(need)),
+        shown.labels.join(" | "));
+    }
+    ck("the licence is not, to begin with", !shown.labels.some((l) => /license/i.test(l)),
+      shown.labels.join(" | "));
+    ck("nor either address", !shown.labels.some((l) => /^City|^Mailing/i.test(l)), shown.labels.join(" | "));
+    ck("nor a rating for somebody who has done no work", !shown.labels.some((l) => /rating/i.test(l)),
+      shown.labels.join(" | "));
+    ck("there is a way to the rest of it", shown.more && shown.open === false);
+
+    await page.evaluate(() => document.querySelector(".sf-more")?.click());
+    await wait(500);
+    const opened = await page.evaluate(() => [...document.querySelectorAll(".form .fld")]
+      .map((f) => f.innerText.trim().split("\n")[0].trim()));
+    ck("and opening it brings back every one of them",
+      opened.some((l) => /license/i.test(l)) && opened.some((l) => /^Mailing/i.test(l))
+      && opened.some((l) => /rating/i.test(l)), opened.join(" | "));
+    await page.evaluate(() => document.querySelector(".sf-more")?.click());
+    await wait(400);
+  }
+
   console.log("\n-- step 1: who they are --");
   const COMPANY = `Harbour Roofing ${S}`;
   ck("the form starts on step 1 of 3", await seen(/Step 1 of 3/));
