@@ -285,6 +285,10 @@ export const api = {
   // still makes a link for the account to hand over itself.
   createInvite: (body) => request("/invites", { method: "POST",
     body: JSON.stringify(typeof body === "string" || body == null ? { label: body } : body) }),
+  // Sends the SAME token again, to the address it was addressed to -- not a
+  // new invite. Reissuing would break the link already sitting in somebody's
+  // inbox, which is the opposite of what pressing "Send again" means.
+  resendInvite: (id) => request(`/invites/${id}/resend`, { method: "POST" }),
   revokeInvite: (id) => request(`/invites/${id}`, { method: "DELETE" }),
   lookupInvite: (token) => request(`/invite/${encodeURIComponent(token)}`),
   acceptInvite: (token, data) =>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 
 // ---- Build target ----------------------------------------------------------
 // "tenant"   → the customer app (app.subsub.work and each GC's own subdomain).
@@ -1785,6 +1785,11 @@ export default function SubSub() {
   const [notifying, setNotifying] = useState(null); // one-way system notification
   const [adding, setAdding] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
+  // Contractors who have been invited and have not joined. They are not
+  // subs -- there is no company, no engagement, nothing to rate or assign --
+  // so they live alongside the roster rather than in it.
+  const [invites, setInvites] = useState(null);   // null = not loaded yet
+  const [invitedOpen, setInvitedOpen] = useState(null);   // an invite being looked at
   const [addMenu, setAddMenu] = useState(false);
   const [editing, setEditing] = useState(null); // sub being edited
   const [tab, setTab] = useState("dashboard");
@@ -2674,6 +2679,47 @@ export default function SubSub() {
     setEngagements((es) => es.map((e) => e.companyId !== id ? e : {
       ...e, docReview: { ...(e.docReview || {}), [key]: null } }));
   };
+
+  // ---- outstanding invites ---------------------------------------------
+  // Kept out of hydrateAccount on purpose: only an admin or a PM may read
+  // them, and a tenant or contractor seat asking would be a 403 on every
+  // sign-in. This asks only for the seats the answer belongs to.
+  const refreshInvites = useCallback(async () => {
+    // Signed out, this is an unauthenticated call that can only ever be a
+    // 401 -- and with real auth behind it, a 401 sets off a token refresh
+    // for a session that does not exist.
+    if (!loggedIn || !currentAccountId) return;
+    try { setInvites(await api.listInvites()); }
+    catch (err) {
+      // A refusal is an answer: this seat does not get to see them, and an
+      // empty list is the truthful thing to draw. Anything else we do not
+      // know, so leave whatever we had rather than blanking the section.
+      console.warn("[invites] load failed:", err);
+      if (err?.status === 403) setInvites([]);
+    }
+  }, [loggedIn, currentAccountId]);
+
+  useEffect(() => {
+    if (loggedIn && can("contractors")) refreshInvites(); else setInvites([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loggedIn, currentAccountId, role]);
+
+  // Only the ones still waiting on somebody. Accepted invites have become
+  // contractors and are on the roster already; revoked and expired ones are
+  // not waiting on anything.
+  const openInvites = useMemo(() => (invites || []).filter((i) => i.status === "open"), [invites]);
+
+  // The search box reaches them, because searching for a name and being told
+  // nothing matches -- when an invite to that name went out on Tuesday -- is
+  // how somebody invites the same contractor twice. The other filters are
+  // about capabilities, ratings and documents, none of which exist for
+  // somebody who has not signed up; those do not apply and the strip says so.
+  const invitedMatches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return openInvites;
+    return openInvites.filter((i) =>
+      [i.contact, i.companyName, i.label, i.email, i.phone].filter(Boolean).join(" ").toLowerCase().includes(q));
+  }, [openInvites, query]);
 
   // ---- persistence wiring ---------------------------------------------
   // Pulls this account's companies/engagements/jobs/members from the API and
@@ -3680,6 +3726,41 @@ export default function SubSub() {
 
           {jobZip && <div className="zip-note"><Target size={12} /> Ranking contractors by distance from {jobZip}</div>}
 
+          {/* Invited, and not yet anybody. They used to be listed inside the
+              invite modal, which put them behind a button nobody presses
+              twice and gave them nowhere to go as they piled up. They belong
+              here, where somebody looking for a contractor looks -- as a
+              status, plainly marked, in front of the roster rather than in
+              it. There is very little to show about them, so the card shows
+              very little: who, where it went, and when. */}
+          {invitedMatches.length > 0 && (
+            <section className="invited-strip">
+              <h4 className="invited-h">
+                <Clock size={13} /> Invited <span className="count">{invitedMatches.length}</span>
+                <span className="invited-sub">waiting for them to finish signing up</span>
+              </h4>
+              <div className="invited-row">
+                {invitedMatches.map((i) => (
+                  <button key={i.id} className="invited-card" onClick={() => setInvitedOpen(i)}>
+                    <span className="invited-chip">Invited</span>
+                    <b>{inviteName(i)}</b>
+                    <span className="invited-to">{[i.email, i.phone].filter(Boolean).join(" · ")
+                      || "Link for you to hand over"}</span>
+                    {/* Sent and merely created are different facts, and one
+                        of them means nobody has been asked anything. */}
+                    <span className={`invited-when ${i.sentAt ? "" : "unsent"}`}>
+                      {i.sentAt ? `Sent ${relTime(i.sentAt)}` : "Not sent — nobody has it yet"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              {activeCount > (query.trim() ? 1 : 0) && (
+                <p className="cov-hint">The filters above don’t apply to invited contractors —
+                  there are no capabilities, rating or documents to filter on until they join.</p>
+              )}
+            </section>
+          )}
+
           <div className="result-meta">{filtered.length} {filtered.length === 1 ? "contractor" : "contractors"} match</div>
 
           {filtered.length === 0 ? (
@@ -4219,7 +4300,15 @@ export default function SubSub() {
           onCancel={() => { setAdding(false); setResumeAssign(null); }} /></Modal>}
 
       {inviteOpen && <Modal onClose={() => setInviteOpen(false)}>
-        <InviteLinks canRevoke={role === "admin"} onClose={() => setInviteOpen(false)} /></Modal>}
+        <InviteLinks onSent={refreshInvites} onClose={() => setInviteOpen(false)} /></Modal>}
+      {invitedOpen && <Modal onClose={() => setInvitedOpen(null)}>
+        <InvitedPanel invite={invitedOpen} canRevoke={role === "admin"}
+          onChanged={(after) => {
+            setInvitedOpen(after);
+            setInvites((cur) => (cur || []).map((i) => i.id === after.id ? { ...i, ...after } : i));
+          }}
+          onRevoked={(id) => setInvites((cur) => (cur || []).filter((i) => i.id !== id))}
+          onClose={() => setInvitedOpen(null)} /></Modal>}
       {editing && <Modal onClose={() => setEditing(null)} wide>
         <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub} onCancel={() => setEditing(null)} /></Modal>}
 
@@ -9799,26 +9888,131 @@ const UNIFORM_CATALOG = [
 ];
 const SIZES = ["S", "M", "L", "XL", "2XL", "3XL"];
 
+// What to call somebody nobody has met. In order of how much it was worth
+// typing: the name whoever sent it typed, the company they typed, the label
+// on an older link, then whatever address it went to.
+function inviteName(i) {
+  return i.contact || i.companyName || i.label || i.email || i.phone || "Unnamed invite";
+}
+
+// An invite, opened from the Contractors list. Deliberately small: until
+// somebody accepts, all that exists is a name, an address, a link and a
+// date, and a full-width panel of empty sections would imply otherwise.
+function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const sendable = !!(invite.email || invite.phone);
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(invite.url); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    catch { setCopied(false); setErr("This browser wouldn’t let us copy. The link is above — select it."); }
+  };
+
+  const resend = async () => {
+    setBusy("resend"); setErr(""); setNote("");
+    try {
+      const after = await api.resendInvite(invite.id);
+      onChanged(after);
+      // Each route on its own, same as the first send. "Sent again" over a
+      // text that could not go is the same lie the second time.
+      const went = [after.emailed && invite.email, after.texted && invite.phone].filter(Boolean);
+      if (went.length) setNote(`Sent again to ${andList(went)}.`);
+      const failed = [];
+      if (invite.email && !after.emailed) failed.push("the email didn’t go");
+      if (invite.phone && !after.texted) {
+        failed.push(after.textError === "sms_not_configured"
+          ? "texting isn’t switched on yet, so no text was sent"
+          : "the text didn’t go");
+      }
+      if (failed.length) setErr(`${went.length ? "But " : ""}${andList(failed)}.`
+        + (went.length ? "" : " Copy the link and send it yourself."));
+    } catch (e) {
+      console.error("[invites] resend failed:", e);
+      const code = e?.body?.error;
+      setErr(code === "already_accepted" ? "They’ve already accepted — they’re on your contractor list now."
+        : code === "revoked" ? "That invite was revoked."
+        : code === "expired" ? "That invite has expired. Send them a new one."
+        : code === "no_contact" ? "There’s no address on this one — it was made as a link to hand over."
+        : "Could not send it again. Try once more.");
+    } finally { setBusy(""); }
+  };
+
+  const revoke = async () => {
+    setBusy("revoke"); setErr("");
+    try { await api.revokeInvite(invite.id); onRevoked(invite.id); onClose(); }
+    catch (e) {
+      console.error("[invites] revoke failed:", e);
+      setErr("Could not revoke that invite.");
+      setBusy("");
+    }
+  };
+
+  return (
+    <div className="invited-panel">
+      <span className="invited-chip">Invited</span>
+      <h2>{inviteName(invite)}</h2>
+      <p className="panel-note">
+        Nothing else is known about them yet. Their trades, crews, documents and
+        rating arrive when they finish setting up their account.
+      </p>
+
+      <dl className="invited-facts">
+        {invite.companyName && invite.contact && <><dt>Company</dt><dd>{invite.companyName}</dd></>}
+        <dt>Invited</dt>
+        <dd>{invite.email || invite.phone
+          ? andList([invite.email, invite.phone].filter(Boolean))
+          : <span className="invited-when unsent">by link — no address on file</span>}</dd>
+        <dt>Status</dt>
+        <dd>{invite.sentAt
+          ? <>Sent {relTime(invite.sentAt)}</>
+          : <span className="invited-when unsent">Not sent — copy the link and send it yourself</span>}</dd>
+        <dt>Expires</dt>
+        <dd>{relTime(invite.expiresAt)}</dd>
+      </dl>
+
+      <code className="inv-url">{invite.url}</code>
+
+      {note && <p className="cov-hint ok" role="status"><CheckCircle2 size={13} /> {note}</p>}
+      {err && <p className="cov-hint" role="alert">{err}</p>}
+
+      <div className="invited-acts">
+        <button className="pick" onClick={copy}><Copy size={13} /> {copied ? "Copied" : "Copy link"}</button>
+        {sendable && <button className="pick" disabled={!!busy} onClick={resend}>
+          <Send size={13} /> {busy === "resend" ? "Sending…" : "Send again"}
+        </button>}
+        {canRevoke && <button className="pick danger" disabled={!!busy} onClick={revoke}>
+          <Trash2 size={13} /> {busy === "revoke" ? "Revoking…" : "Revoke"}
+        </button>}
+      </div>
+
+      <div className="panel-actions">
+        <button className="btn-ghost" onClick={onClose}>Done</button>
+      </div>
+    </div>
+  );
+}
+
 // ---- Account (profile, company, users, subscription) --------------------
 // One-time links a customer hands out themselves, one contractor at a time.
 // Deliberately weaker than the public application page that comes with Scale,
 // which is always on and can be found unprompted -- the difference between
 // the plans has to stay real.
-function InviteLinks({ canRevoke, onClose }) {
-  const [rows, setRows] = useState(null);   // null = still loading
+function InviteLinks({ onSent, onClose }) {
   const [contact, setContact] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [sentNote, setSentNote] = useState("");
-  const [copied, setCopied] = useState(null);
-
-  const load = async () => {
-    try { setRows(await api.listInvites()); }
-    catch (e) { console.error("[invites] load failed:", e); setRows([]); setErr("Could not load your links."); }
-  };
-  useEffect(() => { load(); }, []);
+  // The one this modal just made, if it made one. Everything outstanding
+  // lives in the Contractors list now; what stays here is the link to the
+  // invite you are looking at, because a link-only invite is unusable until
+  // somebody copies it and this is the moment they will.
+  const [made, setMade] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   const to = email.trim();
   const mobile = phone.trim();
@@ -9833,22 +10027,25 @@ function InviteLinks({ canRevoke, onClose }) {
       if (to && !validEmail(to)) { setErr("That email address doesn't look right."); return; }
       if (!phoneOk) { setErr("A mobile number needs 10 digits."); return; }
     }
-    setBusy(true); setErr(""); setSentNote("");
+    setBusy(true); setErr(""); setSentNote(""); setMade(null); setCopied(false);
     try {
       const made = await api.createInvite(link ? { contact: contact.trim() || null } : {
         contact: contact.trim() || null,
         email: to || null,
         phone: mobile || null,
       });
-      setRows((cur) => [made, ...(cur || [])]);
-      if (link) { copy(made.url, made.id); return; }
+      setMade(made);
+      // The Contractors list is where it lives from here, so it has to be
+      // told there is a new one before this modal closes.
+      onSent?.();
+      if (link) { copy(made.url); return; }
 
       // Each route reported on its own. "Invite sent" over a bounced email,
       // or over a text that could not go because texting is not switched on
       // yet, is a message somebody waits on that never left.
       const went = [made.emailed && to, made.texted && mobile].filter(Boolean);
       if (went.length) {
-        setSentNote(`Invite sent to ${andList(went)}.`);
+        setSentNote(`Invite sent to ${andList(went)}. They’re in your Contractors list as Invited until they finish signing up.`);
         setContact(""); setEmail(""); setPhone("");
       }
       const failed = [];
@@ -9861,7 +10058,7 @@ function InviteLinks({ canRevoke, onClose }) {
       if (failed.length) {
         setErr(`${went.length ? "But " : "The invite was created, but "}${andList(failed)}.`
           + (went.length ? "" : " Copy the link below and send it yourself."));
-        if (!went.length) copy(made.url, made.id);
+        if (!went.length) copy(made.url);
       }
     } catch (e) {
       console.error("[invites] create failed:", e);
@@ -9874,23 +10071,13 @@ function InviteLinks({ canRevoke, onClose }) {
   // Clipboard access is refused often enough -- an insecure origin, a browser
   // that wants a user gesture it did not see -- that the link has to stay
   // readable and selectable on screen regardless.
-  const copy = async (url, id) => {
+  const copy = async (url) => {
     try {
       await navigator.clipboard.writeText(url);
-      setCopied(id);
-      setTimeout(() => setCopied((c) => c === id ? null : c), 2000);
-    } catch { setCopied(null); }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { setCopied(false); }
   };
-
-  const revoke = async (id) => {
-    try {
-      await api.revokeInvite(id);
-      setRows((cur) => cur.map((r) => r.id === id ? { ...r, status: "revoked" } : r));
-    } catch (e) { console.error("[invites] revoke failed:", e); setErr("Could not revoke that link."); }
-  };
-
-  const open = (rows || []).filter((r) => r.status === "open");
-  const past = (rows || []).filter((r) => r.status !== "open");
 
   return (
     <div className="inv-panel">
@@ -9935,51 +10122,23 @@ function InviteLinks({ canRevoke, onClose }) {
         <CheckCircle2 size={13} /> {sentNote}</p>}
       {err && <p className="cov-hint" role="alert">{err}</p>}
 
-      {rows === null ? <p className="cov-hint">Loading…</p> : (
-        <>
-          {open.length === 0 && <p className="cov-hint">No open links yet.</p>}
-          {open.map((r) => (
-            <div key={r.id} className="inv-row-out">
-              <div className="inv-main">
-                <b>{r.contact || r.companyName || r.label || r.email || r.phone || "Unnamed invite"}</b>
-                {/* Sent and merely created are different facts. A row that
-                    says "sent" over a link nobody ever sent is how an account
-                    ends up waiting on a contractor who was never asked. */}
-                <span className="inv-who">
-                  {r.sentAt ? <>Sent to {andList([r.email, r.phone].filter(Boolean))} · {relTime(r.sentAt)}</>
-                    : (r.email || r.phone) ? <>Not sent — copy the link and send it yourself</>
-                    : <>Link to send yourself</>}
-                </span>
-                <code className="inv-url">{r.url}</code>
-              </div>
-              <div className="inv-acts">
-                <button className="pick" onClick={() => copy(r.url, r.id)}>
-                  <Copy size={13} /> {copied === r.id ? "Copied" : "Copy"}
-                </button>
-                {canRevoke && <button className="pick" onClick={() => revoke(r.id)}>
-                  <Trash2 size={13} /> Revoke
-                </button>}
-              </div>
-            </div>
-          ))}
-
-          {past.length > 0 && (
-            <>
-              <h5 className="inv-past">Previously</h5>
-              {past.map((r) => (
-                <div key={r.id} className="inv-row-out spent">
-                  <div className="inv-main">
-                    <b>{r.label || "Unnamed link"}</b>
-                    <span className="cov-hint">{
-                      r.status === "accepted" ? "Accepted"
-                        : r.status === "revoked" ? "Revoked" : "Expired"
-                    }</span>
-                  </div>
-                </div>
-              ))}
-            </>
-          )}
-        </>
+      {/* The link to the one just made, and only that one. Everything still
+          outstanding is in the Contractors list under Invited, which is
+          where somebody looking for a contractor already looks -- this modal
+          used to carry the whole list, so the answer to "did I invite them?"
+          lived behind a button called "Invite". */}
+      {made && (
+        <div className="inv-made">
+          <span className="inv-who">
+            {made.emailed || made.texted
+              ? "Their link, if you want to send it another way too:"
+              : "Send them this link — nothing has gone out on its own:"}
+          </span>
+          <code className="inv-url">{made.url}</code>
+          <button className="pick" onClick={() => copy(made.url)}>
+            <Copy size={13} /> {copied ? "Copied" : "Copy link"}
+          </button>
+        </div>
       )}
 
       <div className="panel-actions">
@@ -14892,6 +15051,46 @@ body{background:var(--paper)}
 .inv-acts .pick{display:flex;align-items:center;gap:5px}
 .inv-past{margin:20px 0 0;font-size:11.5px;font-weight:700;letter-spacing:.06em;
   text-transform:uppercase;color:var(--ink-soft)}
+.inv-made{display:flex;flex-direction:column;align-items:flex-start;gap:7px;margin-top:14px;
+  border:1px solid var(--line);border-radius:11px;padding:12px 13px;background:var(--card)}
+.inv-made .pick{display:flex;align-items:center;gap:5px}
+
+/* Invited contractors, in the Contractors list. A row of small cards rather
+   than the full contractor card: there is no rating, no crew count, no
+   document strip and no Assign button, and a card the same size as a real
+   one -- with three quarters of it empty -- would read as a contractor
+   whose details had gone missing. */
+.invited-strip{margin:0 0 18px}
+.invited-h{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:0 0 9px;
+  font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft)}
+.invited-h .count{background:var(--paper);border:1px solid var(--line);border-radius:20px;
+  padding:1px 8px;font-size:11px;letter-spacing:0}
+.invited-sub{font-weight:500;font-size:11.5px;letter-spacing:0;text-transform:none}
+.invited-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(225px,1fr));gap:10px}
+.invited-card{display:flex;flex-direction:column;align-items:flex-start;gap:3px;
+  background:var(--card);border:1px dashed var(--line);border-radius:12px;padding:12px 13px;
+  text-align:left;font:inherit;color:inherit;cursor:pointer;min-width:0;
+  transition:border-color .15s,transform .15s}
+.invited-card:hover{border-color:var(--brand);transform:translateY(-2px)}
+.invited-card b{font-size:13.5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.invited-chip{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;background:var(--paper);border:1px solid var(--line);
+  color:var(--ink-soft);padding:2px 8px;border-radius:20px;margin-bottom:3px}
+.invited-to,.invited-when{font-size:11.5px;color:var(--ink-soft);max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* An invite nobody has been sent is not the same as one they are sitting on,
+   and the difference is the whole reason somebody is waiting. */
+.invited-when.unsent{color:var(--red);font-weight:600}
+
+.invited-panel{max-width:420px}
+.invited-panel h2{margin:4px 0 0}
+.invited-facts{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:14px 0 12px;font-size:13px}
+.invited-facts dt{font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--ink-soft);align-self:center}
+.invited-facts dd{margin:0;min-width:0;word-break:break-word}
+.invited-acts{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.invited-acts .pick{display:flex;align-items:center;gap:5px}
+.invited-acts .pick.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 35%,var(--line))}
 
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;box-shadow:var(--shadow);transition:border-color .15s,transform .15s}

@@ -1248,6 +1248,40 @@ const inviteRowToJs = (r, account) => ({
     : "open",
 });
 
+// Sending one, by both routes. Lifted out of the create route so that
+// sending an invite again is the same act as sending it the first time --
+// same token, same wording, same reporting -- rather than a second
+// implementation that drifts from it.
+//
+// The token is deliberately reused. Reissuing would quietly break the link
+// already sitting in somebody's inbox, which is the opposite of what
+// "resend" means to whoever pressed it.
+async function deliverSubInvite(env, { row, account, accountId, userId }) {
+  const link = inviteUrl(account, row.token);
+  const email = row.email || null, phone = row.phone || null;
+  let mailResult = null, smsResult = null;
+  if (email) {
+    const mail = subInviteEmail({ contact: row.contact, companyName: row.company_name, account, link });
+    mailResult = await sendEmail(env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
+    await logMail(env, { accountId, companyId: null, to: email, kind: "sub_invite",
+      subject: mail.subject, result: mailResult, sentBy: userId });
+  }
+  if (phone) {
+    smsResult = await sendSms(env, { to: phone, body: subInviteSms({ companyName: row.company_name, account, link }) });
+    await logSms(env, { accountId, companyId: null, to: phone, kind: "sub_invite", result: smsResult });
+  }
+  const emailed = !!mailResult?.ok, texted = !!smsResult?.ok;
+  return {
+    emailed, texted,
+    emailError: email && !emailed ? (mailResult?.error || "send_failed") : null,
+    // sms_not_configured is its own answer: nothing is wrong with the
+    // number, SubSub simply cannot text yet, and telling somebody to check
+    // the number would send them looking in the wrong place.
+    textError: phone && !texted ? (smsResult?.error || "send_failed") : null,
+    went: [emailed && email, texted && phone].filter(Boolean).join(" and "),
+  };
+}
+
 // A PM can hand out links; only an admin should be able to revoke one, same
 // split as everywhere else in the account.
 app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
@@ -1293,20 +1327,11 @@ app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
   // The step that decides whether anybody is invited used to happen in the
   // account's own mail client, where nothing here could see it succeed or
   // fail. Now each route reports separately, and neither is assumed.
-  const link = inviteUrl(account, token);
-  let mailResult = null, smsResult = null;
-  if (email) {
-    const mail = subInviteEmail({ contact, companyName, account, link });
-    mailResult = await sendEmail(c.env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
-    await logMail(c.env, { accountId, companyId: null, to: email, kind: "sub_invite",
-      subject: mail.subject, result: mailResult, sentBy: userId });
-  }
-  if (phone) {
-    smsResult = await sendSms(c.env, { to: phone, body: subInviteSms({ companyName, account, link }) });
-    await logSms(c.env, { accountId, companyId: null, to: phone, kind: "sub_invite", result: smsResult });
-  }
-  const emailed = !!mailResult?.ok;
-  const texted = !!smsResult?.ok;
+  const sent = await deliverSubInvite(c.env, {
+    row: { token, email: email || null, phone, contact, company_name: companyName },
+    account, accountId, userId,
+  });
+  const { emailed, texted } = sent;
   // Only when something actually left, by either route. An invite marked
   // sent that never went is worse than one marked nothing, because somebody
   // waits on it.
@@ -1314,9 +1339,8 @@ app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
     await c.env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(id).run();
   }
 
-  const went = [emailed && email, texted && phone].filter(Boolean).join(" and ");
   await logActivity(c.env, accountId, userId, "invite_created",
-    went ? `Invite sent to ${went}` : label ? `Invite link created for ${label}` : "Invite link created");
+    sent.went ? `Invite sent to ${sent.went}` : label ? `Invite link created for ${label}` : "Invite link created");
 
   const row = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(id).first();
   return c.json({
@@ -1324,22 +1348,60 @@ app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
     // Each route on its own. "Invite sent" over a bounced email, or over a
     // text that could not go because texting is not switched on, is the
     // same class of lie as a booking page that confirms nothing.
-    emailed, texted,
-    emailError: email && !emailed ? (mailResult?.error || "send_failed") : null,
-    // sms_not_configured is its own answer: nothing is wrong with the
-    // number, SubSub simply cannot text yet, and telling somebody to check
-    // the number would send them looking in the wrong place.
-    textError: phone && !texted ? (smsResult?.error || "send_failed") : null,
+    emailed, texted, emailError: sent.emailError, textError: sent.textError,
   }, 201);
 });
 
-app.get("/api/invites", async (c) => {
+// Guarded the same way as creating one. An invite token is a credential --
+// whoever holds it can file an application against this account -- and a
+// tenant or a contractor seat has no reason to read the account's outstanding
+// ones. It was open to any authenticated seat in the account, which was only
+// ever safe because nothing but the admin screen asked for it.
+app.get("/api/invites", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
   const { results } = await c.env.DB.prepare(
     `SELECT * FROM sub_invites WHERE account_id = ? ORDER BY created_at DESC LIMIT 100`
   ).bind(accountId).all();
   return c.json(results.map((r) => inviteRowToJs(r, account)));
+});
+
+// Send an outstanding invite again, to the address it was addressed to.
+//
+// The commonest reason an invite goes nowhere is that it was sent on a
+// Tuesday and read on nothing. Without this the only recourse was to create
+// a second invite, which leaves two live tokens for one contractor and a
+// list that reads as two people.
+app.post("/api/invites/:id/resend", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const row = await c.env.DB.prepare(
+    `SELECT * FROM sub_invites WHERE id = ? AND account_id = ?`
+  ).bind(c.req.param("id"), accountId).first();
+  // Scoped by account, so an id from another account is a miss rather than a
+  // way to make somebody else's invite go out again.
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (row.used_at) return c.json({ error: "already_accepted" }, 409);
+  if (row.revoked_at) return c.json({ error: "revoked" }, 409);
+  if (new Date(row.expires_at) < new Date()) return c.json({ error: "expired" }, 409);
+  // A link made to hand over in person has nowhere to be sent. Saying so is
+  // better than reporting a send that had no recipient.
+  if (!row.email && !row.phone) return c.json({ error: "no_contact" }, 400);
+
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  const sent = await deliverSubInvite(c.env, { row, account, accountId, userId });
+  // Same rule as the first send: sent_at moves only if something left.
+  if (sent.emailed || sent.texted) {
+    await c.env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run();
+  }
+  await logActivity(c.env, accountId, userId, "invite_resent",
+    sent.went ? `Invite sent again to ${sent.went}` : "Invite could not be sent again");
+
+  const after = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(row.id).first();
+  return c.json({
+    ...inviteRowToJs(after, account),
+    emailed: sent.emailed, texted: sent.texted,
+    emailError: sent.emailError, textError: sent.textError,
+  });
 });
 
 app.delete("/api/invites/:id", requireRole("admin"), async (c) => {
