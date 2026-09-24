@@ -16,24 +16,24 @@ scheduling and work orders — as distinct from the marketing site at
   now also writes through to the API (`src/lib/api.js`), and login/reload
   hydrate real state from D1 instead of seed data — see "Persistence
   wiring" below for exactly what's covered and what's a known rough edge.
-- **Verified four ways.** `scripts/e2e-smoke.mjs` drives a real headless
-  browser through the actual UI — sign in, create a job, **reload the page**,
-  confirm the session AND the job survive — then a direct D1 query confirms
-  the row is really there, not a client-side illusion. `scripts/e2e-upload-smoke.mjs`
-  does the same for a real document: signs in as a contractor with one
-  missing, uploads a real file through the actual `<input type=file>`,
-  reloads, confirms it still shows as under review — then a direct R2 + D1
-  check confirms the bytes and the record are both really there.
-  `scripts/e2e-logo-smoke.mjs` does the same for account branding: signs in
-  as a Scale-plan admin, uploads a logo, reloads, and confirms the persisted
-  `<img>` actually loads from the public `/api/logo/:accountId` endpoint (not
-  a cached local blob). Underneath all three, the API itself was curl-tested
-  for auth/role enforcement, the `splitPatch` field-routing, the
-  documents-incomplete gate blocking work-order assignment, and the
-  cross-account document-review reset on re-upload.
-- Run them yourself: start both dev servers (see "Local development" below),
-  then any of `node scripts/e2e-smoke.mjs`, `node scripts/e2e-upload-smoke.mjs`,
-  `node scripts/e2e-logo-smoke.mjs` from `app/`.
+- **Verified by a suite, not by three smoke scripts.** The three
+  `scripts/e2e-*-smoke.mjs` files that used to be named here are gone. They
+  all drove the sign-in page by clicking `.ld-row`, the demo account picker
+  the app had before sign-in took an email and a password; nothing has
+  rendered that class for a long time, so all three timed out rather than
+  testing anything. A test that cannot run is worse than no test, because
+  the README goes on claiming it.
+- What replaced them is `npm run test:*` — forty-odd suites in `scripts/`,
+  each driving the real sign-in through a real headless browser and
+  asserting against what actually left the building (the mail and SMS
+  stubs) or what the API actually stored. `test:session` covers the
+  reload-and-still-signed-in half of the old smoke test; job creation and
+  persistence are covered many times over.
+- Two things those scripts covered that the suite does not yet: a document
+  uploaded through the real `<input type=file>`, checked for its bytes in
+  R2, and an account logo uploaded and then served back from
+  `/api/logo/:accountId`. Both are worth rebuilding against the real
+  sign-in; neither was being checked by the dead scripts either.
 - **Three real bugs caught while building this, all fixed:** the "Switch
   user" dev menu assumed `user.role` existed directly on the (now-global,
   correctly normalized) user record — it crashed the whole app the moment

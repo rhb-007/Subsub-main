@@ -372,10 +372,6 @@ Fixed as encountered, because each one blocked something on the list:
   section. They fail on the commit before this work too, and branded hostnames
   provision correctly in production, so this is test drift rather than a live
   fault. Worth a look before anyone trusts that file again.
-- `scripts/e2e-smoke.mjs` waits for `.ld-row`, the demo account picker the
-  sign-in page had before it took an email and a password. Nothing renders
-  that class any more, so the script times out — on the commit before this
-  work too. It needs rewriting against the real sign-in, or deleting.
 - The Add menu has a "User" entry behind `can("users")`, and no role grants
   `users`, so it never renders. Users are managed from My account -> Users,
   which works. Dead branch, harmless.
