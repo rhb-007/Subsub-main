@@ -24,6 +24,7 @@
     "test:invitedlist": "node scripts/invited-list-test.mjs",
     "test:rolelabel": "node scripts/role-label-test.mjs",
     "test:connect": "node scripts/connect-test.mjs",
+    "test:wayin": "node scripts/way-in-test.mjs",
     "test:licenses": "node scripts/license-provider-test.mjs",
     "test:hero": "node scripts/hero-image-test.mjs",
     "test:session": "node scripts/session-life-test.mjs",

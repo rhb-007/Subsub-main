@@ -753,6 +753,26 @@ async function createApplication(env, account, body, note) {
 // application did not go through when it did. It reports what happened to
 // the login and nothing else; "forgot password" is the way back if it went
 // wrong.
+// A way in, whichever way they came. applicantLogin() sets a password from
+// the form when they typed one -- but the password box is optional, and
+// somebody who skipped it used to end up with a company, an engagement, a
+// seat and no login at all, holding an email that said "thanks, we've got
+// it" and nothing else.
+//
+// So when no login was made, the invite goes instead. Nobody joins this
+// system without a way back into it.
+async function applicantWayIn(c, { account, userId, email, password }) {
+  const login = await applicantLogin(c, { account, userId, email, password });
+  if (login?.created) return { login };
+  const user = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(userId).first();
+  // Already has a login from somewhere else -- another account, an earlier
+  // application. Sending "choose a password" to somebody who has one is a
+  // phishing lesson in reverse, and inviteAccountUser refuses it for us.
+  const invite = await inviteAccountUser(c, { accountId: account.id, user,
+    role: "contractor", invitedBy: null });
+  return { login, invite };
+}
+
 async function applicantLogin(c, { account, userId, email, password }) {
   const pw = String(password || "");
   if (!pw) return null;
@@ -808,8 +828,7 @@ app.post("/api/apply/:subdomain", async (c) => {
   // while they are here grants nothing the application did not already
   // grant -- and it is what lets the sign-in page stop carrying a link that
   // explains how to do it afterwards.
-  const login = await applicantLogin(c, { account, userId, email: body.email, password });
-  return c.json({ ok: true, login });
+  return c.json({ ok: true, ...(await applicantWayIn(c, { account, userId, email: body.email, password })) });
 });
 
 // ---------------------------------------------------------------------------
@@ -1490,8 +1509,8 @@ app.post("/api/invite/:token", async (c) => {
   await logActivity(c.env, account.id, null, "invite_accepted",
     `${body.company} joined through an invite link`);
 
-  const login = await applicantLogin(c, { account, userId: applicantId, email: body.email, password });
-  return c.json({ ok: true, login });
+  return c.json({ ok: true,
+    ...(await applicantWayIn(c, { account, userId: applicantId, email: body.email, password })) });
 });
 
 
@@ -5937,6 +5956,7 @@ app.post("/api/platform/accounts", async (c) => {
     trades && trades.length ? JSON.stringify(trades) : null).run();
 
   let ownerId = null;
+  let ownerInvite = { invited: false, reason: "no_email" };
   if (ownerEmail) {
     // Reuse the person if this address is already known. Somebody running two
     // companies is one person with two memberships, not two rows.
@@ -5950,6 +5970,15 @@ app.post("/api/platform/accounts", async (c) => {
     await c.env.DB.prepare(
       `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, 'admin')`
     ).bind(uid(), ownerId, id).run();
+
+    // And tell them, because this is the front door. An account set up for
+    // a customer by SubSub used to arrive as nothing at all: a row, a
+    // subdomain, and an admin who had never heard of any of it and had no
+    // password to try. Somebody then read them a URL over the phone and
+    // talked them through "forgot password" for a login that did not exist.
+    const owner = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(ownerId).first();
+    ownerInvite = await inviteAccountUser(c, { accountId: id, user: owner, role: "admin",
+      invitedBy: { id: null, name: staff?.name || "SubSub" } });
   }
 
   if (plan === "scale") {
@@ -5959,7 +5988,8 @@ app.post("/api/platform/accounts", async (c) => {
   await auditPlatform(c.env, staff, id, "account_created",
     `${staff.name} created this account`, { name, subdomain, plan, ownerEmail: ownerEmail || null });
 
-  return c.json({ id, name, subdomain, kind, plan, billing, trades, ownerId }, 201);
+  return c.json({ id, name, subdomain, kind, plan, billing, trades, ownerId,
+    ownerInvite }, 201);
 });
 
 // Plan and account type, from the console. Deliberately does NOT touch
@@ -6258,7 +6288,13 @@ app.post("/api/platform/accounts/:id/users", async (c) => {
   await auditPlatform(c.env, staff, accountId, "user_added",
     `${staff.name} added ${name} as ${role}`, { userId: user.id, email, role });
 
-  return c.json({ id: user.id, name, email, role }, 201);
+  // Same rule as everywhere else: added is not the same as able to get in.
+  // Somebody added from the console had a seat and no way to reach it.
+  const full = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(user.id).first();
+  const invite = await inviteAccountUser(c, { accountId, user: full, role,
+    invitedBy: { id: null, name: staff?.name || "SubSub" } });
+
+  return c.json({ id: user.id, name, email, role, invite }, 201);
 });
 
 // Staff never see or set a password. This starts the same reset the person
