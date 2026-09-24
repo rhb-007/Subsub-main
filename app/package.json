@@ -23,6 +23,7 @@
     "test:userinvite": "node scripts/user-invite-test.mjs",
     "test:inviteui": "node scripts/invite-ui-test.mjs",
     "test:licenses": "node scripts/license-provider-test.mjs",
+    "test:hero": "node scripts/hero-image-test.mjs",
     "test:visits": "node scripts/tenant-visit-test.mjs",
     "test:reports": "node scripts/tenant-report-test.mjs",
     "test:decline": "node scripts/decline-test.mjs",
