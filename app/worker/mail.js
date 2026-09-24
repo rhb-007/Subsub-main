@@ -497,3 +497,14 @@ export function userInviteSms({ account, role, link }) {
     : "so you can use the account";
   return `${who} has added you on SubSub, ${what}. Choose a password here: ${link}`;
 }
+
+// A work order, on a lock screen. The three things that decide whether
+// somebody turns up: who wants the work, what trade, and by when they have
+// to answer.
+export function workOrderIssuedSms({ job, trade, woNumber, account, respondBy }) {
+  const who = account?.name || "A contractor";
+  const where = job?.address ? ` at ${job.address}` : "";
+  const by = respondBy ? ` Reply by ${String(respondBy).slice(0, 10)}.` : "";
+  return `${who} has sent you work order ${woNumber} — ${trade}${where}.${by} `
+    + `Accept or decline it in SubSub.`;
+}

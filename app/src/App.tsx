@@ -2308,12 +2308,35 @@ export default function SubSub() {
     const wanted = (details.trades && details.trades.length)
       ? details.trades
       : [{ trade, tradeScope: details.tradeScope || "", value: details.value || "" }];
-    wanted.forEach((ln) => {
-      persist("assign", api.assign(jobId, {
-        trade: ln.trade, companyId: sub.id, tradeScope: ln.tradeScope, value: ln.value,
-        payKind: ln.payKind || "fixed", rate: ln.rate || "", capHours: ln.capHours ?? null,
-        crewName: details.crewName, responseWindow: details.responseWindow,
-      }));
+    // Whether the contractor was actually told. This used to be thrown
+    // away: a bounced address, a number that could not be texted, or a
+    // contractor record with no address at all all looked, on this screen,
+    // exactly like a work order delivered -- and the person who pressed
+    // Assign is the only one who can fix any of them.
+    Promise.all(wanted.map((ln) => api.assign(jobId, {
+      trade: ln.trade, companyId: sub.id, tradeScope: ln.tradeScope, value: ln.value,
+      payKind: ln.payKind || "fixed", rate: ln.rate || "", capHours: ln.capHours ?? null,
+      crewName: details.crewName, responseWindow: details.responseWindow,
+    }))).then((made) => {
+      const told = made.filter((m) => m?.notified?.emailed || m?.notified?.texted);
+      if (told.length === made.length) {
+        const where = told[0]?.notified?.to;
+        setBillingNote(`Work order sent to ${sub.company}${where ? ` — ${where}` : ""}.`);
+        return;
+      }
+      const why = made.map((m) => m?.notified?.emailError || m?.notified?.textError).find(Boolean);
+      setBillingNote(
+        why === "no_contact"
+          ? `${sub.company} has no email or mobile on file, so nothing could be sent. `
+            + "The work order is issued — add a contact and send it again."
+        : why === "notify_off"
+          ? `${sub.company} has notifications switched off, so nothing was sent. `
+            + "The work order is issued — turn email or SMS on for them and send it again."
+        : `The work order is issued, but ${sub.company} could not be reached. `
+          + "Check their email and mobile, then reissue it.");
+    }).catch((err) => {
+      console.error("[persist] assign failed:", err);
+      setBillingNote("Could not issue that work order. It has not been sent — try again.");
     });
     { const jb = allJobs.find((j) => j.id === jobId);
       const n = (details.trades && details.trades.length) || 1;

@@ -12,7 +12,7 @@ import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEm
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
-  connectRequestEmail, connectRequestSms } from "./mail.js";
+  connectRequestEmail, connectRequestSms, workOrderIssuedSms } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -4716,27 +4716,65 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
 
   // Tell them. A work order nobody knows about is why response deadlines get
   // missed. Failure is logged and does not undo the issue.
+  //
+  // It goes by whichever routes the contractor asked for. A work order is
+  // the job itself, not an announcement about it, and a roofer who set
+  // "Email + SMS" and got neither has been given a deadline nobody told
+  // them about -- which is exactly how a response window expires.
+  //
+  // And it is REPORTED. This sent an email, wrote the result to email_log
+  // and returned nothing, so an address that bounced, a number that could
+  // not be texted, or a contractor with no address at all were all
+  // indistinguishable on screen from a work order delivered. Whoever
+  // pressed Assign is the only person who can fix any of those, and they
+  // were the one person not told.
+  let notified = { emailed: false, texted: false, emailError: null, textError: null, to: null };
   {
     const co = await c.env.DB.prepare(
-      `SELECT id, company, contact, email FROM companies WHERE id = ?`).bind(companyId).first();
-    if (co?.email) {
+      `SELECT id, company, contact, email, phone, notify FROM companies WHERE id = ?`).bind(companyId).first();
+    const prefs = parseJson(co?.notify, null) || {};
+    // Neither switched on cannot be a silence: the form that sets these
+    // refuses to save with both off, so a row in that state is old data
+    // rather than a decision, and email is the safer reading of it.
+    const wantEmail = prefs.email !== false || prefs.sms !== true;
+    const wantSms = prefs.sms === true;
+    const to = co?.email && wantEmail ? co.email : null;
+    const sms = co?.phone && wantSms ? co.phone : null;
+    notified.to = [to, sms].filter(Boolean).join(" and ") || null;
+
+    if (to || sms) {
       const [account, job] = await Promise.all([
         c.env.DB.prepare(`SELECT id, name, subdomain FROM accounts WHERE id = ?`).bind(accountId).first(),
         c.env.DB.prepare(`SELECT title, address, area, zip, date FROM jobs WHERE id = ?`).bind(jobId).first(),
       ]);
-      const mail = workOrderIssuedEmail({ company: co, contact: co.contact, job, trade,
-        woNumber, account, respondBy });
-      const result = await sendEmail(c.env, { to: co.email, subject: mail.subject,
-        text: mail.text, html: mail.html });
-      await logMail(c.env, { accountId, companyId, to: co.email, kind: "wo_issued",
-        subject: mail.subject, result, sentBy: userId });
+      if (to) {
+        const mail = workOrderIssuedEmail({ company: co, contact: co.contact, job, trade,
+          woNumber, account, respondBy });
+        const result = await sendEmail(c.env, { to, subject: mail.subject,
+          text: mail.text, html: mail.html });
+        await logMail(c.env, { accountId, companyId, to, kind: "wo_issued",
+          subject: mail.subject, result, sentBy: userId });
+        notified.emailed = !!result?.ok;
+        if (!result?.ok) notified.emailError = result?.error || "send_failed";
+      }
+      if (sms) {
+        const result = await sendSms(c.env, {
+          to: sms, body: workOrderIssuedSms({ job, trade, woNumber, account, respondBy }) });
+        await logSms(c.env, { accountId, companyId, to: sms, kind: "wo_issued", result });
+        notified.texted = !!result?.ok;
+        if (!result?.ok) notified.textError = result?.error || "send_failed";
+      }
+    } else {
+      // Nothing to send to at all, which is a fact about the contractor
+      // record and fixable in ten seconds by whoever is looking at it.
+      notified.emailError = co?.email || co?.phone ? "notify_off" : "no_contact";
     }
   }
   await logActivity(c.env, accountId, userId, "wo_issued",
     `Issued ${woNumber} to ${await companyName(c.env.DB, companyId)} · ${trade}`);
   await touchJob(c.env, jobId);
   await notifyTenant(c, jobId, autoScheduled ? "booked" : "arranging");
-  return c.json({ id, woNumber, status: autoScheduled ? "accepted" : "pending" }, 201);
+  return c.json({ id, woNumber, status: autoScheduled ? "accepted" : "pending", notified }, 201);
 });
 
 // Sending somebody out, without waiting for a manager to wake up.

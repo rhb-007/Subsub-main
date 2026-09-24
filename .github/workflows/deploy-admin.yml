@@ -1,0 +1,176 @@
+# Deploy the internal console (admin.subsub.work).
+#
+# This is the one piece of SubSub that nothing deployed.
+#
+# The customer app is a Cloudflare Pages project, built on every push. The
+# API Worker has deploy-api.yml next door. The console is a third thing --
+# a separate Worker, subsub-admin, built from the same source with
+# VITE_BUILD=platform -- and it was only ever deployed by running wrangler
+# from a terminal. Nobody here has a terminal, so it has been running
+# whatever was last pushed by hand, for as long as that has been true.
+#
+# That is not a cosmetic gap. The console is where support answers "did
+# they get the email?" and "is that contractor really on the account?", and
+# a console running last month's bundle answers both of those wrongly.
+#
+# Two ways to press it:
+#
+#   * Actions tab -> "Deploy admin console" -> Run workflow. Works from a
+#     phone.
+#   * Automatically, when a push changes anything the console is built from.
+#
+# It needs the same two repository secrets as deploy-api.yml
+# (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID) and two more values for the
+# build itself, as repository secrets OR variables:
+#
+#   VITE_SUPABASE_URL        the project URL. Public.
+#   VITE_SUPABASE_ANON_KEY   the ANON / publishable key. Public by design --
+#                            never the service_role key, which belongs
+#                            nowhere near a browser bundle or this file.
+#
+# Without those two the console builds, but with no sign-in configured: it
+# renders a form nobody can get through, which looks like a broken console
+# rather than a missing variable. So the build refuses rather than shipping
+# one, and says which value is missing.
+name: Deploy admin console
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "app/src/**"
+      - "app/shared/**"
+      - "app/worker-admin.js"
+      - "app/wrangler.admin.toml"
+      - "app/index.html"
+      - "app/vite.config.js"
+      - "app/package.json"
+      - "app/package-lock.json"
+      - ".github/workflows/deploy-admin.yml"
+
+concurrency:
+  group: deploy-admin
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      # Same split as deploy-api.yml: pressing Run workflow is asking for a
+      # deploy, so a missing credential is a failure that names itself. A
+      # push is not asking for anything, so it still builds and checks --
+      # worth having either way -- and only the upload is skipped.
+      - name: Check the credentials are set
+        id: creds
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ASKED_FOR: ${{ github.event_name }}
+        run: |
+          missing=""
+          [ -n "$TOKEN" ]   || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "$ACCOUNT" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          if [ -z "$missing" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          if [ "$ASKED_FOR" = "workflow_dispatch" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "::notice::Not deploying:$missing not set. Building and checking anyway."
+
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      - name: Lint
+        working-directory: app
+        run: npm run lint
+
+      # Deploying the customer app to admin.subsub.work is the failure this
+      # guards. Both builds write to dist/ and the only thing that decides
+      # which one is in there is VITE_BUILD, so it is checked before the
+      # build and proved after it.
+      - name: Check the build variables are set
+        id: buildvars
+        env:
+          SUPA_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
+          SUPA_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          missing=""
+          [ -n "$SUPA_URL" ] || missing="$missing VITE_SUPABASE_URL"
+          [ -n "$SUPA_KEY" ] || missing="$missing VITE_SUPABASE_ANON_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing build value(s):$missing"
+            echo "A console built without these has no sign-in configured — it renders a form"
+            echo "nobody can get through, which reads as a broken console rather than a"
+            echo "missing setting. Add them under Settings -> Secrets and variables ->"
+            echo "Actions, as secrets or variables. Use the ANON (publishable) key, never"
+            echo "the service_role key."
+            exit 1
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build the console
+        working-directory: app
+        env:
+          VITE_BUILD: platform
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
+          VITE_STAFF_EMAIL_DOMAIN: ${{ vars.VITE_STAFF_EMAIL_DOMAIN || 'subsub.work' }}
+        run: npm run build
+
+      # Two things, both of which have a wrong answer that deploys silently.
+      - name: Check it is the console we built, and the console we are deploying
+        working-directory: app
+        run: |
+          name=$(grep -m1 '^name' wrangler.admin.toml | cut -d'"' -f2)
+          if [ "$name" != "subsub-admin" ]; then
+            echo "::error::app/wrangler.admin.toml names '$name', expected 'subsub-admin'."
+            exit 1
+          fi
+          # The platform build renders the staff sign-in; the customer build
+          # renders the tenant one. Grep the bundle for a string only the
+          # console has, rather than trusting that the variable took.
+          if ! grep -rqF "SubSub internal console" dist/assets/*.js; then
+            echo "::error::The built bundle is not the console."
+            echo "VITE_BUILD=platform did not take, so this is the customer app — and"
+            echo "deploying it to admin.subsub.work would put a tenant sign-in behind"
+            echo "Access with nothing to sign into."
+            exit 1
+          fi
+          echo "deploying $name"
+
+      - name: Deploy
+        if: steps.creds.outputs.ready == 'true'
+        working-directory: app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --config=./wrangler.admin.toml
+
+      - name: Say what happened
+        if: success()
+        run: |
+          if [ "${{ steps.creds.outputs.ready }}" = "true" ]; then
+            echo "### subsub-admin deployed from \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### subsub-admin built and checked, not deployed"
+              echo ""
+              echo "The console builds cleanly at \`${{ github.sha }}\`, and is the console."
+              echo "Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to deploy it."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
