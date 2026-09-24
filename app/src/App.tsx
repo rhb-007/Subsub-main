@@ -14816,7 +14816,50 @@ function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, 
   ];
   return (
     <div className="detail">
-      <div className="detail-head">
+      {/* Who this is, first and on its own.
+          The trades used to sit above the company name -- nine chips of
+          "Electrical / Plumbing / HVAC / Drywall..." before anything said
+          WHOSE they were -- so the one thing somebody opens this card to
+          check arrived fourth. And the Edit button shared the top-right
+          corner with the modal's close X, which sits on top of everything
+          at a fixed position: Edit was half-covered and easy to miss the
+          other way. Identity is a panel of its own now, the trades are
+          below it where they belong, and nothing lives under the X. */}
+      <div className="detail-id">
+        <div className="di-top">
+          <h2>{sub.company}</h2>
+          {sub.rating > 0 && <span className="rating-wrap"><Stars value={sub.rating} />
+            {sub.ratedJobs ? <span className="rated-count">from {sub.ratedJobs} {sub.ratedJobs === 1 ? "job" : "jobs"}</span> : null}</span>}
+        </div>
+        <p className="di-person">
+          <b>{sub.contact}</b> · <Users size={13} /> {crewCount(sub)} {crewCount(sub) === 1 ? "crew" : "crews"} · {headCount(sub)} people ·
+          <span className={`avail-inline ${sub.available ? "up" : "down"}`}>
+            {sub.available ? "Available" : "Not available"}</span>
+        </p>
+        <div className="detail-contact">
+          <a href={`tel:${sub.phone}`}><Phone size={14} /> {sub.phone}</a>
+          <a href={`mailto:${sub.email}`}><Mail size={14} /> {sub.email}</a>
+        </div>
+        {(sub.city || sub.zip) && (
+          <p className="detail-addr"><MapPin size={13} /> {[sub.city, sub.state, sub.zip].filter(Boolean).join(", ")}</p>
+        )}
+        <div className="di-chips">
+          {(sub.propertyIds || []).length > 0 && (
+            <span className="notify-chip" title="Properties this vendor is scoped to">
+              <Building2 size={12} /> {sub.propertyIds.length} propert{sub.propertyIds.length === 1 ? "y" : "ies"}
+            </span>
+          )}
+          <span className="notify-chip" title="How long they warranty their labor">
+            <ShieldCheck size={12} /> {warrantyLabel(sub)}
+          </span>
+          <span className="notify-chip" title="How this contractor receives automated notifications">
+            <Bell size={12} /> {notifyLabel(sub)}
+          </span>
+        </div>
+      </div>
+
+      {/* The trades, and Edit beside them -- a long way from the close X. */}
+      <div className="detail-trades">
         <div className="cat-row">
           {sub.categories.map((c) => {
             const M = catMeta(c);
@@ -14825,33 +14868,6 @@ function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, 
         </div>
         <button className="edit-btn" onClick={onEdit}><Pencil size={13} /> Edit</button>
       </div>
-      <div className="name-row big"><h2>{sub.company}</h2>
-        {sub.rating > 0 && <span className="rating-wrap"><Stars value={sub.rating} />
-          {sub.ratedJobs ? <span className="rated-count">from {sub.ratedJobs} {sub.ratedJobs === 1 ? "job" : "jobs"}</span> : null}</span>}
-      </div>
-      <div className="detail-contact">
-        <a href={`tel:${sub.phone}`}><Phone size={14} /> {sub.phone}</a>
-        <a href={`mailto:${sub.email}`}><Mail size={14} /> {sub.email}</a>
-        {(sub.propertyIds || []).length > 0 && (
-          <span className="notify-chip" title="Properties this vendor is scoped to">
-            <Building2 size={12} /> {sub.propertyIds.length} propert{sub.propertyIds.length === 1 ? "y" : "ies"}
-          </span>
-        )}
-        <span className="notify-chip" title="How long they warranty their labor">
-          <ShieldCheck size={12} /> {warrantyLabel(sub)}
-        </span>
-        <span className="notify-chip" title="How this contractor receives automated notifications">
-          <Bell size={12} /> {notifyLabel(sub)}
-        </span>
-      </div>
-      {(sub.city || sub.zip) && (
-        <p className="detail-addr"><MapPin size={13} /> {[sub.city, sub.state, sub.zip].filter(Boolean).join(", ")}</p>
-      )}
-      <p className="detail-person">
-        {sub.contact} · <Users size={13} /> {crewCount(sub)} {crewCount(sub) === 1 ? "crew" : "crews"} · {headCount(sub)} people ·
-        <span className={`avail-inline ${sub.available ? "up" : "down"}`}>
-          {sub.available ? "Available" : "Not available"}</span>
-      </p>
 
       {(() => { const st = contractorStats(sub, jobs); return (
         <div className="stat-cards">
@@ -16133,6 +16149,28 @@ body{background:var(--paper)}
 .modal-close{position:absolute;top:16px;right:16px;border:0;background:var(--paper);width:30px;height:30px;border-radius:8px;display:grid;place-items:center;cursor:pointer;color:var(--ink-soft)}
 .modal-close:hover{background:var(--line)}
 
+/* The identity block on a contractor's card. Everything else on this
+   screen -- capabilities, coverage, crews, notes, licence, documents --
+   answers a question you only ask once you know whose card you are on, so
+   that goes first, in a panel of its own, and the trades come after it.
+
+   The right padding is not decoration. The modal's close X is positioned
+   absolutely at top:16 right:16, so it sits over the top-right corner of
+   whatever is first in the modal; this keeps the name and the rating out
+   from under it. */
+.detail-id{background:var(--paper);border:1px solid var(--line);border-radius:13px;
+  padding:15px 40px 14px 16px;margin-bottom:12px}
+.di-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.di-top h2{margin:0;font-size:23px;line-height:1.2;letter-spacing:-.02em;font-weight:700}
+.di-person{font-size:13.5px;color:var(--ink-soft);margin:5px 0 9px;
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.di-person b{color:var(--ink);font-weight:600}
+.di-chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+/* Trades below the identity, with Edit at the end of them -- out of the
+   close button's corner, and no longer a row of its own. */
+.detail-trades{display:flex;align-items:flex-start;justify-content:space-between;
+  gap:12px;margin-bottom:16px}
+.detail-trades .cat-row{flex:1;min-width:0}
 .detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:2px}
 .edit-btn{display:flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;flex:none}
 .edit-btn:hover{background:var(--paper);border-color:var(--brand);color:var(--brand)}
