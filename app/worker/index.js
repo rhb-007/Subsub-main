@@ -1643,15 +1643,28 @@ app.get("/api/connect/lookup", requireRole("admin", "pm"), async (c) => {
     co = await c.env.DB.prepare(`SELECT * FROM companies WHERE phone = ?`).bind(phone).first();
   }
   if (!co) return c.json({ found: false });
-  if (!(await companyHasLogin(c.env, co.id))) return c.json({ found: false, reason: "no_account" });
 
+  // Their own contractor, first and regardless of anything else. Most
+  // company rows here were typed in by a hiring account and have no login
+  // behind them, and the login check below quite rightly refuses to offer
+  // those for connecting -- but applying it first meant somebody typing the
+  // address of a contractor ALREADY ON THEIR OWN LIST was told "nobody on
+  // SubSub matches that". Nothing is being disclosed here that the account
+  // did not type in itself.
   const engaged = !!(await c.env.DB.prepare(
     `SELECT 1 AS yes FROM engagements WHERE account_id = ? AND company_id = ?`
   ).bind(accountId, co.id).first());
+  if (engaged) return c.json({ found: true, match: connectMatchToJs(co, { engaged: true, pending: false }) });
+
+  // Somebody else's company row with nobody behind it. Asking it to connect
+  // would be a request no one could ever accept, so it is not offered and
+  // the ordinary add-them-yourself path carries on as it always has.
+  if (!(await companyHasLogin(c.env, co.id))) return c.json({ found: false, reason: "no_account" });
+
   const pending = !!(await c.env.DB.prepare(
     `SELECT 1 AS yes FROM connect_requests WHERE account_id = ? AND company_id = ? AND status = 'pending'`
   ).bind(accountId, co.id).first());
-  return c.json({ found: true, match: connectMatchToJs(co, { engaged, pending }) });
+  return c.json({ found: true, match: connectMatchToJs(co, { engaged: false, pending }) });
 });
 
 // The same question, asked by a scanned code rather than by an address.
@@ -1686,12 +1699,14 @@ app.post("/api/connect-requests", requireRole("admin", "pm"), async (c) => {
     ? await c.env.DB.prepare(`SELECT * FROM companies WHERE connect_code = ?`).bind(code).first()
     : await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(String(b.companyId || "")).first();
   if (!co) return c.json({ error: "not_found" }, 404);
-  if (!(await companyHasLogin(c.env, co.id))) return c.json({ error: "no_account" }, 409);
 
+  // Same order as the lookup: already ours beats anything else, or a
+  // contractor on our own list reads as a stranger with no account.
   const engaged = await c.env.DB.prepare(
     `SELECT id FROM engagements WHERE account_id = ? AND company_id = ?`
   ).bind(accountId, co.id).first();
   if (engaged) return c.json({ error: "already_engaged", companyId: co.id }, 409);
+  if (!(await companyHasLogin(c.env, co.id))) return c.json({ error: "no_account" }, 409);
 
   const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
   const id = uid();

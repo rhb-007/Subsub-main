@@ -83,6 +83,12 @@ const cleanup = () => {
     `DELETE FROM memberships WHERE company_id = '${THEM.companyId}' AND account_id = '${GC}';`,
     `DELETE FROM activity WHERE kind LIKE 'connect%';`,
     `UPDATE companies SET connect_code = NULL WHERE id = '${THEM.companyId}';`,
+    `DELETE FROM user_invites WHERE email LIKE '%${S}%';`,
+    `DELETE FROM memberships WHERE company_id IN (SELECT id FROM companies WHERE company LIKE '%${S}%');`,
+    `DELETE FROM engagements WHERE company_id IN (SELECT id FROM companies WHERE company LIKE '%${S}%');`,
+    `DELETE FROM activity WHERE text LIKE '%${S}%';`,
+    `DELETE FROM users WHERE email LIKE '%${S}%';`,
+    `DELETE FROM companies WHERE company LIKE '%${S}%';`,
     `DELETE FROM memberships WHERE user_id = 'usr_cx_${S}';`,
     `DELETE FROM activity WHERE user_id = 'usr_cx_${S}';`,
     `DELETE FROM users WHERE id = 'usr_cx_${S}';`,
@@ -186,6 +192,43 @@ try {
 
     const nothing = await fetch(`${API}/connect/lookup`, { headers: H });
     ck("and asking nothing is refused rather than answered", nothing.status === 400, String(nothing.status));
+  }
+
+  console.log("\n-- a contractor already on our own list --");
+  {
+    // The report this answers: a general contractor typed the email of a
+    // subcontractor ALREADY ON THEIR OWN ROSTER and was told "Nobody on
+    // SubSub matches that."
+    //
+    // Most company rows on SubSub were typed in by a hiring account and
+    // have no login behind them -- Sound Siding above is one, and the
+    // lookup rightly refuses to offer those for connecting, since nobody
+    // could accept. But that check ran first, so it also swallowed the
+    // account's own contractors. Nothing is disclosed by naming a company
+    // that this account typed in itself.
+    const email = `mine.${S}@ownroster.test`;
+    const mine = await (await fetch(`${API}/subs`, { method: "POST", headers: H,
+      body: JSON.stringify({ company: `Own Roster ${S}`, contact: "Chris Roster", email,
+        categories: ["siding"], caps: [] }) })).json();
+    ck("a contractor is on our roster", !!mine.companyId, JSON.stringify(mine).slice(0, 70));
+    // Take the login away, which is the state every contractor added before
+    // invites were sent is in.
+    d1(`DELETE FROM user_invites WHERE email = '${email}';`);
+    d1(`DELETE FROM memberships WHERE user_id IN (SELECT id FROM users WHERE email = '${email}');`);
+    d1(`DELETE FROM users WHERE email = '${email}';`);
+
+    const look = await (await fetch(`${API}/connect/lookup?email=${email}`, { headers: H })).json();
+    ck("looking them up finds them, rather than denying they exist",
+      look.found === true, JSON.stringify(look).slice(0, 110));
+    ck("and says they are already ours", look.match?.engaged === true, String(look.match?.engaged));
+    ck("naming the company, so it is plainly the right one",
+      look.match?.company === `Own Roster ${S}`, look.match?.company);
+
+    const ask = await fetch(`${API}/connect-requests`, { method: "POST", headers: H,
+      body: JSON.stringify({ companyId: mine.companyId }) });
+    const askBody = await ask.json();
+    ck("and asking to connect says they are already engaged, not that they have no account",
+      ask.status === 409 && askBody.error === "already_engaged", `${ask.status} ${askBody.error}`);
   }
 
   console.log("\n-- who may ask --");
@@ -412,6 +455,14 @@ try {
     ck("they are the three that can identify somebody",
       /email/i.test(gate) && /mobile/i.test(gate) && /license/i.test(gate),
       gate.replace(/\n/g, " ").slice(0, 120));
+    // "Skip" only means something when there is something to skip. With
+    // nothing typed there is nothing to skip past, and calling it that
+    // reads as though a step is being missed out.
+    const firstBtn = await gc.page.evaluate(() =>
+      [...document.querySelectorAll(".cx-gate .form-actions button")]
+        .map((b) => b.innerText.trim()).join(" | "));
+    ck("the way on says continue, not skip, while there is nothing to skip",
+      /continue/i.test(firstBtn) && !/skip/i.test(firstBtn), firstBtn);
 
     await typeGate("Email", "someone.new@nowhere.test");
     await wait(2600);
@@ -419,6 +470,9 @@ try {
     // blank space says the second when it means the first.
     ck("an address nobody has says so in words", /nobody on subsub matches/i.test(await gateText()),
       (await gateText()).split("\n").find((l) => /matches/i.test(l)) || "said nothing");
+    ck("and still says continue, because nothing was found to skip", await gc.page.evaluate(() =>
+      [...document.querySelectorAll(".cx-gate .form-actions button")]
+        .some((b) => /continue/i.test(b.innerText))));
     ck("and does not pretend to have found somebody",
       await gc.page.evaluate(() => !document.querySelector(".cx-found")));
 
@@ -429,11 +483,17 @@ try {
     ck("naming the company", card.includes(THEM.company), card.split("\n")[1]);
     ck("and saying there is nothing to fill in", /nothing to fill in/i.test(card),
       (card.match(/.*nothing to fill in.*/i) || ["not said"])[0].slice(0, 70));
+    // NOW there is something to skip, and only now.
+    const withMatch = await gc.page.evaluate(() =>
+      [...document.querySelectorAll(".cx-gate .form-actions button")]
+        .map((b) => b.innerText.trim()).join(" | "));
+    ck("and only with somebody found does the way on say skip",
+      /skip/i.test(withMatch), withMatch);
 
     // Never a dead end. Two companies can share a number, and plenty of
     // contractors have no email on file at all.
     await gc.page.evaluate(() => [...document.querySelectorAll(".cx-gate .form-actions button")]
-      .find((b) => /by hand/i.test(b.innerText))?.click());
+      .find((b) => /add them myself|^continue$/i.test(b.innerText))?.click());
     await wait(900);
     ck("it can be waved past into the form the old way",
       await gc.page.evaluate(() => !document.querySelector(".cx-gate") && !!document.querySelector(".sf-steps")));
@@ -455,7 +515,7 @@ try {
     await typeGate("License", "GATECARRY99");
     await wait(2500);
     await gc.page.evaluate(() => [...document.querySelectorAll(".cx-gate .form-actions button")]
-      .find((b) => /add them myself/i.test(b.innerText))?.click());
+      .find((b) => /add them myself|^continue$/i.test(b.innerText))?.click());
     await wait(1000);
     const carried = await gc.page.evaluate(() => {
       const more = document.querySelector(".sf-more");

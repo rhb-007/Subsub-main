@@ -133,7 +133,7 @@ try {
   console.log("\n-- past the are-they-already-here gate --");
   ck("it opens on the gate rather than the form", await seen(/already on SubSub\?/i));
   await page.evaluate(() => [...document.querySelectorAll(".cx-gate .form-actions button")]
-    .find((b) => /add them myself/i.test(b.innerText))?.click());
+    .find((b) => /add them myself|^continue$/i.test(b.innerText))?.click());
   await wait(900);
   ck("and skipping it lands on the form", await seen(/Step 1 of 3/));
 

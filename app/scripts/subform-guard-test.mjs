@@ -79,7 +79,7 @@ try {
   // about the step guards behind it, so it goes straight past -- the gate
   // has its own suite in connect-test.mjs.
   await page.evaluate(() => [...document.querySelectorAll(".cx-gate .form-actions button")]
-    .find((b) => /add them myself/i.test(b.innerText))?.click());
+    .find((b) => /add them myself|^continue$/i.test(b.innerText))?.click());
   await wait(900);
   const ty = async (ph, v) => { const e = await page.$(`input[placeholder="${ph}"]`); await e.click({ clickCount: 3 }); await e.type(v); };
   await ty("Company name", "Guard Co"); await ty("Primary contact", "Ana"); await ty("name@company.com", "a@b.test");

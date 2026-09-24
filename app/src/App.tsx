@@ -15350,7 +15350,6 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
     || v.mailStreet || v.mailCity || v.mailState || v.mailZip
     || Number(v.rating) > 0 || v.available === false);
   const [moreOpen, setMoreOpen] = useState(() => !!existing || hasExtras(init));
-  const gateTyped = !!(f.email.trim() || f.phone.trim() || f.license.trim());
 
   const askToConnect = async () => {
     setConnecting(true); setConnectErr("");
@@ -15455,7 +15454,12 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect }) {
               // Whatever was typed up here has to be visible down there.
               setMoreOpen((open) => open || hasExtras(f));
             }}>
-            {match ? "Not them — add by hand" : gateTyped ? "Add them myself" : "Skip — add them myself"}
+            {/* "Skip" only means something when there is something to
+                skip. With nobody found -- or nobody looked for yet --
+                this button is not skipping anything, it is carrying on to
+                the form, and calling that "skip" reads as though a step
+                is being missed out. */}
+            {match ? "Skip — add them myself" : "Continue"}
           </button>
         </div>
       </div>
