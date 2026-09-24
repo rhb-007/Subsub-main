@@ -520,33 +520,11 @@ body.nav-open{overflow:hidden}
 
       <div class="hero-crew">
         <picture>
-          <!-- The wider crew, on anything with room to stand them beside the
-               words: eight of them rather than five, which needs width to
-               read as a crew rather than a scrum.
-
-               Landscape AND at least 1001px. The width alone would catch a
-               12.9" tablet held upright, which is 1024 across and is exactly
-               the case this is meant to exclude; the orientation alone would
-               catch a phone turned sideways. Both together is what "desktop
-               and tablet landscape" actually means.
-
-               A tall monitor turned portrait gets the narrower crew. That is
-               a fair trade for a rule that is one line and has no
-               exceptions. -->
-          <source type="image/webp" media="(min-width:1001px) and (orientation:landscape)"
-            srcset="hero-crew-wide.webp 820w, hero-crew-wide@2x.webp 1536w"
-            sizes="46vw" width="820" height="547">
-          <source media="(min-width:1001px) and (orientation:landscape)"
-            srcset="hero-crew-wide.png 820w, hero-crew-wide@2x.png 1536w"
-            sizes="46vw" width="820" height="547">
-
           <source type="image/webp" srcset="hero-crew.webp 820w, hero-crew@2x.webp 1626w"
-            sizes="92vw" width="820" height="470">
-          <!-- Alt covers both, because there is only one of it and either
-               image may be the one on screen. -->
+            sizes="(max-width:900px) 92vw, 46vw">
           <img src="hero-crew.png" srcset="hero-crew.png 820w, hero-crew@2x.png 1626w"
-            sizes="92vw" width="820" height="470"
-            alt="A grinning crew of sock-puppet subcontractors in hard hats and hi-vis vests, holding a hammer, a nail gun and a length of timber"
+            sizes="(max-width:900px) 92vw, 46vw" width="820" height="470"
+            alt="Five sock-puppet subcontractors in hard hats and hi-vis vests, grinning, one holding a hammer and one a length of timber"
             fetchpriority="high" decoding="async">
         </picture>
       </div>
