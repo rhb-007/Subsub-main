@@ -789,6 +789,45 @@ a provider sign-in comes back with a session and no form submit, so the app
 has to notice it on load. Without that it draws the sign-in screen at
 somebody who has just authenticated.
 
+## Adding somebody who works at the account
+
+Users → Add sends them an invite. They choose a password from the link and
+they are in, in the seat the admin already gave them.
+
+Before this it wrote a `users` row and a membership and **sent nothing at
+all** — no email, no link. Whoever was added found out by being told, and got
+in by noticing "Already invited? Create your password" on the sign-in screen
+and working out that it meant them. The roster looked identical whether
+somebody had signed in a hundred times or had never heard of SubSub, so
+nobody could see it happening either.
+
+The roster now says. Anybody without a login carries a line — *"Hasn't set a
+password yet · invite sent 3 days ago"* — with **Send again** next to it.
+Somebody who already has a login is never offered one: a "choose a password"
+mail to a person who has one is a phishing lesson in reverse.
+
+The invite carries no role. The membership is written when the admin adds
+them, so the link proves an address and sets a password and cannot widen
+anything. Migration **028** adds the table; without it people can still be
+added and the Worker logs that no invite was sent rather than refusing.
+
+### "Already invited? Create your password" is gone
+
+That line used to sit at the bottom of every sign-in screen in the product,
+and it was not a convenience — it was the only way in for anybody an account
+had added, because none of the three invites sent anything. A line that reads
+like an edge case was carrying the whole flow.
+
+All three send now — tenants, subcontractors, and the people who work at the
+account — and every one of them ends on a screen that takes a password. The
+public application form takes one too, which is the last case that used to
+need it: applying already creates that person a contractor membership, so
+choosing a password there grants nothing the application did not.
+
+Somebody whose invite expired asks whoever added them for another. That is a
+person, not a link on a sign-in box explaining a flow to somebody who is
+looking at a sign-in box.
+
 ## Inviting a subcontractor
 
 The account types in an email address and SubSub sends the invite. The link

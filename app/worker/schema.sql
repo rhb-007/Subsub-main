@@ -482,6 +482,23 @@ CREATE TABLE tenant_invites (
   user_id      TEXT REFERENCES users(id),
   revoked_at   TEXT
 );
+
+-- The same idea for the people who work at the account -- see migration 028
+-- for why this is not a row in the table above.
+CREATE TABLE user_invites (
+  id          TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token       TEXT UNIQUE NOT NULL,
+  email       TEXT,
+  created_by  TEXT REFERENCES users(id),
+  created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+  expires_at  TEXT NOT NULL,
+  sent_at     TEXT,
+  used_at     TEXT,
+  revoked_at  TEXT
+);
+CREATE INDEX idx_user_invites_account ON user_invites(account_id, created_at);
 CREATE INDEX idx_tenant_invites_account ON tenant_invites(account_id);
 
 CREATE TABLE sub_invites (

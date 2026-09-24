@@ -218,6 +218,14 @@ export const api = {
 
   // One-time subcontractor invite links. The first three need a session; the
   // last two are how somebody holding a link uses it, before they have one.
+  // Somebody added to the account itself, setting their password. Public,
+  // like the other two invite lookups: they hold a link and no session.
+  lookupUserInvite: (token) => request(`/user-invite/${token}`),
+  acceptUserInvite: (token, body) =>
+    request(`/user-invite/${token}`, { method: "POST", body: JSON.stringify(body) }),
+  resendUserInvite: (userId) =>
+    request(`/account-users/${userId}/invite`, { method: "POST" }),
+
   listInvites: () => request("/invites"),
   // Takes an object now: an address means SubSub sends it, a label alone
   // still makes a link for the account to hand over itself.

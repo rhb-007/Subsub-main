@@ -11,7 +11,7 @@ import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
-  subInviteEmail } from "./mail.js";
+  subInviteEmail, userInviteEmail } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -170,6 +170,9 @@ app.use("/api/*", async (c, next) => {
     // trailing slash matters: /api/tenants, the manager's roster, stays
     // behind auth, and so would any other path beginning the same way.
     || c.req.path.startsWith("/api/tenant-invite/")
+    // The same for somebody added to the account itself: they hold a link
+    // and no session, and the link is how they get one.
+    || c.req.path.startsWith("/api/user-invite/")
     || c.req.path === "/api/stripe/webhook"
     || c.req.path === "/api/impersonation/end"
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
@@ -735,6 +738,41 @@ async function createApplication(env, account, body, note) {
   return { companyId, engagementId, userId: user.id };
 }
 
+// A login for somebody who has just applied, set from the same form.
+//
+// This was the actual gap on the contractor side: applying created the
+// company, the engagement and a users row, and left them with no way in --
+// there is no password anywhere in that. They had to notice "Already
+// invited? Create your password" on the sign-in page and work out that it
+// meant them.
+//
+// Never fails the request. By the time this runs the application is saved
+// and any invite is spent, so throwing here would tell somebody their
+// application did not go through when it did. It reports what happened to
+// the login and nothing else; "forgot password" is the way back if it went
+// wrong.
+async function applicantLogin(c, { account, userId, email, password }) {
+  const pw = String(password || "");
+  if (!pw) return null;
+  const to = String(email || "").trim().toLowerCase();
+  if (!to) return { created: false, error: "no_email" };
+
+  const signed = await supabaseSignUp(c.env, to, pw, { redirectTo: `${accountOrigin(account)}/` });
+  if (!signed.ok && signed.error !== "email_in_use") {
+    console.error("[apply] application saved, login not created:", signed.error, signed.detail || "");
+    return { created: false, error: signed.error || "signup_failed" };
+  }
+  // Supabase's enumeration guard showing through: an address it already
+  // knows answers 200 with a fabricated id and no identities, and writing
+  // that id would point auth_id at nobody.
+  const already = signed.error === "email_in_use" || signed.existed;
+  if (signed.ok && !signed.existed && signed.authId && userId) {
+    await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ? AND auth_id IS NULL`)
+      .bind(signed.authId, userId).run();
+  }
+  return { created: true, existed: already, needsConfirmation: signed.ok && !signed.session && !already };
+}
+
 // Requires the three fields nothing downstream can do without. Returns an
 // error code, or null when the body is usable.
 function applicationProblem(body) {
@@ -758,8 +796,18 @@ app.post("/api/apply/:subdomain", async (c) => {
   const problem = applicationProblem(body);
   if (problem) return c.json({ error: problem }, 400);
 
-  await createApplication(c.env, account, body, "Applied through the public application form.");
-  return c.json({ ok: true });
+  const password = String(body.password || "");
+  if (password && password.length < 8) return c.json({ error: "weak_password" }, 400);
+
+  const { userId } = await createApplication(c.env, account, body,
+    "Applied through the public application form.");
+  // Same as the invited path. Applying already creates this person a
+  // contractor membership on the account, so letting them choose a password
+  // while they are here grants nothing the application did not already
+  // grant -- and it is what lets the sign-in page stop carrying a link that
+  // explains how to do it afterwards.
+  const login = await applicantLogin(c, { account, userId, email: body.email, password });
+  return c.json({ ok: true, login });
 });
 
 // ---------------------------------------------------------------------------
@@ -1355,40 +1403,7 @@ app.post("/api/invite/:token", async (c) => {
   await logActivity(c.env, account.id, null, "invite_accepted",
     `${body.company} joined through an invite link`);
 
-  // A login, here, rather than a second screen they have to find. This was
-  // the actual gap: the old flow created the company, the engagement and a
-  // users row, and then left the contractor with no way in -- there is no
-  // password anywhere in it. They had to notice "Already invited? Create
-  // your password" on the sign-in page and work out that it was for them.
-  let login = null;
-  if (password) {
-    const email = String(body.email || "").trim().toLowerCase();
-    const signed = await supabaseSignUp(c.env, email, password,
-      { redirectTo: `${accountOrigin(account)}/` });
-    if (!signed.ok && signed.error !== "email_in_use") {
-      // The application is already saved and the link already spent, so this
-      // cannot fail the request -- it would tell somebody their application
-      // did not go through when it did. Say what happened about the login
-      // only, and let them use "forgot password" from the sign-in screen.
-      console.error("[invite] application saved, login not created:", signed.error, signed.detail || "");
-      login = { created: false, error: signed.error || "signup_failed" };
-    } else {
-      // Same enumeration guard as the tenant path: an address Supabase
-      // already knows answers 200 with a fabricated id and no identities,
-      // and writing that would point auth_id at nobody.
-      const already = signed.error === "email_in_use" || signed.existed;
-      if (signed.ok && !signed.existed && signed.authId && applicantId) {
-        await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ? AND auth_id IS NULL`)
-          .bind(signed.authId, applicantId).run();
-      }
-      login = {
-        created: true,
-        existed: already,
-        needsConfirmation: signed.ok && !signed.session && !already,
-      };
-    }
-  }
-
+  const login = await applicantLogin(c, { account, userId: applicantId, email: body.email, password });
   return c.json({ ok: true, login });
 });
 
@@ -1414,12 +1429,31 @@ app.get("/api/account-users", async (c) => {
   const byUser = {};
   for (const r of scopes || []) (byUser[r.user_id] ||= []).push(r.property_id);
 
+  // The most recent live invite per person, if there is one. Missing table
+  // means 028 is not applied, which is a roster without the extra column
+  // rather than a roster that fails to load.
+  const invites = {};
+  try {
+    const { results: inv } = await c.env.DB.prepare(
+      `SELECT user_id, MAX(sent_at) AS sent_at FROM user_invites
+        WHERE account_id = ? AND used_at IS NULL AND revoked_at IS NULL AND sent_at IS NOT NULL
+        GROUP BY user_id`
+    ).bind(accountId).all();
+    for (const r of inv || []) invites[r.user_id] = r.sent_at;
+  } catch (err) { if (!missingSchema(err)) throw err; }
+
   return c.json(results.map((r) => ({
     // A tenant added by phone alone carries a placeholder address. It exists
     // so the row has a unique key, and it is nobody's address: handing it to
     // the browser gets it printed next to a mailto: link that goes nowhere.
     id: r.id, name: r.name, email: realEmail(r.email), phone: r.phone, role: r.role, subId: r.company_id,
     propertyIds: byUser[r.id] || [], unit: r.unit || null,
+    // Whether this person can actually get in, and whether anybody has told
+    // them they can. Both were invisible: an admin added somebody and the
+    // roster looked identical whether they had signed in once or had never
+    // heard of SubSub.
+    hasLogin: !!r.auth_id,
+    inviteSentAt: invites[r.id] || null,
   })));
 });
 
@@ -1446,6 +1480,136 @@ async function setMembershipProperties(db, membershipId, accountId, role, proper
     }
   }
   await db.batch(stmts);
+}
+
+const userInviteUrl = (account, token) => `${accountOrigin(account)}/?user=${token}`;
+
+async function lookupUserInvite(env, token) {
+  if (!token || !/^[0-9a-f]{64}$/.test(token)) return { error: "invalid" };
+  let row;
+  try {
+    row = await env.DB.prepare(`SELECT * FROM user_invites WHERE token = ?`).bind(token).first();
+  } catch (err) {
+    if (missingSchema(err)) return { error: "invalid" };
+    throw err;
+  }
+  if (!row) return { error: "invalid" };
+  if (row.revoked_at) return { error: "revoked" };
+  if (row.used_at) return { error: "used" };
+  if (new Date(row.expires_at) < new Date()) return { error: "expired" };
+  const [account, user] = await Promise.all([
+    env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(row.account_id).first(),
+    env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(row.user_id).first(),
+  ]);
+  if (!account || !user) return { error: "invalid" };
+  return { invite: row, account, user };
+}
+
+// Public: the page has to show whose account this is, and their branding,
+// before anybody has typed anything.
+app.get("/api/user-invite/:token", async (c) => {
+  const { error, invite, account, user } = await lookupUserInvite(c.env, c.req.param("token"));
+  // A token that was never valid and one spent an hour ago read the same
+  // from outside; the person holding a dead link needs the same instruction
+  // either way, which is to ask for another.
+  if (error) return c.json({ error }, error === "invalid" ? 404 : 410);
+  const membership = await c.env.DB.prepare(
+    `SELECT role FROM memberships WHERE user_id = ? AND account_id = ?`
+  ).bind(user.id, account.id).first();
+  return c.json({
+    name: user.name, email: realEmail(invite.email || user.email),
+    role: membership?.role || null,
+    account: {
+      id: account.id, name: account.name, subdomain: account.subdomain,
+      theme: parseJson(account.theme),
+      logoKey: account.logo_key, useDefaultMark: !!account.use_default_mark,
+    },
+  });
+});
+
+// And the accept: a password, and nothing else. The membership was decided
+// when the admin added them, so this cannot widen anything -- it proves the
+// address and sets a way in.
+app.post("/api/user-invite/:token", async (c) => {
+  const rl = await rateLimit(c.env, "user-invite", clientIp(c), { limit: 20, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+
+  const { error, invite, account, user } = await lookupUserInvite(c.env, c.req.param("token"));
+  if (error) return c.json({ error }, error === "invalid" ? 404 : 410);
+
+  const b = await c.req.json().catch(() => ({}));
+  const password = String(b.password || "");
+  if (password.length < 8) return c.json({ error: "weak_password" }, 400);
+  const email = realEmail(invite.email || user.email);
+  if (!email) return c.json({ error: "no_email" }, 400);
+
+  const signed = await supabaseSignUp(c.env, email, password, { redirectTo: `${accountOrigin(account)}/` });
+  if (!signed.ok && signed.error !== "email_in_use") {
+    return c.json({ error: signed.error, detail: signed.detail }, 400);
+  }
+  // Supabase's enumeration guard showing through: an address it already
+  // knows answers 200 with a fabricated id and no identities, and writing
+  // that id would point auth_id at nobody.
+  const already = signed.error === "email_in_use" || signed.existed;
+  if (signed.ok && !signed.existed && signed.authId && !user.auth_id) {
+    await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ? AND auth_id IS NULL`)
+      .bind(signed.authId, user.id).run();
+  }
+  await c.env.DB.prepare(`UPDATE user_invites SET used_at = CURRENT_TIMESTAMP WHERE id = ?`)
+    .bind(invite.id).run();
+  await logActivity(c.env, account.id, null, "user_joined", `${user.name} set up their login`);
+
+  return c.json({
+    ok: true, email,
+    // Said, not guessed at. A project with email confirmation on will not
+    // sign them in yet, and somebody typing a correct password into a screen
+    // that keeps refusing it has no way to know why.
+    needsConfirmation: signed.ok && !signed.session && !already,
+    existed: already,
+  });
+});
+
+// Make an invite for somebody on the account, and send it.
+//
+// Returns what happened rather than throwing: adding the person has already
+// succeeded by the time this runs, and failing the whole request because an
+// email bounced would tell an admin their colleague was not added when they
+// were.
+async function inviteAccountUser(c, { accountId, user, role, invitedBy }) {
+  const email = realEmail(user.email);
+  if (!email) return { invited: false, reason: "no_email" };
+  // Already has a login: there is nothing to set up, and a "choose a
+  // password" mail to somebody who has one is a phishing lesson in reverse.
+  if (user.auth_id) return { invited: false, reason: "already_has_login" };
+
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  const id = uid(), token = newInviteToken();
+  const expires = new Date(Date.now() + INVITE_TTL_DAYS * 86400_000).toISOString();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO user_invites (id, account_id, user_id, token, email, created_by, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, accountId, user.id, token, email, invitedBy?.id || null, expires).run();
+  } catch (err) {
+    if (missingSchema(err)) {
+      console.warn("[user-invite] 028_user_invites not applied - person added, invite not sent");
+      return { invited: false, reason: "migration_needed", migration: "028_user_invites" };
+    }
+    throw err;
+  }
+
+  const mail = userInviteEmail({
+    name: user.name, account, role, invitedBy: invitedBy?.name || null,
+    link: userInviteUrl(account, token),
+  });
+  const result = await sendEmail(c.env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
+  await logMail(c.env, { accountId, companyId: null, to: email, kind: "user_invite",
+    subject: mail.subject, result, sentBy: invitedBy?.id || null });
+  if (result?.ok) {
+    await c.env.DB.prepare(`UPDATE user_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(id).run();
+    return { invited: true, to: email };
+  }
+  return { invited: false, reason: "send_failed", error: result?.error || null };
 }
 
 app.post("/api/account-users", requireRole("admin"), async (c) => {
@@ -1478,7 +1642,45 @@ app.post("/api/account-users", requireRole("admin"), async (c) => {
       .bind(membershipId, userId, accountId, b.role, b.subId ?? null).run();
   }
   await setMembershipProperties(c.env.DB, membershipId, accountId, b.role, b.propertyIds);
-  return c.json({ id: userId }, 201);
+
+  // Tell them. This is the whole point: adding somebody used to write two
+  // rows and send nothing, so the person added had no way to find out they
+  // had an account, and no way in if they did.
+  const row = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(userId).first();
+  const me = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`)
+    .bind(c.get("auth").userId).first();
+  const invite = await inviteAccountUser(c, {
+    accountId, user: row, role: b.role,
+    invitedBy: { id: c.get("auth").userId, name: me?.name || null },
+  });
+  return c.json({ id: userId, ...invite }, 201);
+});
+
+// "They never got it." Same invite, sent again -- and any earlier one for
+// this person is withdrawn, so a list of live links cannot outgrow the
+// number of people waiting on one.
+app.post("/api/account-users/:userId/invite", requireRole("admin"), async (c) => {
+  const { accountId, userId: byId } = c.get("auth");
+  const userId = c.req.param("userId");
+  const member = await c.env.DB.prepare(
+    `SELECT u.*, m.role FROM users u JOIN memberships m ON m.user_id = u.id
+      WHERE u.id = ? AND m.account_id = ?`
+  ).bind(userId, accountId).first();
+  if (!member) return c.json({ error: "not_found" }, 404);
+
+  try {
+    await c.env.DB.prepare(
+      `UPDATE user_invites SET revoked_at = CURRENT_TIMESTAMP
+        WHERE account_id = ? AND user_id = ? AND used_at IS NULL AND revoked_at IS NULL`
+    ).bind(accountId, userId).run();
+  } catch (err) { if (!missingSchema(err)) throw err; }
+
+  const me = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(byId).first();
+  const invite = await inviteAccountUser(c, {
+    accountId, user: member, role: member.role,
+    invitedBy: { id: byId, name: me?.name || null },
+  });
+  return c.json(invite, invite.invited ? 200 : 409);
 });
 
 app.patch("/api/account-users/:userId", requireRole("admin"), async (c) => {

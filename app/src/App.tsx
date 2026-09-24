@@ -1635,6 +1635,15 @@ export default function SubSub() {
   });
   const [tenantInvite, setTenantInvite] = useState(null);
   const [tenantInviteErr, setTenantInviteErr] = useState("");
+  // And the third: somebody added to the account itself. Its own parameter
+  // again, for the same reason -- what it asks for and where it lands are
+  // different from both of the others.
+  const [userToken] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("user");
+  });
+  const [userInvite, setUserInvite] = useState(null);
+  const [userInviteErr, setUserInviteErr] = useState("");
   // Set when a sign-in resolves to more than one account and nothing in the
   // address says which. Holds the whole login result, so choosing costs no
   // second round trip.
@@ -2425,6 +2434,14 @@ export default function SubSub() {
         propertyIds: u.propertyIds || [] }]);
     setUserForm(false);
   };
+  // "They never got it." Re-reads the roster afterwards so the row stops
+  // saying an invite went out two days ago when one just went out now.
+  const resendInvite = async (userId) => {
+    const r = await api.resendUserInvite(userId);
+    await hydrateAccount(account.id, currentUserId);
+    return r;
+  };
+
   // Removing someone from an account drops the membership, not the person —
   // they may still be a contractor or admin elsewhere.
   const removeUser = (id) => {
@@ -2843,6 +2860,24 @@ export default function SubSub() {
   }, [tenantToken]);
 
   useEffect(() => {
+    if (!userToken) return;
+    let live = true;
+    api.lookupUserInvite(userToken).then((res) => {
+      if (!live) return;
+      setUserInvite(res);
+      setPublicView("user-signup");
+    }).catch((err) => {
+      if (!live) return;
+      console.error("[user-invite] lookup failed:", err);
+      setUserInviteErr(err?.status === 410
+        ? "That link has already been used, or it has expired. Ask whoever added you for a new one."
+        : "That link isn't valid. Check you copied all of it, or ask whoever added you for a new one.");
+      setPublicView("user-signup");
+    });
+    return () => { live = false; };
+  }, [userToken]);
+
+  useEffect(() => {
     if (!inviteToken) return;
     let live = true;
     api.lookupInvite(inviteToken).then((res) => {
@@ -2951,7 +2986,14 @@ export default function SubSub() {
     // session would put them in the app instead, which is the opposite of what
     // the link says -- and it is the link the account page uses to look at
     // what a subcontractor actually sees. "Back to sign in" gets them in.
-    if (openingApplication) return;
+    //
+    // An invite link is the same shape of problem and was not covered. The
+    // three screens they open are only drawn while signed out, so somebody
+    // who already has a session in this browser -- an admin opening a link
+    // to check it, or a manager who was also added to a second account --
+    // got dropped into the app and never saw the invite at all. From the
+    // outside that is a link that does nothing.
+    if (openingApplication || userToken || tenantToken || inviteToken) return;
     resumeSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -3071,6 +3113,10 @@ export default function SubSub() {
         {BUILD === "platform" && publicView === "superadmin" ? (
           <SuperadminLogin
             onLogin={(me) => { setStaff(me); setCurrentUserId(me.userId); setSuperadminView(true); setLoggedIn(true); }} />
+        ) : publicView === "user-signup" ? (
+          <UserInviteSignup invite={userInvite} error={userInviteErr}
+            onSubmit={(data) => api.acceptUserInvite(userToken, data)}
+            onBackToLogin={() => setPublicView("login")} />
         ) : publicView === "tenant-signup" ? (
           <TenantSignup invite={tenantInvite} error={tenantInviteErr}
             onSubmit={(data) => api.acceptTenantInvite(tenantToken, data)}
@@ -3983,6 +4029,7 @@ export default function SubSub() {
           cancelBusy={cancelBusy}
           billingBusy={billingBusy} billingErr={billingErr}
           onAddUser={addUser} onRemoveUser={removeUser} onEditUser={setEditUser}
+          onResendInvite={resendInvite}
           onLoginAs={(id) => {
             const m = memberships.find((x) => x.userId === id && x.accountId === account.id);
             setCurrentUserId(id); setPane("jobs");
@@ -7741,6 +7788,135 @@ function TenantImport({ properties, unitWord, onCancel, onDone }) {
 //
 // Three questions and no more. A tenant is not applying for anything; they
 // are being told where to report a broken boiler.
+// Setting a password after being added to an account.
+//
+// The third of three invite screens, and the last gap: adding somebody under
+// Users -> Add wrote two rows and sent nothing, so the person added had no
+// way to learn they had an account and no way in if they did. It asks for
+// one thing, because one thing is all that is left to decide -- their role
+// and their buildings were settled when the admin added them, which is also
+// why a leaked link here cannot widen anything.
+function UserInviteSignup({ invite, error, onSubmit, onBackToLogin }) {
+  const [password, setPassword] = useState("");
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);
+  const [err, setErr] = useState("");
+
+  // Nothing to wear until the lookup lands, so it stays blank rather than
+  // flashing SubSub's own branding and repainting into somebody else's.
+  if (!invite && !error) {
+    return <div className="wl-page"><div className="wl-card wl-done"><p>Loading…</p></div></div>;
+  }
+  if (error) {
+    return (
+      <div className="wl-page">
+        <div className="wl-card wl-done">
+          <div className="wl-tick warn"><AlertTriangle size={30} /></div>
+          <h1>This link doesn't work</h1>
+          <p>{error}</p>
+          <button className="wl-btn" onClick={onBackToLogin}>Go to sign in</button>
+        </div>
+        <PoweredBy className="wl-foot" height={15} />
+      </div>
+    );
+  }
+
+  const acct = invite.account;
+  const brand = {
+    id: acct.id, name: acct.name, subdomain: acct.subdomain,
+    logoData: acct.logoKey ? logoUrl(acct.id) : null,
+    useDefaultMark: acct.useDefaultMark, theme: acct.theme,
+  };
+  const t = themeOf(brand);
+  const ROLE_WORDS = {
+    admin: "an admin", pm: "a manager", owner: "a building owner",
+    contractor: "a contractor", tenant: "a resident",
+  };
+
+  if (done) return (
+    <div className="wl-page" style={themeVars(t)}>
+      <div className="wl-card wl-done">
+        <div className="wl-brand"><BrandMark brand={brand} height={30} />
+          <span className="wl-brand-name">{brand.name}</span></div>
+        <div className="wl-tick"><CheckCircle2 size={34} /></div>
+        <h1>You're set up.</h1>
+        {/* Which of the three endings depends on the Supabase project and on
+            whether this address already had a login. Saying the wrong one
+            leaves somebody typing a correct password into a screen that
+            keeps refusing it. */}
+        {done.needsConfirmation ? (
+          <p>Check <b>{done.email}</b> for a message confirming your address. Click the link
+            in it and your password works.</p>
+        ) : done.existed ? (
+          <p>That address already had a SubSub login, so sign in with the password you
+            already use — the new one wasn't needed.</p>
+        ) : (
+          <p>Sign in with <b>{done.email}</b> and the password you just chose.</p>
+        )}
+        <button className="wl-btn" onClick={onBackToLogin}>Go to sign in</button>
+      </div>
+      <PoweredBy className="wl-foot" height={15} />
+    </div>
+  );
+
+  const ok = password.length >= 8;
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      setDone(await onSubmit({ password }));
+    } catch (e) {
+      console.error("[user-invite] accept failed:", e);
+      const code = e?.body?.error;
+      setErr(code === "weak_password" ? "That password is too short — eight characters or more."
+        : code === "used" ? "That link has already been used. Try signing in."
+        : code === "expired" || code === "revoked" ? "That link is no longer valid. Ask whoever added you for a new one."
+        : code === "rate_limited" ? "Too many attempts from this connection. Wait a few minutes."
+        : e?.status >= 500 ? "SubSub had a problem just then — nothing was changed. Try again in a moment."
+        : "That didn't work. Try again.");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="wl-page" style={themeVars(t)}>
+      <div className="wl-card">
+        <div className="wl-brand"><BrandMark brand={brand} height={30} />
+          <span className="wl-brand-name">{brand.name}</span></div>
+        <h1>Welcome{invite.name ? `, ${invite.name.split(" ")[0]}` : ""}</h1>
+        <p className="wl-lede">
+          You've been added to {brand.name}
+          {ROLE_WORDS[invite.role] ? ` as ${ROLE_WORDS[invite.role]}` : ""}.
+          Choose a password and you're in.
+        </p>
+        {invite.email && (
+          <div className="wl-summary" style={{ marginBottom: 16 }}>
+            <div><span>You'll sign in with</span><b>{invite.email}</b></div>
+          </div>
+        )}
+        <label className="wl-fld">Password<Req />{" "}
+          <span className="fld-note">at least 8 characters</span>
+          <input type={show ? "text" : "password"} autoComplete="new-password"
+            value={password} onChange={(e) => { setPassword(e.target.value); setErr(""); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && ok && !busy) save(); }} />
+        </label>
+        {/* The same control the tenant screen uses, so the two invite pages
+            do not look like they came from different products. */}
+        <button type="button" className="wl-reveal" onClick={() => setShow((v) => !v)}>
+          {show ? "Hide" : "Show"} password
+        </button>
+        {err && <p className="wl-err" role="alert">{err}</p>}
+        <div className="wl-actions">
+          <button className="wl-btn-ghost" onClick={onBackToLogin}>I already have an account</button>
+          <button className="wl-btn" disabled={!ok || busy} onClick={save}>
+            {busy ? "Setting up…" : "Set password"}
+          </button>
+        </div>
+      </div>
+      <PoweredBy className="wl-foot" height={15} />
+    </div>
+  );
+}
+
 function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
   const [password, setPassword] = useState("");
   // Somebody added by phone alone has a placeholder address on file, which
@@ -9264,10 +9440,12 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
     notifyEmail: true, notifySms: false,
     password: "",
   });
-  // Only when they arrived through an invite. The public application form is
-  // open to anybody who finds it, and a password box on that is an invitation
-  // to create logins nobody asked for.
-  const canSetPassword = !!invite;
+  // On both paths now, invited or not. Applying already creates this person
+  // a contractor membership on the account -- the password grants nothing
+  // the application did not already grant, and offering it here is what
+  // lets the sign-in page stop carrying a link explaining how to do it
+  // afterwards.
+  const canSetPassword = true;
   const [saving, setSaving] = useState(false);
   const [sendErr, setSendErr] = useState("");
   const [madeLogin, setMadeLogin] = useState(null);
@@ -9981,12 +10159,48 @@ function EmergencyContractorPanel({ subs, current, onSave }) {
   );
 }
 
+// Whether a person on this roster can actually get in.
+//
+// Adding somebody wrote a users row and a membership and sent nothing, and
+// the roster looked identical whether they had signed in a hundred times or
+// had never heard of SubSub. So an admin had no way to notice that the
+// manager they added on Friday was still locked out on Wednesday.
+function SeatState({ u, onResend }) {
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState("");
+  if (u.hasLogin) return null;   // nothing to say about somebody who is in
+  const resend = async () => {
+    setBusy(true); setSaid("");
+    try {
+      const r = await onResend(u.id);
+      setSaid(r?.invited ? `Sent again to ${r.to}` : "Couldn't send that — check the address.");
+    } catch (e) {
+      console.error("[user-invite] resend failed:", e);
+      setSaid(e?.body?.reason === "already_has_login"
+        ? "They already have a login." : "Couldn't send that just now.");
+    } finally { setBusy(false); }
+  };
+  return (
+    <span className="seat-state">
+      <AlertTriangle size={11} />
+      {u.inviteSentAt
+        ? <>Hasn't set a password yet · invite sent {relTime(u.inviteSentAt)}</>
+        : <>Hasn't been sent an invite</>}
+      {said ? <b> · {said}</b> : (
+        <button className="seat-resend" disabled={busy} onClick={resend}>
+          {busy ? "Sending…" : u.inviteSentAt ? "Send again" : "Send invite"}
+        </button>
+      )}
+    </span>
+  );
+}
+
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
   accountTrades, onSetAccountTrades, subscriptionStatus, currentPeriodEnd, comped, cancelAtPeriodEnd,
   onSaveUser, onSaveBrand, onUpgrade, onManageBilling, billingBusy, billingErr,
   onCancelSubscription, onResumeSubscription, cancelBusy,
-  onAddUser, onRemoveUser, onEditUser, onLoginAs, currentUserId,
+  onAddUser, onRemoveUser, onEditUser, onLoginAs, onResendInvite, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onSaveNotify,
   hostnameStatus, onRefreshHostname, properties = [],
   emergencyCompanyId = null, onSetEmergencyContractor }) {
@@ -10479,6 +10693,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                           .map((id) => properties.find((p) => p.id === id)?.name).filter(Boolean);
                         return names.length ? ` · ${names.join(", ")}` : " · no buildings yet";
                       })()}</p>
+                    <SeatState u={u} onResend={onResendInvite} />
                   </div>
                   <div className="user-row-actions">
                     {linked && !docsComplete(linked) && (
@@ -13437,8 +13652,14 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
   // public SubSignup form on this subdomain (which creates that row up
   // front). resolveSupabaseUser() in worker/index.js links the two by
   // email on first sign-in — no separate provisioning call needed here.
-  const [mode, setMode] = useState("signin"); // "signin" | "signup"
-  const [signupSent, setSignupSent] = useState(false);
+  // There used to be a "signup" mode here, reached from "Already invited?
+  // Create your password" at the bottom of every sign-in screen. That link
+  // was the only way in for anybody an account had added, because none of
+  // the three invites sent anything -- a line that reads like an edge case
+  // was carrying the whole flow. All three send now and every one ends on a
+  // screen that takes a password, so the mode and its branch are gone rather
+  // than left sitting here unreachable, which is how a dead path gets
+  // mistaken for a live one.
   // Signed up, never clicked the confirmation. Sign-in is refused until they
   // do, so the page offers the message again rather than leaving them to
   // hunt through a week-old inbox.
@@ -13491,19 +13712,6 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
 
     if (!email.trim() || !pw) { setErr("Enter your email and password."); return; }
     setErr(""); setBusy(true);
-
-    if (mode === "signup") {
-      const { data, error } = await supabase.auth.signUp({ email: email.trim(), password: pw });
-      setBusy(false);
-      if (error) { setErr(error.message); return; }
-      if (data.session) {                       // email confirmation disabled — straight in
-        const msg = await onLogin();
-        if (msg) setErr(msg);
-        return;
-      }
-      setSignupSent(true); // otherwise Supabase mailed a confirmation link
-      return;
-    }
 
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pw });
     if (error) {
@@ -13562,7 +13770,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
         )}
 
         <div className="login-form">
-          {supabaseEnabled && !signupSent && (
+          {supabaseEnabled && (
             <>
               <button className="btn-google" onClick={signInWithGoogle} disabled={busy}>
                 <GoogleG /> <span>Continue with Google</span>
@@ -13570,20 +13778,14 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
               <div className="login-or"><span>or use your email</span></div>
             </>
           )}
-          {supabaseEnabled && signupSent ? (
-            <div className="login-err" style={{ color: "var(--forest-lift)" }}>
-              <CheckCircle2 size={13} /> Check {email} for a confirmation link, then come back and sign in.
-            </div>
-          ) : (
-            <>
-              <label className="fld">Email
+          <label className="fld">Email
                 <input type="email" inputMode="email" autoComplete="username"
                   value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); setResetSent(false); setUnconfirmed(false); setResent(false); }}
                   placeholder="you@company.com"
                   onKeyDown={(e) => e.key === "Enter" && submit()} />
               </label>
               <label className="fld">Password
-                <input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                <input type="password" autoComplete="current-password"
                   value={pw} onChange={(e) => { setPw(e.target.value); setErr(""); }}
                   placeholder="••••••••"
                   onKeyDown={(e) => e.key === "Enter" && submit()} />
@@ -13597,20 +13799,11 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
               )}
               {resent && <div className="login-err" style={{ color: "var(--forest-lift)" }}><CheckCircle2 size={13} /> Sent again. Click the link in it, then sign in here.</div>}
               <button className="btn-solid login-btn" onClick={submit} disabled={busy}>
-                <Lock size={15} /> {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
+                <Lock size={15} /> {busy ? "Please wait…" : "Sign in"}
               </button>
-              {mode === "signin" ? (
-                <button className="login-forgot" onClick={forgotPassword}>
-                  Forgot password?
-                </button>
-              ) : null}
-              {supabaseEnabled && (
-                <button className="login-forgot" onClick={() => { setMode(mode === "signup" ? "signin" : "signup"); setErr(""); }}>
-                  {mode === "signup" ? "Already have an account? Sign in" : "Already invited? Create your password"}
-                </button>
-              )}
-            </>
-          )}
+          <button className="login-forgot" onClick={forgotPassword}>
+            Forgot password?
+          </button>
         </div>
 
         {onSignup && onSubdomain && (
@@ -16486,6 +16679,15 @@ p.fld-note{margin:6px 0 0}
 /* Who the invite went to, under its name and above the link. Quiet, because
    it is a fact about the row rather than the row itself. */
 .inv-who{display:block;font-size:11.5px;color:var(--ink-soft);margin:2px 0 4px}
+
+/* Amber rather than red: somebody who has not set a password yet is a thing
+   to finish, not a thing that has gone wrong. */
+.seat-state{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:3px;
+  font-size:11.5px;font-weight:600;color:#8a6116}
+.seat-state svg{flex:none}
+.seat-resend{background:none;border:0;padding:0 0 0 4px;font:600 11.5px Inter,sans-serif;
+  color:var(--forest-lift);cursor:pointer;text-decoration:underline}
+.seat-resend:disabled{opacity:.6;cursor:default}
 
 .imp-banner{display:flex;align-items:center;gap:10px;background:var(--amber);color:#1a1207;padding:9px 18px;
   font-size:13px;font-weight:600}

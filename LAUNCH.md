@@ -72,6 +72,19 @@ Status: `[ ]` not started · `[~]` in progress · `[x]` done
       contractor is sent. Held by `npm run test:reportdetail` and
       `npm run test:tenantui`.
 
+- [x] **9. Adding somebody to the account told them nothing.** Found while
+      finishing item 7. Users → Add wrote a `users` row and a membership and
+      sent no email, no link, nothing — so the person added had no way to
+      learn they had an account, and no way in if they did. The roster gave
+      no sign of it either: it looked the same whether somebody had signed
+      in a hundred times or had never heard of SubSub.
+      They get a real invite now, the roster says who has not set a password
+      and offers to send it again, and the public application form takes a
+      password too. Which between them retire **"Already invited? Create
+      your password"** from every sign-in screen — that line was not a
+      convenience, it was the only way in for anybody an account had added.
+      `npm run test:userinvite`.
+
 ## Worth doing when tenants are in real use
 
 - Telling a tenant when something changes. They see status when they look;

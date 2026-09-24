@@ -46,9 +46,17 @@ try {
   ck("and so is the paragraph it carried", !/invited you at/i.test(signin));
   ck("the sign-in form itself is untouched",
     await page.evaluate(() => !!document.querySelector("input[type=password]") && !!document.querySelector(".login-btn")));
-  ck("and the two ways in for somebody without a password are still offered",
-    /Create your password/i.test(signin) && /Forgot password/i.test(signin),
+  // This used to assert that "Already invited? Create your password" was
+  // offered here. It was, and it had to be, because none of the three
+  // invites sent anything -- that line was the only way in for anybody an
+  // account had added. All three send now and every one ends on a screen
+  // that takes a password, so the line is gone on purpose and its absence
+  // is the thing worth holding. What remains is the way back for somebody
+  // who has a login and cannot get at it.
+  ck("the line explaining invites to people looking at a sign-in box is gone",
+    !/Create your password/i.test(signin),
     signin.split("\n").filter((l) => /password/i.test(l)).join(" / "));
+  ck("and forgotten passwords are still catered for", /Forgot password/i.test(signin));
 
   console.log("\n-- the application form --");
   await page.goto(`http://${HOST}:${PORT}/?apply=1`, { waitUntil: "networkidle0" });

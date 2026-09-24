@@ -220,6 +220,46 @@ This is an automated message from an unmonitored address. Replies aren't receive
   };
 }
 
+// Adding somebody who works at the account -- a manager, another admin, a
+// building owner with a seat.
+//
+// Adding them used to send nothing at all: a users row, a membership, and
+// silence. Whoever was added found out by being told, and got in by noticing
+// a link on the sign-in screen that did not say it was for them. This is the
+// third of the three invites and it completes the set.
+export function userInviteEmail({ name, account, role, invitedBy, link }) {
+  const who = account?.name || "your team";
+  const what = {
+    admin: "an admin, so you can change anything on the account",
+    pm: "a manager, so you can raise jobs and assign contractors",
+    owner: "a building owner, so you can see and request work at your buildings",
+    contractor: "a contractor, so you can see and answer your work orders",
+    tenant: "a resident, so you can report repairs",
+  }[role] || "a member of the account";
+  const by = invitedBy ? `${invitedBy} has` : "You have been";
+  const text = `Hi ${name || "there"},
+
+${by} ${invitedBy ? "added you to" : "added to"} ${who} on SubSub, as ${what}.
+
+Choose a password and you're in:
+  ${link}
+
+SubSub is where ${who} keeps its subcontractors, their insurance and licences,
+and the work orders that go out to them.
+
+This link works once and expires in 30 days. If you weren't expecting it, you
+can ignore it -- nothing happens until you use it.
+
+-- ${who}, through SubSub
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+  return {
+    subject: `${invitedBy ? `${invitedBy} added you to` : "You've been added to"} ${who} on SubSub`,
+    text,
+    html: textToHtml(text, link),
+  };
+}
+
 export function tenantInviteEmail({ firstName, account, propertyName, unit, link }) {
   const who = account?.name || "your building manager";
   const place = [propertyName, unit ? `Unit ${unit}` : null].filter(Boolean).join(", ");
