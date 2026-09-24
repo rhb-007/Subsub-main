@@ -396,6 +396,69 @@ is left alone. `scripts/hostnames-test.mjs` (`npm run test:hostnames`) covers
 both, plus retry-safety and each failure mode, against a stand-in for
 Cloudflare's API.
 
+## Licence verifiers, behind the states' own registries
+
+Six states and DC are wired directly to their own open data. That is free and
+authoritative and always wins. The other forty-three have never been
+checkable at all, which is what the two commercial verifiers are for — and
+they also stand behind the wired states when one of those is down.
+
+**The order is the point.**
+
+1. The state's own registry, where there is one. If it answers — found, or
+   genuinely not found — that is the answer.
+2. Otherwise each configured provider in turn; first definite answer wins.
+3. Otherwise, honestly unsupported.
+
+A paid aggregator saying "active" over a state registry saying "no such
+licence" is worse than having no aggregator, so step 2 never runs when step 1
+produced an answer. Only a failed call or an unsupported state falls through.
+
+**Worker secrets** (not plain variables — these are keys):
+
+| Variable | Provider |
+|---|---|
+| `STATELICENSE_API_KEY` | StateLicense.io |
+| `TRADESAPI_API_KEY` | TradesAPI |
+
+Unset, the wired states answer as before and everywhere else reports
+`UNSUPPORTED_STATE`, which is the honest answer rather than a silent pass.
+
+### A status is never inferred
+
+Both clients were written **without ever having seen a real response** —
+neither vendor was reachable from the environment they were built in. So
+`readVerify()` reads field *names* in the two or three spellings a verifier
+of this kind uses (`status`, `license_status`, `licenseStatus` all
+unambiguously mean the same thing) and, if none of them is present, reports a
+check that did not complete and logs the body whole. It never decides a
+licence is active because a payload did not say otherwise.
+
+That matters more here than anywhere else in this codebase. A licence wrongly
+shown as active is how somebody uninsured ends up on a roof. Provider results
+therefore always carry `fieldMappingVerified: false`, the same flag the five
+unchecked state mappings carry.
+
+A `404` is treated the same way. From outside it cannot be told apart from a
+guessed endpoint that does not exist, and "this contractor has no licence" is
+a sentence with consequences.
+
+### Pinning the real shapes
+
+`GET /api/platform/license-probe?state=CA&license=1078456` — staff only. It
+asks every configured provider the same question and returns each one's HTTP
+status, the first 2KB of its answer, and whether `readVerify()` recognised
+it. The keys never leave the Worker.
+
+That is the shortest path from "we think this works" to "we watched it work",
+and it needs a browser rather than a terminal. Run it once against a licence
+you can check by hand, and the mappings stop being guesses.
+
+**TradesAPI's request shape is itself a guess.** No documentation for it was
+available when it was wired, so `PROVIDERS` marks it `unverifiedRequest:
+true` and the probe reports that alongside the answer. Expect to correct the
+path.
+
 ## Expanding license verification beyond Washington
 
 `STATE_LICENSING_APIS.md` surveys all 49 other states + DC for the same

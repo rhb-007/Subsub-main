@@ -25,6 +25,7 @@ import {
   hostnameConfig, brandedHost, provisionHostname, deprovisionHostname, checkHostname, diagnose,
 } from "./hostnames.js";
 import { setupCheck } from "./setup-check.js";
+import { verifyWithFallback, configuredProviders, askProvider, PROVIDERS } from "./licenses.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 
 const app = new Hono();
@@ -2581,12 +2582,24 @@ async function verifyDC(licenseNumber) {
   };
 }
 
-async function verifyLicenseForState(state, licenseNumber) {
+// The state's own registry, and nothing else. Kept separate so the chain in
+// licenses.js can ask it first and only fall through when it could not
+// answer -- a paid verifier saying "active" over a state registry saying
+// "no such licence" is worse than having no verifier.
+async function askStateRegistry(state, licenseNumber) {
   const code = (state || "").trim().toUpperCase();
   if (code === "DC") return verifyDC(licenseNumber);
   const cfg = SOCRATA_STATES[code];
   if (!cfg) return { found: false, status: "UNSUPPORTED_STATE", supportedStates: [...Object.keys(SOCRATA_STATES), "DC"] };
   return verifySocrataState(cfg, licenseNumber);
+}
+
+async function verifyLicenseForState(env, state, licenseNumber) {
+  return verifyWithFallback(env, {
+    state: (state || "").trim().toUpperCase(),
+    license: licenseNumber,
+    askState: askStateRegistry,
+  });
 }
 
 async function storeLicenseCheck(db, companyId, state, result) {
@@ -2619,7 +2632,7 @@ app.post("/api/subs/:companyId/verify-license", requireRole("admin", "pm"), asyn
   // mailing address in practice.
   const state = (company.state || "WA").trim().toUpperCase();
 
-  const result = await verifyLicenseForState(state, company.license);
+  const result = await verifyLicenseForState(c.env, state, company.license);
   await storeLicenseCheck(c.env.DB, companyId, state, result);
   return c.json(result);
 });
@@ -4538,7 +4551,7 @@ async function licenseSweep(env) {
   for (const co of companies) {
     const prevStatus = parseJson(co.license_check)?.status;
     const state = (co.state || "WA").trim().toUpperCase();
-    const result = await verifyLicenseForState(state, co.license);
+    const result = await verifyLicenseForState(env, state, co.license);
     if (result.status && result.status !== prevStatus) flagged.push({ companyId: co.id, from: prevStatus, to: result.status });
     await storeLicenseCheck(env.DB, co.id, state, result);
   }
@@ -5031,6 +5044,66 @@ app.get("/api/platform/me", async (c) => {
 
 // Financial figures are superadmin-only, and the check is here rather than in
 // the interface: a standard user calling this directly gets 403, not numbers.
+// What each licence verifier actually answers, in its own words.
+//
+// Both provider clients were written without ever having seen a real
+// response -- neither vendor was reachable from where this was built -- so
+// their field mappings are guesses until somebody looks. This is how
+// somebody looks, from a browser, without a terminal: it asks every
+// configured provider the same question and returns the HTTP status and the
+// first couple of kilobytes of each answer, plus whether readVerify()
+// recognised it.
+//
+// Staff only, and it sends a licence number somebody chose to a vendor
+// somebody chose. It is a diagnostic, not a feature, and it is the shortest
+// path from "we think this works" to "we watched it work".
+app.get("/api/platform/license-probe", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+
+  const state = String(c.req.query("state") || "").trim().toUpperCase();
+  const license = String(c.req.query("license") || "").trim();
+  if (!/^[A-Z]{2}$/.test(state) || !license) return c.json({ error: "state_and_license_required" }, 400);
+
+  const providers = configuredProviders(c.env);
+  const out = [];
+  for (const p of providers) {
+    const { url, headers } = p.request(p.base, p.key, { state, license });
+    const started = Date.now();
+    let status = 0, body = "", failed = null;
+    try {
+      const res = await fetch(url, { headers: { accept: "application/json", ...headers } });
+      status = res.status;
+      body = (await res.text()).slice(0, 2000);
+    } catch (err) {
+      failed = String(err?.message || err).slice(0, 200);
+    }
+    const parsed = await askProvider(p, { state, license });
+    out.push({
+      id: p.id, label: p.label,
+      // The key never leaves the Worker. The path is what somebody needs to
+      // see when the answer is a 404 from a guessed endpoint.
+      url: url.replace(/(key|token|api[-_]?key)=[^&]*/gi, "$1=***"),
+      requestShapeIsAGuess: !!p.unverifiedRequest,
+      httpStatus: status, unreachable: failed,
+      recognised: parsed.ok === true,
+      whyNot: parsed.ok ? null : parsed.error,
+      readAs: parsed.ok ? { found: parsed.found, status: parsed.status,
+        expirationDate: parsed.expirationDate || null, businessName: parsed.businessName || null } : null,
+      raw: body,
+      ms: Date.now() - started,
+    });
+  }
+  return c.json({
+    state, license, by: staff?.email || null,
+    configured: providers.map((p) => p.id),
+    // Named so an empty result reads as "no key set" rather than "no
+    // providers exist", which are very different problems.
+    notConfigured: PROVIDERS.filter((p) => !providers.some((q) => q.id === p.id)).map((p) => p.id),
+    providers: out,
+  });
+});
+
 app.get("/api/platform/revenue", async (c) => {
   const { error, staff } = await requireStaff(c);
   if (error) return error;

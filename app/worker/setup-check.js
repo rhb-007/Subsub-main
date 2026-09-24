@@ -54,6 +54,13 @@ const GROUPS = [
     matters: "How this console verifies that a request really came through Access.",
   },
   {
+    id: "licenses", label: "Licence verifiers",
+    vars: ["STATELICENSE_API_KEY", "TRADESAPI_API_KEY"],
+    matters: "Checking a contractor's licence outside the six states wired to their own open data. "
+      + "Unset, those states answer as before and everywhere else is reported as unsupported -- "
+      + "which is the honest answer, not a silent pass.",
+  },
+  {
     id: "demo", label: "Book a demo (Cal)",
     vars: ["CAL_API_KEY", "CAL_EVENT_TYPE_ID"],
     matters: "Real availability and real bookings on the marketing site's demo form. "
