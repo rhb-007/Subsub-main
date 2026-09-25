@@ -27,6 +27,7 @@
     "test:acctcompany": "node scripts/account-company-test.mjs",
     "test:hireable": "node scripts/hireable-ui-test.mjs",
     "test:pagetitle": "node scripts/page-title-test.mjs",
+    "test:availtz": "node scripts/availability-tz-test.mjs",
     "test:wayin": "node scripts/way-in-test.mjs",
     "build:platform": "vite build --outDir dist-platform",
     "test:consolefresh": "node scripts/console-fresh-test.mjs",

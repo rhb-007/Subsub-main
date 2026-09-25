@@ -1519,6 +1519,10 @@ function dayKey(d = new Date()) {
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 // Noon, so a daylight-saving shift cannot move the date under it.
 const dayFromKey = (k) => new Date(`${k}T12:00:00`);
+// Today with the clock taken off it. A run of calendar columns built from
+// `new Date()` carries the current time of day into every one of them,
+// which is harmless until something calls toISOString() on the result.
+const startOfDay = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 // "Today" / "Tomorrow" / "Friday" / "In 19 days" -- what somebody would say.
 function relDay(k, from = dayKey()) {
@@ -12941,7 +12945,6 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   const timeDeclined = visits.filter((v) => v.status === "declined")
     .map((v) => ({ v, job: jobs.find((j) => j.id === v.jobId) })).filter((x) => x.job && !isClosed(x.job));
   const managesProperties = Array.isArray(properties);
-  const today = new Date().toISOString().slice(0, 10);
   // Only approved work has trade slots. An unapproved request has its own
   // section above and must not also be counted as needing a contractor.
   const slots = jobs.filter(isLiveJob).flatMap((j) => j.trades.map((t) => ({ job: j, trade: t, a: j.assignments[t] })));
@@ -13381,11 +13384,23 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
 
 // ---- Availability calendar ----------------------------------------------
 function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onRequestDocs }) {
-  const today = new Date();
-  const days = [...Array(14)].map((_, i) => {
-    const d = new Date(today); d.setDate(today.getDate() + i); return d;
-  });
-  const fmt = (d) => d.toISOString().slice(0, 10);
+  // Local midnight, not "now". The columns are calendar days, and carrying
+  // the current clock time into them is what made the key under each one
+  // disagree with the number printed on it -- see fmt below.
+  const today = startOfDay();
+  const days = [...Array(14)].map((_, i) => addDays(today, i));
+  // dayKey, not toISOString().slice(0,10). This is the whole bug: a cell
+  // PRINTED d.getDate(), which is local, and stored d.toISOString(), which
+  // is UTC. West of Greenwich those are the same string until late
+  // afternoon and different after it -- so from about five o'clock every
+  // evening in Seattle, the column headed 23 read and wrote the 24th.
+  //
+  // It was not only the days off. jobsByDay is keyed on the real dates in
+  // the database, so a booked job moved a column; availableOn checked the
+  // wrong day; and clicking a cell to assign passed the wrong date straight
+  // into the work order. A grid that quietly books Thursday when you press
+  // Wednesday is worse than one that is merely wrong to look at.
+  const fmt = dayKey;
   const jobsByDay = useMemo(() => {
     const map = {};
     jobs.forEach((j) => { (map[j.date] ||= []).push(j); });
@@ -13405,7 +13420,7 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
         <div className="cal-grid">
           <div className="cal-corner">Contractor <span className="cc-note">free crews</span></div>
           {days.map((d) => (
-            <div key={fmt(d)} className="cal-dayhead">
+            <div key={fmt(d)} data-day={fmt(d)} className="cal-dayhead">
               <span className="dow">{d.toLocaleDateString(undefined, { weekday: "short" })}</span>
               <span className="dom">{d.getDate()}</span>
             </div>
@@ -13422,11 +13437,14 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
                   const dayJobs = (jobsByDay[fmt(d)] || []).filter((j) =>
                     Object.values(j.assignments || {}).some((a) => a.subId === s.id));
                   const booked = dayJobs.length > 0;
-                  const dayKey = fmt(d);
-                  const free = availableOn(s, dayKey);
+                  // Not named dayKey: that is the helper fmt IS, and a local
+                  // shadowing it here would be one rename away from a bug
+                  // that looks like a typo.
+                  const key = fmt(d);
+                  const free = availableOn(s, key);
                   const cls = booked ? "booked" : free ? "up" : "down";
                   const clickable = !booked && free && ready;
-                  const dstat = dayStatus(s, allJobs, dayKey, null, accountId);
+                  const dstat = dayStatus(s, allJobs, key, null, accountId);
                   const freeCt = dstat?.crews?.length || 0;
                   const needDocs = !ready && !booked && free;
                   const title = booked ? dayJobs.map((j) => j.title).join(", ")
@@ -13435,12 +13453,12 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
                     : !ready ? `Available — complete docs to schedule`
                     : dstat?.label || `Assign ${s.company} to a job`;
                   return (
-                    <div key={dayKey}
+                    <div key={key} data-day={key}
                       className={`cal-cell ${cls} ${clickable ? "clickable" : ""} ${needDocs ? "needdocs" : ""}`}
                       title={needDocs
                         ? `Missing ${missingDocs(s).map((k) => DOC_LABELS[k]).join(", ")} — click to request documents`
                         : title}
-                      onClick={clickable ? () => onSchedule(s, dayKey)
+                      onClick={clickable ? () => onSchedule(s, key)
                         : needDocs ? () => onRequestDocs(s) : undefined}>
                       {booked ? <span className="cal-job">{dayJobs.length}</span>
                         : needDocs ? <span className="cal-doc"><Mail size={11} /></span>
@@ -14335,7 +14353,6 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
   const [sub2, setSub2] = useState("trades");
   const caps = [...new Set(sub.categories.flatMap((c) => CAP_LIBRARY[c] || []))];
   const miss = missingDocs(sub);
-  const today = new Date().toISOString().slice(0, 10);
 
   const first = (me?.name || sub.contact || sub.company).split(" ")[0];
   const pending = mine.filter((m) => m.a.status === "pending" && !m.a.auto);
@@ -14891,10 +14908,13 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable }) {
   const crews = sub.crews || [];
   const [crewId, setCrewId] = useState(crews[0]?.id || "");
   const [offset, setOffset] = useState(0);
-  const today = new Date();
-  const start = new Date(today); start.setDate(today.getDate() + offset * 28);
-  const days = [...Array(28)].map((_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
-  const fmt = (d) => d.toISOString().slice(0, 10);
+  // Same fix as the hiring account's grid, and the same reason: this is the
+  // screen that WRITES the off-days, so an evening tap on the 23rd marked
+  // the 24th off and the contractor was booked on a day they had blocked.
+  const today = startOfDay();
+  const start = addDays(today, offset * 28);
+  const days = [...Array(28)].map((_, i) => addDays(start, i));
+  const fmt = dayKey;
 
   const isAll = crewId === "__all";
   const crew = crews.find((c) => c.id === crewId);
@@ -15011,7 +15031,7 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable }) {
               const off = crewOffDays(crew).includes(key);
               const paused = crew.available === false;
               return (
-                <button key={key}
+                <button key={key} data-day={key}
                   className={`mc-day ${booked ? "booked" : paused ? "down" : off ? "off" : "free"}`}
                   disabled={booked || paused}
                   title={booked ? `${crew.name} has a job this day`
