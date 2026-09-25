@@ -1935,6 +1935,33 @@ export default function SubSub() {
   // "close the form" without the app having to own the form.
   const [homeKey, setHomeKey] = useState(0);
   const [userMenu, setUserMenu] = useState(false);
+  // The connect code, held at the top of the app rather than inside the
+  // menu that shows it.
+  //
+  // What this is for is somebody standing on a job site in front of a
+  // general contractor with a phone out. It was four taps deep -- My
+  // account, Company, the subcontractor panel, scroll -- which is three
+  // taps too many with a stranger waiting, and it is the whole point of
+  // having a code at all rather than spelling an email address out loud.
+  //
+  // Fetched once and kept: the menu closes over it and gets opened again,
+  // and a spinner on the second open is a spinner while somebody waits.
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrCode, setQrCode] = useState(null);
+  const [qrErr, setQrErr] = useState("");
+  const loadQr = async () => {
+    setQrErr("");
+    try { setQrCode(await api.myConnectCode()); }
+    catch (e) {
+      console.error("[connect] code failed:", e);
+      setQrErr(companyErrorText(e).replace("company profile", "code"));
+    }
+  };
+  const toggleQr = () => {
+    const next = !qrOpen;
+    setQrOpen(next);
+    if (next && !qrCode) loadQr();
+  };
   const [mobileNav, setMobileNav] = useState(false);
   const [userForm, setUserForm] = useState(false);
   const [editUser, setEditUser] = useState(null);
@@ -2087,6 +2114,20 @@ export default function SubSub() {
     : (PLANS[account.plan]?.branding
         ? account
         : { ...account, logoData: null, theme: null, useDefaultMark: true, subdomain: "app" });
+  // Who has a code to show at all. A contractor seat always does -- the
+  // membership carries the company. An admin or project manager has one
+  // only where the account itself can be hired, which since 031 is a
+  // general contractor and nothing else: a landlord is not somebody's
+  // subcontractor, and an item in their menu that answers 403 is worse
+  // than no item.
+  //
+  // Below `account`, not up with the other role answers: `account` is a
+  // const declared further down, and reading it earlier is a temporal dead
+  // zone throw -- which is not a wrong menu item, it is the whole app
+  // replaced by the error screen. It was exactly that for one build.
+  const canShowQr = role === "contractor"
+    || ((role === "admin" || role === "pm") && isHireable(account));
+
   // What this person is, in the words the customer uses. A subcontractor signing
   // into someone else's portal is a contractor, not "a general contractor" — the
   // account type is the hiring side's identity, not theirs.
@@ -3546,6 +3587,11 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A code belongs to a company, and switching seats switches company. Held
+  // over, the menu would show the last one -- which is somebody else's
+  // standing offer to be asked, handed to the wrong person to show around.
+  useEffect(() => { setQrCode(null); setQrOpen(false); setQrErr(""); }, [currentAccountId]);
+
   // Switching accounts, or an admin changing the account type, can leave the
   // current tab unreachable. Fall back rather than render an empty page.
   useEffect(() => {
@@ -3959,6 +4005,18 @@ export default function SubSub() {
                 <>
                   <div className="add-scrim" onClick={() => setUserMenu(false)} />
                   <div className="add-menu user-menu">
+                    {/* First, above My account. Everything else in here is
+                        something you go and do; this is something somebody
+                        is waiting on you for. */}
+                    {canShowQr && (
+                      <>
+                        <button className="um-qr" onClick={toggleQr} aria-expanded={qrOpen}>
+                          <QrCodeIcon size={14} /> My QR code
+                          <ChevronDown size={13} className={`um-caret ${qrOpen ? "up" : ""}`} />
+                        </button>
+                        {qrOpen && <QrPeek code={qrCode} err={qrErr} onRetry={loadQr} />}
+                      </>
+                    )}
                     <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
                       <UserCog size={14} /> My account
                     </button>
@@ -4041,6 +4099,22 @@ export default function SubSub() {
             <a className="drawer-addr" href={`https://${portalUrl(brand)}/`} target="_blank" rel="noreferrer">
               <Globe size={13} /> <span>{portalUrl(brand)}</span>
             </a>
+          )}
+          {/* The phone is where this matters most, and the phone is the one
+              that gets this drawer rather than the menu above.
+
+              stopPropagation because the drawer closes on any button inside
+              it -- which is right for a nav item and wrong for this: opening
+              the code would shut the drawer over it, and Copy link would
+              shut it again. */}
+          {canShowQr && (
+            <div className="drawer-qr" onClick={(e) => e.stopPropagation()}>
+              <button className="um-qr" onClick={toggleQr} aria-expanded={qrOpen}>
+                <QrCodeIcon size={14} /> My QR code
+                <ChevronDown size={13} className={`um-caret ${qrOpen ? "up" : ""}`} />
+              </button>
+              {qrOpen && <QrPeek code={qrCode} err={qrErr} onRetry={loadQr} />}
+            </div>
           )}
           {/* A tenant's two jobs, as two links: see what you've reported,
               and report something. Without them the nav was empty and the
@@ -14544,6 +14618,49 @@ function QrCode({ value, size = 190, label }) {
 // out of ConnectPane because a general contractor needs exactly this on
 // their own account settings since 031 -- an account is a company, so the
 // same endpoint answers for both and there is no reason for two of these.
+// The same code, cut down to what somebody needs with a stranger waiting.
+//
+// Deliberately not ConnectCode with a flag. That one belongs on a settings
+// page and carries the things a settings page is for -- rotating the code,
+// the warning about what rotating breaks, the confirm step. None of that is
+// wanted in a menu held open at arm's length, and a "Change code" button
+// one thumb-width from "Copy link" on a phone is a way to break the code
+// you are in the middle of showing somebody.
+function QrPeek({ code, err, onRetry }) {
+  const [copied, setCopied] = useState(false);
+  const [copyErr, setCopyErr] = useState("");
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code.url);
+      setCopied(true); setTimeout(() => setCopied(false), 2000);
+    } catch { setCopyErr("This browser wouldn't let us copy. Read the code out instead."); }
+  };
+  if (err) {
+    return (
+      <div className="qrp" role="alert">
+        <p className="qrp-note">{err}</p>
+        <button className="pick" onClick={onRetry}>Try again</button>
+      </div>
+    );
+  }
+  if (!code) return <div className="qrp"><p className="qrp-note">Loading…</p></div>;
+  return (
+    <div className="qrp">
+      <QrCode value={code.url} size={170} label={`Connect code ${code.code}`} />
+      {/* In words as well as in squares: a camera that will not focus is
+          the normal case on a wet morning, not the exception. */}
+      <span className="qrp-code">{code.code}</span>
+      <button className="pick" onClick={copy}>
+        <Copy size={13} /> {copied ? "Copied" : "Copy link"}
+      </button>
+      <p className="qrp-note">
+        Show this to have them add you. Nothing of yours moves until you accept.
+      </p>
+      {copyErr && <p className="qrp-note" role="alert">{copyErr}</p>}
+    </div>
+  );
+}
+
 function ConnectCode() {
   const [code, setCode] = useState(null);
   const [err, setErr] = useState("");
@@ -17819,6 +17936,27 @@ p.fld-note{margin:6px 0 0}
 
 /* user row actions */
 .user-row-actions{display:flex;align-items:center;gap:7px;flex:none}
+/* The code, one tap from anywhere.
+   .user-menu button is a two-line stack (name over role), so this one says
+   row explicitly rather than inheriting a layout meant for the account list.
+   Its own palette rather than the theme's: this renders on a popover that
+   is white whatever the account's colours are, AND in the drawer, which is
+   not -- one set of colours that reads on both beats two that each read on
+   one. */
+.um-qr{flex-direction:row !important;align-items:center !important;gap:9px !important;
+  width:100%;font-weight:700 !important}
+.um-caret{margin-left:auto;flex:none;transition:transform .15s}
+.um-caret.up{transform:rotate(180deg)}
+.qrp{display:flex;flex-direction:column;align-items:center;gap:8px;
+  margin:3px 4px 5px;padding:12px 8px;border-radius:10px;
+  background:#f4f8f6;border:1px solid #d9e3dd;color:#12211c}
+.qrp .qr{display:block;border-radius:6px}
+.qrp-code{font:700 17px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.14em;color:#12211c}
+.qrp-note{margin:0;font-size:11.5px;line-height:1.4;text-align:center;color:#5d6f67}
+.qrp .pick{background:#fff}
+/* The drawer closes on a button, so the code sits in a block of its own
+   that does not pass the click on. */
+.drawer-qr{display:flex;flex-direction:column;margin:2px 0 6px}
 .um-sec{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;
   color:var(--ink-soft);padding:10px 14px 5px;border-top:1px solid var(--line);margin-top:4px}
 .um-acct{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;
@@ -20208,7 +20346,7 @@ p.fld-note{margin:6px 0 0}
    them. Reachable only by rotating to landscape, where the desktop chip
    takes over. */
 @media (min-width:1001px){
-  .drawer-user,.drawer-addr,.drawer-actions,.pf-drawer-user,.pf-drawer-actions{display:none}
+  .drawer-user,.drawer-addr,.drawer-actions,.drawer-qr,.pf-drawer-user,.pf-drawer-actions{display:none}
 }
 @media (max-width:1000px){
   /* platform console */
