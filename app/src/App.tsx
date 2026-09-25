@@ -5055,7 +5055,7 @@ export default function SubSub() {
           onCancel={() => { setAdding(false); setResumeAssign(null); }} /></Modal>}
 
       {inviteOpen && <Modal onClose={() => setInviteOpen(false)}>
-        <InviteLinks onSent={refreshInvites}
+        <InviteLinks onSent={refreshInvites} subs={subs} invites={openInvites}
           onOpenExisting={(m) => { setInviteOpen(false); openExistingContractor(m); }}
           onConnect={async (m) => {
             const made = await api.requestConnect({ companyId: m.companyId });
@@ -11182,7 +11182,23 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
 // Deliberately weaker than the public application page that comes with Scale,
 // which is always on and can be found unprompted -- the difference between
 // the plans has to stay real.
-function InviteLinks({ onSent, onClose, onConnect, onOpenExisting }) {
+// Two names are the same company, allowing for how people type one.
+//
+// Case, punctuation, "the", and the legal suffix nobody says out loud:
+// "Enterprise Roofing", "Enterprise Roofing LLC" and "enterprise roofing,
+// inc." are one company to everybody except a string comparison.
+const NAME_NOISE = /\b(inc|llc|l\.?l\.?c|ltd|limited|co|corp|corporation|company|pllc|lp|llp)\b/g;
+const nameKey = (v) => String(v || "").toLowerCase()
+  .replace(/&/g, " and ")
+  .replace(/[^a-z0-9\s]/g, " ")
+  .replace(NAME_NOISE, " ")
+  // \b, not \s+: a bare "The" has to key to nothing, or it is a three-letter
+  // prefix that suggests every company beginning with the word.
+  .replace(/^the\b\s*/, "")
+  .replace(/\s+/g, " ")
+  .trim();
+
+function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], invites = [] }) {
   const [companyName, setCompanyName] = useState("");
   const [contact, setContact] = useState("");
   const [email, setEmail] = useState("");
@@ -11212,6 +11228,35 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting }) {
   const { match, checking: matchChecking } =
     useConnectMatch(!!onConnect, { email: to, phone: mobile, license: "" });
   const showMatch = match && !dismissedMatch;
+
+  // And the question the company name asks, which is a different one.
+  //
+  // Typing a company name here did nothing at all, because the lookup above
+  // matches on an email, a mobile or a licence number and on nothing else.
+  // That is deliberate and stays: a name search across every company on
+  // SubSub is a directory of the platform, and any account could walk it one
+  // prefix at a time.
+  //
+  // What a name CAN be matched against is THIS account's own list, which is
+  // its own data and discloses nothing to anybody. It also catches the
+  // mistake that actually happens here: inviting a company you already work
+  // with, or inviting the same one twice in a week because the first invite
+  // is not in front of you.
+  const nameTyped = nameKey(companyName);
+  const [dismissedName, setDismissedName] = useState(false);
+  const nameHits = useMemo(() => {
+    if (nameTyped.length < 3) return { mine: [], invited: [] };
+    const starts = (v) => { const k = nameKey(v); return !!k && k.startsWith(nameTyped); };
+    return {
+      mine: (subs || []).filter((x) => starts(x.company)).slice(0, 3),
+      invited: (invites || []).filter((i) => starts(i.companyName) || starts(i.label)).slice(0, 3),
+    };
+  }, [nameTyped, subs, invites]);
+  // The contact-based match wins the space when there is one: it knows more
+  // -- whether they are on SubSub at all, whether you are already connected
+  // -- than a name can.
+  const showName = !dismissedName && !showMatch
+    && (nameHits.mine.length > 0 || nameHits.invited.length > 0);
 
   const askToConnect = async () => {
     setConnecting(true); setErr("");
@@ -11340,6 +11385,41 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting }) {
         </div>
       )}
       {!showMatch && matchChecking && <p className="cov-hint">Checking whether they are already on SubSub…</p>}
+      {/* A name you already have on your own list. Not a search of SubSub --
+          see nameHits above for why there isn't one -- so it says plainly
+          that it is looking at your own contractors, and never implies the
+          company is or is not on the platform. */}
+      {showName && (
+        <div className="cx-found inv-name-hit" role="status">
+          <span className="cx-found-chip"><CheckCircle2 size={12} /> Already on your list</span>
+          {nameHits.mine.map((x) => (
+            <div key={x.id} className="inv-hit-row">
+              <span className="inv-hit-name"><b>{x.company}</b>
+                {x.contact ? <span className="cx-found-sub"> · {x.contact}</span> : null}</span>
+              <button type="button" className="btn-solid small"
+                onClick={() => onOpenExisting?.({ companyId: x.id, company: x.company })}>
+                <ArrowRight size={13} /> Open
+              </button>
+            </div>
+          ))}
+          {nameHits.invited.map((i) => (
+            <div key={i.id} className="inv-hit-row">
+              <span className="inv-hit-name"><b>{i.companyName || i.label}</b>
+                <span className="cx-found-sub"> · invited{i.sentAt ? ` ${relTime(i.sentAt)}` : ""}, not finished yet</span></span>
+            </div>
+          ))}
+          <p className="cx-found-note">
+            {nameHits.invited.length && !nameHits.mine.length
+              ? "Sending another invite is harmless — they will just get a second link."
+              : "This is a match on your own contractors, not a search of SubSub."}
+          </p>
+          <div className="cx-found-acts">
+            <button type="button" className="pick" onClick={() => setDismissedName(true)}>
+              Not them — carry on
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* One per line. These were three boxes and a button on one row inside
           a 560px panel, which on a phone came out about sixty pixels wide
@@ -11347,6 +11427,10 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting }) {
           short has no reason to be dense. */}
       <div className="inv-make">
         <label className="fld">Company name
+          {/* Said here because the field looks like a search box and is not
+              one. Somebody typed a name, watched nothing happen, and
+              reasonably reported it as broken. */}
+          <span className="fld-note">we check your own contractors — SubSub is matched on the email, mobile or licence below</span>
           <input value={companyName} maxLength={160} placeholder="Cascade Roofworks"
             onChange={(e) => { setCompanyName(e.target.value); setErr(""); }}
             onKeyDown={(e) => { if (e.key === "Enter" && canSend && !busy) create(); }} />
@@ -20010,6 +20094,13 @@ p.fld-note{margin:6px 0 0}
 /* What happened when somebody was just added. Green for the ordinary case,
    because the ordinary case -- added AND invited, in one go -- is the thing
    an admin could not see and went looking for a second button to do. */
+/* Rows inside the "already on your list" panel: a name that can be long and
+   a button that must not shrink, which is the pair that wraps badly. */
+.inv-name-hit .inv-hit-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  width:100%;padding:5px 0}
+.inv-hit-name{flex:1 1 180px;min-width:0;font-size:13px}
+.inv-name-hit .btn-solid.small{flex:none}
+
 .seat-added{display:flex;align-items:center;gap:7px;margin:0 0 12px;padding:10px 13px;
   border-radius:10px;font-size:13px;font-weight:600;
   background:#eef5f1;border:1px solid #cfe0d6;color:var(--brand)}
