@@ -182,7 +182,10 @@ try {
     const r = await fetch(`${API}/signup`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ company: `Brand New ${S}`, name: "Alex New", email,
         subdomain: `brandnew${S}`.slice(0, 30), password: "correct horse battery",
-        kind: "general_contractor", trades: ["roofing"] }) });
+        // A general contractor can be hired as well as hire, so signup asks
+        // for the same proof they will ask of their own subcontractors.
+        kind: "general_contractor", trades: ["roofing"],
+        license: `WAYIN${S.toUpperCase()}`, ubi: "601 555 222" }) });
     const out = await r.json();
     ck("the account is made", r.status === 201 || out.ok === true || !!out.accountId,
       `${r.status} ${JSON.stringify(out).slice(0, 90)}`);

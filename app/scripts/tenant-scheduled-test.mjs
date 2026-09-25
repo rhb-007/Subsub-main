@@ -97,9 +97,9 @@ try {
 
   console.log("\n-- the booked one has its own section, first --");
   let secs = await sections();
-  ck("there is a section for it", secs.some((x) => /somebody is coming/i.test(x.title || "")),
+  ck("there is a section for it", secs.some((x) => /vendor has been dispatched/i.test(x.title || "")),
     secs.map((x) => x.title).join(" | "));
-  const sched = secs.find((x) => /somebody is coming/i.test(x.title || ""));
+  const sched = secs.find((x) => /vendor has been dispatched/i.test(x.title || ""));
   const rest = secs.find((x) => /everything else|what you/i.test(x.title || ""));
   ck("it is above everything else", sched.top < rest.top, `${sched.top} vs ${rest.top}`);
   ck("and holds the booked report", sched.rows.includes(BOOKED), sched.rows.join(" | "));
@@ -129,7 +129,7 @@ try {
 
   await wait(3000);
   secs = await sections();
-  const sched2 = secs.find((x) => /somebody is coming/i.test(x.title || ""));
+  const sched2 = secs.find((x) => /vendor has been dispatched/i.test(x.title || ""));
   ck("it joins the section above", sched2.rows.includes(WAITING), sched2.rows.join(" | "));
   ck("which now holds both", sched2.rows.length === 2 && sched2.count === "2", `${sched2.rows.length}, count ${sched2.count}`);
   // Soonest first: the next visit is the one being asked about.

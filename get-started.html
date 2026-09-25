@@ -522,6 +522,21 @@ body.nav-open{overflow:hidden}
           <div id="trades"></div>
         </div>
 
+        <!-- A general contractor can be hired as well as hire, so they are
+             asked for exactly what they will ask of their own subcontractors.
+             Property managers, portfolio managers and building owners only
+             ever hire, so they are not asked and this block stays hidden. -->
+        <div class="field hide" id="gcCreds">
+          <label for="license">Your license and UBI</label>
+          <p class="fine">You can be hired through SubSub too — another general contractor can find
+            you and send you work. This is what they see, and it is the same proof you will ask of
+            your own subcontractors.</p>
+          <div class="two">
+            <input id="license" placeholder="WA L&amp;I license number" autocapitalize="characters" autocorrect="off" spellcheck="false">
+            <input id="ubi" placeholder="UBI number" inputmode="numeric">
+          </div>
+        </div>
+
         <div class="field"><label for="city">Where you're based</label>
           <div class="three">
             <input id="city" placeholder="City" autocomplete="address-level2">
@@ -860,6 +875,21 @@ body.nav-open{overflow:hidden}
   document.getElementById('state').addEventListener('input', function(){
     this.value = this.value.toUpperCase().slice(0,2);
   });
+  document.getElementById('license').addEventListener('input', function(){
+    this.value = this.value.toUpperCase();
+  });
+  /* The licence pair belongs to the one kind of account that can be hired. */
+  function isGC(){
+    var el = document.querySelector('input[name="role"]:checked');
+    return !el || el.value === 'General contractor';
+  }
+  function syncGCCreds(){
+    document.getElementById('gcCreds').classList.toggle('hide', !isGC());
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="role"]'), function(r){
+    r.addEventListener('change', syncGCCreds);
+  });
+  syncGCCreds();
   document.getElementById('logoFile').addEventListener('change', function(){
     if(!this.files.length) return;
     var r = new FileReader();
@@ -887,6 +917,13 @@ body.nav-open{overflow:hidden}
       markTradesError('Pick at least one trade.');
       document.getElementById('tradesErr').scrollIntoView({behavior:'smooth', block:'center'});
       return;
+    }
+    if(isGC()){
+      var lic = document.getElementById('license');
+      var ubi = document.getElementById('ubi');
+      clearFieldError(lic); clearFieldError(ubi);
+      if(!lic.value.trim()){ markField(lic, 'Enter your state license number.'); lic.focus(); return; }
+      if(!ubi.value.trim()){ markField(ubi, 'Enter your UBI number.'); ubi.focus(); return; }
     }
     go(3);
   });
@@ -986,6 +1023,9 @@ body.nav-open{overflow:hidden}
   };
   var FIELD_ERRORS = {
     subdomain_taken: 'That sign-in address is already taken. Pick another.',
+    license_required: 'A general contractor needs a state license number — you can be hired through SubSub too.',
+    ubi_required: 'A general contractor needs a UBI number.',
+    license_taken: 'That license number is already registered here. Email support@subsub.work and we will sort it out.',
     email_in_use: 'That email already has an account. Sign in instead.',
     invalid_subdomain: 'That sign-in address cannot be used. Use 3-40 letters, numbers or dashes.',
     invalid_email: 'That email address does not look right.',
@@ -1046,6 +1086,13 @@ body.nav-open{overflow:hidden}
       company: company.value.trim(),
       subdomain: (sub.value.trim() || company.value.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,20)),
       trades: pickedTrades(),
+      license: (document.getElementById('license') || {}).value || '',
+      ubi: (document.getElementById('ubi') || {}).value || '',
+      // Collected on step 2 since this page was written and thrown away
+      // every time. It is what another contractor sees as "where they are".
+      city: (document.getElementById('city') || {}).value || '',
+      state: (document.getElementById('state') || {}).value || '',
+      zip: (document.getElementById('zip') || {}).value || '',
       plan: plan,
       billing: billing
     };

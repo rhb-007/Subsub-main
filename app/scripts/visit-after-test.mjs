@@ -216,8 +216,8 @@ try {
   ck("the tenant is in", /Hello, Marin/.test(await page.evaluate(() => document.body.innerText)));
 
   const secs = await sections();
-  const overdue = secs.find((x) => /did they come/i.test(x.title || ""));
-  const coming = secs.find((x) => /somebody is coming/i.test(x.title || ""));
+  const overdue = secs.find((x) => /did your vendor show up/i.test(x.title || ""));
+  const coming = secs.find((x) => /vendor has been dispatched/i.test(x.title || ""));
   ck("a booked time that has passed gets its own section", !!overdue, secs.map((x) => x.title).join(" | "));
   ck("and it holds the one that has", overdue.rows.includes(STILL), overdue.rows.join(" | "));
   // The whole complaint: this is what used to say "Somebody is coming".
@@ -233,17 +233,17 @@ try {
     /^Was due/.test(r.chip) && !/Scheduled/.test(r.chip), r.chip);
   ck("and still carries the date and window", /1 PM/.test(r.chip), r.chip);
   ck("it is marked as wanting something from the reader", r.needsYou === true);
-  ck("and asks the question", r.asks === true && /Did somebody come\?/.test(r.text), r.text.slice(0, 150));
+  ck("and asks the question", r.asks === true && /Did your vendor show up\?/.test(r.text), r.text.slice(0, 150));
   ck("with both answers offered",
-    r.buttons.some((b) => /nobody came/i.test(b)) && r.buttons.some((b) => /they came/i.test(b)),
+    r.buttons.some((b) => /nobody showed up/i.test(b)) && r.buttons.some((b) => /they showed up/i.test(b)),
     r.buttons.join(" | "));
 
   console.log("\n-- answering it --");
   await page.evaluate(() => [...document.querySelectorAll(".tn-after button")]
-    .find((b) => /yes, they came/i.test(b.textContent))?.click());
+    .find((b) => /yes, they showed up/i.test(b.textContent))?.click());
   await wait(2500);
   const after = await sections();
-  const overdue2 = after.find((x) => /did they come/i.test(x.title || ""));
+  const overdue2 = after.find((x) => /did your vendor show up/i.test(x.title || ""));
   ck("the row leaves the section once it is answered",
     !overdue2 || !overdue2.rows.includes(STILL), overdue2?.rows.join(" | "));
   const r2 = await rowFor(STILL);

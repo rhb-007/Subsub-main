@@ -430,7 +430,16 @@ const ACCOUNT_KINDS = {
   // it may do. A general contractor's second seat runs projects, not
   // property: they have no buildings, so "property manager" describes a job
   // nobody in the account has. Every other kind keeps the default.
+  //
+  // `hireable` is who can be on the other side of the arrangement. A general
+  // contractor sells siding to a property manager on Tuesday and subs its
+  // gutters out on Wednesday, so they both hire and are hired. The other
+  // three only ever hire: a landlord is not somebody's subcontractor, and
+  // offering them a QR code and a listing would be offering a thing they
+  // will never use -- one careless join from putting a building owner on
+  // somebody's roster.
   general_contractor: { label: "General contractor", properties: false, invites: [],
+                        hireable: true,
                         roleLabels: { pm: "Project manager" } },
   property_manager:   { label: "Property manager", properties: true, invites: ["owner"] },
   // A building owner's account has no owners to invite -- they are the owner.
@@ -447,6 +456,8 @@ const DEFAULT_ACCOUNT_KIND = "general_contractor";
 const kindOf = (account) =>
   (account && ACCOUNT_KINDS[account.kind]) ? account.kind : DEFAULT_ACCOUNT_KIND;
 const hasProperties = (account) => ACCOUNT_KINDS[kindOf(account)].properties;
+// Whether this account can itself be hired as a subcontractor.
+const isHireable = (account) => !!ACCOUNT_KINDS[kindOf(account)].hireable;
 // The line under the name on a sign-in page. SubSub's own address describes
 // the product; a company's address describes what the company is -- the
 // people signing in there are its staff, its owners, its tenants, its
@@ -8844,16 +8855,22 @@ function tenantStage(job, visit) {
       // one of them is waiting and the other is stalled.
       const asked = someoneAsked(job);
       return visitPassed(visit)
-        ? { key: "nobody", label: asked ? "Nobody confirmed for this" : "Nobody was booked for this", tone: "wait" }
+        ? { key: "nobody",
+            label: asked
+              ? "Still waiting on a vendor to accept this job"
+              : "Still lining up a vendor for this",
+            tone: "wait" }
         : { key: "promised",
-            label: `${visitWhen(visit)} — ${asked ? "waiting on the contractor" : "booking a contractor"}`,
+            label: `${visitWhen(visit)} — ${asked
+              ? "waiting on a vendor to accept, please standby"
+              : "lining up a vendor"}`,
             tone: "busy" };
     }
     return visitPassed(visit)
       ? { key: "passed", label: `Was due ${visitWhen(visit)}`, tone: "wait" }
       : { key: "scheduled", label: `Scheduled — ${visitWhen(visit)}`, tone: "ok" };
   }
-  if (visit?.status === "missed") return { key: "missed", label: "Nobody came — arranging another time", tone: "wait" };
+  if (visit?.status === "missed") return { key: "missed", label: "Nobody arrived — rescheduling", tone: "wait" };
   if (visit?.status === "happened") return { key: "visited", label: `Visited ${niceDay(visit.date)}`, tone: "busy" };
   const assigned = Object.values(job.assignments || {});
   const accepted = assigned.filter((a) => a.status === "accepted" || a.auto);
@@ -9404,7 +9421,7 @@ function TenantVisitOutcome({ visit, brandName, onSay }) {
   return (
     <div className="tn-visit tn-after">
       <div className="tn-visit-when"><Clock size={15} /> This visit was booked for <b>{visitWhen(visit)}</b></div>
-      <p className="tn-visit-q">That time has passed. Did somebody come?</p>
+      <p className="tn-visit-q">That time has passed. Did your vendor show up?</p>
       {saying ? (
         <>
           <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
@@ -9412,15 +9429,15 @@ function TenantVisitOutcome({ visit, brandName, onSay }) {
           <div className="tn-visit-actions">
             <button className="btn-ghost" onClick={() => setSaying(false)} disabled={!!busy}>Back</button>
             <button className="btn-solid" onClick={() => say(false)} disabled={!!busy}>
-              {busy === "no" ? "Sending…" : "Send — nobody came"}
+              {busy === "no" ? "Sending…" : "Send — nobody showed up"}
             </button>
           </div>
         </>
       ) : (
         <div className="tn-visit-actions">
-          <button className="btn-ghost" onClick={() => setSaying(true)} disabled={!!busy}>No, nobody came</button>
+          <button className="btn-ghost" onClick={() => setSaying(true)} disabled={!!busy}>No, nobody showed up</button>
           <button className="btn-solid" onClick={() => say(true)} disabled={!!busy}>
-            <Check size={15} /> {busy === "yes" ? "Saving…" : "Yes, they came"}
+            <Check size={15} /> {busy === "yes" ? "Saving…" : "Yes, they showed up"}
           </button>
         </div>
       )}
@@ -9466,10 +9483,10 @@ function VisitBlock({ job, visit, who, onPropose, onAssign }) {
           <AlertTriangle size={14} />
           <span>
             {someoneAsked(job)
-              ? <>A time is {visit.status === "confirmed" ? "agreed" : "proposed"} and no contractor has
-                  accepted it yet. Nobody will turn up until one does.</>
-              : <>A time is {visit.status === "confirmed" ? "agreed" : "proposed"} and <b>nobody is
-                  assigned</b>. Nobody will turn up.</>}
+              ? <>A time is {visit.status === "confirmed" ? "agreed" : "proposed"} and no vendor has
+                  accepted this job yet. Nobody is scheduled to arrive until one does.</>
+              : <>A time is {visit.status === "confirmed" ? "agreed" : "proposed"} and <b>no vendor
+                  is assigned</b>. Nobody is scheduled to arrive.</>}
           </span>
           {onAssign && (
             <button className="btn-solid sm" onClick={onAssign}>
@@ -9490,10 +9507,10 @@ function VisitBlock({ job, visit, who, onPropose, onAssign }) {
           needs something doing, so it reads as a problem and springs the
           propose form open above. */}
       {visit?.status === "missed" && (
-        <p className="visit-state bad"><AlertTriangle size={14} /> Nobody came for <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."} {name} is still waiting.</p>
+        <p className="visit-state bad"><AlertTriangle size={14} /> No vendor showed up for <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."} {name} is still waiting.</p>
       )}
       {visit?.status === "happened" && (
-        <p className="visit-state ok"><CheckCircle2 size={14} /> {name} says somebody came on <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."}</p>
+        <p className="visit-state ok"><CheckCircle2 size={14} /> {name} says a vendor showed up on <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."}</p>
       )}
       {visit?.status === "declined" && (
         <p className="visit-state bad"><AlertTriangle size={14} /> {name} can't make <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."} Propose another.</p>
@@ -10039,12 +10056,12 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
                 {/* Soonest first, because the next one is the one being
                     asked about. */}
                 {overdue.length > 0 && (
-                  <TenantSection id="overdue" title="Did they come?" count={overdue.length}>
+                  <TenantSection id="overdue" title="Did your vendor show up?" count={overdue.length}>
                     <div className="tn-list">{overdue.map(row)}</div>
                   </TenantSection>
                 )}
                 {scheduled.length > 0 && (
-                  <TenantSection id="scheduled" title="Somebody is coming" count={scheduled.length}>
+                  <TenantSection id="scheduled" title="A vendor has been dispatched to fix your issue" count={scheduled.length}>
                     <div className="tn-list">{scheduled.map(row)}</div>
                   </TenantSection>
                 )}
@@ -11865,7 +11882,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           onSave={onSetEmergencyContractor} />
       )}
 
-      {pane === "company" && canManage && (
+      {/* Only a general contractor. The other three kinds hire and are not
+          hired, so this panel would be a QR code for something they will
+          never do. */}
+      {pane === "company" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
         <HireablePanel accountName={brand?.name} requests={incomingConnects}
           onRespond={onRespondConnect} onReload={onReloadConnects} />
       )}

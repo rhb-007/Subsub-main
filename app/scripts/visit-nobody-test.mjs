@@ -188,20 +188,20 @@ try {
   const realRow = await rowFor(page, REAL);
 
   ck("the properly booked one does say somebody is coming",
-    /somebody is coming/i.test(realRow?.section || ""), realRow?.section);
+    /vendor has been dispatched/i.test(realRow?.section || ""), realRow?.section);
   ck("with the time on the chip", /^Scheduled/.test(realRow?.chip || ""), realRow?.chip);
 
   // The whole point.
   ck("the one nobody was hired for does not",
-    !/somebody is coming/i.test(orphanRow?.section || ""), `${orphanRow?.section} / ${orphanRow?.chip}`);
+    !/vendor has been dispatched/i.test(orphanRow?.section || ""), `${orphanRow?.section} / ${orphanRow?.chip}`);
   ck("and its chip says so instead",
-    /nobody was booked/i.test(orphanRow?.chip || ""), orphanRow?.chip);
+    /lining up a vendor/i.test(orphanRow?.chip || ""), orphanRow?.chip);
   ck("it is not asked whether somebody came", orphanRow?.asksOutcome === false, orphanRow?.text.slice(0, 120));
   ck("the one whose contractor withdrew does not either",
-    !/somebody is coming/i.test(withdrawnRow?.section || ""), `${withdrawnRow?.section} / ${withdrawnRow?.chip}`);
+    !/vendor has been dispatched/i.test(withdrawnRow?.section || ""), `${withdrawnRow?.section} / ${withdrawnRow?.chip}`);
   // Still ahead, so it reads as a plan rather than a failure.
   ck("and reads as a time waiting on a contractor",
-    /booking a contractor/i.test(withdrawnRow?.chip || ""), withdrawnRow?.chip);
+    /lining up a vendor/i.test(withdrawnRow?.chip || ""), withdrawnRow?.chip);
   ck("nothing threw", crashes.length === 0, crashes.join(" ; "));
 
   console.log("\n-- and the manager is told, where they can fix it --");
@@ -234,8 +234,9 @@ try {
       hasButton: !!w?.querySelector("button") };
   }, ORPHAN);
   ck("the job card is there", !!warned?.found, String(warned));
-  ck("it says nobody will turn up", /nobody will turn up/i.test(warned?.warn || ""), warned?.warn);
-  ck("naming the actual problem", /nobody is\s+assigned/i.test(warned?.warn || ""), warned?.warn);
+  ck("it says nobody is scheduled to arrive",
+    /nobody is scheduled to arrive/i.test(warned?.warn || ""), warned?.warn);
+  ck("naming the actual problem", /no vendor\s+is assigned/i.test(warned?.warn || ""), warned?.warn);
   ck("with a way to fix it in the same breath", warned?.hasButton === true);
 
   const fine = await mp.evaluate((t) => {

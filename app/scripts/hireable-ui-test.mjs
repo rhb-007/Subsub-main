@@ -20,7 +20,7 @@ import { execFileSync } from "node:child_process";
 
 const APP = process.env.APP_PORT || "5191";
 const CONSOLE = process.env.CONSOLE_PORT || "5192";
-const HOST = "cascademanagement.subsub.work";
+const HOST = "outerhome.subsub.work";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
@@ -42,6 +42,9 @@ d1(`INSERT INTO superadmins (user_id, role, finance, impersonate) VALUES ('${sta
 try {
   // ---- the account's own company profile ---------------------------------
   console.log("\n-- a general contractor's own settings --");
+  // Outerhome, not Cascade: only a general contractor can be hired, so a
+  // property manager has no such panel and the section below would be
+  // testing its absence by accident rather than on purpose.
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   await page.setViewport({ width: 1280, height: 1500 });
@@ -50,7 +53,7 @@ try {
   await page.goto(`http://${HOST}:${APP}/`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("input[type=password]", { timeout: 15000 });
   await wait(900);
-  await page.type("input[type=email]", "pm@example.test");
+  await page.type("input[type=email]", "admin@example.test");
   await page.type("input[type=password]", "correct horse battery");
   await page.click(".login-btn");
   await wait(6500);
@@ -113,6 +116,42 @@ try {
   ck("and unlocks once there is something to save", unlocked === false);
   ck("nothing threw on that page", crashes.length === 0, crashes.join(" ; "));
   await ctx.close();
+
+  // ---- and a property manager has none of it ----------------------------
+  console.log("\n-- a property manager's own settings --");
+  {
+    const pmCtx = await browser.createBrowserContext();
+    const pm = await pmCtx.newPage();
+    await pm.setViewport({ width: 1280, height: 1500 });
+    const pmCrashes = [];
+    pm.on("pageerror", (e) => pmCrashes.push(e.message));
+    await pm.goto(`http://cascademanagement.subsub.work:${APP}/`, { waitUntil: "domcontentloaded" });
+    await pm.waitForSelector("input[type=password]", { timeout: 15000 });
+    await wait(900);
+    await pm.type("input[type=email]", "pm@example.test");
+    await pm.type("input[type=password]", "correct horse battery");
+    await pm.click(".login-btn");
+    await wait(6500);
+    await pm.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^My account/i.test(b.innerText.trim()))?.click());
+    await wait(1800);
+    await pm.evaluate(() => [...document.querySelectorAll(".seg-tabs button")]
+      .find((b) => /^Company$/i.test(b.innerText.trim()))?.click());
+    await wait(2600);
+    const shown = await pm.evaluate(() => {
+      const panels = [...document.querySelectorAll(".settings-panel h4")].map((x) => x.textContent.trim());
+      return { panels, hireable: panels.some((t) => /working as a subcontractor/i.test(t)),
+        qr: !!document.querySelector(".cx-code") };
+    });
+    // They hire; they are not hired. A QR code here is an offer of something
+    // that will never happen.
+    ck("no 'working as a subcontractor' panel", shown.hireable === false, shown.panels.join(" | "));
+    ck("and no QR code anywhere on the page", shown.qr === false);
+    ck("while the rest of the Company pane is still there",
+      shown.panels.some((t) => /account type/i.test(t)), shown.panels.join(" | "));
+    ck("nothing threw for them either", pmCrashes.length === 0, pmCrashes.join(" ; "));
+    await pmCtx.close();
+  }
 
   // ---- the console drawer's logs -----------------------------------------
   console.log("\n-- the console's account drawer --");

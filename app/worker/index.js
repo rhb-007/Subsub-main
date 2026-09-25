@@ -568,8 +568,20 @@ app.post("/api/signup", async (c) => {
   // Absent is fine (an older page, or a caller that does not collect them);
   // present but wrong is not, because it would store ids nothing can render.
   const trades = b.trades === undefined ? [] : validTrades(b.trades);
+  // A general contractor is a company that can be HIRED, so they are asked
+  // for exactly what a subcontractor is asked for. Anything less and the
+  // first thing a bigger contractor sees of them is a profile that cannot
+  // be verified -- the same paperwork gap they themselves refuse to hire on.
+  const hireable = HIREABLE_KINDS.includes(kind);
+  const license = String(b.license || "").trim().slice(0, 60);
+  const ubi = String(b.ubi || "").trim().slice(0, 40);
+  const city = String(b.city || "").trim().slice(0, 120) || null;
+  const state = String(b.state || "").trim().slice(0, 40) || null;
+  const zip = String(b.zip || "").trim().slice(0, 20) || null;
 
   if (!company) return c.json({ error: "company_required" }, 400);
+  if (hireable && !license) return c.json({ error: "license_required" }, 400);
+  if (hireable && !ubi) return c.json({ error: "ubi_required" }, 400);
   if (!personName) return c.json({ error: "name_required" }, 400);
   if (!EMAIL_RE.test(email)) return c.json({ error: "invalid_email" }, 400);
   // Mobile stays optional, but a half-typed one is worse than none: it reads
@@ -591,6 +603,15 @@ app.post("/api/signup", async (c) => {
   ]);
   if (subTaken) return c.json({ error: "subdomain_taken" }, 409);
   if (emailTaken) return c.json({ error: "email_in_use" }, 409);
+  // companies.license is unique across the whole table, so this number may
+  // already be on a contractor row somebody typed in. Adopting that row
+  // would hand whoever knows a public licence number the documents on it,
+  // so it is refused and said plainly instead.
+  if (hireable && license) {
+    const licTaken = await c.env.DB.prepare(
+      `SELECT id FROM companies WHERE license = ?`).bind(license).first();
+    if (licTaken) return c.json({ error: "license_taken" }, 409);
+  }
 
   let authId = null, needsConfirmation = false;
   if (realAuth) {
@@ -621,6 +642,25 @@ app.post("/api/signup", async (c) => {
         `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, 'admin')`
       ).bind(membershipId, userId, accountId),
     ]);
+    // The company they are, for the kinds that can be hired. Written here
+    // rather than left to ensureAccountCompany so a general contractor is
+    // findable from the moment they finish signing up, with the licence and
+    // the address they just typed rather than a name and nothing else.
+    if (hireable) {
+      try {
+        await c.env.DB.prepare(
+          `INSERT OR IGNORE INTO companies (id, company, contact, email, phone, license, ubi, city, state, zip)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(ownCompanyId(accountId), company, personName, email, phone,
+          license || null, ubi || null, city, state, zip).run();
+        await c.env.DB.prepare(`UPDATE accounts SET company_id = ? WHERE id = ?`)
+          .bind(ownCompanyId(accountId), accountId).run();
+      } catch (err) {
+        // A database without 031 still signs people up; they get their row
+        // the first time they open the panel that needs it.
+        if (!missingSchema(err)) throw err;
+      }
+    }
   } catch (err) {
     // Two signups racing on the same subdomain or email land here.
     console.error("[signup] insert failed:", err?.message || err);
@@ -1586,9 +1626,20 @@ async function ensureConnectCode(env, companyId) {
 // every time and never a second one.
 const ownCompanyId = (accountId) => `cmp_own_${accountId}`;
 async function ensureAccountCompany(env, accountId) {
-  const a = await env.DB.prepare(`SELECT id, name, company_id FROM accounts WHERE id = ?`)
-    .bind(accountId).first();
+  let a;
+  try {
+    a = await env.DB.prepare(`SELECT id, name, kind, company_id FROM accounts WHERE id = ?`)
+      .bind(accountId).first();
+  } catch (err) {
+    // No company_id column yet: this database has not had 031 run.
+    if (missingSchema(err)) return null;
+    throw err;
+  }
   if (!a) return null;
+  // Only a general contractor. The row exists to be hired; the other kinds
+  // hire and are not hired, and a dormant listing for a landlord is one
+  // careless join from a landlord on somebody's subcontractor roster.
+  if (!HIREABLE_KINDS.includes(a.kind)) return null;
   if (a.company_id) return a.company_id;
   const id = ownCompanyId(accountId);
   try {
@@ -1648,12 +1699,30 @@ async function isOwnCompany(env, accountId, companyId) {
 
 // Which company this seat speaks for. A contractor seat speaks for the
 // company it was seated with; an admin or a project manager speaks for the
-// account they run, which is a company of its own since 031.
+// account they run, which is a company of its own since 031 -- but only if
+// that account is a general contractor.
 async function seatCompany(c) {
   const { role, companyId, accountId } = c.get("auth");
   if (role === "contractor" && companyId) return companyId;
   if ((role === "admin" || role === "pm") && accountId) return await ensureAccountCompany(c.env, accountId);
   return null;
+}
+
+// Why a seat has no company, for the routes that should say so rather than
+// answer "forbidden" to a property manager who was never going to have one.
+async function noCompanyReason(c) {
+  const { accountId } = c.get("auth");
+  if (!accountId) return "forbidden";
+  try {
+    const a = await c.env.DB.prepare(`SELECT kind, company_id FROM accounts WHERE id = ?`)
+      .bind(accountId).first();
+    if (a && !HIREABLE_KINDS.includes(a.kind)) return "not_hireable";
+    if (a && !a.company_id) return "migration_needed";
+  } catch (err) {
+    if (missingSchema(err)) return "migration_needed";
+    throw err;
+  }
+  return "forbidden";
 }
 
 // What a hiring account is allowed to learn about a company it does not
@@ -1899,7 +1968,12 @@ const myCompanyToJs = (co) => ({
 
 app.get("/api/my-company", requireRole("admin", "pm"), async (c) => {
   const companyId = await seatCompany(c);
-  if (!companyId) return c.json({ error: "migration_needed", migration: "031_account_company" }, 503);
+  if (!companyId) {
+    const why = await noCompanyReason(c);
+    return why === "not_hireable"
+      ? c.json({ error: "not_hireable" }, 409)
+      : c.json({ error: "migration_needed", migration: "031_account_company" }, 503);
+  }
   const co = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(companyId).first();
   if (!co) return c.json({ error: "not_found" }, 404);
   const code = await ensureConnectCode(c.env, companyId);
@@ -1912,7 +1986,12 @@ app.get("/api/my-company", requireRole("admin", "pm"), async (c) => {
 app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const companyId = await seatCompany(c);
-  if (!companyId) return c.json({ error: "migration_needed", migration: "031_account_company" }, 503);
+  if (!companyId) {
+    const why = await noCompanyReason(c);
+    return why === "not_hireable"
+      ? c.json({ error: "not_hireable" }, 409)
+      : c.json({ error: "migration_needed", migration: "031_account_company" }, 503);
+  }
   const b = await c.req.json().catch(() => ({}));
   const str = (v, n) => v === undefined ? undefined : String(v || "").trim().slice(0, n) || null;
 
@@ -1956,7 +2035,7 @@ app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
 // Their code, and the URL a QR of it should carry.
 app.get("/api/connect/code", async (c) => {
   const companyId = await seatCompany(c);
-  if (!companyId) return c.json({ error: "forbidden" }, 403);
+  if (!companyId) return c.json({ error: await noCompanyReason(c) }, 403);
   const code = await ensureConnectCode(c.env, companyId);
   if (!code) return c.json({ error: "not_found" }, 404);
   return c.json({ code, url: connectUrl(code) });
@@ -1967,7 +2046,7 @@ app.get("/api/connect/code", async (c) => {
 // possible to stop the old one working.
 app.post("/api/connect/code/rotate", async (c) => {
   const companyId = await seatCompany(c);
-  if (!companyId) return c.json({ error: "forbidden" }, 403);
+  if (!companyId) return c.json({ error: await noCompanyReason(c) }, 403);
   await c.env.DB.prepare(`UPDATE companies SET connect_code = NULL WHERE id = ?`).bind(companyId).run();
   const code = await ensureConnectCode(c.env, companyId);
   return c.json({ code, url: connectUrl(code) });
@@ -2786,6 +2865,12 @@ const ACCOUNT_KINDS = ["general_contractor", "property_manager", "building_owner
 // The kinds that keep a building list, and so are the only ones with anything
 // for a tenant or a building owner to be attached to.
 const ACCOUNT_KINDS_WITH_PROPERTIES = ["property_manager", "building_owner", "portfolio_manager"];
+// And the kinds that can themselves be hired. A general contractor sells
+// siding on Tuesday and subs its gutters out on Wednesday; a property
+// manager, a portfolio manager and a building owner only ever hire. The
+// migration gives a company row to nobody else, and this is the check that
+// keeps it that way as accounts change kind.
+const HIREABLE_KINDS = ["general_contractor"];
 
 // The trade categories an account can hire out -- the same thirty ids the app
 // renders from. Kept here too because the browser's copy is a convenience and

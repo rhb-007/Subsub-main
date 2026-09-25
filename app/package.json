@@ -25,6 +25,7 @@
     "test:rolelabel": "node scripts/role-label-test.mjs",
     "test:connect": "node scripts/connect-test.mjs",
     "test:acctcompany": "node scripts/account-company-test.mjs",
+    "test:gconly": "node scripts/gc-only-test.mjs",
     "test:hireable": "node scripts/hireable-ui-test.mjs",
     "test:pagetitle": "node scripts/page-title-test.mjs",
     "test:availtz": "node scripts/availability-tz-test.mjs",

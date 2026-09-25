@@ -34,5 +34,9 @@ SELECT
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='connect_requests')       AS m030_connect_requests,
   (SELECT COUNT(*) FROM pragma_table_info('companies')   WHERE name='connect_code')         AS m030_connect_code,
   (SELECT COUNT(*) FROM pragma_table_info('accounts')    WHERE name='company_id')           AS m031_account_company,
-  -- Not a column check: the point of 031 is that every account HAS one.
-  (SELECT COUNT(*) FROM accounts WHERE company_id IS NULL)                                  AS m031_accounts_without;
+  -- Not a column check: the point of 031 is that every GENERAL CONTRACTOR
+  -- has one. The other account kinds hire but are not hired, and must not.
+  (SELECT COUNT(*) FROM accounts
+    WHERE kind = 'general_contractor' AND company_id IS NULL)                               AS m031_gcs_without,
+  (SELECT COUNT(*) FROM accounts
+    WHERE kind <> 'general_contractor' AND company_id IS NOT NULL)                          AS m031_others_with;
