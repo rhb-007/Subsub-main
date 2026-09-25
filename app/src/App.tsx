@@ -1,4 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+// The one thing that has to escape the tree it is rendered in: the code
+// held up to be scanned. Inside the profile menu it would be clipped by
+// the menu's own scrolling box.
+import { createPortal } from "react-dom";
 
 // ---- Build target ----------------------------------------------------------
 // "tenant"   → the customer app (app.subsub.work and each GC's own subdomain).
@@ -29,6 +33,7 @@ import {
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
+  Maximize2, Share2,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl } from "./lib/api";
 // The same file the Worker imports, so a problem cannot be an emergency in
@@ -14618,6 +14623,100 @@ function QrCode({ value, size = 190, label }) {
 // out of ConnectPane because a general contractor needs exactly this on
 // their own account settings since 031 -- an account is a company, so the
 // same endpoint answers for both and there is no reason for two of these.
+// The code, held up to be scanned.
+//
+// Everything about this screen is about the ten seconds where one person
+// holds a phone out and another points a camera at it, usually outdoors.
+// Four things decide whether that works, and the small inline code loses on
+// three of them:
+//
+//   SIZE. A code the size of a postage stamp has to be held close, and a
+//   camera close enough to fill the frame with it cannot focus. This one is
+//   as big as the screen allows.
+//
+//   BRIGHTNESS. There is no API for the backlight, but a white screen is
+//   the next best thing -- on an OLED phone a full white field is close to
+//   the brightest the panel gets, and it is the contrast the scanner wants
+//   anyway. Which is why this ignores the account's palette and the dark
+//   theme: this is not a piece of interface, it is a thing being
+//   photographed.
+//
+//   THE SCREEN GOING TO SLEEP. The other person fumbles for their camera,
+//   the phone dims and locks, and the code has to be found again. A wake
+//   lock holds it on. It is only in newer browsers, so it is asked for and
+//   never depended on -- and re-taken when the tab comes back, because the
+//   browser drops it whenever the page is hidden.
+//
+//   THE CAMERA NOT COOPERATING AT ALL. Rain, glare, a cracked lens, an old
+//   phone. Share sends the same link through whatever they already use, and
+//   the code is printed in words underneath to be read out.
+function QrFull({ code, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const canShare = typeof navigator !== "undefined" && !!navigator.share;
+  const closeRef = useRef(null);
+
+  // Hold the screen on, and take it back when the tab returns -- the
+  // browser releases it on its own whenever the page is hidden.
+  useEffect(() => {
+    let lock = null, gone = false;
+    const take = async () => {
+      try { lock = await navigator.wakeLock?.request("screen"); }
+      catch { /* unsupported, denied, or the battery is too low. Not worth saying. */ }
+    };
+    take();
+    const again = () => { if (!gone && document.visibilityState === "visible") take(); };
+    document.addEventListener("visibilitychange", again);
+    return () => {
+      gone = true;
+      document.removeEventListener("visibilitychange", again);
+      lock?.release?.().catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    const was = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = was; };
+  }, [onClose]);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code.url);
+      setCopied(true); setTimeout(() => setCopied(false), 2000);
+    } catch { /* the code is on screen in words; nothing to recover */ }
+  };
+  const share = async () => {
+    try {
+      await navigator.share({ title: "Add me on SubSub",
+        text: "Scan or open this to add me as a subcontractor.", url: code.url });
+    } catch { /* they cancelled the sheet, which is not an error */ }
+  };
+
+  return createPortal(
+    <div className="qrf" role="dialog" aria-modal="true" aria-label="Your connect code">
+      <div className="qrf-box">
+        <div className="qrf-code">
+          <QrCode value={code.url} size={520} label={`Connect code ${code.code}`} />
+        </div>
+        <span className="qrf-txt">{code.code}</span>
+        <div className="qrf-acts">
+          {canShare && (
+            <button className="qrf-btn solid" onClick={share}><Share2 size={15} /> Share</button>
+          )}
+          <button className="qrf-btn" onClick={copy}>
+            <Copy size={15} /> {copied ? "Copied" : "Copy link"}
+          </button>
+          <button className="qrf-btn" ref={closeRef} onClick={onClose}><X size={15} /> Done</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // The same code, cut down to what somebody needs with a stranger waiting.
 //
 // Deliberately not ConnectCode with a flag. That one belongs on a settings
@@ -14629,6 +14728,7 @@ function QrCode({ value, size = 190, label }) {
 function QrPeek({ code, err, onRetry }) {
   const [copied, setCopied] = useState(false);
   const [copyErr, setCopyErr] = useState("");
+  const [full, setFull] = useState(false);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(code.url);
@@ -14646,7 +14746,15 @@ function QrPeek({ code, err, onRetry }) {
   if (!code) return <div className="qrp"><p className="qrp-note">Loading…</p></div>;
   return (
     <div className="qrp">
-      <QrCode value={code.url} size={170} label={`Connect code ${code.code}`} />
+      {/* The code is the button. A code this size is for recognising, not
+          for scanning -- pointing a camera at it means holding the phone
+          close enough that it cannot focus -- so touching it is what makes
+          it big enough to be read across a tailgate. */}
+      <button className="qrp-tap" onClick={() => setFull(true)}
+        title="Make it big enough to scan" aria-label="Show the code full screen">
+        <QrCode value={code.url} size={170} label={`Connect code ${code.code}`} />
+        <span className="qrp-tap-hint"><Maximize2 size={12} /> Tap to scan</span>
+      </button>
       {/* In words as well as in squares: a camera that will not focus is
           the normal case on a wet morning, not the exception. */}
       <span className="qrp-code">{code.code}</span>
@@ -14657,11 +14765,13 @@ function QrPeek({ code, err, onRetry }) {
         Show this to have them add you. Nothing of yours moves until you accept.
       </p>
       {copyErr && <p className="qrp-note" role="alert">{copyErr}</p>}
+      {full && <QrFull code={code} onClose={() => setFull(false)} />}
     </div>
   );
 }
 
 function ConnectCode() {
+  const [full, setFull] = useState(false);
   const [code, setCode] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
@@ -14697,7 +14807,14 @@ function ConnectCode() {
   return (
     <>
       <div className="cx-code">
-        <QrCode value={code.url} label={`Connect code ${code.code}`} />
+        {/* Same code, same place, same everything around it -- it is only
+            that touching it now makes it big enough to actually scan. */}
+        <button className="qrp-tap" onClick={() => setFull(true)}
+          title="Make it big enough to scan" aria-label="Show the code full screen">
+          <QrCode value={code.url} label={`Connect code ${code.code}`} />
+          <span className="qrp-tap-hint"><Maximize2 size={12} /> Tap to scan</span>
+        </button>
+        {full && <QrFull code={code} onClose={() => setFull(false)} />}
         <div className="cx-code-side">
           {/* The code in words as well as in squares: a camera that will
               not focus is the normal case, not the exception. */}
@@ -17936,6 +18053,40 @@ p.fld-note{margin:6px 0 0}
 
 /* user row actions */
 .user-row-actions{display:flex;align-items:center;gap:7px;flex:none}
+/* Held up to be scanned.
+   White, not the account's palette and not the dark theme: this is not a
+   piece of interface, it is a thing being photographed, and on an OLED
+   phone a full white field is about as bright as the panel gets. Fixed
+   colours for the same reason -- a themed QR is a QR that stops scanning.
+
+   The code sizes off BOTH axes. 86vw alone overflows a short landscape
+   screen; 62vh alone leaves it tiny in portrait. The cap keeps it from
+   becoming a poster on a desktop monitor, where nobody is scanning it. */
+.qrf{position:fixed;inset:0;z-index:200;background:#fff;color:#12211c;
+  display:flex;align-items:center;justify-content:center;padding:16px;
+  overflow:auto;-webkit-overflow-scrolling:touch}
+.qrf-box{display:flex;flex-direction:column;align-items:center;gap:14px;max-width:100%}
+.qrf-code{width:min(86vw,62vh,560px);aspect-ratio:1;display:flex;align-items:center;justify-content:center}
+.qrf-code svg{width:100%;height:100%;display:block}
+.qrf-txt{font:700 clamp(19px,5.5vw,27px) ui-monospace,SFMono-Regular,Menlo,monospace;
+  letter-spacing:.16em;color:#12211c}
+.qrf-acts{display:flex;flex-wrap:wrap;gap:9px;justify-content:center}
+.qrf-btn{display:inline-flex;align-items:center;gap:7px;border:1px solid #cfd8d2;background:#fff;
+  color:#12211c;border-radius:10px;padding:12px 17px;font:700 14.5px Inter,sans-serif;cursor:pointer;
+  /* A thumb target, because this is used one-handed standing up. */
+  min-height:46px}
+.qrf-btn.solid{background:#103528;border-color:#103528;color:#fff}
+.qrf-btn:focus-visible{outline:2px solid #103528;outline-offset:2px}
+
+/* The small code is a button: it is for recognising, not for scanning. */
+.qrp-tap{position:relative;display:block;padding:0;border:0;background:none;cursor:pointer;
+  border-radius:8px;line-height:0}
+.qrp-tap:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
+.qrp-tap-hint{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);
+  display:inline-flex;align-items:center;gap:4px;white-space:nowrap;
+  background:rgba(18,33,28,.82);color:#fff;border-radius:99px;padding:3px 9px;
+  font:700 10.5px Inter,sans-serif;pointer-events:none}
+
 /* The code, one tap from anywhere.
    .user-menu button is a two-line stack (name over role), so this one says
    row explicitly rather than inheriting a layout meant for the account list.

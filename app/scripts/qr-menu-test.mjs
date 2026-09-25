@@ -55,6 +55,11 @@ const api = serveApi({ port: API, routes: (path) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, account(kind)];
   if (path === "/api/account") return [200, account(kind)];
   if (path === "/api/connect/code") return codeAnswer();
+  if (path === "/api/my-company") {
+    return [200, { companyId: "cmp_own_acc1", company: "Outerhome", contact: "", email: "r@example.test",
+      phone: "", license: "", ubi: "", city: "", state: "", zip: "",
+      findable: true, code: CODE.code, url: CODE.url }];
+  }
   if (path === "/api/account-users") {
     return [200, [{ id: "usr_richard", name: "Richard Braun", email: "r@example.test",
       role: seatRole, subId: seatRole === "contractor" ? "cmp_sub1" : null, propertyIds: [] }]];
@@ -122,7 +127,8 @@ try {
     t.ck("and the phone's copy of the item stays off a wide screen",
       shown.drawerCopyShown === false, JSON.stringify(shown));
     t.ck("with the code in words too", shown.code === CODE.code, String(shown.code));
-    t.ck("one Copy link, not two", shown.acts.length === 1, shown.acts.join(" | "));
+    t.ck("one Copy link, not two",
+      shown.acts.filter((x) => /copy link/i.test(x)).length === 1, shown.acts.join(" | "));
     t.ck("Copy link is there", shown.acts.some((x) => /Copy link/i.test(x)), shown.acts.join(" | "));
     t.ck("and Change code is NOT", !shown.acts.some((x) => /change code/i.test(x)), shown.acts.join(" | "));
     t.ck("the menu stayed open over it", shown.menuStillOpen);
@@ -136,6 +142,103 @@ try {
     await page.click(".um-qr");
     await page.waitForSelector(".qrp .qr", { timeout: 4000 });
     t.ck("and comes back without asking twice", (await fetches(page)) === 1, String(await fetches(page)));
+    t.ck("nothing threw", crashes.length === 0, crashes.join(" ; "));
+    await ctx.close();
+  }
+
+  // ---- big enough to actually scan ------------------------------------
+  // The inline code is for recognising. Pointing a camera at something that
+  // size means holding the phone close enough that it cannot focus, so the
+  // one that gets scanned is the full-screen one.
+  console.log("\n-- held up to be scanned --");
+  {
+    const { ctx, page, crashes } = await open({ width: 390, height: 844 });
+    // Through the drawer, which is what a phone actually gets.
+    await page.click(".nav-burger");
+    await wait(300);
+    await page.click(".drawer-qr .um-qr");
+    await page.waitForSelector(".drawer-qr .qrp .qr", { timeout: 4000 });
+    const small = await page.$eval(".drawer-qr svg.qr", (n) => n.getBoundingClientRect().width);
+    t.ck("the small code is on screen to be tapped", small > 0, String(small));
+
+    await page.click(".drawer-qr .qrp-tap");
+    await page.waitForSelector(".qrf", { timeout: 4000 });
+    const big = await page.evaluate(() => {
+      const box = document.querySelector(".qrf");
+      const svg = document.querySelector(".qrf svg.qr");
+      const r = svg.getBoundingClientRect();
+      return { w: Math.round(r.width), h: Math.round(r.height),
+        vw: window.innerWidth, vh: window.innerHeight,
+        bg: getComputedStyle(box).backgroundColor,
+        // It has to escape the menu it was opened from, which has its own
+        // scrolling box and would clip it.
+        parentIsBody: box.parentElement === document.body,
+        onTopOfMenu: getComputedStyle(box).position === "fixed",
+        dialog: box.getAttribute("role") + "/" + box.getAttribute("aria-modal"),
+        acts: [...document.querySelectorAll(".qrf-btn")].map((b) => b.innerText.trim()),
+        codeShown: document.querySelector(".qrf-txt")?.textContent,
+        fitsOnScreen: r.width <= window.innerWidth && r.height <= window.innerHeight,
+      };
+    });
+    t.ck("it is far bigger than the inline one", big.w > small * 1.8, `${big.w} vs ${Math.round(small)}`);
+    t.ck("it fills most of the width", big.w > big.vw * 0.7, `${big.w} of ${big.vw}`);
+    t.ck("and still fits on the screen", big.fitsOnScreen, JSON.stringify(big));
+    t.ck("it is square", Math.abs(big.w - big.h) <= 1, `${big.w} x ${big.h}`);
+    t.ck("on white, whatever the theme is doing",
+      big.bg === "rgb(255, 255, 255)", big.bg);
+    t.ck("it escaped the menu that opened it", big.parentIsBody && big.onTopOfMenu, JSON.stringify(big));
+    t.ck("it is a dialog", big.dialog === "dialog/true", big.dialog);
+    t.ck("the code is readable out loud too", big.codeShown === CODE.code, String(big.codeShown));
+    t.ck("with a way out", big.acts.some((x) => /done/i.test(x)), big.acts.join(" | "));
+    t.ck("and a way through when the camera will not play",
+      big.acts.some((x) => /copy link/i.test(x)), big.acts.join(" | "));
+
+    // Escape, because it covers the whole screen and a phone user who
+    // cannot find Done is stuck looking at a QR code.
+    await page.keyboard.press("Escape");
+    await wait(250);
+    t.ck("Escape closes it", (await page.$(".qrf")) === null);
+    t.ck("and the page scrolls again",
+      await page.evaluate(() => document.body.style.overflow !== "hidden"));
+    t.ck("nothing threw", crashes.length === 0, crashes.join(" ; "));
+    await ctx.close();
+  }
+
+  // ---- and the settings panel, which did not move ---------------------
+  // The ask was to leave the settings where they are and make the code
+  // itself easier to get at. So: the full panel is still reached the way it
+  // always was, still has the things a settings page is for, and has gained
+  // the same tap-to-scan.
+  console.log("\n-- the settings panel, where it always was --");
+  {
+    const { ctx, page, crashes } = await open({ width: 1200, height: 1000 });
+    await page.click(".user-btn");
+    await wait(250);
+    await page.click(".um-account");
+    await page.waitForSelector(".seg-tabs", { timeout: 5000 });
+    const panes = await page.$$eval(".seg-tabs button", (b) => b.map((x) => x.innerText.trim()));
+    t.ck("My account still has its Company pane", panes.some((x) => /company/i.test(x)), panes.join(" | "));
+    await page.evaluate(() => {
+      [...document.querySelectorAll(".seg-tabs button")].find((b) => /company/i.test(b.innerText))?.click();
+    });
+    await page.waitForSelector(".cx-code", { timeout: 6000 });
+    const panel = await page.evaluate(() => ({
+      acts: [...document.querySelectorAll(".cx-code-acts button")].map((b) => b.innerText.trim()),
+      tappable: !!document.querySelector(".cx-code .qrp-tap"),
+      squares: document.querySelectorAll(".cx-code svg.qr path").length,
+    }));
+    t.ck("rotating the code is still here, not in the menu",
+      panel.acts.some((x) => /change code/i.test(x)), panel.acts.join(" | "));
+    t.ck("and so is Copy link", panel.acts.some((x) => /copy link/i.test(x)), panel.acts.join(" | "));
+    t.ck("the code is drawn", panel.squares === 1, JSON.stringify(panel));
+    t.ck("and it got the same tap-to-scan", panel.tappable, JSON.stringify(panel));
+
+    await page.click(".cx-code .qrp-tap");
+    await page.waitForSelector(".qrf", { timeout: 4000 });
+    t.ck("which opens the same full-screen code",
+      (await page.$eval(".qrf-txt", (n) => n.textContent)) === CODE.code);
+    await page.keyboard.press("Escape");
+    await wait(200);
     t.ck("nothing threw", crashes.length === 0, crashes.join(" ; "));
     await ctx.close();
   }
