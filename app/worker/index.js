@@ -2814,12 +2814,33 @@ function validTrades(v) {
   return out;
 }
 
+// The look AND the browser-tab titles of the two pages a subcontractor sees
+// before they are inside the app. The titles live here rather than in
+// columns of their own because they belong to exactly the same two pages as
+// the colours, and one JSON blob is one thing to keep in step.
 function validTheme(theme) {
   if (!theme || typeof theme !== "object") return null;
   const out = {};
   for (const k of ["bg", "surface", "text", "accent", "btnText"]) {
     if (typeof theme[k] !== "string" || !HEX_COLOR.test(theme[k])) return null;
     out[k] = theme[k];
+  }
+  // SubSub is not the customer's to remove. The browser adds nothing, so
+  // the name only survives because the page puts it there -- which means a
+  // title saved without it would be a page passing the product off as the
+  // customer's own. It is stripped on the way in and added on the way out,
+  // so a customer who types it gets one and a customer who deletes it gets
+  // one anyway.
+  for (const k of ["signInTitle", "applyTitle"]) {
+    if (theme[k] === undefined || theme[k] === null) continue;
+    if (typeof theme[k] !== "string") return null;
+    const own = String(theme[k])
+      .replace(/\s*[\u00b7|\-\u2013\u2014]\s*SubSub\s*$/i, "")
+      .replace(/\s*\bSubSub\b\s*$/i, "")
+      .replace(/[\r\n\t]+/g, " ")
+      .trim()
+      .slice(0, 60);
+    if (own) out[k] = own;
   }
   return out;
 }

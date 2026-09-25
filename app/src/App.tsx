@@ -1344,6 +1344,59 @@ const THEME_FIELDS = [
   { id: "btnText",  label: "Button text" },
 ];
 const themeOf = (brand) => ({ ...DEFAULT_THEME, ...((brand && brand.theme) || {}) });
+
+// The browser-tab titles of the two pages a subcontractor sees before they
+// are inside the app. They live in the theme JSON, next to the colours of
+// the same two pages, so there is no migration and no second place to look.
+//
+// SubSub is not optional. These pages are on a subsub.work address, they
+// carry a "Powered by SubSub" line already, and a customer removing the
+// name from the tab would be passing off the product as their own. So the
+// account writes their half and the suffix is added here -- and stripped
+// first, so somebody typing "... | SubSub" gets one rather than two.
+const TITLE_SUFFIX = "SubSub";
+const TITLE_MAX = 60;
+// A default nobody has to think about, which is most of what was being
+// asked for: the tab reads as the company's own without anybody opening
+// settings.
+const defaultTitles = (name) => ({
+  signIn: `${name || "Contractor"} — Contractor sign in`,
+  apply: `${name || "Contractor"} — Apply to work with us`,
+});
+// Whatever was typed, without our name on the end of it. Run on the way in
+// AND on the way out, so the box never shows the suffix and the tab never
+// shows it twice.
+const stripSuffix = (v) => String(v || "")
+  .replace(/\s*[·|\-–—]\s*SubSub\s*$/i, "")
+  .replace(/\s*\bSubSub\b\s*$/i, "")
+  .trim();
+const pageTitle = (custom, fallback) => {
+  const own = stripSuffix(custom).slice(0, TITLE_MAX) || fallback;
+  return `${own} · ${TITLE_SUFFIX}`;
+};
+const titlesOf = (brand) => {
+  const t = (brand && brand.theme) || {};
+  const d = defaultTitles(brand?.name);
+  return {
+    signIn: stripSuffix(t.signInTitle) || d.signIn,
+    apply: stripSuffix(t.applyTitle) || d.apply,
+    // What is actually set, as opposed to what is shown: the form needs to
+    // know the difference so an untouched box reads as a default rather
+    // than as something somebody chose.
+    signInSet: !!stripSuffix(t.signInTitle),
+    applySet: !!stripSuffix(t.applyTitle),
+  };
+};
+// Set the tab. Restores whatever was there on the way out, so a page that
+// renamed the tab does not leave its name behind when it unmounts.
+function usePageTitle(title) {
+  useEffect(() => {
+    if (!title) return undefined;
+    const had = document.title;
+    document.title = title;
+    return () => { document.title = had; };
+  }, [title]);
+}
 // Inline custom properties so the themed pages don't need a stylesheet rebuild.
 const themeVars = (t) => ({
   "--wl-bg": t.bg, "--wl-surface": t.surface, "--wl-text": t.text,
@@ -10188,6 +10241,10 @@ function PropertyForm({ existing, onSubmit, onCancel }) {
 // lands in that GC's account as an invited engagement awaiting approval.
 function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
   const t = themeOf(brand);
+  // The tab. This page is linked from a customer's own website, so it is
+  // opened cold, in a tab beside six others, by somebody who has never
+  // heard of us -- and it said "SubSub" and nothing about whose form it is.
+  usePageTitle(pageTitle(titlesOf(brand).apply, defaultTitles(brand?.name).apply));
   const [step, setStep] = useState(1);
   // Part-filled from the invite. Whoever sent it already typed the company
   // and the address; asking a contractor to type them again is asking them
@@ -11818,6 +11875,36 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               </label>
             ))}
           </div>
+
+          <div className="form-sec">Page titles</div>
+          <p className="panel-note">
+            What the browser tab says on those same two pages. They are filled in from your
+            company name already, so there is nothing to do here unless you want different
+            words — a contractor opening your application form from your own website sees
+            this before they see anything else on the page.
+          </p>
+          {[
+            ["signInTitle", "Sign-in page", defaultTitles(b.name).signIn],
+            ["applyTitle", "Application form", defaultTitles(b.name).apply],
+          ].map(([key, label, fallback]) => (
+            <label key={key} className="fld">{label}
+              <span className="fld-note">{stripSuffix(th[key]) ? "yours" : "from your company name"}</span>
+              <div className="subdomain-row">
+                <input value={stripSuffix(th[key] || "")} maxLength={TITLE_MAX}
+                  placeholder={fallback}
+                  onChange={(e) => { setTh({ ...th, [key]: e.target.value }); setBSaved(false); setBErr(""); }} />
+                {/* Fixed, not a field. These pages are on a subsub.work
+                    address and already carry a "Powered by SubSub" line;
+                    a tab that drops the name would be passing the product
+                    off as the customer's own. Typing it yourself does not
+                    double it -- it is stripped before this is added. */}
+                <span className="sd-suffix" title="SubSub stays on every page title">· SubSub</span>
+              </div>
+              <span className="cov-hint">
+                The tab will read <b>{pageTitle(th[key], fallback)}</b>
+              </span>
+            </label>
+          ))}
 
           {(() => {
             const cr = contrastRatio(th.text, th.surface);
@@ -15300,6 +15387,7 @@ function GoogleG({ size = 17 }) {
 
 function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, entryErr, onForgetProvider }) {
   const wl = themeOf(brand);
+  usePageTitle(pageTitle(titlesOf(brand).signIn, defaultTitles(brand?.name).signIn));
   // Show which account each demo login lands in — the same person can hold
   // memberships in several.
   const acctOf = (u) => {
