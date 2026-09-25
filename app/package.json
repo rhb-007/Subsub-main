@@ -50,6 +50,7 @@
     "test:hourly": "node scripts/hourly-test.mjs",
     "test:activity": "node scripts/job-activity-test.mjs",
     "test:scheduled": "node scripts/tenant-scheduled-test.mjs",
+    "test:schedule": "node scripts/schedule-test.mjs",
     "test:visitafter": "node scripts/visit-after-test.mjs",
     "test:migration-gap": "node scripts/migration-gap-test.mjs",
     "test:whitescreen": "node scripts/whitescreen-test.mjs",

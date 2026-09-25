@@ -1456,6 +1456,27 @@ function visitPassed(v, now = new Date()) {
   if (isNaN(at)) return false;
   return at.getTime() < now.getTime();
 }
+// YYYY-MM-DD in the reader's own timezone. toISOString().slice(0,10) is UTC,
+// which west of Greenwich turns "this evening" into "tomorrow" for several
+// hours every night -- long enough for a job booked for today to read as
+// overdue to somebody in Seattle at five o'clock.
+function dayKey(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+// Noon, so a daylight-saving shift cannot move the date under it.
+const dayFromKey = (k) => new Date(`${k}T12:00:00`);
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+// "Today" / "Tomorrow" / "Friday" / "In 19 days" -- what somebody would say.
+function relDay(k, from = dayKey()) {
+  const n = Math.round((dayFromKey(k) - dayFromKey(from)) / 86400000);
+  if (n === 0) return "Today";
+  if (n === 1) return "Tomorrow";
+  if (n === -1) return "Yesterday";
+  if (n < 0) return `${-n} days ago`;
+  if (n < 7) return dayFromKey(k).toLocaleDateString(undefined, { weekday: "long" });
+  return `In ${n} days`;
+}
 function niceWhen(iso) {
   if (!iso) return "";
   const then = new Date(iso);
@@ -1851,6 +1872,20 @@ export default function SubSub() {
   const [readyOnly, setReadyOnly] = useState(false);
   const [autoOnly, setAutoOnly] = useState(false);
   const [jobPhase, setJobPhase] = useState("active");
+  // List or calendar. Remembered, because it is a way of working rather than
+  // a setting -- somebody who runs the month grid wants it again tomorrow.
+  // localStorage throws in a private window, on both read and write, so both
+  // are guarded and it simply opens on the list.
+  const [jobView, setJobView] = useState(() => {
+    try { return localStorage.getItem("subsub.jobs.view") === "calendar" ? "calendar" : "list"; }
+    catch { return "list"; }
+  });
+  const pickJobView = (v) => {
+    setJobView(v);
+    try { localStorage.setItem("subsub.jobs.view", v); } catch { /* nothing to remember it with */ }
+  };
+  const [jobDay, setJobDay] = useState("");    // the day open in the calendar
+  const [focusJob, setFocusJob] = useState(""); // scrolled to and ringed, briefly
   // Arriving from a property card: which building the contractor list and
   // the jobs list are narrowed to. Held here rather than inside each view
   // because the property page is what sets it, on the way out.
@@ -2501,12 +2536,32 @@ export default function SubSub() {
     setEngagements((es) => es.map((e) => (e.propertyIds || []).includes(id)
       ? { ...e, propertyIds: e.propertyIds.filter((x) => x !== id) } : e));
   };
-  const tryAddJob = (forSub, forProperty) => {
+  const tryAddJob = (forSub, forProperty, forDate) => {
     // The plan belongs to the account, not to a guest of it. Showing an owner
     // an upgrade prompt would be asking the wrong person for money.
     if (atJobLimit && runsTheAccount(role, membership)) { setAddMenu(false); setUpgradePrompt({ kind: "job" }); return; }
     if (atJobLimit) { setAddMenu(false); setBillingNote("This account has reached its job limit. Ask whoever manages it to raise it."); return; }
-    setJobForm({ ...(forSub ? { forSub } : {}), ...(forProperty ? { forProperty } : {}) });
+    setJobForm({ ...(forSub ? { forSub } : {}), ...(forProperty ? { forProperty } : {}),
+      ...(forDate ? { forDate } : {}) });
+  };
+  // Arriving at the calendar from the dashboard. An empty date means "the
+  // calendar, wherever it was" rather than a day.
+  const goJobCalendar = (date) => {
+    pickJobView("calendar");
+    setJobDay(date && DATE_KEY_RE.test(date) ? date : "");
+    setTab("jobs");
+  };
+  // And picking a job out of it. The list is filtered three ways -- by
+  // building, by phase, and by which tab you are on -- so landing on a list
+  // that does not contain the job just clicked is the easy failure here.
+  // Every filter that would hide it is cleared on the way.
+  const openJob = (id) => {
+    const j = jobs.find((x) => x.id === id);
+    if (j && jobProperty && j.propertyId !== jobProperty) setJobProperty("");
+    setJobPhase("all");
+    pickJobView("list");
+    setFocusJob(id);
+    setTab("jobs");
   };
   const tryAddContractor = () => {
     if (atContractorLimit) { setAddMenu(false); setUpgradePrompt({ kind: "contractor" }); return; }
@@ -2839,6 +2894,21 @@ export default function SubSub() {
     if (loggedIn && can("contractors")) refreshInvites(); else setInvites([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loggedIn, currentAccountId, role]);
+
+  // Arriving at a job from somewhere else -- the schedule panel, the month
+  // grid. Bringing the list up with the job somewhere in the middle of forty
+  // others is not arriving at it, so it is scrolled to and ringed. The ring
+  // is a pointer rather than a state: it says "here", and then it stops.
+  useEffect(() => {
+    if (!focusJob || tab !== "jobs" || jobView !== "list") return;
+    // A tick, so the list has rendered the card before it is looked for.
+    const find = setTimeout(() => {
+      document.querySelector(`[data-job-id="${focusJob}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+    const fade = setTimeout(() => setFocusJob(""), 2800);
+    return () => { clearTimeout(find); clearTimeout(fade); };
+  }, [focusJob, tab, jobView]);
 
   // A scanned code, resolved once there is somebody to resolve it for.
   const [scanned, setScanned] = useState(null);       // { match } or { error }
@@ -3883,6 +3953,7 @@ export default function SubSub() {
           onInvite={() => setInviteOpen(true)}
           onAddSub={() => tryAddContractor()}
           onGoJobs={() => setTab("jobs")} onGoContractors={() => setTab("network")}
+          onGoCalendar={goJobCalendar} onOpenJob={openJob}
           onNewJob={() => tryAddJob()}
           properties={can("properties") ? accountProperties : null}
           onGoProperties={() => setTab("properties")} onAddProperty={tryAddProperty}
@@ -4169,21 +4240,46 @@ export default function SubSub() {
           ) : (
             <div className="jobs-list">
               <div className="jobs-head">
-                <div className="seg-tabs sm">
-                  {[["active", "Active"], ["completed", "Completed"], ["all", "All"]].map(([id, l]) => {
-                    // Counted within the building being looked at, so the tab
-                    // numbers agree with the list underneath them.
-                    const here = jobs.filter((x) => !jobProperty || x.propertyId === jobProperty);
-                    const n = id === "all" ? here.length : here.filter((x) => isClosed(x) === (id === "completed")).length;
-                    return (
-                      <button key={id} className={jobPhase === id ? "on" : ""} onClick={() => setJobPhase(id)}>
-                        {l} <span className="seg-n">{n}</span>
-                      </button>
-                    );
-                  })}
+                {/* Same jobs, two ways of finding one. The list is ordered by
+                    what moved last, which answers "what needs me"; the grid
+                    answers "what is happening in October", which the list
+                    could not. */}
+                <div className="seg-tabs sm jv-seg">
+                  {[["list", "List", ClipboardList], ["calendar", "Calendar", Calendar]].map(([id, l, Icon]) => (
+                    <button key={id} className={jobView === id ? "on" : ""} onClick={() => pickJobView(id)}
+                      aria-pressed={jobView === id}>
+                      <Icon size={13} /> {l}
+                    </button>
+                  ))}
                 </div>
+                {jobView === "list" && (
+                  <div className="seg-tabs sm">
+                    {[["active", "Active"], ["completed", "Completed"], ["all", "All"]].map(([id, l]) => {
+                      // Counted within the building being looked at, so the tab
+                      // numbers agree with the list underneath them.
+                      const here = jobs.filter((x) => !jobProperty || x.propertyId === jobProperty);
+                      const n = id === "all" ? here.length : here.filter((x) => isClosed(x) === (id === "completed")).length;
+                      return (
+                        <button key={id} className={jobPhase === id ? "on" : ""} onClick={() => setJobPhase(id)}>
+                          {l} <span className="seg-n">{n}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 <button className="add-btn small" onClick={() => tryAddJob()}><Plus size={14} /> New job</button>
               </div>
+              {/* The grid takes every job at this building, whatever phase:
+                  it has a key of its own for done and not done, and hiding
+                  last month's finished work would make it lie about the
+                  month it is showing. */}
+              {jobView === "calendar" ? (
+                <JobsCalendar
+                  jobs={jobs.filter((j) => !jobProperty || j.propertyId === jobProperty)}
+                  selected={jobDay} onSelect={setJobDay} onOpenJob={openJob}
+                  onNewJob={(date) => tryAddJob(null, null, date)} />
+              ) : (
+              <>
               {shownJobs.length === 0 && (
                 <div className="dash-empty"><ClipboardList size={24} />
                   <p>No {jobPhase === "all" ? "" : jobPhase} jobs{jobProperty ? ` at ${propName(jobProperty)}` : ""}.</p></div>
@@ -4195,7 +4291,7 @@ export default function SubSub() {
                 const moved = movedAgo(j);
                 return (
                   <div key={j.id} data-job-id={j.id}
-                    className={`job-card ${done ? "done" : ""} ${moved ? "just-moved" : ""}`}>
+                    className={`job-card ${done ? "done" : ""} ${moved ? "just-moved" : ""} ${focusJob === j.id ? "landed" : ""}`}>
                     <div className="job-card-head">
                       <div>
                         <div className="job-title-row">
@@ -4394,6 +4490,8 @@ export default function SubSub() {
                   </div>
                 );
               })}
+              </>
+              )}
             </div>
           )}
         </main>
@@ -4535,7 +4633,7 @@ export default function SubSub() {
         </Modal>
       )}
       {jobForm && <Modal onClose={() => setJobForm(null)} wide>
-        <JobForm allJobs={allJobs} accountId={account.id} properties={accountProperties} forProperty={jobForm.forProperty} forSub={jobForm.forSub} jobs={jobs} asOwner={role === "owner"}
+        <JobForm allJobs={allJobs} accountId={account.id} properties={accountProperties} forProperty={jobForm.forProperty} forSub={jobForm.forSub} forDate={jobForm.forDate} jobs={jobs} asOwner={role === "owner"}
           onSubmit={(job) => createJob(job, jobForm.forSub)}
           onCancel={() => setJobForm(null)} /></Modal>}
       {assigning && <Modal onClose={() => setAssigning(null)} wide>
@@ -12253,7 +12351,257 @@ function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], su
   );
 }
 
-function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit" }) {
+// Every job on a month grid, which the jobs tab never had.
+//
+// The list is ordered by whatever moved last, which is the right order for
+// "what needs me" and the wrong one for "what is happening in October".
+// Same jobs, same actions -- picking one here hands it to the list, which
+// scrolls to it and marks it, so there is one place a job is edited and
+// this is a way of finding it rather than a second copy of it.
+function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
+  const todayK = dayKey();
+  const [cursor, setCursor] = useState(() => {
+    const start = selected && DATE_KEY_RE.test(selected) ? selected : todayK;
+    const d = dayFromKey(start);
+    return { y: d.getFullYear(), m: d.getMonth() };
+  });
+  // Rebuilt per render rather than memoised on `jobs`: the array is replaced
+  // on every optimistic write, so a memo keyed on it saves nothing and a
+  // memo keyed on anything else goes stale.
+  const byDay = {};
+  jobs.forEach((j) => { if (j.date) (byDay[j.date] ||= []).push(j); });
+  Object.values(byDay).forEach((list) => list.sort((a, b) =>
+    String(a.time || "").localeCompare(String(b.time || ""))));
+
+  const first = new Date(cursor.y, cursor.m, 1);
+  const days = new Date(cursor.y, cursor.m + 1, 0).getDate();
+  const pad = first.getDay();
+  const cells = [
+    ...Array.from({ length: pad }, () => null),
+    ...Array.from({ length: days }, (_, i) => dayKey(new Date(cursor.y, cursor.m, i + 1))),
+  ];
+  while (cells.length % 7) cells.push(null);
+  const step = (n) => setCursor((c) => {
+    const d = new Date(c.y, c.m + n, 1);
+    return { y: d.getFullYear(), m: d.getMonth() };
+  });
+  const monthLabel = first.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const inMonth = jobs.filter((j) => j.date && j.date.slice(0, 7) === dayKey(first).slice(0, 7)).length;
+  const undated = jobs.filter((j) => !j.date);
+  const dayJobs = selected && byDay[selected] ? byDay[selected] : [];
+  const fill = (j) => `${j.trades.filter((t) => j.assignments[t]).length}/${j.trades.length}`;
+
+  return (
+    <div className="jcal">
+      <div className="jcal-top">
+        <button className="jcal-nav" onClick={() => step(-1)} aria-label="Previous month">
+          <ChevronRight size={16} style={{ transform: "rotate(180deg)" }} />
+        </button>
+        <div className="jcal-month">
+          <strong>{monthLabel}</strong>
+          <span>{inMonth === 1 ? "1 job" : `${inMonth} jobs`}</span>
+        </div>
+        <button className="jcal-nav" onClick={() => step(1)} aria-label="Next month">
+          <ChevronRight size={16} />
+        </button>
+        <button className="jcal-today" onClick={() => {
+          const d = dayFromKey(todayK);
+          setCursor({ y: d.getFullYear(), m: d.getMonth() });
+          onSelect(todayK);
+        }}>Today</button>
+      </div>
+
+      <div className="jcal-dows">
+        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <span key={d}>{d}</span>)}
+      </div>
+      <div className="jcal-grid">
+        {cells.map((k, i) => {
+          if (!k) return <span key={`pad${i}`} className="jcal-cell empty" />;
+          const list = byDay[k] || [];
+          const openOnes = list.filter((j) => !isClosed(j));
+          return (
+            <button key={k}
+              className={`jcal-cell ${list.length ? "has" : ""} ${k === todayK ? "today" : ""} ${k === selected ? "on" : ""} ${k < todayK ? "past" : ""}`}
+              onClick={() => onSelect(k === selected ? "" : k)}
+              aria-pressed={k === selected}
+              title={list.length ? `${list.length} job${list.length === 1 ? "" : "s"} on ${niceDay(k)}` : niceDay(k)}>
+              <span className="jc-dom">{dayFromKey(k).getDate()}</span>
+              {list.length > 0 && (
+                <span className="jc-marks">
+                  {list.slice(0, 3).map((j) => (
+                    <span key={j.id} className={`jc-dot ${isClosed(j) ? "done" : j.trades.every((t) => j.assignments[t]) ? "full" : "open"}`} />
+                  ))}
+                  {list.length > 3 && <span className="jc-plus">+{list.length - 3}</span>}
+                </span>
+              )}
+              {/* The count is read out to a screen reader, where three
+                  coloured dots say nothing at all. */}
+              <span className="sr-only">{list.length
+                ? `${list.length} job${list.length === 1 ? "" : "s"}, ${openOnes.length} open`
+                : "nothing booked"}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="jcal-key">
+        <span><i className="jc-dot open" /> Needs a contractor</span>
+        <span><i className="jc-dot full" /> All trades assigned</span>
+        <span><i className="jc-dot done" /> Completed</span>
+      </div>
+
+      {selected && (
+        <div className="jcal-day">
+          <div className="jcd-head">
+            <h4>{niceDay(selected)} <span className="jcd-rel">{relDay(selected, todayK)}</span></h4>
+            <button className="jcd-close" onClick={() => onSelect("")} aria-label="Close this day"><X size={14} /></button>
+          </div>
+          {dayJobs.length === 0 ? (
+            <div className="dash-empty">
+              <ClipboardList size={22} /><p>Nothing booked for this day.</p>
+              {onNewJob && <button className="btn-solid dash-empty-btn" onClick={() => onNewJob(selected)}>
+                <Plus size={15} /> New job</button>}
+            </div>
+          ) : dayJobs.map((j) => (
+            <button key={j.id} className={`jcd-row ${isClosed(j) ? "done" : ""}`} onClick={() => onOpenJob(j.id)}>
+              <span className="jcd-time">{j.time ? niceTime(j.time) : "All day"}</span>
+              <span className="jcd-main">
+                <span className="jcd-title">{j.title}</span>
+                <span className="jcd-meta">
+                  {[j.address, j.area, j.zip].filter(Boolean).join(", ") || "No address"}
+                </span>
+              </span>
+              <span className={`fill-badge ${j.trades.every((t) => j.assignments[t]) ? "full" : ""}`}>{fill(j)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {undated.length > 0 && (
+        <p className="jcal-undated">
+          {undated.length === 1 ? "1 job has no date on it" : `${undated.length} jobs have no date on them`},
+          {" "}so nothing here can show {undated.length === 1 ? "it" : "them"}. They are all in the list.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// The schedule, at the top of the dashboard, where somebody looks first.
+//
+// It used to be a five-row list near the bottom headed "Upcoming jobs",
+// below registration problems and documents to verify -- so the question a
+// manager opens this page with, what is happening and when, was answered
+// last and in the smallest type on the screen.
+//
+// And it called a job booked for two days ago "upcoming", because the only
+// test on it was "has a date and is not closed". A date that has passed is
+// the one thing on a schedule that needs saying out loud, so it gets its
+// own line here rather than being quietly sorted to the front of a list
+// that claims everything in it is still to come.
+function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs, onNewJob }) {
+  const todayK = dayKey();
+  const dated = jobs.filter((j) => !isClosed(j) && j.date)
+    .sort((a, b) => a.date.localeCompare(b.date) || String(a.time || "").localeCompare(String(b.time || "")));
+  const late = dated.filter((j) => j.date < todayK);
+  const ahead = dated.filter((j) => j.date >= todayK);
+  const next = ahead[0] || null;
+  const undated = jobs.filter((j) => !isClosed(j) && !j.date).length;
+  // Two weeks: as far ahead as anybody plans from a dashboard, and it fits
+  // across a phone by scrolling rather than by shrinking to nothing.
+  const strip = Array.from({ length: 14 }, (_, i) => {
+    const d = addDays(dayFromKey(todayK), i);
+    const k = dayKey(d);
+    return { k, d, n: dated.filter((j) => j.date === k).length };
+  });
+  const fill = (j) => `${j.trades.filter((t) => j.assignments[t]).length}/${j.trades.length}`;
+  const where = (j) => [j.area, j.zip].filter(Boolean).join(" ");
+
+  return (
+    <section className="sched-hero">
+      <div className="sh-head">
+        <h3><Calendar size={16} /> {isOwner ? "Coming up at your buildings" : "What's scheduled"}</h3>
+        <button className="sh-all" onClick={() => onGoCalendar(todayK)}>
+          Open the calendar <ChevronRight size={14} />
+        </button>
+      </div>
+
+      {late.length > 0 && (
+        <div className="sh-late">
+          <span className="shl-lede">
+            <AlertTriangle size={14} />
+            {late.length === 1 ? "1 job is past its date" : `${late.length} jobs are past their date`}
+          </span>
+          <div className="shl-rows">
+            {late.slice(0, 3).map((j) => (
+              <button key={j.id} className="shl-row" onClick={() => onOpenJob(j.id)}>
+                <span className="shl-when">{relDay(j.date, todayK)}</span>
+                <span className="shl-title">{j.title}</span>
+                <span className="shl-fill">{fill(j)} trades</span>
+              </button>
+            ))}
+            {late.length > 3 && (
+              <button className="shl-more" onClick={() => onGoCalendar(late[0].date)}>
+                and {late.length - 3} more →
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {next ? (
+        <button className="sh-next" onClick={() => onOpenJob(next.id)}>
+          <span className="shn-when">
+            <span className="shn-dow">{dayFromKey(next.date).toLocaleDateString(undefined, { weekday: "short" })}</span>
+            <span className="shn-day">{dayFromKey(next.date).getDate()}</span>
+            <span className="shn-mon">{dayFromKey(next.date).toLocaleDateString(undefined, { month: "short" })}</span>
+          </span>
+          <span className="shn-main">
+            <span className="shn-lede">{relDay(next.date, todayK)}{next.time ? ` · ${niceTime(next.time)}` : ""}</span>
+            <span className="shn-title">{next.title}</span>
+            <span className="shn-meta">
+              {where(next) || "No address"} · {fill(next)} trades assigned
+            </span>
+          </span>
+          <span className={`shn-fill ${next.trades.every((t) => next.assignments[t]) ? "full" : ""}`}>{fill(next)}</span>
+        </button>
+      ) : (
+        <div className="sh-none">
+          <ClipboardList size={22} />
+          <p>{late.length ? "Nothing else booked in." : "Nothing booked in yet."}</p>
+          <button className="btn-solid" onClick={onNewJob}>
+            <Plus size={15} /> {isOwner ? "Request work" : "New job"}</button>
+        </div>
+      )}
+
+      {/* The fortnight, so "is anything happening Thursday" is answered by
+          looking rather than by opening something. */}
+      <div className="sh-strip" role="list">
+        {strip.map(({ k, d, n }) => (
+          <button key={k} role="listitem"
+            className={`shs-day ${n ? "has" : ""} ${k === todayK ? "today" : ""} ${next && k === next.date ? "is-next" : ""}`}
+            onClick={() => onGoCalendar(k)}
+            title={n ? `${n} job${n === 1 ? "" : "s"} on ${niceDay(k)}` : `Nothing on ${niceDay(k)}`}>
+            <span className="shs-dow">{d.toLocaleDateString(undefined, { weekday: "narrow" })}</span>
+            <span className="shs-dom">{d.getDate()}</span>
+            <span className="shs-n">{n || ""}</span>
+          </button>
+        ))}
+      </div>
+
+      {undated > 0 && (
+        <p className="sh-undated">
+          {undated === 1 ? "1 job has no date on it yet." : `${undated} jobs have no date on them yet.`}
+          {/* The list, not the calendar: a job with no date is the one thing
+              a calendar cannot show. */}
+          {" "}<button className="sh-link" onClick={onGoJobs}>See them</button>
+        </p>
+      )}
+    </section>
+  );
+}
+
+function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit" }) {
   // Which request is being turned down, and why. One at a time: the reason
   // is the point, and a row of open boxes invites none of them being filled.
   const [declining, setDeclining] = useState(null);
@@ -12272,7 +12620,12 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   const open = slots.filter((s) => !s.a);
   const pending = slots.filter((s) => s.a && s.a.status === "pending" && !s.a.auto);
   const declined = slots.filter((s) => s.a && s.a.status === "declined");
-  const upcoming = jobs.filter((j) => !isClosed(j) && j.date).sort((a, b) => a.date.localeCompare(b.date));
+  // Only what is still to come. This counted every dated open job, past
+  // ones included, under a tile reading "Work scheduled" -- so a building
+  // owner was told three things were coming when two of them were last
+  // week's. The panel above splits the two; so does this.
+  const upcoming = jobs.filter((j) => !isClosed(j) && j.date && j.date >= dayKey())
+    .sort((a, b) => a.date.localeCompare(b.date));
   const nonCompliant = subs.filter((s) => DOC_KINDS.some((k) => !s[k]));
   const toReview = subs.map((s) => ({ sub: s, kinds: pendingReviewDocs(s) })).filter((x) => x.kinds.length);
   const licenseIssues = subs.filter((s) => !licenseOk(s));
@@ -12353,7 +12706,13 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         <section className="dash-sec sec-sos">
           <h3><AlertTriangle size={15} /> Needs attention now
             <span className="sec-count red">{emergencies.length}</span></h3>
-          {emergencies.map((j) => {
+          {/* Capped, like every other section here. This one alone drew every
+              row it had, and on an account carrying a few hundred open
+              urgent reports that is a wall tens of thousands of pixels tall
+              -- with everything the page is actually for, the schedule
+              included, below the bottom of it. A call to action that has to
+              be scrolled past is not one. */}
+          {emergencies.slice(0, 6).map((j) => {
             const who = users.find((u) => u.id === j.requestedBy);
             const at = props.find((p) => p.id === j.propertyId);
             const onIt = Object.values(j.assignments || {})
@@ -12385,6 +12744,11 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               </div>
             );
           })}
+          {emergencies.length > 6 && (
+            <button className="dash-more" onClick={onGoJobs}>
+              View all {emergencies.length} urgent reports →
+            </button>
+          )}
           <p className="rollup-note">
             {emergencies.some((j) => j.severity === "911")
               ? "A life-safety report means the person was shown a 911 notice before they sent it. Nothing here is dispatched automatically — emergency services are not something this can call. "
@@ -12393,6 +12757,12 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
           </p>
         </section>
       )}
+
+      {/* Above the getting-started checklist and the tiles, and below only
+          the life-safety reports. "When is somebody coming" is the question
+          this page exists to answer. */}
+      <ScheduleHero jobs={jobs} isOwner={isOwner} onGoJobs={onGoJobs}
+        onOpenJob={onOpenJob} onGoCalendar={onGoCalendar} onNewJob={onNewJob} />
 
       {runsAccount && <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
         subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
@@ -12662,38 +13032,6 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </section>
       )}
 
-      <section className="dash-sec">
-        <h3><Calendar size={15} /> {isOwner ? "Coming up at your buildings" : "Upcoming jobs"}
-          {upcoming.length > 0 && <span className="sec-count">{upcoming.length}</span>}</h3>
-        {upcoming.length === 0 ? (
-          <div className="dash-empty">
-            <ClipboardList size={24} /><p>Nothing scheduled yet.</p>
-            {/* The empty state named the problem and then offered no way out
-                of it; the button is the whole reason somebody reads this. */}
-            <button className="btn-solid dash-empty-btn" onClick={onNewJob}>
-              <Plus size={15} /> {isOwner ? "Request work" : "New job"}</button>
-          </div>
-        ) : upcoming.slice(0, 5).map((j) => {
-          const filled = j.trades.filter((t) => j.assignments[t]).length;
-          return (
-            <div key={j.id} className="dash-row" onClick={onGoJobs}>
-              <div className="dash-date">
-                <span className="dd-mon">{new Date(`${j.date}T12:00:00`).toLocaleDateString(undefined, { month: "short" })}</span>
-                <span className="dd-day">{new Date(`${j.date}T12:00:00`).getDate()}</span>
-              </div>
-              <div className="dash-row-main">
-                <span className="dr-title">{j.title}</span>
-                <span className="dr-meta">
-                  {[j.area, j.zip].filter(Boolean).join(" ")} · {filled}/{j.trades.length} trades
-                  {j.sqft ? ` · ${Number(j.sqft).toLocaleString()} sq ft` : ""}
-                </span>
-              </div>
-              <span className={`fill-badge ${filled === j.trades.length ? "full" : ""}`}>{filled}/{j.trades.length}</span>
-            </div>
-          );
-        })}
-      </section>
-
       {!isOwner && unrated.length > 0 && (
         <section className="dash-sec">
           <h3><Star size={15} /> Completed, not yet rated <span className="sec-count">{unrated.length}</span></h3>
@@ -12839,7 +13177,7 @@ function MaterialSource({ value, onChange }) {
 
 // ---- Create job ----------------------------------------------------------
 // The job holds every project fact. Work orders are derived from it on assign.
-function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, properties, forProperty, asOwner = false }) {
+function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, properties, forProperty, forDate, asOwner = false }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
   // An owner with one building never has a choice to make, so it is made for
@@ -12853,7 +13191,9 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
     area: start ? start.city || "" : "",
     zip: start ? start.zip || "" : "",
     sqft: "", stories: "",
-    date: "", time: "07:00",
+    // Opened from an empty day on the calendar: that day is the answer to
+    // the question the form is about to ask.
+    date: forDate || "", time: "07:00",
     trades: forSub ? [...forSub.categories] : [],
     scope: "",
     // materialSource is the seed the chooser parses, empty on a new job. The
@@ -17198,6 +17538,134 @@ p.fld-note{margin:6px 0 0}
 .auto-strip{display:flex;align-items:center;gap:8px;background:#fbf0dd;border:1px solid #ecd9b0;color:#8a5a12;
   font-size:12.5px;font-weight:600;padding:10px 13px;border-radius:10px;margin-bottom:18px}
 .dash-sec{margin-bottom:24px}
+
+/* ---- the schedule panel, at the top of the dashboard ------------------
+   Raised out of the run of dash-sec blocks it used to sit at the bottom
+   of: its own surface, its own border, and the only panel on the page
+   with a date in 26px type. */
+.sched-hero{background:var(--card);border:1px solid var(--line);border-radius:16px;
+  padding:16px 16px 14px;margin-bottom:22px;box-shadow:var(--shadow)}
+.sh-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.sh-head h3{display:flex;align-items:center;gap:8px;margin:0;font-size:14px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft)}
+.sh-head h3 svg{color:var(--brand)}
+.sh-all{display:inline-flex;align-items:center;gap:4px;border:0;background:none;cursor:pointer;
+  font:700 12.5px Inter,sans-serif;color:var(--brand);padding:4px 2px}
+.sh-all:hover{text-decoration:underline;text-underline-offset:2px}
+
+/* A date that has gone past is the one thing on a schedule worth saying out
+   loud, so it is said before the next one rather than sorted in with it. */
+.sh-late{background:#fdf6e9;border:1px solid #ecd9b0;border-radius:12px;padding:10px 12px;margin-bottom:12px}
+.shl-lede{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;color:var(--amber-ink)}
+.shl-rows{display:flex;flex-direction:column;gap:2px;margin-top:7px}
+.shl-row{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;cursor:pointer;
+  padding:6px 4px;border-radius:8px;text-align:left;font:inherit}
+.shl-row:hover{background:#f8eed9}
+.shl-when{flex:none;font-size:11.5px;font-weight:700;color:var(--amber-ink);min-width:74px}
+.shl-title{flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shl-fill{flex:none;font-size:11.5px;color:var(--ink-soft);font-weight:600}
+.shl-more{background:none;border:0;cursor:pointer;font:700 12px Inter,sans-serif;color:var(--amber-ink);
+  padding:5px 4px;text-align:left}
+
+/* The next one, in the type size the question deserves. */
+.sh-next{display:flex;align-items:center;gap:14px;width:100%;text-align:left;cursor:pointer;
+  background:var(--paper);border:1px solid var(--line);border-radius:13px;padding:13px 14px;font:inherit}
+.sh-next:hover{border-color:var(--brand);background:#f2f7f4}
+.shn-when{flex:none;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  width:62px;padding:7px 0;background:var(--card);border:1px solid var(--line);border-radius:11px}
+.shn-dow{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft)}
+.shn-day{font-size:26px;font-weight:800;line-height:1.05;letter-spacing:-.03em;color:var(--ink)}
+.shn-mon{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft)}
+.shn-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.shn-lede{font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--brand)}
+.shn-title{font-size:16px;font-weight:700;letter-spacing:-.01em;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shn-meta{font-size:12.5px;color:var(--ink-soft)}
+.shn-fill{flex:none;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:20px;
+  background:#fbf0dd;color:var(--amber-ink)}
+.shn-fill.full{background:#e6f0e9;color:var(--brand-dk)}
+.sh-none{text-align:center;padding:22px 14px;color:var(--ink-soft);background:var(--paper);
+  border:1px dashed var(--line);border-radius:12px}
+.sh-none > svg{opacity:.5;margin-bottom:6px}
+.sh-none p{margin:0 0 11px;font-size:13.5px}
+
+/* The fortnight. It scrolls sideways on a phone rather than shrinking to
+   fourteen unreadable slivers. */
+.sh-strip{display:flex;gap:5px;margin-top:12px;overflow-x:auto;padding-bottom:3px;
+  scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+.shs-day{flex:1 0 42px;display:flex;flex-direction:column;align-items:center;gap:1px;cursor:pointer;
+  background:var(--card);border:1px solid var(--line);border-radius:9px;padding:6px 2px 4px;font:inherit}
+.shs-day:hover{border-color:var(--brand)}
+.shs-dow{font-size:9.5px;font-weight:800;text-transform:uppercase;color:var(--ink-soft)}
+.shs-dom{font-size:14px;font-weight:700;color:var(--ink);line-height:1.15}
+.shs-n{font-size:10px;font-weight:800;color:var(--brand);min-height:13px}
+.shs-day.has{background:#eef4f0;border-color:#cfe0d6}
+.shs-day.today{border-color:var(--brand);box-shadow:inset 0 0 0 1px var(--brand)}
+.shs-day.is-next{background:var(--brand);border-color:var(--brand)}
+.shs-day.is-next .shs-dow,.shs-day.is-next .shs-dom,.shs-day.is-next .shs-n{color:#fff}
+.sh-undated{margin:11px 0 0;font-size:12px;color:var(--ink-soft)}
+.sh-link{background:none;border:0;padding:0;cursor:pointer;font:700 12px Inter,sans-serif;color:var(--brand)}
+.sh-link:hover{text-decoration:underline}
+
+/* ---- the month grid on the jobs tab ---------------------------------- */
+.jv-seg button{display:inline-flex;align-items:center;gap:6px}
+.jcal{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:var(--shadow)}
+.jcal-top{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.jcal-nav{width:32px;height:32px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:var(--paper);border:1px solid var(--line);border-radius:9px;cursor:pointer;color:var(--ink-soft)}
+.jcal-nav:hover{border-color:var(--brand);color:var(--brand)}
+.jcal-month{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;line-height:1.2}
+.jcal-month strong{font-size:16px;letter-spacing:-.01em}
+.jcal-month span{font-size:11.5px;color:var(--ink-soft);font-weight:600}
+.jcal-today{flex:none;background:var(--paper);border:1px solid var(--line);border-radius:9px;cursor:pointer;
+  font:700 12px Inter,sans-serif;color:var(--ink-soft);padding:7px 12px}
+.jcal-today:hover{border-color:var(--brand);color:var(--brand)}
+.jcal-dows{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:4px}
+.jcal-dows span{text-align:center;font-size:10.5px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--ink-soft)}
+.jcal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.jcal-cell{position:relative;min-height:56px;display:flex;flex-direction:column;align-items:center;gap:3px;
+  background:var(--paper);border:1px solid transparent;border-radius:9px;padding:5px 2px;cursor:pointer;font:inherit}
+.jcal-cell.empty{background:none;cursor:default;min-height:0}
+.jcal-cell:hover:not(.empty){border-color:var(--brand)}
+.jcal-cell.has{background:var(--card);border-color:var(--line)}
+.jcal-cell.past{opacity:.66}
+.jcal-cell.today .jc-dom{background:var(--brand);color:#fff;border-radius:50%;width:22px;height:22px;
+  display:inline-flex;align-items:center;justify-content:center}
+.jcal-cell.on{border-color:var(--brand);box-shadow:inset 0 0 0 1px var(--brand)}
+.jc-dom{font-size:12.5px;font-weight:700;color:var(--ink);line-height:22px;min-height:22px}
+.jc-marks{display:flex;flex-wrap:wrap;gap:3px;justify-content:center;align-items:center}
+.jc-dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none}
+.jc-dot.open{background:var(--amber)}
+.jc-dot.full{background:var(--brand)}
+.jc-dot.done{background:#b9c3bc}
+.jc-plus{font-size:9.5px;font-weight:800;color:var(--ink-soft)}
+.jcal-key{display:flex;flex-wrap:wrap;gap:14px;margin-top:11px;font-size:11.5px;color:var(--ink-soft);font-weight:600}
+.jcal-key span{display:inline-flex;align-items:center;gap:6px}
+.jcal-day{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+.jcd-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.jcd-head h4{margin:0;font-size:14.5px;display:flex;align-items:baseline;gap:8px}
+.jcd-rel{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--brand)}
+.jcd-close{width:28px;height:28px;flex:none;display:flex;align-items:center;justify-content:center;
+  background:none;border:1px solid var(--line);border-radius:8px;cursor:pointer;color:var(--ink-soft)}
+.jcd-close:hover{border-color:var(--red);color:var(--red)}
+.jcd-row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;cursor:pointer;font:inherit;
+  background:var(--paper);border:1px solid var(--line);border-radius:11px;padding:10px 12px;margin-bottom:6px}
+.jcd-row:hover{border-color:var(--brand);background:#f2f7f4}
+.jcd-row.done{opacity:.7}
+.jcd-time{flex:none;min-width:64px;font-size:11.5px;font-weight:800;color:var(--ink-soft);
+  text-transform:uppercase;letter-spacing:.03em}
+.jcd-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.jcd-title{font-size:14px;font-weight:700;letter-spacing:-.01em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.jcd-meta{font-size:12px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.jcal-undated{margin:12px 0 0;font-size:12px;color:var(--ink-soft)}
+/* Arrived at from the schedule or the grid: here, and then quiet again. */
+.job-card.landed{border-color:var(--brand);box-shadow:0 0 0 3px rgba(31,107,74,.15)}
+/* Said to a screen reader, where three coloured dots say nothing at all. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .dash-sec h3{display:flex;align-items:center;gap:8px;margin:0 0 11px;font-size:14px;font-weight:800;
   text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft)}
 .sec-count{background:var(--line);color:var(--ink);font-size:11px;font-weight:800;padding:1px 8px;border-radius:20px}
@@ -18863,6 +19331,22 @@ p.fld-note{margin:6px 0 0}
 }
 @media (max-width:400px){
   .pf-nav button svg{display:none}
+}
+/* The schedule panel on a phone: the date block and the title stop
+   competing for the same 160px, and the month grid keeps seven columns
+   because six days a week is not a week. */
+@media (max-width:560px){
+  .sched-hero{padding:13px 12px 12px}
+  .sh-next{gap:11px;padding:11px}
+  .shn-when{width:54px}
+  .shn-day{font-size:22px}
+  .shn-title{font-size:15px}
+  .shs-day{flex:0 0 40px}
+  .jcal{padding:10px}
+  .jcal-cell{min-height:46px}
+  .jcal-key{gap:9px;font-size:11px}
+  .jcd-time{min-width:52px}
+  .jobs-head{flex-wrap:wrap;gap:8px}
 }
 /* Two tiles across survives a 390px phone; one across only below that. */
 @media (max-width:359px){
