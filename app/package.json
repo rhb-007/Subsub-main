@@ -57,6 +57,7 @@
     "test:scheduled": "node scripts/tenant-scheduled-test.mjs",
     "test:schedule": "node scripts/schedule-test.mjs",
     "test:dashlayout": "node scripts/dash-layout-test.mjs",
+    "test:dashwidth": "node scripts/dash-width-test.mjs",
     "test:pagehead": "node scripts/page-head-test.mjs",
     "test:visitafter": "node scripts/visit-after-test.mjs",
     "test:visitnobody": "node scripts/visit-nobody-test.mjs",

@@ -18242,8 +18242,17 @@ p.fld-note{margin:6px 0 0}
 
    auto-fit, not two fixed columns. The checklist takes itself off the page
    once it is done or dismissed, and a fixed 1fr 1fr would leave the
-   schedule sitting in half a row beside a gap for ever after. */
-.dash-top{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));
+   schedule sitting in half a row beside a gap for ever after.
+
+   340px, not the 420px this started at. A tablet held upright is 744 to
+   834 points wide, which leaves 708 to 798 inside the page padding: at
+   420 the pair needed 856 and every one of them stacked, so the whole
+   point of the row was lost on the device it matters most on. At 340 the
+   two columns fit from the narrowest tablet up, and a phone still gets
+   them one above the other. The fortnight strip inside the schedule
+   scrolls sideways rather than shrinking, so a narrower panel costs days
+   on screen, not legibility. */
+.dash-top{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));
   gap:16px;align-items:stretch;margin-bottom:22px}
 .dash-top > *{margin-bottom:0;height:100%}
 .sched-hero{background:var(--card);border:1px solid var(--line);border-radius:16px;
