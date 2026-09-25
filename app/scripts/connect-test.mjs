@@ -294,9 +294,22 @@ try {
       body: JSON.stringify({ accept: true }) });
     ck("nor answer it", steal.status === 404, String(steal.status));
 
+    // Nor can the account that sent it. This used to be a 403, because an
+    // admin had no company at all and the route refused the seat outright.
+    // Since 031 an account IS a company, so the seat resolves and the request
+    // simply is not theirs -- 404, which is also the better answer: it does
+    // not confirm that somebody else's request exists.
     const adminTry = await fetch(`${API}/my-connect-requests/${reqId}/respond`, { method: "POST", headers: H,
       body: JSON.stringify({ accept: true }) });
-    ck("and the account that asked cannot accept on their behalf", adminTry.status === 403, String(adminTry.status));
+    ck("and the account that asked cannot accept on their behalf",
+      adminTry.status === 404 || adminTry.status === 403, String(adminTry.status));
+    // The property that actually matters, checked rather than inferred from
+    // a status code: nobody answered, so it is still waiting on the
+    // contractor.
+    const untouched = await (await fetch(`${API}/connect-requests`, { headers: H })).json();
+    ck("and it is still waiting on the contractor",
+      untouched.find((r) => r.id === reqId)?.status === "pending",
+      untouched.find((r) => r.id === reqId)?.status);
   }
 
   console.log("\n-- accepting is what creates the engagement --");

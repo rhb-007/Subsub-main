@@ -304,6 +304,10 @@ export const api = {
   // The contractor's own side: their code, and who has asked for them.
   // Scoped by their company rather than by the account header, because a
   // request comes from an account they are not in yet.
+  // The company this ACCOUNT is: what another general contractor sees when
+  // they look you up, and the details that make you findable at all.
+  myCompany: () => request("/my-company"),
+  saveMyCompany: (patch) => request("/my-company", { method: "PATCH", body: JSON.stringify(patch) }),
   myConnectCode: () => request("/connect/code"),
   rotateConnectCode: () => request("/connect/code/rotate", { method: "POST" }),
   myConnectRequests: () => request("/my-connect-requests"),

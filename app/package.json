@@ -24,6 +24,8 @@
     "test:invitedlist": "node scripts/invited-list-test.mjs",
     "test:rolelabel": "node scripts/role-label-test.mjs",
     "test:connect": "node scripts/connect-test.mjs",
+    "test:acctcompany": "node scripts/account-company-test.mjs",
+    "test:hireable": "node scripts/hireable-ui-test.mjs",
     "test:wayin": "node scripts/way-in-test.mjs",
     "build:platform": "vite build --outDir dist-platform",
     "test:consolefresh": "node scripts/console-fresh-test.mjs",

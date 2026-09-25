@@ -1572,6 +1572,39 @@ async function ensureConnectCode(env, companyId) {
   throw new Error("could not mint a connect code");
 }
 
+// The company row an account IS.
+//
+// A general contractor is a company that happens to hire other companies.
+// Until 031 the two were separate kinds of thing and only a subcontractor
+// had a company row, so a general contractor could not be looked up, could
+// not be asked to connect, and had no QR code to show -- the one question
+// somebody asked about their own account that the app had no answer to.
+//
+// 031 backfills one for every account. This is the safety net for an
+// account created against a database that has not had it run yet, and for
+// one created by a code path that forgot: derived id, so it is the same row
+// every time and never a second one.
+const ownCompanyId = (accountId) => `cmp_own_${accountId}`;
+async function ensureAccountCompany(env, accountId) {
+  const a = await env.DB.prepare(`SELECT id, name, company_id FROM accounts WHERE id = ?`)
+    .bind(accountId).first();
+  if (!a) return null;
+  if (a.company_id) return a.company_id;
+  const id = ownCompanyId(accountId);
+  try {
+    await env.DB.prepare(`INSERT OR IGNORE INTO companies (id, company) VALUES (?, ?)`)
+      .bind(id, a.name).run();
+    await env.DB.prepare(`UPDATE accounts SET company_id = ? WHERE id = ? AND company_id IS NULL`)
+      .bind(id, accountId).run();
+  } catch (err) {
+    // The column does not exist yet: this database has not had 031 run.
+    // Say so the way every other route does rather than 500.
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+  return id;
+}
+
 // Whether anybody can actually answer for this company. A company row is
 // not the same thing as a contractor on SubSub: most of them were typed in
 // by a hiring account and have no login behind them at all. Asking one of
@@ -1582,7 +1615,45 @@ async function companyHasLogin(env, companyId) {
   const row = await env.DB.prepare(
     `SELECT 1 AS yes FROM memberships WHERE company_id = ? AND role = 'contractor' LIMIT 1`
   ).bind(companyId).first();
-  return !!row;
+  if (row) return true;
+  // Or it is an account's own company, and the people who can answer for it
+  // are the people who run that account. Without this an account could be
+  // found by the lookup and then refused as "nobody to ask", which is the
+  // worst of both: visible and unreachable.
+  try {
+    const own = await env.DB.prepare(
+      `SELECT 1 AS yes FROM memberships m JOIN accounts a ON a.id = m.account_id
+        WHERE a.company_id = ? AND m.role IN ('admin', 'pm') LIMIT 1`
+    ).bind(companyId).first();
+    return !!own;
+  } catch (err) {
+    // Before 031 there is no accounts.company_id, and the old answer -- a
+    // contractor seat or nothing -- is the right one.
+    if (missingSchema(err)) return false;
+    throw err;
+  }
+}
+
+// Is this company the caller's own account? Its own question because it is
+// asked from three places and the column may not exist yet.
+async function isOwnCompany(env, accountId, companyId) {
+  try {
+    const a = await env.DB.prepare(`SELECT company_id FROM accounts WHERE id = ?`).bind(accountId).first();
+    return !!a?.company_id && a.company_id === companyId;
+  } catch (err) {
+    if (missingSchema(err)) return false;
+    throw err;
+  }
+}
+
+// Which company this seat speaks for. A contractor seat speaks for the
+// company it was seated with; an admin or a project manager speaks for the
+// account they run, which is a company of its own since 031.
+async function seatCompany(c) {
+  const { role, companyId, accountId } = c.get("auth");
+  if (role === "contractor" && companyId) return companyId;
+  if ((role === "admin" || role === "pm") && accountId) return await ensureAccountCompany(c.env, accountId);
+  return null;
 }
 
 // What a hiring account is allowed to learn about a company it does not
@@ -1646,6 +1717,13 @@ app.get("/api/connect/lookup", requireRole("admin", "pm"), async (c) => {
   }
   if (!co) return c.json({ found: false });
 
+  // Yourself. Since 031 an account is a company, so the address on your own
+  // profile is findable by you -- and a form offering to connect you to
+  // yourself is a form that has not understood the question.
+  if (await isOwnCompany(c.env, accountId, co.id)) {
+    return c.json({ found: false, reason: "own_company" });
+  }
+
   // Their own contractor, first and regardless of anything else. Most
   // company rows here were typed in by a hiring account and have no login
   // behind them, and the login check below quite rightly refuses to offer
@@ -1681,6 +1759,7 @@ app.get("/api/connect/code/:code", requireRole("admin", "pm"), async (c) => {
 
   const co = await c.env.DB.prepare(`SELECT * FROM companies WHERE connect_code = ?`).bind(code).first();
   if (!co) return c.json({ found: false });
+  if (await isOwnCompany(c.env, accountId, co.id)) return c.json({ found: false, reason: "own_company" });
   const engaged = !!(await c.env.DB.prepare(
     `SELECT 1 AS yes FROM engagements WHERE account_id = ? AND company_id = ?`
   ).bind(accountId, co.id).first());
@@ -1708,9 +1787,16 @@ app.post("/api/connect-requests", requireRole("admin", "pm"), async (c) => {
     `SELECT id FROM engagements WHERE account_id = ? AND company_id = ?`
   ).bind(accountId, co.id).first();
   if (engaged) return c.json({ error: "already_engaged", companyId: co.id }, 409);
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  // Since 031 an account is a company, which means an account can find
+  // itself -- scan your own QR, or type in the address on your own profile.
+  // Hiring yourself would seat your own team in your own account as
+  // contractors and put you on your own roster.
+  if (account?.company_id && account.company_id === co.id) {
+    return c.json({ error: "own_company" }, 409);
+  }
   if (!(await companyHasLogin(c.env, co.id))) return c.json({ error: "no_account" }, 409);
 
-  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
   const id = uid();
   try {
     await c.env.DB.prepare(
@@ -1789,14 +1875,87 @@ app.delete("/api/connect-requests/:id", requireRole("admin", "pm"), async (c) =>
 // Scoped by the seat's own company rather than by the account header: a
 // request comes from an account they have no engagement with, so it is not
 // an account they can be "in" yet.
-function contractorCompany(c) {
-  const { role, companyId } = c.get("auth");
-  return role === "contractor" && companyId ? companyId : null;
-}
+// The company this account IS: the details another general contractor sees
+// when they look you up, and the ones that make you findable at all.
+//
+// A backfilled account-company has a name and nothing else, on purpose --
+// inventing an address nobody chose and putting it in front of strangers
+// is not a migration's business. This is where somebody chooses it.
+//
+// Admin and project manager only. It is the account's public face, not a
+// seat's own contact card.
+const myCompanyToJs = (co) => ({
+  companyId: co.id,
+  company: co.company || "",
+  contact: co.contact || "",
+  email: co.email || "",
+  phone: co.phone || "",
+  license: co.license || "",
+  ubi: co.ubi || "",
+  city: co.city || "",
+  state: co.state || "",
+  zip: co.zip || "",
+});
+
+app.get("/api/my-company", requireRole("admin", "pm"), async (c) => {
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ error: "migration_needed", migration: "031_account_company" }, 503);
+  const co = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(companyId).first();
+  if (!co) return c.json({ error: "not_found" }, 404);
+  const code = await ensureConnectCode(c.env, companyId);
+  // What it is worth filling in for: the lookup matches on these three and
+  // nothing else, so a profile with none of them cannot be found by anybody.
+  const findable = !!(co.email || co.phone || co.license);
+  return c.json({ ...myCompanyToJs(co), findable, code, url: code ? connectUrl(code) : null });
+});
+
+app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ error: "migration_needed", migration: "031_account_company" }, 503);
+  const b = await c.req.json().catch(() => ({}));
+  const str = (v, n) => v === undefined ? undefined : String(v || "").trim().slice(0, n) || null;
+
+  const email = str(b.email, 200);
+  if (email && !EMAIL_RE.test(email)) return c.json({ error: "invalid_email" }, 400);
+  const phoneIn = str(b.phone, 40);
+  const phone = phoneIn === undefined ? undefined : (phoneIn ? normalizePhone(phoneIn) : null);
+  if (phoneIn && !phone) return c.json({ error: "invalid_phone" }, 400);
+  const license = str(b.license, 60);
+  // The licence column is the dedupe key across the whole table, so the
+  // clash here is a real one: somebody else already holds this number.
+  // Telling them that is better than a 500 from the unique index.
+  if (license) {
+    const taken = await c.env.DB.prepare(
+      `SELECT id FROM companies WHERE license = ? AND id <> ?`).bind(license, companyId).first();
+    if (taken) return c.json({ error: "license_taken" }, 409);
+  }
+
+  const fields = {
+    company: str(b.company, 200), contact: str(b.contact, 200),
+    email, phone, license, ubi: str(b.ubi, 40),
+    city: str(b.city, 120), state: str(b.state, 40), zip: str(b.zip, 20),
+  };
+  const set = Object.entries(fields).filter(([, v]) => v !== undefined);
+  if (!set.length) return c.json({ error: "nothing_to_change" }, 400);
+  // A company row with no name is not a thing anybody can be shown.
+  if (fields.company === null) return c.json({ error: "name_required" }, 400);
+
+  await c.env.DB.prepare(
+    `UPDATE companies SET ${set.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`
+  ).bind(...set.map(([, v]) => v), companyId).run();
+  await logActivity(c.env, accountId, userId, "company_profile",
+    "Updated the company profile other contractors see");
+
+  const co = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(companyId).first();
+  const code = await ensureConnectCode(c.env, companyId);
+  return c.json({ ...myCompanyToJs(co),
+    findable: !!(co.email || co.phone || co.license), code, url: code ? connectUrl(code) : null });
+});
 
 // Their code, and the URL a QR of it should carry.
 app.get("/api/connect/code", async (c) => {
-  const companyId = contractorCompany(c);
+  const companyId = await seatCompany(c);
   if (!companyId) return c.json({ error: "forbidden" }, 403);
   const code = await ensureConnectCode(c.env, companyId);
   if (!code) return c.json({ error: "not_found" }, 404);
@@ -1807,7 +1966,7 @@ app.get("/api/connect/code", async (c) => {
 // one printed on a van door is that it gets around -- so it has to be
 // possible to stop the old one working.
 app.post("/api/connect/code/rotate", async (c) => {
-  const companyId = contractorCompany(c);
+  const companyId = await seatCompany(c);
   if (!companyId) return c.json({ error: "forbidden" }, 403);
   await c.env.DB.prepare(`UPDATE companies SET connect_code = NULL WHERE id = ?`).bind(companyId).run();
   const code = await ensureConnectCode(c.env, companyId);
@@ -1816,7 +1975,7 @@ app.post("/api/connect/code/rotate", async (c) => {
 
 // Who has asked to work with them.
 app.get("/api/my-connect-requests", async (c) => {
-  const companyId = contractorCompany(c);
+  const companyId = await seatCompany(c);
   if (!companyId) return c.json({ error: "forbidden" }, 403);
   const { results } = await c.env.DB.prepare(
     `SELECT cr.*, co.company AS company_name, co.contact, co.city, co.state, a.name AS account_name
@@ -1833,7 +1992,7 @@ app.get("/api/my-connect-requests", async (c) => {
 // way into this account's roster from here, which is the point of the whole
 // exercise.
 app.post("/api/my-connect-requests/:id/respond", async (c) => {
-  const companyId = contractorCompany(c);
+  const companyId = await seatCompany(c);
   if (!companyId) return c.json({ error: "forbidden" }, 403);
   const { userId } = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
@@ -1895,7 +2054,24 @@ app.post("/api/my-connect-requests/:id/respond", async (c) => {
   const { results: seats } = await c.env.DB.prepare(
     `SELECT DISTINCT user_id FROM memberships WHERE company_id = ? AND role = 'contractor'`
   ).bind(companyId).all();
-  const userIds = new Set([userId, ...seats.map((r) => r.user_id)].filter(Boolean));
+  // And, when the company IS an account, everyone who runs that account.
+  // A general contractor accepting work has no contractor seats of their
+  // own -- their people are admins and project managers on their own
+  // subdomain -- so without this the whole team would accept a connection
+  // none of them could switch to.
+  //
+  // Admin and PM only. A building owner or a tenant is a guest of the
+  // accepting account and has no business being seated in a stranger's.
+  let ownSeats = [];
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT DISTINCT m.user_id FROM memberships m JOIN accounts a ON a.id = m.account_id
+        WHERE a.company_id = ? AND m.role IN ('admin', 'pm')`
+    ).bind(companyId).all();
+    ownSeats = results || [];
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  const userIds = new Set([userId, ...seats.map((r) => r.user_id),
+    ...ownSeats.map((r) => r.user_id)].filter(Boolean));
   for (const uidToSeat of userIds) {
     try {
       await c.env.DB.prepare(
@@ -5789,10 +5965,15 @@ app.get("/api/platform/companies", async (c) => {
     `SELECT co.id, co.company, co.license, co.state, co.city,
             (SELECT COUNT(*) FROM engagements e WHERE e.company_id = co.id) AS accounts,
             (SELECT lc.status FROM license_checks lc WHERE lc.company_id = co.id
-              ORDER BY lc.checked_at DESC LIMIT 1) AS license_status
+              ORDER BY lc.checked_at DESC LIMIT 1) AS license_status,
+            -- Since 031 every account has a company row of its own. They
+            -- belong in this list -- they can be hired like any other -- but
+            -- staff reading it need to know which ones are customers rather
+            -- than contractors somebody typed in.
+            (SELECT a.name FROM accounts a WHERE a.company_id = co.id) AS account_name
        FROM companies co ORDER BY co.company`
   ).all();
-  return c.json(results);
+  return c.json((results || []).map((r) => ({ ...r, accountName: r.account_name || null })));
 });
 
 // One account's activity stream. This is the first place support looks when a

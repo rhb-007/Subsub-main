@@ -2963,8 +2963,22 @@ export default function SubSub() {
       // Whichever side this seat is on. A contractor cannot read the
       // account's outgoing requests and an admin has no incoming ones, so
       // asking for both would be a guaranteed 403 every time.
+      // Both directions for an account seat. Since 031 an account is a
+      // company too, so an admin has outgoing requests (contractors they
+      // asked for) AND incoming ones (contractors who want to hire them).
+      // A contractor seat has only the incoming half.
       if (role === "contractor") setConnectIn(await api.myConnectRequests());
-      else setConnectOut(await api.listConnectRequests());
+      else {
+        const [out, incoming] = await Promise.all([
+          api.listConnectRequests(),
+          // A database without 031 answers 503 here, and an account that
+          // simply has not been asked answers with an empty list. Neither
+          // is worth breaking the outgoing half over.
+          api.myConnectRequests().catch(() => []),
+        ]);
+        setConnectOut(out);
+        setConnectIn(incoming);
+      }
     } catch (err) {
       console.warn("[connect] load failed:", err);
       if (err?.status === 403) { setConnectIn([]); setConnectOut([]); }
@@ -3166,6 +3180,35 @@ export default function SubSub() {
     if (result.memberships.length > 1) { setChooser(result); return null; }
     return enterAccount(result, result.memberships[0]);
   }
+
+  // Seats can appear while somebody is signed in: accepting a connection
+  // puts this whole team into the hiring account. Without re-reading them
+  // the account picker has no idea the new one exists, and the only cure
+  // is a sign-out nobody would think to try.
+  const reloadAccounts = useCallback(async () => {
+    if (!supabaseEnabled) return;
+    try {
+      const fresh = await api.getMe();
+      if (!fresh?.memberships) return;
+      setMemberships((prev) => [
+        ...prev.filter((m) => m.userId !== fresh.user.id),
+        ...fresh.memberships.map((m) => ({ userId: fresh.user.id, accountId: m.accountId, role: m.role, companyId: m.companyId })),
+      ]);
+      setAccounts((prev) => {
+        const byId = Object.fromEntries(prev.map((a) => [a.id, a]));
+        fresh.memberships.forEach((m) => {
+          byId[m.accountId] = { ...byId[m.accountId],
+            id: m.accountId, name: m.accountName, subdomain: m.subdomain,
+            kind: m.kind, plan: m.plan, billing: m.billing, theme: m.theme, trades: m.trades,
+            logoData: m.logoKey ? logoUrl(m.accountId) : byId[m.accountId]?.logoData || null,
+            useDefaultMark: m.useDefaultMark };
+        });
+        return Object.values(byId);
+      });
+    } catch (err) {
+      console.warn("[accounts] reload failed:", err);
+    }
+  }, []);
 
   // The rest of signing in, once it is settled which account is being entered.
   async function enterAccount(result, primary) {
@@ -4507,6 +4550,16 @@ export default function SubSub() {
           accountTrades={account.trades} onSetAccountTrades={setAccountTrades}
           emergencyCompanyId={account.emergencyCompanyId || null}
           onSetEmergencyContractor={setEmergencyContractor}
+          incomingConnects={connectIn || []}
+          onReloadConnects={refreshConnects}
+          onRespondConnect={async (id, accept) => {
+            await api.respondConnect(id, accept);
+            await refreshConnects();
+            // Accepting seats this whole team in the hiring account, which
+            // is a new place to switch to: without a reload the account
+            // picker would not know it exists.
+            if (accept) await reloadAccounts?.();
+          }}
           subscriptionStatus={account.subscriptionStatus} currentPeriodEnd={account.currentPeriodEnd}
           comped={account.comped} cancelAtPeriodEnd={account.cancelAtPeriodEnd}
           canManage={can("account") && role === "admin"} mySub={mySub}
@@ -6251,9 +6304,9 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
 
             <MailLog accountId={open.a.id} load={onMailLog} />
 
-            <div className="pf-panel">
-              <div className="pf-panel-hd">
-                <h3>User activity</h3>
+            <PfFold id="activity" title="User activity" icon={Activity}
+              count={(activity || []).filter((e) => e.accountId === open.a.id).length}
+              head={
                 <select value={actFilter} onChange={(e) => setActFilter(e.target.value)}>
                   <option value="all">Everyone</option>
                   {memberships.filter((m) => m.accountId === open.a.id).map((m) => {
@@ -6262,7 +6315,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                   })}
                   <option value="system">System</option>
                 </select>
-              </div>
+              }>
               {(() => {
                 const list = (activity || [])
                   .filter((e) => e.accountId === open.a.id)
@@ -6281,10 +6334,10 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                   );
                 });
               })()}
-            </div>
+            </PfFold>
 
-            <div className="pf-panel">
-              <h3>Subscription history</h3>
+            <PfFold id="subs" title="Subscription history" icon={TrendingUp}
+              count={subEvents.filter((e) => e.accountId === open.a.id).length}>
               {subEvents.filter((e) => e.accountId === open.a.id).sort((x, y) => x.at.localeCompare(y.at)).map((e) => (
                 <div key={e.id} className="pf-line">
                   <span className="pf-date">{e.at}</span>
@@ -6300,7 +6353,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 </div>
               ))}
               {!subEvents.some((e) => e.accountId === open.a.id) && <p className="pf-note">No events recorded.</p>}
-            </div>
+            </PfFold>
 
             {isSuper && (
               <div className="pf-panel pf-danger-zone">
@@ -6382,9 +6435,19 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                     <div className="pfc-top" onClick={() => setEditCompanyId(r.c.id)}>
                       <div className="pfc-name">
                         <b>{r.c.company}</b>
-                        <span className="pf-sub">{r.c.contact} · {r.c.city}, {r.c.state}</span>
+                        <span className="pf-sub">
+                          {[r.c.contact, [r.c.city, r.c.state].filter(Boolean).join(", ")]
+                            .filter(Boolean).join(" · ") || "No contact details"}
+                        </span>
                       </div>
                       <div className="pfc-summary">
+                        {/* Every account is a company since 031, so this list
+                            holds customers as well as the contractors they
+                            typed in. Reading it without knowing which is which
+                            is how somebody deletes a customer. */}
+                        {r.c.accountName && (
+                          <span className="pf-flag is-acct" title={`This is the account "${r.c.accountName}"`}>account</span>
+                        )}
                         <span className={`pf-status ${coStatus === "active" ? "active" : "canceled"}`}>{coStatus}</span>
                         {r.lic && String(r.lic.status).toLowerCase() !== "active" &&
                           <span className="pf-status suspended" title="State license status">{r.lic.status}</span>}
@@ -7019,6 +7082,60 @@ function resetFailureText(err) {
   return `That did not send (${code || "no error code"}${err?.status ? `, HTTP ${err.status}` : ""}).`;
 }
 
+// A log, folded away.
+//
+// The account drawer ends in three of them -- mail, user activity,
+// subscription history -- and every one grows forever. Open by default they
+// push the things somebody actually came to the drawer to change, the plan
+// and the seats, off the bottom of a screen that is already scrolling. So
+// they start shut, say how much is in them, and stay however they were last
+// left: staff who live in the activity log should not reopen it daily.
+//
+// The remembered state is a convenience. localStorage throws in a private
+// window on read as well as write, so both are guarded and it simply opens
+// the way it would on a first visit.
+//
+// `onFirstOpen` is for a log that has to be fetched. Folded shut, nothing is
+// asked for at all, which is the other half of why these start closed.
+function PfFold({ id, title, icon: Icon, count, defaultOpen = false, onFirstOpen, head, children }) {
+  const key = `subsub.pf.log.${id}`;
+  const [open, setOpen] = useState(() => {
+    try {
+      const saved = localStorage.getItem(key);
+      return saved === null ? defaultOpen : saved === "1";
+    } catch { return defaultOpen; }
+  });
+  const [opened, setOpened] = useState(false);
+  const toggle = () => setOpen((was) => {
+    const next = !was;
+    try { localStorage.setItem(key, next ? "1" : "0"); } catch { /* nothing to remember it with */ }
+    if (next && !opened) { setOpened(true); onFirstOpen?.(); }
+    return next;
+  });
+  // A log that was left open last time still has to fetch on arrival.
+  useEffect(() => {
+    if (open && !opened) { setOpened(true); onFirstOpen?.(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const bodyId = `pf-fold-${id}`;
+  return (
+    <div className={`pf-panel pf-fold ${open ? "open" : ""}`}>
+      <div className="pf-panel-hd pf-fold-hd">
+        <button className="pf-fold-btn" onClick={toggle} aria-expanded={open} aria-controls={bodyId}>
+          <ChevronRight size={15} className={open ? "open" : ""} />
+          {Icon ? <Icon size={15} /> : null}
+          <h3>{title}</h3>
+          {count != null && <span className="pf-fold-n">{count}</span>}
+        </button>
+        {open ? head : null}
+      </div>
+      {/* Unmounted rather than hidden: a shut log should not be rendering
+          four hundred rows nobody is looking at. */}
+      {open && <div id={bodyId}>{children}</div>}
+    </div>
+  );
+}
+
 // Every mail this account has been sent, and whether it went.
 //
 // email_log has recorded this since the schema was written and nothing ever
@@ -7035,9 +7152,8 @@ const MAIL_KIND = {
 function MailLog({ accountId, load }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState("");
-  const [open, setOpen] = useState(false);
 
-  useEffect(() => { setRows(null); setOpen(false); setErr(""); }, [accountId]);
+  useEffect(() => { setRows(null); setErr(""); }, [accountId]);
 
   const fetchRows = async () => {
     setErr("");
@@ -7046,20 +7162,9 @@ function MailLog({ accountId, load }) {
   };
 
   return (
-    <div className="pf-panel">
-      <div className="pf-panel-hd">
-        <h3><Mail size={15} /> Email sent to this account</h3>
-        <button className="pf-mini" onClick={() => {
-          const next = !open;
-          setOpen(next);
-          if (next && rows === null) fetchRows();
-        }}>
-          <ChevronDown size={13} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
-          {open ? "Hide" : "Show"}
-        </button>
-      </div>
-
-      {open && (
+    <PfFold id="mail" title="Email sent to this account" icon={Mail}
+      count={rows ? rows.length : null}
+      onFirstOpen={() => { if (rows === null) fetchRows(); }}>
         <>
           {err && <p className="pf-host-err">{err}</p>}
           {rows === null && !err && <p className="pf-note">Loading…</p>}
@@ -7091,8 +7196,7 @@ function MailLog({ accountId, load }) {
             <button className="pf-mini" onClick={fetchRows}><RefreshCw size={13} /> Refresh</button>
           </div>
         </>
-      )}
-    </div>
+    </PfFold>
   );
 }
 
@@ -11181,6 +11285,137 @@ function SeatState({ u, onResend }) {
   );
 }
 
+// Being hireable.
+//
+// A general contractor was a tenant of SubSub and nothing else: there was
+// no company row of theirs to find, so the connect lookup could not match
+// them, they had no QR code, and a bigger contractor who wanted them for a
+// roof had to type them in from scratch. Which is wrong about the trade --
+// the same outfit sells siding on Tuesday and subs out its gutters on
+// Wednesday, and is a subcontractor the moment somebody bigger calls.
+//
+// 031 gives every account a company row. This is where it gets filled in,
+// because a row with a name and nothing else is findable by nobody: the
+// lookup matches on an email, a mobile or a licence number and on nothing
+// else, which the panel says rather than leaving somebody to wonder why
+// they cannot be found.
+function HireablePanel({ accountName, requests = [], onRespond, onReload }) {
+  const [f, setF] = useState(null);
+  const [loaded, setLoaded] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api.myCompany()
+      .then((r) => { if (alive) { setLoaded(r); setF(r); } })
+      .catch((e) => {
+        console.error("[my-company] load failed:", e);
+        if (!alive) return;
+        setErr(e?.body?.error === "migration_needed"
+          ? `The database isn't migrated yet — run ${e.body.migration || "031_account_company"}.sql and reload.`
+          : "Could not load your company profile.");
+      });
+    return () => { alive = false; };
+  }, []);
+
+  const set = (k, v) => { setF((x) => ({ ...x, [k]: v })); setSaved(false); setErr(""); };
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = await api.saveMyCompany({
+        company: f.company, contact: f.contact, email: f.email, phone: f.phone,
+        license: f.license, ubi: f.ubi, city: f.city, state: f.state, zip: f.zip,
+      });
+      setLoaded(r); setF(r); setSaved(true);
+    } catch (e) {
+      console.error("[my-company] save failed:", e);
+      setErr(e?.body?.error === "license_taken"
+        ? "That licence number is already on another company here. Check the digits."
+        : e?.body?.error === "invalid_email" ? "That email address doesn't look right."
+        : e?.body?.error === "invalid_phone" ? "That mobile number doesn't look right."
+        : e?.body?.error === "name_required" ? "A company name is needed — it's what people see."
+        : "Couldn't save. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+
+  const pending = requests.filter((r) => r.status === "pending");
+  const dirty = f && loaded && ["company", "contact", "email", "phone", "license", "ubi", "city", "state", "zip"]
+    .some((k) => (f[k] || "") !== (loaded[k] || ""));
+
+  return (
+    <div className="portal-panel settings-panel">
+      <h4>Working as a subcontractor</h4>
+      <p className="panel-note">
+        You hire contractors here. You can also be hired: another general contractor can find
+        {" "}<b>{accountName || "your company"}</b> on SubSub and ask to work with you, and
+        this is what they see. Nothing here is on your own contractors&rsquo; screens.
+      </p>
+
+      {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
+      {!f && !err && <p className="cov-hint">Loading…</p>}
+
+      {f && (
+        <>
+          {/* The one thing worth saying out loud: a profile with none of the
+              three things the lookup matches on cannot be found by anybody,
+              and nothing else on the page would ever tell them. */}
+          <div className={`hire-state ${loaded?.findable ? "on" : "off"}`}>
+            {loaded?.findable
+              ? <><CheckCircle2 size={15} /> <span>Another contractor can find you by the details below.</span></>
+              : <><AlertTriangle size={15} /> <span>Nobody can find you yet. Add an email, a mobile or a licence
+                  number — those are the three things a search matches on.</span></>}
+          </div>
+
+          <label className="fld">Company name <span className="fld-note">how you are listed</span>
+            <input value={f.company} onChange={(e) => set("company", e.target.value)} placeholder={accountName || "Your company"} /></label>
+          <label className="fld">Contact name <span className="fld-note">who they ask for</span>
+            <input value={f.contact} onChange={(e) => set("contact", e.target.value)} placeholder="Sam Ortiz" /></label>
+          <div className="fld-row">
+            <label className="fld">Email
+              <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)}
+                autoCapitalize="none" autoCorrect="off" placeholder="work@yourcompany.com" /></label>
+            <label className="fld">Mobile
+              <input inputMode="tel" value={f.phone} onChange={(e) => set("phone", formatPhone(e.target.value))}
+                placeholder="(206) 555-0100" /></label>
+          </div>
+          <div className="fld-row">
+            <label className="fld">Licence number
+              <input value={f.license} onChange={(e) => set("license", e.target.value)} placeholder="RAINIRR891QZ" /></label>
+            <label className="fld">UBI <span className="fld-note">optional</span>
+              <input value={f.ubi} onChange={(e) => set("ubi", e.target.value)} placeholder="601 234 567" /></label>
+          </div>
+          <div className="fld-row">
+            <label className="fld">City
+              <input value={f.city} onChange={(e) => set("city", e.target.value)} placeholder="Seattle" /></label>
+            <label className="fld">State
+              <input value={f.state} onChange={(e) => set("state", e.target.value)} placeholder="WA" /></label>
+            <label className="fld">ZIP
+              <input inputMode="numeric" value={f.zip} onChange={(e) => set("zip", e.target.value)} placeholder="98101" /></label>
+          </div>
+          <div className="form-actions">
+            {saved && !dirty && <span className="saved-note"><Check size={13} /> Saved</span>}
+            <button className="btn-solid" disabled={busy || !dirty} onClick={save}>
+              {busy ? "Saving…" : "Save profile"}</button>
+          </div>
+
+          <div className="form-sec">Your code</div>
+          <p className="panel-note">
+            Show this to a general contractor and have them scan it. They can ask to work with you
+            without anybody spelling out an email address — and you still decide, below.
+          </p>
+          <ConnectCode />
+
+          <div className="form-sec">Asking to work with you{pending.length > 0 ? ` (${pending.length})` : ""}</div>
+          <ConnectRequests requests={requests} onRespond={onRespond} onReload={onReload}
+            emptyNote="Nobody has asked yet. When somebody does, it lands here and nothing happens until you answer." />
+        </>
+      )}
+    </div>
+  );
+}
+
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
   accountTrades, onSetAccountTrades, subscriptionStatus, currentPeriodEnd, comped, cancelAtPeriodEnd,
@@ -11189,7 +11424,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   onAddUser, onRemoveUser, onEditUser, onLoginAs, onResendInvite, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onSaveNotify,
   hostnameStatus, onRefreshHostname, properties = [],
-  emergencyCompanyId = null, onSetEmergencyContractor }) {
+  emergencyCompanyId = null, onSetEmergencyContractor,
+  incomingConnects = [], onRespondConnect, onReloadConnects }) {
   // accountKind is already a prop; the user form needs it to know which
   // scoped roles this account has anybody to hand out.
   const tenantSeats = users.filter((u) => u.role === "tenant");
@@ -11476,6 +11712,11 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {pane === "company" && canManage && (
         <EmergencyContractorPanel subs={subs} current={emergencyCompanyId}
           onSave={onSetEmergencyContractor} />
+      )}
+
+      {pane === "company" && canManage && (
+        <HireablePanel accountName={brand?.name} requests={incomingConnects}
+          onRespond={onRespondConnect} onReload={onReloadConnects} />
       )}
 
       {pane === "company" && canManage && !canBrand && (
@@ -13830,7 +14071,11 @@ function QrCode({ value, size = 190, label }) {
 // The point of the code is that being added should not require spelling an
 // email address out loud on a job site. They show this, it gets scanned,
 // and a request arrives here.
-function ConnectPane({ requests, onRespond, onReload }) {
+// The code, the squares, and the two things anybody does with them. Split
+// out of ConnectPane because a general contractor needs exactly this on
+// their own account settings since 031 -- an account is a company, so the
+// same endpoint answers for both and there is no reason for two of these.
+function ConnectCode() {
   const [code, setCode] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
@@ -13841,7 +14086,13 @@ function ConnectPane({ requests, onRespond, onReload }) {
     let alive = true;
     api.myConnectCode()
       .then((r) => { if (alive) setCode(r); })
-      .catch((e) => { console.error("[connect] code failed:", e); if (alive) setErr("Could not load your code."); });
+      .catch((e) => {
+        console.error("[connect] code failed:", e);
+        if (!alive) return;
+        setErr(e?.body?.error === "migration_needed"
+          ? `The database isn't migrated yet — run ${e.body.migration || "031_account_company"}.sql and reload.`
+          : "Could not load your code.");
+      });
     return () => { alive = false; };
   }, []);
 
@@ -13857,6 +14108,53 @@ function ConnectPane({ requests, onRespond, onReload }) {
     catch { setCopied(false); setErr("This browser wouldn't let us copy. The code is above — read it out."); }
   };
 
+  if (err && !code) return <p className="cov-hint" role="alert">{err}</p>;
+  if (!code) return <p className="cov-hint">Loading…</p>;
+  return (
+    <>
+      <div className="cx-code">
+        <QrCode value={code.url} label={`Connect code ${code.code}`} />
+        <div className="cx-code-side">
+          {/* The code in words as well as in squares: a camera that will
+              not focus is the normal case, not the exception. */}
+          <span className="cx-code-txt">{code.code}</span>
+          {/* The camera not focusing is the normal case, not the
+              exception, so there is a way through without one: send
+              them the link and it opens the same thing. */}
+          <span className="cov-hint">Camera not cooperating? Send them this link instead —
+            it opens the same request on their side.</span>
+          <div className="cx-code-acts">
+            <button className="pick" onClick={copy}>
+              <Copy size={13} /> {copied ? "Copied" : "Copy link"}
+            </button>
+            {confirmRotate ? (
+              <>
+                <button className="pick danger" disabled={!!busy} onClick={rotate}>
+                  {busy === "rotate" ? "Changing…" : "Yes, change it"}
+                </button>
+                <button className="pick" onClick={() => setConfirmRotate(false)}>Keep it</button>
+              </>
+            ) : (
+              <button className="pick" onClick={() => setConfirmRotate(true)}>
+                <RefreshCw size={13} /> Change code
+              </button>
+            )}
+          </div>
+          {confirmRotate && <p className="cov-hint" role="status">
+            Anything already printed or sent with the old code stops working.
+            Nobody you are already connected to is affected.</p>}
+        </div>
+      </div>
+      {err && <p className="cov-hint" role="alert">{err}</p>}
+    </>
+  );
+}
+
+// Who has asked to work with you, and the answer. Also shared: a general
+// contractor gets asked exactly as a subcontractor does.
+function ConnectRequests({ requests, onRespond, onReload, emptyNote }) {
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
   const answer = async (id, accept) => {
     setBusy(id); setErr("");
     try { await onRespond(id, accept); }
@@ -13868,7 +14166,41 @@ function ConnectPane({ requests, onRespond, onReload }) {
       onReload?.();
     } finally { setBusy(""); }
   };
+  const pending = requests.filter((r) => r.status === "pending");
+  if (!pending.length) return <p className="cov-hint">{emptyNote || "Nobody is waiting on an answer."}</p>;
+  return (
+    <>
+      {pending.map((r) => (
+        <div key={r.id} className="cx-req">
+          <div className="cx-main">
+            <b>{r.account}</b>
+            <span className="cx-sub">
+              {r.via === "code" ? "Scanned your code" : "Found you on SubSub"} · {relTime(r.createdAt)}
+            </span>
+            {r.message && <span className="cx-msg">&ldquo;{r.message}&rdquo;</span>}
+            {/* What saying yes actually does. Somebody agreeing to this
+                on a phone deserves to know it hands over documents. */}
+            <span className="cx-note">
+              They&rsquo;ll be able to send you work orders and see your trades, crews,
+              availability and compliance documents. Nothing else, and you can end it later.
+            </span>
+          </div>
+          <div className="cx-acts">
+            <button className="btn-solid small" disabled={!!busy} onClick={() => answer(r.id, true)}>
+              <Check size={13} /> {busy === r.id ? "…" : "Accept"}
+            </button>
+            <button className="pick" disabled={!!busy} onClick={() => answer(r.id, false)}>
+              <X size={13} /> Decline
+            </button>
+          </div>
+        </div>
+      ))}
+      {err && <p className="cov-hint" role="alert">{err}</p>}
+    </>
+  );
+}
 
+function ConnectPane({ requests, onRespond, onReload }) {
   const pending = requests.filter((r) => r.status === "pending");
   const past = requests.filter((r) => r.status !== "pending").slice(0, 10);
 
@@ -13879,34 +14211,7 @@ function ConnectPane({ requests, onRespond, onReload }) {
       <section className="dash-sec">
         <h3><Users size={15} /> Asking to work with you
           {pending.length > 0 && <span className="sec-count">{pending.length}</span>}</h3>
-        {pending.length === 0
-          ? <p className="cov-hint">Nobody is waiting on an answer.</p>
-          : pending.map((r) => (
-            <div key={r.id} className="cx-req">
-              <div className="cx-main">
-                <b>{r.account}</b>
-                <span className="cx-sub">
-                  {r.via === "code" ? "Scanned your code" : "Found you on SubSub"} · {relTime(r.createdAt)}
-                </span>
-                {r.message && <span className="cx-msg">&ldquo;{r.message}&rdquo;</span>}
-                {/* What saying yes actually does. Somebody agreeing to this
-                    on a phone deserves to know it hands over documents. */}
-                <span className="cx-note">
-                  They&rsquo;ll be able to send you work orders and see your trades, crews,
-                  availability and compliance documents. Nothing else, and you can end it later.
-                </span>
-              </div>
-              <div className="cx-acts">
-                <button className="btn-solid small" disabled={!!busy} onClick={() => answer(r.id, true)}>
-                  <Check size={13} /> {busy === r.id ? "…" : "Accept"}
-                </button>
-                <button className="pick" disabled={!!busy} onClick={() => answer(r.id, false)}>
-                  <X size={13} /> Decline
-                </button>
-              </div>
-            </div>
-          ))}
-        {err && <p className="cov-hint" role="alert">{err}</p>}
+        <ConnectRequests requests={requests} onRespond={onRespond} onReload={onReload} />
       </section>
 
       <section className="dash-sec">
@@ -13915,41 +14220,7 @@ function ConnectPane({ requests, onRespond, onReload }) {
           Show this to a contractor and have them scan it. They can ask to work with
           you without you spelling out an email address — you still decide, here.
         </p>
-        {!code ? <p className="cov-hint">Loading…</p> : (
-          <div className="cx-code">
-            <QrCode value={code.url} label={`Connect code ${code.code}`} />
-            <div className="cx-code-side">
-              {/* The code in words as well as in squares: a camera that will
-                  not focus is the normal case, not the exception. */}
-              <span className="cx-code-txt">{code.code}</span>
-              {/* The camera not focusing is the normal case, not the
-                  exception, so there is a way through without one: send
-                  them the link and it opens the same thing. */}
-              <span className="cov-hint">Camera not cooperating? Send them this link instead —
-                it opens the same request on their side.</span>
-              <div className="cx-code-acts">
-                <button className="pick" onClick={copy}>
-                  <Copy size={13} /> {copied ? "Copied" : "Copy link"}
-                </button>
-                {confirmRotate ? (
-                  <>
-                    <button className="pick danger" disabled={!!busy} onClick={rotate}>
-                      {busy === "rotate" ? "Changing…" : "Yes, change it"}
-                    </button>
-                    <button className="pick" onClick={() => setConfirmRotate(false)}>Keep it</button>
-                  </>
-                ) : (
-                  <button className="pick" onClick={() => setConfirmRotate(true)}>
-                    <RefreshCw size={13} /> Change code
-                  </button>
-                )}
-              </div>
-              {confirmRotate && <p className="cov-hint" role="status">
-                Anything already printed or sent with the old code stops working.
-                Nobody you are already connected to is affected.</p>}
-            </div>
-          </div>
-        )}
+        <ConnectCode />
       </section>
 
       {past.length > 0 && (
@@ -17113,6 +17384,14 @@ p.fld-note{margin:6px 0 0}
 .panel-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
 .panel-count{font-size:12.5px;color:var(--ink-soft);font-weight:600}
 .saved-note{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--brand)}
+/* Findable, or not. A company profile with no email, no mobile and no
+   licence number matches nothing the lookup searches on, and nothing else
+   on the page would ever say so. */
+.hire-state{display:flex;align-items:flex-start;gap:9px;border-radius:10px;padding:11px 13px;
+  margin:0 0 14px;font-size:13px;line-height:1.45;font-weight:600}
+.hire-state svg{flex:none;margin-top:1px}
+.hire-state.on{background:#eef4f0;border:1px solid #cfe0d6;color:var(--brand-dk)}
+.hire-state.off{background:#fdf6e9;border:1px solid #ecd9b0;color:var(--amber-ink)}
 
 /* mini calendar (contractor availability) */
 .mini-cal-nav{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:14px 0 10px;font-size:13px;font-weight:700}
@@ -19238,6 +19517,27 @@ p.fld-note{margin:6px 0 0}
 .pf-note{font-size:12.5px;color:var(--ink-soft);margin:10px 0 0;line-height:1.5}
 .pf-act{font-size:13.5px;margin:6px 0;line-height:1.5}
 .pf-panel{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:18px 20px;margin-top:16px}
+/* A folded log. Shut, it is a row you read past; open, an ordinary panel.
+   The three at the bottom of the account drawer all grow forever, and open
+   by default they pushed the plan and the seats -- the things somebody came
+   here to change -- off the end of the scroll. */
+.pf-fold{padding:0}
+.pf-fold .pf-panel-hd{margin:0;padding:4px 14px 4px 6px}
+.pf-fold.open .pf-panel-hd{border-bottom:1px solid var(--line);margin-bottom:12px}
+.pf-fold > div:last-child{padding:0 20px 18px}
+.pf-fold.open > .pf-panel-hd + div{padding-top:0}
+.pf-fold-btn{display:flex;align-items:center;gap:9px;flex:1;min-width:0;background:none;border:0;
+  cursor:pointer;padding:12px 8px;text-align:left;color:var(--ink);font:inherit}
+.pf-fold-btn h3{margin:0;font-size:15px;letter-spacing:-.02em}
+.pf-fold-btn > svg:first-child{flex:none;color:var(--ink-soft);transition:transform .15s}
+.pf-fold-btn > svg:first-child.open{transform:rotate(90deg)}
+.pf-fold-btn > svg:nth-child(2){flex:none;color:var(--brand)}
+.pf-fold-btn:hover h3{color:var(--brand)}
+.pf-fold-n{flex:none;background:var(--line);color:var(--ink);font-size:11px;font-weight:800;
+  padding:1px 8px;border-radius:20px}
+/* A customer, not a contractor somebody typed in. */
+.pf-flag.is-acct{background:#e6f0e9;color:#1f6b4a;padding:2px 8px;border-radius:20px;
+  text-transform:uppercase;letter-spacing:.04em;font-size:10px}
 .pf-panel h3{font-size:15px;letter-spacing:-.02em;margin:0 0 10px}
 .pf-plan-row{display:flex;gap:14px;flex-wrap:wrap}
 .pf-plan-row label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600;color:var(--ink-soft)}
