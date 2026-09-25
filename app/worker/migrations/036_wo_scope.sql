@@ -1,0 +1,20 @@
+-- Labour, materials, or both.
+--
+-- A great deal of the time the general contractor buys the supplies and the
+-- subcontractor is labour. Then the subcontractor has nobody below them,
+-- there is no chain to clear, and asking them for supplier waivers is a
+-- question with no answer. It also moves the exposure UP: the general
+-- contractor's own supply house is the one that can lien the owner.
+--
+-- One field decides all of it -- whether a lower tier is required, which
+-- attestation the waiver carries, and what the roll-up is allowed to say --
+-- so it is a column and not something inferred from whether anybody
+-- happened to fill a list in.
+--
+-- Defaults to labor_materials, which is what every existing row is: nobody
+-- has said otherwise, and assuming a chain that then turns out to be empty
+-- is the safe direction to be wrong in.
+--
+-- Its own file: ALTER TABLE ADD COLUMN cannot run twice, and D1 stops at the
+-- first failure without undoing what ran before it.
+ALTER TABLE work_orders ADD COLUMN scope_kind TEXT NOT NULL DEFAULT 'labor_materials';

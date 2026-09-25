@@ -122,6 +122,28 @@ refactor.
   The bank moves money for free; what is being bought is the reason to let
   it go.
 
+- **A lien waiver is a chain, and it rolls up as a status.** A waiver binds
+  only the party that signs it, so one from your subcontractor does nothing
+  about the supply house they still owe. The useful object is the chain:
+  same row shape at every tier, a parent pointer, and a roll-up that is a
+  **count and a date, never a list** — an account may know their
+  subcontractor's chain is clear; they may not have that subcontractor's
+  supplier list, which is their sources and by inference their margins.
+  Nothing is ever "clear", only "clear through a date", because material
+  delivered the next morning is not covered.
+
+  Very often there is no chain at all: the hiring account buys the supplies
+  and the subcontractor is labour. That is `scope_kind = 'labor_only'`, a
+  declaration somebody signs rather than an absence nobody recorded — and it
+  moves the exposure *up*, because then it is the hiring account's own supply
+  house that can lien the owner.
+
+  **SubSub authors no waiver document.** It requests, tracks, gates payment
+  on, and stores what was signed with a hash of it. Generating the text is a
+  separate decision with a lawyer attached: roughly a dozen states prescribe
+  exact wording and a form that deviates can be void, and lien law follows
+  the property's state, not the signer's.
+
 - **Overflow is broadcast, not browse.** When an account has nobody on its
   own roster for an urgent job, it may broadcast to opted-in companies —
   general contractors included, since 031 made every one of them hireable.
