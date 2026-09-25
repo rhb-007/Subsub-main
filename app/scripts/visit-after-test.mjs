@@ -73,6 +73,10 @@ const booked = async (headers, title, date, times = { startTime: "10:00", endTim
   await fetch(`${API}/jobs/${id}/approve`, { method: "POST", headers: H });
   await fetch(`${API}/jobs/${id}/assign`, { method: "POST", headers: H,
     body: JSON.stringify({ trade: "roofing", companyId: "cmp_r", value: "150", responseWindow: "24h" }) });
+  // Accepted, not merely offered. "Somebody is coming" needs somebody who
+  // has said yes -- an offer still inside its response window can be
+  // declined, and until it is answered nobody is coming anywhere.
+  d1(`UPDATE work_orders SET status = 'accepted' WHERE job_id = '${id}' AND voided_at IS NULL`);
   const v = await (await fetch(`${API}/jobs/${id}/visits`, { method: "POST", headers: H,
     body: JSON.stringify({ date, ...times }) })).json();
   await fetch(`${API}/visits/${v.id}/respond`, { method: "POST", headers, body: JSON.stringify({ status: "confirmed" }) });

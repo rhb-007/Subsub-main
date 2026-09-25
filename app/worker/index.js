@@ -4411,7 +4411,11 @@ app.get("/api/visits", async (c) => {
     const { results } = await c.env.DB.prepare(
       `SELECT v.* FROM visits v JOIN jobs j ON j.id = v.job_id
         WHERE v.account_id = ? ${scope.sql} ${mine} AND v.status != 'superseded'
-        ORDER BY v.created_at DESC`
+        -- created_at is second-granular, so two visits written in the same
+        -- second tie and the order becomes whatever the table felt like.
+        -- The client takes the first row per job, so this decides which
+        -- visit a tenant is shown: newest wins, and rowid breaks the tie.
+        ORDER BY v.created_at DESC, v.rowid DESC`
     ).bind(auth.accountId, ...scope.vals, ...(auth.role === "tenant" ? [auth.userId] : [])).all();
     return c.json((results || []).map(visitRowToJs));
   } catch (err) {
@@ -4454,7 +4458,14 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
   const id = uid();
   try {
     await c.env.DB.prepare(
-      `UPDATE visits SET status = 'superseded' WHERE job_id = ? AND status IN ('proposed', 'declined', 'missed', 'happened')`
+      // Including 'confirmed'. "Propose a different time" is exactly that:
+      // the time that was agreed is no longer the time, so leaving it live
+      // gave the job two current visits at once -- and the client takes
+      // whichever sorts first, so a tenant could be shown either the old
+      // agreed morning or the new proposal depending on the order two rows
+      // written in the same second came back in.
+      `UPDATE visits SET status = 'superseded'
+        WHERE job_id = ? AND status IN ('proposed', 'confirmed', 'declined', 'missed', 'happened')`
     ).bind(jobId).run();
     await c.env.DB.prepare(
       `INSERT INTO visits (id, account_id, job_id, proposed_by, date, start_time, end_time, note, status, responded_at)
@@ -4542,6 +4553,23 @@ app.post("/api/visits/:id/outcome", async (c) => {
   if (String(v.date) > new Date().toISOString().slice(0, 10)) {
     return c.json({ error: "not_yet", date: v.date }, 409);
   }
+  // Somebody has to have been SENT before it makes sense to ask whether
+  // they came. A visit and a work order were unconnected facts: a time
+  // could be agreed before anybody was hired, and withdrawing the only
+  // contractor voided the work order and left the visit standing. The
+  // tenant was then asked whether somebody came for a job nobody had been
+  // booked for, and a yes to that reads on the manager's side as though
+  // the work had been done.
+  //
+  // The client stops asking the question in that state; this is here
+  // because a tab that was open before the contractor was withdrawn would
+  // still have the buttons on it, and a safeguard only in the browser is
+  // not one.
+  const sent = await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM work_orders
+      WHERE job_id = ? AND voided_at IS NULL AND status != 'declined' LIMIT 1`
+  ).bind(v.job_id).first();
+  if (!sent) return c.json({ error: "no_contractor" }, 409);
   const note = String(b.note || "").trim().slice(0, 500) || null;
   const status = b.happened ? "happened" : "missed";
   await c.env.DB.prepare(

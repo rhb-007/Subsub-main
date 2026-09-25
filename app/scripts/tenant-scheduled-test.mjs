@@ -12,6 +12,7 @@
 //   node scripts/tenant-scheduled-test.mjs
 
 import puppeteer from "puppeteer-core";
+import { execFileSync } from "node:child_process";
 
 const PORT = process.env.APP_PORT || "5191";
 const API = process.env.API_BASE || "http://127.0.0.1:8787/api";
@@ -23,6 +24,8 @@ let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const tok = async (e) => (await (await fetch(AUTH, { method: "POST", body: JSON.stringify({ email: e }) })).json()).access_token;
+const d1 = (sql) => execFileSync("npx", ["wrangler", "d1", "execute", "subsub-db",
+  "--config=./wrangler.toml", "--local", "--command", sql], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 
 // ---- a tenant with three reports, one of them booked in -----------------
 const S = Date.now().toString(36);
@@ -53,6 +56,10 @@ for (const id of [jBooked, jWaiting]) {
   await fetch(`${API}/jobs/${id}/approve`, { method: "POST", headers: H });
   await fetch(`${API}/jobs/${id}/assign`, { method: "POST", headers: H,
     body: JSON.stringify({ trade: "roofing", companyId: "cmp_r", value: "150", responseWindow: "24h" }) });
+  // Accepted, not merely offered. "Somebody is coming" needs somebody who
+  // has said yes -- an offer still inside its response window can be
+  // declined, and until it is answered nobody is coming anywhere.
+  d1(`UPDATE work_orders SET status = 'accepted' WHERE job_id = '${id}' AND voided_at IS NULL`);
 }
 // One visit proposed and confirmed, one proposed and left unanswered.
 const vB = await (await fetch(`${API}/jobs/${jBooked}/visits`, { method: "POST", headers: H,

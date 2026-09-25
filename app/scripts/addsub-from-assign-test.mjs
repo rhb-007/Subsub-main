@@ -269,7 +269,9 @@ try {
   const empty2 = await page.evaluate(() => document.querySelector(".empty")?.innerText || "");
   ck("it counts the roster it has rather than claiming there is none",
     /none of your 1 subcontractor covers framing/i.test(empty2), empty2.split("\n").filter(Boolean)[0] || "no empty state");
-  ck("and says the other way out too", /edit the job's trades/i.test(empty2));
+  // Either apostrophe. The copy uses a typographic one; a test that fails
+  // over which of the two is rendered is testing the font, not the screen.
+  ck("and says the other way out too", /edit the job[\u2019']s trades/i.test(empty2), empty2.slice(0, 90));
   ck("with the same button", await page.evaluate(() =>
     [...document.querySelectorAll(".empty button")].some((b) => /^Subcontractor$/i.test(b.textContent.trim()))));
 

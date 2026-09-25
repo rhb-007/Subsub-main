@@ -56,6 +56,7 @@
     "test:scheduled": "node scripts/tenant-scheduled-test.mjs",
     "test:schedule": "node scripts/schedule-test.mjs",
     "test:visitafter": "node scripts/visit-after-test.mjs",
+    "test:visitnobody": "node scripts/visit-nobody-test.mjs",
     "test:migration-gap": "node scripts/migration-gap-test.mjs",
     "test:whitescreen": "node scripts/whitescreen-test.mjs",
     "test:license-shape": "node scripts/license-shape-test.mjs",

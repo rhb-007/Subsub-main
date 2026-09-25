@@ -4546,7 +4546,11 @@ export default function SubSub() {
                     )}
                     {j.requestedBy && j.approvedAt && !isClosed(j) && (
                       <VisitBlock job={j} visit={visits.find((v) => v.jobId === j.id) || null}
-                        who={users.find((u) => u.id === j.requestedBy)} onPropose={proposeVisit} />
+                        who={users.find((u) => u.id === j.requestedBy)} onPropose={proposeVisit}
+                        onAssign={() => {
+                          const slot = j.trades.find((t) => !j.assignments[t]) || j.trades[0];
+                          if (slot) setAssigning({ job: j, trade: slot });
+                        }} />
                     )}
                     {serviceCalls.filter((c) => c.jobId === j.id).length > 0 && (
                       <div className="sc-block">
@@ -8783,6 +8787,23 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
 // use here: "requested_by set, approved_at null, no work orders issued" is
 // four states to somebody running the building and one sentence to the person
 // waiting in the apartment.
+// Is anybody actually booked for this job?
+//
+// A visit and a contractor were two unconnected facts. A manager could
+// agree a time with the tenant before anybody was hired -- which is a real
+// way to work: find out when the tenant can be in, then go looking -- and
+// withdrawing the only contractor voided the work order and left the visit
+// standing. Either way the tenant's screen went on saying "Somebody is
+// coming" about a morning nobody had been sent to, and then asked them
+// whether somebody came. One of them answered yes.
+//
+// Derived rather than stored: the truth is "does this job have a live work
+// order", it changes the moment one is voided, and every row written before
+// today gets the right answer without a migration.
+const jobAssignments = (job) => Object.values(job?.assignments || {});
+const someoneAccepted = (job) => jobAssignments(job).some((a) => a.status === "accepted" || a.auto);
+const someoneAsked = (job) => jobAssignments(job).some((a) => a.status !== "declined");
+
 function tenantStage(job, visit) {
   if (job.withdrawnAt) return { key: "withdrawn", label: "Withdrawn", tone: "off" };
   if (job.declinedAt) return { key: "declined", label: "Not approved", tone: "off" };
@@ -8794,6 +8815,22 @@ function tenantStage(job, visit) {
   // It said "Somebody is coming" about an afternoon two days gone, which is
   // the one sentence on this page that can be flatly untrue.
   if (visit?.status === "confirmed") {
+    // A time both sides agreed is not a person on the doorstep. Until a
+    // contractor has accepted, all that exists is an agreed window -- so
+    // that is what it says, and "Somebody is coming" is kept for when
+    // somebody is.
+    if (!someoneAccepted(job)) {
+      // An offer nobody has accepted is not a person coming either: the
+      // contractor can still say no, and a response window is hours long.
+      // Worth telling apart from nobody having been asked at all, because
+      // one of them is waiting and the other is stalled.
+      const asked = someoneAsked(job);
+      return visitPassed(visit)
+        ? { key: "nobody", label: asked ? "Nobody confirmed for this" : "Nobody was booked for this", tone: "wait" }
+        : { key: "promised",
+            label: `${visitWhen(visit)} — ${asked ? "waiting on the contractor" : "booking a contractor"}`,
+            tone: "busy" };
+    }
     return visitPassed(visit)
       ? { key: "passed", label: `Was due ${visitWhen(visit)}`, tone: "wait" }
       : { key: "scheduled", label: `Scheduled — ${visitWhen(visit)}`, tone: "ok" };
@@ -9264,6 +9301,10 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
         {stage.key === "confirm" && (
           <TenantVisitAsk visit={visit} brandName={brandName} onRespond={onRespondVisit} />
         )}
+        {/* Only when somebody was actually sent. "Did somebody come?" is
+            not a question a tenant can answer usefully about a job nobody
+            was booked for, and a yes to it reads on the manager's side as
+            though the work had been done. */}
         {stage.key === "passed" && onVisitOutcome && (
           <TenantVisitOutcome visit={visit} brandName={brandName} onSay={onVisitOutcome} />
         )}
@@ -9372,7 +9413,7 @@ function TenantVisitOutcome({ visit, brandName, onSay }) {
 
 // On the manager's side of the same thing: where the visit stands, and the
 // form to propose one (or the next one).
-function VisitBlock({ job, visit, who, onPropose }) {
+function VisitBlock({ job, visit, who, onPropose, onAssign }) {
   const [f, setF] = useState({ date: job.date || "", startTime: "09:00", endTime: "11:00", note: "" });
   // Open by default whenever there is no live time to wait on: nothing
   // proposed, a time refused, or one that came and went with nobody there.
@@ -9395,6 +9436,30 @@ function VisitBlock({ job, visit, who, onPropose }) {
   return (
     <div className="visit-block">
       <div className="form-sec">Visit</div>
+      {/* The one thing this block never said. A visit and a contractor were
+          unconnected facts, so a time could be agreed with a tenant for a
+          job nobody had been hired for -- and withdrawing the only
+          contractor voided the work order and left the agreed time
+          standing, with the tenant's screen still reading "Somebody is
+          coming". Whoever is looking at this is the only person who can fix
+          it, so it is said here, with the way to do it. */}
+      {visit && (visit.status === "proposed" || visit.status === "confirmed") && !someoneAccepted(job) && (
+        <div className="visit-state bad visit-nobody">
+          <AlertTriangle size={14} />
+          <span>
+            {someoneAsked(job)
+              ? <>A time is {visit.status === "confirmed" ? "agreed" : "proposed"} and no contractor has
+                  accepted it yet. Nobody will turn up until one does.</>
+              : <>A time is {visit.status === "confirmed" ? "agreed" : "proposed"} and <b>nobody is
+                  assigned</b>. Nobody will turn up.</>}
+          </span>
+          {onAssign && (
+            <button className="btn-solid sm" onClick={onAssign}>
+              <Plus size={13} /> Assign a contractor
+            </button>
+          )}
+        </div>
+      )}
       {visit?.status === "proposed" && (
         <p className="visit-state wait"><Clock size={14} /> Proposed <b>{visitWhen(visit)}</b> — waiting on {name} to confirm.</p>
       )}
@@ -9906,7 +9971,11 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
           const at = visitOf(a.id), bt = visitOf(b.id);
           return `${at.date} ${at.startTime || ""}`.localeCompare(`${bt.date} ${bt.startTime || ""}`);
         };
-        const agreed = live.filter((j) => visitOf(j.id)?.status === "confirmed");
+        // Only a visit somebody has actually been booked for. A time agreed
+        // with nobody hired is a plan, not an appointment, and it belongs
+        // in the ordinary list saying so -- not under a heading promising
+        // that somebody is coming.
+        const agreed = live.filter((j) => visitOf(j.id)?.status === "confirmed" && someoneAccepted(j));
         // A booked time that has been and gone is not "Somebody is coming".
         // It went on saying that about an afternoon two days past, which is
         // the one line here that can be read and be simply wrong. It gets its
@@ -13770,6 +13839,16 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
     .filter((r) => r.onProperty)
     .sort((a, b) => b.score - a.score), [pool, trade, job, jobs, allJobs, accountId]);
 
+  // Why an empty list is empty. It used to offer two explanations -- no
+  // subcontractors at all, or none covering the trade -- and there are
+  // more than two reasons. Being told "none of your subcontractors cover
+  // electrical" when you have an electrician, because they happen to be
+  // scoped to a different building, sends somebody off to add a second
+  // electrician they already have.
+  const covering = pool.filter((s) => s.categories.includes(trade));
+  const scopedOut = covering.filter((s) => job.propertyId && (s.propertyIds || []).length
+    && !s.propertyIds.includes(job.propertyId));
+
   // Step 2: the only details a work order adds on top of the job
   if (chosen) {
     return (
@@ -13956,16 +14035,32 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
       {job.date && <p className="pick-hint">Contractors free on this date are ranked first.</p>}
       {ranked.length === 0 ? (
         /* This was a dead end: it said nobody covered the trade and offered
-           nothing to do about it. The two reasons need different words --
-           an empty roster is not the same problem as a roster with nobody
-           for this trade -- and both need the same way out. */
+           nothing to do about it. Then it grew a way out, but still only
+           two explanations for four situations -- so it could say you had
+           no electrician while an electrician sat on your list, scoped to
+           another building. Each reason gets its own words and its own
+           next step. */
         <div className="empty"><Search size={26} />
           {subs.length === 0 ? (
             <p>No subcontractors on this account yet. Add one and you can put them
               on this job straight away.</p>
-          ) : (
+          ) : covering.length === 0 ? (
             <p>None of your {subs.length} subcontractor{subs.length === 1 ? "" : "s"} cover{subs.length === 1 ? "s" : ""}{" "}
-              {M.label.toLowerCase()}. Add one who does, or edit the job's trades.</p>
+              {M.label.toLowerCase()}. Add one who does, or edit the job&rsquo;s trades.</p>
+          ) : scopedOut.length === covering.length ? (
+            <p>
+              {scopedOut.length === 1
+                ? <><b>{scopedOut[0].company}</b> covers {M.label.toLowerCase()}, but is scoped to other buildings</>
+                : <>Your {scopedOut.length} {M.label.toLowerCase()} subcontractors are all scoped to other buildings</>}
+              {" "}— so {scopedOut.length === 1 ? "they are" : "they are"} not offered for this one. Open the building
+              under Properties and add {scopedOut.length === 1 ? "them" : "one of them"} to its vendor list, or
+              take the scoping off {scopedOut.length === 1 ? "their" : "a"} contractor record.
+            </p>
+          ) : lapsed ? (
+            <p><b>{lapsed.company}</b> was the only one covering {M.label.toLowerCase()} and they
+              didn&rsquo;t reply. Add another, or put the job back to them from the job card.</p>
+          ) : (
+            <p>Nobody is available for {M.label.toLowerCase()} on this job.</p>
           )}
           {onAddSub && (
             <button onClick={onAddSub}><Plus size={14} /> Subcontractor</button>
@@ -14005,9 +14100,19 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
                   <Send size={14} /> {day && day.kind !== "free" && day.kind !== undefined && job.date ? "Select anyway" : "Select"}
                 </button>
               ) : (
-                <button className="btn-notify rec-send" onClick={() => onNotify(sub)}>
-                  <Mail size={14} /> Request docs
-                </button>
+                /* The button simply became a different button, and somebody
+                   looking for Select was left to work out why it was not
+                   there. Compliance is the reason and it is not a guessing
+                   game: name the papers that are missing. */
+                <div className="rec-blocked">
+                  <span className="rec-blocked-why">
+                    Can&rsquo;t be assigned until their documents are in:{" "}
+                    {complianceGaps(sub).join(", ")}
+                  </span>
+                  <button className="btn-notify rec-send" onClick={() => onNotify(sub)}>
+                    <Mail size={14} /> Request docs
+                  </button>
+                </div>
               )}
             </div>
           ))}
@@ -18761,6 +18866,17 @@ p.fld-note{margin:6px 0 0}
    Same box, marked as the thing that is overdue rather than the thing that
    is booked. */
 .tn-after{border-color:var(--gold-dk);background:#fdf6e9}
+/* A visit with nobody booked for it. Sits above the rest of the block and
+   carries the way out, because the manager is the only person who can fix
+   it and the tenant's screen is meanwhile promising somebody. */
+.visit-nobody{display:flex;align-items:flex-start;gap:9px;flex-wrap:wrap;
+  padding:11px 13px;border-radius:10px;background:#faece7;border:1px solid #f0d1c8}
+.visit-nobody > svg{flex:none;margin-top:2px}
+.visit-nobody > span{flex:1;min-width:200px}
+.visit-nobody button{flex:none}
+/* Why a contractor on the list cannot be picked. */
+.rec-blocked{display:flex;flex-direction:column;align-items:flex-end;gap:6px;max-width:260px}
+.rec-blocked-why{font-size:11.5px;line-height:1.4;color:var(--amber-ink);text-align:right;font-weight:600}
 /* and on the manager's job */
 .visit-block{margin-top:14px}
 .visit-state{display:flex;align-items:center;gap:8px;margin:6px 0 10px;font-size:13.5px;color:var(--ink-soft)}
