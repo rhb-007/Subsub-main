@@ -19,6 +19,10 @@ import { sendSms, toE164 } from "./sms.js";
 // never taken from what the browser claims -- otherwise a dripping tap could
 // be labelled urgent and call somebody out at the account's expense.
 import { severityOf } from "../shared/emergency.js";
+// The same fifty states the browser offers, so a client that sends
+// something else -- an old build, a script, a typo that got through --
+// cannot put it in the database.
+import { normalizeState } from "../shared/states.js";
 import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
@@ -604,7 +608,12 @@ app.post("/api/signup", async (c) => {
   const license = String(b.license || "").trim().slice(0, 60);
   const ubi = String(b.ubi || "").trim().slice(0, 40);
   const city = String(b.city || "").trim().slice(0, 120) || null;
-  const state = String(b.state || "").trim().slice(0, 40) || null;
+  // Normalised, not trimmed: a state that is not a state becomes empty
+  // rather than two characters that look like data and match no registry.
+  // Silent rather than a refusal -- somebody is signing up, and "TX" typed
+  // as "TZ" is not worth stopping them over. The licence check reports that
+  // it could not verify, which is the honest outcome.
+  const state = normalizeState(b.state);
   const zip = String(b.zip || "").trim().slice(0, 20) || null;
 
   if (!company) return c.json({ error: "company_required" }, 400);
@@ -2060,7 +2069,9 @@ app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
   const fields = {
     company: str(b.company, 200), contact: str(b.contact, 200),
     email, phone, license, ubi: str(b.ubi, 40),
-    city: str(b.city, 120), state: str(b.state, 40), zip: str(b.zip, 20),
+    city: str(b.city, 120),
+    state: b.state === undefined ? undefined : normalizeState(b.state),
+    zip: str(b.zip, 20),
   };
   const set = Object.entries(fields).filter(([, v]) => v !== undefined);
   if (!set.length) return c.json({ error: "nothing_to_change" }, 400);

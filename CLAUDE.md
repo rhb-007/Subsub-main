@@ -64,6 +64,54 @@ similar companies nearby", "suggest subs for this trade" — stop and say so
 before building it. It may still be the right thing to build, but it changes
 what this product is and needs a decision, not an implementation.
 
+## Decisions already made
+
+These were settled deliberately. Changing one is a product decision, not a
+refactor.
+
+- **No state is hardcoded.** `app/shared/states.js` is the one list — fifty
+  states and DC — imported by the Worker and the browser, with a hand copy in
+  `get-started.html` (no build step there) that a test keeps in step.
+  Territories are absent on purpose. No form defaults to a state and no
+  placeholder names one: a pre-filled wrong answer is worse than an empty
+  box.
+
+- **Signing up never requires a licence, a UBI or a document.** Several
+  states have no state contractor licence at all, so it was a question a real
+  general contractor could not answer, and it cost signups for nothing.
+  Credentials are asked for **inside the account**, in the set-up checklist,
+  where they buy something: being hireable, and later being eligible for work
+  passed on by other accounts. "Add one myself" is the exception — there the
+  hiring account is typing the record and has the card in front of them.
+
+- **Gate at value delivery, not at the door.** Anything that asks a user for
+  paperwork belongs at the moment the paperwork earns them something.
+
+- **Documents carry carrier, policy number, coverage amount and expiry.** An
+  expired certificate that still shows as approved is worse than a missing
+  one. An expiry that lapses under an already-scheduled job does **not**
+  block it — it raises an urgent request for a replacement.
+
+- **Completion is two-party and append-only.** The subcontractor marks work
+  reached with evidence; an admin or project manager verifies it. Neither
+  side can do both. Completion is an event log, not a status flag, because
+  payment releases will depend on it and "who said this was done, and what
+  did they show?" has to be answerable months later. Photos are nudged, never
+  required.
+
+- **Overflow is broadcast, not browse.** When an account has nobody on its
+  own roster for an urgent job, it may broadcast to opted-in companies —
+  general contractors included, since 031 made every one of them hireable.
+  The posting account never sees a list of candidates, only the ones who
+  answer. No ranking, no profiles, no enumeration. Eligibility is earned:
+  good ratings, three months on SubSub, a minimum number of completed jobs,
+  current documents and a verified licence. It is free at launch and will
+  charge a percentage of job value once payment processing exists — so the
+  fee is modelled from the start and switched off, not bolted on later.
+
+  This is the one exception to "not a directory", and it stays an exception
+  because nothing about it is browsable.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

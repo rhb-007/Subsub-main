@@ -65,6 +65,7 @@
     "test:invitename": "node scripts/invite-name-test.mjs",
     "test:waitingon": "node scripts/waiting-on-test.mjs",
     "test:nomining": "node scripts/no-mining-test.mjs",
+    "test:states": "node scripts/states-test.mjs",
     "test:avatarkey": "node scripts/avatar-key-test.mjs",
     "test:pagehead": "node scripts/page-head-test.mjs",
     "test:visitafter": "node scripts/visit-after-test.mjs",

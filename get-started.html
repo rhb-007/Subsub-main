@@ -91,6 +91,10 @@ nav.top a[aria-current]{color:#fff}
 .eyebrow-d{color:var(--gold);background:rgba(227,155,50,.14)}
 .cta-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:32px}
 .fine{font-size:13px;color:var(--muted)}
+    .opt{font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+      color:#5d6f67;background:#eef2f0;border-radius:99px;padding:2px 8px;margin-left:7px;
+      vertical-align:middle}
+    #state{font:inherit;cursor:pointer}
 .fine-d{font-size:14px;color:#8FA79B}
 
 /* ---------- page hero (audience pages) ---------- */
@@ -527,12 +531,13 @@ body.nav-open{overflow:hidden}
              Property managers, portfolio managers and building owners only
              ever hire, so they are not asked and this block stays hidden. -->
         <div class="field hide" id="gcCreds">
-          <label for="license">Your license and UBI</label>
-          <p class="fine">You can be hired through SubSub too — another general contractor can find
-            you and send you work. This is what they see, and it is the same proof you will ask of
-            your own subcontractors.</p>
+          <label for="license">Your license and UBI <span class="opt">optional</span></label>
+          <p class="fine">You can be hired through SubSub too — another general contractor can send
+            you work. Adding these is what makes that possible, and it is the same proof you will
+            ask of your own subcontractors. <b>You can do it later from your account</b> — several
+            states have no contractor license at all, so this is never required to sign up.</p>
           <div class="two">
-            <input id="license" placeholder="WA L&amp;I license number" autocapitalize="characters" autocorrect="off" spellcheck="false">
+            <input id="license" placeholder="State license number" autocapitalize="characters" autocorrect="off" spellcheck="false">
             <input id="ubi" placeholder="UBI number" inputmode="numeric">
           </div>
         </div>
@@ -540,7 +545,7 @@ body.nav-open{overflow:hidden}
         <div class="field"><label for="city">Where you're based</label>
           <div class="three">
             <input id="city" placeholder="City" autocomplete="address-level2">
-            <input id="state" placeholder="State" maxlength="2" autocomplete="address-level1">
+            <select id="state" autocomplete="address-level1"><option value="">State</option></select>
             <input id="zip" placeholder="ZIP" inputmode="numeric" autocomplete="postal-code">
           </div>
         </div>
@@ -878,6 +883,37 @@ body.nav-open{overflow:hidden}
   document.getElementById('license').addEventListener('input', function(){
     this.value = this.value.toUpperCase();
   });
+
+  /* The fifty states and DC. Written out here rather than imported because
+     this page is plain HTML served by Pages with no build step -- but it is
+     the same list as app/shared/states.js, and a test checks the two have
+     not drifted. Territories are absent on purpose: contractor licensing
+     works differently enough there that offering them would promise
+     something the rest of the product cannot keep. */
+  var US_STATES = [
+    ['AL','Alabama'],['AK','Alaska'],['AZ','Arizona'],['AR','Arkansas'],
+    ['CA','California'],['CO','Colorado'],['CT','Connecticut'],['DE','Delaware'],
+    ['DC','District of Columbia'],['FL','Florida'],['GA','Georgia'],['HI','Hawaii'],
+    ['ID','Idaho'],['IL','Illinois'],['IN','Indiana'],['IA','Iowa'],
+    ['KS','Kansas'],['KY','Kentucky'],['LA','Louisiana'],['ME','Maine'],
+    ['MD','Maryland'],['MA','Massachusetts'],['MI','Michigan'],['MN','Minnesota'],
+    ['MS','Mississippi'],['MO','Missouri'],['MT','Montana'],['NE','Nebraska'],
+    ['NV','Nevada'],['NH','New Hampshire'],['NJ','New Jersey'],['NM','New Mexico'],
+    ['NY','New York'],['NC','North Carolina'],['ND','North Dakota'],['OH','Ohio'],
+    ['OK','Oklahoma'],['OR','Oregon'],['PA','Pennsylvania'],['RI','Rhode Island'],
+    ['SC','South Carolina'],['SD','South Dakota'],['TN','Tennessee'],['TX','Texas'],
+    ['UT','Utah'],['VT','Vermont'],['VA','Virginia'],['WA','Washington'],
+    ['WV','West Virginia'],['WI','Wisconsin'],['WY','Wyoming']
+  ];
+  (function(){
+    var sel = document.getElementById('state');
+    for(var i = 0; i < US_STATES.length; i++){
+      var o = document.createElement('option');
+      o.value = US_STATES[i][0];
+      o.textContent = US_STATES[i][0] + ' — ' + US_STATES[i][1];
+      sel.appendChild(o);
+    }
+  })();
   /* The licence pair belongs to the one kind of account that can be hired. */
   function isGC(){
     var el = document.querySelector('input[name="role"]:checked');
@@ -918,13 +954,12 @@ body.nav-open{overflow:hidden}
       document.getElementById('tradesErr').scrollIntoView({behavior:'smooth', block:'center'});
       return;
     }
-    if(isGC()){
-      var lic = document.getElementById('license');
-      var ubi = document.getElementById('ubi');
-      clearFieldError(lic); clearFieldError(ubi);
-      if(!lic.value.trim()){ markField(lic, 'Enter your state license number.'); lic.focus(); return; }
-      if(!ubi.value.trim()){ markField(ubi, 'Enter your UBI number.'); ubi.focus(); return; }
-    }
+    // Not required, deliberately. Demanding a license number here cost
+    // signups for no gain, and in several states there is no state
+    // contractor license to give -- some regulate by county, some not at
+    // all -- so it was a question a real general contractor could not
+    // answer. It is asked for again in the account, where it buys them
+    // something: being hireable through SubSub.
     go(3);
   });
 

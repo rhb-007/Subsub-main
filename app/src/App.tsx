@@ -40,6 +40,9 @@ import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoU
 // the browser and ordinary work on the server, or the other way round.
 import { severityOf, severityRank } from "../shared/emergency.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
+// One list of states, shared with the Worker, so the two cannot disagree
+// about what a state is.
+import { US_STATES } from "../shared/states.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -2764,6 +2767,8 @@ export default function SubSub() {
   // between being set and being drawn, and adding somebody looked exactly
   // as silent as before.
   const [addedUser, setAddedUser] = useState(null);
+  // Which pane of My account another screen has asked for.
+  const [openPane, setOpenPane] = useState(null);
   const addUser = async (u) => {
     setAddedUser(null);
     let r;
@@ -2779,6 +2784,26 @@ export default function SubSub() {
     setUserForm(false);
     return r;
   };
+  // The company this account IS, since 031. Read once when the account can
+  // be hired, because that is the only case where anything reads it: the
+  // set-up checklist asks for a licence number, and the licence is what
+  // makes the account findable and, later, eligible for work passed on by
+  // other accounts.
+  //
+  // A failure is silence, not an error. Nothing on the dashboard depends on
+  // it beyond one checklist row, and a missing migration must not put a red
+  // banner over somebody's whole first morning.
+  const [myCompany, setMyCompany] = useState(null);
+  useEffect(() => {
+    if (!loggedIn || !currentAccountId || !isHireable(account)) { setMyCompany(null); return; }
+    let live = true;
+    api.myCompany()
+      .then((r) => { if (live) setMyCompany(r); })
+      .catch((e) => { console.warn("[my-company] not read:", e?.body?.error || e?.message || e); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loggedIn, currentAccountId, account.kind]);
+
   // Your own picture. The roster is re-read rather than patched locally,
   // because hasAvatar is what every circle on the page reads to decide
   // whether to go and fetch a face.
@@ -4262,6 +4287,8 @@ export default function SubSub() {
       {tab === "dashboard" && can("dashboard") && (
         <AdminDashboard visits={visits} subs={subs} jobs={jobs} role={role} me={me} now={now}
           invites={invites} connectsOut={connectOut || []}
+          hireable={isHireable(account)} myCompany={myCompany}
+          onGoCompany={() => { setTab("account"); setOpenPane({ pane: "company", n: Date.now() }); }}
           onOpenInvite={(i) => setInvitedOpen(i)}
           onOpenConnect={() => setTab("network")}
           accountId={account.id} trades={account.trades} subLimit={PLANS[plan].limit}
@@ -4872,6 +4899,7 @@ export default function SubSub() {
           billingBusy={billingBusy} billingErr={billingErr}
           onAddUser={addUser} onRemoveUser={removeUser} onEditUser={setEditUser}
           onSetMyAvatar={setMyAvatar} added={addedUser} onDismissAdded={() => setAddedUser(null)}
+          openPane={openPane}
           onResendInvite={resendInvite}
           onLoginAs={(id) => {
             const m = memberships.find((x) => x.userId === id && x.accountId === account.id);
@@ -10542,8 +10570,7 @@ function PropertyForm({ existing, onSubmit, onCancel }) {
           placeholder="1420 Riverside Dr" /></label>
       <div className="three">
         <label className="fld">City<input value={f.city} onChange={(e) => set("city", e.target.value)} /></label>
-        <label className="fld">State<input value={f.state} maxLength={2}
-          onChange={(e) => set("state", e.target.value.toUpperCase().slice(0, 2))} /></label>
+        <StateSelect value={f.state} onChange={(v) => set("state", v)} />
         <label className="fld">ZIP<input inputMode="numeric" value={f.zip}
           onChange={(e) => set("zip", e.target.value)} /></label>
       </div>
@@ -10579,7 +10606,9 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
     company: invite?.companyName || "", contact: invite?.contact || "",
     email: invite?.invitedEmail || "", phone: invite?.phone || "",
     license: "", ubi: "",
-    city: "", state: "WA", zip: "",
+    // No state. It used to be "WA" -- a pre-filled wrong answer for
+    // forty-nine of them.
+    city: "", state: "", zip: "",
     categories: [], warranty: "", crewCount: "1",
     notifyEmail: true, notifySms: false,
     password: "",
@@ -10935,6 +10964,29 @@ const SIZES = ["S", "M", "L", "XL", "2XL", "3XL"];
 //
 // The contact is not lost -- it moves to the line underneath, which is where
 // it is on a contractor card too.
+// Where you are, from a list rather than from two characters somebody typed.
+//
+// Every one of these was a free-text box, and two of them carried "WA" as a
+// placeholder while the subcontractor application opened with the state
+// already SET to WA -- a pre-filled wrong answer for forty-nine states, on a
+// form nobody re-reads once it looks answered. A typo here is silent too:
+// the licence lookup keys on the state and simply finds nothing.
+//
+// No default. "Where are you?" is a question this cannot guess, and guessing
+// is what it was doing.
+function StateSelect({ value, onChange, label = "State" }) {
+  return (
+    <label className="fld">{label}
+      <select className="fld-state" value={value || ""} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Choose…</option>
+        {US_STATES.map(([code, name]) => (
+          <option key={code} value={code}>{code} — {name}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function inviteName(i) {
   return i.companyName || i.contact || i.label || i.email || i.phone || "Unnamed invite";
 }
@@ -12013,8 +12065,7 @@ function HireablePanel({ accountName, requests = [], onRespond, onReload }) {
           <div className="fld-row">
             <label className="fld">City
               <input value={f.city} onChange={(e) => set("city", e.target.value)} placeholder="Seattle" /></label>
-            <label className="fld">State
-              <input value={f.state} onChange={(e) => set("state", e.target.value)} placeholder="WA" /></label>
+            <StateSelect value={f.state} onChange={(v) => set("state", v)} />
             <label className="fld">ZIP
               <input inputMode="numeric" value={f.zip} onChange={(e) => set("zip", e.target.value)} placeholder="98101" /></label>
           </div>
@@ -12050,7 +12101,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   hostnameStatus, onRefreshHostname, properties = [], roleLabel,
   emergencyCompanyId = null, onSetEmergencyContractor,
   incomingConnects = [], onRespondConnect, onReloadConnects, onSetMyAvatar,
-  added = null, onDismissAdded }) {
+  added = null, onDismissAdded, openPane = null }) {
   // accountKind is already a prop; the user form needs it to know which
   // scoped roles this account has anybody to hand out.
   const tenantSeats = users.filter((u) => u.role === "tenant");
@@ -12062,6 +12113,11 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     .concat(canManage ? [["billing", "Subscription"]] : []);
   const brandingOn = PLANS[plan].branding;
   const [pane, setPane] = useState("profile");
+  // Somewhere else asked for a particular pane -- the set-up checklist
+  // sending somebody to add their licence, say. A counter rather than a
+  // plain value, so asking for the same pane twice opens it twice instead
+  // of the second request doing nothing.
+  useEffect(() => { if (openPane) setPane(openPane.pane); }, [openPane]);
   const [confirmCancel, setConfirmCancel] = useState(false);
 
   // profile form
@@ -12299,7 +12355,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <label className="fld">Street<input value={addr.mailStreet} onChange={(e) => { setAddr({ ...addr, mailStreet: e.target.value }); setASaved(false); }} placeholder="1234 Industrial Way, Suite B" /></label>
               <div className="fld-row">
                 <label className="fld">City<input value={addr.mailCity} onChange={(e) => { setAddr({ ...addr, mailCity: e.target.value }); setASaved(false); }} placeholder="Seattle" /></label>
-                <label className="fld">State<input value={addr.mailState} maxLength={2} onChange={(e) => { setAddr({ ...addr, mailState: e.target.value.toUpperCase().slice(0, 2) }); setASaved(false); }} placeholder="WA" /></label>
+                <StateSelect value={addr.mailState}
+                  onChange={(v) => { setAddr({ ...addr, mailState: v }); setASaved(false); }} />
                 <label className="fld">ZIP<input inputMode="numeric" value={addr.mailZip} onChange={(e) => { setAddr({ ...addr, mailZip: e.target.value }); setASaved(false); }} placeholder="98108" /></label>
               </div>
               <div className="panel-actions">
@@ -12964,7 +13021,8 @@ function UniformAdmin({ orders, subs, onDecide }) {
 // The order is the dependency order: trades decide which documents get asked
 // for, documents decide who can be assigned, so a job created before either
 // is a job with nobody to give it to.
-function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, onInvite, onAddSub, onNewJob, onGoContractors, properties, onAddProperty }) {
+function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, onInvite, onAddSub, onNewJob, onGoContractors, properties, onAddProperty,
+  hireable = false, myCompany = null, onGoCompany }) {
   const key = `subsub.gs.${accountId}`;
   const [hidden, setHidden] = useState(() => {
     try { return localStorage.getItem(key) === "1"; } catch { return false; }
@@ -13006,6 +13064,25 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
       note: "Insurance, bond, contract and W-9. Nobody can be assigned a job until theirs clear.",
       actions: [{ label: "Review documents", onClick: onGoContractors, solid: true }],
     },
+    // Moved off the signup form and to here, on purpose.
+    //
+    // A licence number was required to create an account at all, which cost
+    // signups for nothing -- and in several states there is no state
+    // contractor licence to give, so it was a question a real general
+    // contractor could not answer. Here it buys them something: it is what
+    // makes them hireable through SubSub, and later what makes them eligible
+    // for work passed on by other accounts.
+    //
+    // Only for an account that can be hired. A property manager is never
+    // asked, because it would never do anything for them.
+    ...(hireable ? [{
+      id: "license", done: !!(myCompany && myCompany.license),
+      title: "Add your license number",
+      note: "It is what lets another general contractor find you and send you work, and "
+        + "it is checked against your state's registry. No state license where you are? "
+        + "Leave it — your email and mobile still make you findable.",
+      actions: [{ label: "Add it", onClick: onGoCompany, solid: true }],
+    }] : []),
     {
       id: "job", done: jobs.length > 0,
       title: "Create your first job",
@@ -13604,7 +13681,8 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
 }
 
 function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit",
-  invites = [], connectsOut = [], onOpenInvite, onOpenConnect }) {
+  invites = [], connectsOut = [], onOpenInvite, onOpenConnect,
+  hireable = false, myCompany = null, onGoCompany }) {
   // Which request is being turned down, and why. One at a time: the reason
   // is the point, and a row of open boxes invites none of them being filled.
   const [declining, setDeclining] = useState(null);
@@ -13807,7 +13885,8 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         {runsAccount && <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
           subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
           onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors}
-          properties={properties} onAddProperty={onAddProperty} />}
+          properties={properties} onAddProperty={onAddProperty}
+          hireable={hireable} myCompany={myCompany} onGoCompany={onGoCompany} />}
       </div>
 
       {/* An owner gets their own row. Reusing the account's -- unassigned
@@ -17562,7 +17641,7 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
       </div>
       <div className="fld-row">
         <label className="fld">City<input value={f.city} onChange={(e) => set("city", e.target.value)} placeholder="Seattle" /></label>
-        <label className="fld">State<input value={f.state} onChange={(e) => set("state", e.target.value.toUpperCase().slice(0, 2))} placeholder="WA" maxLength={2} /></label>
+        <StateSelect value={f.state} onChange={(v) => set("state", v)} />
         <label className="fld">ZIP<input inputMode="numeric" value={f.zip2} onChange={(e) => set("zip2", e.target.value)} placeholder="98101" /></label>
       </div>
       <div className="fld-row">
@@ -17604,7 +17683,7 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
       </div>
       <div className="fld-row">
         <label className="fld">City<input value={f.mailCity} onChange={(e) => set("mailCity", e.target.value)} placeholder="Seattle" /></label>
-        <label className="fld">State<input value={f.mailState} maxLength={2} onChange={(e) => set("mailState", e.target.value.toUpperCase().slice(0, 2))} placeholder="WA" /></label>
+        <StateSelect value={f.mailState} onChange={(v) => set("mailState", v)} />
         <label className="fld">ZIP<input inputMode="numeric" value={f.mailZip} onChange={(e) => set("mailZip", e.target.value)} placeholder="98108" /></label>
       </div>
       </>)}
@@ -20172,6 +20251,17 @@ p.fld-note{margin:6px 0 0}
 
 /* Amber rather than red: somebody who has not set a password yet is a thing
    to finish, not a thing that has gone wrong. */
+/* Where you are, chosen rather than typed. Sized like the text inputs beside
+   it so a city/state/ZIP row does not step down in the middle. */
+.fld-state{width:100%;font:inherit;font-size:14px;padding:10px 11px;border-radius:9px;
+  border:1px solid var(--line);background:var(--card);color:var(--ink);
+  appearance:none;-webkit-appearance:none;cursor:pointer;
+  background-image:linear-gradient(45deg,transparent 50%,var(--ink-soft) 50%),
+                   linear-gradient(135deg,var(--ink-soft) 50%,transparent 50%);
+  background-position:calc(100% - 17px) 50%,calc(100% - 12px) 50%;
+  background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:32px}
+.fld-state:focus{outline:2px solid var(--brand);outline-offset:-1px;border-color:var(--brand)}
+
 /* A face in the circle. object-fit so a portrait and a landscape both fill
    it rather than one of them being squashed into a square. */
 .user-avatar{overflow:hidden}
