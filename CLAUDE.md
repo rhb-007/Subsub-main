@@ -93,11 +93,34 @@ refactor.
   block it — it raises an urgent request for a replacement.
 
 - **Completion is two-party and append-only.** The subcontractor marks work
-  reached with evidence; an admin or project manager verifies it. Neither
+  reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because
   payment releases will depend on it and "who said this was done, and what
   did they show?" has to be answerable months later. Photos are nudged, never
   required.
+
+- **Money is whole cents and every cut is cumulative.** `app/shared/money.js`
+  is the arithmetic; nothing computes a percentage of money anywhere else. A
+  rate rounded per release drifts — 5% of three $333.33 milestones is not 5%
+  of $1,000 — so each cut is *what should have been taken by now, minus what
+  was taken before*. Basis points, never floats, never a stored figure that
+  could be derived from two others.
+
+- **The ledger is written for a processor that does not exist yet.**
+  `wo_releases.method` and `.reference` are the seam: today a cheque number
+  typed in, later a transfer id, with nothing else changing shape. The fee
+  rate is stamped onto each release at the moment it is made, so changing the
+  rate next year cannot rewrite what was charged last year — it is zero until
+  payment processing ships, which is the point of having the column from the
+  first row.
+
+- **Why a GC would route payment through SubSub**, for anything customer-
+  facing: the transfer is not the product. Releasing and signing the lien
+  waiver as one event, refusing to pay a subcontractor whose insurance
+  lapsed, paying against verified work rather than a text message, retainage
+  that does not leak, and 1099s that are generated rather than reconstructed.
+  The bank moves money for free; what is being bought is the reason to let
+  it go.
 
 - **Overflow is broadcast, not browse.** When an account has nobody on its
   own roster for an urgent job, it may broadcast to opted-in companies —

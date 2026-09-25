@@ -1,0 +1,14 @@
+-- Holding a percentage back until the end.
+--
+-- Standard in construction and the obvious sibling to paying by milestone:
+-- five or ten per cent of each release is held and paid once the whole work
+-- order is verified. It is here before it is used, because adding a column
+-- that changes how money is divided AFTER there are releases to recompute is
+-- the kind of migration nobody enjoys.
+--
+-- Basis points, so 500 is 5%. Never a float: see shared/money.js.
+--
+-- Its own file because ALTER TABLE ADD COLUMN is the one statement here that
+-- cannot be run twice, and D1 stops a script at the first failure without
+-- undoing what ran before it.
+ALTER TABLE work_orders ADD COLUMN retainage_bps INTEGER NOT NULL DEFAULT 0;

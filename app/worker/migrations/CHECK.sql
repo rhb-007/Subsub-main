@@ -40,4 +40,8 @@ SELECT
     WHERE kind = 'general_contractor' AND company_id IS NULL)                               AS m031_gcs_without,
   (SELECT COUNT(*) FROM accounts
     WHERE kind <> 'general_contractor' AND company_id IS NOT NULL)                          AS m031_others_with,
-  (SELECT COUNT(*) FROM pragma_table_info('users')       WHERE name='avatar_key')           AS m032_avatar;
+  (SELECT COUNT(*) FROM pragma_table_info('users')       WHERE name='avatar_key')           AS m032_avatar,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_milestones')          AS m033_milestones,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_events')              AS m033_events,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_releases')            AS m033_releases,
+  (SELECT COUNT(*) FROM pragma_table_info('work_orders') WHERE name='retainage_bps')        AS m034_retainage;
