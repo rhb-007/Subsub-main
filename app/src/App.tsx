@@ -43,6 +43,10 @@ import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/s
 // One list of states, shared with the Worker, so the two cannot disagree
 // about what a state is.
 import { US_STATES } from "../shared/states.js";
+// The money arithmetic and the waiver roll-up, shared with the Worker so a
+// figure on screen and a figure written to the ledger cannot disagree.
+import { splitEven, releaseAmounts } from "../shared/money.js";
+import { chainReasonText } from "../shared/waivers.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -5038,7 +5042,19 @@ export default function SubSub() {
           a={(jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a}
           canUpload={role !== "contractor"} brand={brand}
           onUploadSigned={(file) => uploadSignedWO(viewWO.job.id, viewWO.trade, file)}
-          onClose={() => setViewWO(null)} /></Modal>}
+          onClose={() => setViewWO(null)} />
+        {/* Below the document, not inside it: the work order is a thing you
+            print and this is a thing you work. Both sides open the same
+            panel and are offered different buttons, which is the two-party
+            rule shown rather than explained. */}
+        {(() => {
+          const a = (jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a;
+          if (!a?.id) return null;
+          return <WorkOrderProgress woId={a.id} canManage={canComplete}
+            isMine={role === "contractor" && a.subId === membership.companyId}
+            onChanged={() => hydrateAccount(account.id, currentUserId, { quiet: true })} />;
+        })()}
+      </Modal>}
       {notifying && <Modal onClose={() => setNotifying(null)} wide>
         <NotifyForm data={notifying} brand={brand} onClose={() => setNotifying(null)} /></Modal>}
       {coForm && <Modal onClose={() => setCoForm(null)}>
@@ -11882,6 +11898,328 @@ function AvatarPicker({ user, onSave }) {
         {err && <span className="fld-note err" role="alert">{err}</span>}
       </div>
     </div>
+  );
+}
+
+// What a work order is broken into, who said what about it, and what is owed.
+//
+// Both sides open the same panel and see different buttons, which is the
+// two-party rule made visible rather than explained: the subcontractor marks
+// a part reached, the hiring account verifies it, and neither sees the
+// other's action offered to them. Somebody holding both seats -- an account
+// that is also a subcontractor, ordinary since 031 -- is refused by the
+// server, and this says so rather than pretending the button was never
+// there.
+function WorkOrderProgress({ woId, canManage, isMine, onChanged }) {
+  const [plan, setPlan] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [rows, setRows] = useState([]);
+  const [reaching, setReaching] = useState(null);   // milestone id
+  const [note, setNote] = useState("");
+  const [settling, setSettling] = useState(null);   // release
+
+  const load = useCallback(async () => {
+    setErr("");
+    try { setPlan(await api.woPlan(woId)); }
+    catch (e) {
+      console.error("[plan] load failed:", e);
+      setErr(e?.body?.error === "migration_needed"
+        ? `The database isn't migrated yet — run ${e.body.migration || "033_job_ledger"}.sql and reload.`
+        : "Could not load the progress on this work order.");
+    }
+  }, [woId]);
+  useEffect(() => { load(); }, [load]);
+
+  const after = async (fn, what) => {
+    setBusy(what); setErr("");
+    try { await fn(); await load(); onChanged?.(); }
+    catch (e) {
+      console.error(`[plan] ${what} failed:`, e);
+      setErr(planErrorText(e));
+    } finally { setBusy(""); }
+  };
+
+  if (err && !plan) return <p className="cov-hint" role="alert">{err}</p>;
+  if (!plan) return <p className="cov-hint">Loading…</p>;
+
+  const value = plan.valueCents;
+  const done = plan.milestones.filter((m) => m.status === "verified");
+  const relFor = (mid) => plan.releases.find((r) => r.milestoneId === mid);
+  const held = plan.releases.reduce((n, r) => n + r.retainageCents, 0);
+
+  // Editing the plan. Split evenly by default, because the commonest plan is
+  // "three equal draws" and typing 33333, 33333, 33334 to make it add up is
+  // a thing no one should have to do.
+  const startEdit = () => {
+    setRows(plan.milestones.length
+      ? plan.milestones.map((m) => ({ label: m.label, amountCents: m.amountCents }))
+      : [{ label: "All of it", amountCents: value || 0 }]);
+    setEditing(true);
+  };
+  const evenly = (n) => setRows(splitEven(value || 0, n).map((amountCents, i) => ({
+    label: rows[i]?.label || `Draw ${i + 1}`, amountCents,
+  })));
+  const planned = rows.reduce((n, r) => n + (Number(r.amountCents) || 0), 0);
+  const balances = value == null || planned === value;
+
+  return (
+    <section className="wop">
+      <div className="wop-head">
+        <h4>Progress and payment</h4>
+        {value != null && (
+          <span className="wop-total">
+            {formatMoney(value)} · {done.length} of {plan.milestones.length || "—"} verified
+            {held ? <> · {formatMoney(held)} held back</> : null}
+          </span>
+        )}
+      </div>
+
+      {plan.scopeKind === "labor_only" && (
+        <p className="cov-hint"><Check size={12} /> Labour only — you supplied the materials, so
+          there is no supplier chain to clear on this one.</p>
+      )}
+
+      {!plan.milestones.length && !editing && (
+        <p className="cov-hint">
+          {canManage
+            ? "Nothing is broken out yet. Split this into draws and each one can be verified and released on its own."
+            : "Nothing is broken out on this work order yet."}
+        </p>
+      )}
+
+      {editing ? (
+        <div className="wop-edit">
+          <div className="wop-quick">
+            <span className="fld-note">Split evenly into</span>
+            {[1, 2, 3, 4].map((n) => (
+              <button key={n} type="button" className="pick" onClick={() => evenly(n)}>{n}</button>
+            ))}
+          </div>
+          {rows.map((r, i) => (
+            <div key={i} className="wop-row-edit">
+              <input value={r.label} maxLength={120} placeholder={`Draw ${i + 1}`}
+                onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} />
+              <MoneyInput cents={r.amountCents}
+                onChange={(amountCents) => setRows(rows.map((x, j) => j === i ? { ...x, amountCents } : x))} />
+              <button type="button" className="pick" aria-label="Remove"
+                onClick={() => setRows(rows.filter((_, j) => j !== i))}><X size={13} /></button>
+            </div>
+          ))}
+          <div className="wop-quick">
+            <button type="button" className="pick"
+              onClick={() => setRows([...rows, { label: `Draw ${rows.length + 1}`, amountCents: 0 }])}>
+              <Plus size={13} /> Add a draw
+            </button>
+            {/* The invariant, said before it is refused rather than after. */}
+            <span className={balances ? "fld-note" : "fld-err"}>
+              {balances ? "Adds up." : `${formatMoney(planned)} of ${formatMoney(value)} — ${
+                planned < value ? `${formatMoney(value - planned)} short` : `${formatMoney(planned - value)} over`}`}
+            </span>
+          </div>
+          <div className="wop-acts">
+            <button className="btn-solid sm" disabled={!balances || !rows.length || !!busy}
+              onClick={() => after(async () => { await api.setWoPlan(woId, rows); setEditing(false); }, "plan")}>
+              <Check size={13} /> {busy === "plan" ? "Saving…" : "Save the plan"}
+            </button>
+            <button className="pick" onClick={() => setEditing(false)}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {plan.milestones.map((m) => {
+            const rel = relFor(m.id);
+            return (
+              <div key={m.id} className={`wop-row is-${m.status}`}>
+                <span className="wop-seq">{m.seq}</span>
+                <div className="wop-main">
+                  <span className="wop-label">{m.label}</span>
+                  <span className="wop-meta">
+                    {formatMoney(m.amountCents)}
+                    {m.status === "verified" ? <> · verified {relTime(m.verifiedAt)}</>
+                      : m.status === "reached" ? <> · marked done {relTime(m.reachedAt)}</>
+                      : m.status === "rejected" ? <> · sent back</>
+                      : <> · not started</>}
+                    {rel ? <> · {rel.status === "paid"
+                      ? `paid ${relTime(rel.settledAt)}`
+                      : `${formatMoney(rel.netCents)} due`}</> : null}
+                  </span>
+                  {m.note && <span className="wop-note">“{m.note}”</span>}
+                </div>
+                <div className="wop-row-acts">
+                  {/* The subcontractor's half. */}
+                  {isMine && m.status !== "verified" && (
+                    reaching === m.id ? (
+                      <>
+                        <input className="wop-quick-note" value={note} maxLength={2000}
+                          placeholder="What was done (optional)"
+                          onChange={(e) => setNote(e.target.value)} />
+                        <button className="btn-solid sm" disabled={!!busy}
+                          onClick={() => after(async () => {
+                            await api.reachMilestone(m.id, { note: note.trim() || undefined });
+                            setReaching(null); setNote("");
+                          }, "reach")}>
+                          {busy === "reach" ? "Sending…" : "Mark it done"}
+                        </button>
+                        <button className="pick" onClick={() => { setReaching(null); setNote(""); }}>Cancel</button>
+                      </>
+                    ) : (
+                      <button className="btn-solid sm" onClick={() => setReaching(m.id)}>
+                        {m.status === "reached" ? "Update" : "Mark it done"}
+                      </button>
+                    )
+                  )}
+                  {/* And the hiring account's. Only offered once it has been
+                      marked: verifying something nobody claimed is the thing
+                      the two-party rule exists to stop. */}
+                  {canManage && m.status === "reached" && (
+                    <>
+                      <button className="btn-solid sm" disabled={!!busy}
+                        onClick={() => after(() => api.verifyMilestone(m.id), "verify")}>
+                        <Check size={13} /> {busy === "verify" ? "Verifying…" : "Verify"}
+                      </button>
+                      <button className="pick" disabled={!!busy}
+                        onClick={() => {
+                          const why = window.prompt("Send it back — what needs doing?");
+                          if (why && why.trim()) after(() => api.rejectMilestone(m.id, why.trim()), "reject");
+                        }}>Send back</button>
+                    </>
+                  )}
+                  {canManage && rel && rel.status === "due" && (
+                    <button className="pick" onClick={() => setSettling(rel)}>Record payment</button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {canManage && !editing && (
+            <div className="wop-acts">
+              <button className="pick" onClick={startEdit}>
+                {plan.milestones.length ? "Change the plan" : "Split into draws"}
+              </button>
+              {!!done.length && (
+                <span className="fld-note">The plan is fixed once something is verified.</span>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {settling && (
+        <SettleRelease release={settling} onClose={() => setSettling(null)}
+          onDone={() => { setSettling(null); load(); onChanged?.(); }} />
+      )}
+      {err && <p className="fld-err" role="alert">{err}</p>}
+    </section>
+  );
+}
+
+// What went wrong, in words somebody can act on.
+function planErrorText(e) {
+  const code = e?.body?.error;
+  if (code === "does_not_cover") {
+    return `The draws come to ${formatMoney(e.body.sum)} and the work order is ${formatMoney(e.body.want)}.`;
+  }
+  if (code === "already_verified") return "Something here has already been verified, so the plan is fixed. Raise a change order instead.";
+  if (code === "not_reached") return "Nobody has marked that done yet.";
+  if (code === "same_person") return "You marked this one done, so somebody else has to verify it.";
+  if (code === "not_yours_to_mark") return "Only the contractor doing the work can mark it done.";
+  if (code === "already_released") return "That one has already been released.";
+  if (code === "migration_needed") return `The database isn't migrated yet — run ${e.body.migration || "033_job_ledger"}.sql and reload.`;
+  return "That didn't go through. Try again.";
+}
+
+// Recording that money went out, and the waiver standing in the way.
+function SettleRelease({ release, onClose, onDone }) {
+  const [chain, setChain] = useState(null);
+  const [method, setMethod] = useState("check");
+  const [reference, setReference] = useState("");
+  const [why, setWhy] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    api.releaseWaiverState(release.id)
+      .then((r) => { if (live) setChain(r); })
+      .catch((e) => { console.error("[waiver] state failed:", e); if (live) setChain({ clear: false, reasons: [] }); });
+    return () => { live = false; };
+  }, [release.id]);
+
+  const blocked = chain && !chain.clear;
+  const settle = async () => {
+    setBusy(true); setErr("");
+    try {
+      await api.settleRelease(release.id, {
+        method, reference: reference.trim() || undefined,
+        override: blocked || undefined, overrideReason: blocked ? why.trim() : undefined,
+      });
+      onDone();
+    } catch (e) {
+      console.error("[release] settle failed:", e);
+      setErr(e?.body?.error === "waiver_outstanding" ? "The waiver is still outstanding."
+        : e?.body?.error === "already_paid" ? "That one is already recorded as paid."
+        : "Could not record that. Try again.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="form">
+        <h2>Record payment</h2>
+        <p className="form-sub">
+          {formatMoney(release.netCents)} to go out
+          {release.retainageCents ? <> · {formatMoney(release.retainageCents)} held back</> : null}.
+        </p>
+
+        {!chain ? <p className="cov-hint">Checking the waiver…</p> : chain.clear ? (
+          <p className="cov-hint"><Check size={12} /> Waiver clear
+            {chain.through ? <> through {niceDay(chain.through)}</> : null}
+            {chain.lowerTierTotal
+              ? <> · {chain.lowerTierSigned} of {chain.lowerTierTotal} below them signed</>
+              : chain.laborOnly ? <> · labour only, nobody below them</> : null}
+          </p>
+        ) : (
+          <div className="cx-found" role="status">
+            <span className="cx-found-chip"><AlertTriangle size={12} /> Waiver outstanding</span>
+            <ul className="wop-reasons">
+              {(chain.reasons || []).map((r) => <li key={r}>{chainReasonText(r)}</li>)}
+            </ul>
+            <p className="cx-found-note">
+              You can pay anyway — say why, and it is recorded against this release.
+            </p>
+            <label className="fld">Why you are paying anyway
+              <input value={why} maxLength={500} onChange={(e) => setWhy(e.target.value)}
+                placeholder="On the owner's instruction" />
+            </label>
+          </div>
+        )}
+
+        <div className="fld-row">
+          <label className="fld">How
+            <select className="fld-state" value={method} onChange={(e) => setMethod(e.target.value)}>
+              <option value="check">Check</option>
+              <option value="ach">Bank transfer</option>
+              <option value="cash">Cash</option>
+              <option value="other">Something else</option>
+            </select>
+          </label>
+          <label className="fld">Reference <span className="fld-note">check number, transfer id</span>
+            <input value={reference} maxLength={120} onChange={(e) => setReference(e.target.value)} />
+          </label>
+        </div>
+
+        {err && <p className="fld-err" role="alert">{err}</p>}
+        <div className="form-actions">
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn-solid" disabled={busy || (blocked && !why.trim())} onClick={settle}>
+            <Check size={15} /> {busy ? "Recording…" : blocked ? "Pay anyway" : "Record it"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -20251,6 +20589,44 @@ p.fld-note{margin:6px 0 0}
 
 /* Amber rather than red: somebody who has not set a password yet is a thing
    to finish, not a thing that has gone wrong. */
+/* Progress and payment, under the printed work order.
+   Both sides open this and are offered different buttons; the rows carry
+   their state in a class so a verified draw reads as settled at a glance
+   rather than by reading the words. */
+.wop{border-top:1px solid var(--line);margin-top:18px;padding-top:16px}
+.wop-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.wop-head h4{margin:0;font-size:14px;font-weight:800}
+.wop-total{font-size:12.5px;color:var(--ink-soft);font-weight:600}
+.wop-row{display:flex;align-items:flex-start;gap:11px;padding:11px 0;border-bottom:1px solid var(--line)}
+.wop-row:last-of-type{border-bottom:0}
+.wop-seq{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;
+  font:700 11.5px Inter,sans-serif;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft)}
+.wop-row.is-reached .wop-seq{border-color:var(--brand);color:var(--brand)}
+.wop-row.is-verified .wop-seq{background:var(--brand);border-color:var(--brand);color:#fff}
+.wop-row.is-rejected .wop-seq{border-color:var(--red);color:var(--red)}
+.wop-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px}
+.wop-label{font-size:13.5px;font-weight:700}
+.wop-meta{font-size:11.5px;color:var(--ink-soft)}
+.wop-note{font-size:12px;color:var(--ink-soft);font-style:italic}
+.wop-row-acts{display:flex;align-items:center;gap:7px;flex-wrap:wrap;flex:none}
+.wop-quick-note{font:inherit;font-size:13px;padding:7px 9px;border-radius:8px;
+  border:1px solid var(--line);min-width:160px}
+.wop-acts{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:12px}
+.wop-edit{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.wop-row-edit{display:flex;gap:8px;align-items:center}
+.wop-row-edit input{flex:1 1 auto;min-width:0;font:inherit;font-size:13.5px;padding:9px 10px;
+  border-radius:8px;border:1px solid var(--line)}
+.wop-row-edit input[inputmode=decimal]{flex:0 0 110px;text-align:right}
+.wop-quick{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.wop-reasons{margin:6px 0 0;padding-left:18px;font-size:12.5px;color:var(--ink-soft)}
+.wop-reasons li{margin:2px 0}
+@media (max-width:640px){
+  /* The buttons drop under the row rather than squeezing the label into
+     two characters. */
+  .wop-row{flex-wrap:wrap}
+  .wop-row-acts{width:100%;padding-left:35px}
+}
+
 /* Where you are, chosen rather than typed. Sized like the text inputs beside
    it so a city/state/ZIP row does not step down in the middle. */
 .fld-state{width:100%;font:inherit;font-size:14px;padding:10px 11px;border-radius:9px;

@@ -335,6 +335,26 @@ export const api = {
   // they look you up, and the details that make you findable at all.
   myCompany: () => request("/my-company"),
   saveMyCompany: (patch) => request("/my-company", { method: "PATCH", body: JSON.stringify(patch) }),
+  // Milestones, verification and release. The plan call returns the parts,
+  // the event log and the releases together: a screen that fetches three
+  // renders three different moments.
+  woPlan: (woId) => request(`/work-orders/${needId(woId, "work_order")}/plan`),
+  setWoPlan: (woId, milestones) =>
+    request(`/work-orders/${needId(woId, "work_order")}/plan`,
+      { method: "PUT", body: JSON.stringify({ milestones }) }),
+  setWoScope: (woId, patch) =>
+    request(`/work-orders/${needId(woId, "work_order")}/scope`,
+      { method: "PATCH", body: JSON.stringify(patch) }),
+  reachMilestone: (id, body) =>
+    request(`/milestones/${needId(id, "milestone")}/reach`, { method: "POST", body: JSON.stringify(body || {}) }),
+  verifyMilestone: (id) =>
+    request(`/milestones/${needId(id, "milestone")}/verify`, { method: "POST", body: "{}" }),
+  rejectMilestone: (id, reason) =>
+    request(`/milestones/${needId(id, "milestone")}/reject`, { method: "POST", body: JSON.stringify({ reason }) }),
+  releaseWaiverState: (id) => request(`/releases/${needId(id, "release")}/waiver-state`),
+  settleRelease: (id, body) =>
+    request(`/releases/${needId(id, "release")}/settle`, { method: "POST", body: JSON.stringify(body || {}) }),
+
   myConnectCode: () => request("/connect/code"),
   rotateConnectCode: () => request("/connect/code/rotate", { method: "POST" }),
   myConnectRequests: () => request("/my-connect-requests"),
