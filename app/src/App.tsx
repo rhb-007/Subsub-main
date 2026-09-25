@@ -4261,6 +4261,9 @@ export default function SubSub() {
 
       {tab === "dashboard" && can("dashboard") && (
         <AdminDashboard visits={visits} subs={subs} jobs={jobs} role={role} me={me} now={now}
+          invites={invites} connectsOut={connectOut || []}
+          onOpenInvite={(i) => setInvitedOpen(i)}
+          onOpenConnect={() => setTab("network")}
           accountId={account.id} trades={account.trades} subLimit={PLANS[plan].limit}
           unitWord={tenantWhere(kindOf(account)) === "office" ? "Suite" : "Unit"}
           onGoAccount={() => setTab("account")}
@@ -4380,7 +4383,7 @@ export default function SubSub() {
               it. There is very little to show about them, so the card shows
               very little: who, where it went, and when. */}
           {invitedMatches.length > 0 && (
-            <section className="invited-strip">
+            <section className="invited-strip is-invited">
               <h4 className="invited-h">
                 <Clock size={13} /> Invited <span className="count">{invitedMatches.length}</span>
                 <span className="invited-sub">waiting for them to finish signing up</span>
@@ -4390,8 +4393,8 @@ export default function SubSub() {
                   <button key={i.id} className="invited-card" onClick={() => setInvitedOpen(i)}>
                     <span className="invited-chip">Invited</span>
                     <b>{inviteName(i)}</b>
-                    <span className="invited-to">{[i.email, i.phone].filter(Boolean).join(" · ")
-                      || "Link for you to hand over"}</span>
+                    <span className="invited-to">{[inviteContact(i), i.email, i.phone]
+                      .filter(Boolean).join(" · ") || "Link for you to hand over"}</span>
                     {/* Sent and merely created are different facts, and one
                         of them means nobody has been asked anything. */}
                     <span className={`invited-when ${i.sentAt ? "" : "unsent"}`}>
@@ -4411,9 +4414,14 @@ export default function SubSub() {
               contractor has to build an account, and one of these already
               has everything and is deciding whether to share it. They sit
               next to each other because from here both mean the same thing
-              -- somebody who is not on the list yet and might be. */}
+              -- somebody who is not on the list yet and might be.
+
+              is-invited / is-asked on top of the shared class: the two look
+              alike on purpose and are two different lists answering two
+              different questions, and nothing in the markup said which was
+              which. */}
           {requestedMatches.length > 0 && (
-            <section className="invited-strip">
+            <section className="invited-strip is-asked">
               <h4 className="invited-h">
                 <Send size={13} /> Asked to connect <span className="count">{requestedMatches.length}</span>
                 <span className="invited-sub">
@@ -10918,8 +10926,21 @@ const SIZES = ["S", "M", "L", "XL", "2XL", "3XL"];
 // What to call somebody nobody has met. In order of how much it was worth
 // typing: the name whoever sent it typed, the company they typed, the label
 // on an older link, then whatever address it went to.
+// The headline on an invited contractor.
+//
+// The company, not the person. You hire Enterprise Roofing; Rodolfo Mendoza
+// is who answers their phone. A list headed by four first names is a list
+// you cannot scan for the roofer, and it does not match the contractor cards
+// beside it, which have led on the company since they were redesigned.
+//
+// The contact is not lost -- it moves to the line underneath, which is where
+// it is on a contractor card too.
 function inviteName(i) {
-  return i.contact || i.companyName || i.label || i.email || i.phone || "Unnamed invite";
+  return i.companyName || i.contact || i.label || i.email || i.phone || "Unnamed invite";
+}
+// And the person, when they are not already the headline.
+function inviteContact(i) {
+  return i.companyName && i.contact ? i.contact : null;
 }
 
 // What a scan lands on. The general contractor has the contractor standing
@@ -13582,7 +13603,8 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
   );
 }
 
-function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit" }) {
+function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit",
+  invites = [], connectsOut = [], onOpenInvite, onOpenConnect }) {
   // Which request is being turned down, and why. One at a time: the reason
   // is the point, and a row of open boxes invites none of them being filled.
   const [declining, setDeclining] = useState(null);
@@ -13606,6 +13628,37 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // week's. The panel above splits the two; so does this.
   const upcoming = jobs.filter((j) => !isClosed(j) && j.date && j.date >= dayKey())
     .sort((a, b) => a.date.localeCompare(b.date));
+  // Everybody who has been asked something and has not answered.
+  //
+  // Four contractors were invited and the dashboard said nothing about any
+  // of them. "Awaiting contractor reply" beside it counts something else
+  // entirely -- trade slots on a job waiting on a yes or no -- so a screen
+  // that looked like it was reporting on this was reporting on work orders
+  // and reading zero.
+  //
+  // Who HAS answered is not a list, it is the absence of one: an invite that
+  // is accepted becomes a contractor and leaves this, and a connect request
+  // that is accepted does the same. So the section is what is still
+  // outstanding, and the heading says so rather than implying a tally of
+  // replies that nobody is keeping.
+  //
+  // Both kinds in one place because the question is the same one -- who am I
+  // waiting on -- even though what was asked differs: an invite asks
+  // somebody to build an account, a connect request asks somebody who
+  // already has one to share it.
+  const waitingOn = useMemo(() => [
+    ...(invites || []).filter((i) => i.status === "open")
+      .map((i) => ({ kind: "invite", id: i.id, row: i,
+        name: inviteName(i), who: inviteContact(i),
+        reach: [i.email, i.phone].filter(Boolean).join(" · "),
+        at: i.sentAt || null, sent: !!i.sentAt })),
+    ...(connectsOut || []).filter((r) => r.status === "pending")
+      .map((r) => ({ kind: "connect", id: r.id, row: r,
+        name: r.company || r.companyName || "A contractor", who: r.contact || null,
+        reach: [r.city, r.state].filter(Boolean).join(", "),
+        at: r.createdAt || null, sent: true })),
+  ].sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))), [invites, connectsOut]);
+
   const nonCompliant = subs.filter((s) => DOC_KINDS.some((k) => !s[k]));
   const toReview = subs.map((s) => ({ sub: s, kinds: pendingReviewDocs(s) })).filter((x) => x.kinds.length);
   const licenseIssues = subs.filter((s) => !licenseOk(s));
@@ -13795,7 +13848,11 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </button>
         <button className="dash-card" onClick={onGoJobs}>
           <span className="dc-num">{pending.length}</span>
-          <span className="dc-lab">Awaiting contractor reply</span>
+          {/* "Awaiting contractor reply" read as "contractors I have asked
+              something and not heard back from", which is the section above
+              and a completely different number. This one counts trade slots
+              on a job with an offer out. Named for what it counts. */}
+          <span className="dc-lab">Job offers awaiting a reply</span>
         </button>
         <button className={`dash-card ${nonCompliant.length ? "warn" : ""}`} onClick={onGoContractors}>
           <span className="dc-num">{nonCompliant.length}</span>
@@ -13883,6 +13940,39 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             );
           })}
           </DashRows>
+        </section>
+      )}
+
+      {/* Who has been asked something and has not answered. Above the job
+          sections: with nothing booked in, this is the only thing on the
+          page that is actually in flight. */}
+      {!isOwner && waitingOn.length > 0 && (
+        <section className="dash-sec">
+          <h3><Clock size={15} /> Waiting on contractors
+            <span className="sec-count">{waitingOn.length}</span></h3>
+          <DashRows id="waitingon">
+          {waitingOn.map((w) => (
+            <div key={`${w.kind}-${w.id}`} className="dash-row">
+              <div className="dash-row-main">
+                <span className="dr-title">{w.name}</span>
+                <span className="dr-meta">
+                  {w.kind === "invite"
+                    ? (w.sent ? `Invited ${relTime(w.at)}` : "Invite not sent — nobody has it yet")
+                    : `Asked to connect ${w.at ? relTime(w.at) : "recently"}`}
+                  {w.who ? ` · ${w.who}` : ""}{w.reach ? ` · ${w.reach}` : ""}
+                </span>
+              </div>
+              <button className="btn-solid dash-row-btn"
+                onClick={() => (w.kind === "invite" ? onOpenInvite : onOpenConnect)?.(w.row)}>
+                <ArrowRight size={13} /> Open
+              </button>
+            </div>
+          ))}
+          </DashRows>
+          <p className="rollup-note">
+            These are the ones who have not answered. Anybody who has is on your
+            Contractors list already, so they drop off here on their own.
+          </p>
         </section>
       )}
 
