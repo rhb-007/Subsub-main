@@ -362,6 +362,8 @@ const TENANT_ALLOWED = [
   // The proposed time for a repair of theirs, and their answer to it.
   [/^\/api\/visits$/, ["GET"]],
   [/^\/api\/visits\/[^/]+\/respond$/, ["POST"]],
+  // And, once the window has been and gone, whether anybody actually came.
+  [/^\/api\/visits\/[^/]+\/outcome$/, ["POST"]],
 ];
 
 app.use("/api/*", async (c, next) => {
@@ -4255,7 +4257,7 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
   const id = uid();
   try {
     await c.env.DB.prepare(
-      `UPDATE visits SET status = 'superseded' WHERE job_id = ? AND status IN ('proposed', 'declined')`
+      `UPDATE visits SET status = 'superseded' WHERE job_id = ? AND status IN ('proposed', 'declined', 'missed', 'happened')`
     ).bind(jobId).run();
     await c.env.DB.prepare(
       `INSERT INTO visits (id, account_id, job_id, proposed_by, date, start_time, end_time, note, status, responded_at)
@@ -4310,6 +4312,50 @@ app.post("/api/visits/:id/respond", async (c) => {
     await logActivity(c.env, auth.accountId, auth.userId, "visit_declined",
       `Can't make the visit for "${v.title}" (${when})${note ? `: ${note}` : ""}`);
   }
+  const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(v.id).first();
+  await touchJob(c.env, v.job_id);
+  return c.json(visitRowToJs(row));
+});
+
+// What happened on the day. A confirmed visit is a promise, and until now
+// nothing ever collected on it: the window passed, nobody wrote anything
+// down, and the tenant's dashboard went on saying "Somebody is coming" about
+// an afternoon two days gone. So once the window has been and gone the person
+// who was waiting in gets asked the only question that settles it.
+//
+// "Nobody came" deliberately does not touch the job. The repair is still
+// needed and still open; what is finished is this particular appointment, and
+// the manager is the one who arranges the next one. Proposing it supersedes
+// this row.
+app.post("/api/visits/:id/outcome", async (c) => {
+  const auth = c.get("auth");
+  if (auth.role !== "tenant") return c.json({ error: "forbidden" }, 403);
+  const b = await c.req.json().catch(() => ({}));
+  if (typeof b.happened !== "boolean") return c.json({ error: "bad_outcome" }, 400);
+  const v = await c.env.DB.prepare(
+    `SELECT v.*, j.requested_by, j.title FROM visits v JOIN jobs j ON j.id = v.job_id
+      WHERE v.id = ? AND v.account_id = ?`).bind(c.req.param("id"), auth.accountId).first();
+  if (!v) return c.json({ error: "not_found" }, 404);
+  if (v.requested_by !== auth.userId) return c.json({ error: "forbidden" }, 403);
+  // Only a visit that was actually agreed, and only after its day. The client
+  // works the window out to the minute in the reader's own timezone; the
+  // check here is the coarser one on purpose, because the server has no idea
+  // which timezone that is and refusing a real answer is the worse failure.
+  if (v.status !== "confirmed") return c.json({ error: "not_open", status: v.status }, 409);
+  if (String(v.date) > new Date().toISOString().slice(0, 10)) {
+    return c.json({ error: "not_yet", date: v.date }, 409);
+  }
+  const note = String(b.note || "").trim().slice(0, 500) || null;
+  const status = b.happened ? "happened" : "missed";
+  await c.env.DB.prepare(
+    `UPDATE visits SET status = ?, tenant_note = ?, responded_at = ? WHERE id = ?`
+  ).bind(status, note, new Date().toISOString(), v.id).run();
+  const when = visitWhen(v);
+  await logActivity(c.env, auth.accountId, auth.userId,
+    b.happened ? "visit_happened" : "visit_missed",
+    b.happened
+      ? `Somebody came for "${v.title}" (${when})${note ? `: ${note}` : ""}`
+      : `Nobody came for "${v.title}" (${when})${note ? `: ${note}` : ""}`);
   const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(v.id).first();
   await touchJob(c.env, v.job_id);
   return c.json(visitRowToJs(row));

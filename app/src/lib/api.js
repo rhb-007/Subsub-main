@@ -322,6 +322,8 @@ export const api = {
   listVisits: () => request("/visits"),
   proposeVisit: (jobId, body) => request(`/jobs/${jobId}/visits`, { method: "POST", body: JSON.stringify(body) }),
   respondVisit: (id, body) => request(`/visits/${id}/respond`, { method: "POST", body: JSON.stringify(body) }),
+  // And, once the window has passed, whether anybody actually turned up.
+  visitOutcome: (id, body) => request(`/visits/${id}/outcome`, { method: "POST", body: JSON.stringify(body) }),
   listServiceCalls: () => request("/service-calls"),
   raiseServiceCall: (call) => request("/service-calls", { method: "POST", body: JSON.stringify(call) }),
   confirmServiceCall: (id, patch) => request(`/service-calls/${id}/confirm`, { method: "POST", body: JSON.stringify(patch || {}) }),

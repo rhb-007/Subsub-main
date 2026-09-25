@@ -1445,6 +1445,17 @@ function visitWhen(v) {
   const win = v.startTime ? ` · ${niceTime(v.startTime)}${v.endTime ? `–${niceTime(v.endTime)}` : ""}` : "";
   return `${niceDay(v.date)}${win}`;
 }
+// Has the agreed window been and gone? Read in the reader's own timezone,
+// which is the one they are standing in when they wonder where the plumber
+// got to. No end time means the whole day: a visit "on Tuesday" is not late
+// until Tuesday is over.
+function visitPassed(v, now = new Date()) {
+  if (!v?.date) return false;
+  const end = v.endTime || v.startTime;
+  const at = end ? new Date(`${v.date}T${end}:00`) : new Date(`${v.date}T23:59:59`);
+  if (isNaN(at)) return false;
+  return at.getTime() < now.getTime();
+}
 function niceWhen(iso) {
   if (!iso) return "";
   const then = new Date(iso);
@@ -2762,6 +2773,14 @@ export default function SubSub() {
     }
     return v;
   };
+  // Afterwards: whether anybody actually turned up. Neither answer moves the
+  // job -- "yes" leaves the manager to close it, "no" leaves them to propose
+  // the next time -- so only the visit changes here.
+  const visitOutcome = async (id, body) => {
+    const v = await api.visitOutcome(id, body);
+    setVisits((vs) => vs.map((x) => x.id === id ? v : x));
+    return v;
+  };
   const confirmServiceCall = (id, patch = {}) => {
     persist("confirmServiceCall", api.confirmServiceCall(id, patch));
     setServiceCalls((cs) => cs.map((c) => c.id !== id ? c : {
@@ -4036,20 +4055,27 @@ export default function SubSub() {
                 const ready = s.bond && s.insurance && s.contract;
                 return (
                   <div key={s.id} className="card" onClick={() => setSelected(s)}>
-                    <div className="card-top">
-                      <div className="cat-row">
-                        {s.categories.map((c) => {
-                          const M = catMeta(c);
-                          return <span key={c} className={`cat-badge cat-${c}`}><M.icon size={12} /> {M.label}</span>;
-                        })}
+                    {/* The same order the detail modal takes: whose card this
+                        is, then what they do. The trades were a row of chips
+                        ABOVE the name, so a screenful of cards read as a wall
+                        of "Roofing / Siding / Gutters" and you had to get to
+                        the second block of each one to learn whose it was. */}
+                    <div className="card-id">
+                      <div className="name-row">
+                        <h3>{s.company}</h3>
+                        <span className="nr-right">
+                          {s.rating > 0 && <Stars value={s.rating} />}
+                          <span className={`avail-dot ${s.available ? "up" : "down"}`} title={s.available ? "Available" : "Not available"} />
+                        </span>
                       </div>
-                      <span className={`avail-dot ${s.available ? "up" : "down"}`} title={s.available ? "Available" : "Not available"} />
+                      <p className="contact">{s.contact} · <Users size={11} /> {crewCount(s)} {crewCount(s) === 1 ? "crew" : "crews"} · {headCount(s)} ppl</p>
                     </div>
-                    <div className="name-row">
-                      <h3>{s.company}</h3>
-                      {s.rating > 0 && <Stars value={s.rating} />}
+                    <div className="cat-row">
+                      {s.categories.map((c) => {
+                        const M = catMeta(c);
+                        return <span key={c} className={`cat-badge cat-${c}`}><M.icon size={12} /> {M.label}</span>;
+                      })}
                     </div>
-                    <p className="contact">{s.contact} · <Users size={11} /> {crewCount(s)} {crewCount(s) === 1 ? "crew" : "crews"} · {headCount(s)} ppl</p>
                     <div className="caps">
                       {s.caps.slice(0, 3).map((c) => <span key={c} className="cap">{c}</span>)}
                       {s.caps.length > 3 && <span className="cap more">+{s.caps.length - 3}</span>}
@@ -4437,7 +4463,7 @@ export default function SubSub() {
       {can("tenant") && tab !== "account" && (
         <TenantPortal me={me} brand={brand} jobs={jobs} properties={accountProperties}
           unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey}
-          visits={visits} onRespondVisit={respondVisit}
+          visits={visits} onRespondVisit={respondVisit} onVisitOutcome={visitOutcome}
           onWithdraw={withdrawReport} onEdit={editReport} onPhotosChanged={changeReportPhotos}
           onReport={(r) => createJob({ ...r, trades: r.trades || [] })} />
       )}
@@ -5649,13 +5675,6 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
           </div>
         </nav>
         <div className="pf-me">
-          {/* Everything on these screens belongs to somebody else and moves
-              without this tab hearing about it. */}
-          <button className="pf-refresh" onClick={onRefresh} disabled={refreshing}
-            title={refreshedAt ? `Last read ${relTime(new Date(refreshedAt).toISOString())}` : "Read it again"}>
-            <RefreshCw size={14} className={refreshing ? "spin" : ""} />
-            <span className="pf-refresh-txt">{refreshing ? "Reading…" : "Refresh"}</span>
-          </button>
           <button className="pf-user" onClick={() => setMenu((m) => !m)} aria-expanded={menu}>
             <span className="user-avatar pf-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
             <span className="pf-user-txt"><b>{me.name}</b><span>{STAFF_ROLE_LABEL[admin.role] || "Standard"}</span></span>
@@ -5681,6 +5700,25 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
       </header>
 
       <main className="pf-main">
+        {/* Everything on these screens belongs to somebody else and moves
+            without this tab hearing about it, so there has to be a way to
+            catch up that is not a browser reload. This used to be a lone
+            icon in the header beside the avatar -- inside .pf-me, which is
+            display:none below 1000px, so on a tablet held upright there was
+            no refresh at all. Over the content it re-reads it survives every
+            width, and it can say the thing the icon never could: when what
+            you are looking at was actually read. */}
+        <div className="pf-fresh">
+          <span className="pf-fresh-when">
+            {refreshing ? "Reading…"
+              : refreshedAt ? `Read ${relTime(new Date(refreshedAt).toISOString())}`
+              : "Not read yet"}
+          </span>
+          <button className="pf-refresh" onClick={onRefresh} disabled={refreshing}>
+            <RefreshCw size={14} className={refreshing ? "spin" : ""} />
+            <span className="pf-refresh-txt">Refresh</span>
+          </button>
+        </div>
         {/* Whatever the last write said went wrong. Above the screen rather
             than beside the button, because by the time it fails the button
             may well have been dismissed with the form it sat in. */}
@@ -8493,7 +8531,16 @@ function tenantStage(job, visit) {
   // A date on the job is not a date with the tenant. Only a visit they have
   // confirmed reads as scheduled; one waiting on them asks them.
   if (visit?.status === "proposed") return { key: "confirm", label: "Confirm a time", tone: "wait" };
-  if (visit?.status === "confirmed") return { key: "scheduled", label: `Scheduled — ${visitWhen(visit)}`, tone: "ok" };
+  // A confirmed visit whose window has passed is not "Scheduled" any more.
+  // It said "Somebody is coming" about an afternoon two days gone, which is
+  // the one sentence on this page that can be flatly untrue.
+  if (visit?.status === "confirmed") {
+    return visitPassed(visit)
+      ? { key: "passed", label: `Was due ${visitWhen(visit)}`, tone: "wait" }
+      : { key: "scheduled", label: `Scheduled — ${visitWhen(visit)}`, tone: "ok" };
+  }
+  if (visit?.status === "missed") return { key: "missed", label: "Nobody came — arranging another time", tone: "wait" };
+  if (visit?.status === "happened") return { key: "visited", label: `Visited ${niceDay(visit.date)}`, tone: "busy" };
   const assigned = Object.values(job.assignments || {});
   const accepted = assigned.filter((a) => a.status === "accepted" || a.auto);
   if (accepted.length) {
@@ -8942,10 +8989,11 @@ function TenantReportModal({
 // above, which is also where correcting and withdrawing now happen. This
 // used to carry both forms inline and could show two of the five things a
 // tenant had actually filled in.
-function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRespondVisit, onOpen }) {
+function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRespondVisit, onVisitOutcome, onOpen }) {
   const photos = job.photos || [];
+  const asks = stage.key === "confirm" || stage.key === "passed";
   return (
-    <div className={`tn-row ${stage.key === "confirm" ? "needs-you" : ""} ${stage.key === "withdrawn" ? "is-off" : ""}`}>
+    <div className={`tn-row ${asks ? "needs-you" : ""} ${stage.key === "withdrawn" ? "is-off" : ""}`}>
       <div className="tn-row-main">
         <button type="button" className="tn-row-open" onClick={onOpen}>
           <span className="tn-row-title">{job.title}</span>
@@ -8956,6 +9004,9 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
         </button>
         {stage.key === "confirm" && (
           <TenantVisitAsk visit={visit} brandName={brandName} onRespond={onRespondVisit} />
+        )}
+        {stage.key === "passed" && onVisitOutcome && (
+          <TenantVisitOutcome visit={visit} brandName={brandName} onSay={onVisitOutcome} />
         )}
         <div className="tn-row-actions">
           <button className="tn-link" onClick={onOpen}>
@@ -9011,11 +9062,62 @@ function TenantVisitAsk({ visit, brandName, onRespond }) {
   );
 }
 
+// And the question afterwards. Nothing in the system knew whether a visit
+// had actually happened: the window passed and the row went on reading
+// "Scheduled" until somebody closed the job, which could be weeks. The one
+// person who knows for certain is the one who was waiting in, so they are
+// asked -- once, on the row, in two words.
+//
+// "No" does not withdraw or reopen anything. The report was always open;
+// what is finished is the appointment.
+function TenantVisitOutcome({ visit, brandName, onSay }) {
+  const [saying, setSaying] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const say = async (happened) => {
+    setBusy(happened ? "yes" : "no"); setErr("");
+    try { await onSay(visit.id, { happened, note: note.trim() }); }
+    catch (e) {
+      console.error("[visit] outcome failed:", e);
+      setErr("That didn't go through. Try again in a moment.");
+    } finally { setBusy(""); }
+  };
+  return (
+    <div className="tn-visit tn-after">
+      <div className="tn-visit-when"><Clock size={15} /> This visit was booked for <b>{visitWhen(visit)}</b></div>
+      <p className="tn-visit-q">That time has passed. Did somebody come?</p>
+      {saying ? (
+        <>
+          <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
+            placeholder={`Anything ${brandName} should know? e.g. I waited in all morning`} />
+          <div className="tn-visit-actions">
+            <button className="btn-ghost" onClick={() => setSaying(false)} disabled={!!busy}>Back</button>
+            <button className="btn-solid" onClick={() => say(false)} disabled={!!busy}>
+              {busy === "no" ? "Sending…" : "Send — nobody came"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="tn-visit-actions">
+          <button className="btn-ghost" onClick={() => setSaying(true)} disabled={!!busy}>No, nobody came</button>
+          <button className="btn-solid" onClick={() => say(true)} disabled={!!busy}>
+            <Check size={15} /> {busy === "yes" ? "Saving…" : "Yes, they came"}
+          </button>
+        </div>
+      )}
+      {err && <p className="billing-err" role="alert">{err}</p>}
+    </div>
+  );
+}
+
 // On the manager's side of the same thing: where the visit stands, and the
 // form to propose one (or the next one).
 function VisitBlock({ job, visit, who, onPropose }) {
   const [f, setF] = useState({ date: job.date || "", startTime: "09:00", endTime: "11:00", note: "" });
-  const [open, setOpen] = useState(!visit || visit.status === "declined");
+  // Open by default whenever there is no live time to wait on: nothing
+  // proposed, a time refused, or one that came and went with nobody there.
+  const [open, setOpen] = useState(!visit || visit.status === "declined" || visit.status === "missed");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const name = who?.name || "the tenant";
@@ -9038,7 +9140,18 @@ function VisitBlock({ job, visit, who, onPropose }) {
         <p className="visit-state wait"><Clock size={14} /> Proposed <b>{visitWhen(visit)}</b> — waiting on {name} to confirm.</p>
       )}
       {visit?.status === "confirmed" && (
-        <p className="visit-state ok"><CheckCircle2 size={14} /> {name} confirmed <b>{visitWhen(visit)}</b>.</p>
+        visitPassed(visit)
+          ? <p className="visit-state wait"><Clock size={14} /> <b>{visitWhen(visit)}</b> has been and gone. {name} hasn't said yet whether anybody came.</p>
+          : <p className="visit-state ok"><CheckCircle2 size={14} /> {name} confirmed <b>{visitWhen(visit)}</b>.</p>
+      )}
+      {/* The two answers to that question. "Nobody came" is the one that
+          needs something doing, so it reads as a problem and springs the
+          propose form open above. */}
+      {visit?.status === "missed" && (
+        <p className="visit-state bad"><AlertTriangle size={14} /> Nobody came for <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."} {name} is still waiting.</p>
+      )}
+      {visit?.status === "happened" && (
+        <p className="visit-state ok"><CheckCircle2 size={14} /> {name} says somebody came on <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."}</p>
       )}
       {visit?.status === "declined" && (
         <p className="visit-state bad"><AlertTriangle size={14} /> {name} can't make <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."} Propose another.</p>
@@ -9325,7 +9438,7 @@ function TenantSection({ id, title, count, defaultOpen = true, children }) {
   );
 }
 
-function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onWithdraw, onEdit, onPhotosChanged }) {
+function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onVisitOutcome, onWithdraw, onEdit, onPhotosChanged }) {
   const visitOf = (jobId) => visits.find((v) => v.jobId === jobId) || null;
   // Closed-out reports -- done, or taken back -- keep out of the way of the
   // live ones but stay reachable: "did they ever fix the fan" is a question
@@ -9530,14 +9643,20 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         // coming". Buried among five reports that all say "reported Sep 21"
         // it takes finding; at the top it is the answer.
         const live = mine.filter((j) => !isPast(j));
-        const scheduled = live
-          .filter((j) => visitOf(j.id)?.status === "confirmed")
-          .sort((a, b) => {
-            const at = visitOf(a.id), bt = visitOf(b.id);
-            return `${at.date} ${at.startTime || ""}`.localeCompare(`${bt.date} ${bt.startTime || ""}`);
-          });
-        const scheduledIds = new Set(scheduled.map((j) => j.id));
-        const current = live.filter((j) => !scheduledIds.has(j.id));
+        const byWhen = (a, b) => {
+          const at = visitOf(a.id), bt = visitOf(b.id);
+          return `${at.date} ${at.startTime || ""}`.localeCompare(`${bt.date} ${bt.startTime || ""}`);
+        };
+        const agreed = live.filter((j) => visitOf(j.id)?.status === "confirmed");
+        // A booked time that has been and gone is not "Somebody is coming".
+        // It went on saying that about an afternoon two days past, which is
+        // the one line here that can be read and be simply wrong. It gets its
+        // own group, above the rest, because it is now the thing asking
+        // something of the person reading.
+        const overdue = agreed.filter((j) => visitPassed(visitOf(j.id))).sort(byWhen);
+        const scheduled = agreed.filter((j) => !visitPassed(visitOf(j.id))).sort(byWhen);
+        const bookedIds = new Set(agreed.map((j) => j.id));
+        const current = live.filter((j) => !bookedIds.has(j.id));
         const past = mine.filter(isPast);
         const row = (j) => {
           const v = visitOf(j.id);
@@ -9556,7 +9675,8 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
                 j.withdrawnAt ? `withdrawn${j.withdrawnNote ? ` — “${j.withdrawnNote}”` : ""}` : null,
                 j.declinedAt ? `not approved${j.declinedNote ? ` — “${j.declinedNote}”` : ""}` : null,
               ].filter(Boolean).join(" · ")}
-              onRespondVisit={onRespondVisit} onOpen={() => setOpenId(j.id)} />
+              onRespondVisit={onRespondVisit} onVisitOutcome={onVisitOutcome}
+              onOpen={() => setOpenId(j.id)} />
           );
         };
         return (
@@ -9572,18 +9692,23 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
               <>
                 {/* Soonest first, because the next one is the one being
                     asked about. */}
+                {overdue.length > 0 && (
+                  <TenantSection id="overdue" title="Did they come?" count={overdue.length}>
+                    <div className="tn-list">{overdue.map(row)}</div>
+                  </TenantSection>
+                )}
                 {scheduled.length > 0 && (
                   <TenantSection id="scheduled" title="Somebody is coming" count={scheduled.length}>
                     <div className="tn-list">{scheduled.map(row)}</div>
                   </TenantSection>
                 )}
                 <TenantSection id="open"
-                  title={scheduled.length ? "Everything else you've reported" : "What you've reported"}
+                  title={agreed.length ? "Everything else you've reported" : "What you've reported"}
                   count={current.length}>
                   {current.length === 0 ? (
                     <div className="dash-empty">
                       <ClipboardList size={24} />
-                      <p>{scheduled.length
+                      <p>{agreed.length
                         ? "Nothing else open — the rest is booked in above."
                         : "Nothing open right now."}</p>
                     </div>
@@ -9718,7 +9843,10 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
             : asOwner
             ? "No buildings have been shared with you. Whoever manages them can grant access."
             : "No buildings have been assigned to you. Whoever owns them can grant access."}</p>
-          {canManage && <button className="btn-solid" onClick={() => setForm({})}>Add a property</button>}
+          {/* "New property" is already in the header, a couple of inches
+              above this and on screen whether or not the list is empty.
+              Two buttons doing one thing, one of them only sometimes, is
+              two things to read before deciding there is only one. */}
         </div>
       ) : (
         <div className="prop-grid">
@@ -16171,7 +16299,14 @@ body{background:var(--paper)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;box-shadow:var(--shadow);transition:border-color .15s,transform .15s}
 .card:hover{border-color:var(--brand);transform:translateY(-2px)}
-.card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px}
+/* Identity first on the card, matching the detail modal. The divider
+   is what the modal gets from its panel background: a line between
+   whose card this is and what they are qualified for. */
+.card-id{padding-bottom:9px;margin-bottom:9px;border-bottom:1px solid var(--line)}
+.card-id .contact{margin:3px 0 0}
+.nr-right{display:flex;align-items:center;gap:8px;flex:none}
+.nr-right .avail-dot{margin-top:0}
+.card > .cat-row{margin-bottom:11px}
 .cat-row{display:flex;flex-wrap:wrap;gap:5px}
 .cat-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;background:#eef1ee;color:var(--brand-dk)}
 .cat-roofing{background:#eaf3ee;color:#1f6b4a}
@@ -16187,7 +16322,7 @@ body{background:var(--paper)}
 .avail-dot.down{background:#c05a3f;box-shadow:0 0 0 3px #f2ddd5}
 .name-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .name-row.big{margin:8px 0 6px}
-.name-row h3{margin:0;font-size:16px;font-weight:700;letter-spacing:-.01em}
+.name-row h3{margin:0;font-size:16px;font-weight:700;letter-spacing:-.01em;flex:1;min-width:0}
 .name-row h2{margin:0;font-size:22px;letter-spacing:-.02em}
 .stars{font-size:12.5px;font-weight:700;color:var(--amber);display:inline-flex;align-items:center;gap:3px;flex:none}
 .contact{margin:2px 0 11px;font-size:13px;color:var(--ink-soft);display:flex;align-items:center;gap:4px;flex-wrap:wrap}
@@ -16248,7 +16383,11 @@ body{background:var(--paper)}
 .lg.up{background:#3a9b63}.lg.down{background:#c05a3f}.lg.booked{background:#2b5c85}
 .cal-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:13px;padding:4px;box-shadow:var(--shadow)}
 .cal-grid{display:grid;grid-template-columns:170px repeat(14,minmax(42px,1fr));gap:3px;min-width:760px}
-.cal-corner{font-size:11.5px;font-weight:700;color:var(--ink-soft);padding:8px;display:flex;align-items:center}
+/* Stacked, not side by side. The note under it is display:block and sized
+   to sit on its own line, but a row flex laid the two out as neighbours and
+   ate the space between them: "Contractorfree crews". */
+.cal-corner{font-size:11.5px;font-weight:700;color:var(--ink-soft);padding:8px;
+  display:flex;flex-direction:column;justify-content:center;align-items:flex-start;gap:1px}
 .cal-dayhead{display:flex;flex-direction:column;align-items:center;padding:6px 2px;font-size:11px}
 .cal-dayhead .dow{color:var(--ink-soft)}
 .cal-dayhead .dom{font-weight:700;font-size:13px}
@@ -17763,6 +17902,10 @@ p.fld-note{margin:6px 0 0}
 .tn-visit-q{margin:8px 0 10px;font-size:13.5px}
 .tn-visit textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;font-size:14px;margin-bottom:10px}
 .tn-visit-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+/* The question asked after the window has passed rather than before it.
+   Same box, marked as the thing that is overdue rather than the thing that
+   is booked. */
+.tn-after{border-color:var(--gold-dk);background:#fdf6e9}
 /* and on the manager's job */
 .visit-block{margin-top:14px}
 .visit-state{display:flex;align-items:center;gap:8px;margin:6px 0 10px;font-size:13.5px;color:var(--ink-soft)}
@@ -18519,15 +18662,30 @@ p.fld-note{margin:6px 0 0}
   border-radius:8px;font:600 13.5px Inter,sans-serif;color:#12211c;cursor:pointer;text-align:left}
 .pf-menu > button svg{color:#1f6b4a;flex:none}
 .pf-menu > button:hover{background:#f2f8f4;color:#1f6b4a}
-.pf-menu > button/* Read it again. The console is a window onto other people's data, none of
+/* Read it again. The console is a window onto other people's data, none of
    which changes in this tab, so it needs a way to catch up that is not a
-   browser reload. */
-.pf-refresh{display:inline-flex;align-items:center;gap:6px;background:none;
-  border:1px solid var(--line);border-radius:9px;padding:7px 11px;cursor:pointer;
+   browser reload.
+
+   The base rule below used to carry a stray ".pf-menu > button" in front of
+   this comment. A CSS comment counts as whitespace, so the two selectors
+   became one descendant selector and none of the styling ever reached the
+   button. Worth remembering while writing a comment in here at all: this
+   block is a JS template literal, so a backslash is an escape and a comment
+   that tries to quote a comment terminator emits a real one, ending this
+   comment early and feeding the rest of the prose to the CSS parser -- which
+   is how the rule under it disappears.
+
+   The label stays at every width now. It is not in the header any more, so
+   it is not fighting a user chip for room, and an icon with no word next to
+   it was the other half of "I cannot find the refresh". */
+.pf-fresh{display:flex;align-items:center;justify-content:flex-end;gap:11px;
+  flex-wrap:wrap;margin:0 0 14px}
+.pf-fresh-when{font-size:12px;font-weight:600;color:var(--ink-soft)}
+.pf-refresh{display:inline-flex;align-items:center;gap:6px;background:var(--card);
+  border:1px solid var(--line);border-radius:9px;padding:7px 12px;cursor:pointer;
   font:600 12.5px Inter,sans-serif;color:var(--ink-soft)}
-.pf-refresh:hover:not(:disabled){color:var(--ink);border-color:var(--ink-soft)}
+.pf-refresh:hover:not(:disabled){color:var(--brand);border-color:var(--brand)}
 .pf-refresh:disabled{opacity:.6;cursor:default}
-@media (max-width:640px){.pf-refresh-txt{display:none}}
 @keyframes pf-spin{to{transform:rotate(360deg)}}
 .spin{animation:pf-spin 1s linear infinite}
 @media (prefers-reduced-motion:reduce){.spin{animation:none}}

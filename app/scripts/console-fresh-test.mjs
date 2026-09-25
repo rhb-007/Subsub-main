@@ -122,6 +122,76 @@ try {
   const stale = await companiesText();
   ck("which is exactly the complaint: it is not on screen", !stale.includes(LATE));
 
+  console.log("\n-- and it can be found --");
+  {
+    // It used to live in .pf-me, beside the avatar in the dark header --
+    // which is display:none below 1000px, so on a tablet held upright there
+    // was no refresh on the screen at all. It is over the content it
+    // re-reads now, which survives every width.
+    const where = await page.evaluate(() => {
+      const b = document.querySelector(".pf-refresh");
+      if (!b) return null;
+      const r = b.getBoundingClientRect();
+      const cs = getComputedStyle(b);
+      return {
+        inHeaderChip: !!b.closest(".pf-me"),
+        inMain: !!b.closest(".pf-main"),
+        w: Math.round(r.width), h: Math.round(r.height),
+        label: b.innerText.trim(),
+        border: cs.borderTopWidth, radius: cs.borderTopLeftRadius, weight: cs.fontWeight,
+        when: document.querySelector(".pf-fresh-when")?.innerText.trim() || "",
+      };
+    });
+    ck("the button is on the screen", !!where && where.w > 0 && where.h > 0, JSON.stringify(where));
+    ck("and not in the header chip that disappears on a tablet", where.inHeaderChip === false);
+    ck("it sits over the content it re-reads", where.inMain === true);
+    ck("with its label, not just an icon", /refresh/i.test(where.label), JSON.stringify(where.label));
+    // The base rule read ".pf-menu > button .pf-refresh" -- a stray selector
+    // and a CSS comment, which is whitespace, made the whole thing a
+    // descendant rule. None of it applied, so the button was drawn bare.
+    ck("and its styling actually applies", where.border !== "0px" && where.radius !== "0px",
+      `border ${where.border}, radius ${where.radius}`);
+    ck("beside a line saying when this was last read", /read|reading/i.test(where.when), where.when);
+  }
+
+  console.log("\n-- on a tablet held upright, too --");
+  {
+    await page.setViewport({ width: 768, height: 1024 });
+    await wait(800);
+    const onTablet = await page.evaluate(() => {
+      const b = document.querySelector(".pf-refresh");
+      if (!b) return { there: false };
+      const r = b.getBoundingClientRect();
+      const cs = getComputedStyle(b);
+      const strip = document.querySelector(".pf-fresh").getBoundingClientRect();
+      return { there: true, w: Math.round(r.width), h: Math.round(r.height),
+        display: cs.display, top: Math.round(r.top), right: Math.round(r.right),
+        stripRight: Math.round(strip.right), stripWidth: Math.round(strip.width),
+        label: b.innerText.trim(), chipGone: getComputedStyle(document.querySelector(".pf-me")).display };
+    });
+    // The report, exactly: "completely invisible portrait tablet".
+    ck("the button is still rendered", onTablet.there === true);
+    ck("and still has a size", onTablet.w > 0 && onTablet.h > 0, `${onTablet.w}x${onTablet.h}`);
+    ck("and is not display:none", onTablet.display !== "none", onTablet.display);
+    ck("it is inside the viewport", onTablet.right > 0 && onTablet.right <= 768 && onTablet.top >= 0,
+      `top ${onTablet.top}, right ${onTablet.right}`);
+    // Not merely present: at the end of a strip that spans the content. The
+    // first version of this rule never reached the browser at all -- the
+    // comment above it ended early and ate it -- and the button sat inline
+    // at the left, which passes "is it on screen" and fails the eye.
+    ck("the strip spans the content", onTablet.stripWidth > 600, `${onTablet.stripWidth}px`);
+    ck("and the button sits at the end of it",
+      Math.abs(onTablet.right - onTablet.stripRight) < 3,
+      `button ${onTablet.right}, strip ${onTablet.stripRight}`);
+    ck("still with its label", /refresh/i.test(onTablet.label), JSON.stringify(onTablet.label));
+    // And the header chip it used to live in really is gone at this width,
+    // which is what made the old placement invisible rather than merely
+    // awkward.
+    ck("while the chip it used to live in is hidden here", onTablet.chipGone === "none", onTablet.chipGone);
+    await page.setViewport({ width: 1280, height: 1400 });
+    await wait(600);
+  }
+
   console.log("\n-- reading it again --");
   {
     const btn = await page.evaluate(() => !!document.querySelector(".pf-refresh"));
