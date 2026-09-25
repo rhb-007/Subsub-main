@@ -2360,7 +2360,7 @@ export default function SubSub() {
       });
     }
     setJobs((js) => [{ ...job, id, accountId: account.id, status: "active", notes: "",
-      createdAt: new Date().toISOString().slice(0, 10), assignments,
+      createdAt: new Date().toISOString().slice(0, 10),
       // Mirrors what the server just decided, so the row reads as a request
       // straight away rather than looking like a live job until the next load.
       requestedBy: requested ? currentUserId : null, approvedAt: null,
@@ -2368,7 +2368,17 @@ export default function SubSub() {
       // know the created_at that the edit window is measured from, or the
       // ids the photos were given, and guessing both made two working
       // features look broken until the page was reloaded.
-      ...(saved || {}), assignments }, ...js]);
+      ...(saved || {}),
+      // Except the assignments, deliberately re-applied after it. The work
+      // orders above are fired and not awaited, so the job the server just
+      // handed back does not know about them yet; taking its empty set would
+      // blank the trades that were assigned a moment ago.
+      //
+      // This key used to appear twice in this literal, once before the
+      // spread as well, which the build warned about on every run. The
+      // earlier one never survived -- whichever way it went, this one won --
+      // so it is gone rather than silenced.
+      assignments }, ...js]);
     setJobForm(null);
     setTab("jobs");
     return id;
