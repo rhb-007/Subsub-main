@@ -416,9 +416,13 @@ export const api = {
     revenue: () => request("/platform/revenue"),
     health: () => request("/platform/health"),
     activity: (accountId) => request(`/platform/activity/${encodeURIComponent(accountId)}`),
-    impersonate: (accountId, reason) =>
+    // `userId` picks which seat. Left out, the server takes an admin, which
+    // is what it always did. Named, it takes that person -- so support can
+    // see what a SUBCONTRACTOR sees, which is a different app from an
+    // admin's and was unreachable before.
+    impersonate: (accountId, reason, userId) =>
       request(`/platform/impersonate/${encodeURIComponent(accountId)}`,
-        { method: "POST", body: JSON.stringify({ reason: reason || null }) }),
+        { method: "POST", body: JSON.stringify({ reason: reason || null, userId: userId || null }) }),
     // Hand the seat back. Best effort: a session nobody ended still expires
     // on its own, so a failure here is not worth stopping anything for.
     endImpersonation: (token) =>

@@ -3930,13 +3930,16 @@ export default function SubSub() {
             return platformWrite(() => api.platform.resetPassword(userId, accountId),
               "Could not send that reset email.", { reload: false });
           }}
-          onImpersonate={async (acct) => {
-            // The server decides. It re-checks the impersonate flag, picks the
-            // account's admin, and writes the audit row BEFORE handing the
-            // session over — the banner in the interface is not the record.
+          onImpersonate={async (acct, asUserId) => {
+            // The server decides. It re-checks the impersonate flag, resolves
+            // the seat, and writes the audit row BEFORE handing the session
+            // over — the banner in the interface is not the record.
+            //
+            // asUserId is optional and names a person on that account; without
+            // it the server takes an admin, which is what it always did.
             if (staff) {
               try {
-                const r = await api.platform.impersonate(acct.id);
+                const r = await api.platform.impersonate(acct.id, null, asUserId);
                 // The token is what the API accepts. Setting the ids alone
                 // used to leave every call refused, and the app fell back to
                 // "contractor with no contractor record" -- an empty screen
@@ -5967,7 +5970,23 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     const engs = engagements.filter((e) => e.companyId === c.id);
     const accts = engs.map((e) => accounts.find((a) => a.id === e.accountId)).filter(Boolean);
     const lic = c.licenseCheck;
-    return { c, accts, lic, licOk: !lic || String(lic.status).toLowerCase() === "active",
+    // Who can actually answer for this company.
+    //
+    // The console had every one of these already -- users and memberships
+    // come down whole in the bootstrap -- and showed none of them. So a
+    // company was a name and a licence number, with no way to tell whether
+    // anybody was behind it, and no way to look at what they see. Half the
+    // people on this platform are contractors and support could not reach
+    // one of them.
+    const seats = memberships
+      .filter((m) => m.companyId === c.id && m.role === "contractor")
+      .map((m) => ({
+        m,
+        u: users.find((u) => u.id === m.userId),
+        acct: accounts.find((a) => a.id === m.accountId),
+      }))
+      .filter((x) => x.u && x.acct);
+    return { c, accts, seats, lic, licOk: !lic || String(lic.status).toLowerCase() === "active",
       dup: companies.filter((x) => x.license && x.license.toUpperCase().trim() === (c.license || "").toUpperCase().trim()).length > 1 };
   });
 
@@ -6740,10 +6759,20 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
             </div>
             <div className="pf-kpis pf-kpis-wrap">
               <Kpi label="Subcontractor companies" value={companies.length} />
-              <Kpi label="Serving 2+ accounts" value={compRows.filter((r) => r.accts.length > 1).length} accent />
+              <Kpi label="With somebody signed in" value={compRows.filter((r) => r.seats.length).length} accent />
+              <Kpi label="Serving 2+ accounts" value={compRows.filter((r) => r.accts.length > 1).length} />
               <Kpi label="License issues" value={health.licFail} warn={health.licFail > 0} />
               <Kpi label="Possible duplicates" value={health.dups} warn={health.dups > 0} />
             </div>
+            {/* The commonest support question about a company is "can they
+                get in", and the answer was nowhere on this screen. A company
+                with no seat is one somebody typed in and nobody claimed --
+                which is most of them, and worth knowing rather than
+                guessing. */}
+            <p className="pf-note">
+              {compRows.filter((r) => !r.seats.length).length} of {companies.length} have
+              nobody signed in — typed in by an account, never claimed.
+            </p>
             {newCompany && (
               <div className="pf-panel pf-newform">
                 <h3>New company</h3>
@@ -6805,6 +6834,10 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                           <span className="pf-status suspended" title="State license status">{r.lic.status}</span>}
                         {r.accts.length > 1 && <span className="pf-multi">×{r.accts.length}</span>}
                         {r.dup && <span className="pf-flag" title="Same license number on another record">dup</span>}
+                        {r.seats.length
+                          ? <span className="pf-flag is-seat" title="Somebody can sign in as this company">
+                              {r.seats.length === 1 ? "1 login" : `${r.seats.length} logins`}</span>
+                          : <span className="pf-sub pfc-noseat" title="Typed in by an account; nobody has claimed it">no login</span>}
                       </div>
                       <div className="pfc-actions" onClick={(e) => e.stopPropagation()}>
                         {isSuper && (
@@ -6841,6 +6874,32 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                         <div className="pfc-row">
                           <span>Warranty</span>
                           <span>{warrantyLabel(r.c).replace(" labor warranty", "")}</span>
+                        </div>
+                        {/* The people, and the way into what they see.
+                            A subcontractor's portal is a different app from
+                            an admin's -- their jobs, their documents, their
+                            availability, their code -- and until now support
+                            could not open it. "It looks wrong on my end" was
+                            unanswerable for half the users on the platform. */}
+                        <div className="pfc-row pfc-seats">
+                          <span>Signs in as</span>
+                          <span>
+                            {r.seats.length ? r.seats.map(({ u, acct }) => (
+                              <span key={`${u.id}:${acct.id}`} className="pfc-seat">
+                                <b>{u.name}</b>
+                                <span className="pf-sub"> · contractor on {acct.name}</span>
+                                {admin?.impersonate && (
+                                  <button className="pf-mini" title={`Open SubSub as ${u.name}`}
+                                    onClick={() => onImpersonate(acct, u.id)}>
+                                    <LogIn size={12} /> Open as them
+                                  </button>
+                                )}
+                              </span>
+                            )) : <span className="pf-sub">
+                              Nobody. This company was typed in by an account and never claimed,
+                              so there is no seat to open.
+                            </span>}
+                          </span>
                         </div>
                         {isSuper && (
                           <div className="pfc-row">
@@ -20589,6 +20648,14 @@ p.fld-note{margin:6px 0 0}
 
 /* Amber rather than red: somebody who has not set a password yet is a thing
    to finish, not a thing that has gone wrong. */
+/* Who can sign in as a company, on the platform console. The commonest
+   support question about a contractor is "can they even get in", and the
+   answer was on no screen. */
+.pf-flag.is-seat{background:#eef5f1;color:#1f6b4a;border-color:#cfe0d6}
+.pfc-noseat{font-size:11px;opacity:.75}
+.pfc-seats > span:last-child{display:flex;flex-direction:column;gap:6px;align-items:flex-end;text-align:right}
+.pfc-seat{display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+
 /* Progress and payment, under the printed work order.
    Both sides open this and are offered different buttons; the rows carry
    their state in a class so a verified draw reads as settled at a glance

@@ -6753,22 +6753,42 @@ app.post("/api/platform/impersonate/:accountId", async (c) => {
 
   const account = await c.env.DB.prepare(`SELECT id, name FROM accounts WHERE id = ?`).bind(accountId).first();
   if (!account) return c.json({ error: "not_found" }, 404);
-  const target = await c.env.DB.prepare(
-    `SELECT user_id FROM memberships WHERE account_id = ? AND role = 'admin' LIMIT 1`
-  ).bind(accountId).first();
-  if (!target) return c.json({ error: "no_admin_on_account" }, 409);
+
+  // Whose seat. This took an admin and nothing else, which meant support
+  // could never see what a SUBCONTRACTOR sees -- and a subcontractor's
+  // portal is a different app from an admin's: their jobs, their documents,
+  // their availability, their QR code. "It looks wrong on my end" was
+  // unanswerable for the half of the users who are contractors.
+  //
+  // Still a seat on THIS account and still checked from the membership
+  // table, so naming a user is choosing among people already there rather
+  // than a way to reach anybody else.
+  const wanted = String(b.userId || "").trim();
+  const target = wanted
+    ? await c.env.DB.prepare(
+        `SELECT user_id, role FROM memberships WHERE account_id = ? AND user_id = ?`
+      ).bind(accountId, wanted).first()
+    : await c.env.DB.prepare(
+        `SELECT user_id, role FROM memberships WHERE account_id = ? AND role = 'admin' LIMIT 1`
+      ).bind(accountId).first();
+  if (!target) {
+    return c.json({ error: wanted ? "not_on_this_account" : "no_admin_on_account" }, 409);
+  }
 
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO activity (id, account_id, at, user_id, kind, text, meta)
        VALUES (?, ?, datetime('now'), NULL, 'impersonation', ?, ?)`
-    ).bind(uid(), accountId, `${staff.name} signed in as this account`,
-      JSON.stringify({ staffUserId: staff.userId, reason: b.reason || null })),
+    ).bind(uid(), accountId,
+      `${staff.name} signed in as this account${target.role === "admin" ? "" : ` (${target.role} seat)`}`,
+      JSON.stringify({ staffUserId: staff.userId, reason: b.reason || null,
+        actAsUserId: target.user_id, actAsRole: target.role })),
     c.env.DB.prepare(
       `INSERT INTO events (account_id, actor_id, kind, subject_id, payload)
        VALUES (?, ?, 'impersonation_started', ?, ?)`
     ).bind(accountId, staff.userId, accountId,
-      JSON.stringify({ reason: b.reason || null, staffEmail: staff.email })),
+      JSON.stringify({ reason: b.reason || null, staffEmail: staff.email,
+        actAsUserId: target.user_id, actAsRole: target.role })),
   ]);
   // The session itself. Thirty minutes is long enough to look at a problem
   // and short enough that a forgotten tab is not a standing key to somebody
@@ -6783,7 +6803,7 @@ app.post("/api/platform/impersonate/:accountId", async (c) => {
 
   return c.json({
     ok: true, accountId, accountName: account.name,
-    actAsUserId: target.user_id, token, expiresAt: expires,
+    actAsUserId: target.user_id, actAsRole: target.role, token, expiresAt: expires,
   });
 });
 
