@@ -11450,6 +11450,33 @@ function SeatState({ u, onResend }) {
   );
 }
 
+// What went wrong, in words.
+//
+// This used to be one sentence -- "Could not load your company profile" --
+// for every failure except a missing migration, which is the least useful
+// possible answer to somebody who is blocked and cannot see a network tab.
+// It sent them looking for a database problem they did not have.
+//
+// The status is on the end of the unknown case on purpose: an error nobody
+// anticipated is still worth being able to quote in one message.
+function companyErrorText(e) {
+  const code = e?.body?.error;
+  if (code === "migration_needed") {
+    return `The database isn't migrated yet — run ${e.body.migration || "031_account_company"}.sql and reload.`;
+  }
+  if (code === "not_hireable") {
+    return "This account hires contractors but isn't hired itself, so it has no subcontractor "
+      + "profile. Only a general contractor does. If that's wrong, change the account type above.";
+  }
+  if (code === "forbidden" || e?.status === 403) {
+    return "Your seat can't see this. An admin or a project manager on this account can.";
+  }
+  if (code === "not_found") {
+    return "This account's company record is missing. Tell us and we'll put it back — nothing of yours is lost.";
+  }
+  return `Could not load your company profile${e?.status ? ` (HTTP ${e.status}${code ? `, ${code}` : ""})` : ""}.`;
+}
+
 // Being hireable.
 //
 // A general contractor was a tenant of SubSub and nothing else: there was
@@ -11478,9 +11505,7 @@ function HireablePanel({ accountName, requests = [], onRespond, onReload }) {
       .catch((e) => {
         console.error("[my-company] load failed:", e);
         if (!alive) return;
-        setErr(e?.body?.error === "migration_needed"
-          ? `The database isn't migrated yet — run ${e.body.migration || "031_account_company"}.sql and reload.`
-          : "Could not load your company profile.");
+        setErr(companyErrorText(e));
       });
     return () => { alive = false; };
   }, []);
@@ -14447,9 +14472,7 @@ function ConnectCode() {
       .catch((e) => {
         console.error("[connect] code failed:", e);
         if (!alive) return;
-        setErr(e?.body?.error === "migration_needed"
-          ? `The database isn't migrated yet — run ${e.body.migration || "031_account_company"}.sql and reload.`
-          : "Could not load your code.");
+        setErr(companyErrorText(e).replace("company profile", "code"));
       });
     return () => { alive = false; };
   }, []);
