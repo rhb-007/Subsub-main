@@ -18301,10 +18301,20 @@ p.fld-note{margin:6px 0 0}
 .shn-fill{flex:none;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:20px;
   background:#fbf0dd;color:var(--amber-ink)}
 .shn-fill.full{background:#e6f0e9;color:var(--brand-dk)}
-.sh-none{text-align:center;padding:22px 14px;color:var(--ink-soft);background:var(--paper);
+/* The empty state takes the slack rather than leaving it above the strip.
+   The panel is as tall as whatever sits beside it, and with nothing booked
+   in there was a couple of inches of dead air between "nothing booked in
+   yet" and the fortnight -- which reads as a panel that failed to draw
+   rather than a panel with nothing in it. 1 1 auto, not flex:1: a zero
+   basis would collapse the box to nothing on the days there is no slack
+   to take. The bottom margin under the line went with the second New job
+   button it used to make room for. */
+.sh-none{flex:1 1 auto;min-height:96px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  text-align:center;padding:22px 14px;color:var(--ink-soft);background:var(--paper);
   border:1px dashed var(--line);border-radius:12px}
 .sh-none > svg{opacity:.5;margin-bottom:6px}
-.sh-none p{margin:0 0 11px;font-size:13.5px}
+.sh-none p{margin:0;font-size:13.5px}
 
 /* The fortnight. It scrolls sideways on a phone rather than shrinking to
    fourteen unreadable slivers. */

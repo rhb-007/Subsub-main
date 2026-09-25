@@ -46,10 +46,19 @@ const page_html = `<!doctype html><html><head><meta charset="utf-8"><style>${css
         `<button class="shs-day"><span class="shs-dow">W</span><span class="shs-dom">${i + 1}</span><span class="shs-n"></span></button>`).join("")}</div>
     </section>
     <div class="gs-card" id="gs">
-      <h3>Get set up</h3>
-      <p>Progress &middot; 1 of 4 done</p>
-      <ul class="gs-steps"><li>Tell us what you hire out</li><li>Bring your subcontractors in</li>
-        <li>Approve their documents</li><li>Create your first job</li></ul>
+      <div class="gs-head"><div><h3>Get set up</h3><p>Progress &middot; 1 of 4 done</p></div>
+        <button class="gs-hide">x</button></div>
+      <div class="gs-bar"><span style="width:25%"></span></div>
+      <ol class="gs-steps">
+        <li class="gs-step done"><span class="gs-tick"></span><div class="gs-body"><b>Tell us what you hire out</b></div></li>
+        <li class="gs-step now"><span class="gs-tick"></span><div class="gs-body"><b>Bring your subcontractors in</b>
+          <p>Send them a link and they build their own profile and upload their own documents. Faster than
+             chasing paperwork, and it stays theirs to keep current.</p>
+          <div class="gs-acts"><button class="btn-solid">Invite a subcontractor</button>
+            <button class="btn-ghost">Add one myself</button></div></div></li>
+        <li class="gs-step later"><span class="gs-tick"></span><div class="gs-body"><b>Approve their documents</b></div></li>
+        <li class="gs-step later"><span class="gs-tick"></span><div class="gs-body"><b>Create your first job</b></div></li>
+      </ol>
     </div>
   </div>
 </main></div></body></html>`;
@@ -127,6 +136,24 @@ try {
     ck(`${w}: the checklist is not rendered`, b.gs === null, String(b.gs));
     ck(`${w}: so the schedule takes the whole row`,
       Math.abs(b.hero.w - b.top.w) < 4, `${b.hero.w} of ${b.top.w}`);
+  }
+
+  // ---- and no dead air inside the shorter panel ----------------------
+  // The two panels are as tall as each other. With nothing booked in, the
+  // schedule's own content is a short line, so the slack has to go
+  // somewhere: into the empty state, not into a gap above the fortnight.
+  console.log("\n-- the empty schedule fills its panel rather than leaving a hole --");
+  for (const w of [834, 1180]) {
+    await measure(page, w);
+    const g = await page.evaluate(() => {
+      const r = (sel) => document.querySelector(sel).getBoundingClientRect();
+      const none = r(".sh-none"), strip = r("#strip"), hero = r("#hero");
+      return { gap: Math.round(strip.top - none.bottom),
+        noneH: Math.round(none.height), heroH: Math.round(hero.height) };
+    });
+    ck(`${w}: the empty state is not collapsed`, g.noneH >= 96, JSON.stringify(g));
+    ck(`${w}: and there is no hole above the fortnight`, g.gap < 40, JSON.stringify(g));
+    ck(`${w}: it takes most of the panel it is in`, g.noneH > g.heroH * 0.4, JSON.stringify(g));
   }
 
   // The fortnight strip is the thing a narrower panel costs. It is allowed
