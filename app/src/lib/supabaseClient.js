@@ -29,3 +29,30 @@ export const supabase = supabaseEnabled
       },
     })
   : null;
+
+// Is there a session in this browser, answered synchronously?
+//
+// supabase.auth.getSession() is a promise -- it waits for the client to
+// finish reading storage -- so it cannot tell the first render anything, and
+// the first render is exactly where the question matters: draw the sign-in
+// screen, or wait and draw the app. Guessing "signed out" and correcting a
+// second later is what put a sign-in form in front of people who were
+// already signed in, and they did the sensible thing and signed in again.
+//
+// So: read the same storage the library reads. supabase-js v2 keeps its
+// session under sb-<project ref>-auth-token. The key is matched by shape
+// rather than rebuilt from the URL, so it survives the ref changing and a
+// client configured with its own storageKey.
+//
+// A true answer here is "there is something worth waiting for", not proof of
+// a valid session -- an expired one still ends at the sign-in screen, just
+// without the flash on the way.
+export function hasStoredSession() {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && /^sb-.*-auth-token$/.test(k) && localStorage.getItem(k)) return true;
+    }
+  } catch { /* private window, or site data blocked -- assume nothing is kept */ }
+  return false;
+}

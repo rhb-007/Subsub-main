@@ -42,8 +42,21 @@ const AUTH_KEY = "subsub.auth";
 export function getAuth() {
   try { return JSON.parse(localStorage.getItem(AUTH_KEY) || "null"); } catch { return null; }
 }
+// The only localStorage write in the app that was not wrapped, and the one
+// that matters most: it runs in the middle of enterAccount(), so a throw here
+// took the rest of signing in with it -- the seat, the tab and setLoggedIn.
+// Private browsing and blocked site data both throw on write. Losing the
+// seat means the next visit starts at the sign-in screen; losing the sign-in
+// means this one does.
 export function setAuth(auth) {
-  localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
+  try { localStorage.setItem(AUTH_KEY, JSON.stringify(auth)); }
+  catch { /* nothing to remember it with; this session still works */ }
+}
+// Whether a seat was left behind here, answered synchronously so the first
+// render can wait rather than guess. See hasStoredSession().
+export function hasStoredAuth() {
+  const a = getAuth();
+  return !!(a?.userId && a?.accountId);
 }
 export function clearAuth() {
   localStorage.removeItem(AUTH_KEY);

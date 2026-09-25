@@ -6,3 +6,4 @@ dist/
 .dev.vars
 *.log
 dist-platform/
+dist-boot-test/

@@ -30,13 +30,13 @@ import {
   // standing for the idea of one.
   QrCode as QrCodeIcon,
 } from "lucide-react";
-import { api, getAuth, setAuth, clearAuth, clearStoredAuth, logoUrl } from "./lib/api";
+import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl } from "./lib/api";
 // The same file the Worker imports, so a problem cannot be an emergency in
 // the browser and ordinary work on the server, or the other way round.
 import { severityOf, severityRank } from "../shared/emergency.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 import { qrPath } from "./lib/qr.js";
-import { supabase, supabaseEnabled } from "./lib/supabaseClient";
+import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
 // What a confirmation or reset link left in the address bar.
 //
@@ -1699,6 +1699,14 @@ export default function SubSub() {
   // anyone has signed in. Real-auth only: the dev-stub demo picker doesn't
   // need this, and a production account may not even exist locally.
   const [subdomainBrand, setSubdomainBrand] = useState(null);
+  // Whether that fetch is still out. Without it the sign-in screen drew
+  // immediately under SubSub's own name and logo -- the fallback for a
+  // hostname belonging to nobody -- and swapped to the company's a moment
+  // later. On someone else's address that is the wrong company's brand on
+  // screen, however briefly, which is the one thing a white-labelled login
+  // page must not do.
+  const [brandPending, setBrandPending] = useState(
+    () => supabaseEnabled && !!detectSubdomain());
   useEffect(() => {
     if (!supabaseEnabled) return;
     const sub = detectSubdomain();
@@ -1706,7 +1714,8 @@ export default function SubSub() {
     api.getAccountBySubdomain(sub).then((a) => {
       setSubdomainBrand({ id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: a.billing,
         logoData: a.logoKey ? logoUrl(a.id) : null, useDefaultMark: a.useDefaultMark, theme: a.theme });
-    }).catch(() => {}); // no account on this subdomain — fall through to generic branding
+    }).catch(() => {}) // no account on this subdomain — fall through to generic branding
+      .finally(() => setBrandPending(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [loading, setLoading] = useState(false);
@@ -3393,6 +3402,29 @@ export default function SubSub() {
   // session, which used to sign somebody out for no reason they could see.
   const [entryErr, setEntryErr] = useState("");
 
+  // Still working out whether this browser is signed in.
+  //
+  // This is the bug behind "it logs me out every time I come back". It never
+  // did: loggedIn starts false, resumeSession() below is a round trip to the
+  // API, and until it answered there was nothing between the two but the
+  // sign-in screen. So the first thing somebody saw on returning to a tab
+  // was a working sign-in form -- and they signed in, because that is what a
+  // sign-in form is for. The session underneath was fine the whole time.
+  //
+  // Guessing "signed out" and correcting a second later is not a small
+  // cosmetic wrong: it is indistinguishable from actually being signed out,
+  // and on a phone on cellular the second lasts longer than anyone waits.
+  //
+  // So the question is asked from storage before the first render, which
+  // both localStorage reads answer synchronously. Either key is reason to
+  // wait: the seat is what resumeSession() needs, and the provider session
+  // alone is the first-Google-sign-in case resumeFromProvider() exists for.
+  // A stale or expired one still ends at the sign-in screen -- a moment
+  // later, and without having offered a form in the meantime.
+  const [resuming, setResuming] = useState(
+    () => !openingApplication && !userToken && !tenantToken && !inviteToken
+      && (hasStoredAuth() || (supabaseEnabled && hasStoredSession())));
+
   const resumeFromProvider = async () => {
     if (!supabaseEnabled) return;
     const { data } = await supabase.auth.getSession().catch(() => ({ data: null }));
@@ -3488,8 +3520,12 @@ export default function SubSub() {
     // to check it, or a manager who was also added to a second account --
     // got dropped into the app and never saw the invite at all. From the
     // outside that is a link that does nothing.
-    if (openingApplication || userToken || tenantToken || inviteToken) return;
-    resumeSession();
+    if (openingApplication || userToken || tenantToken || inviteToken) { setResuming(false); return; }
+    // finally, not then: every early return and every failure inside
+    // resumeSession() has to put the screen back, or a session that cannot
+    // be resumed hangs on the splash for ever instead of offering the
+    // sign-in screen it needs to offer.
+    resumeSession().finally(() => setResuming(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -3597,6 +3633,26 @@ export default function SubSub() {
             const msg = await handleLogin();
             if (msg) console.warn("[auth-link] signed in but could not enter:", msg);
           }} />
+      </div>
+    );
+  }
+
+  // Nothing decided yet: neither "sign in" nor anybody's logo.
+  //
+  // It sits below the invite and chooser screens above, which are opened by
+  // a link rather than by a session and answer their own question, and above
+  // the sign-in screen, which is the thing it exists to hold back. No
+  // wordmark on it at all -- SubSub's would be the wrong company's on a
+  // customer's address, and the customer's is not known yet, which is half
+  // of what is being waited for.
+  if (!loggedIn && (resuming || brandPending)) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <div className="boot-wait" role="status" aria-live="polite">
+          <span className="boot-spin" aria-hidden="true" />
+          <span className="sr-only">Loading</span>
+        </div>
       </div>
     );
   }
@@ -18390,6 +18446,17 @@ p.fld-note{margin:6px 0 0}
 /* Arrived at from the schedule or the grid: here, and then quiet again. */
 .job-card.landed{border-color:var(--brand);box-shadow:0 0 0 3px rgba(31,107,74,.15)}
 /* Said to a screen reader, where three coloured dots say nothing at all. */
+/* The screen between "the page loaded" and "we know who you are". Deliberately
+   anonymous: a wordmark here is either the wrong company's or one that is
+   still being fetched. prefers-reduced-motion gets a still dot rather than
+   nothing, so the screen does not read as finished when it is not. */
+.boot-wait{display:flex;align-items:center;justify-content:center;
+  min-height:100vh;min-height:100dvh;background:var(--paper)}
+.boot-spin{width:26px;height:26px;border-radius:50%;
+  border:2.5px solid var(--line);border-top-color:var(--ink-soft);
+  animation:boot-turn .7s linear infinite}
+@keyframes boot-turn{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.boot-spin{animation:none;opacity:.55}}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
   clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .dash-sec h3{display:flex;align-items:center;gap:8px;margin:0 0 11px;font-size:14px;font-weight:800;
