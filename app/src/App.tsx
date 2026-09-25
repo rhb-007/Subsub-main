@@ -4904,6 +4904,11 @@ export default function SubSub() {
 
       <footer className="ss-footer">
         <span>{brand.name} · {portalUrl(brand)}</span>
+        {/* Which build the browser actually has. Small, grey, and the first
+            thing to check when a change "did not go out" -- the alternative
+            is guessing from the outside whether a deploy landed, which has
+            cost more time than the changes themselves. */}
+        <span className="ss-build" title="The version this browser is running">{__BUILD__}</span>
         <PoweredBy className="ss-foot-by" height={13} />
       </footer>
     </div>
@@ -18527,6 +18532,7 @@ p.fld-note{margin:6px 0 0}
 .brand-url{margin-top:1px;font-size:11.5px;font-weight:400;color:var(--ink-soft);
   font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ss-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+.ss-build{font-size:11px;color:var(--ink-soft);opacity:.65;font-variant-numeric:tabular-nums}
   max-width:1160px;margin:0 auto;padding:18px 24px 28px;font-size:11.5px;color:var(--ink-soft);
   border-top:1px solid var(--line)}
 .ss-foot-by{opacity:1}

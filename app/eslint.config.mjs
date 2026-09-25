@@ -26,7 +26,9 @@ export default [
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: "module",
-      globals: { ...globals.browser, ...globals.es2021 },
+      // __BUILD__ is replaced at build time by vite.config.js with the
+      // commit and timestamp, so the running app can say which build it is.
+      globals: { ...globals.browser, ...globals.es2021, __BUILD__: "readonly" },
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
     // Registered so the file's existing `eslint-disable-next-line
