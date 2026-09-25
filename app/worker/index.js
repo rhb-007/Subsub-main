@@ -23,6 +23,10 @@ import { severityOf } from "../shared/emergency.js";
 // something else -- an old build, a script, a typo that got through --
 // cannot put it in the database.
 import { normalizeState } from "../shared/states.js";
+// Money, and whether a chain of waivers is clear. Shared with the browser
+// so a figure on screen and a figure written here cannot disagree.
+import { releaseAmounts, milestonesCover } from "../shared/money.js";
+import { chainStatus, SCOPE_KINDS } from "../shared/waivers.js";
 import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
@@ -135,6 +139,18 @@ function parseJson(v, fallback = null) {
 }
 
 const uid = () => crypto.randomUUID();
+
+// SubSub's cut of a release, in basis points.
+//
+// Zero, and here anyway. The rate is STAMPED onto each release at the moment
+// it is made rather than read at report time, so turning this on next year
+// cannot rewrite what was charged this year -- which is the only way a fee
+// on money that has already moved can be accounted for honestly.
+const PLATFORM_FEE_BPS = 0;
+
+// Today, UTC, as an ISO day. Waivers cover work through a date and dates
+// compare as strings; no Date arithmetic, no timezone, no midnight bug.
+const dayKeyUtc = () => new Date().toISOString().slice(0, 10);
 
 // ---------------------------------------------------------------------------
 // Auth — real when SUPABASE_URL/SUPABASE_ANON_KEY are configured (see
@@ -5573,6 +5589,369 @@ app.delete("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "c
 // upload volume ever justifies it, swap this for real presigned URLs via
 // aws4fetch + an R2 API token to take the Worker out of the data path.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Milestones, verification and release.
+//
+// The two-party rule is the whole point and it is enforced three ways,
+// because one way is a way somebody removes by accident: the subcontractor's
+// seat is the only one that may REACH, an admin or project manager is the
+// only one that may VERIFY, and the person who reached is refused on verify
+// even when they hold both seats. That last one is not paranoia -- a general
+// contractor who is also somebody's subcontractor has both, and 031 made
+// that the ordinary case rather than a curiosity.
+//
+// Every state change writes an append-only event. Status on the milestone is
+// a convenience for reading; wo_events is the record.
+// ---------------------------------------------------------------------------
+
+// One work order, with who is allowed to touch it already decided.
+async function loadWorkOrder(c, id) {
+  const { accountId, role, companyId } = c.get("auth");
+  const wo = await c.env.DB.prepare(
+    `SELECT wo.*, j.account_id, j.property_id FROM work_orders wo
+       JOIN jobs j ON j.id = wo.job_id WHERE wo.id = ?`
+  ).bind(id).first();
+  if (!wo || wo.account_id !== accountId) return { error: c.json({ error: "not_found" }, 404) };
+  // A contractor sees their own and nobody else's. Checked here rather than
+  // in each route, because the route that forgets is the one that matters.
+  if (role === "contractor" && wo.company_id !== companyId) {
+    return { error: c.json({ error: "forbidden" }, 403) };
+  }
+  return { wo };
+}
+
+// The append-only record. Everything that changes a milestone or a release
+// goes through here and nothing updates what it wrote.
+async function woEvent(c, { workOrderId, milestoneId = null, kind, payload = {}, idemKey = null }) {
+  const { accountId, userId, role, companyId } = c.get("auth");
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO wo_events (id, work_order_id, account_id, milestone_id, kind,
+         actor_user_id, actor_role, actor_company_id, payload, idem_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(uid(), workOrderId, accountId, milestoneId, kind,
+      userId || null, role || null, companyId || null, JSON.stringify(payload), idemKey).run();
+    return { written: true };
+  } catch (err) {
+    // A repeat of a write that already happened is not a failure. Anything
+    // else is.
+    if (/UNIQUE constraint failed: wo_events\.idem_key/i.test(String(err?.message || err))) {
+      return { written: false, duplicate: true };
+    }
+    throw err;
+  }
+}
+
+const milestoneToJs = (m) => ({
+  id: m.id, seq: m.seq, label: m.label, amountCents: m.amount_cents,
+  status: m.status,
+  reachedAt: m.reached_at || null, reachedBy: m.reached_by || null,
+  verifiedAt: m.verified_at || null, verifiedBy: m.verified_by || null,
+  note: m.note || null,
+});
+
+// What the work order is broken into, what has happened to it, and what is
+// owed. One call, because a screen that needs three is a screen that renders
+// three different moments.
+app.get("/api/work-orders/:id/plan", async (c) => {
+  const { wo, error } = await loadWorkOrder(c, c.req.param("id"));
+  if (error) return error;
+  const [ms, evs, rel] = await Promise.all([
+    c.env.DB.prepare(`SELECT * FROM wo_milestones WHERE work_order_id = ? ORDER BY seq`).bind(wo.id).all(),
+    c.env.DB.prepare(`SELECT * FROM wo_events WHERE work_order_id = ? ORDER BY at, rowid`).bind(wo.id).all(),
+    c.env.DB.prepare(`SELECT * FROM wo_releases WHERE work_order_id = ? ORDER BY created_at, rowid`).bind(wo.id).all(),
+  ]).catch((err) => { throw err; });
+  return c.json({
+    workOrderId: wo.id,
+    valueCents: wo.value_cents,
+    scopeKind: wo.scope_kind || "labor_materials",
+    retainageBps: wo.retainage_bps || 0,
+    milestones: (ms.results || []).map(milestoneToJs),
+    events: (evs.results || []).map((e) => ({
+      id: e.id, kind: e.kind, at: e.at, milestoneId: e.milestone_id || null,
+      actorUserId: e.actor_user_id || null, actorRole: e.actor_role || null,
+      payload: parseJson(e.payload, {}),
+    })),
+    releases: (rel.results || []).map((r) => ({
+      id: r.id, milestoneId: r.milestone_id || null, grossCents: r.gross_cents,
+      retainageCents: r.retainage_cents, feeBps: r.fee_bps, feeCents: r.fee_cents,
+      netCents: r.net_cents, status: r.status, method: r.method || null,
+      reference: r.reference || null, settledAt: r.settled_at || null,
+      createdAt: r.created_at,
+    })),
+  });
+});
+
+// Set the plan. Replaces it wholesale rather than patching: a milestone list
+// that half-changed is a list whose amounts no longer sum to anything.
+//
+// Refused once anything has been verified. Re-cutting the parts of a job
+// after money has been released against one of them is a change order, which
+// is a different mechanism with a different paper trail.
+app.put("/api/work-orders/:id/plan", requireRole("admin", "pm"), async (c) => {
+  const { wo, error } = await loadWorkOrder(c, c.req.param("id"));
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+
+  const settled = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM wo_milestones WHERE work_order_id = ? AND status = 'verified'`
+  ).bind(wo.id).first();
+  if (settled?.n) return c.json({ error: "already_verified", verified: settled.n }, 409);
+
+  const rows = Array.isArray(b.milestones) ? b.milestones : [];
+  if (!rows.length) return c.json({ error: "no_milestones" }, 400);
+  if (rows.length > 40) return c.json({ error: "too_many" }, 400);
+  const clean = rows.map((m, i) => ({
+    seq: i + 1,
+    label: String(m.label || "").trim().slice(0, 120) || `Part ${i + 1}`,
+    amountCents: Math.round(Number(m.amountCents) || 0),
+  }));
+  if (clean.some((m) => m.amountCents < 0)) return c.json({ error: "negative_amount" }, 400);
+
+  // The invariant that keeps a work order honest: the parts sum to the
+  // whole. Without it a work order can be fully verified having released
+  // less than its value, and the gap is invisible rather than wrong.
+  const cover = milestonesCover(clean, wo.value_cents);
+  if (!cover.ok) return c.json({ error: "does_not_cover", ...cover }, 400);
+
+  await c.env.DB.prepare(`DELETE FROM wo_milestones WHERE work_order_id = ?`).bind(wo.id).run();
+  for (const m of clean) {
+    await c.env.DB.prepare(
+      `INSERT INTO wo_milestones (id, work_order_id, account_id, seq, label, amount_cents)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(uid(), wo.id, wo.account_id, m.seq, m.label, m.amountCents).run();
+  }
+  await woEvent(c, { workOrderId: wo.id, kind: "plan.set",
+    payload: { milestones: clean, valueCents: wo.value_cents } });
+  return c.json({ ok: true, milestones: clean.length });
+});
+
+// Labour or materials, and how much is held back. Both change what a waiver
+// has to say and what a release is worth, so both are refused once anything
+// is verified.
+app.patch("/api/work-orders/:id/scope", requireRole("admin", "pm"), async (c) => {
+  const { wo, error } = await loadWorkOrder(c, c.req.param("id"));
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  const verified = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM wo_milestones WHERE work_order_id = ? AND status = 'verified'`
+  ).bind(wo.id).first();
+  if (verified?.n) return c.json({ error: "already_verified" }, 409);
+
+  const sets = [], vals = [];
+  if (b.scopeKind !== undefined) {
+    if (!SCOPE_KINDS.includes(b.scopeKind)) return c.json({ error: "bad_scope" }, 400);
+    sets.push("scope_kind = ?"); vals.push(b.scopeKind);
+  }
+  if (b.retainageBps !== undefined) {
+    const bps = Math.round(Number(b.retainageBps) || 0);
+    // A hold larger than half the job is not retainage, it is a typo.
+    if (bps < 0 || bps > 5000) return c.json({ error: "bad_retainage" }, 400);
+    sets.push("retainage_bps = ?"); vals.push(bps);
+  }
+  if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
+  await c.env.DB.prepare(`UPDATE work_orders SET ${sets.join(", ")} WHERE id = ?`)
+    .bind(...vals, wo.id).run();
+  await woEvent(c, { workOrderId: wo.id, kind: "scope.set",
+    payload: { scopeKind: b.scopeKind, retainageBps: b.retainageBps } });
+  return c.json({ ok: true });
+});
+
+// The subcontractor says a part is done.
+//
+// Only their seat. An admin cannot reach on their behalf, because a record
+// where the paying party wrote both halves is worth nothing to anybody
+// looking at it later.
+app.post("/api/milestones/:id/reach", async (c) => {
+  const { role, companyId, userId } = c.get("auth");
+  const m = await c.env.DB.prepare(`SELECT * FROM wo_milestones WHERE id = ?`)
+    .bind(c.req.param("id")).first();
+  if (!m) return c.json({ error: "not_found" }, 404);
+  const { wo, error } = await loadWorkOrder(c, m.work_order_id);
+  if (error) return error;
+  if (role !== "contractor" || wo.company_id !== companyId) {
+    return c.json({ error: "not_yours_to_mark" }, 403);
+  }
+  if (m.status === "verified") return c.json({ error: "already_verified" }, 409);
+
+  const b = await c.req.json().catch(() => ({}));
+  const photos = Array.isArray(b.photos) ? b.photos.slice(0, 12) : [];
+  const note = String(b.note || "").trim().slice(0, 2000) || null;
+
+  await c.env.DB.prepare(
+    `UPDATE wo_milestones SET status = 'reached', reached_at = CURRENT_TIMESTAMP,
+       reached_by = ?, note = COALESCE(?, note) WHERE id = ?`
+  ).bind(userId, note, m.id).run();
+  // Photos are nudged, never required -- requiring them is how you collect
+  // four pictures of a van dashboard.
+  await woEvent(c, { workOrderId: wo.id, milestoneId: m.id, kind: "milestone.reached",
+    payload: { photos, note, hadPhotos: photos.length > 0 }, idemKey: b.idemKey || null });
+  return c.json({ ok: true, photos: photos.length });
+});
+
+// And the hiring account agrees, which is what makes anything owed.
+app.post("/api/milestones/:id/verify", requireRole("admin", "pm"), async (c) => {
+  const { userId } = c.get("auth");
+  const m = await c.env.DB.prepare(`SELECT * FROM wo_milestones WHERE id = ?`)
+    .bind(c.req.param("id")).first();
+  if (!m) return c.json({ error: "not_found" }, 404);
+  const { wo, error } = await loadWorkOrder(c, m.work_order_id);
+  if (error) return error;
+  if (m.status === "verified") return c.json({ error: "already_verified" }, 409);
+  if (m.status !== "reached") return c.json({ error: "not_reached" }, 409);
+  // The third guard. An account that is also somebody's subcontractor holds
+  // both seats, and 031 made that ordinary rather than exotic.
+  if (m.reached_by && m.reached_by === userId) {
+    return c.json({ error: "same_person", detail: "whoever marked this cannot verify it" }, 409);
+  }
+
+  const prior = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(gross_cents), 0) AS gross FROM wo_releases
+      WHERE work_order_id = ? AND status <> 'void'`
+  ).bind(wo.id).first();
+
+  const amounts = releaseAmounts({
+    gross: m.amount_cents,
+    priorGross: prior?.gross || 0,
+    retainageBps: wo.retainage_bps || 0,
+    feeBps: PLATFORM_FEE_BPS,
+  });
+
+  await c.env.DB.prepare(
+    `UPDATE wo_milestones SET status = 'verified', verified_at = CURRENT_TIMESTAMP,
+       verified_by = ? WHERE id = ?`
+  ).bind(userId, m.id).run();
+
+  const releaseId = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO wo_releases (id, work_order_id, account_id, milestone_id, company_id,
+         gross_cents, retainage_cents, fee_bps, fee_cents, net_cents, idem_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(releaseId, wo.id, wo.account_id, m.id, wo.company_id,
+      amounts.gross, amounts.retainage, PLATFORM_FEE_BPS, amounts.fee, amounts.net,
+      `rel:${m.id}`).run();
+  } catch (err) {
+    // The unique index on milestone_id doing its job. Verifying twice is a
+    // double-click, not a second release.
+    if (/UNIQUE constraint failed/i.test(String(err?.message || err))) {
+      return c.json({ error: "already_released" }, 409);
+    }
+    throw err;
+  }
+
+  await woEvent(c, { workOrderId: wo.id, milestoneId: m.id, kind: "milestone.verified",
+    payload: { releaseId, ...amounts, feeBps: PLATFORM_FEE_BPS } });
+  return c.json({ ok: true, releaseId, ...amounts });
+});
+
+// Turning one down. The reason travels, because a rejection nobody can read
+// is a rejection somebody has to telephone about.
+app.post("/api/milestones/:id/reject", requireRole("admin", "pm"), async (c) => {
+  const m = await c.env.DB.prepare(`SELECT * FROM wo_milestones WHERE id = ?`)
+    .bind(c.req.param("id")).first();
+  if (!m) return c.json({ error: "not_found" }, 404);
+  const { wo, error } = await loadWorkOrder(c, m.work_order_id);
+  if (error) return error;
+  if (m.status === "verified") return c.json({ error: "already_verified" }, 409);
+  const b = await c.req.json().catch(() => ({}));
+  const why = String(b.reason || "").trim().slice(0, 1000);
+  if (!why) return c.json({ error: "reason_required" }, 400);
+
+  await c.env.DB.prepare(`UPDATE wo_milestones SET status = 'rejected' WHERE id = ?`).bind(m.id).run();
+  await woEvent(c, { workOrderId: wo.id, milestoneId: m.id, kind: "milestone.rejected",
+    payload: { reason: why } });
+  return c.json({ ok: true });
+});
+
+// Is this release's chain clear, and through when?
+//
+// Counts and dates, never a roster. The account is entitled to know their
+// subcontractor's chain is clear; the subcontractor's supplier list is that
+// subcontractor's book.
+async function waiverStateFor(c, { wo, release, asOf }) {
+  const root = await c.env.DB.prepare(
+    `SELECT * FROM lien_waivers WHERE release_id = ? AND tier = 0
+      ORDER BY created_at DESC LIMIT 1`
+  ).bind(release.id).first();
+  const kids = root
+    ? (await c.env.DB.prepare(`SELECT * FROM lien_waivers WHERE parent_id = ?`).bind(root.id).all()).results
+    : [];
+  const declared = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM lower_tier_parties WHERE work_order_id = ? AND company_id = ?`
+  ).bind(wo.id, wo.company_id).first();
+
+  const shape = (w) => (w ? { status: w.status, throughDate: w.through_date, scopeKind: w.scope_kind } : null);
+  return chainStatus({
+    root: shape(root),
+    children: (kids || []).map(shape),
+    asOf,
+    scopeKind: wo.scope_kind || "labor_materials",
+    declaredCount: declared?.n || 0,
+  });
+}
+
+app.get("/api/releases/:id/waiver-state", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const r = await c.env.DB.prepare(`SELECT * FROM wo_releases WHERE id = ? AND account_id = ?`)
+    .bind(c.req.param("id"), accountId).first();
+  if (!r) return c.json({ error: "not_found" }, 404);
+  const { wo, error } = await loadWorkOrder(c, r.work_order_id);
+  if (error) return error;
+  return c.json(await waiverStateFor(c, { wo, release: r, asOf: dayKeyUtc() }));
+});
+
+// Money goes out.
+//
+// Settlement is manual: a cheque number, a transfer reference, whatever they
+// already do. `method` is the seam a processor drops into later without this
+// route changing shape.
+//
+// GATED ON THE WAIVER, which is the point of the whole mechanism. An
+// override exists because a real business has to be able to pay somebody on
+// a Friday afternoon -- but it is recorded as its own event with a reason,
+// so "we always override it" is a visible fact rather than a habit nobody
+// can see.
+app.post("/api/releases/:id/settle", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const r = await c.env.DB.prepare(`SELECT * FROM wo_releases WHERE id = ? AND account_id = ?`)
+    .bind(c.req.param("id"), accountId).first();
+  if (!r) return c.json({ error: "not_found" }, 404);
+  if (r.status === "paid") return c.json({ error: "already_paid" }, 409);
+  if (r.status === "void") return c.json({ error: "void" }, 409);
+  const { wo, error } = await loadWorkOrder(c, r.work_order_id);
+  if (error) return error;
+
+  const b = await c.req.json().catch(() => ({}));
+  const method = String(b.method || "manual").trim().slice(0, 40);
+  const reference = String(b.reference || "").trim().slice(0, 120) || null;
+
+  const chain = await waiverStateFor(c, { wo, release: r, asOf: dayKeyUtc() });
+  if (!chain.clear && !b.override) {
+    return c.json({ error: "waiver_outstanding", ...chain }, 409);
+  }
+  if (!chain.clear) {
+    const why = String(b.overrideReason || "").trim().slice(0, 500);
+    if (!why) return c.json({ error: "override_reason_required", ...chain }, 400);
+    await woEvent(c, { workOrderId: wo.id, milestoneId: r.milestone_id, kind: "release.override",
+      payload: { releaseId: r.id, reason: why, chain } });
+  }
+
+  const res = await c.env.DB.prepare(
+    `UPDATE wo_releases SET status = 'paid', method = ?, reference = ?,
+       settled_at = CURRENT_TIMESTAMP, settled_by = ?
+     WHERE id = ? AND status = 'due'`
+  ).bind(method, reference, userId, r.id).run();
+  // Two people pressing pay at once: the second write changes nothing and
+  // must not report success.
+  if (!res.meta?.changes) return c.json({ error: "already_paid" }, 409);
+
+  await woEvent(c, { workOrderId: wo.id, milestoneId: r.milestone_id, kind: "release.settled",
+    payload: { releaseId: r.id, method, reference, netCents: r.net_cents, chainClear: chain.clear },
+    idemKey: `settle:${r.id}` });
+  return c.json({ ok: true, status: "paid", chainClear: chain.clear });
+});
+
 app.put("/api/uploads/:kind/:fileName", async (c) => {
   const { accountId } = c.get("auth");
   const { kind, fileName } = c.req.param();

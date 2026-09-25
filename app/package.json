@@ -68,6 +68,7 @@
     "test:states": "node scripts/states-test.mjs",
     "test:money": "node --no-warnings scripts/money-test.mjs",
     "test:waiver": "node --no-warnings scripts/waiver-test.mjs",
+    "test:milestone": "node --no-warnings scripts/milestone-test.mjs",
     "test:avatarkey": "node scripts/avatar-key-test.mjs",
     "test:pagehead": "node scripts/page-head-test.mjs",
     "test:visitafter": "node scripts/visit-after-test.mjs",
