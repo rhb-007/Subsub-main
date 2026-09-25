@@ -159,7 +159,12 @@ try {
   const wrong = cards.filter((c) => {
     const j = byId.get(c.id);
     if (!j) return false;
-    return c.badge !== (Date.now() - asTime(j.updatedAtIso) <= SIX_H);
+    // The same fallback the badge itself uses. A job that has never been
+    // touched has no updated_at, and movedAgo() falls back to created_at on
+    // purpose; comparing against updatedAtIso alone gave NaN and called a
+    // correct badge wrong -- which only showed up once two runs landed
+    // inside the six-hour window.
+    return c.badge !== (Date.now() - asTime(j.updatedAtIso || j.createdAtIso) <= SIX_H);
   });
   ck("every badge matches whether that job actually moved recently",
     wrong.length === 0, wrong.slice(0, 3).map((w) => `${w.title}: badge=${w.badge}`).join(" ; "));
@@ -173,7 +178,19 @@ try {
   ck("the most recently moved of them is first",
     cards[0]?.id === newestShown?.id,
     `first is ${byId.get(cards[0]?.id)?.updatedAtIso}, newest shown is ${newestShown?.updatedAtIso}`);
-} finally { await browser.close(); }
+} finally {
+  await browser.close();
+  // Take the jobs away again. Without this every run left two behind, and
+  // within six hours of each other the leftovers are inside the badge
+  // window and get asserted over by the next run -- which is how this file
+  // came to fail only when the whole suite ran.
+  try {
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("npx", ["wrangler", "d1", "execute", "subsub-db", "--config=./wrangler.toml",
+      "--local", "--command", `DELETE FROM jobs WHERE id IN ('${a}', '${b}')`],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) { console.log("cleanup:", String(e.message).slice(0, 80)); }
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;

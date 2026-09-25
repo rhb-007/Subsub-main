@@ -12888,6 +12888,53 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
   );
 }
 
+// A dashboard section's rows, capped.
+//
+// Ten sections, most of them drawing every row they had, on a page whose
+// job is to be scanned. A morning with four approvals, six unassigned
+// trades and five documents outstanding ran to three screenfuls, and the
+// section at the bottom might as well not have been there.
+//
+// Capped rather than folded away. Hiding a section behind a closed header
+// would hide the count with it, and the count is the whole signal -- "5
+// documents to verify" is the thing somebody needs to see whether or not
+// they open it. So the heading and the number stay, the first few rows
+// stay, and the rest waits behind one button that says how many there are.
+//
+// Three is the default because it is enough to show the shape of the list
+// -- what these rows are, and roughly how urgent -- without any one
+// section owning the screen.
+//
+// Whether it is open is remembered per section, because somebody who works
+// out of the documents queue every morning should not reopen it every
+// morning. localStorage throws in a private window on read as well as
+// write, so both are guarded.
+function DashRows({ id, peek = 3, children }) {
+  const rows = React.Children.toArray(children).filter(Boolean);
+  const key = `subsub.dash.rows.${id}`;
+  const [open, setOpen] = useState(() => {
+    try { return localStorage.getItem(key) === "1"; } catch { return false; }
+  });
+  const toggle = () => setOpen((was) => {
+    const next = !was;
+    try { localStorage.setItem(key, next ? "1" : "0"); } catch { /* nothing to remember it with */ }
+    return next;
+  });
+  const over = rows.length > peek;
+  const shown = over && !open ? rows.slice(0, peek) : rows;
+  return (
+    <>
+      {shown}
+      {over && (
+        <button className="dash-more" onClick={toggle} aria-expanded={open}>
+          {open ? `Show the first ${peek}` : `Show all ${rows.length}`}
+          <ChevronDown size={13} className={open ? "flip" : ""} />
+        </button>
+      )}
+    </>
+  );
+}
+
 // The schedule, at the top of the dashboard, where somebody looks first.
 //
 // It used to be a five-row list near the bottom headed "Upcoming jobs",
@@ -12900,7 +12947,7 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
 // the one thing on a schedule that needs saying out loud, so it gets its
 // own line here rather than being quietly sorted to the front of a list
 // that claims everything in it is still to come.
-function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs, onNewJob }) {
+function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
   const todayK = dayKey();
   const dated = jobs.filter((j) => !isClosed(j) && j.date)
     .sort((a, b) => a.date.localeCompare(b.date) || String(a.time || "").localeCompare(String(b.time || "")));
@@ -12970,8 +13017,10 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs, onNewJ
         <div className="sh-none">
           <ClipboardList size={22} />
           <p>{late.length ? "Nothing else booked in." : "Nothing booked in yet."}</p>
-          <button className="btn-solid" onClick={onNewJob}>
-            <Plus size={15} /> {isOwner ? "Request work" : "New job"}</button>
+          {/* "New job" is in the page header, a couple of inches above this
+              and on screen whether or not anything is booked. A second one
+              here is two buttons doing one thing, one of them only
+              sometimes. */}
         </div>
       )}
 
@@ -13158,16 +13207,24 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </section>
       )}
 
-      {/* Above the getting-started checklist and the tiles, and below only
-          the life-safety reports. "When is somebody coming" is the question
-          this page exists to answer. */}
-      <ScheduleHero jobs={jobs} isOwner={isOwner} onGoJobs={onGoJobs}
-        onOpenJob={onOpenJob} onGoCalendar={onGoCalendar} onNewJob={onNewJob} />
+      {/* Above the tiles and below only the life-safety reports. "What is
+          happening, and when" is the question this page exists to answer,
+          and the setup checklist is the other thing somebody is working
+          through in their first week -- so they sit beside each other
+          rather than one pushing the other down a screen.
 
-      {runsAccount && <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
-        subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
-        onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors}
-        properties={properties} onAddProperty={onAddProperty} />}
+          The checklist takes itself off the page once it is done or
+          dismissed, and the grid is auto-fit: one child then fills the row
+          instead of sitting in half of it beside a gap. */}
+      <div className="dash-top">
+        <ScheduleHero jobs={jobs} isOwner={isOwner} onGoJobs={onGoJobs}
+          onOpenJob={onOpenJob} onGoCalendar={onGoCalendar} />
+
+        {runsAccount && <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
+          subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
+          onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors}
+          properties={properties} onAddProperty={onAddProperty} />}
+      </div>
 
       {/* An owner gets their own row. Reusing the account's -- unassigned
           slots, contractors missing documents -- would be showing somebody
@@ -13227,6 +13284,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         <section className="dash-sec">
           <h3><Building2 size={15} /> {isOwner ? "Waiting on approval" : "Asked for by owners and tenants"}
             <span className="sec-count amber">{awaitingApproval.length}</span></h3>
+          <DashRows id="approvals">
           {awaitingApproval.map((j) => {
             const who = users.find((u) => u.id === j.requestedBy);
             const where = props.find((p) => p.id === j.propertyId);
@@ -13265,6 +13323,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               </div>
             );
           })}
+          </DashRows>
           {!isOwner && (
             <p className="rollup-note">Approving turns a request into a job you can price and
               assign. Nothing reaches a contractor until you do — and if you are not going to,
@@ -13277,6 +13336,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         <section className="dash-sec">
           <h3><Calendar size={15} /> Tenant can't make the proposed time
             <span className="sec-count amber">{timeDeclined.length}</span></h3>
+          <DashRows id="timedeclined">
           {timeDeclined.map(({ v, job }) => {
             const who = users.find((u) => u.id === job.requestedBy);
             return (
@@ -13291,13 +13351,15 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               </div>
             );
           })}
+          </DashRows>
         </section>
       )}
 
       {!isOwner && open.length > 0 && (
         <section className="dash-sec">
           <h3><AlertTriangle size={15} /> Needs a contractor <span className="sec-count amber">{open.length}</span></h3>
-          {open.slice(0, 6).map(({ job, trade }) => {
+          <DashRows id="openslots">
+          {open.map(({ job, trade }) => {
             const M = catMeta(trade);
             return (
               <div key={`${job.id}-${trade}`} className="dash-row">
@@ -13312,6 +13374,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               </div>
             );
           })}
+          </DashRows>
           {open.length > 6 && <button className="dash-more" onClick={onGoJobs}>View all {open.length} open slots →</button>}
         </section>
       )}
@@ -13320,6 +13383,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         <section className="dash-sec">
           <h3><Clock size={15} /> No reply — needs re-matching
             <span className="sec-count red">{expiredOffers.length}</span></h3>
+          <DashRows id="expired">
           {expiredOffers.map(({ job, trade, a }) => (
             <div key={`${job.id}-${trade}`} className="dash-row">
               <div className="dash-avatar">{(a.company || "?").split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
@@ -13336,12 +13400,14 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               </button>
             </div>
           ))}
+          </DashRows>
         </section>
       )}
 
       {!isOwner && licenseIssues.length > 0 && (
         <section className="dash-sec">
           <h3><Shield size={15} /> Registration problems <span className="sec-count red">{licenseIssues.length}</span></h3>
+          <DashRows id="licences">
           {licenseIssues.map((s) => (
             <div key={s.id} className="dash-row">
               <div className="dash-avatar">{s.company.split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
@@ -13358,12 +13424,14 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               </button>
             </div>
           ))}
+          </DashRows>
         </section>
       )}
 
       {!isOwner && toReview.length > 0 && (
         <section className="dash-sec">
           <h3><Shield size={15} /> Documents to verify <span className="sec-count amber">{toReview.reduce((n, x) => n + x.kinds.length, 0)}</span></h3>
+          <DashRows id="toreview">
           {toReview.map(({ sub, kinds }) => (
             <div key={sub.id} className="dash-row">
               <div className="dash-avatar">{sub.company.split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
@@ -13376,12 +13444,14 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               </button>
             </div>
           ))}
+          </DashRows>
         </section>
       )}
 
       {!isOwner && nonCompliant.length > 0 && (
         <section className="dash-sec">
           <h3><AlertTriangle size={15} /> Awaiting documents <span className="sec-count red">{nonCompliant.length}</span></h3>
+          <DashRows id="awaitingdocs">
           {nonCompliant.map((s) => (
             <div key={s.id} className="dash-row">
               <div className="dash-avatar">{s.company.split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
@@ -13394,12 +13464,14 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               </button>
             </div>
           ))}
+          </DashRows>
         </section>
       )}
 
       {!isOwner && declined.length > 0 && (
         <section className="dash-sec">
           <h3><XCircle size={15} /> Declined — needs reassigning <span className="sec-count red">{declined.length}</span></h3>
+          <DashRows id="declined">
           {declined.map(({ job, trade, a }) => {
             const M = catMeta(trade);
             return (
@@ -13413,13 +13485,15 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               </div>
             );
           })}
+          </DashRows>
         </section>
       )}
 
       {!isOwner && readyToComplete.length > 0 && (
         <section className="dash-sec">
           <h3><CheckCircle2 size={15} /> Ready to mark complete <span className="sec-count">{readyToComplete.length}</span></h3>
-          {readyToComplete.slice(0, 5).map((j) => (
+          <DashRows id="ready">
+          {readyToComplete.map((j) => (
             <div key={j.id} className="dash-row">
               <div className="dash-avatar"><CheckCircle2 size={15} /></div>
               <div className="dash-row-main">
@@ -13429,13 +13503,15 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               <button className="btn-solid dash-row-btn" onClick={onGoJobs}>Review</button>
             </div>
           ))}
+          </DashRows>
         </section>
       )}
 
       {!isOwner && unrated.length > 0 && (
         <section className="dash-sec">
           <h3><Star size={15} /> Completed, not yet rated <span className="sec-count">{unrated.length}</span></h3>
-          {unrated.slice(0, 5).map(({ job, trade, a }) => (
+          <DashRows id="unrated">
+          {unrated.map(({ job, trade, a }) => (
             <div key={`${job.id}-${trade}`} className="dash-row" onClick={onGoJobs}>
               <div className="dash-avatar">{(a.company || "?").split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
               <div className="dash-row-main">
@@ -13445,6 +13521,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               <button className="btn-ghost dash-row-btn" onClick={onGoJobs}>Rate</button>
             </div>
           ))}
+          </DashRows>
         </section>
       )}
     </main>
@@ -18035,8 +18112,22 @@ p.fld-note{margin:6px 0 0}
    Raised out of the run of dash-sec blocks it used to sit at the bottom
    of: its own surface, its own border, and the only panel on the page
    with a date in 26px type. */
+/* The two things somebody is working out of in their first month, side by
+   side rather than one pushing the other down a screen: what is scheduled,
+   and what is left to set up.
+
+   auto-fit, not two fixed columns. The checklist takes itself off the page
+   once it is done or dismissed, and a fixed 1fr 1fr would leave the
+   schedule sitting in half a row beside a gap for ever after. */
+.dash-top{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));
+  gap:16px;align-items:stretch;margin-bottom:22px}
+.dash-top > *{margin-bottom:0;height:100%}
 .sched-hero{background:var(--card);border:1px solid var(--line);border-radius:16px;
-  padding:16px 16px 14px;margin-bottom:22px;box-shadow:var(--shadow)}
+  padding:16px 16px 14px;margin-bottom:22px;box-shadow:var(--shadow);
+  display:flex;flex-direction:column}
+/* The fortnight strip sits at the bottom of the panel whatever is above it,
+   so the two panels' feet line up when one has more in it than the other. */
+.sched-hero .sh-strip{margin-top:auto;padding-top:12px}
 .sh-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
 .sh-head h3{display:flex;align-items:center;gap:8px;margin:0;font-size:14px;font-weight:800;
   text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft)}
@@ -18230,7 +18321,14 @@ p.fld-note{margin:6px 0 0}
   border:1px solid var(--line);border-radius:9px;padding:4px 0}
 .dd-mon{font-size:9.5px;font-weight:800;text-transform:uppercase;color:var(--ink-soft)}
 .dd-day{font-size:15px;font-weight:800;line-height:1.1}
-.dash-more{border:0;background:none;color:var(--brand);font-size:12.5px;font-weight:700;cursor:pointer;padding:6px 2px}
+/* "Show all 7" on a capped section. Not a link away: the rows are right
+   here, and sending somebody to another screen to read three more of them
+   is how a dashboard becomes a table of contents. */
+.dash-more{display:inline-flex;align-items:center;gap:5px;border:0;background:none;
+  color:var(--brand);font-size:12.5px;font-weight:700;cursor:pointer;padding:8px 2px}
+.dash-more:hover{text-decoration:underline;text-underline-offset:2px}
+.dash-more svg{transition:transform .15s}
+.dash-more svg.flip{transform:rotate(180deg)}
 .sec-count.red{background:var(--red);color:#fff}
 
 /* coverage: custom cities + multiple radii */
