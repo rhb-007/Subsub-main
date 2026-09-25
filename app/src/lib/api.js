@@ -262,6 +262,20 @@ export const api = {
   addAccountUser: (u) => request("/account-users", { method: "POST", body: JSON.stringify(u) }),
   updateAccountUser: (userId, patch) => request(`/account-users/${userId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removeAccountUser: (userId) => request(`/account-users/${userId}`, { method: "DELETE" }),
+  // A face. Behind auth and scoped to a shared account, so it arrives the
+  // same way a report photo does -- fetched like any other call and handed
+  // to the page as a blob URL, because an <img> cannot send a bearer token.
+  // The caller owns revoking it; see avatarUrl() in App.tsx, which keeps one
+  // per person rather than one per row that draws them.
+  userAvatarBlob: async (userId) => {
+    const res = await fetch(`${API_BASE}/account-users/${encodeURIComponent(userId)}/avatar`,
+      { headers: await authHeaders() });
+    if (!res.ok) throw new Error(`avatar_${res.status}`);
+    return URL.createObjectURL(await res.blob());
+  },
+  // Your own, which any seat may change. Needing to ask an administrator to
+  // change your profile picture is not a permission model, it is an errand.
+  setMyAvatar: (avatarKey) => request("/me/avatar", { method: "PATCH", body: JSON.stringify({ avatarKey }) }),
   // Cancelling happens here rather than in Stripe's hosted portal, which has
   // no embedded form. Always at period end -- they paid for the period.
   cancelSubscription: () => request("/billing/cancel", { method: "POST" }),

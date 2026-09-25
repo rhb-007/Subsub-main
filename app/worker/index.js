@@ -2242,6 +2242,10 @@ app.get("/api/account-users", async (c) => {
     // heard of SubSub.
     hasLogin: !!r.auth_id,
     inviteSentAt: invites[r.id] || null,
+    // Whether to go and fetch a face, not the key itself. The key is an R2
+    // path; handing it to the browser invites somebody to ask for a
+    // different one.
+    hasAvatar: !!r.avatar_key,
   })));
 });
 
@@ -2493,6 +2497,16 @@ app.patch("/api/account-users/:userId", requireRole("admin"), async (c) => {
     await c.env.DB.prepare(`UPDATE users SET name = COALESCE(?, name), email = COALESCE(?, email), phone = COALESCE(?, phone) WHERE id = ?`)
       .bind(b.name ?? null, b.email ?? null, b.phone ?? null, userId).run();
   }
+  // A face. Separate from the name/email write above because it is the one
+  // field on this route somebody is also allowed to change about themselves
+  // -- see PATCH /api/me/avatar -- and because null is a real value here
+  // (removing a picture) rather than "leave it alone", which is what
+  // COALESCE means everywhere else in that statement.
+  if (b.avatarKey !== undefined) {
+    const key = b.avatarKey === null ? null : String(b.avatarKey);
+    if (key !== null && !ownedKey(key, accountId)) return c.json({ error: "bad_key" }, 400);
+    await c.env.DB.prepare(`UPDATE users SET avatar_key = ? WHERE id = ?`).bind(key, userId).run();
+  }
   if (b.role != null) {
     if (!MEMBER_ROLES.includes(b.role)) return c.json({ error: "invalid_role" }, 400);
     await c.env.DB.prepare(`UPDATE memberships SET role = ?, company_id = ? WHERE user_id = ? AND account_id = ?`)
@@ -2508,6 +2522,62 @@ app.patch("/api/account-users/:userId", requireRole("admin"), async (c) => {
     if (m) await setMembershipProperties(c.env.DB, m.id, accountId, m.role, b.propertyIds);
   }
   return c.json({ ok: true });
+});
+
+// An uploaded key is only acceptable if this account uploaded it.
+//
+// PUT /api/uploads writes to `${accountId}/${kind}/...`, so the prefix is
+// the proof. Without this check an admin could patch in any path in the
+// bucket and then read it back through the avatar route below -- turning a
+// profile picture into a way to fetch another account's documents.
+const ownedKey = (key, accountId) =>
+  typeof key === "string" && key.startsWith(`${accountId}/`) && !key.includes("..");
+
+// Somebody's face, for the people who work with them.
+//
+// Behind auth and scoped to a shared account, unlike the company logo,
+// which is public because it has to render on a login page. A logo is a
+// business's sign; this is a person's photograph, and the people entitled
+// to see it are the ones on a roster with them.
+//
+// It serves the one key stored against that person's own row and never a
+// path from the request, so it cannot be pointed at anything else in the
+// bucket.
+app.get("/api/account-users/:userId/avatar", async (c) => {
+  const { accountId } = c.get("auth");
+  const row = await c.env.DB.prepare(
+    `SELECT u.avatar_key FROM users u
+       JOIN memberships m ON m.user_id = u.id AND m.account_id = ?
+      WHERE u.id = ?`
+  ).bind(accountId, c.req.param("userId")).first();
+  if (!row?.avatar_key) return c.notFound();
+  const obj = await c.env.FILES.get(row.avatar_key);
+  if (!obj) return c.notFound();
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": obj.httpMetadata?.contentType || "image/jpeg",
+      // Private: it is one person's photograph, and a shared cache holding
+      // it would serve it to whoever asked next.
+      "Cache-Control": "private, max-age=300",
+    },
+  });
+});
+
+// Your own face. Any seat, not just an admin -- needing to ask an
+// administrator to change your profile picture is not a permission model,
+// it is an errand.
+app.patch("/api/me/avatar", async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const key = b.avatarKey == null ? null : String(b.avatarKey);
+  if (key !== null && !ownedKey(key, accountId)) return c.json({ error: "bad_key" }, 400);
+  try {
+    await c.env.DB.prepare(`UPDATE users SET avatar_key = ? WHERE id = ?`).bind(key, userId).run();
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "032_user_avatar" }, 503);
+    throw err;
+  }
+  return c.json({ ok: true, hasAvatar: !!key });
 });
 
 // Drops the membership, not the person — they may still belong elsewhere.

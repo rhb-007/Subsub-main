@@ -39,4 +39,5 @@ SELECT
   (SELECT COUNT(*) FROM accounts
     WHERE kind = 'general_contractor' AND company_id IS NULL)                               AS m031_gcs_without,
   (SELECT COUNT(*) FROM accounts
-    WHERE kind <> 'general_contractor' AND company_id IS NOT NULL)                          AS m031_others_with;
+    WHERE kind <> 'general_contractor' AND company_id IS NOT NULL)                          AS m031_others_with,
+  (SELECT COUNT(*) FROM pragma_table_info('users')       WHERE name='avatar_key')           AS m032_avatar;

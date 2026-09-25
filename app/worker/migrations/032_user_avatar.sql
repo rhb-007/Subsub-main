@@ -1,0 +1,15 @@
+-- A face on a seat.
+--
+-- Every person on a roster was two initials in a green circle, which is
+-- fine for two people and stops working at ten -- and an account with a
+-- Miguel Acosta and a Maria Alvarez has the same circle twice.
+--
+-- The key, not the image: the bytes live in R2 like every other upload, and
+-- this is the one key the API will serve for this person. Storing a path
+-- the browser could choose would turn the avatar route into a way to read
+-- anything else in the bucket.
+--
+-- Nullable, and stays null for everybody who never sets one. Initials
+-- remain the fallback rather than a generated placeholder: a made-up face
+-- is worse than no face.
+ALTER TABLE users ADD COLUMN avatar_key TEXT;

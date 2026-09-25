@@ -33,7 +33,7 @@ import {
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
-  Maximize2, Share2,
+  Maximize2, Share2, ImagePlus,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl } from "./lib/api";
 // The same file the Worker imports, so a problem cannot be an emergency in
@@ -2745,21 +2745,62 @@ export default function SubSub() {
 
   // --- user management (admin only) ---
   // A user is global; joining an account is a membership.
-  const addUser = (u) => {
-    persist("addAccountUser", api.addAccountUser(u));
-    const existing = users.find((x) => x.email.toLowerCase() === (u.email || "").toLowerCase());
-    const userId = existing ? existing.id : "u" + Date.now();
-    if (!existing) setUsers((us) => [...us, { id: userId, name: u.name, email: u.email, phone: u.phone }]);
-    setMemberships((ms) => [...ms.filter((m) => !(m.userId === userId && m.accountId === account.id)),
-      { userId, accountId: account.id, role: u.role, companyId: u.subId ?? null,
-        propertyIds: u.propertyIds || [] }]);
+  // Adding somebody invites them -- the server has always done both in one
+  // call, and there is no way to add without inviting. What was missing was
+  // any sign of it here.
+  //
+  // This used to fire and forget, and draw an optimistic row under a made-up
+  // id. That row carried no hasLogin and no inviteSentAt, so it said "Hasn't
+  // been sent an invite" about somebody who had just been sent one, beside a
+  // button offering to send another -- and the button 404'd anyway, because
+  // the id was invented here and the server had never heard of it.
+  //
+  // So: wait for the answer, re-read the roster, and hand back what actually
+  // happened so the screen can say it.
+  //
+  // The result is held HERE rather than in the screen that shows it.
+  // hydrateAccount() flips the app into its loading state, which unmounts
+  // the account screen -- so a notice stored down there was thrown away
+  // between being set and being drawn, and adding somebody looked exactly
+  // as silent as before.
+  const [addedUser, setAddedUser] = useState(null);
+  const addUser = async (u) => {
+    setAddedUser(null);
+    let r;
+    try {
+      r = await api.addAccountUser(u);
+    } catch (e) {
+      console.error("[users] add failed:", e);
+      setAddedUser({ name: u.name, invited: false, reason: "add_failed" });
+      throw e;
+    }
+    setAddedUser({ name: u.name, ...(r || {}) });
+    await hydrateAccount(account.id, currentUserId, { quiet: true });
     setUserForm(false);
+    return r;
   };
+  // Your own picture. The roster is re-read rather than patched locally,
+  // because hasAvatar is what every circle on the page reads to decide
+  // whether to go and fetch a face.
+  const setMyAvatar = async (avatarKey) => {
+    await api.setMyAvatar(avatarKey);
+    await hydrateAccount(account.id, currentUserId, { quiet: true });
+  };
+  // And somebody else's, which an admin may do. Their own goes through the
+  // route above, so a project manager fixing their own picture does not need
+  // a permission they do not have.
+  const setUserAvatar = async (userId, avatarKey) => {
+    if (userId === currentUserId) return setMyAvatar(avatarKey);
+    await api.updateAccountUser(userId, { avatarKey });
+    await hydrateAccount(account.id, currentUserId, { quiet: true });
+    setEditUser((u) => (u && u.id === userId ? { ...u, hasAvatar: !!avatarKey } : u));
+  };
+
   // "They never got it." Re-reads the roster afterwards so the row stops
   // saying an invite went out two days ago when one just went out now.
   const resendInvite = async (userId) => {
     const r = await api.resendUserInvite(userId);
-    await hydrateAccount(account.id, currentUserId);
+    await hydrateAccount(account.id, currentUserId, { quiet: true });
     return r;
   };
 
@@ -3181,8 +3222,17 @@ export default function SubSub() {
   // Pulls this account's companies/engagements/jobs/members from the API and
   // replaces the corresponding local state. Called on login and whenever the
   // account switcher changes accounts.
-  async function hydrateAccount(accountId, userId) {
-    setLoading(true);
+  //
+  // `quiet` is for re-reading after an action rather than arriving: adding a
+  // user, sending an invite again, changing a picture. Without it the whole
+  // screen was replaced by "Loading…" and back, which unmounts the account
+  // screen -- and with it the pane you were on, the form you were in and
+  // anything either of them was holding. Adding somebody from the Users tab
+  // dropped you back on Profile, having thrown away the notice saying what
+  // had just been sent. Arriving still shows the loading screen; there is
+  // nothing on it yet to lose.
+  async function hydrateAccount(accountId, userId, { quiet = false } = {}) {
+    if (!quiet) setLoading(true);
     try {
       // allSettled, not all: a building owner is refused several of these
       // outright -- the cross-account booking feed, the uniform orders -- and
@@ -3243,7 +3293,15 @@ export default function SubSub() {
         // Over the row, not in place of it: the signed-in person's own row
         // carries things the roster does not (their notification choices),
         // and rebuilding it from the roster threw those away on every load.
-        members.forEach((m) => { byId[m.id] = { ...(byId[m.id] || {}), id: m.id, name: m.name, email: m.email, phone: m.phone }; });
+        // hasLogin and inviteSentAt come with the roster and were being
+        // dropped here, which made the roster lie about every person on it.
+        // SeatState reads hasLogin to decide whether to say anything at all,
+        // so undefined meant "no login" -- and the account owner, signed in
+        // and looking at the page, was told they had never been invited,
+        // beside a button offering to send them an invite they do not need.
+        members.forEach((m) => { byId[m.id] = { ...(byId[m.id] || {}), id: m.id, name: m.name,
+          email: m.email, phone: m.phone, hasLogin: m.hasLogin, inviteSentAt: m.inviteSentAt,
+          hasAvatar: m.hasAvatar }; });
         return Object.values(byId);
       });
       setMemberships((prev) => {
@@ -3258,7 +3316,7 @@ export default function SubSub() {
     } catch (err) {
       console.error("[hydrate] failed:", err);
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }
 
@@ -3999,7 +4057,7 @@ export default function SubSub() {
               onClick={() => setMobileNav((v) => !v)}><span /></button>
             <div className="user-wrap">
               <button className="user-btn" onClick={() => setUserMenu((v) => !v)}>
-                <span className="user-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+                <Avatar user={me} />
                 <span className="user-meta">
                   <span className="user-name">{me.name}</span>
                   <span className="user-role">{roleLabel}</span>
@@ -4095,7 +4153,7 @@ export default function SubSub() {
         {mobileNav && <div className="nav-scrim" onClick={() => setMobileNav(false)} />}
         <nav className={`tabs ${mobileNav ? "open" : ""}`} onClick={(e) => { if (e.target.closest("button")) setMobileNav(false); }}>
           <div className="drawer-user">
-            <span className="user-avatar">{me.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+            <Avatar user={me} />
             {/* The company name is the page heading and the footer already;
                 here it only cost the role the room to be read. */}
             <span className="drawer-user-txt"><b>{me.name}</b><span>{roleLabel}</span></span>
@@ -4805,6 +4863,7 @@ export default function SubSub() {
           cancelBusy={cancelBusy}
           billingBusy={billingBusy} billingErr={billingErr}
           onAddUser={addUser} onRemoveUser={removeUser} onEditUser={setEditUser}
+          onSetMyAvatar={setMyAvatar} added={addedUser} onDismissAdded={() => setAddedUser(null)}
           onResendInvite={resendInvite}
           onLoginAs={(id) => {
             const m = memberships.find((x) => x.userId === id && x.accountId === account.id);
@@ -4981,6 +5040,7 @@ export default function SubSub() {
         <UserForm subs={subs} properties={accountProperties} accountKind={kindOf(account)}
           existing={editUser} isSelf={editUser.id === currentUserId}
           canChangeRole={can("users") && editUser.id !== currentUserId}
+          onSetAvatar={can("users") || editUser.id === currentUserId ? setUserAvatar : null}
           onSubmit={updateUser} onCancel={() => setEditUser(null)} /></Modal>}
       {adding && <Modal onClose={() => { setAdding(false); setResumeAssign(null); }} wide>
         <SubForm properties={accountProperties} onSubmit={addSub}
@@ -11564,6 +11624,110 @@ function EmergencyContractorPanel({ subs, current, onSave }) {
   );
 }
 
+// ---- faces ---------------------------------------------------------------
+// One blob URL per person, not one per row that draws them.
+//
+// The roster, the header chip and the drawer all draw the same face, and
+// the roster draws every seat at once. Fetching per component would be one
+// request per rendered circle, and a new blob URL each time -- which the
+// browser holds until the tab closes, whether or not anything still points
+// at it.
+//
+// Keyed by person and by a version that changes when somebody uploads, so a
+// new picture replaces the old one instead of being hidden behind it.
+const avatarCache = new Map();
+let avatarVersion = 0;
+function avatarUrl(userId) {
+  const key = `${userId}:${avatarVersion}`;
+  if (!avatarCache.has(key)) {
+    avatarCache.set(key, api.userAvatarBlob(userId).catch((e) => {
+      // A 404 is the ordinary answer for somebody who has not set one, and
+      // the roster says who has -- so this is only reached when the two
+      // disagree, which is a stale roster rather than a fault.
+      console.warn("[avatar] not loaded:", userId, e?.message || e);
+      return null;
+    }));
+  }
+  return avatarCache.get(key);
+}
+// After an upload. The old blob URLs are released rather than left behind:
+// on a long session of editing pictures they are the one thing here that
+// grows without limit.
+function forgetAvatars() {
+  for (const p of avatarCache.values()) p.then?.((u) => u && URL.revokeObjectURL(u));
+  avatarCache.clear();
+  avatarVersion += 1;
+}
+
+// A person, as a circle. Their photograph if they have set one, their
+// initials if not -- never a generated face, which is worse than no face.
+function Avatar({ user, className = "" }) {
+  const [url, setUrl] = useState(null);
+  const id = user?.id, has = !!user?.hasAvatar;
+  useEffect(() => {
+    let live = true;
+    if (!has || !id) { setUrl(null); return; }
+    avatarUrl(id).then((u) => { if (live) setUrl(u); });
+    return () => { live = false; };
+    // avatarVersion is not state; the upload path re-renders the tree that
+    // owns these rows, which is what brings a new picture in.
+  }, [id, has]);
+  const initials = String(user?.name || "?").split(" ").map((w) => w[0]).join("").slice(0, 2);
+  return (
+    <span className={`user-avatar ${className}`}>
+      {url ? <img src={url} alt="" className="ua-img" /> : initials}
+    </span>
+  );
+}
+
+// Choosing one. Used by an admin on somebody else's row and by anybody on
+// their own profile, so the write is a prop rather than baked in.
+function AvatarPicker({ user, onSave }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const file = useRef(null);
+  const pick = async (f) => {
+    if (!f) return;
+    if (!/^image\//.test(f.type)) { setErr("That isn't an image."); return; }
+    // The same ceiling report photos get. A phone camera clears it easily;
+    // a RAW file does not, and finding that out after the upload is worse.
+    if (f.size > 10 * 1024 * 1024) { setErr("That picture is over 10MB — try a smaller one."); return; }
+    setBusy(true); setErr("");
+    try {
+      const { key } = await api.uploadFile("avatar", f);
+      await onSave(key);
+      forgetAvatars();
+    } catch (e) {
+      console.error("[avatar] upload failed:", e);
+      setErr(e?.body?.error === "migration_needed"
+        ? `The database isn't migrated yet — run ${e.body.migration || "032_user_avatar"}.sql and reload.`
+        : "That didn't upload. Try again.");
+    } finally { setBusy(false); if (file.current) file.current.value = ""; }
+  };
+  const clear = async () => {
+    setBusy(true); setErr("");
+    try { await onSave(null); forgetAvatars(); }
+    catch (e) { console.error("[avatar] remove failed:", e); setErr("Couldn't remove that. Try again."); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="ua-pick">
+      <Avatar user={user} className="lg" />
+      <div className="ua-pick-acts">
+        <input ref={file} type="file" accept="image/*" hidden
+          onChange={(e) => pick(e.target.files?.[0])} />
+        <button type="button" className="pick" disabled={busy} onClick={() => file.current?.click()}>
+          <ImagePlus size={13} /> {busy ? "Uploading…" : user?.hasAvatar ? "Change picture" : "Add a picture"}
+        </button>
+        {user?.hasAvatar && (
+          <button type="button" className="pick" disabled={busy} onClick={clear}>Remove</button>
+        )}
+        {err && <span className="fld-note err" role="alert">{err}</span>}
+      </div>
+    </div>
+  );
+}
+
 // Whether a person on this roster can actually get in.
 //
 // Adding somebody wrote a users row and a membership and sent nothing, and
@@ -11780,7 +11944,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   onPatchSub, onRequestDocs, onSeatLimit, onSaveNotify,
   hostnameStatus, onRefreshHostname, properties = [], roleLabel,
   emergencyCompanyId = null, onSetEmergencyContractor,
-  incomingConnects = [], onRespondConnect, onReloadConnects }) {
+  incomingConnects = [], onRespondConnect, onReloadConnects, onSetMyAvatar,
+  added = null, onDismissAdded }) {
   // accountKind is already a prop; the user form needs it to know which
   // scoped roles this account has anybody to hand out.
   const tenantSeats = users.filter((u) => u.role === "tenant");
@@ -11922,6 +12087,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
         <>
           <div className="portal-panel settings-panel">
             <h4>Your details</h4>
+            {/* Your own picture, on your own profile. Every seat gets this,
+                not just an admin: asking somebody else to change your
+                profile picture is an errand, not a permission. */}
+            <AvatarPicker user={me} onSave={onSetMyAvatar} />
             {mySub && (
               <>
                 <label className="fld">Company name <span className="fld-note">shown on your dashboard</span>
@@ -12287,10 +12456,32 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <Plus size={14} /> New user
             </button>
           </div>
+          {added && (
+            <p className={`seat-added ${added.invited ? "" : "warn"}`} role="status">
+              {added.invited
+                ? <><Check size={13} /> {added.name} was added and invited
+                    {added.to ? <> — we {added.emailed && added.texted ? "emailed and texted"
+                      : added.texted ? "texted" : "emailed"} {added.to}</> : null}. Nothing else to send.</>
+                : <><AlertTriangle size={13} /> {added.name} was added, but the invite did not go out
+                    {added.reason === "no_email" ? " — they have no email address on file."
+                      : added.reason === "already_has_login" ? " — they already have a login, so they don't need one."
+                      : added.reason === "add_failed" ? " — nothing was saved. Try again."
+                      : ". Use Send invite on their row to try again."}</>}
+              <button className="seat-added-x" onClick={onDismissAdded} aria-label="Dismiss"><X size={13} /></button>
+            </p>
+          )}
           {adding && (
             <div className="portal-panel" style={{ marginBottom: 12 }}>
               <UserForm subs={subs} properties={properties} accountKind={accountKind}
-                onSubmit={(u) => { onAddUser(u); setAdding(false); }} onCancel={() => setAdding(false)} />
+                onSubmit={async (u) => {
+                  // The notice is set by whoever owns the call, one level up.
+                  // Said out loud at all because the whole confusion was an
+                  // invite going out silently and the row implying it had
+                  // not: an admin who cannot see that it was sent sends a
+                  // second one.
+                  try { await onAddUser(u); } catch { /* the notice says so */ }
+                  setAdding(false);
+                }} onCancel={() => setAdding(false)} />
             </div>
           )}
           <div className="user-list">
@@ -12298,7 +12489,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               const linked = u.subId && subs.find((x) => x.id === u.subId);
               return (
                 <div key={u.id} className="user-row">
-                  <span className="user-avatar lg">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+                  <Avatar user={u} className="lg" />
                   <div className="user-row-main">
                     <div className="user-row-head">
                       <h4>{u.name}</h4>
@@ -15662,7 +15853,7 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable }) {
 }
 
 // ---- Create / edit user -------------------------------------------------
-function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = true, properties = [], accountKind = DEFAULT_ACCOUNT_KIND }) {
+function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = true, properties = [], accountKind = DEFAULT_ACCOUNT_KIND, onSetAvatar }) {
   const [f, setF] = useState(existing
     ? { id: existing.id, name: existing.name, email: existing.email, role: existing.role,
         subId: existing.subId || "", propertyIds: existing.propertyIds || [] }
@@ -15697,6 +15888,12 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
           : existing ? "Change this user's details, role, or access."
           : `Admins manage users; ${roleLabelIn(accountKind, "pm").toLowerCase()}s do everything else.`}
       </p>
+      {/* Only on an existing person: the picture is stored against a row,
+          and a new user has not got one yet. They set their own, or an
+          admin sets it for them once they are on the roster. */}
+      {existing && onSetAvatar && (
+        <AvatarPicker user={existing} onSave={(key) => onSetAvatar(existing.id, key)} />
+      )}
       <label className="fld">Full name<input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Jane Doe" /></label>
       <label className="fld">Email<input value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="jane@company.com" /></label>
       <div className="fld">Role
@@ -19801,6 +19998,26 @@ p.fld-note{margin:6px 0 0}
 
 /* Amber rather than red: somebody who has not set a password yet is a thing
    to finish, not a thing that has gone wrong. */
+/* A face in the circle. object-fit so a portrait and a landscape both fill
+   it rather than one of them being squashed into a square. */
+.user-avatar{overflow:hidden}
+.ua-img{width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit}
+.ua-pick{display:flex;align-items:center;gap:14px;margin:0 0 16px;flex-wrap:wrap}
+.ua-pick .user-avatar.lg{flex:none}
+.ua-pick-acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+.ua-pick-acts .fld-note.err{color:var(--red);flex-basis:100%}
+
+/* What happened when somebody was just added. Green for the ordinary case,
+   because the ordinary case -- added AND invited, in one go -- is the thing
+   an admin could not see and went looking for a second button to do. */
+.seat-added{display:flex;align-items:center;gap:7px;margin:0 0 12px;padding:10px 13px;
+  border-radius:10px;font-size:13px;font-weight:600;
+  background:#eef5f1;border:1px solid #cfe0d6;color:var(--brand)}
+.seat-added.warn{background:#fdf6e9;border-color:#ecd9b0;color:#7a5a12}
+.seat-added-x{margin-left:auto;border:0;background:none;color:inherit;cursor:pointer;
+  padding:2px;opacity:.7;line-height:0}
+.seat-added-x:hover{opacity:1}
+.seat-added svg{flex:none}
 .seat-state{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:3px;
   font-size:11.5px;font-weight:600;color:#8a6116}
 .seat-state svg{flex:none}
