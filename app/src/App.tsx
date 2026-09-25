@@ -4067,6 +4067,19 @@ export default function SubSub() {
 
       {tab === "network" && can("contractors") && (
         <main className="ss-main">
+          <PageHead title="Contractors"
+            sub={subs.length === 0
+              ? "Nobody on your list yet."
+              : `${subs.length} on your list \u00b7 ${subs.filter(docsComplete).length} ready to schedule`}>
+            {can("contractors") && runsTheAccount(role, membership) && (
+              <>
+                <button className="btn-solid" onClick={() => setInviteOpen(true)}>
+                  <Mail size={15} /> Invite</button>
+                <button className="btn-ghost" onClick={() => tryAddContractor()}>
+                  <Plus size={15} /> Add one myself</button>
+              </>
+            )}
+          </PageHead>
           {/* Arriving from a building's card. A filtered list that does not
               say it is filtered is how somebody concludes they have three
               contractors when they have thirty. */}
@@ -4327,6 +4340,11 @@ export default function SubSub() {
           .localeCompare(String(a.updatedAtIso || a.createdAtIso || "")));
       return (
         <main className="ss-main">
+          <PageHead title="Jobs"
+            sub={jobs.length === 0
+              ? "Nothing raised yet."
+              : `${jobs.length} job${jobs.length === 1 ? "" : "s"} \u00b7 ${
+                  jobs.filter((j) => !isClosed(j)).length} still open`} />
           {jobProperty && (
             <div className="scoped-to">
               <Building2 size={14} />
@@ -4607,7 +4625,7 @@ export default function SubSub() {
           seatCount={seatCount} atSeatLimit={atSeatLimit}
           jobsThisMonth={jobsThisMonth} canBrand={canBrand}
           billing={billing} onSetBilling={setBilling}
-          accountKind={kindOf(account)} onSetAccountKind={setAccountKind}
+          accountKind={kindOf(account)} onSetAccountKind={setAccountKind} roleLabel={roleLabel}
           accountTrades={account.trades} onSetAccountTrades={setAccountTrades}
           emergencyCompanyId={account.emergencyCompanyId || null}
           onSetEmergencyContractor={setEmergencyContractor}
@@ -11553,7 +11571,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   onCancelSubscription, onResumeSubscription, cancelBusy,
   onAddUser, onRemoveUser, onEditUser, onLoginAs, onResendInvite, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onSaveNotify,
-  hostnameStatus, onRefreshHostname, properties = [],
+  hostnameStatus, onRefreshHostname, properties = [], roleLabel,
   emergencyCompanyId = null, onSetEmergencyContractor,
   incomingConnects = [], onRespondConnect, onReloadConnects }) {
   // accountKind is already a prop; the user form needs it to know which
@@ -11622,6 +11640,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
 
   return (
     <main className="ss-main">
+      <PageHead title="My account"
+        sub={[me.name, canManage ? brand.name : null, roleLabel]
+          .filter(Boolean).join(" \u00b7 ")} />
       {panes.length > 1 && (
         <div className="seg-tabs">
           {panes.map(([id, l]) => (
@@ -12308,9 +12329,10 @@ function UniformOrder({ sub, orders, onOrder, brand }) {
   const total = lines.reduce((n, l) => n + l.qty, 0);
 
   return (
+    <>
+    <PageHead title="Uniforms" sub={`Branded gear from ${brand.name}`} />
     <div className="portal-panel">
-      <h4>Order uniforms</h4>
-      <p className="panel-note">Branded gear from {brand.name}. Orders go to them for approval, then ship to your mailing address.</p>
+      <p className="panel-note">Orders go to {brand.name} for approval, then ship to your mailing address.</p>
 
       {!hasAddr && (
         <div className="doc-block with-cta">
@@ -12368,6 +12390,7 @@ function UniformOrder({ sub, orders, onOrder, brand }) {
         </>
       )}
     </div>
+    </>
   );
 }
 
@@ -12932,6 +12955,29 @@ function DashRows({ id, peek = 3, children }) {
         </button>
       )}
     </>
+  );
+}
+
+// The name of the screen you are on.
+//
+// Properties had one and the rest did not, so Contractors opened on a
+// search box, Availability on a colour key and Jobs on a row of filters --
+// three screens that begin by asking you something without first saying
+// what they are. On a tablet, where the nav is behind a hamburger, there
+// was then nothing on the page naming where you were at all.
+//
+// Same shape as the one Properties already used, so this is one thing
+// rather than a fourth variation: the name, a line of plain arithmetic
+// under it, and whatever this screen's main action is on the right.
+function PageHead({ title, sub, children }) {
+  return (
+    <div className="dash-hello">
+      <div>
+        <h2>{title}</h2>
+        {sub ? <p>{sub}</p> : null}
+      </div>
+      {children ? <div className="dash-cta">{children}</div> : null}
+    </div>
   );
 }
 
@@ -13553,8 +13599,13 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
     return map;
   }, [jobs]);
 
+  const free = subs.filter((s) => availableOn(s, dayKey())).length;
   return (
     <main className="ss-main">
+      <PageHead title="Availability"
+        sub={subs.length === 0
+          ? "No contractors to show yet."
+          : `${subs.length} contractor${subs.length === 1 ? "" : "s"} \u00b7 ${free} free today \u00b7 the next 14 days`} />
       <div className="cal-legend">
         <span><span className="lg up" /> Available</span>
         <span><span className="lg down" /> Not available</span>
@@ -14493,7 +14544,10 @@ function ConnectPane({ requests, onRespond, onReload }) {
 
   return (
     <div className="pane">
-      <h2 className="pane-h">Connect</h2>
+      <PageHead title="Connect"
+        sub={pending.length
+          ? `${pending.length} waiting on your answer`
+          : "Your code, and who has asked to work with you"} />
 
       <section className="dash-sec">
         <h3><Users size={15} /> Asking to work with you
@@ -14678,6 +14732,8 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
 
       {pane === "settings" && (
         <>
+          <PageHead title="Job settings"
+            sub="What you work in, where you go, and when you are free" />
           <div className="seg-tabs">
             {[["trades", "Trades"], ["coverage", "Coverage"], ["availability", "Availability"]].map(([id, l]) => (
               <button key={id} className={sub2 === id ? "on" : ""} onClick={() => setSub2(id)}>{l}</button>
@@ -14752,8 +14808,12 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
 
 
       {pane === "docs" && (
+        <>
+        <PageHead title="My documents"
+          sub={miss.length === 0
+            ? `All ${DOC_KINDS.length} on file`
+            : `${DOC_KINDS.length - miss.length} of ${DOC_KINDS.length} on file`} />
         <div className="portal-panel">
-          <h4>My documents</h4>
           {miss.length > 0 ? (
             <div className="doc-alert">
               <AlertTriangle size={16} />
@@ -14843,6 +14903,7 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
             ))}
           </div>
         </div>
+        </>
       )}
 
     </main>
@@ -14932,8 +14993,12 @@ function MyCrews({ crews, onSave }) {
   const total = clean.reduce((n, c) => n + c.members.length, 0);
 
   return (
+    <>
+    <PageHead title="My crews"
+      sub={crews.length === 0 ? "No crews yet."
+        : `${crews.length} crew${crews.length === 1 ? "" : "s"} \u00b7 ${
+            crews.reduce((n, c) => n + (c.members || []).length, 0)} people`} />
     <div className="portal-panel">
-      <h4>My crews</h4>
       <p className="panel-note">Name each crew and list who's on it. Admins pick which crew runs a job.</p>
       <div className="crew-edit">
         {list.map((cr, ci) => (
@@ -14963,6 +15028,7 @@ function MyCrews({ crews, onSave }) {
             </button>}
       </div>
     </div>
+    </>
   );
 }
 
