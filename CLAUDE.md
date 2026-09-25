@@ -92,6 +92,17 @@ refactor.
   one. An expiry that lapses under an already-scheduled job does **not**
   block it — it raises an urgent request for a replacement.
 
+  `app/shared/docs.js` is the status logic. Two rules there are load-bearing:
+  **a blank expiry means "does not expire", never "unknown"** — a W-9 and a
+  signed contract have no shelf life, and treating a missing date as doubt
+  would put two thirds of every roster permanently amber until people learned
+  to ignore the colour. And **the date that matters is the job's, not
+  today's**: a certificate current now but lapsing Friday does not cover work
+  booked for the Tuesday after, and assignment is the only moment anybody can
+  act on that. Each upload is a row in `company_docs` and old ones are
+  superseded rather than deleted, because the question in a dispute is "were
+  they insured on the day of that job".
+
 - **Completion is two-party and append-only.** The subcontractor marks work
   reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because

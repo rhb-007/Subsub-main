@@ -47,4 +47,6 @@ SELECT
   (SELECT COUNT(*) FROM pragma_table_info('work_orders') WHERE name='retainage_bps')        AS m034_retainage,
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='lien_waivers')           AS m035_waivers,
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='lower_tier_parties')     AS m035_lower_tier,
-  (SELECT COUNT(*) FROM pragma_table_info('work_orders') WHERE name='scope_kind')           AS m036_scope;
+  (SELECT COUNT(*) FROM pragma_table_info('work_orders') WHERE name='scope_kind')           AS m036_scope,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='company_docs')           AS m037_docs,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_reminders')          AS m037_reminders;
