@@ -1758,12 +1758,31 @@ async function noCompanyReason(c) {
 // email it was found by, not the phone, not a document, not who else they
 // work for. Enough to recognise the company standing in front of you and
 // nothing that would make this worth scraping.
-const connectMatchToJs = (co, { engaged, pending }) => ({
+// What one lookup is allowed to tell you about a company you have no
+// relationship with.
+//
+// SubSub is not a directory. It is for running the subcontractors you
+// already have and for adding the ones you meet, so a lookup exists to stop
+// you sending a "set up an account" invite to somebody who has one -- not to
+// tell you about them. You already typed the address, the mobile or the
+// licence; what you need back is which company it is, so you do not ask the
+// wrong outfit to connect.
+//
+// So a stranger's match carries the company and roughly where they are, and
+// nothing else. Their contact's name is a person, and you typed the address
+// so you know who you were writing to. The licence number was going out with
+// every match and NOTHING has ever read it -- a field about somebody you have
+// never worked with, leaving the server for no reason at all.
+//
+// `full` is for the two cases where the company is not a stranger: one of
+// your own contractors, where every one of these fields is already on their
+// card, and a code somebody showed you in person, which is them choosing to
+// identify themselves.
+const connectMatchToJs = (co, { engaged, pending, full = false }) => ({
   companyId: co.id,
   company: co.company,
-  contact: co.contact || null,
+  contact: (full || engaged) ? (co.contact || null) : null,
   where: [co.city, co.state].filter(Boolean).join(", ") || null,
-  license: co.license || null,
   engaged, pending,
 });
 
@@ -1863,7 +1882,7 @@ app.get("/api/connect/code/:code", requireRole("admin", "pm"), async (c) => {
   const pending = !!(await c.env.DB.prepare(
     `SELECT 1 AS yes FROM connect_requests WHERE account_id = ? AND company_id = ? AND status = 'pending'`
   ).bind(accountId, co.id).first());
-  return c.json({ found: true, match: connectMatchToJs(co, { engaged, pending }) });
+  return c.json({ found: true, match: connectMatchToJs(co, { engaged, pending, full: true }) });
 });
 
 // Ask to connect. By company id (from the lookup) or by code (from a scan).
