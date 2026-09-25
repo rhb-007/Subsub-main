@@ -44,6 +44,34 @@ app.use("/api/*", cors());
 // any of this becomes reachable unauthenticated.
 app.onError((err, c) => {
   console.error("[unhandled]", c.req.method, c.req.path, err?.stack || err?.message || err);
+
+  // A migration that has not been run is not a bug in the server, and
+  // "server_error" about one sends whoever reads it looking for one. Routes
+  // that expect to outrun the schema already catch this themselves; this is
+  // for every route that does not, which is most of them -- GET
+  // /api/my-company threw a bare 500 for want of the connect_code column and
+  // said nothing about which file to run.
+  //
+  // missingSchema() answers "unknown" when it recognises the shape of the
+  // complaint but not the name in it. That is still worth saying -- the
+  // database is behind the code -- so it goes out with no migration named
+  // rather than with a guess, and `detail` carries the wording either way.
+  //
+  // The cost, taken deliberately: a column name mistyped in a query here is
+  // indistinguishable from a column a migration has not added yet, and now
+  // reports as the second. `detail` still carries SQLite's own words, which
+  // name the column, so the mistake is one look away rather than hidden --
+  // and an operator who can act is worth more than a developer who is told
+  // the truth in a way nobody can use.
+  const migration = missingSchema(err);
+  if (migration) {
+    return c.json({
+      error: "migration_needed",
+      migration: migration === "unknown" ? null : migration,
+      detail: String(err?.message || err).slice(0, 300),
+    }, 503);
+  }
+
   return c.json({
     error: "server_error",
     // Kept in the response as well as the log because these are a signed-in
@@ -3705,6 +3733,13 @@ function missingSchema(err) {
   if (/pay_kind|rate_cents|cap_hours/i.test(m)) return "024_hourly_work_orders";
   if (/updated_at/i.test(m)) return "025_job_activity";
   if (/material_supplier|material_branch/i.test(m)) return "026_material_supplier";
+  if (/user_invites/i.test(m)) return "028_user_invites";
+  // Both halves of 030: the table the requests live in, and the column
+  // holding the code a contractor's QR encodes. Named rather than left to
+  // "unknown" because this is the one an account with 031 already applied
+  // hits -- the company profile panel needs both, and being told to run the
+  // migration it had was worse than being told nothing.
+  if (/connect_requests|connect_code/i.test(m)) return "030_connect_requests";
   if (/tenant_invites|memberships\.unit|\bunit\b/i.test(m)) {
     return /sent_at/i.test(m) ? "017_tenant_invite_sent" : "015_tenants";
   }

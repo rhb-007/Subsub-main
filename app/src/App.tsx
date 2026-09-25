@@ -11533,7 +11533,17 @@ function SeatState({ u, onResend }) {
 function companyErrorText(e) {
   const code = e?.body?.error;
   if (code === "migration_needed") {
-    return `The database isn't migrated yet — run ${e.body.migration || "031_account_company"}.sql and reload.`;
+    // The server names the migration when it can be sure which one adds the
+    // missing piece. When it cannot, say what is missing rather than naming
+    // the wrong file: this panel needs two migrations, and 031 was the one
+    // hardcoded here, so a database missing only 030 was told to run the one
+    // it already had.
+    if (e.body.migration) {
+      return `The database isn't migrated yet — run ${e.body.migration}.sql and reload.`;
+    }
+    return "The database isn't migrated yet"
+      + (e.body.missing ? ` — it has no ${e.body.missing}.` : ".")
+      + " Run the outstanding migrations and reload.";
   }
   if (code === "not_hireable") {
     return "This account hires contractors but isn't hired itself, so it has no subcontractor "
@@ -11545,7 +11555,12 @@ function companyErrorText(e) {
   if (code === "not_found") {
     return "This account's company record is missing. Tell us and we'll put it back — nothing of yours is lost.";
   }
-  return `Could not load your company profile${e?.status ? ` (HTTP ${e.status}${code ? `, ${code}` : ""})` : ""}.`;
+  // The server puts the real reason in `detail` on a 500. Leaving it in the
+  // network tab and printing "HTTP 500, server_error" on screen is how a
+  // one-look problem became a round of guessing.
+  const detail = e?.body?.detail;
+  return `Could not load your company profile${e?.status ? ` (HTTP ${e.status}${code ? `, ${code}` : ""})` : ""}.`
+    + (detail ? ` ${detail}` : "");
 }
 
 // Being hireable.
