@@ -470,5 +470,100 @@ console.log("\n-- an owner keeps watching a building they appointed out --");
     !none.some((j) => j.id === "job_theirs"));
 }
 
+console.log("\n-- a tenant comes with the building, and keeps their own reports --");
+{
+  // Tenants follow the building because their next report has to reach whoever
+  // manages the place now. But the reports they ALREADY made stay with the
+  // account that handled them, since jobs never move -- so without this a
+  // tenant who followed their building lost every report they had ever made
+  // about their own home: nothing on the new account, and a 403 from the old
+  // one, because their seat there is gone.
+  const { db, env } = seed();
+  db.exec(`
+    -- Tam reported a leak while Cascade managed Cedar. A neighbour reported
+    -- something too, which Tam must never gain sight of.
+    INSERT INTO users(id,name,email,auth_id) VALUES ('u_nb','Nadia Neighbour','n@n.test','a_n');
+    INSERT INTO memberships(id,user_id,account_id,role,unit) VALUES ('m_nb','u_nb','acc_pm','tenant','5C');
+    INSERT INTO membership_properties(membership_id,property_id) VALUES ('m_nb','p_cedar');
+    INSERT INTO jobs(id,account_id,title,date,status,property_id,requested_by) VALUES
+      ('job_leak','acc_pm','Leak under the sink','${iso(-10)}','active','p_cedar','u_ten'),
+      ('job_nb','acc_pm','Their broken window','${iso(-9)}','active','p_cedar','u_nb');
+  `);
+
+  const [, req] = await json(await call(env, "u_dana", "acc_pm", "/properties/p_cedar/transfer",
+    { method: "POST", body: JSON.stringify({}) }));
+  await call(env, "u_pm", "acc_pm", `/property-transfers/${req.id}/decide`,
+    { method: "POST", body: JSON.stringify({ accept: true }) });
+
+  // They came with it, with their unit and their scope intact.
+  const seat = one(db, `SELECT account_id, unit, role FROM memberships WHERE id='m_tam'`);
+  ck("the tenant is on the new account", seat.account_id === "acc_dana", seat.account_id);
+  ck("still a tenant", seat.role === "tenant");
+  ck("with their unit", seat.unit === "4B" || seat.unit === null, String(seat.unit));
+  ck("and still scoped to their building",
+    one(db, `SELECT COUNT(*) n FROM membership_properties WHERE membership_id='m_tam'`).n === 1);
+  // A neighbour at the same building comes too -- they live there as well.
+  ck("so does another tenant at the same building",
+    one(db, `SELECT account_id FROM memberships WHERE id='m_nb'`).account_id === "acc_dana");
+
+  // THE POINT: their own report survived the move.
+  const [s, jobs] = await json(await call(env, "u_ten", "acc_dana", "/jobs"));
+  ck("the tenant can still see the leak they reported", s === 200
+    && jobs.some((j) => j.id === "job_leak"), JSON.stringify(jobs.map((j) => j.id)));
+  const leak = jobs.find((j) => j.id === "job_leak");
+  ck("marked as handled by whoever managed it then",
+    leak.underPreviousManager === true && leak.readOnly === true, JSON.stringify(leak && {
+      underPreviousManager: leak.underPreviousManager, readOnly: leak.readOnly }));
+  ck("and it names who they reported it to",
+    leak.managedBy === "Cascade Management", String(leak.managedBy));
+
+  // THE NEGATIVE: not the neighbour's.
+  ck("but not their neighbour's report",
+    !jobs.some((j) => j.id === "job_nb"), JSON.stringify(jobs.map((j) => j.id)));
+  const blob = JSON.stringify(jobs);
+  ck("and nothing about the neighbour at all",
+    !/Nadia|broken window/.test(blob), blob.slice(0, 160));
+}
+
+console.log("\n-- and a tenant does not keep reports once they leave the building --");
+{
+  // Scoped to a property they are STILL a tenant of. Somebody moved out and
+  // unscoped keeps nothing, because the building is no longer theirs to read.
+  const { db, env } = seed();
+  db.exec(`
+    INSERT INTO jobs(id,account_id,title,date,status,property_id,requested_by) VALUES
+      ('job_leak','acc_pm','Leak under the sink','${iso(-10)}','active','p_cedar','u_ten');
+  `);
+  const [, req] = await json(await call(env, "u_dana", "acc_pm", "/properties/p_cedar/transfer",
+    { method: "POST", body: JSON.stringify({}) }));
+  await call(env, "u_pm", "acc_pm", `/property-transfers/${req.id}/decide`,
+    { method: "POST", body: JSON.stringify({ accept: true }) });
+  // They move out: the scope goes.
+  db.exec(`DELETE FROM membership_properties WHERE membership_id='m_tam'`);
+  const [, jobs] = await json(await call(env, "u_ten", "acc_dana", "/jobs"));
+  ck("a tenant no longer at the building keeps nothing",
+    !jobs.some((j) => j.id === "job_leak"), JSON.stringify(jobs.map((j) => j.id)));
+
+  // And the case that actually exercises the property clause: still a tenant
+  // SOMEWHERE, with an old report at an address they have left. Emptying the
+  // scope entirely short-circuits before the clause is reached, so it proves
+  // nothing about it.
+  const { db: db2, env: env2 } = seed();
+  db2.exec(`
+    INSERT INTO jobs(id,account_id,title,date,status,property_id,requested_by) VALUES
+      ('job_here','acc_pm','Leak at Cedar','${iso(-10)}','active','p_cedar','u_ten'),
+      ('job_gone','acc_pm','Leak at the old flat','${iso(-90)}','active','p_elm','u_ten');
+  `);
+  const [, r2] = await json(await call(env2, "u_dana", "acc_pm", "/properties/p_cedar/transfer",
+    { method: "POST", body: JSON.stringify({}) }));
+  await call(env2, "u_pm", "acc_pm", `/property-transfers/${r2.id}/decide`,
+    { method: "POST", body: JSON.stringify({ accept: true }) });
+  const [, mine] = await json(await call(env2, "u_ten", "acc_dana", "/jobs"));
+  ck("they keep the report at the address they still live at",
+    mine.some((j) => j.id === "job_here"), JSON.stringify(mine.map((j) => j.id)));
+  ck("and not one at an address they have left",
+    !mine.some((j) => j.id === "job_gone"), JSON.stringify(mine.map((j) => j.id)));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

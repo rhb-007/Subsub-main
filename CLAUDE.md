@@ -156,6 +156,18 @@ refactor.
 
   **Tenants follow the building**, because a tenant is a person who reports a
   leak at that address and their next report has to reach whoever manages it.
+  Their seat, their unit and their property scope all move.
+
+  And **a tenant keeps their own reports** across the move. Jobs never move, so
+  without this a tenant who followed their building lost every report they had
+  ever made about their own home — nothing on the new account, and a 403 from
+  the old one, because their seat there is gone. Their own reports about their
+  own home are the most personal record here and the least defensible thing to
+  lose. Scoped hard: reported **by them**, at a property they are **still** a
+  tenant of, read-only, with the account that handled it named — because "who
+  did I report this to" is what somebody chasing an old repair is asking. Not
+  the building's other repairs: sharing an address with somebody is not a reason
+  to read their business.
 
   **An owner keeps watching a building they appointed out.** The property stays
   on their list *and* the work at it comes with them — `/api/properties` and

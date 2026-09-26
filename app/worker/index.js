@@ -4550,6 +4550,34 @@ app.get("/api/jobs", async (c) => {
   // A guest seat never reaches this. An owner scoped to named buildings on
   // somebody else's account sees what that scope allows and nothing through a
   // second door.
+  // A tenant's OWN reports, wherever they ended up.
+  //
+  // When a building changes hands the tenants follow it -- their next report has
+  // to reach whoever manages the place now -- but the reports they already made
+  // stay with the account that handled them, because jobs never move. So a
+  // tenant who followed their building lost every report they had ever made
+  // about their own home: nothing on the new account, and a 403 from the old one
+  // because their seat there is gone.
+  //
+  // Their own reports about their own home are the most personal record here and
+  // the least defensible thing to lose. Scoped hard: reported BY them, at a
+  // property they are STILL a tenant of. Not the building's other repairs --
+  // sharing an address with somebody is not a reason to read their business.
+  let pastReports = [];
+  if (auth.role === "tenant" && (auth.propertyIds || []).length) {
+    try {
+      const marks = auth.propertyIds.map(() => "?").join(",");
+      const { results } = await c.env.DB.prepare(
+        `SELECT j.*, a.name AS managed_by_name FROM jobs j
+           LEFT JOIN accounts a ON a.id = j.account_id
+          WHERE j.requested_by = ? AND j.account_id != ?
+            AND j.property_id IN (${marks})
+          ORDER BY COALESCE(j.date, j.created_at) DESC LIMIT 200`
+      ).bind(auth.userId, accountId, ...auth.propertyIds).all();
+      pastReports = results || [];
+    } catch (err) { if (!missingSchema(err)) throw err; }
+  }
+
   let ownedJobs = [];
   if (auth.role !== "owner" && auth.role !== "tenant") {
     try {
@@ -4569,7 +4597,7 @@ app.get("/api/jobs", async (c) => {
 
   // Work orders for both sets. The second query is scoped by JOB rather than by
   // account, because these jobs are on an account the caller is not part of.
-  const jobIds = [...jobs, ...ownedJobs].map((j) => j.id);
+  const jobIds = [...jobs, ...ownedJobs, ...pastReports].map((j) => j.id);
   const woByJob = {};
   if (jobIds.length) {
     const { results: wos } = await c.env.DB.prepare(
@@ -4585,6 +4613,14 @@ app.get("/api/jobs", async (c) => {
       ...stripMoney(auth, jobRowToJs(j, woByJob[j.id] || [])),
       // Theirs to watch, not to touch.
       atOwnedProperty: true, readOnly: true,
+      managedBy: j.managed_by_name || null,
+    })),
+    // Handled by whoever managed the building at the time, so read-only now.
+    // Named, because "who did I report this to" is the question a tenant
+    // chasing an old repair is actually asking.
+    ...pastReports.map((j) => ({
+      ...stripMoney(auth, jobRowToJs(j, woByJob[j.id] || [])),
+      underPreviousManager: true, readOnly: true,
       managedBy: j.managed_by_name || null,
     })),
   ]);
