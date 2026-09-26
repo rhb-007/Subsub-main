@@ -415,5 +415,60 @@ console.log("\n-- appointing is not a way to look up accounts --");
     s3 === 403 && b3.error === "not_yours_to_appoint", `${s3} ${b3.error}`);
 }
 
+console.log("\n-- an owner keeps watching a building they appointed out --");
+{
+  // The card staying on the list is not the same as seeing the building. The
+  // whole reason an owner is here is to watch what happens at the property they
+  // own, and appointing a manager is exactly when they stop being able to watch
+  // it themselves -- so the work has to come with it.
+  const { db, env } = seed();
+  db.exec(`
+    UPDATE properties SET account_id='acc_other', owner_account_id='acc_dana' WHERE id='p_cedar';
+    INSERT INTO jobs(id,account_id,title,date,status,property_id) VALUES
+      ('job_theirs','acc_other','Boiler service','${iso(4)}','active','p_cedar');
+  `);
+
+  const [s, jobs] = await json(await call(env, "u_dana", "acc_dana", "/jobs"));
+  ck("the owner sees work at their own building", s === 200
+    && jobs.some((j) => j.id === "job_theirs"), JSON.stringify(jobs.map((j) => j.id)));
+  const mine = jobs.find((j) => j.id === "job_theirs");
+  ck("marked as one they only watch", mine.readOnly === true && mine.atOwnedProperty === true,
+    JSON.stringify({ readOnly: mine.readOnly, atOwnedProperty: mine.atOwnedProperty }));
+  ck("and it says who runs it", mine.managedBy === "Sound PM", String(mine.managedBy));
+  // The manager's own view is unchanged.
+  const [, theirs] = await json(await call(env, "u_far", "acc_other", "/jobs"));
+  ck("the manager sees it as an ordinary job of theirs",
+    theirs.find((j) => j.id === "job_theirs")?.readOnly === undefined,
+    JSON.stringify(theirs.find((j) => j.id === "job_theirs")?.readOnly));
+
+  // A guest seat must not pick these up through a second door -- and the case
+  // that actually tests it is a seat whose ACCOUNT owns an appointed-out
+  // building. Cascade owns Elm and has appointed Sound PM to run it; Theo is a
+  // guest on Cascade scoped to Elm... so scope it to something else, because
+  // the question is whether the owned-building query bypasses his scope
+  // entirely.
+  db.exec(`
+    INSERT INTO properties(id,account_id,owner_account_id,name)
+      VALUES ('p_birch','acc_other','acc_pm','9 Birch Ln');
+    INSERT INTO jobs(id,account_id,title,date,status,property_id) VALUES
+      ('job_birch','acc_other','Lift inspection','${iso(6)}','active','p_birch');
+  `);
+  const [, guest] = await json(await call(env, "u_theo", "acc_pm", "/jobs"));
+  ck("a scoped guest seat sees nothing extra",
+    !guest.some((j) => j.id === "job_theirs"), JSON.stringify(guest.map((j) => j.id)));
+  // The one that matters: Cascade owns Birch, so Cascade's ADMIN should see it,
+  // but a guest on Cascade scoped elsewhere must not.
+  ck("nor work at a building their host account owns but they are not scoped to",
+    !guest.some((j) => j.id === "job_birch"), JSON.stringify(guest.map((j) => j.id)));
+  const [, host] = await json(await call(env, "u_pm", "acc_pm", "/jobs"));
+  ck("while the account that owns it does see it",
+    host.some((j) => j.id === "job_birch"), JSON.stringify(host.map((j) => j.id)));
+  // And an unrelated account still sees nothing of it.
+  const { env: env3 } = seed();
+  const [, none] = await json(await call(env3, "u_pm", "acc_pm", "/jobs"));
+  ck("an account with no claim on the building sees nothing",
+    !none.some((j) => j.id === "job_theirs"));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -2331,7 +2331,13 @@ export default function SubSub() {
 
   // Jobs you can see are your account's. But crew AVAILABILITY is computed from
   // allJobs — a crew booked by another GC genuinely cannot work for you that day.
-  const jobs = useMemo(() => allJobs.filter((j) => j.accountId === account.id),
+  // This account's own jobs, PLUS work at buildings it owns and has appointed
+  // somebody else to run. Filtering on accountId alone dropped the second kind
+  // -- their accountId is the manager's -- exactly as it did for properties, so
+  // an owner saw the building on their list with nothing ever happening at it.
+  // They are marked readOnly and every action on them is gated on that.
+  const jobs = useMemo(
+    () => allJobs.filter((j) => j.accountId === account.id || j.atOwnedProperty),
     [allJobs, account.id]);
 
   // Users visible in THIS account, with their role in it.
@@ -4868,11 +4874,21 @@ export default function SubSub() {
                 const moved = movedAgo(j);
                 return (
                   <div key={j.id} data-job-id={j.id}
-                    className={`job-card ${done ? "done" : ""} ${moved ? "just-moved" : ""} ${focusJob === j.id ? "landed" : ""}`}>
+                    className={`job-card ${done ? "done" : ""} ${moved ? "just-moved" : ""} ${focusJob === j.id ? "landed" : ""} ${j.readOnly ? "not-mine" : ""}`}>
                     <div className="job-card-head">
                       <div>
                         <div className="job-title-row">
                           <h3>{j.title}</h3>
+                          {/* Work at a building this account owns and somebody
+                              else runs. Theirs to watch, not to touch -- said
+                              before any of the buttons below are looked for,
+                              because the answer to "why can't I edit this" has
+                              to be on the card. */}
+                          {j.readOnly && (
+                            <span className="job-watching" title={`Run by ${j.managedBy || "their manager"}`}>
+                              <Eye size={11} /> {j.managedBy || "Their manager"} runs this
+                            </span>
+                          )}
                           <span className={`job-phase ${done ? "done" : ""}`}>{j.withdrawnAt ? "withdrawn by tenant" : j.declinedAt ? "not approved" : done ? "completed" : "active"}</span>
                           {/* Only while it is genuinely news. A badge that
                               never expires is wallpaper. */}
@@ -4940,7 +4956,16 @@ export default function SubSub() {
                                 </div>
                               ) : <span className="trade-open-note">No contractor · no work order issued</span>}
                             </div>
-                            {a ? (
+                            {/* Every action on a trade row, gated in ONE place.
+                                A building somebody else runs is theirs to
+                                assign, replace, price and complete; gating the
+                                eight buttons individually would work until
+                                somebody adds a ninth. */}
+                            {j.readOnly ? (
+                              <span className="trade-open-note">
+                                {a ? "Handled by their manager" : "Their manager assigns this"}
+                              </span>
+                            ) : a ? (
                               <div className="trade-side">
                                 {a.auto ? (
                                   <div className="trade-actions">
@@ -21862,6 +21887,11 @@ p.fld-note{margin:6px 0 0}
   background:var(--card);color:var(--brand);font-size:11.5px;font-weight:700;
   padding:5px 10px;border-radius:7px;cursor:pointer;font-family:inherit;flex:none}
 .ph-start:hover{background:var(--paper)}
+/* a job at a building somebody else runs */
+.job-card.not-mine{background:var(--paper)}
+.job-watching{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;
+  padding:3px 8px;border-radius:6px;background:var(--card);border:1px solid var(--line);
+  color:var(--ink-soft);white-space:nowrap}
 .ph-managed{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;
   padding:3px 8px;border-radius:6px;background:var(--paper);border:1px solid var(--line);
   color:var(--ink-soft);white-space:nowrap;flex:none}

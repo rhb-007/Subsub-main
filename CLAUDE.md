@@ -157,6 +157,18 @@ refactor.
   **Tenants follow the building**, because a tenant is a person who reports a
   leak at that address and their next report has to reach whoever manages it.
 
+  **An owner keeps watching a building they appointed out.** The property stays
+  on their list *and* the work at it comes with them — `/api/properties` and
+  `/api/jobs` both return rows for buildings the caller owns but does not
+  operate, marked `ownedNotOperated` / `atOwnedProperty` and `readOnly`. Without
+  the second half an owner sees a name, an address and nothing ever happening at
+  it, which is being shown a card rather than seeing their building — and
+  watching the property is the entire reason they are here. Every action on such
+  a job is gated in one place, not per button. A guest seat never reaches any of
+  it: an owner or tenant scoped to named buildings sees what that scope allows
+  and nothing through a second door, including when their *host* account owns an
+  appointed-out building.
+
   An owner then holding their building may **appoint** a manager — the same
   two-party rule in reverse, and the manager must accept, because a building
   appearing in a portfolio unannounced is work, liability and possibly a plan

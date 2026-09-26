@@ -51,6 +51,8 @@ let PROPS_OWNER = [
     city: "Seattle", state: "WA", zip: "98101", units: 8, notes: "", ownedByAnother: false },
 ];
 let TRANSFERS = [];
+// Work the appointed manager has booked at the owner's building.
+let JOBS_OWNER = [];
 
 const requested = [], decided = [], cancelled = [], appointed = [];
 const USERS_PM = [
@@ -71,7 +73,8 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     { id: "u_dana", name: "Dana Reyes", email: "dana@owner.test", phone: null, role: "admin",
       subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
   if (path === "/api/property-transfers") return [200, TRANSFERS];
-  if (path === "/api/subs" || path === "/api/jobs") return [200, []];
+  if (path === "/api/subs") return [200, []];
+  if (path === "/api/jobs") return [200, WHICH === "pm" ? [] : JOBS_OWNER];
   if (path === "/api/invites" || path === "/api/connect-requests") return [200, []];
   const rq = /^\/api\/properties\/([^/]+)\/transfer$/.exec(path);
   if (rq && method === "POST") { requested.push({ id: rq[1], body }); return [201, { id: "tr1", awaiting: "acc_pm" }]; }
@@ -237,6 +240,46 @@ try {
     t.ck("it reaches the server with the subdomain typed",
       appointed.length === 1 && appointed[0].body.subdomain === "soundpm", JSON.stringify(appointed));
     await ctx.close();
+  }
+
+console.log("\n-- and they can watch the work at it, without touching it --");
+  {
+    TRANSFERS = [];
+    PROPS_OWNER = [{ id: "p_cedar", accountId: "acc_other", name: "12 Cedar St",
+      address: "12 Cedar St", city: "Seattle", state: "WA", zip: "98101", units: 8, notes: "",
+      ownedNotOperated: true, managedBy: "Sound PM" }];
+    JOBS_OWNER = [{
+      id: "job_theirs", accountId: "acc_other", title: "Boiler service", status: "active",
+      date: new Date(Date.now() + 4 * 86400000).toISOString().slice(0, 10), time: null,
+      address: "12 Cedar St", area: "Seattle", zip: "98101", propertyId: "p_cedar",
+      trades: ["plumbing"], assignments: {}, notes: "", scope: "Annual service",
+      createdAt: new Date().toISOString().slice(0, 10), photos: [],
+      readOnly: true, atOwnedProperty: true, managedBy: "Sound PM",
+    }];
+    const { ctx, page } = await openAs("owner");
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => /^Jobs/.test(b.innerText.trim().split("\n")[0]))?.click());
+    await wait(1100);
+    const card = await page.evaluate(() => {
+      const c = [...document.querySelectorAll(".job-card")].find((x) => /Boiler service/.test(x.innerText));
+      if (!c) return null;
+      return { text: c.innerText.replace(/\s+/g, " ").trim(),
+        notMine: c.className.includes("not-mine"),
+        buttons: [...c.querySelectorAll("button")].map((b) => b.innerText.trim()).filter(Boolean) };
+    });
+    t.ck("the work at their building is on their jobs screen", !!card, String(card));
+    t.ck("and the card says who runs it", /sound pm runs this/i.test(card.text), card.text);
+    t.ck("it reads as one they only watch", card.notMine === true, String(card.notMine));
+    // THE NEGATIVE: none of the manager's actions may be offered.
+    t.ck("no assign button", !card.buttons.some((b) => /assign/i.test(b)), JSON.stringify(card.buttons));
+    t.ck("no replace or withdraw",
+      !card.buttons.some((b) => /replace|withdraw/i.test(b)), JSON.stringify(card.buttons));
+    t.ck("no change order", !card.buttons.some((b) => /change order/i.test(b)), JSON.stringify(card.buttons));
+    t.ck("no overflow button", !card.buttons.some((b) => /overflow/i.test(b)), JSON.stringify(card.buttons));
+    t.ck("it says whose job assigning it is",
+      /their manager assigns this|handled by their manager/i.test(card.text), card.text);
+    await ctx.close();
+    JOBS_OWNER = [];
   }
 
   console.log("\n-- a building they own but do not run says so --");

@@ -4534,14 +4534,60 @@ app.get("/api/jobs", async (c) => {
     ({ results: jobs } = await listJobs("created_at DESC"));
   }
 
-  const { results: wos } = await c.env.DB.prepare(
-    `SELECT wo.* FROM work_orders wo JOIN jobs j ON j.id = wo.job_id
-     WHERE j.account_id = ? AND wo.voided_at IS NULL`
-  ).bind(accountId).all();
-  const woByJob = {};
-  for (const w of wos) (woByJob[w.job_id] ||= []).push(w);
+  // Work at buildings this account OWNS but has appointed somebody else to run.
+  //
+  // Without this an owner who appoints a manager keeps the building on their
+  // list and sees nothing happening at it: a name, an address, and no work,
+  // ever. That is not seeing your building -- it is being shown a card about
+  // it. The whole reason an owner is on SubSub is to watch what happens at the
+  // property they own, and appointing a manager is precisely when they stop
+  // being able to watch it themselves.
+  //
+  // Read-only, and marked so. The work belongs to the manager: the owner does
+  // not assign it, price it, complete it or cancel it, and every screen needs
+  // to know that before it offers a button.
+  //
+  // A guest seat never reaches this. An owner scoped to named buildings on
+  // somebody else's account sees what that scope allows and nothing through a
+  // second door.
+  let ownedJobs = [];
+  if (auth.role !== "owner" && auth.role !== "tenant") {
+    try {
+      const { results } = await c.env.DB.prepare(
+        `SELECT j.*, a.name AS managed_by_name FROM jobs j
+           JOIN properties p ON p.id = j.property_id
+           LEFT JOIN accounts a ON a.id = j.account_id
+          WHERE p.owner_account_id = ? AND p.account_id != ?
+          ORDER BY COALESCE(j.date, j.created_at) DESC LIMIT 400`
+      ).bind(accountId, accountId).all();
+      ownedJobs = results || [];
+    } catch (err) {
+      // No 039 means no owner_account_id, and the list is what it always was.
+      if (!missingSchema(err)) throw err;
+    }
+  }
 
-  return c.json(jobs.map((j) => stripMoney(auth, jobRowToJs(j, woByJob[j.id] || []))));
+  // Work orders for both sets. The second query is scoped by JOB rather than by
+  // account, because these jobs are on an account the caller is not part of.
+  const jobIds = [...jobs, ...ownedJobs].map((j) => j.id);
+  const woByJob = {};
+  if (jobIds.length) {
+    const { results: wos } = await c.env.DB.prepare(
+      `SELECT wo.* FROM work_orders wo
+        WHERE wo.voided_at IS NULL AND wo.job_id IN (${jobIds.map(() => "?").join(",")})`
+    ).bind(...jobIds).all();
+    for (const w of wos) (woByJob[w.job_id] ||= []).push(w);
+  }
+
+  return c.json([
+    ...jobs.map((j) => stripMoney(auth, jobRowToJs(j, woByJob[j.id] || []))),
+    ...ownedJobs.map((j) => ({
+      ...stripMoney(auth, jobRowToJs(j, woByJob[j.id] || [])),
+      // Theirs to watch, not to touch.
+      atOwnedProperty: true, readOnly: true,
+      managedBy: j.managed_by_name || null,
+    })),
+  ]);
 });
 
 // Every job the API has ever seen, across ALL accounts, but only the fact of
