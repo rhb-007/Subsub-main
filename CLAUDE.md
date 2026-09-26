@@ -572,6 +572,18 @@ refactor.
   rendered with the old one's jobs, properties and roster. Both go through
   `goToSeat` now, which also lands on a screen the new seat's role actually has.
 
+  What that looked like is worth recording, because it did not look like stale
+  data. A general contractor who had accepted a property manager's request to
+  connect switched to them and got **“This contractor login isn't linked to a
+  contractor record yet.”** Nothing was wrong on the server: the engagement and
+  the contractor seat were both written correctly. `mySub` looks for the seat's
+  own company in `subs`, `subs` was still the *previous* account's roster, and a
+  general contractor's roster does not contain themselves — so it found nothing
+  and drew the empty state. The branding, the name and the nav had all followed
+  the switch, which is exactly what made it read as a broken account rather than
+  a page that had not reloaded. **When a screen says a record is missing, check
+  what account the data in state belongs to before looking for the record.**
+
   **Sending is gated on a document being uploaded, not verified.** Verification
   is each hiring account's own verdict and says nothing about whether the
   contractor has one to send — the common case is that they upload and somebody

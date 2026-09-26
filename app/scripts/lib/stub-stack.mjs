@@ -113,7 +113,13 @@ export function serveApi({ port, routes, delay = 0 }) {
       });
       if (raw) { try { sent = JSON.parse(raw); } catch { sent = raw; } }
     }
-    const hit = routes(path, req.method, sent);
+    // And the headers, because some routes answer differently per ACCOUNT and
+    // the app says which one it means in X-Account-Id. A stub that answers the
+    // same roster whatever account is asked cannot see a switch land in the
+    // wrong account's data -- which is exactly the bug that wanted testing.
+    // Fourth argument, so every caller written against routes(path, method,
+    // body) keeps working untouched.
+    const hit = routes(path, req.method, sent, req.headers);
     const [status, body] = hit === undefined ? [200, []] : hit;
     res.writeHead(status, cors);
     res.end(JSON.stringify(body));
