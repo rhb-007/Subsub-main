@@ -12,7 +12,8 @@ import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEm
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
-  connectRequestEmail, connectRequestSms, workOrderIssuedSms } from "./mail.js";
+  connectRequestEmail, connectRequestSms, workOrderIssuedSms,
+  autoScheduleRequestEmail } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -28,6 +29,7 @@ import { normalizeState } from "../shared/states.js";
 import { releaseAmounts, milestonesCover } from "../shared/money.js";
 import { chainStatus, SCOPE_KINDS } from "../shared/waivers.js";
 import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
+import { hasPortal, canSet as canSetAuto, AUTO_DENY_TEXT } from "../shared/autoschedule.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
 import {
@@ -3211,7 +3213,18 @@ app.get("/api/subs", async (c) => {
             en.accepted as en_accepted, en.declined as en_declined,
             en.auto_schedule as en_auto_schedule, en.notes as en_notes,
             (SELECT group_concat(ep.property_id) FROM engagement_properties ep
-              WHERE ep.engagement_id = en.id) as en_property_ids
+              WHERE ep.engagement_id = en.id) as en_property_ids,
+            -- Whether anybody is there to answer for this company: a seat on
+            -- THIS account, or an account of their own (031 made general
+            -- contractors hireable, and theirs is the second kind). It
+            -- decides who owns the auto-schedule switch, so the browser is
+            -- told the same fact the PATCH route enforces on. A count, never
+            -- a name -- who the seat belongs to is already on the roster for
+            -- this account's own people and is nobody else's to collect.
+            (SELECT COUNT(*) FROM memberships ms
+              WHERE ms.company_id = co.id AND ms.account_id = en.account_id
+                AND ms.role = 'contractor') as en_seats,
+            (SELECT COUNT(*) FROM accounts ac WHERE ac.company_id = co.id) as en_own_account
      FROM engagements en JOIN companies co ON co.id = en.company_id
      WHERE en.account_id = ? ${onlyMine}`
   ).bind(accountId, ...scopeVals).all();
@@ -3223,6 +3236,14 @@ app.get("/api/subs", async (c) => {
     auto_schedule: r.en_auto_schedule, notes: r.en_notes,
     property_ids: r.en_property_ids,
   }));
+  // Reachability is not an engagement column, so it is attached after
+  // composeSub rather than threaded through it.
+  subs.forEach((sub, i) => {
+    sub.hasPortal = hasPortal({
+      hasSeat: (results[i].en_seats || 0) > 0,
+      ownsAccount: (results[i].en_own_account || 0) > 0,
+    });
+  });
   return c.json(subs);
 });
 
@@ -3379,6 +3400,29 @@ app.patch("/api/subs/:companyId", async (c) => {
     `SELECT id FROM engagements WHERE account_id = ? AND company_id = ?`
   ).bind(accountId, companyId).first();
   if (!engagement) return c.json({ error: "not_found" }, 404);
+
+  // Auto-schedule books work to somebody's calendar as accepted, with no
+  // buttons on their side. Hiding the toggle from the roster is not a
+  // control -- this is. See shared/autoschedule.js for why the ON direction
+  // needs a consenting party and OFF never does.
+  if ("autoSchedule" in patch) {
+    const seats = await c.env.DB.prepare(
+      `SELECT (SELECT COUNT(*) FROM memberships ms
+                WHERE ms.company_id = ? AND ms.account_id = ? AND ms.role = 'contractor') AS seats,
+              (SELECT COUNT(*) FROM accounts ac WHERE ac.company_id = ?) AS own_account`
+    ).bind(companyId, accountId, companyId).first();
+    const verdict = canSetAuto({
+      side: auth.role === "contractor" ? "contractor" : "hiring",
+      on: !!patch.autoSchedule,
+      portal: hasPortal({
+        hasSeat: (seats?.seats || 0) > 0,
+        ownsAccount: (seats?.own_account || 0) > 0,
+      }),
+    });
+    if (!verdict.ok) {
+      return c.json({ error: verdict.reason, detail: AUTO_DENY_TEXT[verdict.reason] }, 409);
+    }
+  }
 
   await applySubPatch(c.env.DB, companyId, engagement.id, patch);
 
@@ -7440,6 +7484,64 @@ app.post("/api/notify/documents", requireRole("admin", "pm"), async (c) => {
   if (!result.ok) return c.json({ error: result.error, detail: result.detail }, 502);
   await logActivity(c.env, accountId, userId, "email_sent",
     `Requested documents from ${ctx.company.company}`);
+  return c.json({ ok: true, to, id: result.id });
+});
+
+// Asking a subcontractor to turn auto-schedule on. The account cannot set it
+// for them, so this is the only move available from the hiring side -- see
+// shared/autoschedule.js. Same preview-then-send shape as the document
+// request: the server composes the text, so what the admin reviews is what
+// goes out.
+//
+// There is no request record and no pending state, on purpose. The answer to
+// "did they agree?" is the engagement's auto_schedule flag itself; a second
+// row saying "asked" could only ever drift from it, and a subcontractor who
+// says no says it by leaving the switch alone rather than by pressing
+// decline on something.
+async function autoScheduleContext(c, companyId) {
+  const { accountId } = c.get("auth");
+  const row = await c.env.DB.prepare(
+    `SELECT co.*, en.auto_schedule FROM companies co
+       JOIN engagements en ON en.company_id = co.id AND en.account_id = ?
+      WHERE co.id = ?`
+  ).bind(accountId, companyId).first();
+  if (!row) return null;
+  const account = await c.env.DB.prepare(
+    `SELECT id, name, subdomain FROM accounts WHERE id = ?`).bind(accountId).first();
+  return { company: row, contact: row.contact, autoSchedule: !!row.auto_schedule, account };
+}
+
+app.get("/api/notify/auto-schedule/preview", requireRole("admin", "pm"), async (c) => {
+  const ctx = await autoScheduleContext(c, c.req.query("companyId"));
+  if (!ctx) return c.json({ error: "not_engaged" }, 404);
+  const mail = autoScheduleRequestEmail({ ...ctx, note: c.req.query("note") || "" });
+  return c.json({
+    to: ctx.company.email || null, subject: mail.subject, text: mail.text,
+    configured: !!(c.env.RESEND_API_KEY && c.env.MAIL_FROM),
+  });
+});
+
+app.post("/api/notify/auto-schedule", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const ctx = await autoScheduleContext(c, b.companyId);
+  if (!ctx) return c.json({ error: "not_engaged" }, 404);
+  // Nothing to ask for. Worth saying rather than sending a mail that tells
+  // somebody to switch on what is already on.
+  if (ctx.autoSchedule) return c.json({ error: "already_on" }, 409);
+
+  const to = ctx.company.email;
+  if (!to) return c.json({ error: "no_email_on_file" }, 400);
+
+  const note = String(b.note || "").trim().slice(0, 400);
+  const mail = autoScheduleRequestEmail({ ...ctx, note });
+  const result = await sendEmail(c.env, { to, subject: mail.subject, text: mail.text, html: mail.html });
+  await logMail(c.env, { accountId, companyId: ctx.company.id, to, kind: "auto_schedule_request",
+    subject: mail.subject, result, sentBy: userId });
+
+  if (!result.ok) return c.json({ error: result.error, detail: result.detail }, 502);
+  await logActivity(c.env, accountId, userId, "email_sent",
+    `Asked ${ctx.company.company} to turn on auto-schedule`);
   return c.json({ ok: true, to, id: result.id });
 });
 

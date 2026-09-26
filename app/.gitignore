@@ -7,3 +7,4 @@ dist/
 *.log
 dist-platform/
 dist-boot-test/
+dist-autosched-test/

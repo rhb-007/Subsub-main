@@ -77,7 +77,14 @@ export function serveApp({ dir, port }) {
 export function serveApi({ port, routes, delay = 0 }) {
   const calls = [];
   const cors = { "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "*", "Content-Type": "application/json" };
+    "Access-Control-Allow-Headers": "*",
+    // PATCH and DELETE are not CORS-safelisted, so without this header the
+    // browser rejects the preflight and the app sees "Failed to fetch" --
+    // never reaching the stub, which then reports no call and looks like a
+    // button that does nothing. GET and POST are safelisted and worked
+    // without it, which is why nothing noticed until a PATCH was tested.
+    "Access-Control-Allow-Methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
+    "Content-Type": "application/json" };
   const server = createServer(async (req, res) => {
     const path = req.url.split("?")[0];
     // The preflight is not a call. Counting it made every cross-origin
@@ -87,7 +94,19 @@ export function serveApi({ port, routes, delay = 0 }) {
     if (req.method === "OPTIONS") { res.writeHead(204, cors); return res.end(); }
     calls.push(path);
     if (delay) await wait(delay);
-    const hit = routes(path, req.method);
+    // The body too, for the routes where what was SENT is the thing being
+    // checked -- a toggle that draws itself correctly and posts the opposite
+    // value is the bug a UI test is there to catch, and a stub that throws
+    // the body away cannot see it. Third argument, so every caller written
+    // against routes(path, method) keeps working untouched.
+    let sent = null;
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      const raw = await new Promise((res2) => {
+        let b = ""; req.on("data", (d) => { b += d; }); req.on("end", () => res2(b));
+      });
+      if (raw) { try { sent = JSON.parse(raw); } catch { sent = raw; } }
+    }
+    const hit = routes(path, req.method, sent);
     const [status, body] = hit === undefined ? [200, []] : hit;
     res.writeHead(status, cors);
     res.end(JSON.stringify(body));

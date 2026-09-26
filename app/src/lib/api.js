@@ -396,6 +396,15 @@ export const api = {
     + (trade ? `&trade=${encodeURIComponent(trade)}` : "")),
   sendDocRequest: (payload) => request("/notify/documents",
     { method: "POST", body: JSON.stringify(payload) }),
+
+  // Asking a contractor to turn auto-schedule on. The account cannot set it
+  // for them, so this is the hiring side's only move -- see
+  // shared/autoschedule.js.
+  previewAutoScheduleRequest: ({ companyId, note }) => request(
+    `/notify/auto-schedule/preview?companyId=${encodeURIComponent(companyId)}`
+    + (note ? `&note=${encodeURIComponent(note)}` : "")),
+  sendAutoScheduleRequest: (payload) => request("/notify/auto-schedule",
+    { method: "POST", body: JSON.stringify(payload) }),
   notifyLog: (companyId) => request("/notify/log"
     + (companyId ? `?companyId=${encodeURIComponent(companyId)}` : "")),
 

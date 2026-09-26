@@ -34,6 +34,8 @@
     "build:platform": "vite build --outDir dist-platform",
     "test:consolefresh": "node scripts/console-fresh-test.mjs",
     "test:subdetail": "node scripts/sub-detail-test.mjs",
+    "test:autosched": "node --no-warnings scripts/autoschedule-test.mjs",
+    "test:autoschedui": "node scripts/autoschedule-ui-test.mjs",
     "test:uitidy": "node scripts/ui-tidy-test.mjs",
     "test:wonotify": "node scripts/wo-notify-test.mjs",
     "test:licenses": "node scripts/license-provider-test.mjs",

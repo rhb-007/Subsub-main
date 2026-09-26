@@ -128,6 +128,59 @@ This is an automated message from an unmonitored address. Replies aren't receive
   };
 }
 
+// Asking a subcontractor to turn auto-schedule on.
+//
+// The account cannot do this for them (shared/autoschedule.js says why), so
+// this is the whole mechanism: a mail that explains what they would be
+// agreeing to and points at the switch in their own account. It is written
+// to be declinable. Overstating it -- "enable this to get more work" --
+// would buy a yes from somebody who had not understood that jobs land
+// already accepted, and the first surprise booking would cost more trust
+// than the feature is worth.
+export function autoScheduleRequestEmail({ company, contact, account, note }) {
+  const who = account?.name || "our team";
+  const text = `Hi ${contact || company.company},
+
+${who} has asked whether you'd like to turn on auto-schedule for the work
+they send you.${note ? `
+
+THEIR NOTE
+  ${note}` : ""}
+
+WHAT IT MEANS
+  Jobs ${who} assigns you are booked straight onto your calendar, already
+  accepted. No response window, and nothing for you to approve.
+
+  It cuts the back-and-forth on routine work, and it means you are not
+  losing a job because a request sat unread for an afternoon.
+
+WHAT TO KNOW BEFORE YOU SAY YES
+  • You will not get an accept or decline step on those jobs.
+  • Keep your availability and crew days current -- auto-schedule books
+    against them, so a day you are not free needs to be marked not free.
+  • It applies only to ${who}, not to anyone else you work with.
+  • You can switch it back off whenever you like, and so can they.
+
+THIS IS YOURS TO DECIDE
+  ${who} cannot turn this on for you. If you would rather keep accepting
+  each job by hand, do nothing -- that is the default and nobody is
+  notified.
+
+TO TURN IT ON
+  https://${portalUrl(account?.subdomain)}
+  Open your account, go to what you do, and switch on auto-schedule.
+
+— ${who}
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+
+  return {
+    subject: `${who}: would you like jobs booked automatically?`,
+    text,
+    html: textToHtml(text, `https://${portalUrl(account?.subdomain)}`),
+  };
+}
+
 export function workOrderIssuedEmail({ company, contact, job, trade, woNumber, account, respondBy }) {
   const who = account?.name || "our team";
   const text = `Hi ${contact || company.company},

@@ -103,6 +103,23 @@ refactor.
   superseded rather than deleted, because the question in a dispute is "were
   they insured on the day of that job".
 
+- **Auto-schedule is granted, not assigned.** An auto-scheduled job is
+  written to the subcontractor's calendar as *accepted*, with no response
+  window and no accept/decline buttons in their portal. That is a commitment,
+  so the side paying for the work cannot switch it on for the side doing it.
+  `app/shared/autoschedule.js` holds the rule and the API enforces it; the
+  hiring side may ask, by email, and may always switch it **off** — taking it
+  away costs a round trip and binds nobody.
+
+  The one case where the hiring account sets it directly is a contractor with
+  **no portal**: a record the account typed in, with no seat here and no
+  SubSub account of their own. Nobody is going to press accept, so the
+  response window just expires; turning it on is the account declining to
+  wait for a reply that was never coming, not a promise extracted from
+  anybody. The test for "is there somebody to ask?" is scoped to *this*
+  account — a seat on some other account cannot reach this engagement's
+  switch, so counting it would leave the flag settable by nobody at all.
+
 - **Completion is two-party and append-only.** The subcontractor marks work
   reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because

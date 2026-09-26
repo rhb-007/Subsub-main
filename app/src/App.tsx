@@ -47,6 +47,7 @@ import { US_STATES } from "../shared/states.js";
 // figure on screen and a figure written to the ledger cannot disagree.
 import { splitEven, releaseAmounts } from "../shared/money.js";
 import { chainReasonText } from "../shared/waivers.js";
+import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/autoschedule.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -2032,6 +2033,7 @@ export default function SubSub() {
   const [viewWO, setViewWO] = useState(null);   // { job, trade, a }
   const [assignSub, setAssignSub] = useState(null);       // { sub } -> pick job+trade
   const [notifying, setNotifying] = useState(null); // one-way system notification
+  const [askingAuto, setAskingAuto] = useState(null); // "turn auto-schedule on?" request
   const [adding, setAdding] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   // Contractors who have been invited and have not joined. They are not
@@ -2288,9 +2290,19 @@ export default function SubSub() {
     .filter((e) => e.accountId === account.id)
     .map((e) => {
       const co = companies.find((c) => c.id === e.companyId);
-      return co ? composeSub(co, e) : null;
+      if (!co) return null;
+      const sub = composeSub(co, e);
+      // Whether this contractor can answer for themselves, which decides who
+      // owns the auto-schedule switch. The server computes it and is the one
+      // that enforces it; this falls back to the seats we already hold so the
+      // card is right in seed mode too, where there is no server to ask.
+      if (sub.hasPortal === undefined) {
+        sub.hasPortal = memberships.some((m) => m.accountId === account.id
+          && m.role === "contractor" && m.companyId === co.id);
+      }
+      return sub;
     })
-    .filter(Boolean), [engagements, companies, account.id]);
+    .filter(Boolean), [engagements, companies, account.id, memberships]);
 
   // Properties belong to the account you're viewing.
   const accountProperties = useMemo(
@@ -2877,6 +2889,17 @@ export default function SubSub() {
     if (Object.keys(co).length) patchCompany(companyId, co);
     if (Object.keys(en).length) patchEngagement(companyId, en);
   };
+  // Auto-schedule is the one contractor field the server can refuse: turning
+  // it ON commits somebody else's calendar, so only they may do that when
+  // they have an account to do it from (shared/autoschedule.js). That makes
+  // the optimistic write patchSub does wrong here -- it would draw the switch
+  // as On and log the refusal to the console, which is exactly the lie the
+  // rule exists to prevent. So this one awaits, then moves.
+  const setAutoSchedule = async (companyId, on) => {
+    await api.patchSub(companyId, { autoSchedule: on });
+    patchEngagement(companyId, { autoSchedule: on });
+  };
+
   // Merge into the engagement's docReview (per-GC verdict on a shared file).
   const patchDocReview = (companyId, kind, review) => {
     const cur = engagements.find((e) => e.companyId === companyId && e.accountId === account.id);
@@ -3302,6 +3325,10 @@ export default function SubSub() {
         const { co, en } = splitSeed(flat);
         co.id = flat.id;
         en.id = flat.engagementId; en.accountId = flat.accountId; en.companyId = flat.id;
+        // Derived, not stored -- whether anybody is on the other side to
+        // answer. Carried explicitly rather than through ENGAGEMENT_FIELDS so
+        // splitPatch() can never try to write it back.
+        if ("hasPortal" in flat) en.hasPortal = !!flat.hasPortal;
         cos.push(co); ens.push(en);
       });
       setCompanies(cos);
@@ -5015,7 +5042,16 @@ export default function SubSub() {
 
       {selected && (
         <Modal onClose={() => setSelected(null)} wide>
-          <SubDetail sub={selected} jobs={jobs} onSaveNotes={saveNotes} onRequestDocs={requestDocs}
+          {/* The live row, not the snapshot taken when the card was opened.
+              setSelected() stores the sub object, so anything changed from
+              inside the modal -- the auto-schedule switch is the first thing
+              that can be -- used to leave the card drawing the old value
+              until it was closed and reopened. Looking it up by id each
+              render costs nothing and makes every field here current. */}
+          <SubDetail sub={subs.find((s) => s.id === selected.id) || selected}
+            jobs={jobs} onSaveNotes={saveNotes} onRequestDocs={requestDocs}
+            onSetAuto={(on) => setAutoSchedule(selected.id, on)}
+            onAskAuto={() => { setAskingAuto(selected); setSelected(null); }}
             onEdit={() => { setEditing(selected); setSelected(null); }}
             onReviewDoc={(sb, kind) => { setSelected(null); setReviewing({ sub: sb, kind }); }}
             onVerifyLicense={(sb) => verifyLicense(sb.id)}
@@ -5060,6 +5096,8 @@ export default function SubSub() {
       </Modal>}
       {notifying && <Modal onClose={() => setNotifying(null)} wide>
         <NotifyForm data={notifying} brand={brand} onClose={() => setNotifying(null)} /></Modal>}
+      {askingAuto && <Modal onClose={() => setAskingAuto(null)} wide>
+        <AutoScheduleAsk sub={askingAuto} onClose={() => setAskingAuto(null)} /></Modal>}
       {coForm && <Modal onClose={() => setCoForm(null)}>
         <ChangeOrderForm job={coForm.job} trade={coForm.trade} a={coForm.a} origin={coForm.origin}
           accountKind={kindOf(account)}
@@ -15989,10 +16027,10 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
                 <Zap size={18} />
                 <div className="auto-card-main">
                   <span className="auto-title">Auto-schedule</span>
+                  {/* Same sentence source as the hiring side's card, so the
+                      two descriptions of one switch cannot drift apart. */}
                   <span className="auto-desc">
-                    {sub.autoSchedule
-                      ? "On — jobs matching your availability are booked directly, no approval needed. You get priority in matching."
-                      : "Off — you review and accept or decline every job request."}
+                    {autoStateText({ on: !!sub.autoSchedule, portal: true, side: "contractor" })}
                   </span>
                 </div>
                 <label className="auto-toggle">
@@ -17221,7 +17259,66 @@ function Modal({ children, onClose, wide }) {
 }
 
 // ---- Sub detail ----------------------------------------------------------
-function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense }) {
+// Auto-schedule, from the hiring side.
+//
+// The switch itself is not always this account's to throw, which is the whole
+// point of the card rather than a plain toggle: a contractor with a portal
+// agreed to be booked without being asked, or did not, and an account cannot
+// decide that on their behalf. shared/autoschedule.js holds the rule and the
+// server enforces it -- this only makes the button match the answer, so the
+// refusal is read before the tap instead of after it.
+function AutoScheduleCard({ sub, onSet, onAsk }) {
+  const on = !!sub.autoSchedule;
+  const portal = !!sub.hasPortal;
+  const verdict = canSetAuto({ side: "hiring", on: !on, portal });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const flip = async (next) => {
+    setErr(""); setBusy(true);
+    try { await onSet(next); } catch (e) {
+      setErr(e?.body?.detail || AUTO_DENY_TEXT[e?.body?.error] || e?.message || "Could not change it.");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <section>
+      <h4><Zap size={13} /> Auto-schedule</h4>
+      <div className={`auto-card ${on ? "on" : ""}`}>
+        <Zap size={18} />
+        <div className="auto-card-main">
+          <span className="auto-title">{on ? "On" : "Off"}</span>
+          <span className="auto-desc">{autoStateText({ on, portal, side: "hiring" })}</span>
+        </div>
+        {/* Off is always ours to choose; on is only ours when there is nobody
+            on the other side who could have answered. */}
+        {(on || verdict.ok) ? (
+          <label className="auto-toggle">
+            <input type="checkbox" checked={on} disabled={busy}
+              onChange={(e) => flip(e.target.checked)} />
+            <span>{on ? "On" : "Off"}</span>
+          </label>
+        ) : (
+          <button className="mini" disabled={busy} onClick={onAsk}>
+            <Mail size={13} /> Ask them
+          </button>
+        )}
+      </div>
+      {!on && !verdict.ok && (
+        <p className="auto-note">{AUTO_DENY_TEXT[verdict.reason]}</p>
+      )}
+      {!on && verdict.ok && !portal && (
+        <p className="auto-note">
+          They have no SubSub account, so no one is going to press accept.
+          Turning this on schedules the work and leaves telling them to you.
+        </p>
+      )}
+      {err && <p className="auto-err"><AlertTriangle size={12} /> {err}</p>}
+    </section>
+  );
+}
+
+function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto }) {
   const ready = sub.bond && sub.insurance && sub.contract;
   const [notes, setNotes] = useState(sub.notes || "");
   const [dirty, setDirty] = useState(false);
@@ -17295,6 +17392,8 @@ function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, 
       ); })()}
 
       <section><h4>Capabilities</h4><div className="caps">{sub.caps.map((c) => <span key={c} className="cap">{c}</span>)}</div></section>
+
+      {onSetAuto && <AutoScheduleCard sub={sub} onSet={onSetAuto} onAsk={onAskAuto} />}
 
       <section>
         <h4>Coverage</h4>
@@ -17482,6 +17581,99 @@ function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, 
 }
 
 // ---- Send a compliance notification (one way: email, optionally + SMS) ---
+// "Would you like jobs booked automatically?" -- the hiring side's only move
+// on a contractor who has an account of their own. Same shape as NotifyForm:
+// the server composes the message so the text reviewed here is the text sent.
+//
+// A note is offered because the honest version of this ask usually has a
+// reason attached ("for the Cedar Park punch list, you're there every
+// Tuesday anyway"), and a bare system mail asking somebody to give up their
+// accept step reads like a setting change nobody requested.
+function AutoScheduleAsk({ sub, onClose }) {
+  const [note, setNote] = useState("");
+  const [preview, setPreview] = useState(null);
+  const [previewErr, setPreviewErr] = useState("");
+  const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  // Debounced, because the note is in the previewed text and every keystroke
+  // would otherwise be a request.
+  useEffect(() => {
+    let live = true;
+    const t = setTimeout(() => {
+      api.previewAutoScheduleRequest({ companyId: sub.id, note: note.trim() })
+        .then((p) => { if (live) { setPreview(p); setPreviewErr(""); } })
+        .catch((e) => { if (live) setPreviewErr(e?.body?.error || e?.message || "preview_failed"); });
+    }, 300);
+    return () => { live = false; clearTimeout(t); };
+  }, [sub.id, note]);
+
+  const send = async () => {
+    setErr(""); setBusy(true);
+    try {
+      await api.sendAutoScheduleRequest({ companyId: sub.id, note: note.trim() });
+      setBusy(false); setSent(true);
+    } catch (e) {
+      setBusy(false);
+      setErr(e?.body?.error === "no_email_on_file" ? "This contractor has no email on file."
+        : e?.body?.error === "already_on" ? "Auto-schedule is already on for them."
+        : e?.body?.error === "mail_not_configured" ? "Email delivery isn't configured yet."
+        : `Could not send: ${e?.body?.detail || e?.body?.error || e?.message || "unknown error"}`);
+    }
+  };
+
+  if (sent) {
+    return (
+      <div className="form sent-state">
+        <CheckCircle2 size={40} />
+        <h2>Asked</h2>
+        <p>
+          Sent to {sub.email} — {sub.contact} at {sub.company}. If they switch it on,
+          this card turns on by itself; nothing here is waiting on a reply.
+        </p>
+        <button className="btn-solid" onClick={onClose}>Done</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="form">
+      <h2>Ask about auto-schedule</h2>
+      <p className="form-sub">{sub.company} · {sub.contact}</p>
+
+      <div className="notify-note">
+        <Zap size={13} />
+        You can't turn this on for them — it books jobs to their calendar already
+        accepted, so it's theirs to agree to. This asks, and points them at the switch.
+      </div>
+
+      <div className="fld">Add a note <span className="fld-note">optional — why you're asking</span>
+        <textarea rows={3} maxLength={400} value={note} onChange={(e) => setNote(e.target.value)}
+          placeholder="You're at Cedar Park every Tuesday anyway — this would save the back-and-forth." />
+      </div>
+
+      <div className="form-sec">What they'll get</div>
+      {previewErr ? <p className="auto-err"><AlertTriangle size={12} /> Couldn't build the preview: {previewErr}</p>
+        : !preview ? <p className="muted">Loading…</p>
+        : <>
+            <p className="prev-subject"><b>{preview.subject}</b></p>
+            <pre className="prev-body">{preview.text}</pre>
+            {!preview.configured && <p className="auto-err"><AlertTriangle size={12} /> Email delivery isn't configured yet.</p>}
+            {!preview.to && <p className="auto-err"><AlertTriangle size={12} /> No email on file for them.</p>}
+          </>}
+
+      {err && <p className="auto-err"><AlertTriangle size={12} /> {err}</p>}
+
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn-solid" disabled={busy || !preview || !preview.configured || !preview.to}
+          onClick={send}><Mail size={14} /> {busy ? "Sending…" : "Send"}</button>
+      </div>
+    </div>
+  );
+}
+
 function NotifyForm({ data, brand, onClose }) {
   const { sub, job, trade } = data;
   const prefs = notifyPrefs(sub);
@@ -18987,6 +19179,13 @@ p.fld-note{margin:6px 0 0}
 .auto-toggle{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--ink-soft);cursor:pointer;flex:none}
 .auto-toggle input{accent-color:var(--amber);width:17px;height:17px}
 .auto-booked{display:flex;align-items:center;gap:7px;color:#8a5a12;font-weight:700;font-size:13.5px}
+/* the hiring side's card: why the switch is or is not theirs, and the mail
+   preview in the ask modal */
+.auto-note{margin:-8px 0 0;font-size:12.5px;color:var(--ink-soft);line-height:1.45}
+.auto-err{display:flex;align-items:center;gap:6px;margin:8px 0 0;font-size:12.5px;color:var(--red);line-height:1.45}
+.auto-card .mini{flex:none}
+.prev-subject{margin:0 0 8px;font-size:13px}
+.prev-body{margin:0;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.5;color:var(--ink-soft);background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:14px;max-height:280px;overflow:auto}
 
 /* star rating */
 .star-rate{display:flex;align-items:center;gap:2px;flex:none}
