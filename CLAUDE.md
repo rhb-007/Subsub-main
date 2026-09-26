@@ -535,6 +535,43 @@ refactor.
   tint, and the same sentence as before. `clientCount` is what decides, so the
   screen only changes shape once there is a second company to distinguish.
 
+  **And the switcher itself has a threshold.** A flat list with the relationship
+  under each name is right at two or three seats and is what the drawer does. At
+  twenty-five it is around 1,100px of two-line buttons below every nav item with
+  *Sign out* pushed off the screen, and `seatDescription` reads identically on
+  twenty-four of the rows — so the line that *was* the fix distinguishes nothing
+  at exactly the point where distinguishing matters most.
+
+  Past `SWITCHER_THRESHOLD` (in `app/shared/handover.js`) the list becomes one
+  entry opening a panel: grouped by relationship so the **heading** carries what
+  the rows were repeating, searchable over the account's own memberships, and
+  ordered by **what is waiting on you there** — alphabetical alone is the order
+  that makes somebody read all twenty-five. Under the threshold nothing changes
+  at all, and that is the design: a fix for the twenty-five case that taxes the
+  two case has made the common thing worse to improve the rare one. The same
+  ordering applies to the flat list, which has the same problem in miniature.
+
+  `seatGroup` sends an unrecognised role to the staff group rather than dropping
+  it. A seat that renders nowhere is worse than one in the wrong group: it is a
+  place somebody holds a seat and cannot reach.
+
+  **Two things this uncovered.** Signing in goes through `handleLogin`, which
+  calls `getMe()` and gets every seat; `resumeSession` never did, and
+  `hydrateAccount` writes memberships for the **current account only**. So the
+  switcher was correct immediately after signing in and **empty after a
+  refresh** — the demo seed the state starts from is keyed to ids no real user
+  has. A way out of an account that exists until you reload the page is not a way
+  out. `reloadAccounts()` runs on resume now, and **before** `hydrateAccount`,
+  because it replaces every row for that user and `getMe()` carries no
+  `propertyIds` or `unit` — running it second would strip a scoped owner or
+  tenant seat of the buildings it is scoped to.
+
+  And there were two ways into another account doing different amounts of work:
+  the header's user menu switched properly, while the drawer set
+  `currentAccountId` and stopped — so nothing re-fetched and the new account
+  rendered with the old one's jobs, properties and roster. Both go through
+  `goToSeat` now, which also lands on a screen the new seat's role actually has.
+
   **Sending is gated on a document being uploaded, not verified.** Verification
   is each hiring account's own verdict and says nothing about whether the
   contractor has one to send — the common case is that they upload and somebody

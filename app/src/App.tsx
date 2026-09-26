@@ -52,7 +52,7 @@ import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso } from "../shared/docs.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
-import { isOwnerKind, seatDescription } from "../shared/handover.js";
+import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -2045,6 +2045,10 @@ export default function SubSub() {
   const [jobForm, setJobForm] = useState(null);           // { forSub? } create-job modal
   const [assigning, setAssigning] = useState(null);       // { job, trade } -> pick contractor
   const [viewWO, setViewWO] = useState(null);   // { job, trade, a }
+  // The switcher panel, and what is typed into its search box. Both reset
+  // together: a query left behind from last time hides most of the list.
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [seatQuery, setSeatQuery] = useState("");
   const [assignSub, setAssignSub] = useState(null);       // { sub } -> pick job+trade
   const [notifying, setNotifying] = useState(null); // one-way system notification
   const [askingAuto, setAskingAuto] = useState(null); // "turn auto-schedule on?" request
@@ -2845,6 +2849,35 @@ export default function SubSub() {
     elsewhere: { accountId: w.accountId, name: w.accountName, subdomain: w.accountSubdomain },
   }));
 
+  // Every seat but the one we are standing in, with what is waiting on us
+  // there. The count comes from the same cross-account list the badge uses, so
+  // the switcher can order by it -- alphabetical alone is the order that makes
+  // somebody read all twenty-five, and the account with four job requests on it
+  // belongs at the top whatever it is called.
+  const seatWaiting = myWork.reduce((n, w) => {
+    if (w.here || w.status !== "pending" || w.auto) return n;
+    n[w.accountId] = (n[w.accountId] || 0) + 1;
+    return n;
+  }, {});
+  const otherSeats = myMemberships
+    .filter((m) => m.accountId !== account.id)
+    .map((m) => {
+      const a = accounts.find((x) => x.id === m.accountId);
+      if (!a) return null;
+      return {
+        accountId: m.accountId, name: a.name, subdomain: a.subdomain, role: m.role,
+        what: seatDescription(m.role, roleLabelIn(kindOf(a), m.role)),
+        waiting: seatWaiting[m.accountId] || 0,
+      };
+    })
+    .filter(Boolean)
+    // The same order the panel groups use, because the flat list has the same
+    // problem in miniature: six seats in whatever order the memberships came
+    // back in can still put the one with three job requests on it last.
+    .sort((a, b) => (b.waiting - a.waiting) || a.name.localeCompare(b.name));
+  const seatsWaiting = otherSeats.reduce((n, s) => n + s.waiting, 0);
+  const seatGroupsShown = groupSeats(otherSeats.filter((s) => matchSeat(s, seatQuery)));
+
   // Amber means somebody, somewhere, is waiting on a yes. Counting only the
   // account in front of us is how the thing it is meant to catch got missed.
   const pendingHere = myAssignments.filter((m) => m.a.status === "pending" && !m.a.auto);
@@ -3608,6 +3641,25 @@ export default function SubSub() {
     }
   }
 
+  // Landing in another account. One function, because there are two ways in --
+  // the header's user menu and the nav drawer -- and only the menu did the whole
+  // job: the drawer set currentAccountId and stopped, so nothing re-fetched and
+  // the new account rendered with the old one's jobs, properties and roster
+  // until something else happened to reload. It also left the tab on a screen
+  // the new seat may not have. Both paths go through here now.
+  const goToSeat = async (accountId) => {
+    if (!accountId || accountId === currentAccountId) { setSwitcherOpen(false); return; }
+    const seat = myMemberships.find((m) => m.accountId === accountId);
+    setSwitcherOpen(false); setUserMenu(false); setMobileNav(false);
+    setAuth({ userId: currentUserId, accountId });
+    setCurrentAccountId(accountId);
+    setSelected(null); setPane("jobs");
+    // The first screen the role over there actually has. Keeping the current
+    // tab lands a contractor seat on a screen it cannot see.
+    if (seat && ROLES[seat.role]) setTab(ROLES[seat.role].can[0]);
+    await hydrateAccount(accountId, currentUserId);
+  };
+
   // `email` is only used in dev-stub mode (see LoginPage) — in real-auth
   // mode, identity already comes from the Supabase session that
   // signInWithPassword() just established, so this just asks who that is.
@@ -3897,6 +3949,19 @@ export default function SubSub() {
     setCurrentUserId(saved.userId);
     setCurrentAccountId(saved.accountId);
     setLoggedIn(true);
+    // Every seat this person holds, not just this one. Signing in goes through
+    // handleLogin(), which calls getMe() and gets the whole list -- resuming did
+    // not, and hydrateAccount() below writes memberships for the CURRENT account
+    // only. So the switcher was correct immediately after signing in and empty
+    // after a refresh: the seats were never loaded, and the demo seed the state
+    // starts from is keyed to ids no real user has. A way out of an account that
+    // exists until you reload the page is not a way out.
+    //
+    // Before hydrateAccount, not after. This replaces every row for this user
+    // and getMe() carries no propertyIds or unit, so running it second would
+    // strip a scoped owner or tenant seat of the buildings it is scoped to.
+    // hydrateAccount writes those back for the account being entered.
+    await reloadAccounts();
     await hydrateAccount(saved.accountId, saved.userId);
   };
 
@@ -4564,21 +4629,29 @@ export default function SubSub() {
                 seat is a contractor one, created by accepting their request to
                 hire you. Where you land and what you can do there both follow
                 from the role, so the role is the half that was missing. */}
-            {myMemberships.length > 1 && myMemberships.filter((m) => m.accountId !== account.id).map((m) => {
-              const a = accounts.find((x) => x.id === m.accountId);
-              if (!a) return null;
-              const what = seatDescription(m.role, roleLabelIn(kindOf(a), m.role));
-              return (
-                <button key={m.accountId} className="switch-acct"
-                  onClick={() => { setCurrentAccountId(m.accountId); setSelected(null); setPane("jobs"); }}>
-                  <ArrowUpDown size={15} />
-                  <span className="sw-main">
-                    <span className="sw-name">{a.name}</span>
-                    <span className="sw-what">{what}</span>
-                  </span>
-                </button>
-              );
-            })}
+            {/* Under the threshold this is the flat list it always was. Over
+                it, one entry opening a panel -- see SWITCHER_THRESHOLD. */}
+            {otherSeats.length > 0 && !usePanel(otherSeats.length) && otherSeats.map((seat) => (
+              <button key={seat.accountId} className="switch-acct"
+                onClick={() => goToSeat(seat.accountId)}>
+                <ArrowUpDown size={15} />
+                <span className="sw-main">
+                  <span className="sw-name">{seat.name}</span>
+                  <span className="sw-what">{seat.what}</span>
+                </span>
+                {seat.waiting > 0 && <span className="count amber">{seat.waiting}</span>}
+              </button>
+            ))}
+            {otherSeats.length > 0 && usePanel(otherSeats.length) && (
+              <button className="switch-acct switch-many" onClick={() => setSwitcherOpen(true)}>
+                <ArrowUpDown size={15} />
+                <span className="sw-main">
+                  <span className="sw-name">Switch account</span>
+                  <span className="sw-what">{otherSeats.length} others you hold a seat in</span>
+                </span>
+                {seatsWaiting > 0 && <span className="count amber">{seatsWaiting}</span>}
+              </button>
+            )}
             <button className="drawer-out" onClick={() => setLoggedIn(false)}><LogOut size={15} /> Sign out</button>
           </div>
         </nav>
@@ -5514,6 +5587,52 @@ export default function SubSub() {
           onNotify={(job, trade) => requestDocs(assignSub.sub, job, trade)}
           onRequestDocs={requestDocs}
           onCancel={() => setAssignSub(null)} /></Modal>}
+      {/* Past the threshold, the switcher. Grouped by relationship, so the
+          heading carries what seatDescription was repeating on every row;
+          ordered by what is waiting on the person there; searchable, over
+          their own memberships only -- nothing is sent anywhere. */}
+      {switcherOpen && (
+        <Modal onClose={() => { setSwitcherOpen(false); setSeatQuery(""); }}>
+          <div className="seat-pick">
+            <h3>Switch account</h3>
+            <p className="seat-sub">
+              You hold a seat in {otherSeats.length + 1} accounts. This is where you
+              go to do something in one of the others &mdash; your own work at all of
+              them is already on <strong>My Jobs</strong>.
+            </p>
+            <input className="seat-search" type="search" value={seatQuery} autoFocus
+              placeholder="Search by name or address" aria-label="Search your accounts"
+              onChange={(e) => setSeatQuery(e.target.value)} />
+            {seatGroupsShown.length === 0 ? (
+              <p className="seat-none">
+                No account of yours matches &ldquo;{seatQuery}&rdquo;.
+              </p>
+            ) : seatGroupsShown.map((g) => (
+              <div key={g.key} className="seat-group">
+                <div className="seat-head">
+                  {g.heading}
+                  <span className="seat-n">{g.seats.length}</span>
+                </div>
+                {g.seats.map((seat) => (
+                  <button key={seat.accountId} className="seat-row"
+                    onClick={() => { setSeatQuery(""); goToSeat(seat.accountId); }}>
+                    <span className="seat-main">
+                      <span className="seat-name">{seat.name}</span>
+                      <span className="seat-sd">{seat.subdomain}</span>
+                    </span>
+                    {seat.waiting > 0 && (
+                      <span className="seat-wait">
+                        {seat.waiting} waiting on you
+                      </span>
+                    )}
+                    <ChevronRight size={15} className="seat-go" />
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
       {viewWO && <Modal onClose={() => setViewWO(null)} wide>
         <WorkOrderDoc job={viewWO.job} trade={viewWO.trade} cos={cosFor(changeOrders, viewWO.job.id, viewWO.trade)}
           a={(jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a}
@@ -20608,6 +20727,36 @@ body{background:var(--paper)}
 .sw-main{display:flex;flex-direction:column;gap:1px;min-width:0;text-align:left}
 .sw-name{font-weight:600}
 .sw-what{font-size:11px;font-weight:500;color:var(--ink-soft);line-height:1.35}
+/* One entry standing in for the rest, past SWITCHER_THRESHOLD. */
+.switch-many .sw-name{font-weight:700}
+
+/* The switcher panel. Grouped, searchable, ordered by what is waiting. */
+.seat-pick{padding-right:26px}
+.seat-pick h3{margin:0 0 6px;font-size:17px;font-weight:700;letter-spacing:-.01em}
+.seat-sub{margin:0 0 14px;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
+.seat-sub strong{color:var(--ink);font-weight:600}
+.seat-search{width:100%;padding:9px 12px;font-size:14px;font-family:inherit;color:var(--ink);
+  background:var(--paper);border:1px solid var(--line);border-radius:9px;margin-bottom:6px}
+.seat-search:focus{outline:2px solid var(--brand);outline-offset:1px;border-color:var(--brand)}
+.seat-none{margin:16px 2px;font-size:13px;color:var(--ink-soft)}
+.seat-group{margin-top:16px}
+/* The heading says the relationship once, so the rows stop repeating it. */
+.seat-head{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.07em;color:var(--ink-soft);
+  padding:0 2px 7px;border-bottom:1px solid var(--line)}
+.seat-n{background:var(--line);color:var(--ink);font-size:10px;font-weight:700;
+  padding:1px 6px;border-radius:20px;letter-spacing:0}
+.seat-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  padding:10px 8px;border:0;background:none;cursor:pointer;border-radius:8px;
+  color:var(--ink);font-family:inherit}
+.seat-row:hover{background:var(--paper)}
+.seat-main{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+.seat-name{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seat-sd{font-size:11px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seat-wait{flex:none;background:var(--amber);color:#fff;font-size:10.5px;font-weight:700;
+  padding:2px 8px;border-radius:20px;white-space:nowrap}
+.seat-go{flex:none;color:var(--ink-soft);opacity:.7}
+.seat-row:hover .seat-go{opacity:1;color:var(--brand-dk)}
 .pack-panel{border:1px solid var(--line);border-radius:12px;padding:15px 16px;
   margin-bottom:16px;background:var(--card)}
 .pack-head{display:flex;gap:14px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}

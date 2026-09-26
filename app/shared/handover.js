@@ -214,6 +214,83 @@ export function seatDescription(role, roleLabel) {
   return `you are ${String(roleLabel || role || "a member").toLowerCase()} there`;
 }
 
+// ---- The switcher, once there are more than a handful of seats ----------
+//
+// A flat list with the relationship under each name is the right answer at two
+// or three seats, and it is what the drawer does. It stops being the right
+// answer at twenty-five: that is roughly 1,100px of two-line buttons below
+// every nav item, with Sign out pushed off the screen, in whatever order the
+// API happened to return -- and `seatDescription` reads identically on
+// twenty-four of the rows, so the line that was the fix distinguishes nothing
+// at exactly the point where distinguishing matters most.
+//
+// Twenty-five is not a hypothetical. A subcontractor is on many general
+// contractors' rosters by definition, and the send-my-documents loop exists to
+// put them on more.
+//
+// So past a threshold the list becomes a panel with a search box and groups,
+// and under it nothing changes at all. The threshold is the whole design: a fix
+// for the twenty-five case that taxes the two case has made the common thing
+// worse to improve the rare one.
+export const SWITCHER_THRESHOLD = 6;
+export const usePanel = (n) => n > SWITCHER_THRESHOLD;
+
+// Grouped by the RELATIONSHIP, not the role name, and in this order: the seats
+// somebody switches to most often first. The heading then carries what
+// seatDescription was repeating on every row, so the rows stop saying it.
+//
+// Phrased from the person's side. "Managed for you" is an owner whose building
+// somebody else runs and a tenant of their landlord's account -- from the
+// database's side those are two different roles on two different kinds of
+// account, and from the person's side they are the same sentence.
+export const SEAT_GROUPS = [
+  { key: "clients", heading: "Companies that hire you", roles: ["contractor"] },
+  { key: "own", heading: "Accounts you work in", roles: ["admin", "pm"] },
+  { key: "managed", heading: "Managed for you", roles: ["owner", "tenant"] },
+];
+
+// An unknown role groups with the staff seats rather than vanishing. A seat
+// that renders nowhere is worse than one in the wrong group: it is a place the
+// person holds a seat and cannot reach.
+export function seatGroup(role) {
+  const hit = SEAT_GROUPS.find((g) => g.roles.includes(role));
+  return hit ? hit.key : "own";
+}
+
+// Ordered by what is waiting on the person there, then by name. Alphabetical
+// alone is the order that makes somebody read all twenty-five; the one with
+// four job requests on it belongs at the top whatever it is called.
+//
+// Returns only the groups that have somebody in them, so a subcontractor with
+// nothing but contractor seats sees one heading rather than three, two of them
+// empty.
+export function groupSeats(seats = []) {
+  const byKey = new Map(SEAT_GROUPS.map((g) => [g.key, []]));
+  for (const seat of seats) {
+    const list = byKey.get(seatGroup(seat.role));
+    if (list) list.push(seat);
+  }
+  const sorted = (list) => [...list].sort((a, b) =>
+    (Number(b.waiting || 0) - Number(a.waiting || 0))
+    || String(a.name || "").localeCompare(String(b.name || "")));
+  return SEAT_GROUPS
+    .map((g) => ({ ...g, seats: sorted(byKey.get(g.key) || []) }))
+    .filter((g) => g.seats.length > 0);
+}
+
+// Typed into the search box. Matches the account name and its subdomain -- the
+// subdomain because it is what somebody has in their address bar and on their
+// invoices, and often what they remember instead of the trading name.
+//
+// Local to the seats this person already holds. Nothing is sent anywhere: this
+// is the account's own list of its own memberships, not a lookup.
+export function matchSeat(seat = {}, query = "") {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return true;
+  return String(seat.name || "").toLowerCase().includes(q)
+    || String(seat.subdomain || "").toLowerCase().includes(q);
+}
+
 // ---- Who may appoint a manager ------------------------------------------
 //
 // Appointing requires OWNING the building, which the API has always checked.
