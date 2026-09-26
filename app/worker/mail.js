@@ -181,6 +181,68 @@ This is an automated message from an unmonitored address. Replies aren't receive
   };
 }
 
+// A certificate is running out, or has.
+//
+// Sent to the SUBCONTRACTOR, because they are the only party who can fix it.
+// The tone changes with how close it is: thirty days out is a reminder, three
+// days is a request, and past the date with work already booked is the one
+// that says so plainly -- their job is not cancelled, and that is exactly why
+// somebody has to act rather than assume it was handled.
+//
+// `daysOut` is the milestone this was sent at: 30, 14, 3, 0, or -1 for
+// "lapsed, and there is booked work over it".
+export function docExpiryEmail({ company, contact, kind, expiresOn, daysOut, account, jobs = [] }) {
+  const who = account?.name || "our team";
+  const name = { insurance: "insurance certificate", bond: "bond",
+    contract: "signed contract", w9: "W-9" }[kind] || kind;
+  const lapsed = daysOut !== null && daysOut < 0;
+  const urgent = daysOut === -1;
+
+  const lead = urgent
+    ? `Your ${name} expired on ${expiresOn}, and you have work booked with ${who} after that date.`
+    : lapsed || daysOut === 0
+      ? `Your ${name} expires today (${expiresOn}).`
+      : `Your ${name} expires on ${expiresOn} — ${daysOut} day${daysOut === 1 ? "" : "s"} from now.`;
+
+  const jobBlock = urgent && jobs.length ? `
+WORK ALREADY BOOKED
+${jobs.map((j) => `  ${j.date || "date not set"}  ${j.title || "Job"}`).join("\n")}
+
+  These are NOT cancelled. Nobody is stranding your crew over paperwork.
+  But they are not covered either, which is a problem for you as much as
+  for ${who}.
+` : "";
+
+  const text = `Hi ${contact || company.company},
+
+${lead}
+${jobBlock}
+WHAT HAPPENS IF IT LAPSES
+  ${who} cannot issue you new work orders without current cover. Work
+  already on your calendar stays on your calendar.
+
+WHAT TO DO
+  Upload the replacement at
+  https://${portalUrl(account?.subdomain)}/documents
+
+  Your renewal certificate from your ${kind === "bond" ? "surety" : "carrier"} is all that is
+  needed. A photo or a PDF is fine.${urgent ? "\n\n  If it is already renewed and just not uploaded, that is a one-minute job\n  and worth doing now." : ""}
+
+— ${who}
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+
+  return {
+    subject: urgent
+      ? `Action needed: your ${name} has expired and you have work booked`
+      : lapsed || daysOut === 0
+        ? `Your ${name} expires today`
+        : `Your ${name} expires in ${daysOut} days`,
+    text,
+    html: textToHtml(text, `https://${portalUrl(account?.subdomain)}/documents`),
+  };
+}
+
 export function workOrderIssuedEmail({ company, contact, job, trade, woNumber, account, respondBy }) {
   const who = account?.name || "our team";
   const text = `Hi ${contact || company.company},

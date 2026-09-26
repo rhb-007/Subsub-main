@@ -13,7 +13,7 @@ import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEm
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
   connectRequestEmail, connectRequestSms, workOrderIssuedSms,
-  autoScheduleRequestEmail } from "./mail.js";
+  autoScheduleRequestEmail, docExpiryEmail } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -30,6 +30,8 @@ import { releaseAmounts, milestonesCover } from "../shared/money.js";
 import { chainStatus, SCOPE_KINDS } from "../shared/waivers.js";
 import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { hasPortal, canSet as canSetAuto, AUTO_DENY_TEXT } from "../shared/autoschedule.js";
+import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
+  addDaysIso, CHASE_AT } from "../shared/docs.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
 import {
@@ -498,6 +500,91 @@ function requireRole(...roles) {
 // answer. Never let a logging failure fail the request that caused it.
 const companyName = async (db, id) =>
   (await db.prepare(`SELECT company FROM companies WHERE id = ?`).bind(id).first())?.company || "a subcontractor";
+
+// ---------------------------------------------------------------------------
+// Documents, and what they say
+// ---------------------------------------------------------------------------
+// `companies.insurance` and friends answer "is there a file". `company_docs`
+// answers "what does it say, and until when" -- see migration 037. Both are
+// kept: every screen already written against the booleans goes on working,
+// and nothing had to be migrated for this to start being true.
+//
+// The certificate is the COMPANY's, shared by every account that engages
+// them -- one COI, uploaded once. The verdict on it is the engagement's,
+// because GC A may require $2M aggregate where GC B accepts $1M. So the facts
+// captured here go on company_docs and the approval stays on
+// engagements.doc_review. Putting the expiry on the engagement would mean the
+// same certificate expiring on different days for different accounts.
+//
+// The current row per kind is the one nothing has superseded.
+async function currentDocRows(db, companyId) {
+  const { results } = await db.prepare(
+    `SELECT * FROM company_docs
+      WHERE company_id = ? AND superseded_at IS NULL
+      ORDER BY kind, uploaded_at DESC`
+  ).bind(companyId).all();
+  const byKind = {};
+  for (const r of results || []) if (!byKind[r.kind]) byKind[r.kind] = r;
+  return byKind;
+}
+
+// The shape shared/docs.js reads. `fileName` is what makes a document present
+// rather than missing, and a NULL expires_on stays null on purpose: in that
+// module null means "does not expire", never "unknown".
+function docShape(rows) {
+  const out = {};
+  for (const k of DOC_KINDS) {
+    const r = rows[k];
+    if (!r) continue;
+    out[k] = {
+      fileName: r.file_name, fileKey: r.file_key,
+      issuer: r.issuer, policyNo: r.policy_no,
+      coverageCents: r.coverage_cents, effectiveOn: r.effective_on,
+      expiresOn: r.expires_on,
+      approvedAt: r.approved_at, uploadedAt: r.uploaded_at,
+    };
+  }
+  return out;
+}
+
+// Falls back to the booleans for a company whose files all predate 037.
+// Without this every existing roster would read as "missing" the moment this
+// shipped -- the files are there, we simply have no row describing them, and
+// saying "no insurance" about a company that handed one over is worse than
+// saying nothing new.
+function docShapeWithLegacy(rows, company) {
+  const out = docShape(rows);
+  const files = parseJson(company?.doc_files, {});
+  for (const k of DOC_KINDS) {
+    if (out[k]) continue;
+    if (!company?.[k]) continue;
+    out[k] = { fileName: files[k] || "on file", legacy: true, expiresOn: null };
+  }
+  return out;
+}
+
+// Supersede whatever is current for this kind. Never deleted: the question in
+// a dispute is whether they were insured on the day of that job, which the
+// certificate current today cannot answer.
+async function supersedeDoc(db, companyId, kind) {
+  await db.prepare(
+    `UPDATE company_docs SET superseded_at = CURRENT_TIMESTAMP
+      WHERE company_id = ? AND kind = ? AND superseded_at IS NULL`
+  ).bind(companyId, kind).run();
+}
+
+// A day string or null. Anything that is not an ISO day is dropped rather
+// than stored badly -- shared/docs.js compares these as strings, so a
+// "12/03/2027" in the column would silently sort wrong for ever.
+const isoDay = (v) => {
+  const t = String(v || "").trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null;
+};
+const centsOf = (v) => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Math.round(Number(String(v).replace(/[^0-9.]/g, "")) * 100);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
 
 async function logActivity(env, accountId, userId, kind, text, meta) {
   if (!accountId || !text) return;
@@ -3244,6 +3331,41 @@ app.get("/api/subs", async (c) => {
       ownsAccount: (results[i].en_own_account || 0) > 0,
     });
   });
+
+  // What each company's paperwork says, so the roster can colour itself and
+  // assignment can ask about the JOB'S date rather than today's. One query for
+  // the whole roster: per-company would be a round trip each and this is the
+  // list screen.
+  try {
+    const ids = subs.map((x) => x.id);
+    if (ids.length) {
+      const { results: docRows } = await c.env.DB.prepare(
+        `SELECT * FROM company_docs
+          WHERE superseded_at IS NULL AND company_id IN (${ids.map(() => "?").join(",")})
+          ORDER BY company_id, kind, uploaded_at DESC`
+      ).bind(...ids).all();
+      const byCompany = {};
+      for (const r of docRows || []) {
+        const per = (byCompany[r.company_id] ||= {});
+        if (!per[r.kind]) per[r.kind] = r;
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      subs.forEach((sub, i) => {
+        sub.docs = docShapeWithLegacy(byCompany[sub.id] || {}, results[i]);
+        // Today's verdict, for the roster. Assignment recomputes against the
+        // job's date, which is the only number that decides whether a
+        // certificate actually covers the work.
+        const st = companyDocStatus(sub.docs, today);
+        sub.docState = st.state;
+        sub.docAssignable = st.assignable;
+        sub.docSoonest = st.soonest;
+      });
+    }
+  } catch (err) {
+    // A database without 037 keeps the roster it always had.
+    if (!missingSchema(err)) throw err;
+    console.warn("[company_docs] roster detail unavailable:", err?.message || err);
+  }
   return c.json(subs);
 });
 
@@ -5198,7 +5320,7 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
     payKind, rate, capHours } = await c.req.json();
 
   const job = await c.env.DB.prepare(
-    `SELECT id, requested_by, approved_at FROM jobs WHERE id = ? AND account_id = ?`
+    `SELECT id, requested_by, approved_at, date FROM jobs WHERE id = ? AND account_id = ?`
   ).bind(jobId, accountId).first();
   if (!job) return c.json({ error: "job_not_found" }, 404);
   // A request an owner raised is not work anybody has agreed to yet. Issuing a
@@ -5211,11 +5333,49 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   if (!engagement) return c.json({ error: "not_engaged" }, 404);
 
   // Documents must be complete before a work order can be issued.
-  const company = await c.env.DB.prepare(`SELECT insurance, bond, contract, license FROM companies WHERE id = ?`).bind(companyId).first();
+  const company = await c.env.DB.prepare(
+    `SELECT insurance, bond, contract, w9, doc_files, license FROM companies WHERE id = ?`
+  ).bind(companyId).first();
   const docReview = parseJson(engagement.doc_review, {});
   const verified = (k) => docReview[k]?.status === "verified";
   if (!verified("insurance") || !verified("bond") || !verified("contract")) {
     return c.json({ error: "documents_incomplete" }, 409);
+  }
+
+  // Verified is not the same as in force. A review is a verdict somebody
+  // recorded once; a certificate has a date on it. An approved COI that ran
+  // out eight months ago passed every check above, which is precisely the
+  // failure this is here to stop -- and the date to ask about is the JOB'S,
+  // not today's, because cover that lapses on the Friday does not cover work
+  // booked for the Tuesday after.
+  //
+  // This refuses a NEW assignment. It is not the same as a certificate
+  // lapsing under work already booked: stranding scheduled work over
+  // paperwork helps nobody, so that case is chased hard by the nightly sweep
+  // instead of cancelling anything.
+  try {
+    const rows = await currentDocRows(c.env.DB, companyId);
+    const docs = docShapeWithLegacy(rows, company);
+    // Only the kinds that have a shelf life, and only the ones this account
+    // requires: a W-9 with no date is not a reason to refuse anything.
+    const cover = coversJob(docs, job.date || new Date().toISOString().slice(0, 10), EXPIRING_KINDS);
+    if (!cover.ok && cover.lapsing.length) {
+      return c.json({
+        error: "documents_lapse_before_job",
+        lapsing: cover.lapsing,
+        jobDate: job.date || null,
+        detail: cover.lapsing.map((k) => {
+          const until = docs[k]?.expiresOn;
+          const name = { insurance: "Insurance", bond: "Bond" }[k] || k;
+          return `${name} expires ${until}, before this job on ${job.date}.`;
+        }).join(" "),
+      }, 409);
+    }
+  } catch (err) {
+    // No 037 means no dates to check, which is the position this account was
+    // in before any of this shipped. It must not stop them assigning work.
+    if (!missingSchema(err)) throw err;
+    console.warn("[assign] expiry check unavailable:", err?.message || err);
   }
 
   const autoScheduled = !!engagement.auto_schedule;
@@ -5561,6 +5721,62 @@ app.post("/api/subs/:companyId/documents/:kind/review", requireRole("admin", "pm
   await c.env.DB.prepare(`UPDATE engagements SET doc_review = ? WHERE id = ?`)
     .bind(JSON.stringify(docReview), engagement.id).run();
 
+  // What the certificate actually says, onto the COMPANY's row rather than
+  // this engagement's verdict -- one certificate, shared by every account that
+  // engages them, so it cannot expire on different days for different people.
+  // This is the moment to ask for it: somebody is reading the document right
+  // now in order to approve it, and was already reading these fields.
+  //
+  // Only on a verified review. A rejection is not a record of cover.
+  if (body.status === "verified") {
+    try {
+      const rows = await currentDocRows(c.env.DB, companyId);
+      const cur = rows[kind];
+      const expires = isoDay(body.expiresOn ?? body.expires);
+      const coverage = centsOf(body.coverageCents ?? body.coverage);
+      if (cur) {
+        await c.env.DB.prepare(
+          `UPDATE company_docs SET
+             issuer = COALESCE(?, issuer), policy_no = COALESCE(?, policy_no),
+             coverage_cents = COALESCE(?, coverage_cents),
+             effective_on = COALESCE(?, effective_on),
+             expires_on = COALESCE(?, expires_on),
+             approved_at = CURRENT_TIMESTAMP, approved_by = ?
+           WHERE id = ?`
+        ).bind((body.issuer || "").trim() || null, (body.policyNo || "").trim() || null,
+          coverage, isoDay(body.effectiveOn), expires, userId, cur.id).run();
+      } else {
+        // Approving a file that predates 037, or one uploaded before this
+        // shipped. There is a file -- the boolean says so -- and now there is
+        // a row describing it, so the next thirty days of chasing work.
+        const company = await c.env.DB.prepare(
+          `SELECT doc_files FROM companies WHERE id = ?`).bind(companyId).first();
+        await c.env.DB.prepare(
+          `INSERT INTO company_docs
+             (id, company_id, kind, file_name, issuer, policy_no, coverage_cents,
+              effective_on, expires_on, approved_at, approved_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`
+        ).bind(uid(), companyId, kind,
+          parseJson(company?.doc_files, {})[kind] || "on file",
+          (body.issuer || "").trim() || null, (body.policyNo || "").trim() || null,
+          coverage, isoDay(body.effectiveOn), expires, userId).run();
+      }
+      // A fresh expiry restarts the chase. Without this, a renewed
+      // certificate stays silent because the old row's reminders are already
+      // on file and nothing would ever be sent again.
+      if (expires) {
+        const again = await currentDocRows(c.env.DB, companyId);
+        if (again[kind]) {
+          await c.env.DB.prepare(`DELETE FROM doc_reminders WHERE company_doc_id = ?`)
+            .bind(again[kind].id).run();
+        }
+      }
+    } catch (err) {
+      if (!missingSchema(err)) throw err;
+      console.warn("[company_docs] review detail not stored:", err?.message || err);
+    }
+  }
+
   await logEvent(c.env, accountId, userId, "doc.reviewed", companyId, { kind, status: body.status });
   await logActivity(c.env, accountId, userId,
     body.status === "verified" ? "doc_verified" : "doc_rejected",
@@ -5577,7 +5793,8 @@ app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "con
   const { companyId } = c.req.param();
   const kind = c.req.param("kind"); // insurance | bond | contract | w9
   if (auth.role === "contractor" && auth.companyId !== companyId) return c.json({ error: "forbidden" }, 403);
-  const { fileKey, fileName } = await c.req.json();
+  const body = await c.req.json();
+  const { fileKey, fileName } = body;
 
   const company = await c.env.DB.prepare(`SELECT doc_files FROM companies WHERE id = ?`).bind(companyId).first();
   if (!company) return c.json({ error: "not_found" }, 404);
@@ -5587,6 +5804,34 @@ app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "con
   await c.env.DB.prepare(
     `UPDATE companies SET doc_files = ?${col ? `, ${col} = 1` : ""} WHERE id = ?`
   ).bind(JSON.stringify(docFiles), companyId).run();
+
+  // And a row saying what this one is. A replacement supersedes rather than
+  // overwrites: the certificate that covered March has to still be findable
+  // in September (migration 037).
+  //
+  // The detail is accepted here but not required. Whoever is uploading may be
+  // the subcontractor on a phone, who has the document in front of them and
+  // no reason to be kept out of the app over a policy number; the expiry is
+  // captured for certain at approval, which is the moment somebody is
+  // actually reading the certificate.
+  try {
+    await supersedeDoc(c.env.DB, companyId, kind);
+    await c.env.DB.prepare(
+      `INSERT INTO company_docs
+         (id, company_id, kind, file_key, file_name, issuer, policy_no,
+          coverage_cents, effective_on, expires_on, uploaded_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(uid(), companyId, kind, fileKey || null, fileName || null,
+      (body.issuer || "").trim() || null, (body.policyNo || "").trim() || null,
+      centsOf(body.coverageCents ?? body.coverage),
+      isoDay(body.effectiveOn), isoDay(body.expiresOn), auth.userId).run();
+  } catch (err) {
+    // A database that has not run 037 must not lose the upload itself: the
+    // booleans above are already written and are what every existing screen
+    // reads.
+    if (!missingSchema(err)) throw err;
+    console.warn("[company_docs] not available:", err?.message || err);
+  }
 
   const { results: engagements } = await c.env.DB.prepare(
     `SELECT id, doc_review FROM engagements WHERE company_id = ?`
@@ -5620,6 +5865,13 @@ app.delete("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "c
     const docReview = { ...parseJson(e.doc_review, {}) };
     delete docReview[kind];
     await c.env.DB.prepare(`UPDATE engagements SET doc_review = ? WHERE id = ?`).bind(JSON.stringify(docReview), e.id).run();
+  }
+  // Superseded, not deleted. Somebody removing this year's certificate does
+  // not unmake the fact that last year's covered a job that was worked.
+  try {
+    await supersedeDoc(c.env.DB, companyId, kind);
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
   }
   return c.json({ ok: true });
 });
@@ -6082,6 +6334,121 @@ async function hostnameSweep(env) {
   }
   return { checked: results.length, changed };
 }
+
+// The nightly document chase.
+//
+// Every current certificate with a date on it, asked one question: is a
+// reminder due today that has not been sent? shared/docs.js decides that
+// (CHASE_AT = 30, 14, 3, 0) and the doc_reminders table remembers the answer,
+// so this can run every night without sending the same warning thirty times.
+//
+// The -1 case is the one worth reading twice. A certificate that lapses under
+// work that is ALREADY BOOKED does not cancel the work: stranding a scheduled
+// crew over paperwork helps nobody, and the hiring account cannot fix it
+// anyway. It is chased harder instead, and the account is told in their own
+// activity feed, because they are the ones with a crew arriving uninsured.
+async function docExpirySweep(env) {
+  const today = new Date().toISOString().slice(0, 10);
+  const horizon = addDaysIso(today, Math.max(...CHASE_AT));
+
+  let rows;
+  try {
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT d.*, co.company, co.contact, co.email, co.notify
+         FROM company_docs d JOIN companies co ON co.id = d.company_id
+        WHERE d.superseded_at IS NULL AND d.expires_on IS NOT NULL
+          AND d.expires_on <= ?`
+    ).bind(horizon).all());
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return { skipped: "company_docs not migrated" };
+  }
+
+  let sent = 0, urgent = 0, skipped = 0;
+  for (const d of rows || []) {
+    // What has already gone out for this exact document.
+    const { results: prior } = await env.DB.prepare(
+      `SELECT days_out FROM doc_reminders WHERE company_doc_id = ?`).bind(d.id).all();
+    const alreadySent = (prior || []).map((r) => r.days_out);
+
+    // Work on the books past the expiry. Only a live work order counts: a
+    // declined or voided one is not somebody turning up.
+    const { results: booked } = await env.DB.prepare(
+      `SELECT j.id, j.title, j.date, j.account_id
+         FROM work_orders wo JOIN jobs j ON j.id = wo.job_id
+        WHERE wo.company_id = ? AND wo.voided_at IS NULL
+          AND wo.status IN ('accepted', 'pending')
+          AND j.date IS NOT NULL AND j.date > ?
+        ORDER BY j.date LIMIT 20`
+    ).bind(d.company_id, d.expires_on).all();
+
+    const due = dueReminder({
+      doc: { fileName: d.file_name, expiresOn: d.expires_on },
+      asOf: today, alreadySent, hasBookedWork: (booked || []).length > 0,
+    });
+    if (due === null) { skipped++; continue; }
+
+    // Which account to write to them as. A company may be engaged by several;
+    // the reminder is about their own certificate, so it goes out under the
+    // account whose work is at stake, and failing that any that engaged them.
+    const accountId = booked?.[0]?.account_id || (await env.DB.prepare(
+      `SELECT account_id FROM engagements WHERE company_id = ? LIMIT 1`
+    ).bind(d.company_id).first())?.account_id || null;
+    const account = accountId ? await env.DB.prepare(
+      `SELECT id, name, subdomain FROM accounts WHERE id = ?`).bind(accountId).first() : null;
+
+    // Recorded BEFORE the send. A row that only exists on success means a
+    // provider outage re-sends every night.
+    //
+    // ux_doc_reminder (company_doc_id, days_out) IS THE CONTROL HERE, not the
+    // alreadySent list above: two runs racing, or a run whose milestone was
+    // already claimed, both come down to this INSERT failing. The list only
+    // saves a pointless failing write. Dropping the index would not show up in
+    // any behaviour this file changes, which is why there is a test asserting
+    // the index exists rather than a test asserting a second send is refused.
+    try {
+      await env.DB.prepare(
+        `INSERT INTO doc_reminders (id, company_doc_id, company_id, days_out, emailed)
+         VALUES (?, ?, ?, ?, 0)`
+      ).bind(crypto.randomUUID(), d.id, d.company_id, due).run();
+    } catch (err) {
+      // Another run claimed it. Not an error.
+      if (/UNIQUE constraint failed/i.test(String(err?.message || err))) { skipped++; continue; }
+      throw err;
+    }
+
+    if (d.email) {
+      const mail = docExpiryEmail({
+        company: d, contact: d.contact, kind: d.kind, expiresOn: d.expires_on,
+        daysOut: due, account, jobs: booked || [],
+      });
+      const result = await sendEmail(env, { to: d.email, subject: mail.subject, text: mail.text, html: mail.html });
+      await logMail(env, { accountId, companyId: d.company_id, to: d.email,
+        kind: "doc_expiry", subject: mail.subject, result });
+      if (result.ok) {
+        await env.DB.prepare(`UPDATE doc_reminders SET emailed = 1 WHERE company_doc_id = ? AND days_out = ?`)
+          .bind(d.id, due).run();
+      }
+    }
+    sent++;
+
+    // The account with a crew booked under lapsed cover is told, in the feed
+    // they already read. One row per account, not per job.
+    if (due === -1) {
+      urgent++;
+      for (const acc of [...new Set((booked || []).map((b) => b.account_id))]) {
+        await logActivity(env, acc, null, "doc_expired",
+          `${d.company} has work booked and their ${d.kind} expired ${d.expires_on} — replacement requested`);
+      }
+    }
+  }
+  return { considered: (rows || []).length, sent, urgent, skipped };
+}
+
+app.get("/api/cron/doc-expiry", async (c) => {
+  if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
+  return c.json(await docExpirySweep(c.env));
+});
 
 app.get("/api/cron/license-sweep", async (c) => {
   if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
@@ -7584,7 +7951,8 @@ export default {
     // most daily and there is no reason to hammer it.
     const nightly = event.cron === "0 3 * * *";
     const jobs = nightly
-      ? [["hostnames", hostnameSweep], ["licenses", licenseSweep]]
+      ? [["hostnames", hostnameSweep], ["licenses", licenseSweep],
+         ["doc-expiry", docExpirySweep]]
       : [["hostnames", hostnameSweep]];
 
     ctx.waitUntil((async () => {

@@ -48,6 +48,8 @@ import { US_STATES } from "../shared/states.js";
 import { splitEven, releaseAmounts } from "../shared/money.js";
 import { chainReasonText } from "../shared/waivers.js";
 import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/autoschedule.js";
+import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS,
+  coversJob as coversJobDocs, daysBetween as daysBetweenIso } from "../shared/docs.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -1057,7 +1059,9 @@ function crewRatings(sub, jobs) {
 const crewCount = (s) => (s.crews || []).length;
 const headCount = (s) => (s.crews || []).reduce((n, c) => n + (c.members?.length || 0), 0);
 const DOC_LABELS = { insurance: "Certificate of insurance", bond: "Surety bond", contract: "Signed subcontractor agreement", w9: "IRS Form W-9" };
-const DOC_KINDS = ["insurance", "bond", "contract", "w9"];
+// DOC_KINDS was a second copy of the list in shared/docs.js. That module
+// decides which kinds expire and what a status means, and two lists that can
+// disagree about what a document even is defeats the point of having it.
 // Used mid-sentence. Lowercasing DOC_LABELS would mangle "IRS Form W-9".
 const DOC_LABELS_INLINE = {
   insurance: "certificate of insurance",
@@ -2534,7 +2538,19 @@ export default function SubSub() {
           + "Check their email and mobile, then reissue it.");
     }).catch((err) => {
       console.error("[persist] assign failed:", err);
-      setBillingNote("Could not issue that work order. It has not been sent — try again.");
+      // Name the reason. "Try again" is the wrong instruction for a refusal
+      // that will refuse identically every time, and a lapsed certificate is
+      // the one case here somebody can actually go and fix.
+      const e = err?.body?.error;
+      setBillingNote(
+        e === "documents_lapse_before_job"
+          ? `${sub.company} is not covered for this job's date. ${err.body.detail || ""} `
+            + "Ask them for the renewal, then assign it again."
+        : e === "documents_incomplete"
+          ? `${sub.company} has documents still waiting on review, so no work order can be issued yet.`
+        : e === "not_approved"
+          ? "This job is still a request nobody has approved, so no work order can be issued against it."
+        : "Could not issue that work order. It has not been sent — try again.");
     });
     { const jb = allJobs.find((j) => j.id === jobId);
       const n = (details.trades && details.trades.length) || 1;
@@ -2910,23 +2926,45 @@ export default function SubSub() {
 
   // --- contractor self-service ---
   // Verification: a document only counts once a human has checked it.
-  const verifySubDoc = (id, kind, data) => {
-    { const sb = subs.find((x) => x.id === id); if (sb) logEvent("doc_verified", `Verified ${DOC_LABELS_INLINE[kind]} for ${sb.company}`); }
-    patchDocReview(id, kind, {
-      status: "verified", ...data,
+  // A verdict on a document goes through the document's OWN route, not the
+  // generic engagement patch.
+  //
+  // It used to go through patchSub({ docReview }), which wrote the verdict and
+  // nothing else -- so /api/subs/:id/documents/:kind/review, which exists for
+  // exactly this, was never called by anything. Three things were quietly not
+  // happening as a result: the activity row the account reads, the event in the
+  // log, and (once 037 shipped) writing down what the certificate actually
+  // says. The expiry was being typed into a box and thrown away.
+  const reviewSubDoc = (id, kind, verdict, data) => {
+    const sb = subs.find((x) => x.id === id);
+    if (sb) logEvent(verdict === "verified" ? "doc_verified" : "doc_rejected",
+      `${verdict === "verified" ? "Verified" : "Rejected"} ${DOC_LABELS_INLINE[kind]} for ${sb.company}`);
+    const review = {
+      status: verdict, ...data,
       verifiedBy: me.name, verifiedAt: new Date().toISOString().slice(0, 10),
+    };
+    // Drawn straight away, and re-read after, because the server also writes
+    // the certificate's own row and the roster reads its expiry from there.
+    patchEngagement(id, {
+      docReview: { ...((engagements.find((e) => e.companyId === id
+        && e.accountId === account.id) || {}).docReview || {}), [kind]: review },
     });
+    persist("reviewDocument", api.reviewDocument(id, kind, review)
+      .then(() => hydrateAccount(account.id, currentUserId, { quiet: true })));
     setReviewing(null);
   };
+  const verifySubDoc = (id, kind, data) => reviewSubDoc(id, kind, "verified", data);
+  // A rejection carries straight on into the "send them the reason" mail,
+  // because a document turned down and nobody told is a contractor waiting on
+  // a job that will never be issued. The docReview passed here is the one just
+  // recorded, so the mail names the right gap.
   const rejectSubDoc = (id, kind, data) => {
-    { const sb = subs.find((x) => x.id === id); if (sb) logEvent("doc_rejected", `Rejected ${DOC_LABELS_INLINE[kind]} for ${sb.company}`); }
-    patchDocReview(id, kind, {
-      status: "rejected", ...data,
-      verifiedBy: me.name, verifiedAt: new Date().toISOString().slice(0, 10),
-    });
-    setReviewing(null);
+    reviewSubDoc(id, kind, "rejected", data);
     const target = subs.find((x) => x.id === id);
-    if (target) requestDocs({ ...target, docReview: { ...(target.docReview || {}), [kind]: { status: "rejected", ...data } } });
+    if (target) {
+      requestDocs({ ...target,
+        docReview: { ...(target.docReview || {}), [kind]: { status: "rejected", ...data } } });
+    }
   };
 
   // Runs the L&I lookup and stores the result on the contractor record.
@@ -3329,6 +3367,17 @@ export default function SubSub() {
         // answer. Carried explicitly rather than through ENGAGEMENT_FIELDS so
         // splitPatch() can never try to write it back.
         if ("hasPortal" in flat) en.hasPortal = !!flat.hasPortal;
+        // Same for what the documents say. These are read off company_docs,
+        // which is neither a companies column nor an engagements one, so the
+        // whitelists drop them -- and a roster whose `docs` is undefined reads
+        // as "nothing expires", which is the silence this whole feature exists
+        // to break. Read-only, for the same reason hasPortal is.
+        if ("docs" in flat) {
+          en.docs = flat.docs;
+          en.docState = flat.docState;
+          en.docAssignable = flat.docAssignable;
+          en.docSoonest = flat.docSoonest;
+        }
         cos.push(co); ens.push(en);
       });
       setCompanies(cos);
@@ -5502,6 +5551,46 @@ function ServiceCallRow({ c, job, showSubActions, onConfirm, onResolve, onResche
 }
 
 // ---- Document review (admin / PM verifies each document) ----------------
+// Who wrote the document, its number, and when it runs out.
+//
+// These were being read and not written down. A reviewer opens a certificate,
+// checks the carrier is real and the limits are enough, ticks the boxes -- and
+// every fact they just read was thrown away, leaving a filename and a boolean.
+// Months later "were they insured on the day of that job, and by whom" had no
+// answer on this platform.
+//
+// A contract and a W-9 are signed once and have no term, so they are not asked
+// for a date. Treating a blank date as doubt would put most of a roster
+// permanently amber, which is the failure shared/docs.js is written to avoid.
+function IssuerFields({ kind, issuer, setIssuer, policyNo, setPolicyNo, expires, setExpires, needsExpiry }) {
+  const who = kind === "bond" ? "Surety" : kind === "insurance" ? "Carrier" : "Issued by";
+  const num = kind === "bond" ? "Bond number" : kind === "insurance" ? "Policy number" : "Reference";
+  return (
+    <>
+      <div className="form-sec" style={{ marginTop: 14 }}>
+        What it says <span className="fld-note">off the document in front of you</span>
+      </div>
+      <div className="rv-issuer">
+        <label className="fld">{who}
+          <input value={issuer} maxLength={120} placeholder={kind === "bond" ? "e.g. Travelers" : "e.g. Acme Mutual"}
+            onChange={(e) => setIssuer(e.target.value)} />
+        </label>
+        <label className="fld">{num}
+          <input value={policyNo} maxLength={80} onChange={(e) => setPolicyNo(e.target.value)} />
+        </label>
+        {needsExpiry && (
+          <label className="fld">{kind === "bond" ? "Bond expires" : "Policy expires"}
+            <input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
+          </label>
+        )}
+      </div>
+      {!needsExpiry && (
+        <p className="cov-hint">This document does not expire, so there is no date to record.</p>
+      )}
+    </>
+  );
+}
+
 function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
   const r = docReview(sub, kind);
   const isIns = kind === "insurance";
@@ -5526,6 +5615,11 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
     return next;
   });
   const [expires, setExpires] = useState(r?.expires || "");
+  // Who wrote it and under what number. Not for show: when a certificate is
+  // questioned months later, "Acme Mutual, CGL-99812" is what somebody rings
+  // up about, and reconstructing it from a filename is not possible.
+  const [issuer, setIssuer] = useState(r?.issuer || sub.docs?.[kind]?.issuer || "");
+  const [policyNo, setPolicyNo] = useState(r?.policyNo || sub.docs?.[kind]?.policyNo || "");
   const [note, setNote] = useState(r?.status === "rejected" ? "" : (r?.note || ""));
   const [rejecting, setRejecting] = useState(false);
 
@@ -5546,9 +5640,14 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
   const bondShort = kind === "bond" && !!amount && bondAmt < BOND_MIN;
   const bondOk = kind !== "bond" || (!!amount && (!bondShort
     || !!(overrides.bond && overrides.bond.trim())));
+  // A bond has a term as surely as a policy does, and asking only about
+  // insurance left every bond on the platform with no date on it -- which is
+  // the state this whole feature exists to get out of. A contract and a W-9
+  // genuinely do not expire, and are not asked.
+  const needsExpiry = EXPIRING_DOC_KINDS.includes(kind);
   const canVerify = isIns
     ? attestOk && allLinesOk && requiredLinesFilled && expires
-    : attestOk && bondOk;
+    : attestOk && bondOk && (!needsExpiry || !!expires);
 
   const openFile = () => {
     const lines = [
@@ -5659,12 +5758,15 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
               </label>
             ))}
           </div>
-          <label className="fld" style={{ marginTop: 14 }}>Policy expires
-            <input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
-          </label>
+          <IssuerFields kind={kind} issuer={issuer} setIssuer={setIssuer}
+            policyNo={policyNo} setPolicyNo={setPolicyNo}
+            expires={expires} setExpires={setExpires} needsExpiry={needsExpiry} />
         </>
       ) : (
         <>
+          <IssuerFields kind={kind} issuer={issuer} setIssuer={setIssuer}
+            policyNo={policyNo} setPolicyNo={setPolicyNo}
+            expires={expires} setExpires={setExpires} needsExpiry={needsExpiry} />
           <div className="form-sec">Confirm on the document</div>
           <div className="rv-checks">
             {checks.map((c) => (
@@ -5716,15 +5818,24 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
             <p className="cov-hint">
               {isIns
                 ? "Enter every required limit, tick each confirmation, and set the expiry to verify."
-                : "Tick each confirmation" + (kind === "bond" ? " and enter the bond amount" : "") + " to verify."}
+                : "Tick each confirmation"
+                  + (kind === "bond" ? ", enter the bond amount and its expiry" : "") + " to verify."}
             </p>
           )}
           <div className="form-actions">
             <button className="btn-warn" onClick={() => setRejecting(true)}><XCircle size={15} /> Reject</button>
             <button className="btn-solid" disabled={!canVerify}
-              onClick={() => onVerify(kind, isIns
-                ? { checks: ticked, limits, expires, note, overrides }
-                : { checks: ticked, amount, note, overrides })}>
+              onClick={() => onVerify(kind, {
+                checks: ticked, note, overrides,
+                ...(isIns ? { limits } : { amount }),
+                ...(needsExpiry ? { expires } : {}),
+                issuer: issuer.trim() || null,
+                policyNo: policyNo.trim() || null,
+                // One number for the record, so a dispute does not need the
+                // whole limits object parsed: the aggregate for a policy, the
+                // face value for a bond.
+                coverage: isIns ? (limits.cgl_agg || null) : (amount || null),
+              })}>
               <CheckCircle2 size={15} /> Verify document
             </button>
           </div>
@@ -15543,6 +15654,13 @@ function PickJobSlot({ sub, jobs, allJobs, accountId, onPick, onNewJob, onNotify
           const M = catMeta(trade);
           const prox = job.zip ? coversZip(sub, job.zip) : null;
           const day = dayStatus(sub, allJobs || jobs, job.date, job.id, accountId);
+          // Cover, against THIS job's date rather than today's. A certificate
+          // that is current on the roster and runs out before the work is the
+          // case nothing else on this screen can show, and picking the slot is
+          // the only moment anybody can act on it. The server refuses these
+          // too -- this is so the refusal is read before the tap.
+          const cover = job.date ? coversJobDocs(sub.docs || {}, job.date, EXPIRING_DOC_KINDS) : null;
+          const lapses = cover && !cover.ok ? cover.lapsing : [];
           return (
             <div key={`${job.id}-${trade}`} className="pick-row">
               <div className={`trade-icon cat-${trade}`}><M.icon size={15} /></div>
@@ -15562,12 +15680,30 @@ function PickJobSlot({ sub, jobs, allJobs, accountId, onPick, onNewJob, onNotify
                   {prox && prox.distance != null && (
                     <span className={`prox-badge ${prox.inRange ? "in" : "out"}`}><Target size={11} /> {prox.distance} mi{prox.inRange ? "" : " · out"}</span>
                   )}
+                  {lapses.length > 0 && (
+                    <span className="lapse-badge" title={lapses.map((k) =>
+                      `${DOC_LABELS[k]} expires ${sub.docs?.[k]?.expiresOn}`).join("; ")}>
+                      <AlertTriangle size={11} /> Not covered on this date
+                    </span>
+                  )}
                 </div>
+                {lapses.length > 0 && (
+                  <p className="lapse-why">
+                    {lapses.map((k) => `${DOC_LABELS_INLINE[k] || k} expires ${sub.docs?.[k]?.expiresOn}`).join(", ")}
+                    {" — before this job on "}{job.date}. Ask them for the renewal first.
+                  </p>
+                )}
               </div>
-              <button className={`rec-send ${day && day.kind !== "free" ? "btn-warn" : "btn-solid"}`}
-                onClick={() => onPick(job, trade)}>
-                <Send size={14} /> {day && day.kind !== "free" ? "Assign anyway" : "Assign"}
-              </button>
+              {lapses.length > 0 ? (
+                <button className="rec-send btn-warn" onClick={() => onNotify(job, trade)}>
+                  <Mail size={14} /> Request renewal
+                </button>
+              ) : (
+                <button className={`rec-send ${day && day.kind !== "free" ? "btn-warn" : "btn-solid"}`}
+                  onClick={() => onPick(job, trade)}>
+                  <Send size={14} /> {day && day.kind !== "free" ? "Assign anyway" : "Assign"}
+                </button>
+              )}
             </div>
           );
         })}
@@ -17624,15 +17760,32 @@ function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, 
           {docs.map((d) => {
             const st = docStatus(sub, d.key);
             const rv = docReview(sub, d.key);
+            // Verified is a verdict somebody recorded once; a certificate has a
+            // date. A row reading "Verified · expires 2024-03-01" in green is
+            // the precise failure this is meant to prevent -- a missing
+            // document makes somebody ask, an expired one makes everybody stop
+            // asking. The date comes off company_docs, which is the
+            // certificate itself, falling back to the reviewer's note.
+            const until = sub.docs?.[d.key]?.expiresOn || rv?.expires || null;
+            const left = until
+              ? daysBetweenIso(new Date().toISOString().slice(0, 10), until) : null;
+            const lapsed = st === "verified" && left !== null && left < 0;
+            const soon = st === "verified" && left !== null && left >= 0 && left <= 30;
             return (
-              <div key={d.key} className={`doc-row st-doc-${st}`}>
+              <div key={d.key} className={`doc-row st-doc-${st}${lapsed ? " doc-lapsed" : soon ? " doc-soon" : ""}`}>
                 <d.icon size={16} />
                 <div className="doc-label-wrap">
                   <span className="doc-label">{d.label}</span>
                   {sub.docFiles?.[d.key] && <span className="doc-file">{sub.docFiles[d.key]}</span>}
                   <span className={`doc-state s-${st}`}>
-                    {st === "verified" && <><CheckCircle2 size={11} /> Verified {rv?.verifiedAt} by {rv?.verifiedBy}
-                      {rv?.limits?.cgl_occ ? ` · CGL ${formatMoney(rv.limits.cgl_occ)}` : rv?.amount ? ` · ${formatMoney(rv.amount)}` : ""}{rv?.expires ? ` · expires ${rv.expires}` : ""}</>}
+                    {st === "verified" && (lapsed
+                      ? <><AlertTriangle size={11} /> Expired {until} — {Math.abs(left)} day{Math.abs(left) === 1 ? "" : "s"} ago. Not cover any more.</>
+                      : <>{soon ? <Clock size={11} /> : <CheckCircle2 size={11} />} Verified {rv?.verifiedAt} by {rv?.verifiedBy}
+                        {rv?.limits?.cgl_occ ? ` · CGL ${formatMoney(rv.limits.cgl_occ)}` : rv?.amount ? ` · ${formatMoney(rv.amount)}` : ""}
+                        {until ? (soon
+                          ? ` · expires ${until}, in ${left} day${left === 1 ? "" : "s"}`
+                          : ` · expires ${until}`) : ""}
+                        {sub.docs?.[d.key]?.issuer ? ` · ${sub.docs[d.key].issuer}` : ""}</>)}
                     {st === "pending" && <><Clock size={11} /> Awaiting review</>}
                     {st === "rejected" && <><XCircle size={11} /> Rejected — {rv?.note}</>}
                     {st === "missing" && <><AlertTriangle size={11} /> Not uploaded</>}
@@ -19284,6 +19437,13 @@ p.fld-note{margin:6px 0 0}
 /* the hiring side's card: why the switch is or is not theirs, and the mail
    preview in the ask modal */
 .auto-note{margin:-8px 0 0;font-size:12.5px;color:var(--ink-soft);line-height:1.45}
+.rv-issuer{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.lapse-badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:800;color:#8f2f2f;background:#fbe9e9;padding:3px 8px;border-radius:6px}
+/* an expired certificate must not read as a verified one */
+.doc-row.doc-lapsed{background:#fbe9e9 !important;border-color:#e8c4c4 !important}
+.doc-row.doc-lapsed .doc-state{color:#8f2f2f;font-weight:700}
+.doc-row.doc-soon{background:#fffdf6;border-color:#ecd9b0}
+.lapse-why{margin:6px 0 0;font-size:12px;color:var(--red);line-height:1.4}
 .auto-err{display:flex;align-items:center;gap:6px;margin:8px 0 0;font-size:12.5px;color:var(--red);line-height:1.45}
 .auto-card .mini{flex:none}
 .prev-subject{margin:0 0 8px;font-size:13px}
