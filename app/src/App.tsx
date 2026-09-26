@@ -2071,6 +2071,8 @@ export default function SubSub() {
   // query in the Worker is "contractors I hire"; this is the other direction,
   // and without it saying yes to somebody showed up nowhere on this account.
   const [clients, setClients] = useState([]);
+  // Our own work at every client, not just the account we are standing in.
+  const [myWork, setMyWork] = useState([]);
   const [addMenu, setAddMenu] = useState(false);
   const [editing, setEditing] = useState(null); // sub being edited
   const [tab, setTab] = useState("dashboard");
@@ -2812,7 +2814,42 @@ export default function SubSub() {
     Object.entries(j.assignments || {})
       .filter(([, a]) => a.subId === mySub.id)
       .map(([trade, a]) => ({ job: j, trade, a }))) : [];
-  const pendingCount = myAssignments.filter((m) => m.a.status === "pending" && !m.a.auto).length;
+
+  // The same thing at every OTHER client. /api/jobs is one account at a time,
+  // so on its own the list above answers "does anybody need me" for exactly one
+  // of however many accounts hire us -- and the badge below counted that one
+  // too. A subcontractor on twenty-five rosters had four jobs waiting on a yes
+  // behind a clean nav. See the note on GET /api/my-work.
+  //
+  // Shaped into the same {job, trade, a} the local rows use so one list renders
+  // both. `elsewhere` carries the client, and it is what turns the card
+  // read-only: answering is an account-scoped write, so a row belonging to
+  // another account offers the way there rather than an Accept button that
+  // would post to the wrong place.
+  const elsewhere = myWork.filter((w) => !w.here).map((w) => ({
+    job: {
+      id: w.jobId, title: w.title, address: w.address, area: w.area, zip: w.zip,
+      date: w.date, time: w.time, severity: w.severity, status: w.jobStatus,
+      scope: w.tradeScope || null, propertyName: w.propertyName,
+      // Absent on this shape rather than undefined: every card reads them and
+      // the jobs list has white-screened on a missing one before.
+      sqft: null, materialSource: null, materialsPaidBy: null, measurementDocs: [],
+    },
+    trade: w.trade,
+    a: {
+      id: w.woId, wo: w.wo, subId: mySub?.id || null, status: w.status, auto: w.auto,
+      responseWindow: w.responseWindow, respondBy: w.respondBy, respondedAt: w.respondedAt,
+      value: w.value, payKind: w.payKind, rate: w.rate, capHours: w.capHours,
+      tradeScope: w.tradeScope, crewName: w.crewName, signedWO: w.signedWO,
+    },
+    elsewhere: { accountId: w.accountId, name: w.accountName, subdomain: w.accountSubdomain },
+  }));
+
+  // Amber means somebody, somewhere, is waiting on a yes. Counting only the
+  // account in front of us is how the thing it is meant to catch got missed.
+  const pendingHere = myAssignments.filter((m) => m.a.status === "pending" && !m.a.auto);
+  const pendingCount = pendingHere.length
+    + elsewhere.filter((m) => m.a.status === "pending" && !m.a.auto).length;
 
   // --- user management (admin only) ---
   // A user is global; joining an account is a membership.
@@ -3377,7 +3414,17 @@ export default function SubSub() {
     catch (err) { console.warn("[clients] load failed:", err); setClients([]); }
   }, [loggedIn, currentAccountId]);
 
-  useEffect(() => { if (loggedIn) refreshClients(); else setClients([]); },
+  // Every slot assigned to us, at every account that engaged us. Reloaded on
+  // an account switch like everything else, because the work does not change
+  // but a row's `here` does -- and `here` is what decides which rows can be
+  // answered from where we are standing.
+  const refreshMyWork = useCallback(async () => {
+    if (!loggedIn) return;
+    try { setMyWork((await api.myWork())?.work || []); }
+    catch (err) { console.warn("[my-work] load failed:", err); setMyWork([]); }
+  }, [loggedIn, currentAccountId]);
+
+  useEffect(() => { if (loggedIn) { refreshClients(); refreshMyWork(); } else { setClients([]); setMyWork([]); } },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [loggedIn, currentAccountId]);
 
@@ -5373,6 +5420,8 @@ export default function SubSub() {
       {can("portal") && tab !== "account" && (
         mySub ? (
           <ContractorPortal sub={mySub} jobs={jobs} pane={pane} mine={myAssignments} brand={brand} me={me} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
+            elsewhere={elsewhere}
+            onGoClient={(accountId) => { setCurrentAccountId(accountId); setSelected(null); setPane("jobs"); }}
             connectRequests={connectIn || []}
             onRespondConnect={async (id, accept) => {
               await api.respondConnect(id, accept);
@@ -17622,7 +17671,7 @@ function SendDocPack({ company, anyOnFile }) {
   );
 }
 
-function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
+function ContractorPortal({ sub, jobs, pane, mine, elsewhere = [], onGoClient, brand, me, orders, now,
   connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage,
   overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow }) {
   const [sub2, setSub2] = useState("trades");
@@ -17630,13 +17679,27 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
   const miss = missingDocs(sub);
 
   const first = (me?.name || sub.contact || sub.company).split(" ")[0];
-  const pending = mine.filter((m) => m.a.status === "pending" && !m.a.auto);
-  const accepted = mine.filter((m) => m.a.status === "accepted" || m.a.auto);
+  // One list, every client. `mine` is this account's jobs and `elsewhere` is
+  // the same slots at the other accounts that hire us -- a subcontractor asks
+  // "where am I due on Tuesday", not "where am I due on Tuesday at this
+  // particular general contractor", and answering the second question is what
+  // made them switch account to find out. Rows carry which client they are for
+  // and answer from there; the counts, the schedule and the booked value are
+  // all across the lot, because a figure for one client out of twenty-five is
+  // not an answer to anything.
+  const all = [...mine, ...elsewhere];
+  const pending = all.filter((m) => m.a.status === "pending" && !m.a.auto);
+  const accepted = all.filter((m) => m.a.status === "accepted" || m.a.auto);
   const upcoming = accepted.filter((m) => m.job.status !== "completed")
     .sort((a, b) => (a.job.date || "9").localeCompare(b.job.date || "9"));
   const past = accepted.filter((m) => m.job.status === "completed");
-  const declined = mine.filter((m) => m.a.status === "declined");
+  const declined = all.filter((m) => m.a.status === "declined");
   const earnings = accepted.reduce((n, m) => n + Number(moneyRaw(m.a.value) || 0), 0);
+  // How many companies this adds up across. The strip under the greeting says
+  // it, because "3 job requests waiting on you" reads very differently when
+  // they are at three different companies and each one needs going to.
+  const clientCount = new Set(elsewhere.map((m) => m.elsewhere.accountId)).size
+    + (mine.length ? 1 : 0);
 
   return (
     <main className="ss-main">
@@ -17702,7 +17765,15 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
             <div className="who-bar">
               <div className="who-txt">
                 <span className="who-me">{sub.company}</span>
-                <span className="who-for">Subcontracting for {brand.name}</span>
+                {/* Who the work is for, which stopped being one company the
+                    moment a second account hired us. Naming only the account
+                    we happen to be standing in, on a list that spans all of
+                    them, is the thing that made the whole screen misleading. */}
+                <span className="who-for">
+                  {clientCount > 1
+                    ? `Subcontracting for ${clientCount} companies`
+                    : `Subcontracting for ${brand.name}`}
+                </span>
               </div>
             </div>
           </div>
@@ -17732,7 +17803,7 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
           {pending.length > 0 && (
             <section className="dash-sec">
               <h3><Clock size={15} /> Job requests <span className="sec-count amber">{pending.length}</span></h3>
-              {pending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} showActions />)}
+              {pending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} showActions />)}
             </section>
           )}
 
@@ -17740,20 +17811,20 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
             <h3><Calendar size={15} /> Current &amp; upcoming {upcoming.length > 0 && <span className="sec-count">{upcoming.length}</span>}</h3>
             {upcoming.length === 0
               ? <div className="dash-empty"><ClipboardList size={24} /><p>No upcoming jobs booked.</p></div>
-              : upcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} />)}
+              : upcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} />)}
           </section>
 
           {past.length > 0 && (
             <section className="dash-sec">
               <h3><CheckCircle2 size={15} /> Completed <span className="sec-count">{past.length}</span></h3>
-              {past.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} past />)}
+              {past.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} past />)}
             </section>
           )}
 
           {declined.length > 0 && (
             <section className="dash-sec">
               <h3><XCircle size={15} /> Declined <span className="sec-count">{declined.length}</span></h3>
-              {declined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} />)}
+              {declined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} />)}
             </section>
           )}
         </>
@@ -17968,13 +18039,31 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
 }
 
 // ---- Contractor dashboard job card -------------------------------------
-function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO, now, changeOrders, onRequestChange }) {
+function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO, now, changeOrders, onRequestChange, elsewhere, onGoClient }) {
   const M = catMeta(trade);
   const left = msLeft(a, now);
   const expired = isExpired(a, now);
   const urgency = urgencyOf(left);
+  // A slot at another client. Read-only, and read-only means every write, not
+  // the obvious one: accepting, declining and requesting a change all post to
+  // the account the seat is on, so offered from here they would reach the wrong
+  // account -- and the work-order modal reads that account's job. So the card
+  // says where the work is and takes them there, in one tap, instead of
+  // pretending it can be answered from a company it does not belong to.
+  const away = !!elsewhere;
   return (
-    <div className={`job-card jr-card ${past ? "past" : ""}`}>
+    <div className={`job-card jr-card ${past ? "past" : ""} ${away ? "jr-away" : ""}`}>
+      {away && (
+        <div className="jr-client">
+          <Building2 size={12} />
+          <span>For <strong>{elsewhere.name}</strong></span>
+          {onGoClient && (
+            <button type="button" className="jr-goto" onClick={() => onGoClient(elsewhere.accountId)}>
+              <ArrowUpDown size={12} /> Open
+            </button>
+          )}
+        </div>
+      )}
       <div className="job-card-head">
         <div>
           <h3>{job.title}</h3>
@@ -17994,11 +18083,13 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
       {(a.tradeScope || job.scope) && <p className="job-scope">{a.tradeScope || job.scope}</p>}
       {a.crewName && <p className="portal-crew"><Users size={12} /> Your crew: {a.crewName}</p>}
       {job.materialSource && <p className="portal-crew"><Layers size={12} /> Materials: {job.materialSource} ({job.materialsPaidBy})</p>}
-      <button className="wo-open-btn" onClick={() => onViewWO({ job, trade, a })}>
-        <ScrollText size={13} /> View work order {a.wo}
-        {(job.measurementDocs || []).length > 0 && <span className="wo-open-meas">+{job.measurementDocs.length} measurement doc{job.measurementDocs.length > 1 ? "s" : ""}</span>}
-      </button>
-      {!past && (a.status === "accepted" || a.auto) && onRequestChange && (
+      {!away && (
+        <button className="wo-open-btn" onClick={() => onViewWO({ job, trade, a })}>
+          <ScrollText size={13} /> View work order {a.wo}
+          {(job.measurementDocs || []).length > 0 && <span className="wo-open-meas">+{job.measurementDocs.length} measurement doc{job.measurementDocs.length > 1 ? "s" : ""}</span>}
+        </button>
+      )}
+      {!away && !past && (a.status === "accepted" || a.auto) && onRequestChange && (
         <button className="wo-open-btn wo-change-btn" onClick={() => onRequestChange(job, trade, a)}>
           <FilePlus2 size={13} /> Request a change to this work order
         </button>
@@ -18006,7 +18097,9 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
       {a.rating ? (
         <p className="portal-crew"><Star size={12} fill="currentColor" /> Rated {a.rating}.0 by the GC</p>
       ) : null}
-      {showActions && awaitingReply(a) && (
+      {/* The countdown still shows on a row from elsewhere -- it is the whole
+          reason to surface it at all -- but the buttons below do not. */}
+      {(showActions || away) && awaitingReply(a) && (
         <div className={`ddl ddl-${urgency}`}>
           {expired ? <><XCircle size={14} /> <b>Expired</b> — this offer has been withdrawn.
             Contact the office if you still want the work.</>
@@ -18015,7 +18108,20 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
                 { weekday: "short", hour: "numeric", minute: "2-digit" })}</span></>}
         </div>
       )}
-      {showActions && !expired ? (
+      {away ? (
+        <div className="portal-respond away">
+          <span className="respond-label">
+            {awaitingReply(a) && !expired
+              ? `Answer this at ${elsewhere.name}`
+              : `This job is at ${elsewhere.name}`}
+          </span>
+          {onGoClient && (
+            <button type="button" className="resp go" onClick={() => onGoClient(elsewhere.accountId)}>
+              <ArrowUpDown size={13} /> Go to {elsewhere.name}
+            </button>
+          )}
+        </div>
+      ) : showActions && !expired ? (
         <div className="portal-respond">
           <span className="respond-label">Do you accept this job?</span>
           <div className="respond-btns">
@@ -21766,6 +21872,23 @@ p.fld-note{margin:6px 0 0}
 .sec-count.amber{background:var(--amber);color:#fff}
 .dash-sec .job-card{margin-bottom:10px}
 .jr-card.past{opacity:.72}
+/* A slot at another client, on a list that spans all of them. The tint and the
+   left edge say "this one is not here" at a glance, without a separate section
+   -- splitting the list by company is the switching this replaces. */
+.jr-away{border-left:3px solid var(--brand);background:linear-gradient(90deg,var(--paper) 0%,var(--card) 26%)}
+.jr-client{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--ink-soft);
+  margin:-2px 0 10px;padding-bottom:9px;border-bottom:1px dashed var(--line)}
+.jr-client svg{flex:none}
+.jr-client strong{color:var(--ink);font-weight:700}
+.jr-goto{margin-left:auto;border:1px solid var(--line);background:var(--card);color:var(--brand-dk);
+  font-size:11px;font-weight:700;padding:3px 9px;border-radius:7px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:5px;flex:none}
+.jr-goto:hover{border-color:var(--brand);background:var(--paper)}
+.portal-respond.away .respond-label{font-weight:600;color:var(--ink)}
+.resp.go{border:1px solid var(--brand);background:var(--card);color:var(--brand-dk);font-weight:700;
+  font-size:12.5px;padding:8px 13px;border-radius:9px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px}
+.resp.go:hover{background:var(--brand);color:#fff}
 .dash-empty{text-align:center;padding:28px 16px;color:var(--ink-soft);background:var(--card);
   border:1px dashed var(--line);border-radius:12px}
 .dash-empty > svg{opacity:.5;margin-bottom:8px}   /* same trap, 8px and the New job button */

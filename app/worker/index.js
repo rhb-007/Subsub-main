@@ -6426,6 +6426,101 @@ app.get("/api/clients", async (c) => {
   })));
 });
 
+// Every job slot assigned to this company, across every account that engaged
+// it. The other end of /api/clients: that says who hires us, this says what
+// they want doing.
+//
+// Why it has to exist. /api/jobs is `WHERE j.account_id = ?`, and the portal's
+// My Jobs and its amber badge are both derived from it -- so a subcontractor on
+// twenty-five rosters answered "does anybody need me tomorrow" by switching
+// account twenty-five times, and the badge only ever counted the account they
+// happened to be standing in. Four jobs could sit waiting on a yes behind a
+// clean nav. That is not a long menu, it is missed work, and the doc-share flow
+// exists precisely to put a subcontractor on more rosters -- so the better the
+// growth loop works the worse it gets.
+//
+// The shape is the one the tenant's own reports use, for the same reason: their
+// own work, read-only, with the account that wants it NAMED, because "who is
+// this for" is the whole question when the answer is a different company every
+// row.
+//
+// Scoped by the work order, not by the job. `w.company_id = mine` is the only
+// thing that selects a row, so this returns THEIR work and cannot be widened
+// into the client's job list. Three things are deliberately absent:
+//
+//   - The other trades on the same job. A job can carry three work orders and
+//     the other two name other companies on that account's roster. Telling a
+//     roofer which electrician the GC uses is the accumulation this product
+//     refuses everywhere else, and it is worth saying that /api/jobs does not
+//     redact this today for a contractor seat -- that is a separate hole, not
+//     one this route may copy.
+//   - Anything about the account beyond its name and subdomain. The subdomain
+//     is here because it is how you get there, not as a fact about them.
+//   - The client, the sqft, the measurement docs, the tenant's report -- none
+//     of which a list answering "where am I due" needs.
+//
+// Voided orders are gone and withdrawn jobs are out of everything live, so
+// neither is here. Capped, because this is a list somebody scans.
+app.get("/api/my-work", async (c) => {
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ work: [] });
+  const { accountId } = c.get("auth");
+  let rows;
+  try {
+    ({ results: rows } = await c.env.DB.prepare(
+      `SELECT w.id AS wo_id, w.wo_number, w.trade, w.status, w.auto_scheduled,
+              w.response_window, w.respond_by, w.responded_at, w.crew_name,
+              w.trade_scope, w.value_cents, w.pay_kind, w.rate_cents, w.cap_hours,
+              w.issued_at, w.signed_file_key,
+              j.id AS job_id, j.account_id, j.title, j.address, j.area, j.zip,
+              j.date, j.time, j.severity, j.status AS job_status, j.completed_at,
+              j.scope, j.updated_at, j.created_at,
+              a.name AS account_name, a.subdomain AS account_subdomain,
+              p.name AS property_name
+         FROM work_orders w
+         JOIN jobs j ON j.id = w.job_id
+         JOIN accounts a ON a.id = j.account_id
+         LEFT JOIN properties p ON p.id = j.property_id
+        WHERE w.company_id = ? AND w.voided_at IS NULL AND j.withdrawn_at IS NULL
+        ORDER BY COALESCE(j.updated_at, j.created_at) DESC
+        LIMIT 200`
+    ).bind(companyId).all());
+  } catch (err) {
+    // A database without 020's withdrawn_at, or 025's updated_at, behaves the
+    // way every other route does rather than 500-ing the portal.
+    if (!missingSchema(err)) throw err;
+    return c.json({ work: [] });
+  }
+  return c.json({
+    work: (rows || []).map((r) => ({
+      woId: r.wo_id, wo: r.wo_number, jobId: r.job_id, trade: r.trade,
+      // The account this is for. `here` is what lets the screen offer the
+      // accept and decline buttons on the rows it can actually act on: this
+      // list spans accounts and responding is an account-scoped write, so a
+      // row belonging elsewhere is read-only and says where to go instead.
+      accountId: r.account_id, accountName: r.account_name,
+      accountSubdomain: r.account_subdomain, here: r.account_id === accountId,
+      status: r.status, auto: !!r.auto_scheduled,
+      responseWindow: r.response_window || null, respondBy: r.respond_by || null,
+      respondedAt: r.responded_at || null,
+      title: r.title, address: r.address || null, area: r.area || null, zip: r.zip || null,
+      propertyName: r.property_name || null,
+      date: r.date || null, time: r.time || null,
+      severity: r.severity || null, jobStatus: r.job_status,
+      completedAt: r.completed_at || null, tradeScope: r.trade_scope || null,
+      crewName: r.crew_name || null,
+      // What they are being paid, because it is their own work order.
+      payKind: r.pay_kind || "fixed",
+      value: r.value_cents != null ? String(r.value_cents / 100) : "",
+      rate: r.rate_cents != null ? String(r.rate_cents / 100) : "",
+      capHours: r.cap_hours != null ? r.cap_hours : null,
+      signedWO: r.signed_file_key || null,
+      issuedAt: r.issued_at || null,
+      updatedAtIso: r.updated_at || r.created_at || null,
+    })),
+  });
+});
+
 // What they have sent, and whether anybody opened it. The view count is the
 // reason to send it through here rather than as an attachment.
 app.get("/api/doc-shares", async (c) => {

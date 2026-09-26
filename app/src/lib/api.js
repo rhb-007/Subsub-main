@@ -361,6 +361,9 @@ export const api = {
   // Sending your own paperwork to somebody who asked for it.
   // The other end of a connection: accounts that hire us.
   clients: () => request("/clients"),
+  // Every slot assigned to us, at every client. The portal's job list and its
+  // badge both used to read /api/jobs, which is one account at a time.
+  myWork: () => request("/my-work"),
   docShares: () => request("/doc-shares"),
   sendDocPack: (body) => request("/doc-shares", { method: "POST", body: JSON.stringify(body) }),
   revokeDocShare: (id) => request(`/doc-shares/${encodeURIComponent(id)}/revoke`, { method: "POST" }),

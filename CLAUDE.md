@@ -500,6 +500,41 @@ refactor.
   rent from them* — because where you land and what you can do there both
   follow from the role, and the role was the half the menu never said.
 
+  **A subcontractor's work is one list, not one account at a time.** The whole
+  point of that loop is to put a subcontractor on more rosters, and the portal
+  answered "does anybody need me" for exactly one of them. `/api/jobs` is
+  `WHERE j.account_id = ?`, and both the portal's job list and its amber badge
+  were derived from it — so a roofer on twenty-five GCs' rosters found out by
+  switching account twenty-five times, and could have four jobs waiting on a yes
+  behind a clean nav. That is not a long menu, it is missed work, and it gets
+  worse the better the growth loop works.
+
+  `GET /api/my-work` is every slot assigned to **this company**, across every
+  account that engaged it, with the client named. It is the shape the tenant's
+  own reports use, for the same reason: their own work, read-only, with the
+  account it belongs to named, because "who is this for" is the whole question
+  when the answer is a different company every row. The counts, the schedule and
+  the booked value are all across the lot — a figure for one client out of
+  twenty-five answers nothing.
+
+  Scoped **by the work order, not the job**: `w.company_id = mine` is the only
+  thing that selects a row, so it cannot be widened into a client's job list.
+  And it never carries **the other trades on the same job** — a job holds three
+  work orders and the other two name other companies on that account's roster,
+  so telling a roofer which electrician the GC uses is the accumulation refused
+  everywhere else. Worth knowing that `/api/jobs` does **not** redact that for a
+  contractor seat today; that is a separate hole, not one this route may copy.
+
+  **Read-only means every write, not the obvious one.** Accepting, declining and
+  requesting a change all post to the account the seat is on, and the work-order
+  modal reads that account's job — so on a row belonging elsewhere every one of
+  them would reach the wrong company. The card says whose the work is, keeps the
+  countdown (the entire reason to surface it), and offers one tap to get there.
+
+  And the fix must not tax the common case: at one client there is no strip, no
+  tint, and the same sentence as before. `clientCount` is what decides, so the
+  screen only changes shape once there is a second company to distinguish.
+
   **Sending is gated on a document being uploaded, not verified.** Verification
   is each hiring account's own verdict and says nothing about whether the
   contractor has one to send — the common case is that they upload and somebody
