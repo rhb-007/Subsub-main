@@ -195,3 +195,36 @@ export function openWorkText(n, side) {
     : `${what} at this building ${n === 1 ? "stays" : "stay"} yours to finish. `
       + "The new manager can see that it is outstanding, not who is doing it.";
 }
+
+// ---- Who may appoint a manager ------------------------------------------
+//
+// Appointing requires OWNING the building, which the API has always checked.
+// That check alone was not enough, because 039 backfilled
+// `owner_account_id = account_id` for every row that already existed -- the
+// only safe backfill, since before it there was no owner concept and whoever
+// held a building went on holding it. The side effect is that every building a
+// property manager had typed in reads as theirs, so a managing agent was
+// offered "appoint a property manager" on a client's building and the
+// ownership check waved it through.
+//
+// The missing distinction is already modelled, in ACCOUNT_KINDS: a property
+// manager's account INVITES owners, because somebody else owns the buildings.
+// A building owner's account has none to invite, because they ARE the owner.
+// So the kinds that own their buildings are the kinds with nobody to invite.
+//
+// A managing agent is not stuck: they add the owner, the owner takes the
+// building (two-party, as ever), and the owner appoints whoever they like.
+// That is the chain working rather than an agent sub-contracting an
+// instruction onward, which is not theirs to do.
+export const OWNER_KINDS = ["building_owner"];
+export const isOwnerKind = (kind) => OWNER_KINDS.includes(kind);
+
+export function canAppoint(property = {}, { accountId, accountKind } = {}) {
+  if (!property.ownerAccountId || property.ownerAccountId !== accountId) {
+    return { ok: false, reason: "not_yours_to_appoint" };
+  }
+  // Already somebody else's to run. Moving it again starts with taking it back.
+  if (property.accountId !== accountId) return { ok: false, reason: "already_managed" };
+  if (!isOwnerKind(accountKind)) return { ok: false, reason: "not_the_owner" };
+  return { ok: true };
+}

@@ -133,11 +133,16 @@ try {
       /hand over to the owner/i.test(cedar?.handover || ""), cedar?.handover);
     t.ck("and says their record survives it",
       /stays yours/i.test(cedar?.handover || ""), cedar?.handover);
-    // A building nobody else owns has nothing to hand over -- it offers
-    // appointing instead, which is the holder's move.
-    t.ck("a building they own themselves offers appointing a manager",
-      /appoint a property manager/i.test(elm?.handover || ""), elm?.handover);
-    t.ck("and says the owner keeps it", /you keep it/i.test(elm?.handover || ""), elm?.handover);
+    // A building with no owner recorded reads, after 039's backfill, as this
+    // account's own -- and this account is a MANAGING AGENT. Appointing is the
+    // owner's move, so it is not offered here however the columns read.
+    t.ck("a managing agent is not offered appointing",
+      !/appoint a property manager/i.test(elm?.handover || ""), elm?.handover);
+    // Not a dead end: the path out is named, because it is a real one.
+    t.ck("and is pointed at adding the owner instead",
+      /add the owner/i.test(elm?.handover || ""), elm?.handover);
+    t.ck("no appoint button on the card either",
+      !elm.buttons.some((b) => /appoint/i.test(b)), JSON.stringify(elm.buttons));
 
     await page.evaluate(() => {
       const c = [...document.querySelectorAll(".prop-card")].find((x) => /Cedar/.test(x.innerText));

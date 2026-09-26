@@ -35,7 +35,8 @@ import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
 import { eligible as overflowEligible, canBroadcast, overflowSplit, postClosed,
   postWindowHours, OVERFLOW_FEE_BPS, ELIGIBILITY } from "../shared/overflow.js";
 import { canHandOver, awaitingFrom, canDecide as canDecideTransfer,
-  canCancel as canCancelTransfer, inheritedShape, openWorkText } from "../shared/handover.js";
+  canCancel as canCancelTransfer, inheritedShape, openWorkText,
+  canAppoint } from "../shared/handover.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
 import {
@@ -6819,12 +6820,20 @@ app.get("/api/property-transfers", async (c) => {
   if (pending.length) {
     const ids = [...new Set(pending.map((r) => r.property_id))];
     try {
-      // Grouped by account as well as property, and read back per transfer
-      // against its `from` side -- the party on their way out. Counting every
-      // open job at the building instead would disagree with the number the
-      // feeds record when it is accepted, which counts the same side, and two
-      // different answers to "how many repairs are outstanding" is worse than
-      // either of them.
+      // Grouped by account as well as property, because the two sides are
+      // asking DIFFERENT questions and only get the same answer when there has
+      // been exactly one previous manager:
+      //
+      //   outgoing  "how much of this is still mine to finish" -- their own
+      //             open work, and nobody else's.
+      //   incoming  "how much am I taking on that will not be mine" -- every
+      //             open repair at the building except their own, which
+      //             includes anything a manager before this one left behind.
+      //
+      // An earlier version answered both with the outgoing side's number for
+      // the sake of a matching count. That made the incoming number wrong:
+      // somebody appointed to a building with leftovers from two managers was
+      // told about one of them.
       const { results } = await c.env.DB.prepare(
         `SELECT j.property_id, j.account_id, COUNT(*) AS n FROM jobs j
           WHERE j.property_id IN (${ids.map(() => "?").join(",")})
@@ -6836,13 +6845,24 @@ app.get("/api/property-transfers", async (c) => {
     } catch (err) { if (!missingSchema(err)) throw err; }
   }
 
+  // Open work at this property on every account except one. What an incoming
+  // manager is taking on is not limited to the party handing it over.
+  const openExcept = (propertyId, exceptAccountId) => Object.entries(openAt)
+    .filter(([k]) => {
+      const [pid, acc] = k.split("|");
+      return pid === propertyId && acc !== exceptAccountId;
+    })
+    .reduce((n, [, v]) => n + v, 0);
+
   return c.json((rows || []).map((r) => {
     const t = transferShape(r);
-    // Which end of this transfer the reader is standing at decides what the
-    // sentence says: one of them is keeping the work, the other is inheriting
-    // the fact of it.
+    // Which end of this transfer the reader is standing at decides both the
+    // sentence and the number: one of them is keeping their own work, the other
+    // is inheriting the fact of everybody else's.
     const incoming = r.to_account_id === accountId;
-    const n = openAt[`${r.property_id}|${r.from_account_id}`] || 0;
+    const n = incoming
+      ? openExcept(r.property_id, r.to_account_id)
+      : (openAt[`${r.property_id}|${r.from_account_id}`] || 0);
     return {
       ...t,
       // Whose move it is, computed from the shared rule rather than guessed at
@@ -7109,27 +7129,36 @@ app.post("/api/property-transfers/:id/decide", requireRole("admin", "pm", "owner
   // both sides are now living with. Said out loud to each of them, because
   // silence here is exactly how a repair gets dropped between two companies
   // that each assumed the other had it.
-  let openNow = 0;
+  // Two numbers, for the same reason as above: what the outgoing side keeps is
+  // their own open work, and what the incoming side takes on is every open
+  // repair at the building that will not be theirs.
+  let keepsOpen = 0, inheritsOpen = 0;
   try {
-    const r = await c.env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM jobs
-        WHERE property_id = ? AND account_id = ? AND status != 'completed'
-          AND withdrawn_at IS NULL AND declined_at IS NULL`
-    ).bind(t.propertyId, t.fromAccountId).first();
-    openNow = r?.n || 0;
+    const { results } = await c.env.DB.prepare(
+      `SELECT account_id, COUNT(*) AS n FROM jobs
+        WHERE property_id = ? AND status != 'completed'
+          AND withdrawn_at IS NULL AND declined_at IS NULL
+        GROUP BY account_id`
+    ).bind(t.propertyId).all();
+    for (const r of results || []) {
+      if (r.account_id === t.fromAccountId) keepsOpen += r.n;
+      if (r.account_id !== t.toAccountId) inheritsOpen += r.n;
+    }
   } catch (err) { if (!missingSchema(err)) throw err; }
 
   await logEvent(c.env, accountId, userId, "property.transferred", t.propertyId,
-    { transferId: t.id, from: t.fromAccountId, to: t.toAccountId, openWork: openNow });
+    { transferId: t.id, from: t.fromAccountId, to: t.toAccountId,
+      keepsOpen, inheritsOpen });
   await logActivity(c.env, t.fromAccountId, null, "transfer_done",
     `${row.property_name} was handed over. Every job you ran on it stays on your record.`
-    + (openNow ? ` ${openWorkText(openNow, "outgoing")}` : ""));
+    + (keepsOpen ? ` ${openWorkText(keepsOpen, "outgoing")}` : ""));
   await logActivity(c.env, t.toAccountId, null, "transfer_done",
     `${row.property_name} is yours now.`
-    + (openNow ? ` ${openWorkText(openNow, "incoming")}` : ""));
+    + (inheritsOpen ? ` ${openWorkText(inheritsOpen, "incoming")}` : ""));
 
   return c.json({ ok: true, status: "accepted", propertyId: t.propertyId,
-    openWork: openNow, openWorkText: openNow ? openWorkText(openNow, "incoming") : null });
+    openWork: inheritsOpen,
+    openWorkText: inheritsOpen ? openWorkText(inheritsOpen, "incoming") : null });
 });
 
 // Appointing a manager. The inverse journey, same two-party rule.
@@ -7165,8 +7194,19 @@ app.post("/api/properties/:propertyId/appoint", requireRole("admin", "pm"), asyn
   if (!prop) return c.json({ error: "not_found" }, 404);
   // Only the owner appoints, and only for a building they both own and hold.
   // An account merely operating a building cannot sub-contract it onward.
-  if (prop.ownerAccountId !== accountId) return c.json({ error: "not_yours_to_appoint" }, 403);
-  if (prop.accountId !== accountId) return c.json({ error: "already_managed" }, 409);
+  //
+  // The ownership check alone used to be the whole rule, and 039's backfill
+  // quietly defeated it: `owner_account_id = account_id` on every pre-existing
+  // row means a managing agent's own buildings read as theirs to appoint away.
+  // canAppoint adds the part the columns cannot express -- whether this KIND of
+  // account is the owner or acts for one -- and lives in shared/handover.js so
+  // the screen and the API cannot disagree about it.
+  const me = await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`)
+    .bind(accountId).first();
+  const may = canAppoint(prop, { accountId, accountKind: me?.kind });
+  if (!may.ok) {
+    return c.json({ error: may.reason }, may.reason === "already_managed" ? 409 : 403);
+  }
 
   // Whole value, exact match. A prefix here would be a directory of accounts.
   const to = await c.env.DB.prepare(

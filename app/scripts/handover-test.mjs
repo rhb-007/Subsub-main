@@ -27,7 +27,7 @@
 
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
-import { canHandOver, awaitingFrom, canDecide, canCancel, MOVES, STAYS, inheritedShape, isOpenWork } from "../shared/handover.js";
+import { canHandOver, awaitingFrom, canDecide, canCancel, MOVES, STAYS, inheritedShape, isOpenWork, canAppoint } from "../shared/handover.js";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
@@ -430,6 +430,54 @@ console.log("\n-- appointing is not a way to look up accounts --");
     s3 === 403 && b3.error === "not_yours_to_appoint", `${s3} ${b3.error}`);
 }
 
+console.log("\n-- appointing is the owner's move, and the columns cannot say so --");
+{
+  // THE BACKFILL HOLE. 039 set owner_account_id = account_id on every row that
+  // already existed, which is the only safe backfill -- before it there was no
+  // owner concept and whoever held a building went on holding it. The side
+  // effect is that every building a managing agent typed in reads as theirs,
+  // so the ownership check waved an agent through to appoint a client's
+  // building onward. The seed's properties are in exactly that state.
+  const { db, env } = seed();
+  db.exec(`UPDATE properties SET owner_account_id='acc_pm' WHERE id='p_elm'`);
+  const own = one(db, `SELECT account_id, owner_account_id FROM properties WHERE id='p_elm'`);
+  ck("the fixture really is the backfilled shape",
+    own.account_id === "acc_pm" && own.owner_account_id === "acc_pm", JSON.stringify(own));
+
+  const [s, b] = await json(await call(env, "u_pm", "acc_pm", "/properties/p_elm/appoint",
+    { method: "POST", body: JSON.stringify({ subdomain: "sound" }) }));
+  ck("a property manager cannot appoint, even on a building the columns call theirs",
+    s === 403 && b.error === "not_the_owner", `${s} ${JSON.stringify(b)}`);
+  ck("and nothing was written",
+    one(db, `SELECT COUNT(*) n FROM property_transfers`).n === 0);
+
+  // A portfolio manager acts for owners too -- same answer.
+  db.exec(`UPDATE accounts SET kind='portfolio_manager' WHERE id='acc_pm'`);
+  const [s2, b2] = await json(await call(env, "u_pm", "acc_pm", "/properties/p_elm/appoint",
+    { method: "POST", body: JSON.stringify({ subdomain: "sound" }) }));
+  ck("nor can a portfolio manager", s2 === 403 && b2.error === "not_the_owner", `${s2} ${b2.error}`);
+
+  // THE CONTROL. A building owner's account, on the same building, may.
+  db.exec(`UPDATE accounts SET kind='building_owner' WHERE id='acc_pm'`);
+  const [s3, b3] = await json(await call(env, "u_pm", "acc_pm", "/properties/p_elm/appoint",
+    { method: "POST", body: JSON.stringify({ subdomain: "sound" }) }));
+  ck("an owner account can", s3 === 201, `${s3} ${JSON.stringify(b3)}`);
+
+  // The rule, without a database. A managing agent is not stuck -- they add the
+  // owner, the owner takes the building, the owner appoints whoever they like.
+  const held = { accountId: "a1", ownerAccountId: "a1" };
+  ck("the shared rule says an owner account may",
+    canAppoint(held, { accountId: "a1", accountKind: "building_owner" }).ok === true);
+  ck("and a managing agent may not",
+    canAppoint(held, { accountId: "a1", accountKind: "property_manager" }).reason === "not_the_owner");
+  ck("a building somebody else owns is refused before kind is even considered",
+    canAppoint({ accountId: "a1", ownerAccountId: "a2" },
+      { accountId: "a1", accountKind: "building_owner" }).reason === "not_yours_to_appoint");
+  ck("and one already run by somebody else is already managed",
+    canAppoint({ accountId: "a2", ownerAccountId: "a1" },
+      { accountId: "a1", accountKind: "building_owner" }).reason === "already_managed");
+}
+
 console.log("\n-- an owner keeps watching a building they appointed out --");
 {
   // The card staying on the list is not the same as seeing the building. The
@@ -770,10 +818,10 @@ console.log("\n-- open repairs when the building moves --");
   // contractor turns up on Tuesday at a building whose manager has no record
   // of them, and a tenant waits on a leak nobody has heard of.
   const { db, env } = seed();
-  // Cascade holds Cedar outright here -- the state after an owner handed it to
-  // them, or a manager who owns the building they run. Appointing is the
-  // holder's move, so this is the seat that can make it.
-  db.exec(`UPDATE properties SET owner_account_id='acc_pm' WHERE id='p_cedar'`);
+  // Dana has taken Cedar back and now holds it outright. Cascade's repairs are
+  // still on Cascade's account, because jobs never move -- which is exactly the
+  // work about to be left behind again when Dana appoints somebody new.
+  db.exec(`UPDATE properties SET account_id='acc_dana', owner_account_id='acc_dana' WHERE id='p_cedar'`);
   // Cascade is running two repairs at Cedar: one with a contractor booked, one
   // still waiting. Plus one finished, which is history and not this list.
   db.exec(`
@@ -789,33 +837,37 @@ console.log("\n-- open repairs when the building moves --");
   ck("the incoming manager sees nothing yet",
     !before.some((j) => j.id === "job_leak"), JSON.stringify(before.map((j) => j.id)));
 
-  // A leftover from an even earlier manager, still open at the same building.
-  // It is NOT part of what Cascade is handing over, so it must not be counted
-  // into "3 open repairs stay yours to finish" -- and the number the feeds
-  // record on acceptance counts Cascade's side, so a different rule here would
-  // make the panel and the feed disagree.
+  // One repair of Dana's own, still open. Dana is the outgoing operator, so
+  // this one IS theirs to finish -- and Sound PM inherits it just the same.
   db.exec(`
     INSERT INTO jobs(id,account_id,title,date,status,property_id,trades) VALUES
-      ('job_older','acc_dana','Older leftover','${iso(7)}','active','p_cedar','["roofing"]');
+      ('job_dana','acc_dana','Dana own repair','${iso(7)}','active','p_cedar','["roofing"]');
   `);
 
   // The request names the count, on both sides, before anybody decides.
-  const [, tr] = await json(await call(env, "u_pm", "acc_pm", "/properties/p_cedar/appoint",
+  const [, tr] = await json(await call(env, "u_dana", "acc_dana", "/properties/p_cedar/appoint",
     { method: "POST", body: JSON.stringify({ subdomain: "sound" }) }));
   const [, asked] = await json(await call(env, "u_far", "acc_other", "/property-transfers"));
   const mine = asked.find((x) => x.id === tr.id);
-  ck("the incoming side is told how much is outstanding", mine?.openWork === 3,
+  // FOUR for the incoming side: Cascade's three leftovers plus Dana's own. What
+  // Sound PM takes on is every open repair at the building that will not be
+  // theirs, not only the ones the party handing it over happens to hold.
+  ck("the incoming side is told everything it is taking on", mine?.openWork === 4,
     JSON.stringify({ openWork: mine?.openWork }));
-  // Three, not four: somebody else's leftover at the same building is not part
-  // of this handover and is not the outgoing manager's to answer for.
-  ck("and only what the outgoing side is actually handing over",
-    mine?.openWork === 3 && !/4 open repairs/.test(mine?.openWorkText || ""), mine?.openWorkText);
+  ck("and the sentence carries that number",
+    /4 open repairs/.test(mine?.openWorkText || ""), mine?.openWorkText);
   ck("and what that means for them",
     /being finished by the previous manager/.test(mine?.openWorkText || ""), mine?.openWorkText);
-  const [, theirs] = await json(await call(env, "u_pm", "acc_pm", "/property-transfers"));
-  ck("the outgoing side is told it stays theirs",
-    /stay yours to finish/.test(theirs.find((x) => x.id === tr.id)?.openWorkText || ""),
-    theirs.find((x) => x.id === tr.id)?.openWorkText);
+  // ONE for the outgoing side: their own. Cascade's three are not Dana's to
+  // finish, and telling Dana they were would be asking them to chase somebody
+  // else's contractor.
+  const [, theirs] = await json(await call(env, "u_dana", "acc_dana", "/property-transfers"));
+  const ours = theirs.find((x) => x.id === tr.id);
+  ck("the outgoing side is told only what is theirs", ours?.openWork === 1,
+    JSON.stringify({ openWork: ours?.openWork }));
+  ck("and that it stays theirs to finish",
+    /1 open repair at this building stays yours to finish/.test(ours?.openWorkText || ""),
+    ours?.openWorkText);
   // A count, not a list -- nothing here names a job or a contractor.
   ck("and neither is handed a list",
     !/job_leak|cmp_roof|Roof leak/.test(JSON.stringify(asked)), JSON.stringify(asked).slice(0, 200));
@@ -824,7 +876,7 @@ console.log("\n-- open repairs when the building moves --");
   const [sa, ba] = await json(await call(env, "u_far", "acc_other", `/property-transfers/${tr.id}/decide`,
     { method: "POST", body: JSON.stringify({ accept: true }) }));
   ck("the appointment is accepted", sa === 200 && ba.status === "accepted", `${sa} ${JSON.stringify(ba)}`);
-  ck("and the answer says what is outstanding", ba.openWork === 3, String(ba.openWork));
+  ck("and the answer says what the incoming side took on", ba.openWork === 4, String(ba.openWork));
   ck("the repairs did not move",
     one(db, `SELECT account_id FROM jobs WHERE id='job_leak'`).account_id === "acc_pm");
   // Both feeds, so neither walks away assuming the other picked it up.
@@ -832,10 +884,10 @@ console.log("\n-- open repairs when the building moves --");
     /being finished by the previous manager/.test(
       db.prepare(`SELECT text FROM activity WHERE account_id='acc_other' AND kind='transfer_done'`).get()?.text || ""),
     db.prepare(`SELECT text FROM activity WHERE account_id='acc_other' AND kind='transfer_done'`).get()?.text);
-  ck("the outgoing feed says they still are",
-    /stay yours to finish/.test(
-      db.prepare(`SELECT text FROM activity WHERE account_id='acc_pm' AND kind='transfer_done'`).get()?.text || ""),
-    db.prepare(`SELECT text FROM activity WHERE account_id='acc_pm' AND kind='transfer_done'`).get()?.text);
+  ck("the outgoing feed says what stays theirs",
+    /1 open repair at this building stays yours to finish/.test(
+      db.prepare(`SELECT text FROM activity WHERE account_id='acc_dana' AND kind='transfer_done'`).get()?.text || ""),
+    db.prepare(`SELECT text FROM activity WHERE account_id='acc_dana' AND kind='transfer_done'`).get()?.text);
 
   // And now the thing this exists for: the new manager can see it.
   const [, after] = await json(await call(env, "u_far", "acc_other", "/jobs"));

@@ -266,7 +266,34 @@ refactor.
   two-party rule in reverse, and the manager must accept, because a building
   appearing in a portfolio unannounced is work, liability and possibly a plan
   limit. An appointment moves **operation only**, so the owner never loses the
-  right to move their building again. The manager is named by **whole
+  right to move their building again.
+
+  **Appointing is the owner's move, and the columns cannot say so on their own.**
+  The API always checked ownership — but 039 backfilled
+  `owner_account_id = account_id` for every row that already existed, which was
+  the only safe backfill and also means every building a managing agent had
+  typed in reads as theirs. So the ownership check waved an agent through to
+  appoint a *client's* building onward. The missing distinction is already
+  modelled in `ACCOUNT_KINDS`: a property manager's account **invites** owners,
+  because somebody else owns the buildings; a building owner's account has none
+  to invite, because they *are* the owner. `canAppoint` in
+  `app/shared/handover.js` therefore also asks whether this **kind** of account
+  is the owner or acts for one, and the API and the screen both read it.
+
+  An agent is not stuck, and the screen says so rather than going blank: they
+  add the owner, the owner takes the building (two-party, as ever), and the
+  owner appoints whoever they like. That is the chain working, rather than an
+  agent sub-contracting an instruction that was never theirs to move.
+
+  **The two sides of a transfer get different counts of open work**, and they
+  only coincide when there has been exactly one previous manager. What the
+  outgoing side is told is *their own* open work — "1 stays yours to finish" —
+  because the repairs a manager before them left are not theirs to chase. What
+  the incoming side is told is every open repair at the building that will not
+  be theirs, leftovers from earlier managers included, because that is what they
+  are actually taking on. An earlier version answered both with the outgoing
+  side's number for the sake of a matching figure, and quietly told somebody
+  appointed to a building with two managers' leftovers about one of them. The manager is named by **whole
   subdomain**, and an unknown one and a real account that cannot manage
   buildings give the **same answer**, so this cannot be walked to find out who
   is on SubSub.

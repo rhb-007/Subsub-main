@@ -52,6 +52,7 @@ import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso } from "../shared/docs.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
+import { isOwnerKind } from "../shared/handover.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -4766,7 +4767,7 @@ export default function SubSub() {
           }}
           onEditOwner={(u) => setEditUser(u)}
           onResendInvite={resendInvite}
-          transfers={transfers} viewingAccountId={account.id}
+          transfers={transfers} viewingAccountId={account.id} accountKind={kindOf(account)}
           onAskTransfer={askTransfer} onDecideTransfer={decideTransfer}
           onCancelTransfer={cancelTransfer} onAppointManager={appointManager} />
       )}
@@ -10909,7 +10910,8 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
 // releasing it are the same row, and a screen that told each side a different
 // story about the same request would be the place the two-party rule quietly
 // broke. shared/handover.js decides whose move it is; nothing here guesses.
-function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel, onAppoint }) {
+function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel, onAppoint,
+  ownerKind = false }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [asking, setAsking] = useState(false);
@@ -11055,7 +11057,12 @@ function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel,
               </span>
             </>
           )}
-          {side === "holder" && (
+          {/* Appointing is the OWNER's move. 039 backfilled every existing
+              row's owner to whoever held it, which is the only safe backfill
+              but means a managing agent's own buildings read as theirs to
+              appoint away -- so the ownership columns cannot answer this on
+              their own and the account's kind does. See shared/handover.js. */}
+          {side === "holder" && (ownerKind ? (
             <>
               <button className="ph-start" onClick={() => setAppointing(true)}>
                 <Building2 size={11} /> Appoint a property manager
@@ -11064,7 +11071,16 @@ function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel,
                 They run it; you keep it. You can hand it to somebody else later without asking anyone.
               </span>
             </>
-          )}
+          ) : (
+            // No button: an agent handing an instruction on to another agent is
+            // not theirs to do. The path is real, though, so it is named --
+            // add the owner, they take the building, they appoint whoever they
+            // like. That is the same two-party chain as everything else here.
+            <span className="ph-small">
+              Add the owner above and they can take this building over — then it
+              is theirs to appoint a manager for.
+            </span>
+          ))}
         </div>
       )}
     </div>
@@ -11132,7 +11148,8 @@ function PropertyOwners({ property, owners, onAddOwner, onEditOwner, onResendInv
 
 function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, onGoVendors, onGoJobs, newAt, canManage = true, asOwner = false,
   owners = [], onAddOwner, onEditOwner, onResendInvite,
-  transfers = [], viewingAccountId, onAskTransfer, onDecideTransfer, onCancelTransfer, onAppointManager }) {
+  transfers = [], viewingAccountId, onAskTransfer, onDecideTransfer, onCancelTransfer, onAppointManager,
+  accountKind }) {
   const [form, setForm] = useState(null);   // null | {} | property
   const [assigning, setAssigning] = useState(null);   // the property whose vendor list is open
   const vendorsFor = (pid) => subs.filter((s) => (s.propertyIds || []).includes(pid));
@@ -11353,6 +11370,7 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                 {onAskTransfer && (
                   <PropertyHandover property={p} transfer={transferFor(p.id)}
                     side={asOwner ? "owner-seat" : p.ownedByAnother ? "manager" : "holder"}
+                    ownerKind={isOwnerKind(accountKind)}
                     onAsk={onAskTransfer} onDecide={onDecideTransfer}
                     onCancel={onCancelTransfer} onAppoint={onAppointManager} />
                 )}
