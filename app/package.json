@@ -36,6 +36,8 @@
     "test:subdetail": "node scripts/sub-detail-test.mjs",
     "test:autosched": "node --no-warnings scripts/autoschedule-test.mjs",
     "test:autoschedui": "node scripts/autoschedule-ui-test.mjs",
+    "test:consoleroster": "node --no-warnings scripts/console-roster-test.mjs",
+    "test:consolerosterui": "node scripts/console-roster-ui-test.mjs",
     "test:uitidy": "node scripts/ui-tidy-test.mjs",
     "test:wonotify": "node scripts/wo-notify-test.mjs",
     "test:licenses": "node scripts/license-provider-test.mjs",

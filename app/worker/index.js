@@ -6701,8 +6701,16 @@ app.get("/api/platform/bootstrap", async (c) => {
       c.env.DB.prepare(`SELECT * FROM accounts`).all(),
       c.env.DB.prepare(`SELECT id, name, email, phone FROM users`).all(),
       c.env.DB.prepare(`SELECT user_id, account_id, role, company_id FROM memberships`).all(),
-      c.env.DB.prepare(`SELECT id, company, license, ubi, city, state, zip, warranty FROM companies`).all(),
-      c.env.DB.prepare(`SELECT id, account_id, company_id, status, categories, rating, rated_jobs FROM engagements`).all(),
+      // contact/phone/email so staff answering "who do I call about this
+      // company" do not have to sit in somebody's account to find out. This
+      // is a staff route behind requireStaff, which is the only reason it may
+      // read across accounts at all -- never reach for it to serve a
+      // customer screen.
+      c.env.DB.prepare(`SELECT id, company, contact, phone, email, license, ubi, city, state, zip, warranty FROM companies`).all(),
+      // doc_review was missing, and the console computes "docs pending
+      // review" from it -- so that number was structurally zero on every
+      // account and every screen that showed it was reporting nothing.
+      c.env.DB.prepare(`SELECT id, account_id, company_id, status, categories, rating, rated_jobs, doc_review FROM engagements`).all(),
       c.env.DB.prepare(`SELECT id, account_id, title, status, date, completed_at, created_at FROM jobs`).all(),
       c.env.DB.prepare(`SELECT * FROM subscription_events ORDER BY at`).all(),
       c.env.DB.prepare(
@@ -6762,6 +6770,7 @@ app.get("/api/platform/bootstrap", async (c) => {
     engagements: engagements.results.map((e) => ({
       id: e.id, accountId: e.account_id, companyId: e.company_id, status: e.status,
       categories: parseJson(e.categories, []), rating: e.rating, ratedJobs: e.rated_jobs,
+      docReview: parseJson(e.doc_review, {}),
     })),
     jobs: jobs.results.map((j) => ({
       id: j.id, accountId: j.account_id, title: j.title, status: j.status,

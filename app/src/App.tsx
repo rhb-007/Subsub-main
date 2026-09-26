@@ -25,7 +25,7 @@ import {
   Search, Phone, Mail, MapPin, FileText, Shield, ScrollText, Calendar,
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
   Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList,
-  Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
+  Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
@@ -6713,6 +6713,98 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
 
             <MailLog accountId={open.a.id} load={onMailLog} />
 
+            {/* This account's subcontractors.
+                The console knew all of this already -- engagements, companies,
+                memberships and users all come down whole in the bootstrap --
+                and the account screen showed a count and nothing else. So
+                "who does Cascade actually use?" could not be answered from
+                the admin at all: the Team panel deliberately filters
+                contractors out, and the Companies screen is sorted by company
+                rather than by customer, so finding one account's roster meant
+                reading every company on the platform and checking which
+                accounts each one served.
+
+                Same shape as the Companies screen's expanded card, because it
+                is the same question asked from the other end, and the same
+                seat-level "Open as them" -- a contractor's portal is a
+                different app from an admin's, and support needs to be able to
+                stand in it. */}
+            {(() => {
+              const mine = engagements.filter((e) => e.accountId === open.a.id).map((e) => {
+                const co = companies.find((x) => x.id === e.companyId);
+                if (!co) return null;
+                // Seats for this company ON THIS ACCOUNT. A seat somebody holds
+                // on another customer's account is not this account's person
+                // and must not be offered here as though it were.
+                const seats = memberships
+                  .filter((m) => m.companyId === co.id && m.role === "contractor"
+                    && m.accountId === open.a.id)
+                  .map((m) => users.find((u) => u.id === m.userId)).filter(Boolean);
+                const pending = DOC_KINDS.filter((k) => e.docReview?.[k]?.status === "pending");
+                const rejected = DOC_KINDS.filter((k) => e.docReview?.[k]?.status === "rejected");
+                return { e, co, seats, pending, rejected };
+              }).filter(Boolean).sort((x, y) => x.co.company.localeCompare(y.co.company));
+
+              return (
+                <PfFold id="roster" title="Subcontractors" icon={Users} count={mine.length} defaultOpen>
+                  {mine.length === 0
+                    ? <p className="pf-note">This account has not added any subcontractors yet.</p>
+                    : mine.map(({ e, co, seats, pending, rejected }) => (
+                      <div key={e.id} className="pf-roster-row">
+                        <div className="pf-rr-main">
+                          <b>{co.company}</b>
+                          <span className="pf-sub">
+                            {[co.contact, [co.city, co.state].filter(Boolean).join(", ")]
+                              .filter(Boolean).join(" · ") || "no contact on file"}
+                          </span>
+                          {(e.categories || []).length > 0 && (
+                            <span className="pf-rr-cats">
+                              {e.categories.map((cat) => (
+                                <span key={cat} className="pf-rr-cat">{catMeta(cat).label}</span>
+                              ))}
+                            </span>
+                          )}
+                        </div>
+                        <div className="pf-rr-meta">
+                          <span className={`pf-status ${e.status === "active" ? "active" : "canceled"}`}>{e.status}</span>
+                          {e.ratedJobs > 0 && <span className="pf-sub">{Number(e.rating).toFixed(1)}★ · {e.ratedJobs} rated</span>}
+                          {pending.length > 0 && (
+                            <span className="pf-flag" title={`Awaiting review: ${pending.join(", ")}`}>
+                              {pending.length} doc{pending.length > 1 ? "s" : ""} pending
+                            </span>
+                          )}
+                          {rejected.length > 0 && (
+                            <span className="pf-rr-bad" title={`Rejected: ${rejected.join(", ")}`}>
+                              {rejected.length} rejected
+                            </span>
+                          )}
+                        </div>
+                        <div className="pf-rr-act">
+                          {seats.length === 0
+                            ? <span className="pf-sub" title="Typed in by this account and never claimed">no login</span>
+                            : seats.map((u) => (
+                              <span key={u.id} className="pf-rr-seat">
+                                <span className="pf-sub">{u.name}</span>
+                                {admin.impersonate && open.a.status !== "canceled" && (
+                                  <button className="pf-mini" title={`Open SubSub as ${u.name}`}
+                                    onClick={() => onImpersonate(open.a, u.id)}>
+                                    <LogIn size={12} /> Open as them
+                                  </button>
+                                )}
+                              </span>
+                            ))}
+                          <button className="pf-mini" title="Open this company on the Companies screen"
+                            onClick={() => { go("companies"); setExpandedCompanyId(co.id); }}>
+                            Company ›
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                </PfFold>
+              );
+            })()}
+
+
             <PfFold id="activity" title="User activity" icon={Activity}
               count={(activity || []).filter((e) => e.accountId === open.a.id).length}
               head={
@@ -13105,8 +13197,18 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     {linked && !docsComplete(linked) && (
                       <button className="btn-notify sm" onClick={() => onRequestDocs(linked)}><Mail size={12} /> Request docs</button>
                     )}
+                    {/* "View as", not "Log in as". This changes what the
+                        browser draws from data already loaded -- the API still
+                        authenticates as whoever is really signed in. Calling
+                        it a login promised a session it does not open, which
+                        matters the moment somebody uses it to check what a
+                        person can reach: the answer they get is this
+                        account's access wearing that person's screen. Real
+                        impersonation exists, in the staff console, and is
+                        audited. */}
                     {u.id !== currentUserId && (
-                      <button className="login-as-btn" onClick={() => onLoginAs(u.id)}><LogIn size={13} /> Log in as</button>
+                      <button className="login-as-btn" title="Preview this account as they see it. You stay signed in as yourself."
+                        onClick={() => onLoginAs(u.id)}><Eye size={13} /> View as</button>
                     )}
                     <button className="edit-btn" onClick={() => onEditUser(u)}><Pencil size={13} /> Edit</button>
                     {u.id !== currentUserId && (
@@ -20853,6 +20955,21 @@ p.fld-note{margin:6px 0 0}
 .pf-flag.is-seat{background:#eef5f1;color:#1f6b4a;border-color:#cfe0d6}
 .pfc-noseat{font-size:11px;opacity:.75}
 .pfc-seats > span:last-child{display:flex;flex-direction:column;gap:6px;align-items:flex-end;text-align:right}
+/* one account's roster, on its own screen */
+.pf-roster-row{display:flex;align-items:flex-start;gap:14px;padding:12px 0;border-bottom:1px solid var(--line)}
+.pf-roster-row:last-child{border-bottom:0}
+.pf-rr-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.pf-rr-main > b{font-size:13.5px}
+.pf-rr-cats{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+.pf-rr-cat{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:5px;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft)}
+.pf-rr-meta{flex:none;display:flex;flex-direction:column;gap:4px;align-items:flex-end;text-align:right}
+.pf-rr-bad{font-size:11px;font-weight:700;color:var(--red)}
+.pf-rr-act{flex:none;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.pf-rr-seat{display:flex;align-items:center;gap:6px}
+@media (max-width:760px){
+  .pf-roster-row{flex-direction:column;gap:8px}
+  .pf-rr-meta,.pf-rr-act{align-items:flex-start;text-align:left;flex-direction:row;flex-wrap:wrap}
+}
 .pfc-seat{display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
 
 /* Progress and payment, under the printed work order.

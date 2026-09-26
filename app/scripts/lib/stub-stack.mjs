@@ -37,10 +37,17 @@ export function tally() {
 // The bundle, built the way production builds it: an absolute API base on
 // another origin, and Supabase configured, so the code paths under test are
 // the deployed ones rather than the dev-stub ones.
-export function buildApp({ outDir, apiPort }) {
+// `platform: true` builds the staff console instead of the customer app --
+// same source, same bundle, VITE_BUILD picks which one boots. Without it the
+// console had no self-contained browser test at all: the only one that
+// existed needed a hand-started local stack and the platform bundle built by
+// hand first, so in practice it did not run, and a console screen could
+// report a number that was structurally impossible without anybody noticing.
+export function buildApp({ outDir, apiPort, platform = false }) {
   execSync(`npx vite build --outDir ${outDir} --emptyOutDir`, {
     cwd: app, stdio: "pipe",
     env: { ...process.env,
+      ...(platform ? { VITE_BUILD: "platform" } : {}),
       VITE_API_BASE: `http://127.0.0.1:${apiPort}/api`,
       VITE_SUPABASE_URL: "http://127.0.0.1:8907",
       VITE_SUPABASE_ANON_KEY: "stub-anon-key" },

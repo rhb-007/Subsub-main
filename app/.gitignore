@@ -8,3 +8,4 @@ dist/
 dist-platform/
 dist-boot-test/
 dist-autosched-test/
+dist-console-test/

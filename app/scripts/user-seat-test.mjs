@@ -122,6 +122,25 @@ try {
     t.ck("somebody who really has not been invited is told so",
       /hasn't been sent an invite/i.test(dana.seat || ""), String(dana.seat));
     t.ck("and is offered one", /send invite/i.test(dana.seat || ""), String(dana.seat));
+
+    // The preview button is not a login. It re-renders this account from data
+    // the browser already holds; the API still authenticates as whoever is
+    // really signed in. Calling it "Log in as" promised a session it does not
+    // open, which is worst exactly when somebody uses it to check what a
+    // person can reach -- the answer they get is this account's access
+    // wearing that person's screen. Real impersonation lives in the staff
+    // console and is audited.
+    const preview = await page.evaluate(() => {
+      const b = document.querySelector(".user-row-actions .login-as-btn");
+      return b ? { label: b.innerText.trim(), title: b.title } : null;
+    });
+    t.ck("the preview button exists", !!preview, JSON.stringify(preview));
+    t.ck("and does not call itself a login",
+      !/log ?in/i.test(preview?.label || ""), String(preview?.label));
+    t.ck("it says what it is instead", /view as/i.test(preview?.label || ""), String(preview?.label));
+    t.ck("and spells out that you stay yourself",
+      /stay signed in as yourself/i.test(preview?.title || ""), String(preview?.title));
+
     t.ck("nothing threw", crashes.length === 0, crashes.join(" ; "));
     await ctx.close();
   }
