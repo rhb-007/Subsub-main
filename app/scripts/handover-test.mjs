@@ -53,7 +53,10 @@ ALTER TABLE accounts ADD COLUMN emergency_company_id TEXT;
 ALTER TABLE jobs ADD COLUMN withdrawn_at TEXT;
 ALTER TABLE jobs ADD COLUMN withdrawn_note TEXT;
 ALTER TABLE jobs ADD COLUMN declined_at TEXT;
-ALTER TABLE jobs ADD COLUMN declined_note TEXT;`;
+ALTER TABLE jobs ADD COLUMN declined_note TEXT;
+ALTER TABLE accounts ADD COLUMN hostname_status TEXT;
+ALTER TABLE accounts ADD COLUMN hostname_error TEXT;
+ALTER TABLE accounts ADD COLUMN hostname_checked_at TEXT;`;
 const iso = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
 
 // Cascade manages Cedar and Elm. Dana owns Cedar and has an account of her own.
@@ -1086,6 +1089,253 @@ console.log("\n-- what you are in somebody else's account --");
     ck(`a ${r} seat does not read as taking them over`,
       !/^switch to|take over|manage them/i.test(seatDescription(r, "Admin")), seatDescription(r, "Admin"));
   }
+}
+
+console.log("\n-- a building arrives owned by whoever added it --");
+{
+  // 039 backfilled every row that existed and this INSERT never learned the
+  // lesson, so every building added afterwards arrived with owner_account_id
+  // NULL. Silently: propertyWithOwner coalesces to account_id on the way out,
+  // so the screens looked right, and the only thing that ever said so was
+  // CHECK.sql's m039_unowned going from 0 to 1.
+  //
+  // What it costs: canHandOver answers no_owner_account, so the building can
+  // never be handed to its owner, and canAppoint refuses for the same reason.
+  const { db, env } = seed();
+  const [s, b] = await json(await call(env, "u_pm", "acc_pm", "/properties",
+    { method: "POST", body: JSON.stringify({ name: "77 Alder Way", address: "77 Alder Way" }) }));
+  ck("the building is created", s === 201, `${s} ${JSON.stringify(b)}`);
+  const row = one(db, `SELECT account_id, owner_account_id FROM properties WHERE id = ?`, b.id);
+  ck("and it is owned, not left null", row.owner_account_id === "acc_pm",
+    String(row.owner_account_id));
+  ck("by whoever added it", row.owner_account_id === row.account_id);
+  ck("so nothing is unowned",
+    one(db, `SELECT COUNT(*) n FROM properties WHERE owner_account_id IS NULL`).n === 0);
+
+  // The point of having an owner at all: it can be moved.
+  const [sa] = await json(await call(env, "u_pm", "acc_pm", `/properties/${b.id}/declare-ownership`,
+    { method: "POST", body: JSON.stringify({ own: true }) }));
+  ck("and a firm that owns it can say so", sa === 200, String(sa));
+}
+
+console.log("\n-- and a company row does not outlive being hireable --");
+{
+  // Since 031 a general contractor IS a company. Changing kind left that row
+  // attached, so an account could turn itself into a property manager and
+  // stay on the hireable side of every query -- one careless join from a
+  // landlord on somebody's subcontractor roster. m031_others_with counts it.
+  const { db, env } = seed();
+  db.exec(`
+    INSERT INTO companies(id,company) VALUES ('cmp_self','Cascade Management');
+    UPDATE accounts SET kind='general_contractor', company_id='cmp_self' WHERE id='acc_pm';
+  `);
+  const [s, b] = await json(await call(env, "u_pm", "acc_pm", "/account",
+    { method: "PATCH", body: JSON.stringify({ kind: "property_manager" }) }));
+  ck("the kind changes", s === 200, `${s} ${JSON.stringify(b)}`);
+  ck("and the company row goes with it",
+    !one(db, `SELECT company_id FROM accounts WHERE id='acc_pm'`).company_id,
+    String(one(db, `SELECT company_id FROM accounts WHERE id='acc_pm'`).company_id));
+
+  // Unless somebody already hires them, which is a conversation rather than a
+  // setting: clearing it would leave live engagements pointing at a company no
+  // account answers for.
+  const { db: db2, env: env2 } = seed();
+  db2.exec(`
+    INSERT INTO companies(id,company) VALUES ('cmp_self','Cascade Management');
+    UPDATE accounts SET kind='general_contractor', company_id='cmp_self' WHERE id='acc_pm';
+    INSERT INTO engagements(id,account_id,company_id,status,categories)
+      VALUES ('en_hired','acc_other','cmp_self','active','["roofing"]');
+  `);
+  const [s2, b2] = await json(await call(env2, "u_pm", "acc_pm", "/account",
+    { method: "PATCH", body: JSON.stringify({ kind: "property_manager" }) }));
+  ck("an account somebody hires is refused", s2 === 409 && b2.error === "hired_by_others",
+    `${s2} ${JSON.stringify(b2)}`);
+  ck("and told how many", b2.count === 1, String(b2.count));
+  ck("with the kind unchanged",
+    one(db2, `SELECT kind FROM accounts WHERE id='acc_pm'`).kind === "general_contractor",
+    one(db2, `SELECT kind FROM accounts WHERE id='acc_pm'`).kind);
+  ck("and the company row still theirs",
+    one(db2, `SELECT company_id FROM accounts WHERE id='acc_pm'`).company_id === "cmp_self");
+
+  // A finished relationship is not somebody hiring them.
+  db2.exec(`UPDATE engagements SET status='ended' WHERE id='en_hired'`);
+  const [s3] = await json(await call(env2, "u_pm", "acc_pm", "/account",
+    { method: "PATCH", body: JSON.stringify({ kind: "property_manager" }) }));
+  ck("once that ends the change goes through", s3 === 200, String(s3));
+
+  // Becoming a hireable kind is not the case this guards.
+  const { env: env4 } = seed();
+  const [s4] = await json(await call(env4, "u_pm", "acc_pm", "/account",
+    { method: "PATCH", body: JSON.stringify({ kind: "general_contractor" }) }));
+  ck("and becoming hireable is never refused", s4 === 200, String(s4));
+}
+
+// An account SubSub's own console creates is a customer like any other, and a
+// general contractor is a company since 031. The console's INSERT wrote the
+// account row and stopped, so a GC set up by staff existed and could not be
+// found by the connect lookup, could not be asked to connect, and had no code
+// to show -- CHECK.sql's m031_gcs_without is the count of them.
+//
+// Reaching a staff route means being staff, and staff is Cloudflare Access, so
+// this mints a real Access token over a real keypair and serves the JWKS the
+// verifier fetches. Stubbing requireStaff instead would test nothing: the
+// point is that the route runs, all of it, exactly as it does in production.
+console.log("\n-- a general contractor the console creates is a company too --");
+{
+  const kid = "test-key-1";
+  const pair = await crypto.subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256" }, true, ["sign", "verify"]);
+  const jwk = { ...(await crypto.subtle.exportKey("jwk", pair.publicKey)), kid, alg: "RS256" };
+  delete jwk.key_ops; delete jwk.ext;
+
+  const TEAM = "subsub-test.cloudflareaccess.com";
+  const AUD = "aud-for-the-console";
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input?.url || "";
+    if (url === `https://${TEAM}/cdn-cgi/access/certs`) {
+      return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+    }
+    return realFetch(input, init);
+  };
+
+  const b64url = (bytes) => Buffer.from(bytes).toString("base64")
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const mint = async (claims) => {
+    const head = b64url(new TextEncoder().encode(JSON.stringify({ alg: "RS256", kid })));
+    const body = b64url(new TextEncoder().encode(JSON.stringify(claims)));
+    const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", pair.privateKey,
+      new TextEncoder().encode(`${head}.${body}`));
+    return `${head}.${body}.${b64url(new Uint8Array(sig))}`;
+  };
+
+  const { db, env } = seed();
+  db.exec(`
+    INSERT INTO users(id,name,email) VALUES ('u_staff','Sam Staff','sam@subsub.work');
+    INSERT INTO superadmins(user_id,role,finance,impersonate)
+      VALUES ('u_staff','superadmin',1,1);`);
+  const senv = { ...env, ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD,
+    STAFF_EMAIL_DOMAIN: "subsub.work" };
+
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+  const token = await mint({ email: "sam@subsub.work", aud: [AUD],
+    iss: `https://${TEAM}`, exp });
+
+  const staffCall = (path, opts = {}) => worker.fetch(
+    new Request(`https://api.subsub.work/api${path}`, { ...opts,
+      headers: { "Content-Type": "application/json",
+                 "Cf-Access-Jwt-Assertion": token, ...(opts.headers || {}) } }), senv);
+
+  const [meS, me] = await json(await staffCall("/platform/me"));
+  ck("the token really is staff", meS === 200 && me.email === "sam@subsub.work",
+    `${meS} ${JSON.stringify(me)}`);
+
+  // No owner email: this is about the account row, and the invite path sends
+  // mail. The company row must not depend on somebody being invited.
+  const [gcS, gc] = await json(await staffCall("/platform/accounts", { method: "POST",
+    body: JSON.stringify({ name: "Harbour Roofing", subdomain: "harbour",
+      kind: "general_contractor", plan: "basic" }) }));
+  ck("the account is created", gcS === 201, `${gcS} ${JSON.stringify(gc).slice(0, 90)}`);
+  const made = gcS === 201 ? one(db, `SELECT company_id FROM accounts WHERE id = ?`, gc.id) : null;
+  ck("and it arrives with a company row", !!made?.company_id, String(made?.company_id));
+  ck("which really exists",
+    !!(made?.company_id && one(db, `SELECT company FROM companies WHERE id = ?`, made.company_id)),
+    "no companies row");
+  ck("named after the account",
+    one(db, `SELECT company FROM companies WHERE id = ?`, made?.company_id || "")?.company
+      === "Harbour Roofing");
+  ck("so nothing the console made is missing one",
+    one(db, `SELECT COUNT(*) AS n FROM accounts WHERE kind='general_contractor'
+               AND company_id IS NULL`).n === 0);
+
+  // The other kinds hire and are not hired. A dormant listing for a landlord
+  // is one careless join from a landlord on somebody's subcontractor roster.
+  const [pmS, pm] = await json(await staffCall("/platform/accounts", { method: "POST",
+    body: JSON.stringify({ name: "Sound Properties", subdomain: "soundprops",
+      kind: "property_manager", plan: "basic" }) }));
+  ck("a property manager is created too", pmS === 201, String(pmS));
+  ck("and is given no company row",
+    pmS === 201 && one(db, `SELECT company_id FROM accounts WHERE id = ?`, pm.id)
+      .company_id === null);
+
+  globalThis.fetch = realFetch;
+}
+
+// The code fixes stop it happening again. They repair nothing already written,
+// and all three counts were already 1 in production, so 042 is the repair --
+// tested here rather than pasted into a D1 console and hoped for, because a
+// statement that silently matches no rows looks exactly like one that worked.
+console.log("\n-- 042 repairs what the routes had already written --");
+{
+  const { db } = seed();
+  db.exec(`
+    INSERT INTO accounts(id,name,subdomain,kind) VALUES
+      ('acc_gc','Outerhome','outerhome','general_contractor'),
+      ('acc_gc2','Harbour Roofing','harbour','general_contractor'),
+      ('acc_landlord','Elm Holdings','elmhold','building_owner');
+    -- A property manager that kept a company row nobody hires: repairable.
+    INSERT INTO companies(id,company) VALUES ('cmp_stale','Cascade Management');
+    UPDATE accounts SET company_id = 'cmp_stale' WHERE id = 'acc_pm';
+    -- A landlord whose company row somebody really does hire: left alone.
+    INSERT INTO companies(id,company) VALUES ('cmp_live','Elm Holdings');
+    UPDATE accounts SET company_id = 'cmp_live' WHERE id = 'acc_landlord';
+    INSERT INTO engagements(id,account_id,company_id,status)
+      VALUES ('en_live','acc_dana','cmp_live','active');
+    -- And two buildings nobody claimed.
+    INSERT INTO properties(id,account_id,name) VALUES
+      ('p_new','acc_pm','9 Birch Way'),
+      ('p_new2','acc_other','3 Fir Close');`);
+
+  const counts = () => ({
+    unowned: one(db, `SELECT COUNT(*) AS n FROM properties WHERE owner_account_id IS NULL`).n,
+    othersWith: one(db, `SELECT COUNT(*) AS n FROM accounts
+      WHERE kind <> 'general_contractor' AND company_id IS NOT NULL`).n,
+    gcsWithout: one(db, `SELECT COUNT(*) AS n FROM accounts
+      WHERE kind = 'general_contractor' AND company_id IS NULL`).n,
+  });
+  const before = counts();
+  ck("the database really is in the broken state", before.unowned === 2
+    && before.othersWith === 2 && before.gcsWithout === 2, JSON.stringify(before));
+
+  const REPAIR = readFileSync(new URL("../worker/migrations/042_repair_invariants.sql",
+    import.meta.url), "utf8");
+  db.exec(REPAIR);
+  const after = counts();
+
+  ck("every building ends up owned", after.unowned === 0, String(after.unowned));
+  ck("by whoever operates it, which is the only answer the data supports",
+    one(db, `SELECT owner_account_id FROM properties WHERE id='p_new'`).owner_account_id === "acc_pm"
+    && one(db, `SELECT owner_account_id FROM properties WHERE id='p_new2'`).owner_account_id === "acc_other");
+  ck("and a building that was already owned is not moved",
+    one(db, `SELECT owner_account_id FROM properties WHERE id='p_cedar'`).owner_account_id === "acc_dana");
+
+  ck("the stale company row is unhooked",
+    one(db, `SELECT company_id FROM accounts WHERE id='acc_pm'`).company_id === null);
+  ck("but one somebody hires is left exactly as it is",
+    one(db, `SELECT company_id FROM accounts WHERE id='acc_landlord'`).company_id === "cmp_live");
+  ck("so the count falls to the accounts that cannot be repaired silently",
+    after.othersWith === 1, String(after.othersWith));
+  ck("and the engagement still points at a company that exists",
+    !!one(db, `SELECT company FROM companies WHERE id='cmp_live'`));
+  ck("nothing is deleted -- the unhooked row stays for the audit trail",
+    !!one(db, `SELECT company FROM companies WHERE id='cmp_stale'`));
+
+  ck("every contractor ends up a company", after.gcsWithout === 0, String(after.gcsWithout));
+  ck("with the id ensureAccountCompany would have minted",
+    one(db, `SELECT company_id FROM accounts WHERE id='acc_gc'`).company_id === "cmp_own_acc_gc");
+  ck("and a row really behind it, named after the account",
+    one(db, `SELECT company FROM companies WHERE id='cmp_own_acc_gc'`)?.company === "Outerhome");
+  ck("each one its own, not shared",
+    one(db, `SELECT company_id FROM accounts WHERE id='acc_gc2'`).company_id === "cmp_own_acc_gc2");
+
+  // Pasted twice is the normal way a hand-run script gets run.
+  db.exec(REPAIR);
+  const again = counts();
+  ck("running it a second time changes nothing",
+    JSON.stringify(again) === JSON.stringify(after), JSON.stringify(again));
+  ck("and mints no second company row",
+    one(db, `SELECT COUNT(*) AS n FROM companies WHERE id LIKE 'cmp_own_%'`).n === 2);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

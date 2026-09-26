@@ -3399,6 +3399,31 @@ app.patch("/api/account", requireRole("admin"), async (c) => {
   if (b.kind != null) {
     if (!ACCOUNT_KINDS.includes(b.kind)) return c.json({ error: "invalid_kind" }, 400);
     sets.push("kind = ?"); vals.push(b.kind);
+    // Becoming a kind that cannot be hired has to take the company row with
+    // it. Since 031 a general contractor IS a company, and the kind change
+    // left that row attached -- so an account could turn itself into a
+    // property manager or a building owner and stay on the hireable side of
+    // every query, which is one careless join from a landlord appearing on
+    // somebody's subcontractor roster. CHECK.sql's m031_others_with counts
+    // exactly this.
+    //
+    // Unless somebody already hires them. Clearing the link then would leave
+    // live engagements pointing at a company no account answers for, and the
+    // contractor on the other end would never be told. That is a conversation
+    // to have with their clients, not a setting to flip.
+    if (!HIREABLE_KINDS.includes(b.kind)) {
+      try {
+        const mine = await c.env.DB.prepare(`SELECT company_id FROM accounts WHERE id = ?`)
+          .bind(accountId).first();
+        if (mine?.company_id) {
+          const hired = await c.env.DB.prepare(
+            `SELECT COUNT(*) AS n FROM engagements WHERE company_id = ? AND status != 'ended'`
+          ).bind(mine.company_id).first();
+          if (hired?.n) return c.json({ error: "hired_by_others", count: hired.n }, 409);
+          sets.push("company_id = ?"); vals.push(null);
+        }
+      } catch (err) { if (!missingSchema(err)) throw err; }
+    }
   }
   if (b.plan != null) { sets.push("plan = ?"); vals.push(b.plan); }
   if (b.billing != null) { sets.push("billing = ?"); vals.push(b.billing); }
@@ -8411,11 +8436,29 @@ app.post("/api/properties", requireRole("admin", "pm"), async (c) => {
   const name = (b.name || "").trim();
   if (!name) return c.json({ error: "name_required" }, 400);
   const id = uid();
-  await c.env.DB.prepare(
-    `INSERT INTO properties (id, account_id, name, address, city, state, zip, units, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, accountId, name, b.address || null, b.city || null, b.state || null,
-    b.zip || null, b.units === "" || b.units == null ? null : Number(b.units), b.notes || null).run();
+  // owner_account_id is set here for the same reason 039 backfilled it: a
+  // building whose owner is NULL can never be handed over (canHandOver says
+  // no_owner_account) and can never have a manager appointed for it. 039 fixed
+  // every row that existed and this INSERT did not learn the lesson, so every
+  // building added afterwards arrived unowned -- silently, because
+  // propertyWithOwner coalesces to account_id on the way out and the screens
+  // looked right. CHECK.sql's m039_unowned is the only thing that ever said so.
+  const vals = [id, accountId, name, b.address || null, b.city || null, b.state || null,
+    b.zip || null, b.units === "" || b.units == null ? null : Number(b.units), b.notes || null];
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO properties (id, account_id, name, address, city, state, zip, units, notes,
+         owner_account_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(...vals, accountId).run();
+  } catch (err) {
+    // A database without 039 has no such column and behaves as it always did.
+    if (!missingSchema(err)) throw err;
+    await c.env.DB.prepare(
+      `INSERT INTO properties (id, account_id, name, address, city, state, zip, units, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(...vals).run();
+  }
   await logEvent(c.env, accountId, c.get("auth").userId, "property.created", id, { name });
   await logActivity(c.env, accountId, c.get("auth").userId, "property_added", `Added property ${name}`);
   return c.json({ id }, 201);
@@ -9143,6 +9186,13 @@ app.post("/api/platform/accounts", async (c) => {
      VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
   ).bind(id, name, subdomain, kind, plan, billing,
     trades && trades.length ? JSON.stringify(trades) : null).run();
+
+  // The same row signing up creates. Without it a general contractor made
+  // from this console cannot be found by the connect lookup at all -- they
+  // exist, and nobody can ask to work with them -- and CHECK.sql counts them
+  // in m031_gcs_without. ensureAccountCompany would get there eventually, but
+  // only once somebody opened a screen that happened to need it.
+  await ensureAccountCompany(c.env, id);
 
   let ownerId = null;
   let ownerInvite = { invited: false, reason: "no_email" };

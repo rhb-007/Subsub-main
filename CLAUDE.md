@@ -557,6 +557,29 @@ refactor.
   that adds a column or table gets a line in
   `app/worker/migrations/CHECK.sql`, which answers "did I run that one?"
   against the schema itself.
+- **CHECK.sql also carries invariants, and a `1` where a `0` belongs is a
+  bug report.** Beside the did-I-run-it columns are counts that must read
+  zero: `m039_unowned` (properties with no `owner_account_id`),
+  `m031_others_with` (a non-hireable account still holding a company row) and
+  `m031_gcs_without` (a general contractor with none). All three read `1` once,
+  and each was a different route writing a row the migration had already
+  taught the schema to expect — 039 backfilled every property and
+  `POST /api/properties` never learned to set the column; 031 made a general
+  contractor a company and `PATCH /api/account` changed `kind` without taking
+  the company row with it; and the staff console's account INSERT never minted
+  one at all. None of the three showed on a screen: `propertyWithOwner`
+  coalesces the owner to `account_id` on the way out, so a building with no
+  owner looked owned right up to the moment somebody tried to hand it over.
+  A backfill is not a fix until every INSERT that runs afterwards writes what
+  it backfilled, so when a migration fills a column in, go and find the routes
+  that write that table.
+
+  One of those has to refuse rather than tidy. Clearing `company_id` when an
+  account stops being hireable is right, unless somebody already hires them —
+  live engagements would then point at a company no account answers for and
+  the contractor on the other end would never be told. That is a conversation
+  with their clients, not a setting to flip, so the route returns 409
+  `hired_by_others` with the count.
 - D1 stops a multi-statement script at the first failing statement and does
   not undo what ran before it. `ALTER TABLE ... ADD COLUMN` is the statement
   that is not repeatable, so it goes in a paste of its own.
