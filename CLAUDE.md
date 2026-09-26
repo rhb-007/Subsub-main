@@ -285,6 +285,24 @@ refactor.
   owner appoints whoever they like. That is the chain working, rather than an
   agent sub-contracting an instruction that was never theirs to move.
 
+  **And a firm that really does own a building says so.** Account kind closed
+  the backfill hole and closed it on a real case too: a management firm owning
+  a building of its own. No reading of the columns separates that from a
+  client's building, because 039 wrote the same value for both — so 040 adds a
+  **declaration**, `properties.owner_declared_at` and `.owner_declared_by`. The
+  same shape as `scope_kind = 'labor_only'`: something somebody says out loud,
+  with a name and a date against it, rather than an absence nobody recorded.
+
+  Three properties hold it in place. It is **per building**, never per account,
+  or a firm with two hundred client buildings and two of its own would unlock
+  all two hundred and two by declaring one. It **never outranks ownership** —
+  `canAppoint` checks who owns the building first, so a declaration cannot be
+  used to claim somebody else's, and one left on a row whose owner later changes
+  stops counting. And it is **reversible**, because a claim somebody mis-tapped
+  should cost nothing to withdraw. Declaring and withdrawing both write to the
+  event log and the feed: claiming a building as your own firm's is the sort of
+  thing that gets asked about later.
+
   **The two sides of a transfer get different counts of open work**, and they
   only coincide when there has been exactly one previous manager. What the
   outgoing side is told is *their own* open work — "1 stays yours to finish" —

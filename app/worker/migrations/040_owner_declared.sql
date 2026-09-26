@@ -1,0 +1,32 @@
+-- "We own this one ourselves."
+--
+-- 039 separated who OPERATES a building from who OWNS it, and backfilled
+-- `owner_account_id = account_id` for every row that already existed. That was
+-- the only safe backfill -- before 039 there was no owner concept and whoever
+-- held a building went on holding it -- but it has a consequence that took a
+-- while to surface: every building a managing agent ever typed in now reads as
+-- a building that agent OWNS.
+--
+-- That matters at exactly one place. Appointing a manager is the owner's move,
+-- and an agent must not be able to sub-contract a client's instruction onward.
+-- The check for it was `owner_account_id = my account`, which the backfill
+-- makes true for a managing agent's whole portfolio. Account kind closed the
+-- hole -- a property manager's account invites owners, a building owner's
+-- account has none to invite -- but it closed it on a real case too: a
+-- management firm that genuinely owns a building of its own.
+--
+-- The columns cannot tell those two apart, and no amount of reading them will,
+-- because the backfill wrote the same value for both. So this is a
+-- DECLARATION rather than an inference -- the same shape as
+-- `wo_scopes.scope_kind = 'labor_only'`: something somebody says out loud,
+-- with their name against it and the date they said it, rather than an absence
+-- nobody recorded.
+--
+-- Deliberately per building, not per account. A managing agent with two
+-- hundred client buildings and two of its own would otherwise unlock
+-- appointing on all two hundred and two.
+--
+-- Clearing it sets both back to NULL, so a mistake costs nothing and leaves no
+-- claim standing.
+ALTER TABLE properties ADD COLUMN owner_declared_at TEXT;
+ALTER TABLE properties ADD COLUMN owner_declared_by TEXT REFERENCES users(id);

@@ -36,7 +36,7 @@ import { eligible as overflowEligible, canBroadcast, overflowSplit, postClosed,
   postWindowHours, OVERFLOW_FEE_BPS, ELIGIBILITY } from "../shared/overflow.js";
 import { canHandOver, awaitingFrom, canDecide as canDecideTransfer,
   canCancel as canCancelTransfer, inheritedShape, openWorkText,
-  canAppoint } from "../shared/handover.js";
+  canAppoint, canDeclareOwnership } from "../shared/handover.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
 import {
@@ -4087,6 +4087,7 @@ export function missingSchema(err) {
   // The recent ones first, because several of them mention words an older
   // rule would claim. "overflow_posts has no column named severity" is 038,
   // not 023, and the severity rule below would have taken it.
+  if (/owner_declared_(at|by)/i.test(m)) return "040_owner_declared";
   if (/\bproperty_transfers\b|owner_account_id|requested_by_account_id/i.test(m)) return "039_building_handover";
   if (/\boverflow_(posts|invites|responses)\b|overflow_(opt_in|trades|since)/i.test(m)) return "038_overflow";
   if (/\bcompany_docs\b|\bdoc_reminders\b|superseded_at|policy_no|coverage_cents/i.test(m)) return "037_document_detail";
@@ -6771,12 +6772,26 @@ async function ownAccountIds(db, userId) {
 
 // One building, with both of its accounts. Readable by either side.
 async function propertyWithOwner(db, propertyId) {
-  const p = await db.prepare(
-    `SELECT id, account_id, owner_account_id, name FROM properties WHERE id = ?`
-  ).bind(propertyId).first();
+  // 040's declaration comes back too, because whether this account may appoint
+  // a manager for the building turns on it. A database without 040 answers the
+  // way it always did -- no declaration, so only an owner-kind account may.
+  let p;
+  try {
+    p = await db.prepare(
+      `SELECT id, account_id, owner_account_id, name, owner_declared_at, owner_declared_by
+         FROM properties WHERE id = ?`
+    ).bind(propertyId).first();
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    p = await db.prepare(
+      `SELECT id, account_id, owner_account_id, name FROM properties WHERE id = ?`
+    ).bind(propertyId).first();
+  }
   if (!p) return null;
   return { id: p.id, name: p.name, accountId: p.account_id,
-    ownerAccountId: p.owner_account_id || p.account_id };
+    ownerAccountId: p.owner_account_id || p.account_id,
+    ownerDeclaredAt: p.owner_declared_at || null,
+    ownerDeclaredBy: p.owner_declared_by || null };
 }
 
 const transferShape = (r) => ({
@@ -7176,6 +7191,64 @@ app.post("/api/property-transfers/:id/decide", requireRole("admin", "pm", "owner
 // The manager is named by subdomain, not searched for. There is no endpoint
 // that takes a name and returns accounts: the owner is expected to know who
 // they are appointing, exactly as a contractor invite expects a whole email.
+// "We own this one ourselves."
+//
+// The escape hatch for a management firm that genuinely owns a building. 039
+// wrote `owner_account_id = account_id` for every row that already existed, so
+// the columns read identically whether an agent owns a building or merely
+// typed it in -- and appointing a manager, which is the owner's move, was
+// therefore either open to every agent's whole portfolio or closed to a real
+// owner. Neither is right, and no reading of the existing columns separates
+// them, because the backfill wrote the same value for both.
+//
+// So it is declared rather than inferred: a name, a date, one building at a
+// time. Clearing it costs nothing and leaves no claim standing.
+app.post("/api/properties/:propertyId/declare-ownership", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const own = b.own !== false;
+
+  let prop;
+  try {
+    prop = await propertyWithOwner(c.env.DB, c.req.param("propertyId"));
+  } catch (err) {
+    const m = missingSchema(err);
+    if (!m) throw err;
+    return c.json({ error: "migration_needed", migration: m }, 503);
+  }
+  if (!prop) return c.json({ error: "not_found" }, 404);
+
+  const me = await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`)
+    .bind(accountId).first();
+  const may = canDeclareOwnership(prop, { accountId, accountKind: me?.kind });
+  if (!may.ok) return c.json({ error: may.reason }, 403);
+
+  try {
+    await c.env.DB.prepare(
+      own
+        ? `UPDATE properties SET owner_declared_at = CURRENT_TIMESTAMP, owner_declared_by = ?
+            WHERE id = ? AND account_id = ? AND owner_account_id = ?`
+        : `UPDATE properties SET owner_declared_at = NULL, owner_declared_by = NULL
+            WHERE id = ? AND account_id = ? AND owner_account_id = ?`
+    ).bind(...(own ? [userId, prop.id, accountId, accountId] : [prop.id, accountId, accountId])).run();
+  } catch (err) {
+    const m = missingSchema(err);
+    if (!m) throw err;
+    return c.json({ error: "migration_needed", migration: m }, 503);
+  }
+
+  // On the record either way. Somebody claiming a building as their own firm's
+  // is the sort of thing that gets asked about later.
+  await logEvent(c.env, accountId, userId, own ? "property.owned_declared" : "property.owned_cleared",
+    prop.id, { name: prop.name });
+  await logActivity(c.env, accountId, userId, own ? "owned_declared" : "owned_cleared",
+    own ? `Recorded that this account owns ${prop.name}`
+        : `Removed the ownership record on ${prop.name}`);
+
+  const after = await propertyWithOwner(c.env.DB, prop.id);
+  return c.json({ ok: true, ownerDeclaredAt: after?.ownerDeclaredAt || null });
+});
+
 app.post("/api/properties/:propertyId/appoint", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const propertyId = c.req.param("propertyId");
@@ -7907,6 +7980,11 @@ const propertyRowToJs = (r) => ({
   // account it is belongs to the transfer record rather than to every property
   // row every screen loads.
   ownedByAnother: !!(r.owner_account_id && r.owner_account_id !== r.account_id),
+  // Whether this account has SAID it owns this one. 039's backfill makes
+  // "owner_account_id is mine" true for every building a managing agent typed
+  // in, so it cannot answer that question; this is the answer, and it is what
+  // lets an agent who really does own a building appoint a manager for it.
+  ownerDeclared: !!r.owner_declared_at,
 });
 
 app.get("/api/properties", async (c) => {

@@ -2960,6 +2960,14 @@ export default function SubSub() {
     await loadTransfers();
     setBillingNote("Asked. It does not move until the other side agrees.");
   };
+  const declareOwnership = async (propertyId, own) => {
+    await api.declareOwnership(propertyId, own);
+    // The property row carries the declaration, and appointing turns on it.
+    await hydrateAccount(account.id, currentUserId, { quiet: true });
+    setBillingNote(own
+      ? "Recorded. You can appoint a manager for this building."
+      : "Removed. This building is back to being one you manage.");
+  };
   const appointManager = async (propertyId, subdomain, note) => {
     const made = await api.appointManager(propertyId, subdomain, note);
     await loadTransfers();
@@ -4787,7 +4795,8 @@ export default function SubSub() {
           onResendInvite={resendInvite}
           transfers={transfers} viewingAccountId={account.id} accountKind={kindOf(account)}
           onAskTransfer={askTransfer} onDecideTransfer={decideTransfer}
-          onCancelTransfer={cancelTransfer} onAppointManager={appointManager} />
+          onCancelTransfer={cancelTransfer} onAppointManager={appointManager}
+          onDeclareOwnership={declareOwnership} />
       )}
 
       {tab === "calendar" && can("calendar") && (
@@ -10929,7 +10938,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
 // story about the same request would be the place the two-party rule quietly
 // broke. shared/handover.js decides whose move it is; nothing here guesses.
 function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel, onAppoint,
-  ownerKind = false }) {
+  ownerKind = false, onDeclareOwnership }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [asking, setAsking] = useState(false);
@@ -11080,7 +11089,7 @@ function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel,
               but means a managing agent's own buildings read as theirs to
               appoint away -- so the ownership columns cannot answer this on
               their own and the account's kind does. See shared/handover.js. */}
-          {side === "holder" && (ownerKind ? (
+          {side === "holder" && (ownerKind || property.ownerDeclared ? (
             <>
               <button className="ph-start" onClick={() => setAppointing(true)}>
                 <Building2 size={11} /> Appoint a property manager
@@ -11088,16 +11097,40 @@ function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel,
               <span className="ph-small">
                 They run it; you keep it. You can hand it to somebody else later without asking anyone.
               </span>
+              {/* Said out loud, so it can be taken back. Nobody should be stuck
+                  with a claim they made by mis-tapping. */}
+              {!ownerKind && property.ownerDeclared && onDeclareOwnership && (
+                <button className="ph-undo" disabled={busy}
+                  onClick={() => act(() => onDeclareOwnership(property.id, false))}>
+                  This isn&rsquo;t ours after all
+                </button>
+              )}
             </>
           ) : (
-            // No button: an agent handing an instruction on to another agent is
-            // not theirs to do. The path is real, though, so it is named --
-            // add the owner, they take the building, they appoint whoever they
-            // like. That is the same two-party chain as everything else here.
-            <span className="ph-small">
-              Add the owner above and they can take this building over — then it
-              is theirs to appoint a manager for.
-            </span>
+            <>
+              {/* Two different buildings look identical in the columns here,
+                  because 039 backfilled every existing row's owner to whoever
+                  held it. Either somebody else owns this and has not been added
+                  yet, or this account owns it outright. Only a person knows
+                  which, so both paths are offered and neither is assumed. */}
+              <span className="ph-small">
+                Add the owner above and they can take this building over — then it
+                is theirs to appoint a manager for.
+              </span>
+              {onDeclareOwnership && (
+                <>
+                  <button className="ph-start" disabled={busy}
+                    onClick={() => act(() => onDeclareOwnership(property.id, true))}>
+                    <Building2 size={11} /> We own this one ourselves
+                  </button>
+                  <span className="ph-small">
+                    For a building your own firm owns rather than manages for somebody.
+                    Recorded against your name, one building at a time, and you can
+                    undo it. It lets you appoint a manager for this building.
+                  </span>
+                </>
+              )}
+            </>
           ))}
         </div>
       )}
@@ -11167,7 +11200,7 @@ function PropertyOwners({ property, owners, onAddOwner, onEditOwner, onResendInv
 function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, onGoVendors, onGoJobs, newAt, canManage = true, asOwner = false,
   owners = [], onAddOwner, onEditOwner, onResendInvite,
   transfers = [], viewingAccountId, onAskTransfer, onDecideTransfer, onCancelTransfer, onAppointManager,
-  accountKind }) {
+  accountKind, onDeclareOwnership }) {
   const [form, setForm] = useState(null);   // null | {} | property
   const [assigning, setAssigning] = useState(null);   // the property whose vendor list is open
   const [detail, setDetail] = useState(null);         // the property whose panel is open
@@ -11429,7 +11462,8 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                   side={asOwner ? "owner-seat" : p.ownedByAnother ? "manager" : "holder"}
                   ownerKind={isOwnerKind(accountKind)}
                   onAsk={onAskTransfer} onDecide={onDecideTransfer}
-                  onCancel={onCancelTransfer} onAppoint={onAppointManager} />
+                  onCancel={onCancelTransfer} onAppoint={onAppointManager}
+                  onDeclareOwnership={canManage ? onDeclareOwnership : null} />
               )}
 
               {p.notes && <p className="prop-notes">{p.notes}</p>}
@@ -22113,6 +22147,12 @@ p.fld-note{margin:6px 0 0}
   background:var(--card);color:var(--brand);font-size:11.5px;font-weight:700;
   padding:5px 10px;border-radius:7px;cursor:pointer;font-family:inherit;flex:none}
 .ph-start:hover{background:var(--paper)}
+/* Taking back a claim. Quiet -- it is an undo, not an action anybody is being
+   steered towards. */
+.ph-undo{background:none;border:0;padding:2px 0;margin-top:2px;font:600 11px Inter,sans-serif;
+  color:var(--ink-soft);cursor:pointer;text-decoration:underline;text-underline-offset:3px;
+  align-self:flex-start}
+.ph-undo:hover{color:var(--ink)}
 /* a job at a building somebody else runs */
 .job-card.not-mine{background:var(--paper)}
 .job-watching{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;

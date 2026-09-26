@@ -414,6 +414,11 @@ export const api = {
   requestTransfer: (propertyId, note) => request(
     `/properties/${encodeURIComponent(propertyId)}/transfer`,
     { method: "POST", body: JSON.stringify({ note: note || null }) }),
+  // Declaring that this account owns a building of its own. Per building, with
+  // a name and a date recorded against it -- see shared/handover.js.
+  declareOwnership: (propertyId, own) => request(
+    `/properties/${encodeURIComponent(propertyId)}/declare-ownership`,
+    { method: "POST", body: JSON.stringify({ own }) }),
   appointManager: (propertyId, subdomain, note) => request(
     `/properties/${encodeURIComponent(propertyId)}/appoint`,
     { method: "POST", body: JSON.stringify({ subdomain, note: note || null }) }),

@@ -57,7 +57,7 @@ let TRANSFERS = [];
 // Work the appointed manager has booked at the owner's building.
 let JOBS_OWNER = [];
 
-const requested = [], decided = [], cancelled = [], appointed = [], asked = [];
+const requested = [], decided = [], cancelled = [], appointed = [], asked = [], declared = [];
 const USERS_PM = [
   { id: "u_pm", name: "Priya Manager", email: "priya@cascade.test", phone: null, role: "admin",
     subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false },
@@ -88,6 +88,13 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/invites" || path === "/api/connect-requests") return [200, []];
   const rq = /^\/api\/properties\/([^/]+)\/transfer$/.exec(path);
   if (rq && method === "POST") { requested.push({ id: rq[1], body }); return [201, { id: "tr1", awaiting: "acc_pm" }]; }
+  const dec = /^\/api\/properties\/([^/]+)\/declare-ownership$/.exec(path);
+  if (dec && method === "POST") {
+    declared.push({ id: dec[1], own: body?.own });
+    PROPS_PM = PROPS_PM.map((p) => p.id === dec[1]
+      ? { ...p, ownerDeclared: body?.own !== false } : p);
+    return [200, { ok: true, ownerDeclaredAt: body?.own === false ? null : "2026-09-26" }];
+  }
   const ap = /^\/api\/properties\/([^/]+)\/appoint$/.exec(path);
   if (ap && method === "POST") { appointed.push({ id: ap[1], body }); return [201, { id: "tr2", to: "Sound PM", awaiting: "acc_other" }]; }
   const dc = /^\/api\/property-transfers\/([^/]+)\/decide$/.exec(path);
@@ -177,6 +184,12 @@ try {
       /add the owner/i.test(elm?.handover || ""), elm?.handover);
     t.ck("no appoint button on the card either",
       !elm.buttons.some((b) => /appoint/i.test(b)), JSON.stringify(elm.buttons));
+    // The escape hatch, for the firm that really does own one. Offered, never
+    // assumed -- the columns read the same either way.
+    t.ck("but it can say it owns this one",
+      elm.buttons.some((b) => /we own this one ourselves/i.test(b)), JSON.stringify(elm.buttons));
+    t.ck("and is told what that means",
+      /owns rather than manages for somebody/i.test(elm?.handover || ""), elm?.handover);
 
     await clickIn(page, "12 Cedar St", /hand over/);
     await page.evaluate(() => {
@@ -404,6 +417,54 @@ console.log("\n-- and they can watch the work at it, without touching it --");
     await ctx.close();
     PROPS_OWNER = PROPS_OWNER.slice(0, 1);
   }
+  console.log("\n-- saying so turns appointing on, for that building only --");
+  {
+    TRANSFERS = []; declared.length = 0; appointed.length = 0;
+    PROPS_PM = PROPS_PM_BASE;
+    const { ctx, page } = await openAs("pm");
+    await toProperties(page);
+    // Say it.
+    const hit = await clickIn(page, "40 Elm Ave", /we own this one ourselves/);
+    t.ck("the claim reaches the server", declared.length === 1 && declared[0].own === true,
+      JSON.stringify(declared));
+    t.ck("naming the building it is about", declared[0]?.id === "p_elm", String(declared[0]?.id));
+    t.ck("the button was the one clicked", /we own this one/i.test(hit || ""), String(hit));
+
+    // And now appointing is there, on that building.
+    const elm = await card(page, "40 Elm Ave");
+    t.ck("appointing is offered once it is recorded",
+      /appoint a property manager/i.test(elm?.handover || ""), elm?.handover);
+    // Reversible: nobody should be stuck with a claim they mis-tapped.
+    t.ck("and the claim can be taken back",
+      /isn.t ours after all/i.test(elm?.handover || ""), elm?.handover);
+
+    // THE NEGATIVE: the other building is untouched. A firm with two hundred
+    // client buildings must not unlock them by declaring one.
+    const cedar = await card(page, "12 Cedar St");
+    t.ck("the other building is not unlocked by it",
+      !/appoint a property manager/i.test(cedar?.handover || ""), cedar?.handover);
+    await ctx.close();
+    PROPS_PM = PROPS_PM_BASE;
+  }
+
+  console.log("\n-- and taking it back puts things as they were --");
+  {
+    TRANSFERS = []; declared.length = 0;
+    PROPS_PM = PROPS_PM_BASE.map((p) => p.id === "p_elm" ? { ...p, ownerDeclared: true } : p);
+    const { ctx, page } = await openAs("pm");
+    await toProperties(page);
+    await clickIn(page, "40 Elm Ave", /isn.t ours after all/);
+    t.ck("the withdrawal reaches the server", declared.length === 1 && declared[0].own === false,
+      JSON.stringify(declared));
+    const elm = await card(page, "40 Elm Ave");
+    t.ck("appointing goes with it",
+      !/appoint a property manager/i.test(elm?.handover || ""), elm?.handover);
+    t.ck("and the offer to claim it comes back",
+      /we own this one ourselves/i.test(elm?.handover || ""), elm?.handover);
+    await ctx.close();
+    PROPS_PM = PROPS_PM_BASE;
+  }
+
   console.log("\n-- open repairs the previous manager is still finishing --");
   {
     TRANSFERS = [];

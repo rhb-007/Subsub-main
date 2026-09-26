@@ -38,6 +38,7 @@ const SCHEMA = readFileSync(new URL("../worker/schema.sql", import.meta.url), "u
 const M014 = readFileSync(new URL("../worker/migrations/014_building_owners.sql", import.meta.url), "utf8");
 const M031 = `ALTER TABLE accounts ADD COLUMN company_id TEXT REFERENCES companies(id);`;
 const M039 = readFileSync(new URL("../worker/migrations/039_building_handover.sql", import.meta.url), "utf8");
+const M040 = readFileSync(new URL("../worker/migrations/040_owner_declared.sql", import.meta.url), "utf8");
 // Columns the job routes write. schema.sql alone leaves them 503-ing on a
 // migration rather than exercising what is under test.
 const JOBCOLS = `
@@ -58,7 +59,7 @@ const iso = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10
 // Cascade manages Cedar and Elm. Dana owns Cedar and has an account of her own.
 // Theo owns Elm and has nowhere to put it.
 const seed = () => {
-  const db = freshDb({ base: SCHEMA, migrations: [M031, JOBCOLS, M039] });
+  const db = freshDb({ base: SCHEMA, migrations: [M031, JOBCOLS, M039, M040] });
   db.exec(`
     INSERT INTO accounts(id,name,subdomain,kind) VALUES
       ('acc_pm','Cascade Management','cascade','property_manager'),
@@ -946,6 +947,118 @@ console.log("\n-- and it is not a second door into another account's work --");
   const [, op] = await json(await call(env, "u_far", "acc_other", "/jobs"));
   ck("the operating account does", op.some((j) => j.id === "job_inh" && j.inherited),
     JSON.stringify(op.map((j) => j.id)));
+}
+
+console.log("\n-- a firm that really does own a building can say so --");
+{
+  // The escape hatch. Account kind closed the backfill hole, and closed it on
+  // a real case too: a management firm that owns a building of its own. The
+  // columns cannot separate that from a client's building, because 039 wrote
+  // the same value for both -- so somebody says it, with their name on it.
+  const { db, env } = seed();
+  db.exec(`UPDATE properties SET owner_account_id='acc_pm' WHERE id='p_elm'`);
+
+  // Before declaring: refused, exactly as it was.
+  const [s0, b0] = await json(await call(env, "u_pm", "acc_pm", "/properties/p_elm/appoint",
+    { method: "POST", body: JSON.stringify({ subdomain: "sound" }) }));
+  ck("an agent still cannot appoint by default", s0 === 403 && b0.error === "not_the_owner",
+    `${s0} ${b0.error}`);
+
+  const [sd, bd] = await json(await call(env, "u_pm", "acc_pm", "/properties/p_elm/declare-ownership",
+    { method: "POST", body: JSON.stringify({ own: true }) }));
+  ck("they can record that they own it", sd === 200 && !!bd.ownerDeclaredAt, `${sd} ${JSON.stringify(bd)}`);
+  // A name and a date, because this is a claim somebody may be asked about.
+  const row = one(db, `SELECT owner_declared_at, owner_declared_by FROM properties WHERE id='p_elm'`);
+  ck("with who said it", row.owner_declared_by === "u_pm", String(row.owner_declared_by));
+  ck("and when", !!row.owner_declared_at, String(row.owner_declared_at));
+  ck("and it is on the feed",
+    /Recorded that this account owns 40 Elm Ave/.test(
+      db.prepare(`SELECT text FROM activity WHERE kind='owned_declared'`).get()?.text || ""),
+    db.prepare(`SELECT text FROM activity WHERE kind='owned_declared'`).get()?.text);
+
+  // And now the thing it exists for.
+  const [s1, b1] = await json(await call(env, "u_pm", "acc_pm", "/properties/p_elm/appoint",
+    { method: "POST", body: JSON.stringify({ subdomain: "sound" }) }));
+  ck("now they can appoint a manager for it", s1 === 201, `${s1} ${JSON.stringify(b1)}`);
+
+  // PER BUILDING. A firm with two hundred client buildings and two of its own
+  // must not unlock the other two hundred by declaring one.
+  const [s2, b2] = await json(await call(env, "u_pm", "acc_pm", "/properties/p_cedar/appoint",
+    { method: "POST", body: JSON.stringify({ subdomain: "sound" }) }));
+  ck("and only that building", s2 === 403, `${s2} ${JSON.stringify(b2)}`);
+
+  // Taking it back costs nothing and leaves no claim standing.
+  const { db: db3, env: env3 } = seed();
+  db3.exec(`UPDATE properties SET owner_account_id='acc_pm' WHERE id='p_elm'`);
+  await call(env3, "u_pm", "acc_pm", "/properties/p_elm/declare-ownership",
+    { method: "POST", body: JSON.stringify({ own: true }) });
+  const [sc] = await json(await call(env3, "u_pm", "acc_pm", "/properties/p_elm/declare-ownership",
+    { method: "POST", body: JSON.stringify({ own: false }) }));
+  ck("the claim can be withdrawn", sc === 200);
+  ck("and nothing is left on the row",
+    !one(db3, `SELECT owner_declared_at FROM properties WHERE id='p_elm'`).owner_declared_at);
+  const [s4, b4] = await json(await call(env3, "u_pm", "acc_pm", "/properties/p_elm/appoint",
+    { method: "POST", body: JSON.stringify({ subdomain: "sound" }) }));
+  ck("so appointing is refused again", s4 === 403 && b4.error === "not_the_owner", `${s4} ${b4.error}`);
+}
+
+console.log("\n-- and it is not a way to claim somebody else's building --");
+{
+  const { db, env } = seed();
+  // Cedar is Dana's, and Cascade only runs it. No declaration may touch that.
+  const [s, b] = await json(await call(env, "u_pm", "acc_pm", "/properties/p_cedar/declare-ownership",
+    { method: "POST", body: JSON.stringify({ own: true }) }));
+  ck("a building somebody else owns cannot be claimed",
+    s === 403 && b.error === "owned_by_another", `${s} ${JSON.stringify(b)}`);
+  ck("and nothing was written",
+    !one(db, `SELECT owner_declared_at FROM properties WHERE id='p_cedar'`).owner_declared_at);
+
+  // Nor one this account does not even run.
+  const [s2, b2] = await json(await call(env, "u_pm", "acc_pm", "/properties/p_far/declare-ownership",
+    { method: "POST", body: JSON.stringify({ own: true }) }));
+  ck("nor a building it does not run", s2 === 403 && b2.error === "not_yours", `${s2} ${b2.error}`);
+
+  // A declaration on a building whose owner later becomes somebody else does
+  // not survive into appointing: ownership is checked first, every time.
+  const { db: db2, env: env2 } = seed();
+  db2.exec(`
+    UPDATE properties SET owner_account_id='acc_pm' WHERE id='p_elm';
+  `);
+  await call(env2, "u_pm", "acc_pm", "/properties/p_elm/declare-ownership",
+    { method: "POST", body: JSON.stringify({ own: true }) });
+  db2.exec(`UPDATE properties SET owner_account_id='acc_dana' WHERE id='p_elm'`);
+  const [s3, b3] = await json(await call(env2, "u_pm", "acc_pm", "/properties/p_elm/appoint",
+    { method: "POST", body: JSON.stringify({ subdomain: "sound" }) }));
+  ck("a stale declaration does not outrank who owns it",
+    s3 === 403 && b3.error === "not_yours_to_appoint", `${s3} ${b3.error}`);
+
+  // An owner-kind account has nothing to declare -- its kind already says it.
+  // It has to be a building they both own and run, or the earlier check answers
+  // first and this proves nothing.
+  const { db: db4, env: env4 } = seed();
+  db4.exec(`UPDATE properties SET account_id='acc_dana', owner_account_id='acc_dana' WHERE id='p_cedar'`);
+  const [s4, b4] = await json(await call(env4, "u_dana", "acc_dana", "/properties/p_cedar/declare-ownership",
+    { method: "POST", body: JSON.stringify({ own: true }) }));
+  ck("an owner account is told it has nothing to declare",
+    s4 === 403 && b4.error === "already_an_owner", `${s4} ${b4.error}`);
+
+  // Only an admin. A project manager runs the work; whether the firm owns a
+  // building is not a scheduling decision.
+  const { db: db5, env: env5 } = seed();
+  db5.exec(`UPDATE memberships SET role='pm' WHERE id='m_pm';
+            UPDATE properties SET owner_account_id='acc_pm' WHERE id='p_elm';`);
+  const [s5] = await json(await call(env5, "u_pm", "acc_pm", "/properties/p_elm/declare-ownership",
+    { method: "POST", body: JSON.stringify({ own: true }) }));
+  ck("a project manager cannot declare it", s5 === 403, String(s5));
+
+  // The rule, without a database.
+  const held = { accountId: "a1", ownerAccountId: "a1" };
+  ck("a declaration lets a managing agent appoint",
+    canAppoint({ ...held, ownerDeclaredAt: "2026-09-26" },
+      { accountId: "a1", accountKind: "property_manager" }).ok === true);
+  ck("but never on a building somebody else owns",
+    canAppoint({ accountId: "a1", ownerAccountId: "a2", ownerDeclaredAt: "2026-09-26" },
+      { accountId: "a1", accountKind: "property_manager" }).reason === "not_yours_to_appoint");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

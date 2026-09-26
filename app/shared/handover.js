@@ -225,6 +225,26 @@ export function canAppoint(property = {}, { accountId, accountKind } = {}) {
   }
   // Already somebody else's to run. Moving it again starts with taking it back.
   if (property.accountId !== accountId) return { ok: false, reason: "already_managed" };
-  if (!isOwnerKind(accountKind)) return { ok: false, reason: "not_the_owner" };
+  // An owner account is the owner of everything on its list, by definition.
+  if (isOwnerKind(accountKind)) return { ok: true };
+  // Otherwise somebody has to have SAID they own this one. The columns cannot
+  // answer it -- 039 wrote the same value for a building an agent owns and a
+  // building an agent merely typed in -- so the escape hatch is a declaration
+  // with a name and a date against it, per building, never per account.
+  if (property.ownerDeclaredAt) return { ok: true };
+  return { ok: false, reason: "not_the_owner" };
+}
+
+// May this account declare that it owns this building? Only for one it both
+// holds and is recorded as owning -- declaring ownership of somebody else's
+// building is the thing all of this exists to prevent, and an owner-kind
+// account has nothing to declare because its kind already says it.
+export function canDeclareOwnership(property = {}, { accountId, accountKind } = {}) {
+  if (property.accountId !== accountId) return { ok: false, reason: "not_yours" };
+  if (!property.ownerAccountId || property.ownerAccountId !== accountId) {
+    // Somebody else owns it -- on the record, not by a backfill's default.
+    return { ok: false, reason: "owned_by_another" };
+  }
+  if (isOwnerKind(accountKind)) return { ok: false, reason: "already_an_owner" };
   return { ok: true };
 }
