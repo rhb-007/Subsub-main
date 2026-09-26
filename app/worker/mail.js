@@ -392,6 +392,50 @@ This is an automated message from an unmonitored address. Replies aren't receive
   };
 }
 
+// A subcontractor sending their own paperwork to somebody who asked for it.
+//
+// Written from the SUBCONTRACTOR, not from SubSub. The recipient asked a
+// person for a certificate and a person is answering; a notification from a
+// platform they have never heard of is a different, worse message, and it is
+// the one that gets deleted.
+//
+// The hook is the expiry. Anybody can attach a PDF -- what an attachment can
+// never do is tell you in eight months that the cover it showed has lapsed.
+export function docPackEmail({ company, contact, toName, note, link, days, kinds = [] }) {
+  const who = company || "A subcontractor";
+  const what = kinds.length
+    ? kinds.map((k) => DOC_LABELS[k] || k).join("\n  ")
+    : "Their current paperwork";
+  const text = `Hi ${toName || "there"},
+
+${contact ? `${contact} at ${who}` : who} has sent you their current
+compliance paperwork${note ? `:\n\n  "${note}"` : "."}
+
+  ${what}
+
+Open it here:
+  ${link}
+
+The page shows the carrier, the policy number, the coverage and the expiry
+date on each one, and you can download them. Nothing to sign up for.
+
+It stays current: when ${who} renews, this page shows the new certificate
+rather than the one that has lapsed. That is the part an emailed PDF cannot
+do, and it is the reason they sent it this way.
+
+This link was made for you and expires in ${days} days. ${who} can withdraw
+it at any time.
+
+-- sent by ${who}, through SubSub
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+  return {
+    subject: `${who} sent you their insurance and paperwork`,
+    text,
+    html: textToHtml(text, link),
+  };
+}
+
 // Adding somebody who works at the account -- a manager, another admin, a
 // building owner with a seat.
 //

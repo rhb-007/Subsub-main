@@ -358,6 +358,12 @@ export const api = {
   myConnectCode: () => request("/connect/code"),
   rotateConnectCode: () => request("/connect/code/rotate", { method: "POST" }),
   myConnectRequests: () => request("/my-connect-requests"),
+  // Sending your own paperwork to somebody who asked for it.
+  docShares: () => request("/doc-shares"),
+  sendDocPack: (body) => request("/doc-shares", { method: "POST", body: JSON.stringify(body) }),
+  revokeDocShare: (id) => request(`/doc-shares/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+  // The public page. No session -- the token is the whole of the auth.
+  docPack: (token) => request(`/pack/${encodeURIComponent(token)}`),
   // Who is asking, for the account deciding whether to say yes. Keyed by the
   // request, never by the account -- see the note on the route.
   connectAsker: (id) => request(`/my-connect-requests/${encodeURIComponent(id)}/asker`),

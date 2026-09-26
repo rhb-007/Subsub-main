@@ -13,7 +13,7 @@ import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEm
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
   connectRequestEmail, connectRequestSms, workOrderIssuedSms,
-  autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail } from "./mail.js";
+  autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -34,6 +34,8 @@ import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
 import { eligible as overflowEligible, canBroadcast, overflowSplit, postClosed,
   postWindowHours, OVERFLOW_FEE_BPS, ELIGIBILITY } from "../shared/overflow.js";
+import { SHARE_DAYS, PACK_KINDS, inLink, shareState, validRecipient,
+  packRow } from "../shared/docshare.js";
 import { canHandOver, awaitingFrom, canDecide as canDecideTransfer,
   canCancel as canCancelTransfer, inheritedShape, openWorkText,
   canAppoint, canDeclareOwnership } from "../shared/handover.js";
@@ -203,7 +205,18 @@ async function resolveSupabaseUser(env, authHeader) {
 app.use("/api/*", async (c, next) => {
   // A brand logo has to render on the login screen, before anyone is
   // authenticated — so this one route is intentionally public. Never do
-  // this for compliance documents; those stay behind auth.
+  // this for compliance documents: a route that serves a document by an
+  // account or company id is a document served to anybody who can guess an
+  // id, and those stay behind auth.
+  //
+  // /api/pack/* is NOT that, and the difference is the whole of why it is
+  // allowed here. Nothing about it is addressable by an id: it is reached by
+  // a 32-byte random token the SUBCONTRACTOR minted to send their own
+  // paperwork to one person who asked for it, it expires, they can withdraw
+  // it, and the document id in the URL is checked to be a current row of the
+  // company that token names and of a kind the link may carry. The W-9 never
+  // is, because it carries a TIN. Adding a compliance document to this
+  // exemption any other way is the thing the paragraph above forbids.
   // /api/account-by-subdomain/* is the same idea: the login screen for
   // e.g. outerhome.subsub.work needs to know which account that subdomain
   // belongs to (for its branding) before anyone has signed in.
@@ -232,6 +245,9 @@ app.use("/api/*", async (c, next) => {
     // The same for somebody added to the account itself: they hold a link
     // and no session, and the link is how they get one.
     || c.req.path.startsWith("/api/user-invite/")
+    // Somebody a subcontractor sent their paperwork to. They have no account
+    // -- not having to get one is the point -- and the token is the auth.
+    || c.req.path.startsWith("/api/pack/")
     || c.req.path === "/api/stripe/webhook"
     || c.req.path === "/api/impersonation/end"
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
@@ -4166,6 +4182,7 @@ export function missingSchema(err) {
   // The recent ones first, because several of them mention words an older
   // rule would claim. "overflow_posts has no column named severity" is 038,
   // not 023, and the severity rule below would have taken it.
+  if (/\bdoc_shares\b/i.test(m)) return "041_doc_shares";
   if (/owner_declared_(at|by)/i.test(m)) return "040_owner_declared";
   if (/\bproperty_transfers\b|owner_account_id|requested_by_account_id/i.test(m)) return "039_building_handover";
   if (/\boverflow_(posts|invites|responses)\b|overflow_(opt_in|trades|since)/i.test(m)) return "038_overflow";
@@ -6237,6 +6254,227 @@ app.delete("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "c
 });
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// "Send my documents to a contractor."
+//
+// The subcontractor's own paperwork, handed to one person who asked for it.
+// See shared/docshare.js for the rules and 041 for why this exists at all:
+// it is the only path where the free side can bring the paying side in,
+// because every other way in needs the hiring account to already be here.
+// ---------------------------------------------------------------------------
+
+// A token that is worth being a secret. 32 bytes of CSPRNG, base64url --
+// never derived from the company, the recipient or the clock, all of which a
+// recipient already knows and could otherwise walk.
+function shareToken() {
+  const b = new Uint8Array(32);
+  crypto.getRandomValues(b);
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+const shareToJs = (r) => ({
+  id: r.id, toEmail: r.to_email, toName: r.to_name || null, note: r.note || null,
+  createdAt: r.created_at, expiresAt: r.expires_at, revokedAt: r.revoked_at || null,
+  viewCount: r.view_count || 0, lastViewedAt: r.last_viewed_at || null,
+  state: shareState({ expiresAt: r.expires_at, revokedAt: r.revoked_at }),
+});
+
+// Send one.
+app.post("/api/doc-shares", async (c) => {
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ error: await noCompanyReason(c) }, 403);
+  const { userId, accountId } = c.get("auth");
+
+  // Per company, not per IP: this sends mail to an address somebody typed, and
+  // the thing to stop is one account emailing a list.
+  const rl = await rateLimit(c.env, "doc-share", companyId, { limit: 20, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+
+  const b = await c.req.json().catch(() => ({}));
+  const toEmail = String(b.toEmail || "").trim().toLowerCase();
+  if (!validRecipient(toEmail)) return c.json({ error: "invalid_email" }, 400);
+  const toName = String(b.toName || "").trim().slice(0, 120) || null;
+  const note = String(b.note || "").trim().slice(0, 500) || null;
+
+  // Something has to be in it. A pack with nothing on file is a link to an
+  // empty page, and sending one teaches the recipient this is not worth
+  // opening next time.
+  const rows = await currentDocRows(c.env.DB, companyId);
+  const company = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(companyId).first();
+  const docs = docShapeWithLegacy(rows, company);
+  if (!PACK_KINDS.some((k) => docs[k])) return c.json({ error: "nothing_on_file" }, 409);
+
+  // One live link per address. Sending again replaces the last one rather
+  // than leaving two ways in, which is what somebody expects when they
+  // re-send to a person who says they cannot find it.
+  try {
+    await c.env.DB.prepare(
+      `UPDATE doc_shares SET revoked_at = CURRENT_TIMESTAMP
+        WHERE company_id = ? AND to_email = ? AND revoked_at IS NULL`
+    ).bind(companyId, toEmail).run();
+  } catch (err) {
+    const m = missingSchema(err);
+    if (!m) throw err;
+    return c.json({ error: "migration_needed", migration: m }, 503);
+  }
+
+  const id = uid();
+  const token = shareToken();
+  const expires = new Date(Date.now() + SHARE_DAYS * 86400000).toISOString().slice(0, 19).replace("T", " ");
+  await c.env.DB.prepare(
+    `INSERT INTO doc_shares (id, token, company_id, sent_by, to_email, to_name, note, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, token, companyId, userId || null, toEmail, toName, note, expires).run();
+
+  const link = `${APP_ORIGIN}/?pack=${encodeURIComponent(token)}`;
+  const mail = docPackEmail({
+    company: company?.company || "A subcontractor",
+    contact: company?.contact || null,
+    toName, note, link, days: SHARE_DAYS,
+    kinds: PACK_KINDS.filter((k) => docs[k] && inLink(k)),
+  });
+  const sent = await sendEmail(c.env, { to: toEmail, ...mail });
+
+  await logEvent(c.env, accountId, userId, "docs.shared", id, { toEmail });
+  return c.json({ ...shareToJs({ id, to_email: toEmail, to_name: toName, note,
+    created_at: new Date().toISOString(), expires_at: expires, view_count: 0 }),
+    sent: !!sent?.ok }, 201);
+});
+
+// What they have sent, and whether anybody opened it. The view count is the
+// reason to send it through here rather than as an attachment.
+app.get("/api/doc-shares", async (c) => {
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json([]);
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT * FROM doc_shares WHERE company_id = ? ORDER BY created_at DESC LIMIT 50`
+    ).bind(companyId).all();
+    return c.json((results || []).map(shareToJs));
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.json([]);
+  }
+});
+
+// Taking it back. Theirs to withdraw at any point, which is most of what
+// makes sending it safe in the first place.
+app.post("/api/doc-shares/:id/revoke", async (c) => {
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ error: "forbidden" }, 403);
+  const r = await c.env.DB.prepare(
+    `UPDATE doc_shares SET revoked_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND company_id = ? AND revoked_at IS NULL`
+  ).bind(c.req.param("id"), companyId).run();
+  if (!r?.meta?.changes) return c.json({ error: "not_found" }, 404);
+  return c.json({ ok: true });
+});
+
+// ---- the public page ------------------------------------------------------
+// No account, no session. Everything it can reach is pinned to the one share
+// row the token names, exactly as /api/logo/:accountId is pinned to one key.
+
+async function shareByToken(env, token) {
+  const row = await env.DB.prepare(
+    `SELECT s.*, co.company, co.contact, co.city, co.state, co.license, co.license_check
+       FROM doc_shares s JOIN companies co ON co.id = s.company_id
+      WHERE s.token = ?`
+  ).bind(String(token || "")).first();
+  if (!row) return null;
+  return row;
+}
+
+app.get("/api/pack/:token", async (c) => {
+  // A token is a guess-resistant secret, but the endpoint is still open, so
+  // it gets the same floor every other public route has.
+  const rl = await rateLimit(c.env, "pack-view", clientIp(c), { limit: 120, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+
+  let row;
+  try {
+    row = await shareByToken(c.env, c.req.param("token"));
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.json({ error: "not_found" }, 404);
+  }
+  // One answer for every way a link can be no good EXCEPT the two the holder
+  // needs to tell apart. Not found stays vague on purpose: it is the only
+  // reply a guessed token can get.
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const state = shareState({ expiresAt: row.expires_at, revokedAt: row.revoked_at });
+  if (state !== "active") return c.json({ error: state, company: row.company }, 410);
+
+  const rows = await currentDocRows(c.env.DB, row.company_id);
+  const company = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`)
+    .bind(row.company_id).first();
+  const docs = docShapeWithLegacy(rows, company);
+
+  // Counted here rather than on the file fetch: opening the page is the event
+  // the sender cares about, and a page with three documents on it must not
+  // read as three opens.
+  await c.env.DB.prepare(
+    `UPDATE doc_shares SET view_count = view_count + 1, last_viewed_at = CURRENT_TIMESTAMP
+      WHERE id = ?`).bind(row.id).run().catch(() => {});
+
+  const lic = parseJson(row.license_check, null);
+  return c.json({
+    company: row.company,
+    contact: row.contact || null,
+    where: [row.city, row.state].filter(Boolean).join(", ") || null,
+    license: row.license || null,
+    // Verified against the state registry, with the date -- the one thing on
+    // here that an emailed PDF genuinely cannot carry.
+    licenseVerified: lic?.status === "active" || lic?.ok === true,
+    licenseCheckedAt: lic?.checkedAt || null,
+    sentTo: row.to_name || null,
+    note: row.note || null,
+    expiresAt: row.expires_at,
+    docs: PACK_KINDS.map((k) => ({ ...packRow({ ...(docs[k] || {}), kind: k }),
+      id: rows[k]?.id || null })),
+  });
+});
+
+// One file out of one pack. Pinned three ways: the token names the share, the
+// share names the company, and the document id must be a current row of THAT
+// company of a kind the link is allowed to carry. An id from another company
+// -- or the W-9 from this one -- gets the same nothing.
+app.get("/api/pack/:token/file/:docId", async (c) => {
+  const rl = await rateLimit(c.env, "pack-file", clientIp(c), { limit: 240, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+
+  let row;
+  try {
+    row = await shareByToken(c.env, c.req.param("token"));
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.notFound();
+  }
+  if (!row) return c.notFound();
+  if (shareState({ expiresAt: row.expires_at, revokedAt: row.revoked_at }) !== "active") {
+    return c.notFound();
+  }
+
+  const doc = await c.env.DB.prepare(
+    `SELECT * FROM company_docs
+      WHERE id = ? AND company_id = ? AND superseded_at IS NULL`
+  ).bind(c.req.param("docId"), row.company_id).first();
+  if (!doc || !doc.file_key) return c.notFound();
+  // The rule that keeps a taxpayer number out of an emailed link.
+  if (!inLink(doc.kind)) return c.notFound();
+
+  const obj = await c.env.FILES.get(doc.file_key);
+  if (!obj) return c.notFound();
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": obj.httpMetadata?.contentType || "application/octet-stream",
+      "Content-Disposition": `inline; filename="${(doc.file_name || "document").replace(/[^\w.\-]/g, "_")}"`,
+      // Never a shared cache: this is one person's certificate behind one
+      // token, and an intermediary holding a copy outlives the revocation.
+      "Cache-Control": "private, no-store",
+    },
+  });
+});
+
 // File uploads. R2Bucket has no createPresignedUrl() — that's an S3-style
 // presigned URL, which on R2 needs the S3-compatible API signed with an R2
 // API token (Account ID + Access Key + Secret), not the Workers binding.

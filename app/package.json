@@ -101,7 +101,9 @@
     "lint": "eslint .",
     "test:proptile": "node scripts/property-tile-test.mjs",
     "test:connectin": "node scripts/connect-inbox-test.mjs",
-    "test:asker": "node scripts/connect-asker-test.mjs"
+    "test:asker": "node scripts/connect-asker-test.mjs",
+    "test:docshare": "node scripts/doc-share-test.mjs",
+    "test:docshareui": "node scripts/doc-share-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

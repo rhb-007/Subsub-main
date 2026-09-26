@@ -431,6 +431,48 @@ refactor.
   exact wording and a form that deviates can be void, and lien law follows
   the property's state, not the signer's.
 
+- **A subcontractor may send their own paperwork, and that is the growth
+  loop.** Every other way into SubSub needs the hiring side to already be here:
+  they look a contractor up, or they scan a code, and both need an account
+  first. So supply could never bring demand in — which, in a product with no
+  directory, is the only flywheel available.
+
+  A subcontractor is asked for the same four documents several times a month,
+  nearly always by a general contractor who is not on SubSub, and answers by
+  attaching PDFs that start going stale the moment they are sent. `POST
+  /api/doc-shares` is that same act done once: they type the address of
+  somebody who just asked, and that person gets a page with the carrier, the
+  policy number, the coverage and — the part an attachment can never do — the
+  expiry, live. Migration 041 holds `doc_shares`; `app/shared/docshare.js`
+  holds the rules.
+
+  **The W-9 is not in the link.** It carries a TIN, and for a sole proprietor
+  that is their social security number; email gets forwarded, sits in shared
+  inboxes and turns up in the archive of whoever leaves next year. The page
+  says a W-9 is on file and reading it needs an account. That is the one piece
+  of deliberate friction in the flow, placed where the recipient is already
+  getting the thing they asked for. Changing it is a decision about somebody
+  else's identity documents, not a tweak to a share feature.
+
+  **The link is not a public URL.** One 32-byte random token per recipient,
+  never derived from anything about the company or the clock, expiring in
+  `SHARE_DAYS`, revocable, and replaced rather than duplicated when the same
+  address is sent to twice. The file route is pinned three ways: the token
+  names the share, the share names the company, and the document must be a
+  current row of *that* company of a kind the link may carry.
+
+  This is the one addition to the public-route exemption list that serves a
+  compliance document, and the comment there now carries both halves. The rule
+  it does not break is the real one: a route that serves a document by an
+  account or company id serves it to anybody who can guess an id. Nothing here
+  is addressable by an id.
+
+  **Sending is gated on a document being uploaded, not verified.** Verification
+  is each hiring account's own verdict and says nothing about whether the
+  contractor has one to send — the common case is that they upload and somebody
+  else asks before the first account has reviewed it. The server and the screen
+  both gate on presence, and they must not disagree.
+
 - **Overflow is broadcast, not browse.** When an account has nobody on its
   own roster for an urgent job, it may broadcast to opted-in companies —
   general contractors included, since 031 made every one of them hireable.

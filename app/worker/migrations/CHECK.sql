@@ -62,4 +62,5 @@ SELECT
   -- whoever holds it, or an unclaimed property can never be handed over.
   (SELECT COUNT(*) FROM properties WHERE owner_account_id IS NULL)                          AS m039_unowned,
   (SELECT COUNT(*) FROM pragma_table_info('properties')  WHERE name='owner_declared_at')     AS m040_declared_at,
-  (SELECT COUNT(*) FROM pragma_table_info('properties')  WHERE name='owner_declared_by')     AS m040_declared_by;
+  (SELECT COUNT(*) FROM pragma_table_info('properties')  WHERE name='owner_declared_by')     AS m040_declared_by,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_shares')              AS m041_doc_shares;

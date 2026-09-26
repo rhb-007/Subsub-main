@@ -35,7 +35,7 @@ import {
   QrCode as QrCodeIcon,
   Maximize2, Share2, ImagePlus, History,
 } from "lucide-react";
-import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl } from "./lib/api";
+import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE } from "./lib/api";
 // The same file the Worker imports, so a problem cannot be an emergency in
 // the browser and ordinary work on the server, or the other way round.
 import { severityOf, severityRank } from "../shared/emergency.js";
@@ -1754,7 +1754,7 @@ export default function SubSub() {
     && new URLSearchParams(window.location.search).has("apply")
     && !!detectSubdomain();
   const [publicView, setPublicView] = useState(
-    BUILD === "platform" ? "superadmin" : openingApplication ? "signup" : "login"); // login | signup | superadmin
+    BUILD === "platform" ? "superadmin" : openingApplication ? "signup" : "login"); // login | signup | superadmin | pack
 
   // The public views are not separate pages, so without this the browser's
   // Back button leaves the app altogether -- to whatever the tab held before,
@@ -1805,6 +1805,13 @@ export default function SubSub() {
   const [tenantToken] = useState(() => {
     if (typeof window === "undefined") return null;
     return new URLSearchParams(window.location.search).get("tenant");
+  });
+  // A subcontractor's paperwork, sent to somebody who asked for it. The only
+  // link in the product whose whole point is that the holder never signs in --
+  // so it gets no session, no account lookup and no branding, just the page.
+  const [packToken] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("pack");
   });
   const [tenantInvite, setTenantInvite] = useState(null);
   const [tenantInviteErr, setTenantInviteErr] = useState("");
@@ -3982,6 +3989,19 @@ export default function SubSub() {
           <span className="boot-spin" aria-hidden="true" />
           <span className="sr-only">Loading</span>
         </div>
+      </div>
+    );
+  }
+
+  // Somebody holding a paperwork link is not here to sign in to anything, and
+  // that stays true if they happen to have a SubSub session of their own --
+  // they clicked a link to read a certificate, not to open their account. So
+  // this sits ABOVE the logged-in gate rather than among the logged-out views.
+  if (packToken) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <DocPack token={packToken} />
       </div>
     );
   }
@@ -17220,6 +17240,270 @@ function ConnectPane({ requests, onRespond, onReload }) {
   );
 }
 
+// The page a general contractor lands on. No account, no session, nothing to
+// sign up for -- that is the entire point, and the moment this asks for a
+// password it stops being better than the email attachment it replaces.
+//
+// What it does that an attachment cannot: say what the cover actually is, and
+// say whether it is still good TODAY. A PDF sent in March is silent about
+// June. This is not.
+function DocPack({ token }) {
+  const [p, setP] = useState(null);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    api.docPack(token)
+      .then((r) => { if (alive) setP(r); })
+      .catch((e) => {
+        console.error("[pack] load failed:", e);
+        if (!alive) return;
+        // Three different sentences, because they are three different things
+        // to the person holding the link.
+        setErr(e?.body?.error === "revoked"
+          ? { head: "This link was withdrawn", body: `${e.body.company || "The sender"} took it back. Ask them for a new one.` }
+          : e?.body?.error === "expired"
+          ? { head: "This link has expired", body: `${e.body.company || "The sender"} can send you a fresh one — it only takes them a moment.` }
+          : { head: "We couldn't find that", body: "Check the link you were sent, or ask for it again." });
+      });
+    return () => { alive = false; };
+  }, [token]);
+
+  const fileUrl = (docId) =>
+    `${API_BASE}/pack/${encodeURIComponent(token)}/file/${encodeURIComponent(docId)}`;
+  // Always with the year. formatDay drops it, which is right on a job card
+  // about next Tuesday and wrong here: "current through Mar 14" of which year
+  // is the one question this page exists to answer.
+  const packDay = (iso) => {
+    const t = Date.parse(`${iso}T00:00:00`);
+    if (!Number.isFinite(t)) return iso;
+    return new Date(t).toLocaleDateString(undefined,
+      { month: "short", day: "numeric", year: "numeric" });
+  };
+
+  if (err) {
+    return (
+      <div className="pack-page">
+        <div className="pack-card">
+          <h1>{err.head}</h1>
+          <p className="pack-lede">{err.body}</p>
+        </div>
+        <p className="pack-foot">Powered by SubSub</p>
+      </div>
+    );
+  }
+  if (!p) return <div className="pack-page"><div className="pack-card"><p className="cov-hint">Loading…</p></div></div>;
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  return (
+    <div className="pack-page">
+      <div className="pack-card">
+        <span className="pack-kicker">Compliance documents</span>
+        <h1>{p.company}</h1>
+        <p className="pack-lede">
+          {p.contact ? `${p.contact} · ` : ""}{p.where || ""}
+          {p.sentTo ? ` · sent to ${p.sentTo}` : ""}
+        </p>
+        {p.note && <p className="pack-note">&ldquo;{p.note}&rdquo;</p>}
+
+        {/* The one thing on here that an emailed PDF genuinely cannot carry. */}
+        {p.license && (
+          <div className={`pack-lic ${p.licenseVerified ? "ok" : ""}`}>
+            {p.licenseVerified ? <ShieldCheck size={15} /> : <FileText size={15} />}
+            <span>
+              Licence {p.license}
+              {p.licenseVerified
+                ? ` · verified against the state registry${p.licenseCheckedAt ? ` on ${packDay(p.licenseCheckedAt)}` : ""}`
+                : ""}
+            </span>
+          </div>
+        )}
+
+        <div className="pack-docs">
+          {p.docs.filter((d) => d.onFile).map((d) => {
+            // The status logic is shared/docs.js's, read against today.
+            const lapsed = d.expiresOn && d.expiresOn < today;
+            return (
+              <div key={d.kind} className={`pack-doc ${lapsed ? "lapsed" : ""}`}>
+                <div className="pack-doc-main">
+                  <b>{DOC_LABELS[d.kind] || d.kind}</b>
+                  <div className="pack-doc-facts">
+                    {d.issuer && <span>{d.issuer}</span>}
+                    {d.policyNo && <span>Policy {d.policyNo}</span>}
+                    {d.coverageCents != null && <span>{formatMoney(String(d.coverageCents / 100))}</span>}
+                    <span className={lapsed ? "pack-bad" : d.expiresOn ? "pack-good" : ""}>
+                      {d.expiresOn
+                        ? `${lapsed ? "Expired" : "Current through"} ${packDay(d.expiresOn)}`
+                        : "Does not expire"}
+                    </span>
+                  </div>
+                </div>
+                {d.readable ? (
+                  <a className="btn-ghost small" href={fileUrl(d.id)} target="_blank" rel="noreferrer">
+                    <Download size={13} /> Open
+                  </a>
+                ) : (
+                  // The W-9. Said plainly rather than left looking broken.
+                  <span className="pack-gated" title="Held back on purpose">
+                    <Lock size={12} /> On file
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {p.docs.some((d) => d.gated) && (
+          <p className="cov-hint">
+            The W-9 is on file and is not in this link — it carries a tax number,
+            so reading it needs an account.
+          </p>
+        )}
+
+        {/* The hook, and the honest version of it: an attachment cannot do
+            this, and that is the whole reason they sent it this way. */}
+        <div className="pack-cta">
+          <strong>This page stays current.</strong>
+          <span>
+            When {p.company} renews, this shows the new certificate rather than the
+            one that lapsed. Create a free account to keep it and be told before
+            anything expires.
+          </span>
+          <a className="btn-solid small" href="/">Create a free account</a>
+        </div>
+      </div>
+      <p className="pack-foot">Sent by {p.company} through SubSub</p>
+    </div>
+  );
+}
+
+// Sending your own paperwork to a contractor who asked for it.
+//
+// Every subcontractor is asked for the same four documents several times a
+// month, nearly always by somebody not on SubSub, and answers by attaching
+// PDFs. This is that same act done once -- and the only thing in the product
+// that a free user hands to a paying one, which is why it is a panel on the
+// screen they already visit rather than a setting somewhere.
+function SendDocPack({ company, anyOnFile }) {
+  const [open, setOpen] = useState(false);
+  const [sent, setSent] = useState(null);
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [shares, setShares] = useState(null);
+
+  const load = async () => {
+    try { setShares(await api.docShares()); }
+    catch (e) { console.error("[doc-share] list failed:", e); setShares([]); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const send = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = await api.sendDocPack({ toEmail: email, toName: name || null, note: note || null });
+      setSent(r); setOpen(false); setEmail(""); setName(""); setNote("");
+      await load();
+    } catch (e) {
+      console.error("[doc-share] send failed:", e);
+      setErr(e?.body?.error === "invalid_email" ? "That email address doesn't look right."
+        : e?.body?.error === "nothing_on_file"
+          ? "There's nothing on file to send yet — upload a document first."
+        : e?.body?.error === "rate_limited" ? "That's a lot of sending. Try again in an hour."
+        : e?.body?.error === "migration_needed"
+          ? `The database isn't migrated yet — run ${e.body.migration}.sql.`
+        : "Couldn't send it. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+
+  const live = (shares || []).filter((x) => x.state === "active");
+
+  return (
+    <div className="pack-panel">
+      <div className="pack-head">
+        <div>
+          <h4><Send size={14} /> Send your paperwork</h4>
+          <p className="panel-note">
+            A contractor asking for your insurance? Send it from here instead of
+            attaching it to an email. They see the carrier, the policy number, the
+            coverage and the expiry — and when you renew, what they are looking at
+            renews with it.
+          </p>
+        </div>
+        {!open && (
+          <button className="btn-solid small" disabled={!anyOnFile} onClick={() => { setOpen(true); setSent(null); }}>
+            <Send size={13} /> Send it
+          </button>
+        )}
+      </div>
+
+      {!anyOnFile && (
+        <p className="cov-hint">Upload a document below and you can send it from here.</p>
+      )}
+
+      {sent && (
+        <div className="doc-ok-banner">
+          <CheckCircle2 size={16} /> Sent to {sent.toEmail}. You&rsquo;ll see here when they open it.
+        </div>
+      )}
+
+      {open && (
+        <div className="pack-form">
+          <label className="fld">Their email
+            <span className="fld-note">The address of the person who asked you for it</span>
+            <input type="email" value={email} autoCapitalize="none" autoCorrect="off"
+              onChange={(e) => setEmail(e.target.value)} placeholder="pm@theircompany.com" /></label>
+          <label className="fld">Their name <span className="fld-note">optional</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Priya" /></label>
+          <label className="fld">Anything to say <span className="fld-note">optional</span>
+            <textarea rows={2} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="As asked on Tuesday." /></label>
+          {/* Said before they send, not discovered afterwards. */}
+          <p className="cov-hint">
+            Your insurance, bond and signed agreement go in the link. Your W-9 is
+            shown as on file but stays behind a sign-in — it has your tax number on it.
+          </p>
+          {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
+          <div className="form-actions">
+            <button className="btn-ghost small" disabled={busy}
+              onClick={() => { setOpen(false); setErr(""); }}>Cancel</button>
+            <button className="btn-solid small" disabled={busy || !email.trim()} onClick={send}>
+              {busy ? "Sending…" : "Send"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {live.length > 0 && (
+        <div className="pack-sent">
+          <div className="form-sec">Sent</div>
+          {live.map((x) => (
+            <div key={x.id} className="pack-row">
+              <div className="pack-who">
+                <b>{x.toName || x.toEmail}</b>
+                <span className="cx-sub">
+                  {x.toName ? `${x.toEmail} · ` : ""}sent {relTime(x.createdAt)}
+                  {/* The reason to send it through here rather than as an
+                      attachment: you find out whether it was read. */}
+                  {x.viewCount > 0
+                    ? ` · opened ${x.viewCount === 1 ? "once" : `${x.viewCount} times`}`
+                    : " · not opened yet"}
+                </span>
+              </div>
+              <button className="pf-mini" onClick={async () => {
+                await api.revokeDocShare(x.id); await load();
+              }}>Withdraw</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
   connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage,
   overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow }) {
@@ -17469,6 +17753,17 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
           ) : (
             <div className="doc-ok-banner"><CheckCircle2 size={16} /> All documents on file — you're cleared for work.</div>
           )}
+          {/* The thing they are asked for several times a month, done once.
+              Sits above the documents themselves because sending them is what
+              a contractor comes to this screen to DO -- reading their own
+              certificate back is not. */}
+          {/* Uploaded, not verified. Verification is each hiring account's own
+              verdict on a document -- it says nothing about whether the
+              contractor has one to send, and the common case is exactly this:
+              they upload, and somebody else asks for it before the first
+              account has got round to reviewing it. The server gates on
+              presence too, and the two must not disagree. */}
+          <SendDocPack company={sub.company} anyOnFile={DOC_KINDS.some((k) => sub[k])} />
           {sub.license && (
             <div className={`lic-card ${licenseOk(sub) ? "ok" : "bad"}`} style={{ marginBottom: 16 }}>
               {licenseOk(sub) ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
@@ -20069,6 +20364,57 @@ body{background:var(--paper)}
 .cx-req.spent{opacity:.6}
 .cx-main{min-width:0;display:flex;flex-direction:column;gap:3px;flex:1 1 260px}
 .cx-main b{font-size:14.5px}
+/* ---- sending your own paperwork, and the page it lands on ---- */
+.pack-panel{border:1px solid var(--line);border-radius:12px;padding:15px 16px;
+  margin-bottom:16px;background:var(--card)}
+.pack-head{display:flex;gap:14px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
+.pack-head h4{margin:0 0 4px;font-size:14.5px;display:flex;align-items:center;gap:6px}
+.pack-head .panel-note{margin:0;max-width:56ch}
+.pack-form{margin-top:12px;border-top:1px solid var(--line);padding-top:12px}
+.pack-sent{margin-top:12px}
+.pack-row{display:flex;gap:12px;align-items:center;justify-content:space-between;
+  padding:9px 0;border-top:1px solid var(--line)}
+.pack-who{min-width:0;display:flex;flex-direction:column;gap:2px}
+.pack-who b{font-size:13.5px}
+/* The page a contractor with no account lands on. Deliberately not the app:
+   no nav, no brand furniture, one card and the documents. */
+.pack-page{min-height:100vh;background:var(--paper);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:24px 16px;gap:12px}
+.pack-card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+  padding:28px;max-width:620px;width:100%;box-shadow:var(--shadow)}
+.pack-kicker{font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-soft)}
+.pack-card h1{margin:6px 0 2px;font-size:26px;letter-spacing:-.02em}
+.pack-lede{margin:0;font-size:13px;color:var(--ink-soft)}
+.pack-note{margin:10px 0 0;font-size:13.5px;font-style:italic}
+.pack-lic{display:flex;align-items:center;gap:7px;margin-top:14px;padding:9px 11px;
+  border-radius:9px;background:var(--paper);border:1px solid var(--line);
+  font-size:12.5px;color:var(--ink)}
+.pack-lic.ok{border-color:var(--ink-soft)}
+.pack-docs{margin-top:16px;display:flex;flex-direction:column}
+.pack-doc{display:flex;gap:12px;align-items:center;justify-content:space-between;
+  padding:13px 0;border-top:1px solid var(--line)}
+.pack-doc-main{min-width:0}
+.pack-doc-main b{font-size:14px}
+.pack-doc-facts{display:flex;flex-wrap:wrap;gap:10px;margin-top:3px;font-size:12px;
+  color:var(--ink-soft)}
+.pack-good{font-weight:700;color:var(--ink)}
+.pack-bad{font-weight:700;color:#a3342a}
+.pack-doc.lapsed{background:#fdf3f2;margin:0 -10px;padding-left:10px;padding-right:10px;
+  border-radius:8px}
+.pack-gated{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;
+  color:var(--ink-soft);white-space:nowrap}
+.pack-cta{margin-top:20px;padding-top:16px;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.pack-cta strong{font-size:14px}
+.pack-cta span{font-size:12.5px;color:var(--ink-soft);line-height:1.55}
+.pack-cta a{margin-top:6px;text-decoration:none}
+.pack-foot{font-size:11.5px;color:var(--ink-soft)}
+@media (max-width:640px){
+  .pack-card{padding:20px}
+  .pack-card h1{font-size:22px}
+  .pack-doc{flex-direction:column;align-items:flex-start;gap:8px}
+}
 /* The way in to who is asking. Reads as the heading it replaces, with just
    enough of an affordance to say it opens. */
 .cx-open{background:none;border:0;padding:0;margin:0;font:700 14.5px Inter,sans-serif;
