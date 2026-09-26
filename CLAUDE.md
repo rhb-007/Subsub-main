@@ -522,8 +522,23 @@ refactor.
   And it never carries **the other trades on the same job** — a job holds three
   work orders and the other two name other companies on that account's roster,
   so telling a roofer which electrician the GC uses is the accumulation refused
-  everywhere else. Worth knowing that `/api/jobs` does **not** redact that for a
-  contractor seat today; that is a separate hole, not one this route may copy.
+  everywhere else.
+
+  **`/api/jobs` now holds the same line, and did not before.** `scopeClause`
+  narrows an owner and a tenant by property and contributes nothing for a
+  contractor, so that list was **every job on the account**, each carrying every
+  trade's assignment: which company, its crew, its work order number and its
+  value. `stripMoney` redacts owners and tenants only, so the rates went too.
+  Accepting one connect request was enough to read a general contractor's whole
+  book — who they use for each trade, at which address, for how much.
+
+  It takes **both** halves, and either alone still leaks. `woScope` limits the
+  list to jobs the caller's company holds a live work order on; `stripOtherTrades`
+  then keeps only their own trades on the jobs that survive. Redacted on the way
+  out of the API rather than hidden in the page, for the reason `stripMoney`
+  gives: a value the browser is sent is a value the browser can be made to show.
+  `assignments` stays an object when it empties out, never absent — the same
+  white-screen rule `inheritedShape` follows.
 
   **Read-only means every write, not the obvious one.** Accepting, declining and
   requesting a change all post to the account the seat is on, and the work-order

@@ -4642,7 +4642,27 @@ app.get("/api/jobs", async (c) => {
   // Sharing a building with somebody is not a reason to see their repairs.
   const scope = scopeClause(auth, "property_id");
   const mine = auth.role === "tenant" ? ` AND requested_by = ? ` : "";
-  const binds = [accountId, ...scope.vals, ...(auth.role === "tenant" ? [auth.userId] : [])];
+  // A CONTRACTOR seat sees the jobs their company was actually issued, and no
+  // others. scopeClause narrows owners and tenants by property and contributes
+  // nothing for a contractor, so this list was every job on the account --
+  // including the ones they are not on, each carrying every trade's assignment.
+  // That is which company the account uses for each trade and what each of them
+  // is being paid, handed to a competitor on the same roster. stripMoney does
+  // not help: it redacts owners and tenants only, so the values went too.
+  //
+  // Accepting one connect request was enough, which is the accumulation this
+  // product refuses everywhere else -- and the send-my-documents loop exists to
+  // put more subcontractors on more rosters, so it was getting worse by design.
+  //
+  // Scoped by the work order, the same way /api/my-work is, because the work
+  // order is the thing that says this job was given to them.
+  const asContractor = auth.role === "contractor" && auth.companyId;
+  const woScope = asContractor
+    ? ` AND EXISTS (SELECT 1 FROM work_orders w
+                     WHERE w.job_id = j.id AND w.company_id = ? AND w.voided_at IS NULL) `
+    : "";
+  const binds = [accountId, ...scope.vals, ...(auth.role === "tenant" ? [auth.userId] : []),
+    ...(asContractor ? [auth.companyId] : [])];
   // `order` is interpolated rather than bound because ORDER BY cannot be a
   // bound parameter. Both callers below pass a literal written here; nothing
   // from a request reaches it, and nothing may be added that does.
@@ -4654,7 +4674,8 @@ app.get("/api/jobs", async (c) => {
     `SELECT j.*, ru.name AS requested_by_name FROM jobs j
        LEFT JOIN users ru ON ru.id = j.requested_by
       WHERE j.account_id = ? ${scope.sql.replace(/\bproperty_id\b/g, "j.property_id")}
-        ${mine.replace(/\brequested_by\b/g, "j.requested_by")} ORDER BY ${order.replace(/\b(updated_at|created_at)\b/g, "j.$1")}`
+        ${mine.replace(/\brequested_by\b/g, "j.requested_by")}
+        ${woScope} ORDER BY ${order.replace(/\b(updated_at|created_at)\b/g, "j.$1")}`
   ).bind(...binds).all();
 
   // The order we want needs the column migration 025 adds. The order is a
@@ -4780,13 +4801,16 @@ app.get("/api/jobs", async (c) => {
     for (const w of wos) (woByJob[w.job_id] ||= []).push(w);
   }
 
+  // Every job leaving this route goes through the same two redactions, rather
+  // than each list remembering to apply them.
+  const forCaller = (j) => stripOtherTrades(auth, stripMoney(auth, jobRowToJs(j, woByJob[j.id] || [])));
   return c.json([
     ...jobs.map((j) => ({
-      ...stripMoney(auth, jobRowToJs(j, woByJob[j.id] || [])),
+      ...forCaller(j),
       ...(j.requested_by_name ? { requestedByName: j.requested_by_name } : {}),
     })),
     ...ownedJobs.map((j) => ({
-      ...stripMoney(auth, jobRowToJs(j, woByJob[j.id] || [])),
+      ...forCaller(j),
       // Theirs to watch, not to touch.
       atOwnedProperty: true, readOnly: true,
       managedBy: j.managed_by_name || null,
@@ -4795,7 +4819,7 @@ app.get("/api/jobs", async (c) => {
     // Named, because "who did I report this to" is the question a tenant
     // chasing an old repair is actually asking.
     ...pastReports.map((j) => ({
-      ...stripMoney(auth, jobRowToJs(j, woByJob[j.id] || [])),
+      ...forCaller(j),
       underPreviousManager: true, readOnly: true,
       managedBy: j.managed_by_name || null,
     })),
@@ -4914,6 +4938,32 @@ function stripMoney(auth, job) {
   for (const [trade, a] of Object.entries(job.assignments || {})) {
     const { value, ...rest } = a;
     assignments[trade] = rest;
+  }
+  return { ...job, assignments };
+}
+
+// What a subcontractor is not shown about a job they ARE on.
+//
+// Scoping the list to jobs they hold a work order on is only half of it: a job
+// carries a work order per trade, and the other two name other companies on
+// that account's roster, with what each of them is being paid. Telling a roofer
+// which electrician the general contractor uses, and for how much, is the
+// accumulation this product refuses everywhere else -- and it needs no special
+// access at all, just being on the same job.
+//
+// So a contractor seat gets its OWN trades and nothing else. Empty rather than
+// absent when they hold none, because every screen does
+// `j.trades.filter((t) => j.assignments[t])` and a job without the map white-
+// screens the jobs list -- the same rule inheritedShape follows, for the same
+// reason.
+//
+// Applied on the way out of the API rather than hidden in the page, because a
+// value the browser is sent is a value the browser can be made to show.
+function stripOtherTrades(auth, job) {
+  if (auth.role !== "contractor" || !auth.companyId) return job;
+  const assignments = {};
+  for (const [trade, a] of Object.entries(job.assignments || {})) {
+    if (a && a.subId === auth.companyId) assignments[trade] = a;
   }
   return { ...job, assignments };
 }
