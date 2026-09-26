@@ -11192,6 +11192,12 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
         <div className="prop-grid">
           {properties.map((p) => {
             const vs = vendorsFor(p.id);
+            // Managing the ACCOUNT is not managing this building. One somebody
+            // else operates has no roster of ours scoped to it and never will:
+            // scoping our vendor to their building, or being told "every vendor
+            // on the account can work it", are both answers to a question that
+            // is not ours to ask.
+            const runs = canManage && !p.ownedNotOperated;
             const js = jobsFor(p.id);
             const open = js.filter((j) => j.status !== "completed").length;
             return (
@@ -11226,7 +11232,7 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                     nothing on the other side of it. */}
                 <div className="prop-stats">
                   <span><strong>{p.units || "—"}</strong> units</span>
-                  {canManage && (
+                  {runs && (
                     vs.length > 0 ? (
                       <button className="stat-link" onClick={() => onGoVendors(p)}>
                         <strong>{vs.length}</strong> assigned vendor{vs.length === 1 ? "" : "s"}
@@ -11255,7 +11261,7 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                 {/* The vendor list is the account's roster and its compliance
                     state. An owner sees who is coming to their own jobs, in
                     the job itself -- not who else is on the books. */}
-                {!canManage ? null : vs.length > 0 ? (
+                {!runs ? null : vs.length > 0 ? (
                   <div className="prop-vendors">
                     {vs.slice(0, 6).map((v) => (
                       <button key={v.id} className="prop-vendor" onClick={() => onOpenSub(v)}>
@@ -11292,18 +11298,19 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
 
                 {p.notes && <p className="prop-notes">{p.notes}</p>}
                 <div className="prop-cta">
-                  {canManage && (
+                  {runs && (
                     <button className="prop-job" onClick={() => setAssigning(p)}>
                       <Users size={12} /> Assign vendors
                     </button>
                   )}
-                  {/* A building somebody else runs: raising work on it is
-                      their manager's job, not theirs. */}
-                  {!p.ownedNotOperated && (
-                    <button className="prop-job" onClick={() => onNewJob(p)}>
-                      <Plus size={12} /> {asOwner ? "Request work here" : "New job here"}
-                    </button>
-                  )}
+                  {/* A building somebody else runs: they cannot book the work,
+                      but they can ask for it. The alternative is watching your
+                      own building and having to ring somebody. */}
+                  <button className="prop-job" onClick={() => onNewJob(p)}>
+                    <Plus size={12} /> {p.ownedNotOperated
+                      ? "Ask your manager"
+                      : asOwner ? "Request work here" : "New job here"}
+                  </button>
                 </div>
               </div>
             );
@@ -15503,6 +15510,13 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const toggleTrade = (id) => setF((s) => ({ ...s, trades: s.trades.includes(id) ? s.trades.filter((x) => x !== id) : [...s.trades, id] }));
   const when = formatWhen(f.date, f.time);
+  // A building this account owns but somebody ELSE runs. What gets sent is a
+  // request to that manager -- they price it, they book the contractors, and
+  // nothing happens until they approve. Promising "create job & find
+  // contractors" here would offer a screen this account is never given, so the
+  // form follows the building rather than the role of whoever opened it.
+  const picked = (properties || []).find((x) => x.id === f.propertyId);
+  const asking = asOwner || !!picked?.ownedNotOperated;
   // A request has to name a building: it is the only thing that decides whose
   // it is, and the server refuses one without.
   const valid = f.title && f.trades.length && f.address && (!asOwner || f.propertyId);
@@ -15521,9 +15535,9 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
 
   return (
     <div className="form">
-      <h2>{asOwner ? "Request work" : "Create job"}</h2>
-      <p className="form-sub">{asOwner
-        ? "This goes to whoever manages the building. They price it and arrange the contractors — nothing is booked until they approve it."
+      <h2>{asking ? "Request work" : "Create job"}</h2>
+      <p className="form-sub">{asking
+        ? `This goes to ${picked?.managedBy || "whoever manages the building"}. They price it and arrange the contractors — nothing is booked until they approve it.`
         : "Enter the project once. Work orders are generated per trade when you assign contractors."}</p>
       {forSub && (
         <div className={`for-sub ${docsComplete(forSub) ? "" : "warn"}`}>
@@ -15545,7 +15559,13 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
                 at one of their own buildings or it is not theirs to ask for. */}
             {!asOwner && <option value="">Not at a managed property</option>}
             {asOwner && !f.propertyId && <option value="">Choose a building…</option>}
-            {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {/* Which buildings are somebody else's to run, said in the list
+                rather than found out after sending. */}
+            {properties.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}{p.ownedNotOperated ? ` — run by ${p.managedBy || "their manager"}` : ""}
+              </option>
+            ))}
           </select>
         </label>
       )}
@@ -15634,7 +15654,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
         <button className="btn-ghost" onClick={onCancel} disabled={saving}>Cancel</button>
         <button className="btn-solid" onClick={save} disabled={!valid || saving}>
           <Plus size={15} /> {saving ? "Saving…"
-            : asOwner ? "Send this request" : <>Create job &amp; find contractors</>}
+            : asking ? "Send this request" : <>Create job &amp; find contractors</>}
         </button>
       </div>
     </div>

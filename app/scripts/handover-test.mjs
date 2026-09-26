@@ -38,12 +38,27 @@ const SCHEMA = readFileSync(new URL("../worker/schema.sql", import.meta.url), "u
 const M014 = readFileSync(new URL("../worker/migrations/014_building_owners.sql", import.meta.url), "utf8");
 const M031 = `ALTER TABLE accounts ADD COLUMN company_id TEXT REFERENCES companies(id);`;
 const M039 = readFileSync(new URL("../worker/migrations/039_building_handover.sql", import.meta.url), "utf8");
+// Columns the job routes write. schema.sql alone leaves them 503-ing on a
+// migration rather than exercising what is under test.
+const JOBCOLS = `
+ALTER TABLE jobs ADD COLUMN severity TEXT;
+ALTER TABLE jobs ADD COLUMN photos TEXT;
+ALTER TABLE jobs ADD COLUMN report_detail TEXT;
+ALTER TABLE jobs ADD COLUMN updated_at TEXT;
+ALTER TABLE work_orders ADD COLUMN pay_kind TEXT NOT NULL DEFAULT 'fixed';
+ALTER TABLE work_orders ADD COLUMN rate_cents INTEGER;
+ALTER TABLE work_orders ADD COLUMN cap_hours REAL;
+ALTER TABLE accounts ADD COLUMN emergency_company_id TEXT;
+ALTER TABLE jobs ADD COLUMN withdrawn_at TEXT;
+ALTER TABLE jobs ADD COLUMN withdrawn_note TEXT;
+ALTER TABLE jobs ADD COLUMN declined_at TEXT;
+ALTER TABLE jobs ADD COLUMN declined_note TEXT;`;
 const iso = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
 
 // Cascade manages Cedar and Elm. Dana owns Cedar and has an account of her own.
 // Theo owns Elm and has nowhere to put it.
 const seed = () => {
-  const db = freshDb({ base: SCHEMA, migrations: [M031, M039] });
+  const db = freshDb({ base: SCHEMA, migrations: [M031, JOBCOLS, M039] });
   db.exec(`
     INSERT INTO accounts(id,name,subdomain,kind) VALUES
       ('acc_pm','Cascade Management','cascade','property_manager'),
@@ -563,6 +578,149 @@ console.log("\n-- and a tenant does not keep reports once they leave the buildin
     mine.some((j) => j.id === "job_here"), JSON.stringify(mine.map((j) => j.id)));
   ck("and not one at an address they have left",
     !mine.some((j) => j.id === "job_gone"), JSON.stringify(mine.map((j) => j.id)));
+}
+
+console.log("\n-- an owner can ask their manager for work at their own building --");
+{
+  // The other half of appointing a manager. Without it an owner watches their
+  // own building, sees the boiler is making a noise, and has no way to say so:
+  // they hold no seat on the managing account, so the ordinary owner request is
+  // closed to them, and the only option left is the telephone.
+  const { db, env } = seed();
+  db.exec(`UPDATE properties SET account_id='acc_other', owner_account_id='acc_dana' WHERE id='p_cedar'`);
+
+  const [s, b] = await json(await call(env, "u_dana", "acc_dana", "/jobs",
+    { method: "POST", body: JSON.stringify({
+      title: "Boiler making a noise", propertyId: "p_cedar", trades: ["plumbing"],
+      scope: "Rumbling on start-up", date: iso(6) }) }));
+  ck("the owner can raise it", s === 201, `${s} ${JSON.stringify(b).slice(0, 120)}`);
+  ck("and it is a request, not a job they created", b.requested === true, String(b.requested));
+
+  // It belongs to the manager, because they are the ones who will do it.
+  const row = one(db, `SELECT account_id, requested_by, property_id FROM jobs WHERE id = ?`, b.id);
+  ck("it lands on the managing account", row.account_id === "acc_other", row.account_id);
+  ck("marked as asked for by the owner", row.requested_by === "u_dana", row.requested_by);
+  ck("at their building", row.property_id === "p_cedar");
+  // And nobody may be committed to a price by somebody else's account.
+  ck("with nothing approved", !one(db, `SELECT approved_at FROM jobs WHERE id = ?`, b.id).approved_at);
+
+  // The manager sees it, and can tell who asked -- the owner is not a member of
+  // their account, so their own users list will never name them.
+  const [, theirs] = await json(await call(env, "u_far", "acc_other", "/jobs"));
+  const seen = theirs.find((j) => j.id === b.id);
+  ck("the manager sees the request", !!seen, JSON.stringify(theirs.map((j) => j.id)));
+  ck("and is told who asked", seen.requestedByName === "Dana Reyes", String(seen.requestedByName));
+  ck("their feed says so too",
+    /Dana Reyes asked for work at 12 Cedar St/.test(
+      db.prepare(`SELECT text FROM activity WHERE account_id='acc_other' AND kind='job_requested'`).get()?.text || ""),
+    db.prepare(`SELECT text FROM activity WHERE account_id='acc_other' AND kind='job_requested'`).get()?.text);
+  // The owner has a record of asking, on the account they actually run.
+  ck("and the owner's own feed records it",
+    /Asked your manager for work/.test(
+      db.prepare(`SELECT text FROM activity WHERE account_id='acc_dana' AND kind='job_requested'`).get()?.text || ""),
+    db.prepare(`SELECT text FROM activity WHERE account_id='acc_dana' AND kind='job_requested'`).get()?.text);
+
+  // The owner can watch it, and still may not run it.
+  const [, mine] = await json(await call(env, "u_dana", "acc_dana", "/jobs"));
+  const watched = mine.find((j) => j.id === b.id);
+  ck("the owner sees what they asked for", !!watched, JSON.stringify(mine.map((j) => j.id)));
+  ck("and it is read-only to them", watched.readOnly === true && watched.atOwnedProperty === true,
+    JSON.stringify({ readOnly: watched.readOnly, atOwnedProperty: watched.atOwnedProperty }));
+
+  // It cannot be issued to a contractor until the manager approves it.
+  const [sa, ba] = await json(await call(env, "u_far", "acc_other", `/jobs/${b.id}/assign`,
+    { method: "POST", body: JSON.stringify({ trade: "plumbing", companyId: "cmp_roof", value: "500" }) }));
+  ck("and no work order can be issued until the manager approves it",
+    sa === 409 && ba.error === "not_approved", `${sa} ${JSON.stringify(ba)}`);
+}
+
+console.log("\n-- and it is not a way to put work on anybody else's account --");
+{
+  const { db, env } = seed();
+  // A building this account neither owns nor operates.
+  const [s, b] = await json(await call(env, "u_dana", "acc_dana", "/jobs",
+    { method: "POST", body: JSON.stringify({ title: "Not mine", propertyId: "p_far", trades: [] }) }));
+  ck("a building they have no claim on is refused",
+    s === 404 && b.error === "property_not_found", `${s} ${JSON.stringify(b)}`);
+  ck("and nothing was written", one(db, `SELECT COUNT(*) n FROM jobs WHERE title='Not mine'`).n === 0);
+
+  // A building they own AND run is an ordinary job of their own, not a request.
+  db.exec(`UPDATE properties SET account_id='acc_dana', owner_account_id='acc_dana' WHERE id='p_cedar'`);
+  const [s2, b2] = await json(await call(env, "u_dana", "acc_dana", "/jobs",
+    { method: "POST", body: JSON.stringify({ title: "My own work", propertyId: "p_cedar", trades: [] }) }));
+  ck("their own building is an ordinary job", s2 === 201 && b2.requested === false,
+    `${s2} ${JSON.stringify(b2).slice(0, 80)}`);
+  ck("on their own account",
+    one(db, `SELECT account_id, requested_by FROM jobs WHERE id = ?`, b2.id).account_id === "acc_dana");
+  ck("and needing nobody's approval",
+    !one(db, `SELECT requested_by FROM jobs WHERE id = ?`, b2.id).requested_by);
+
+  // A guest seat still cannot reach past its own scope.
+  const { env: env3, db: db3 } = seed();
+  db3.exec(`UPDATE properties SET account_id='acc_other', owner_account_id='acc_pm' WHERE id='p_elm'`);
+  const [s3] = await json(await call(env3, "u_theo", "acc_pm", "/jobs",
+    { method: "POST", body: JSON.stringify({ title: "Reaching", propertyId: "p_cedar", trades: [] }) }));
+  ck("a guest seat cannot raise work at a building outside its scope", s3 === 403, String(s3));
+}
+
+console.log("\n-- and urgency does not let them spend the manager's money --");
+{
+  // dispatchEmergency APPROVES the job and issues a work order against the
+  // account's own emergency contractor. Run on the owner's side of a
+  // cross-account request it would approve the manager's job from outside and
+  // engage the OWNER's contractor on it. Marking something urgent must not be
+  // a way to reach past the approval this whole design exists for.
+  const { db, env } = seed();
+  db.exec(`
+    UPDATE properties SET account_id='acc_other', owner_account_id='acc_dana' WHERE id='p_cedar';
+    -- Both sides have named an emergency contractor with everything verified,
+    -- so the only thing stopping a dispatch is the rule under test.
+    INSERT INTO companies(id,company) VALUES ('cmp_em','Nightshift Plumbing');
+    INSERT INTO engagements(id,account_id,company_id,status,categories,doc_review) VALUES
+      ('en_em_dana','acc_dana','cmp_em','active','["plumbing"]',
+       '{"insurance":{"status":"verified"},"bond":{"status":"verified"},"contract":{"status":"verified"}}'),
+      ('en_em_far','acc_other','cmp_em','active','["plumbing"]',
+       '{"insurance":{"status":"verified"},"bond":{"status":"verified"},"contract":{"status":"verified"}}');
+    UPDATE accounts SET emergency_company_id='cmp_em' WHERE id IN ('acc_dana','acc_other');
+  `);
+  const [s, b] = await json(await call(env, "u_dana", "acc_dana", "/jobs",
+    { method: "POST", body: JSON.stringify({
+      title: "Water coming in", propertyId: "p_cedar", trades: ["plumbing"],
+      reportDetail: { problem: "A pipe has burst", started: "Tonight", words: "Ceiling is wet" },
+      severity: "urgent" }) }));
+  ck("the urgent request is accepted", s === 201, `${s} ${JSON.stringify(b).slice(0, 90)}`);
+  ck("but nothing was dispatched", b.emergency?.dispatched === false, JSON.stringify(b.emergency));
+  ck("and it says whose call it is", b.emergency?.reason === "manager_decides", JSON.stringify(b.emergency));
+  // THE TWO THINGS THAT MUST NOT HAVE HAPPENED.
+  ck("the manager's job is not approved from outside",
+    !one(db, `SELECT approved_at FROM jobs WHERE id = ?`, b.id).approved_at,
+    String(one(db, `SELECT approved_at FROM jobs WHERE id = ?`, b.id).approved_at));
+  ck("and no work order was issued against it",
+    one(db, `SELECT COUNT(*) n FROM work_orders WHERE job_id = ?`, b.id).n === 0);
+  ck("the urgency is still recorded, for the manager to act on",
+    one(db, `SELECT severity FROM jobs WHERE id = ?`, b.id).severity === "urgent");
+
+  // THE CONTROL. The same report, on a building the account actually runs,
+  // still dispatches -- so what is blocked above is reaching into another
+  // account, not urgency itself. It has to come from a seat that can raise a
+  // request at all: an admin's own job is never given a severity, because
+  // somebody creating their own work already knows how to prioritise it.
+  const { db: db2, env: env2 } = seed();
+  db2.exec(`
+    INSERT INTO companies(id,company) VALUES ('cmp_em','Nightshift Plumbing');
+    INSERT INTO engagements(id,account_id,company_id,status,categories,doc_review) VALUES
+      ('en_em_pm','acc_pm','cmp_em','active','["plumbing"]',
+       '{"insurance":{"status":"verified"},"bond":{"status":"verified"},"contract":{"status":"verified"}}');
+    UPDATE accounts SET emergency_company_id='cmp_em' WHERE id='acc_pm';
+  `);
+  const [s2, b2] = await json(await call(env2, "u_ten", "acc_pm", "/jobs",
+    { method: "POST", body: JSON.stringify({
+      title: "Water coming in here too", propertyId: "p_cedar", trades: ["plumbing"],
+      reportDetail: { problem: "A pipe has burst", started: "Tonight", words: "Ceiling is wet" } }) }));
+  ck("the same report on a building they run does dispatch",
+    s2 === 201 && b2.emergency?.dispatched === true, `${s2} ${JSON.stringify(b2.emergency)}`);
+  ck("against that account's own contractor",
+    one(db2, `SELECT company_id FROM work_orders WHERE job_id = ?`, b2.id)?.company_id === "cmp_em");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

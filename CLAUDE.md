@@ -181,6 +181,41 @@ refactor.
   and nothing through a second door, including when their *host* account owns an
   appointed-out building.
 
+  **And they may ask for work at it.** Watching is not enough on its own: an
+  owner sees their own building, hears the boiler, and has no seat on the
+  account that runs it, so the ordinary owner request is closed to them and the
+  only remaining move is the telephone. `POST /api/jobs` therefore accepts a
+  property the caller **owns but does not operate**, and writes the job to the
+  **operating** account as a request — `jobs.account_id` is the manager's,
+  `requested_by` is the owner, nothing is approved, and no work order can be
+  issued until the manager approves it. Both feeds record it, because each side
+  needs its own record of who asked. The manager is told **who** asked by name
+  on the row: the person is not a member of their account, so their own users
+  list will never name them, and "somebody asked for work" is not something
+  anybody can act on. The property is the only thing that decides whose account
+  the work lands on, and a building the caller neither owns nor operates gives
+  the same `property_not_found` as one that does not exist. Scoped seats are
+  unaffected — a guest still cannot reach past its own buildings.
+
+  **And urgency is not a way round the approval.** `dispatchEmergency` approves
+  the job and issues a work order against *the account's own* emergency
+  contractor, so run on the owner's side of a cross-account request it would
+  approve the manager's job from outside and engage the **owner's** contractor
+  on it. A cross-account request therefore never auto-dispatches; the urgency is
+  recorded for the manager, who holds the contractor, the money and the
+  decision. Anything that later dispatches from a request has to answer the same
+  question: whose account is the work on, and whose contractor is being spent?
+
+  On the screen, what the form says follows **the building, not the role**. The
+  owner is an admin of their own account, so the role says "create a job and
+  find contractors" — a screen they will never be given for a building somebody
+  else runs. So the form reads *Request work*, names the manager, and sends
+  rather than creates; the picker marks which buildings are somebody else's to
+  run before anything is sent. For the same reason, managing the *account* is
+  not managing *that building*: the vendor affordances on such a card are gone,
+  because scoping our contractor to their building answers a question that is
+  not ours to ask.
+
   An owner then holding their building may **appoint** a manager — the same
   two-party rule in reverse, and the manager must accept, because a building
   appearing in a portfolio unannounced is work, liability and possibly a plan

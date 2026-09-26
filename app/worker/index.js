@@ -4514,7 +4514,14 @@ app.get("/api/jobs", async (c) => {
   // bound parameter. Both callers below pass a literal written here; nothing
   // from a request reaches it, and nothing may be added that does.
   const listJobs = (order) => c.env.DB.prepare(
-    `SELECT * FROM jobs WHERE account_id = ? ${scope.sql} ${mine} ORDER BY ${order}`
+    // The requester's name, on the row. Somebody who asked for work from
+    // another account is not a member of this one, so the account's own users
+    // list will never contain them -- and a request reading "somebody asked for
+    // work" is not something a manager can act on.
+    `SELECT j.*, ru.name AS requested_by_name FROM jobs j
+       LEFT JOIN users ru ON ru.id = j.requested_by
+      WHERE j.account_id = ? ${scope.sql.replace(/\bproperty_id\b/g, "j.property_id")}
+        ${mine.replace(/\brequested_by\b/g, "j.requested_by")} ORDER BY ${order.replace(/\b(updated_at|created_at)\b/g, "j.$1")}`
   ).bind(...binds).all();
 
   // The order we want needs the column migration 025 adds. The order is a
@@ -4608,7 +4615,10 @@ app.get("/api/jobs", async (c) => {
   }
 
   return c.json([
-    ...jobs.map((j) => stripMoney(auth, jobRowToJs(j, woByJob[j.id] || []))),
+    ...jobs.map((j) => ({
+      ...stripMoney(auth, jobRowToJs(j, woByJob[j.id] || [])),
+      ...(j.requested_by_name ? { requestedByName: j.requested_by_name } : {}),
+    })),
     ...ownedJobs.map((j) => ({
       ...stripMoney(auth, jobRowToJs(j, woByJob[j.id] || [])),
       // Theirs to watch, not to touch.
@@ -4748,15 +4758,52 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   if (auth.propertyIds) {
     if (!propertyId) return c.json({ error: "property_required" }, 400);
     if (!maySeeProperty(auth, propertyId)) return c.json({ error: "forbidden" }, 403);
-  } else if (propertyId) {
-    const owned = await c.env.DB.prepare(
-      `SELECT id FROM properties WHERE id = ? AND account_id = ?`).bind(propertyId, accountId).first();
-    if (!owned) return c.json({ error: "property_not_found" }, 404);
+  }
+
+  // Which account the job belongs to. Normally the caller's -- but an owner
+  // holding a building somebody else RUNS can raise work at it, and that work
+  // belongs to the manager, because they are the ones who will do it.
+  //
+  // This is the other half of appointing a manager. Without it an owner watches
+  // their own building, sees the boiler is making a noise, and has no way to say
+  // so: they are not a seat on the managing account, so the ordinary owner
+  // request is not open to them. The only remaining option is to ring somebody,
+  // which is the thing this product exists to stop.
+  let jobAccountId = accountId;
+  let crossAccount = false;
+  // A scoped seat was already checked above, and cannot reach past its own
+  // buildings; this only concerns an unscoped caller naming a property.
+  if (!auth.propertyIds && propertyId) {
+    const prop = await c.env.DB.prepare(
+      `SELECT id, account_id, owner_account_id FROM properties WHERE id = ?`
+    ).bind(propertyId).first().catch(async (err) => {
+      if (!missingSchema(err)) throw err;
+      return c.env.DB.prepare(`SELECT id, account_id FROM properties WHERE id = ?`)
+        .bind(propertyId).first();
+    });
+    if (!prop) return c.json({ error: "property_not_found" }, 404);
+    if (prop.account_id === accountId) {
+      // Their own building, run by them. Nothing changes.
+    } else if (prop.owner_account_id === accountId) {
+      // Theirs, run by somebody else. The work goes to the manager, as a
+      // request they have to approve -- exactly like an owner seat's.
+      jobAccountId = prop.account_id;
+      crossAccount = true;
+    } else {
+      return c.json({ error: "property_not_found" }, 404);
+    }
   }
 
   // Owners and tenants raise requests; a scoped property manager is there to
-  // run the work, so what they create is a job like any other manager's.
-  const requestedBy = (auth.role === "owner" || auth.role === "tenant") ? userId : null;
+  // run the work, so what they create is a job like any other manager's. An
+  // owner reaching into the account that manages their building is a request
+  // too, and for the same reason: nobody may commit somebody else's account to
+  // a price.
+  const requestedBy = (auth.role === "owner" || auth.role === "tenant" || crossAccount)
+    ? userId : null;
+  // Validated against the account that UPLOADED them, which is the caller's --
+  // a cross-account request carries photos that live in the owner's own R2
+  // space, and checking them against the manager's would throw away every one.
   const photos = cleanPhotos(b.photos, accountId);
   // A tenant's report sends its answers; everything else sends a scope it
   // wrote itself. Composing here rather than in the browser means the
@@ -4782,7 +4829,7 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   const cols = ["id", "account_id", "title", "client", "address", "area", "zip", "sqft", "stories",
     "date", "time", "trades", "scope", "material_source", "materials_paid_by", "measurement_docs",
     "created_by", "property_id", "requested_by", "photos", "report_detail", "severity"];
-  const vals = [id, accountId, b.title, b.client || null, b.address || null, b.area || null,
+  const vals = [id, jobAccountId, b.title, b.client || null, b.address || null, b.area || null,
     b.zip || null, b.sqft || null, b.stories || null, b.date || null, b.time || "07:00",
     JSON.stringify(b.trades || []), scope, materialSource, b.materialsPaidBy || null,
     JSON.stringify(b.measurementDocs || []), userId, propertyId, requestedBy,
@@ -4814,7 +4861,19 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
     return c.json({ error: "migration_needed", migration }, 503);
   }
 
-  if (requestedBy) {
+  if (crossAccount) {
+    // Both feeds. The manager has a request to answer; the owner has a record
+    // of having asked, on the account they actually run.
+    const who = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(userId).first();
+    const where = await c.env.DB.prepare(`SELECT name FROM properties WHERE id = ?`)
+      .bind(propertyId).first();
+    await logEvent(c.env, jobAccountId, userId, "job.requested", id,
+      { title: b.title, byAccount: accountId });
+    await logActivity(c.env, jobAccountId, null, "job_requested",
+      `${who?.name || "The owner"} asked for work at ${where?.name || "their building"}: ${b.title}`);
+    await logActivity(c.env, accountId, userId, "job_requested",
+      `Asked your manager for work at ${where?.name || "your building"}: ${b.title}`);
+  } else if (requestedBy) {
     await logEvent(c.env, accountId, userId, "job.requested", id, { title: b.title });
     await logActivity(c.env, accountId, userId, "job_requested", `Requested work: ${b.title}`);
   } else {
@@ -4831,7 +4890,14 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   // than being left to wonder. A fire never reaches this -- emergency
   // services are not a subcontractor.
   let emergency = null;
-  if (severity === "urgent") {
+  if (severity === "urgent" && crossAccount) {
+    // Not ours to dispatch. dispatchEmergency approves the job and issues a
+    // work order against the ACCOUNT'S emergency contractor -- run here it
+    // would approve the manager's job from the owner's side and engage the
+    // owner's contractor on it. Urgency travels as information; the manager
+    // holds the contractor, the money and the decision.
+    emergency = { dispatched: false, reason: "manager_decides" };
+  } else if (severity === "urgent") {
     emergency = await dispatchEmergency(c, id, accountId);
   }
 

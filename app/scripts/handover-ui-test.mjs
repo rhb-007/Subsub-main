@@ -54,7 +54,7 @@ let TRANSFERS = [];
 // Work the appointed manager has booked at the owner's building.
 let JOBS_OWNER = [];
 
-const requested = [], decided = [], cancelled = [], appointed = [];
+const requested = [], decided = [], cancelled = [], appointed = [], asked = [];
 const USERS_PM = [
   { id: "u_pm", name: "Priya Manager", email: "priya@cascade.test", phone: null, role: "admin",
     subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false },
@@ -74,6 +74,13 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
       subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
   if (path === "/api/property-transfers") return [200, TRANSFERS];
   if (path === "/api/subs") return [200, []];
+  if (path === "/api/jobs" && method === "POST") {
+    asked.push(body);
+    return [201, { id: "job_new", requested: true, job: { id: "job_new", accountId: "acc_other",
+      title: body?.title, propertyId: body?.propertyId, trades: body?.trades || [],
+      assignments: {}, status: "active", readOnly: true, atOwnedProperty: true,
+      managedBy: "Sound PM", createdAt: new Date().toISOString().slice(0, 10), photos: [] } }];
+  }
   if (path === "/api/jobs") return [200, WHICH === "pm" ? [] : JOBS_OWNER];
   if (path === "/api/invites" || path === "/api/connect-requests") return [200, []];
   const rq = /^\/api\/properties\/([^/]+)\/transfer$/.exec(path);
@@ -292,14 +299,82 @@ console.log("\n-- and they can watch the work at it, without touching it --");
     await toProperties(page);
     const c = await card(page, "12 Cedar St");
     t.ck("the card says who runs it", /managed by sound pm/i.test(c?.managed || ""), String(c?.managed));
-    // Raising work on it is their manager's job.
     const cta = await page.evaluate(() => {
       const x = [...document.querySelectorAll(".prop-card")].find((y) => /Cedar/.test(y.innerText));
       return [...x.querySelectorAll(".prop-cta button")].map((b) => b.innerText.trim());
     });
-    t.ck("and it does not offer to raise work there",
-      !cta.some((b) => /new job|request work/i.test(b)), JSON.stringify(cta));
+    // They cannot book the work. They can ask for it -- the alternative is
+    // watching your own building and having to ring somebody.
+    t.ck("it offers to ask the manager", cta.some((b) => /ask your manager/i.test(b)), JSON.stringify(cta));
+    // THE NEGATIVE: it is not their building to run.
+    t.ck("and does not offer to assign vendors",
+      !cta.some((b) => /assign/i.test(b)), JSON.stringify(cta));
+    t.ck("nor to raise a job of their own",
+      !cta.some((b) => /new job here/i.test(b)), JSON.stringify(cta));
     await ctx.close();
+  }
+
+  console.log("\n-- and asking for work there says whose job it becomes --");
+  {
+    TRANSFERS = []; asked.length = 0;
+    PROPS_OWNER = [{ id: "p_cedar", accountId: "acc_other", name: "12 Cedar St",
+      address: "12 Cedar St", city: "Seattle", state: "WA", zip: "98101", units: 8, notes: "",
+      ownedNotOperated: true, managedBy: "Sound PM" },
+    { id: "p_elm", accountId: "acc_dana", name: "40 Elm Ave", address: "40 Elm Ave",
+      city: "Tacoma", state: "WA", zip: "98402", units: 4, notes: "" }];
+    const { ctx, page } = await openAs("owner");
+    await toProperties(page);
+    await page.evaluate(() => {
+      const x = [...document.querySelectorAll(".prop-card")].find((y) => /Cedar/.test(y.innerText));
+      [...x.querySelectorAll(".prop-cta button")].find((b) => /ask your manager/i.test(b.innerText))?.click();
+    });
+    await wait(900);
+    const form = await page.evaluate(() => {
+      const f = document.querySelector(".modal .form") || document.querySelector(".form");
+      if (!f) return null;
+      return { head: f.querySelector("h2")?.innerText.trim(),
+        sub: f.querySelector(".form-sub")?.innerText.replace(/\s+/g, " ").trim(),
+        send: [...f.querySelectorAll(".form-actions button")].map((b) => b.innerText.trim()),
+        options: [...f.querySelectorAll("select option")].map((o) => o.innerText.trim()) };
+    });
+    t.ck("the form knows it is a request, not a job", form?.head === "Request work", String(form?.head));
+    // The account is an admin of its own account -- the ROLE says they may
+    // create jobs. The building is what makes this a request.
+    t.ck("and names who it goes to", /sound pm/i.test(form?.sub || ""), form?.sub);
+    t.ck("and that nothing is booked until they approve",
+      /nothing is booked until they approve/i.test(form?.sub || ""), form?.sub);
+    t.ck("the button sends rather than creates",
+      form.send.some((b) => /send this request/i.test(b))
+        && !form.send.some((b) => /find contractors/i.test(b)), JSON.stringify(form.send));
+    // The picker says which buildings are somebody else's to run, so the
+    // answer is visible before anything is sent.
+    t.ck("the list marks the building somebody else runs",
+      form.options.some((o) => /12 Cedar St — run by Sound PM/.test(o)), JSON.stringify(form.options));
+    t.ck("and leaves their own unmarked",
+      form.options.some((o) => o === "40 Elm Ave"), JSON.stringify(form.options));
+
+    // Sending it reaches the server naming the building, which is the only
+    // thing that decides whose account the work lands on.
+    await page.evaluate(() => {
+      const f = document.querySelector(".modal .form") || document.querySelector(".form");
+      const ti = [...f.querySelectorAll("input")].find((i) => /full exterior/i.test(i.placeholder || ""));
+      // React tracks the value it set, so assigning .value alone is ignored.
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      set.call(ti, "Boiler making a noise");
+      ti.dispatchEvent(new Event("input", { bubbles: true }));
+      [...f.querySelectorAll(".pick")].find((b) => /plumb/i.test(b.innerText))?.click();
+    });
+    await wait(400);
+    await page.evaluate(() => {
+      const f = document.querySelector(".modal .form") || document.querySelector(".form");
+      [...f.querySelectorAll(".form-actions button")].find((b) => /send this request/i.test(b.innerText))?.click();
+    });
+    await wait(1100);
+    t.ck("it reaches the server", asked.length === 1, JSON.stringify(asked));
+    t.ck("naming the building it is at", asked[0]?.propertyId === "p_cedar", String(asked[0]?.propertyId));
+    t.ck("and what is wrong", /boiler/i.test(asked[0]?.title || ""), String(asked[0]?.title));
+    await ctx.close();
+    PROPS_OWNER = PROPS_OWNER.slice(0, 1);
   }
 } finally {
   await browser.close();
