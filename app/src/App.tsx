@@ -15701,6 +15701,32 @@ function PostOverflow({ job, trade, onPost, onCancel }) {
     );
   }
 
+  // Not switched on yet. The eligibility check reports this because it is the
+  // one call made before the form draws -- otherwise the form opens cheerfully,
+  // somebody types out the scope of an emergency, and the send fails. Said
+  // plainly and with the file named, because the person reading this is the
+  // person who can run it.
+  if (gate && gate.available === false) {
+    return (
+      <div className="form">
+        <h2>Overflow isn't switched on yet</h2>
+        <p className="form-sub">{job.title} · {catMeta(trade).label}</p>
+        <div className="doc-block">
+          <AlertTriangle size={17} />
+          <div>
+            <b>The database needs migration {gate.migration || "038_overflow"}.</b>
+            <p>
+              Everything else about this job is unaffected — assign from your own roster
+              as usual. Once that migration is applied this button starts working and
+              nothing else has to change.
+            </p>
+          </div>
+        </div>
+        <div className="form-actions"><button className="btn-solid" onClick={onCancel}>Back</button></div>
+      </div>
+    );
+  }
+
   if (gate && !gate.ok) {
     return (
       <div className="form">
@@ -15782,6 +15808,8 @@ function PostOverflow({ job, trade, onPost, onCancel }) {
                 ? "You have somebody of your own for this trade."
                 : e?.body?.error === "already_posted"
                 ? "This slot is already out to overflow."
+                : e?.body?.error === "migration_needed"
+                ? `Overflow needs migration ${e.body.migration || "038_overflow"} applied to the database first.`
                 : `Could not post it: ${e?.body?.error || e?.message || "unknown error"}`);
             }
           }}>

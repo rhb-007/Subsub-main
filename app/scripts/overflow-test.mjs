@@ -35,7 +35,7 @@ import { eligible, canBroadcast, overflowSplit, overflowFee, postClosed,
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
 
-const { default: worker } = await import("../worker/index.js");
+const { default: worker, missingSchema } = await import("../worker/index.js");
 
 const SCHEMA = readFileSync(new URL("../worker/schema.sql", import.meta.url), "utf8");
 const M024 = `
@@ -438,6 +438,92 @@ console.log("\n-- and none of it crosses accounts --");
   ck("and answering a cancelled post is refused",
     (await call(env, "u_ok2", "acc1", `/overflow/${post.id}/respond`,
       { method: "POST", body: JSON.stringify({ status: "offered" }) })).status === 409);
+}
+
+console.log("\n-- and on a database that has not run 038 yet --");
+{
+  // The state the live database is actually in until somebody pastes the
+  // migration. Nothing about the rest of the product may break, and the one
+  // thing that cannot work has to say so in a sentence naming the file --
+  // rather than opening a form, taking a description of an emergency, and
+  // then failing.
+  const db = freshDb({ base: SCHEMA, migrations: [M023, M024, M031, M037] });
+  db.exec(`
+    INSERT INTO accounts(id,name,subdomain,kind) VALUES ('acc1','Cascade','cascade','property_manager');
+    INSERT INTO companies(id,company) VALUES ('cmp_a','Some Plumber');
+    INSERT INTO users(id,name,email,auth_id) VALUES ('u_admin','Admin','a@a.test','auth_a');
+    INSERT INTO memberships(id,user_id,account_id,role,company_id) VALUES ('m1','u_admin','acc1','admin',NULL);
+    INSERT INTO jobs(id,account_id,title,date,status,area,zip)
+      VALUES ('job1','acc1','Burst riser','${iso(1)}','active','Seattle','98101');
+  `);
+  const env = { DB: makeD1(db) };
+
+  // The lists degrade to empty rather than erroring, so no screen breaks.
+  const [sp, posts] = await json(await call(env, "u_admin", "acc1", "/overflow/posts"));
+  ck("the posts list is empty rather than broken", sp === 200 && posts.length === 0, `${sp}`);
+  const [so, offers] = await json(await call(env, "u_admin", "acc1", "/overflow/offers"));
+  ck("so is the offers list", so === 200 && offers.length === 0, `${so}`);
+
+  // The check the form makes before drawing anything.
+  const [se, elig] = await json(await call(env, "u_admin", "acc1",
+    "/jobs/job1/overflow/eligibility?trade=plumbing"));
+  ck("the eligibility check still answers", se === 200, String(se));
+  ck("and reports that overflow cannot run", elig.available === false, JSON.stringify(elig));
+  ck("naming the migration, not just failing", elig.migration === "038_overflow", String(elig.migration));
+
+  // And the post itself refuses in a way that names it.
+  const [sx, bx] = await json(await call(env, "u_admin", "acc1", "/jobs/job1/overflow",
+    { method: "POST", body: JSON.stringify({ trade: "plumbing", value: "3000" }) }));
+  ck("posting is refused with a migration, not a 500",
+    sx === 503 && bx.error === "migration_needed", `${sx} ${JSON.stringify(bx)}`);
+  ck("and it says which one", bx.migration === "038_overflow", String(bx.migration));
+
+  // Nothing else may be collateral damage.
+  ck("the roster still loads", (await call(env, "u_admin", "acc1", "/subs")).status === 200);
+  ck("the jobs still load", (await call(env, "u_admin", "acc1", "/jobs")).status === 200);
+
+  // The sweep and the other features added alongside this must not care.
+  env.CRON_SECRET = "s";
+  ck("the document sweep still runs",
+    (await call(env, "u_admin", "acc1", "/cron/doc-expiry",
+      { headers: { Authorization: "Bearer s" } })).status === 200);
+}
+
+console.log("\n-- every recent migration names itself when it is missing --");
+{
+  // These were all reading "unknown", which turns a two-minute paste into a
+  // guess. The message is the only thing standing between somebody and the
+  // right file.
+  const cases = [
+    ["no such table: overflow_posts", "038_overflow"],
+    ["table overflow_posts has no column named severity", "038_overflow"],
+    ["no such column: overflow_opt_in", "038_overflow"],
+    ["no such table: company_docs", "037_document_detail"],
+    ["no such table: doc_reminders", "037_document_detail"],
+    ["no such column: scope_kind", "036_wo_scope"],
+    ["no such table: lien_waivers", "035_waiver_chain"],
+    ["no such column: retainage_bps", "034_retainage"],
+    ["no such table: wo_milestones", "033_job_ledger"],
+    ["no such column: avatar_key", "032_user_avatar"],
+    ["no such column: severity", "023_emergencies"],
+    ["no such column: pay_kind", "024_hourly_work_orders"],
+  ];
+  // The real function, called with the real messages. Grepping the source for
+  // the filename would pass even if every rule pointed at the wrong one.
+  for (const [msg, want] of cases) {
+    const got = missingSchema(new Error(msg));
+    ck(`"${msg.slice(0, 44)}" -> ${want}`, got === want, `got ${got}`);
+  }
+  // An overflow_posts error that happens to mention `severity` must not be
+  // blamed on 023 -- which is what order in that function decides.
+  ck("an overflow error mentioning severity is still 038",
+    missingSchema(new Error("table overflow_posts has no column named severity")) === "038_overflow");
+  // And something that is not a schema error at all is not a migration.
+  ck("an ordinary failure is not reported as a missing migration",
+    missingSchema(new Error("UNIQUE constraint failed: overflow_posts.id")) === null,
+    String(missingSchema(new Error("UNIQUE constraint failed: overflow_posts.id"))));
+  ck("nor is a network wobble",
+    missingSchema(new Error("D1_ERROR: connection reset")) === null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

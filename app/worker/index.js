@@ -3997,7 +3997,7 @@ async function issueTenantInvite(c, auth, t) {
 
 // Which migration a D1 complaint is really about. The message names the
 // column or table, so the answer is in the error and only needs reading.
-function missingSchema(err) {
+export function missingSchema(err) {
   // D1 sometimes carries the real message on the cause rather than the error
   // itself, so both are read.
   const m = [err?.message, err?.cause?.message, err].map((x) => String(x || "")).join(" | ");
@@ -4008,6 +4008,16 @@ function missingSchema(err) {
   // migration 015 -- an INSERT -- threw a plain 500, and the form said
   // "Could not add them. Try again." instead of naming the migration.
   if (!/no such (table|column)|has no column named/i.test(m)) return null;
+  // The recent ones first, because several of them mention words an older
+  // rule would claim. "overflow_posts has no column named severity" is 038,
+  // not 023, and the severity rule below would have taken it.
+  if (/\boverflow_(posts|invites|responses)\b|overflow_(opt_in|trades|since)/i.test(m)) return "038_overflow";
+  if (/\bcompany_docs\b|\bdoc_reminders\b|superseded_at|policy_no|coverage_cents/i.test(m)) return "037_document_detail";
+  if (/scope_kind/i.test(m)) return "036_wo_scope";
+  if (/\blien_waivers\b|\blower_tier_parties\b|through_date|doc_sha256/i.test(m)) return "035_waiver_chain";
+  if (/retainage_bps/i.test(m)) return "034_retainage";
+  if (/\bwo_(milestones|events|releases)\b|fee_bps|idem_key/i.test(m)) return "033_job_ledger";
+  if (/avatar_key/i.test(m)) return "032_user_avatar";
   if (/\bnotify\b/i.test(m)) return "018_user_notify";
   if (/\bvisits\b/i.test(m)) return "019_visits";
   if (/withdrawn_(at|note)/i.test(m)) return "020_withdrawn_reports";
@@ -6604,12 +6614,27 @@ app.get("/api/jobs/:jobId/overflow/eligibility", requireRole("admin", "pm"), asy
 
   const roster = await ownRosterFor(c.env.DB, accountId, job.date);
   const verdict = canBroadcast({ ownRoster: roster, trade });
+
+  // Whether the feature can run at all. This route reads none of 038's tables,
+  // so without it the answer would be a cheerful "yes, go ahead" followed by a
+  // 503 after somebody had typed out the scope. Asked here, cheaply, so the
+  // form can say so before it asks for anything.
+  let available = true, migration = null;
+  try {
+    await c.env.DB.prepare(`SELECT 1 FROM overflow_posts LIMIT 1`).first();
+  } catch (err) {
+    const m = missingSchema(err);
+    if (!m) throw err;
+    available = false; migration = m;
+  }
+
   return c.json({
     ok: verdict.ok, reason: verdict.reason || null,
     // Their own contractors, by name, because they are their own and the
     // whole point of refusing is "use these people".
     companies: verdict.companies || [],
     feeBps: OVERFLOW_FEE_BPS,
+    available, migration,
   });
 });
 

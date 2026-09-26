@@ -55,7 +55,7 @@ let POSTS = [{
 }];
 
 const posted = [], picked = [], responded = [], optedIn = [];
-let ELIGIBILITY = { ok: true, reason: null, companies: [], feeBps: 0 };
+let ELIGIBILITY = { ok: true, reason: null, companies: [], feeBps: 0, available: true, migration: null };
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
@@ -138,9 +138,37 @@ try {
   t.ck("picking sends the company that answered",
     picked.length === 1 && picked[0].body.companyId === "cmp_ok", JSON.stringify(picked));
 
+console.log("\n-- before the migration is run, it says so before asking anything --");
+  {
+    // The live state until somebody pastes 038. The form must not open, take a
+    // description of an emergency, and only then fail.
+    ELIGIBILITY = { ok: true, reason: null, companies: [], feeBps: 0,
+      available: false, migration: "038_overflow" };
+    POSTS = [];
+    const { ctx: c0, page: p0 } = await openApp();
+    await toJobs(p0);
+    await p0.evaluate(() => [...document.querySelectorAll(".trade-actions button")]
+      .find((x) => /overflow/i.test(x.innerText))?.click());
+    await wait(1200);
+    const panel = await p0.evaluate(() => {
+      const f = [...document.querySelectorAll(".form")].find((x) => /overflow/i.test(x.innerText));
+      return f ? { text: f.innerText.replace(/\s+/g, " ").trim(),
+        hasScope: !!f.querySelector("textarea"),
+        buttons: [...f.querySelectorAll("button")].map((b) => b.innerText.trim()) } : null;
+    });
+    t.ck("it says overflow is not switched on", /isn't switched on yet/i.test(panel?.text || ""), panel?.text);
+    t.ck("and names the migration", /038_overflow/.test(panel?.text || ""), panel?.text);
+    t.ck("it does not ask for a scope it cannot send", panel?.hasScope === false, String(panel?.hasScope));
+    t.ck("and offers no send button", !panel.buttons.some((b) => /send it out/i.test(b)), JSON.stringify(panel.buttons));
+    t.ck("while saying the rest of the job is unaffected",
+      /own roster as usual/i.test(panel?.text || ""), panel?.text);
+    await c0.close();
+    ELIGIBILITY = { ok: true, reason: null, companies: [], feeBps: 0, available: true, migration: null };
+  }
+
   console.log("\n-- posting is refused when the account has somebody of its own --");
   {
-    ELIGIBILITY = { ok: false, reason: "own_roster_available", companies: ["My Own Plumbing"], feeBps: 0 };
+    ELIGIBILITY = { ok: false, reason: "own_roster_available", companies: ["My Own Plumbing"], feeBps: 0, available: true, migration: null };
     POSTS = [];
     const { ctx: c2, page: p2 } = await openApp();
     await toJobs(p2);
@@ -164,7 +192,7 @@ try {
 
   console.log("\n-- and when they have nobody, it sends without naming anyone --");
   {
-    ELIGIBILITY = { ok: true, reason: null, companies: [], feeBps: 0 };
+    ELIGIBILITY = { ok: true, reason: null, companies: [], feeBps: 0, available: true, migration: null };
     POSTS = [];
     const { ctx: c3, page: p3 } = await openApp();
     await toJobs(p3);
