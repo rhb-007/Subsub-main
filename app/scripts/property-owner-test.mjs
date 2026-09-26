@@ -97,7 +97,9 @@ const cards = (page) => page.evaluate(() => [...document.querySelectorAll(".prop
   name: c.querySelector("h3")?.innerText.trim(),
   owners: c.querySelector(".prop-owners")?.innerText.replace(/\s+/g, " ").trim() || null,
   rows: [...c.querySelectorAll(".po-row")].map((r) => r.innerText.replace(/\s+/g, " ").trim()),
-  addBtn: !!c.querySelector(".po-add"),
+  // Specifically the one in the Owners panel. Other panels on this card have
+  // their own start buttons and must not be mistaken for this.
+  addBtn: !!c.querySelector(".prop-owners .po-add"),
 })));
 
 try {

@@ -10951,7 +10951,7 @@ function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel,
         <div className="ph-idle">
           {side === "owner-seat" && (
             <>
-              <button className="po-add" onClick={() => setAsking(true)}>
+              <button className="ph-start" onClick={() => setAsking(true)}>
                 <ArrowRightLeft size={11} /> Ask to take this building over
               </button>
               <span className="ph-small">
@@ -10961,7 +10961,7 @@ function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel,
           )}
           {side === "manager" && property.ownedByAnother && (
             <>
-              <button className="po-add" onClick={() => setAsking(true)}>
+              <button className="ph-start" onClick={() => setAsking(true)}>
                 <ArrowRightLeft size={11} /> Hand over to the owner
               </button>
               <span className="ph-small">
@@ -10971,7 +10971,7 @@ function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel,
           )}
           {side === "holder" && (
             <>
-              <button className="po-add" onClick={() => setAppointing(true)}>
+              <button className="ph-start" onClick={() => setAppointing(true)}>
                 <Building2 size={11} /> Appoint a property manager
               </button>
               <span className="ph-small">
@@ -21858,6 +21858,10 @@ p.fld-note{margin:6px 0 0}
 .ph-small{display:block;margin:7px 0 0;font-size:12px;color:var(--ink-soft);line-height:1.45}
 .ph-acts{display:flex;gap:8px;justify-content:flex-end;margin-top:11px;flex-wrap:wrap}
 .ph-idle{display:flex;flex-direction:column;gap:5px;align-items:flex-start}
+.ph-start{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--brand);
+  background:var(--card);color:var(--brand);font-size:11.5px;font-weight:700;
+  padding:5px 10px;border-radius:7px;cursor:pointer;font-family:inherit;flex:none}
+.ph-start:hover{background:var(--paper)}
 .ph-managed{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;
   padding:3px 8px;border-radius:6px;background:var(--paper);border:1px solid var(--line);
   color:var(--ink-soft);white-space:nowrap;flex:none}
