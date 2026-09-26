@@ -49,7 +49,12 @@ export const ELIGIBILITY = {
   minRatedJobs: 3,
   // Finished work, not accepted work.
   minCompletedJobs: 5,
-  // Long enough that the account is not a week old.
+  // Long enough that the account is not a week old. Counted from when the
+  // company JOINED SubSub, not from when they opted in to overflow -- see
+  // overflowStanding() in the Worker. Counting from opt-in made a
+  // subcontractor who had been working through SubSub for two years "too new"
+  // for three months, and meant the feature could reach nobody at all for a
+  // quarter after launch.
   minDaysOnPlatform: 90,
 };
 
@@ -97,7 +102,7 @@ export const ELIGIBILITY_TEXT = {
   too_few_ratings: `You need at least ${ELIGIBILITY.minRatedJobs} rated jobs.`,
   rating_too_low: `Overflow work goes to contractors rated ${ELIGIBILITY.minRating.toFixed(1)} and above.`,
   too_few_jobs: `You need at least ${ELIGIBILITY.minCompletedJobs} completed jobs.`,
-  too_new: `Overflow opens after ${ELIGIBILITY.minDaysOnPlatform} days on SubSub.`,
+  too_new: `Overflow opens after ${ELIGIBILITY.minDaysOnPlatform} days on SubSub — counted from when you joined, not from when you opted in.`,
 };
 
 // May this account broadcast this trade at all?

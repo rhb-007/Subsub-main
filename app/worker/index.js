@@ -6495,6 +6495,20 @@ async function overflowStanding(db, companyId, today) {
   const co = await db.prepare(
     `SELECT co.*,
             (SELECT COUNT(*) FROM accounts a WHERE a.company_id = co.id) AS own_account,
+            -- When this business actually came onto SubSub.
+            --
+            -- NOT when they opted in to overflow: that made the ninety-day bar
+            -- count from the moment somebody flipped a switch, so a
+            -- subcontractor who had been working through SubSub for two years
+            -- was "too new" for three months, and on a young platform the
+            -- feature could reach nobody at all for a quarter. "Three months on
+            -- SubSub" means on SubSub.
+            --
+            -- The earliest of: their own account being created (a general
+            -- contractor, since 031), and the first time anybody engaged them.
+            -- Whichever came first is when they first existed here.
+            (SELECT MIN(a.created_at) FROM accounts a WHERE a.company_id = co.id) AS own_account_since,
+            (SELECT MIN(en.invited_at) FROM engagements en WHERE en.company_id = co.id) AS first_engaged_at,
             -- Ratings and finished work, across everybody who has engaged
             -- them. This is the company's OWN record and is used to decide
             -- what they are offered, never handed to another account.
@@ -6520,6 +6534,13 @@ async function overflowStanding(db, companyId, today) {
   const docs = docShapeWithLegacy(rows, co);
   const lic = parseJson(co.license_check, null);
 
+  // The earliest thing that means "they were here". SQLite's scalar min() is
+  // no use for this: it returns NULL when any argument is NULL, and a company
+  // that owns no account has NULL for that half -- which is most of them.
+  // companies.created_at is the last resort; see the note on joinedOn below.
+  const joined = [co.own_account_since, co.first_engaged_at, co.created_at]
+    .map((v) => isoDay(v)).filter(Boolean).sort()[0] || null;
+
   return {
     co,
     shape: {
@@ -6530,11 +6551,17 @@ async function overflowStanding(db, companyId, today) {
       rating: Number(co.avg_rating || 0),
       ratedJobs: Number(co.rated_jobs || 0),
       completedJobs: Number(co.completed_jobs || 0),
-      // Since they opted in, not since somebody typed them in. companies.
-      // created_at is when an account added a contact, which for most of the
-      // table has nothing to do with a business joining SubSub.
-      daysOnPlatform: co.overflow_since
-        ? daysBetween(String(co.overflow_since).slice(0, 10), today) : null,
+      // Time on SubSub, from when they joined rather than from when they
+      // opted in. companies.created_at is the last resort: it is when an
+      // account typed them in, which is the right answer for a company that
+      // was invited here and the wrong one for a record that sat unclaimed --
+      // but a record nobody has claimed has no seat, so it cannot opt in and
+      // never reaches this.
+      joinedOn: joined,
+      daysOnPlatform: joined ? daysBetween(joined, today) : null,
+      // Kept and returned because it is worth somebody being able to see when
+      // they turned this on. It no longer decides anything.
+      optedInOn: isoDay(co.overflow_since),
     },
   };
 }

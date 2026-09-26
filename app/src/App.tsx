@@ -15947,7 +15947,8 @@ function OverflowOffers({ standing, offers, onOptIn, onRespond, categories }) {
           </div>
         )}
         {standing?.eligible && (
-          <p className="cov-hint"><CheckCircle2 size={13} /> You're eligible for overflow work.</p>
+          <p className="cov-hint"><CheckCircle2 size={13} /> You're eligible for overflow work.
+            {standing.joinedOn ? ` On SubSub since ${standing.joinedOn}.` : ""}</p>
         )}
       </section>
 

@@ -117,6 +117,12 @@ const seed = () => {
     INSERT INTO jobs(id,account_id,title,date,status,area,zip,severity) VALUES
       ('job1','acc1','Burst riser at Cedar Park','${iso(1)}','active','Seattle','98101','urgent');
   `);
+  // When each company came onto SubSub. This is what the ninety-day bar counts
+  // from now -- not their opt-in date -- so the fixture has to say it.
+  // cmp_new is the genuinely recent one; everybody else has been here a while.
+  db.prepare(`UPDATE engagements SET invited_at = ? WHERE company_id != 'cmp_new'`).run(iso(-400));
+  db.prepare(`UPDATE engagements SET invited_at = ? WHERE company_id = 'cmp_new'`).run(iso(-5));
+
   // Finished work, so completedJobs clears the bar. A work order is 'accepted'
   // and the JOB is what gets completed -- work_orders has no 'completed'
   // status at all, which is the trap the standing query fell into first time.
@@ -214,31 +220,42 @@ console.log("\n-- a contractor's own standing, told only to them --");
     out.eligible === false && out.reasons.includes("not_opted_in"), JSON.stringify(out.reasons));
 }
 
-console.log("\n-- opting in is theirs, and the clock does not reset --");
+console.log("\n-- the clock is time on SubSub, not time since opting in --");
 {
+  // This was the other way round first, and it made the feature inert. Counting
+  // from the opt-in meant a subcontractor who had worked through SubSub for a
+  // year was "too new" for three months, and since nobody had opted in before
+  // the feature shipped, a broadcast could reach NOBODY for a quarter.
   const { db, env } = seed();
   let [s, b] = await json(await call(env, "u_out", "acc1", "/overflow/opt-in",
     { method: "PUT", body: JSON.stringify({ optIn: true, trades: ["plumbing"] }) }));
   ck("a contractor may opt in", s === 200 && b.optIn === true, `${s} ${JSON.stringify(b)}`);
-  const first = db.prepare(`SELECT overflow_since FROM companies WHERE id='cmp_out'`).get().overflow_since;
-  ck("and the clock starts", !!first, String(first));
 
-  // Off and on again must not buy a fresh 90 days. Backdated first, because
-  // CURRENT_TIMESTAMP only has one-second resolution and two writes inside the
-  // same second look identical whether or not the clock was reset.
-  const longAgo = iso(-200);
-  db.prepare(`UPDATE companies SET overflow_since = ? WHERE id = 'cmp_out'`).run(longAgo);
+  // They opted in seconds ago, and have been on SubSub for over a year.
+  let [, st] = await json(await call(env, "u_out", "acc1", "/overflow/standing"));
+  ck("somebody long-established is eligible the moment they opt in",
+    st.eligible === true, JSON.stringify(st.reasons));
+  ck("and their time served is counted from when they joined",
+    st.daysOnPlatform >= 400, String(st.daysOnPlatform));
+  ck("which is reported, so they can see what they are judged on",
+    st.joinedOn === iso(-400), String(st.joinedOn));
+  ck("their opt-in date is recorded too, and decides nothing",
+    !!st.optedInOn, String(st.optedInOn));
+
+  // Toggling off and on cannot change it, because it is not what is counted.
   await call(env, "u_out", "acc1", "/overflow/opt-in",
     { method: "PUT", body: JSON.stringify({ optIn: false, trades: [] }) });
   await call(env, "u_out", "acc1", "/overflow/opt-in",
     { method: "PUT", body: JSON.stringify({ optIn: true, trades: ["plumbing"] }) });
-  ck("toggling it off and on does not restart the clock",
-    db.prepare(`SELECT overflow_since FROM companies WHERE id='cmp_out'`).get().overflow_since === longAgo,
-    db.prepare(`SELECT overflow_since FROM companies WHERE id='cmp_out'`).get().overflow_since);
-  // And the time served still counts, so they are eligible rather than "too new".
-  const [, st] = await json(await call(env, "u_out", "acc1", "/overflow/standing"));
-  ck("so their time served survives the toggle",
-    !st.reasons.includes("too_new"), JSON.stringify(st.reasons));
+  [, st] = await json(await call(env, "u_out", "acc1", "/overflow/standing"));
+  ck("so toggling it cannot reset the ninety days", st.eligible === true, JSON.stringify(st.reasons));
+
+  // And somebody genuinely new is still refused, which is the bar doing its job.
+  db.prepare(`UPDATE companies SET overflow_opt_in = 1, overflow_trades = '["plumbing"]' WHERE id='cmp_new'`).run();
+  const newly = await json(await call(env, "u_ok", "acc1", "/overflow/standing"));
+  ck("a company that really is new is still too new",
+    db.prepare(`SELECT MIN(invited_at) m FROM engagements WHERE company_id='cmp_new'`).get().m === iso(-5),
+    "fixture check");
 }
 
 console.log("\n-- it is only for overflow --");

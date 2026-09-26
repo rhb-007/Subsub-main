@@ -178,7 +178,12 @@ refactor.
   The posting account never sees a list of candidates, only the ones who
   answer. No ranking, no profiles, no enumeration. Eligibility is earned:
   good ratings, three months on SubSub, a minimum number of completed jobs,
-  current documents and a verified licence. It is free at launch and will
+  current documents and a verified licence. **Three months on SubSub means
+  since they joined, not since they opted in** — the earliest of their own
+  account being created and the first time anybody engaged them. Counting from
+  the opt-in made a subcontractor who had worked through SubSub for a year
+  "too new" for a quarter, and since nobody had opted in before the feature
+  shipped it meant a broadcast could reach nobody at all for three months. It is free at launch and will
   charge a percentage of job value once payment processing exists — so the
   fee is modelled from the start and switched off, not bolted on later.
 
