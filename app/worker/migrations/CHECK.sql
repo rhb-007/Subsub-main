@@ -49,4 +49,10 @@ SELECT
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='lower_tier_parties')     AS m035_lower_tier,
   (SELECT COUNT(*) FROM pragma_table_info('work_orders') WHERE name='scope_kind')           AS m036_scope,
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='company_docs')           AS m037_docs,
-  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_reminders')          AS m037_reminders;
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_reminders')          AS m037_reminders,
+  (SELECT COUNT(*) FROM pragma_table_info('companies')   WHERE name='overflow_opt_in')      AS m038_optin,
+  (SELECT COUNT(*) FROM pragma_table_info('companies')   WHERE name='overflow_trades')      AS m038_trades,
+  (SELECT COUNT(*) FROM pragma_table_info('companies')   WHERE name='overflow_since')       AS m038_since,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='overflow_posts')         AS m038_posts,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='overflow_invites')       AS m038_invites,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='overflow_responses')     AS m038_responses;

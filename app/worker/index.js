@@ -13,7 +13,7 @@ import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEm
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
   connectRequestEmail, connectRequestSms, workOrderIssuedSms,
-  autoScheduleRequestEmail, docExpiryEmail } from "./mail.js";
+  autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -32,6 +32,8 @@ import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { hasPortal, canSet as canSetAuto, AUTO_DENY_TEXT } from "../shared/autoschedule.js";
 import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
+import { eligible as overflowEligible, canBroadcast, overflowSplit, postClosed,
+  postWindowHours, OVERFLOW_FEE_BPS, ELIGIBILITY } from "../shared/overflow.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
 import {
@@ -6458,6 +6460,490 @@ app.get("/api/cron/license-sweep", async (c) => {
 app.get("/api/cron/hostname-sweep", async (c) => {
   if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
   return c.json(await hostnameSweep(c.env));
+});
+
+// ---------------------------------------------------------------------------
+// Overflow — broadcast, never browse
+// ---------------------------------------------------------------------------
+// shared/overflow.js holds the rules and the reasoning. The one property every
+// route below is built to protect:
+//
+//   THE POSTING ACCOUNT NEVER LEARNS WHO IT WENT TO. overflow_invites is the
+//   distribution list and no route returns it, filtered or counted. A count of
+//   how many companies were asked measures the platform's roster and is
+//   nobody's to have. What an account may read is overflow_responses, for
+//   their own posts: the companies that ANSWERED, who by answering chose to
+//   be known to them.
+//
+// There is deliberately no endpoint that takes a trade and gives back
+// companies. Matching happens here and the answer is never returned.
+
+// Everything eligibility needs about one company, in one row. Used to decide
+// who a broadcast reaches (never returned to a poster) and to tell a company
+// about their own standing (returned only to them).
+async function overflowStanding(db, companyId, today) {
+  const co = await db.prepare(
+    `SELECT co.*,
+            (SELECT COUNT(*) FROM accounts a WHERE a.company_id = co.id) AS own_account,
+            -- Ratings and finished work, across everybody who has engaged
+            -- them. This is the company's OWN record and is used to decide
+            -- what they are offered, never handed to another account.
+            (SELECT AVG(NULLIF(en.rating, 0)) FROM engagements en
+              WHERE en.company_id = co.id AND en.rated_jobs > 0) AS avg_rating,
+            (SELECT COALESCE(SUM(en.rated_jobs), 0) FROM engagements en
+              WHERE en.company_id = co.id) AS rated_jobs,
+            -- Finished work, not accepted work. Completion lives on the JOB
+            -- (jobs.status / completed_at); work_orders.status only ever holds
+            -- pending, accepted or declined, so counting a 'completed' work
+            -- order would have returned zero for every company on the platform
+            -- and made nobody eligible, silently.
+            (SELECT COUNT(DISTINCT wo.id) FROM work_orders wo
+               JOIN jobs j ON j.id = wo.job_id
+              WHERE wo.company_id = co.id AND wo.voided_at IS NULL
+                AND wo.status = 'accepted'
+                AND (j.status = 'completed' OR j.completed_at IS NOT NULL)) AS completed_jobs
+       FROM companies co WHERE co.id = ?`
+  ).bind(companyId).first();
+  if (!co) return null;
+
+  const rows = await currentDocRows(db, companyId);
+  const docs = docShapeWithLegacy(rows, co);
+  const lic = parseJson(co.license_check, null);
+
+  return {
+    co,
+    shape: {
+      overflowOptIn: !!co.overflow_opt_in,
+      overflowTrades: parseJson(co.overflow_trades, []),
+      licenseVerified: !!(lic?.found && String(lic.status).toUpperCase() === "ACTIVE" && !lic.suspendDate),
+      docsCurrent: companyDocStatus(docs, today, EXPIRING_KINDS).ok,
+      rating: Number(co.avg_rating || 0),
+      ratedJobs: Number(co.rated_jobs || 0),
+      completedJobs: Number(co.completed_jobs || 0),
+      // Since they opted in, not since somebody typed them in. companies.
+      // created_at is when an account added a contact, which for most of the
+      // table has nothing to do with a business joining SubSub.
+      daysOnPlatform: co.overflow_since
+        ? daysBetween(String(co.overflow_since).slice(0, 10), today) : null,
+    },
+  };
+}
+
+const daysBetween = (from, to) =>
+  Math.round((Date.UTC(+to.slice(0, 4), +to.slice(5, 7) - 1, +to.slice(8, 10))
+    - Date.UTC(+from.slice(0, 4), +from.slice(5, 7) - 1, +from.slice(8, 10))) / 86400000);
+
+// A company's own standing, for their own screen. Their reasons are things
+// they can act on; this is the only route that returns them and it returns
+// them about the caller alone.
+app.get("/api/overflow/standing", requireRole("contractor", "admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const companyId = auth.role === "contractor" ? auth.companyId
+    : (await c.env.DB.prepare(`SELECT company_id FROM accounts WHERE id = ?`)
+        .bind(auth.accountId).first())?.company_id;
+  if (!companyId) return c.json({ error: "no_company" }, 404);
+
+  const today = new Date().toISOString().slice(0, 10);
+  let st;
+  try {
+    st = await overflowStanding(c.env.DB, companyId, today);
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  if (!st) return c.json({ error: "not_found" }, 404);
+  const verdict = overflowEligible(st.shape, { asOf: today });
+  return c.json({
+    companyId, ...st.shape, eligible: verdict.ok, reasons: verdict.reasons,
+    thresholds: ELIGIBILITY,
+  });
+});
+
+// Opting in, and choosing which trades. Theirs to set; nobody else may.
+app.put("/api/overflow/opt-in", requireRole("contractor", "admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const companyId = auth.role === "contractor" ? auth.companyId
+    : (await c.env.DB.prepare(`SELECT company_id FROM accounts WHERE id = ?`)
+        .bind(auth.accountId).first())?.company_id;
+  if (!companyId) return c.json({ error: "no_company" }, 404);
+
+  const b = await c.req.json().catch(() => ({}));
+  const on = !!b.optIn;
+  const trades = Array.isArray(b.trades) ? b.trades.filter((t) => typeof t === "string").slice(0, 40) : [];
+  try {
+    // overflow_since is set on the FIRST opt-in and never moved. Re-stamping
+    // it on every toggle would make "90 days on SubSub" resettable by
+    // switching off and on again.
+    await c.env.DB.prepare(
+      `UPDATE companies SET overflow_opt_in = ?, overflow_trades = ?,
+         overflow_since = COALESCE(overflow_since, CASE WHEN ? THEN CURRENT_TIMESTAMP END)
+       WHERE id = ?`
+    ).bind(on ? 1 : 0, JSON.stringify(trades), on ? 1 : 0, companyId).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  await logEvent(c.env, auth.accountId, auth.userId, on ? "overflow.opted_in" : "overflow.opted_out",
+    companyId, { trades });
+  return c.json({ ok: true, optIn: on, trades });
+});
+
+// May this account broadcast this slot? Asked before the button is offered.
+//
+// It answers about the ACCOUNT'S OWN ROSTER only -- whether they have somebody
+// of their own who could take it -- and says nothing about who is out there.
+app.get("/api/jobs/:jobId/overflow/eligibility", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const jobId = c.req.param("jobId");
+  const trade = c.req.query("trade") || "";
+  const job = await c.env.DB.prepare(
+    `SELECT id, date, title FROM jobs WHERE id = ? AND account_id = ?`).bind(jobId, accountId).first();
+  if (!job) return c.json({ error: "job_not_found" }, 404);
+
+  const roster = await ownRosterFor(c.env.DB, accountId, job.date);
+  const verdict = canBroadcast({ ownRoster: roster, trade });
+  return c.json({
+    ok: verdict.ok, reason: verdict.reason || null,
+    // Their own contractors, by name, because they are their own and the
+    // whole point of refusing is "use these people".
+    companies: verdict.companies || [],
+    feeBps: OVERFLOW_FEE_BPS,
+  });
+});
+
+// The account's own contractors, shaped for canBroadcast(). Scoped to the
+// caller's engagements, as every company read on a customer route must be.
+async function ownRosterFor(db, accountId, jobDate) {
+  const { results } = await db.prepare(
+    `SELECT co.id, co.company, co.available, co.insurance, co.bond, co.contract, co.doc_files,
+            en.categories, en.doc_review
+       FROM engagements en JOIN companies co ON co.id = en.company_id
+      WHERE en.account_id = ? AND en.status IN ('active', 'invited')`
+  ).bind(accountId).all();
+  const today = new Date().toISOString().slice(0, 10);
+  const out = [];
+  for (const r of results || []) {
+    const review = parseJson(r.doc_review, {});
+    const verified = ["insurance", "bond", "contract"].every((k) => review[k]?.status === "verified");
+    let covers = true;
+    try {
+      const docs = docShapeWithLegacy(await currentDocRows(db, r.id), r);
+      covers = coversJob(docs, jobDate || today, EXPIRING_KINDS).ok;
+    } catch (err) { if (!missingSchema(err)) throw err; }
+    out.push({
+      company: r.company, categories: parseJson(r.categories, []),
+      available: !!r.available,
+      // Somebody who cannot legally be issued the work is not a reason to
+      // refuse a broadcast -- that is precisely when an account has nobody.
+      assignable: verified && covers,
+    });
+  }
+  return out;
+}
+
+// Post it. This is the only place a job reaches past its own account.
+app.post("/api/jobs/:jobId/overflow", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const jobId = c.req.param("jobId");
+  const b = await c.req.json().catch(() => ({}));
+  const trade = String(b.trade || "").trim();
+  if (!trade) return c.json({ error: "trade_required" }, 400);
+
+  const job = await c.env.DB.prepare(
+    `SELECT id, title, date, address, area, zip, severity FROM jobs WHERE id = ? AND account_id = ?`
+  ).bind(jobId, accountId).first();
+  if (!job) return c.json({ error: "job_not_found" }, 404);
+
+  // Overflow means overflow. An account with somebody of their own who could
+  // take this is not overflowing, and without this check the feature is a
+  // marketplace with extra steps.
+  const roster = await ownRosterFor(c.env.DB, accountId, job.date);
+  const allowed = canBroadcast({ ownRoster: roster, trade });
+  if (!allowed.ok) {
+    return c.json({ error: allowed.reason, companies: allowed.companies }, 409);
+  }
+
+  const severity = ["911", "urgent", "standard"].includes(b.severity) ? b.severity
+    : (job.severity || "urgent");
+  const expiresAt = new Date(Date.now() + postWindowHours(severity) * 3600_000).toISOString();
+  const valueCents = (b.value || b.value === 0) && String(b.value).trim() !== ""
+    ? Math.round(Number(String(b.value).replace(/[^0-9.]/g, "")) * 100) : null;
+
+  const postId = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO overflow_posts
+         (id, account_id, job_id, trade, severity, scope, value_cents, fee_bps, expires_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(postId, accountId, jobId, trade, severity,
+      String(b.scope || "").slice(0, 2000) || null, valueCents,
+      OVERFLOW_FEE_BPS, expiresAt, userId).run();
+  } catch (err) {
+    if (/UNIQUE constraint failed/i.test(String(err?.message || err))) {
+      return c.json({ error: "already_posted" }, 409);
+    }
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+
+  // Who it reaches. Computed here and NEVER returned: the response below
+  // carries no company, no count, nothing derived from this list.
+  const today = new Date().toISOString().slice(0, 10);
+  const { results: candidates } = await c.env.DB.prepare(
+    `SELECT id FROM companies WHERE overflow_opt_in = 1`
+  ).all();
+
+  let reached = 0;
+  const account = await c.env.DB.prepare(
+    `SELECT id, name, subdomain FROM accounts WHERE id = ?`).bind(accountId).first();
+  for (const cand of candidates || []) {
+    // Never to themselves.
+    if (account?.company_id && cand.id === account.company_id) continue;
+    // Never to somebody this account already works with: that is their own
+    // roster, and they have already been told there is nobody on it.
+    const already = await c.env.DB.prepare(
+      `SELECT 1 FROM engagements WHERE account_id = ? AND company_id = ?`
+    ).bind(accountId, cand.id).first();
+    if (already) continue;
+
+    const st = await overflowStanding(c.env.DB, cand.id, today);
+    if (!st) continue;
+    if (!st.shape.overflowTrades.includes(trade)) continue;
+    if (!overflowEligible(st.shape, { asOf: today }).ok) continue;
+
+    await c.env.DB.prepare(
+      `INSERT OR IGNORE INTO overflow_invites (id, post_id, company_id) VALUES (?, ?, ?)`
+    ).bind(uid(), postId, cand.id).run();
+    reached++;
+
+    if (st.co.email) {
+      const mail = overflowPostEmail({
+        company: st.co, contact: st.co.contact, account, job, trade, severity,
+        split: overflowSplit(valueCents, OVERFLOW_FEE_BPS), expiresAt,
+        scope: b.scope || "",
+      });
+      const result = await sendEmail(c.env, { to: st.co.email, subject: mail.subject,
+        text: mail.text, html: mail.html });
+      await logMail(c.env, { accountId, companyId: cand.id, to: st.co.email,
+        kind: "overflow_post", subject: mail.subject, result, sentBy: userId });
+      if (result.ok) {
+        await c.env.DB.prepare(
+          `UPDATE overflow_invites SET emailed = 1 WHERE post_id = ? AND company_id = ?`
+        ).bind(postId, cand.id).run();
+      }
+    }
+  }
+
+  await logEvent(c.env, accountId, userId, "overflow.posted", postId, { jobId, trade, severity });
+  await logActivity(c.env, accountId, userId, "overflow_posted",
+    `Put ${trade} on ${job.title} out to overflow`);
+
+  // `reached` is logged, never returned. It is a measure of the platform's
+  // roster, and an account that can watch it move learns the shape of
+  // everybody else's business one post at a time.
+  console.log(`[overflow] post ${postId} reached ${reached}`);
+  return c.json({
+    id: postId, trade, severity, expiresAt,
+    feeBps: OVERFLOW_FEE_BPS,
+    // Said in words rather than numbers, deliberately.
+    sent: true,
+  }, 201);
+});
+
+// The account's own posts, and who ANSWERED them.
+app.get("/api/overflow/posts", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  let posts;
+  try {
+    ({ results: posts } = await c.env.DB.prepare(
+      `SELECT p.*, j.title AS job_title, j.date AS job_date
+         FROM overflow_posts p JOIN jobs j ON j.id = p.job_id
+        WHERE p.account_id = ? ORDER BY p.created_at DESC LIMIT 100`
+    ).bind(accountId).all());
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.json([]);
+  }
+  const now = new Date().toISOString();
+  const out = [];
+  for (const p of posts || []) {
+    // Only the responses. overflow_invites is not read here, and must not be.
+    const { results: responses } = await c.env.DB.prepare(
+      `SELECT r.*, co.company, co.contact, co.phone, co.email, co.city, co.state
+         FROM overflow_responses r JOIN companies co ON co.id = r.company_id
+        WHERE r.post_id = ? AND r.status = 'offered' ORDER BY r.created_at`
+    ).bind(p.id).all();
+    out.push({
+      id: p.id, jobId: p.job_id, jobTitle: p.job_title, jobDate: p.job_date,
+      trade: p.trade, severity: p.severity, scope: p.scope,
+      value: p.value_cents, feeBps: p.fee_bps,
+      status: postClosed(p, now) && p.status === "open" ? "expired" : p.status,
+      expiresAt: p.expires_at, createdAt: p.created_at,
+      filledCompanyId: p.filled_company_id,
+      responses: (responses || []).map((r) => ({
+        id: r.id, companyId: r.company_id, company: r.company, contact: r.contact,
+        phone: r.phone, email: r.email,
+        where: [r.city, r.state].filter(Boolean).join(", ") || null,
+        price: r.price_cents, canStart: r.can_start, note: r.note, at: r.created_at,
+      })),
+    });
+  }
+  return c.json(out);
+});
+
+// What a company has been asked about. Only their own invitations.
+app.get("/api/overflow/offers", requireRole("contractor", "admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const companyId = auth.role === "contractor" ? auth.companyId
+    : (await c.env.DB.prepare(`SELECT company_id FROM accounts WHERE id = ?`)
+        .bind(auth.accountId).first())?.company_id;
+  if (!companyId) return c.json([]);
+
+  let rows;
+  try {
+    ({ results: rows } = await c.env.DB.prepare(
+      `SELECT p.*, j.title AS job_title, j.date AS job_date, j.area, j.zip,
+              a.name AS account_name,
+              r.status AS my_status, r.price_cents AS my_price, r.can_start AS my_start, r.note AS my_note
+         FROM overflow_invites i
+         JOIN overflow_posts p ON p.id = i.post_id
+         JOIN jobs j ON j.id = p.job_id
+         JOIN accounts a ON a.id = p.account_id
+         LEFT JOIN overflow_responses r ON r.post_id = p.id AND r.company_id = i.company_id
+        WHERE i.company_id = ? ORDER BY p.created_at DESC LIMIT 50`
+    ).bind(companyId).all());
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.json([]);
+  }
+  const now = new Date().toISOString();
+  return c.json((rows || []).map((p) => ({
+    id: p.id, jobTitle: p.job_title, jobDate: p.job_date,
+    // The area, not the street. Until they are picked they do not need the
+    // door -- and the account has not chosen to hand it to them.
+    where: [p.area, p.zip].filter(Boolean).join(" ") || null,
+    account: p.account_name, trade: p.trade, severity: p.severity, scope: p.scope,
+    ...overflowSplit(p.value_cents, p.fee_bps),
+    status: postClosed(p, now) && p.status === "open" ? "expired" : p.status,
+    expiresAt: p.expires_at,
+    mine: p.my_status ? { status: p.my_status, price: p.my_price, canStart: p.my_start, note: p.my_note } : null,
+    won: p.filled_company_id === companyId,
+  })));
+});
+
+// Answering. An offer, not a booking: the account still picks.
+app.post("/api/overflow/:postId/respond", requireRole("contractor", "admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const postId = c.req.param("postId");
+  const b = await c.req.json().catch(() => ({}));
+  const companyId = auth.role === "contractor" ? auth.companyId
+    : (await c.env.DB.prepare(`SELECT company_id FROM accounts WHERE id = ?`)
+        .bind(auth.accountId).first())?.company_id;
+  if (!companyId) return c.json({ error: "no_company" }, 404);
+
+  // Invited, or nothing. Without this, holding a post id would be enough to
+  // answer a broadcast nobody sent you.
+  const invited = await c.env.DB.prepare(
+    `SELECT 1 FROM overflow_invites WHERE post_id = ? AND company_id = ?`
+  ).bind(postId, companyId).first();
+  if (!invited) return c.json({ error: "not_invited" }, 403);
+
+  const post = await c.env.DB.prepare(`SELECT * FROM overflow_posts WHERE id = ?`).bind(postId).first();
+  if (!post) return c.json({ error: "not_found" }, 404);
+  if (postClosed(post, new Date().toISOString())) return c.json({ error: "closed" }, 409);
+
+  const status = ["offered", "withdrawn", "passed"].includes(b.status) ? b.status : "offered";
+  const price = (b.price || b.price === 0) && String(b.price).trim() !== ""
+    ? Math.round(Number(String(b.price).replace(/[^0-9.]/g, "")) * 100) : null;
+
+  await c.env.DB.prepare(
+    `INSERT INTO overflow_responses (id, post_id, company_id, status, price_cents, can_start, note, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT (post_id, company_id) DO UPDATE SET
+       status = excluded.status, price_cents = excluded.price_cents,
+       can_start = excluded.can_start, note = excluded.note, updated_at = CURRENT_TIMESTAMP`
+  ).bind(uid(), postId, companyId, status, price,
+    String(b.canStart || "").slice(0, 40) || null,
+    String(b.note || "").slice(0, 1000) || null).run();
+
+  // The posting account is told somebody answered, in their own feed.
+  if (status === "offered") {
+    await logActivity(c.env, post.account_id, null, "overflow_answered",
+      `${await companyName(c.env.DB, companyId)} answered your ${post.trade} overflow post`);
+  }
+  await logEvent(c.env, auth.accountId, auth.userId, "overflow.responded", postId, { status });
+  return c.json({ ok: true, status });
+});
+
+// Picking one. This engages them and issues the work order -- which is the
+// moment the two accounts actually have a relationship.
+app.post("/api/overflow/:postId/pick", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const postId = c.req.param("postId");
+  const b = await c.req.json().catch(() => ({}));
+  const companyId = String(b.companyId || "");
+
+  const post = await c.env.DB.prepare(
+    `SELECT * FROM overflow_posts WHERE id = ? AND account_id = ?`).bind(postId, accountId).first();
+  if (!post) return c.json({ error: "not_found" }, 404);
+  if (post.status !== "open") return c.json({ error: "closed" }, 409);
+
+  // Only somebody who offered. An account cannot reach into the invite list by
+  // naming a company id, which is the one way this route could become a
+  // directory lookup.
+  const answered = await c.env.DB.prepare(
+    `SELECT * FROM overflow_responses WHERE post_id = ? AND company_id = ? AND status = 'offered'`
+  ).bind(postId, companyId).first();
+  if (!answered) return c.json({ error: "did_not_answer" }, 409);
+
+  // An engagement, so everything downstream -- documents, work orders,
+  // ratings, releases -- behaves exactly as it does for anybody else. Overflow
+  // is how they met, not a different kind of relationship.
+  let engagement = await c.env.DB.prepare(
+    `SELECT * FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(accountId, companyId).first();
+  if (!engagement) {
+    const enId = uid();
+    await c.env.DB.prepare(
+      `INSERT INTO engagements (id, account_id, company_id, status, categories)
+       VALUES (?, ?, ?, 'active', ?)`
+    ).bind(enId, accountId, companyId, JSON.stringify([post.trade])).run();
+    engagement = { id: enId };
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE overflow_posts SET status = 'filled', filled_company_id = ?, closed_at = CURRENT_TIMESTAMP
+      WHERE id = ?`
+  ).bind(companyId, postId).run();
+
+  await logEvent(c.env, accountId, userId, "overflow.filled", postId, { companyId, trade: post.trade });
+  await logActivity(c.env, accountId, userId, "overflow_filled",
+    `Picked ${await companyName(c.env.DB, companyId)} from overflow for ${post.trade}`);
+
+  // The work order itself is issued by the ordinary assign route, so every
+  // document and expiry check applies to overflow work too. Returning the
+  // engagement is what lets the browser go straight there.
+  return c.json({ ok: true, companyId, engagementId: engagement.id,
+    jobId: post.job_id, trade: post.trade,
+    fee: overflowSplit(post.value_cents, post.fee_bps) });
+});
+
+// Taking it back down.
+app.post("/api/overflow/:postId/cancel", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const postId = c.req.param("postId");
+  const post = await c.env.DB.prepare(
+    `SELECT id, status FROM overflow_posts WHERE id = ? AND account_id = ?`).bind(postId, accountId).first();
+  if (!post) return c.json({ error: "not_found" }, 404);
+  if (post.status !== "open") return c.json({ error: "closed" }, 409);
+  await c.env.DB.prepare(
+    `UPDATE overflow_posts SET status = 'cancelled', closed_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).bind(postId).run();
+  await logEvent(c.env, accountId, userId, "overflow.cancelled", postId, {});
+  return c.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------

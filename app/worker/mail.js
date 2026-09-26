@@ -243,6 +243,63 @@ This is an automated message from an unmonitored address. Replies aren't receive
   };
 }
 
+// A broadcast landing on an opted-in contractor.
+//
+// This is a stranger's emergency, so it says what the work is, roughly where,
+// what it pays and how long they have -- and nothing that would let anybody
+// treat it as a lead list. It names the account, because a contractor being
+// asked to drive somewhere on a Sunday is entitled to know who is asking.
+//
+// The street address is NOT here. Until they are picked they need the area, not
+// the door; the account has not chosen to hand them a property.
+export function overflowPostEmail({ company, contact, account, job, trade, severity, split, expiresAt, scope }) {
+  const who = account?.name || "A SubSub account";
+  const urgent = severity === "911" || severity === "urgent";
+  const where = [job?.area, job?.zip].filter(Boolean).join(" ");
+  const pay = split?.gross
+    ? `  Up to ${money(split.gross / 100)}${split.fee ? ` (SubSub's fee ${money(split.fee / 100)}, you clear ${money(split.net / 100)})` : ""}`
+    : "  Not stated — quote them";
+
+  const text = `Hi ${contact || company.company},
+
+${who} needs ${trade} cover${urgent ? " urgently" : ""} and has nobody on their
+own list free. You are getting this because you opted in to overflow work.
+
+THE JOB
+  Trade: ${trade}${where ? `
+  Area: ${where}` : ""}${job?.date ? `
+  Date: ${niceDate(job.date)}` : ""}${scope ? `
+  Scope: ${String(scope).slice(0, 400)}` : ""}
+
+WHAT IT PAYS
+${pay}
+
+HOW LONG YOU HAVE
+  ${niceDate(expiresAt, true)}
+
+  After that the post closes. Answering is not a commitment -- ${who} still
+  chooses, and nothing goes on your calendar until they do and a work order is
+  issued.
+
+TO ANSWER
+  https://${portalUrl(account?.subdomain)}
+
+  Say when you could be there and what you would do it for. If it is not for
+  you, ignore this -- nothing happens and nothing is held against you.
+
+— SubSub
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+
+  return {
+    subject: urgent
+      ? `${trade} needed${where ? ` in ${where}` : ""} — ${who}`
+      : `Overflow work: ${trade}${where ? ` in ${where}` : ""}`,
+    text,
+    html: textToHtml(text, `https://${portalUrl(account?.subdomain)}`),
+  };
+}
+
 export function workOrderIssuedEmail({ company, contact, job, trade, woNumber, account, respondBy }) {
   const who = account?.name || "our team";
   const text = `Hi ${contact || company.company},

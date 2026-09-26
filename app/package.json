@@ -40,6 +40,8 @@
     "test:consolerosterui": "node scripts/console-roster-ui-test.mjs",
     "test:docwire": "node --no-warnings scripts/doc-expiry-wire-test.mjs",
     "test:docwireui": "node scripts/doc-expiry-ui-test.mjs",
+    "test:overflow": "node --no-warnings scripts/overflow-test.mjs",
+    "test:overflowui": "node scripts/overflow-ui-test.mjs",
     "test:uitidy": "node scripts/ui-tidy-test.mjs",
     "test:wonotify": "node scripts/wo-notify-test.mjs",
     "test:licenses": "node scripts/license-provider-test.mjs",

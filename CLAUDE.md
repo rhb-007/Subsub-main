@@ -182,6 +182,30 @@ refactor.
   charge a percentage of job value once payment processing exists — so the
   fee is modelled from the start and switched off, not bolted on later.
 
+  `app/shared/overflow.js` holds the eligibility rules and the fee model;
+  migration 038 holds the tables. Three properties are load-bearing and easy
+  to destroy by accident:
+
+  **The posting account never learns who it went to.** `overflow_invites` is
+  the distribution list and is server-side only — no route returns it,
+  filtered or counted. A count of how many companies were asked measures the
+  platform's roster, and an account that can watch that number move learns
+  the shape of everybody else's business one post at a time. What an account
+  reads is `overflow_responses`: the ones who answered, who by answering
+  chose to be known to them.
+
+  **There is no endpoint that takes a trade and returns companies.** Matching
+  happens in the Worker and the answer is never returned.
+
+  **It is refused when the account has somebody of their own** who covers the
+  trade and could actually be issued the work. Without that precondition this
+  is a marketplace with extra steps.
+
+  A response is an offer, not a booking: picking is what creates the
+  engagement and the work order, so overflow is how two accounts met rather
+  than a different kind of relationship — every document and expiry check
+  applies to it unchanged.
+
   This is the one exception to "not a directory", and it stays an exception
   because nothing about it is browsable.
 

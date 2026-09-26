@@ -50,6 +50,8 @@ import { chainReasonText } from "../shared/waivers.js";
 import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/autoschedule.js";
 import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso } from "../shared/docs.js";
+import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
+  postWindowHours } from "../shared/overflow.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -2038,6 +2040,10 @@ export default function SubSub() {
   const [assignSub, setAssignSub] = useState(null);       // { sub } -> pick job+trade
   const [notifying, setNotifying] = useState(null); // one-way system notification
   const [askingAuto, setAskingAuto] = useState(null); // "turn auto-schedule on?" request
+  const [postingOverflow, setPostingOverflow] = useState(null); // { job, trade }
+  const [overflowPosts, setOverflowPosts] = useState([]);
+  const [overflowOffers, setOverflowOffers] = useState([]);
+  const [overflowStanding, setOverflowStanding] = useState(null);
   const [adding, setAdding] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   // Contractors who have been invited and have not joined. They are not
@@ -2916,6 +2922,48 @@ export default function SubSub() {
     patchEngagement(companyId, { autoSchedule: on });
   };
 
+  // ---- overflow -----------------------------------------------------------
+  // Broadcast, never browse. There is no call here that asks the server for
+  // companies, because no such route exists -- see shared/overflow.js.
+  const loadOverflow = async () => {
+    const [posts, offers, standing] = await Promise.allSettled([
+      api.overflowPosts(), api.overflowOffers(), api.overflowStanding(),
+    ]);
+    if (posts.status === "fulfilled") setOverflowPosts(posts.value || []);
+    if (offers.status === "fulfilled") setOverflowOffers(offers.value || []);
+    if (standing.status === "fulfilled") setOverflowStanding(standing.value);
+  };
+  const postOverflow = async (jobId, body) => {
+    const made = await api.postOverflow(jobId, body);
+    await loadOverflow();
+    logEvent("overflow_posted", `Put ${body.trade} out to overflow`);
+    return made;
+  };
+  const pickOverflow = async (postId, companyId) => {
+    try {
+      const got = await api.pickOverflow(postId, companyId);
+      // They are an ordinary contractor now, so the roster and everything
+      // hanging off it has to be re-read before the work order is issued.
+      await hydrateAccount(account.id, currentUserId, { quiet: true });
+      await loadOverflow();
+      setBillingNote("Picked. They're on your roster now — issue the work order when you're ready.");
+      return got;
+    } catch (err) {
+      setBillingNote(err?.body?.error === "did_not_answer"
+        ? "They have not answered this post."
+        : "Could not pick them. Try again.");
+      throw err;
+    }
+  };
+  const respondOverflow = async (postId, body) => {
+    await api.respondOverflow(postId, body);
+    await loadOverflow();
+  };
+  const setOverflowOptIn = async (optIn, trades) => {
+    await api.setOverflowOptIn(optIn, trades);
+    await loadOverflow();
+  };
+
   // Merge into the engagement's docReview (per-GC verdict on a shared file).
   const patchDocReview = (companyId, kind, review) => {
     const cur = engagements.find((e) => e.companyId === companyId && e.accountId === account.id);
@@ -3353,6 +3401,9 @@ export default function SubSub() {
       setLoadErr(broke.length ? hydrateError(broke) : null);
       const [flatSubs, ownJobs, bookings, members, uniformOrderRows, serviceCallRows,
              propertyRows, visitRows] = settled.map((r) => (r.status === "fulfilled" && Array.isArray(r.value)) ? r.value : []);
+      // Overflow, loaded separately: the routes 503 on a database without 038
+      // and must not take the whole hydrate down with them.
+      loadOverflow().catch((err) => console.warn("[overflow] unavailable:", err?.message || err));
       setUniformOrders(uniformOrderRows);
       setServiceCalls(serviceCallRows);
       setProperties(propertyRows);
@@ -4684,6 +4735,23 @@ export default function SubSub() {
               <button onClick={() => setJobProperty("")}><X size={13} /> Show all</button>
             </div>
           )}
+          {/* Who answered an overflow post. Above the jobs list because an
+              emergency slot with somebody's hand up is the most time-sensitive
+              thing on this screen -- and it is answers, never candidates. */}
+          {overflowPosts.some((p) => p.status === "open") && (
+            <section className="dash-sec ovf-sec">
+              <h3><Zap size={15} /> Out to overflow
+                <span className="sec-count">
+                  {overflowPosts.filter((p) => p.status === "open")
+                    .reduce((n, p) => n + p.responses.length, 0)}
+                </span>
+              </h3>
+              <OverflowPosts posts={overflowPosts.filter((p) => p.status === "open")}
+                onPick={pickOverflow} onCancelPost={async (id) => {
+                  await api.cancelOverflow(id); await loadOverflow();
+                }} onReload={loadOverflow} />
+            </section>
+          )}
           {jobs.length === 0 ? (
             <div className="empty"><ClipboardList size={28} /><p>No jobs yet.</p>
               <button onClick={() => tryAddJob()}>Create a job</button></div>
@@ -4874,9 +4942,36 @@ export default function SubSub() {
                                 })()}
                               </div>
                             ) : (
-                              <button className="trade-assign" onClick={() => setAssigning({ job: j, trade: t })}>
-                                <Plus size={13} /> Assign &amp; issue WO
-                              </button>
+                              <div className="trade-actions">
+                                <button className="trade-assign" onClick={() => setAssigning({ job: j, trade: t })}>
+                                  <Plus size={13} /> Assign &amp; issue WO
+                                </button>
+                                {/* Overflow, beside Assign rather than instead of
+                                    it. The modal checks whether this account has
+                                    anybody of their own first and refuses if they
+                                    do -- so the button being here is not an
+                                    invitation to skip your own roster, and the
+                                    server refuses it too. */}
+                                {(() => {
+                                  const out = overflowPosts.find((p) =>
+                                    p.jobId === j.id && p.trade === t && p.status === "open");
+                                  if (out) {
+                                    return (
+                                      <span className="ovf-pill" title={`Closes ${new Date(out.expiresAt).toLocaleString()}`}>
+                                        <Zap size={11} /> Out to overflow
+                                        {out.responses.length
+                                          ? ` · ${out.responses.length} answered`
+                                          : " · no answers yet"}
+                                      </span>
+                                    );
+                                  }
+                                  return (
+                                    <button className="trade-swap" onClick={() => setPostingOverflow({ job: j, trade: t })}>
+                                      <Zap size={12} /> Overflow
+                                    </button>
+                                  );
+                                })()}
+                              </div>
                             )}
                           </div>
                         );
@@ -5059,6 +5154,8 @@ export default function SubSub() {
               }, ...os]);
             }}
             onSetAutoSchedule={(v) => patchSub(mySub.id, { autoSchedule: v })}
+            overflowStanding={overflowStanding} overflowOffers={overflowOffers}
+            onSetOverflowOptIn={setOverflowOptIn} onRespondOverflow={respondOverflow}
             onSetCrews={(crews) => patchSub(mySub.id, { crews })}
             onSetCoverage={(coverage) => patchSub(mySub.id, { coverage })}
             onToggleCrewDay={(crewId, day) => patchSub(mySub.id, {
@@ -5147,6 +5244,10 @@ export default function SubSub() {
         <NotifyForm data={notifying} brand={brand} onClose={() => setNotifying(null)} /></Modal>}
       {askingAuto && <Modal onClose={() => setAskingAuto(null)} wide>
         <AutoScheduleAsk sub={askingAuto} onClose={() => setAskingAuto(null)} /></Modal>}
+      {postingOverflow && <Modal onClose={() => setPostingOverflow(null)} wide>
+        <PostOverflow job={postingOverflow.job} trade={postingOverflow.trade}
+          onPost={(body) => postOverflow(postingOverflow.job.id, body)}
+          onCancel={() => setPostingOverflow(null)} /></Modal>}
       {coForm && <Modal onClose={() => setCoForm(null)}>
         <ChangeOrderForm job={coForm.job} trade={coForm.trade} a={coForm.a} origin={coForm.origin}
           accountKind={kindOf(account)}
@@ -15554,6 +15655,364 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
 }
 
 // ---- Pick which job + trade to put a contractor on -----------------------
+// Putting a slot out to overflow, from the hiring side.
+//
+// The screen is written to make one thing obvious: this is not a search. There
+// is no list of candidates before you post and none after -- only the people
+// who answer. shared/overflow.js says why, and the API enforces it; if this
+// component tried to show a count of who was reached there would be nothing
+// to show it from.
+function PostOverflow({ job, trade, onPost, onCancel }) {
+  const [scope, setScope] = useState("");
+  const [value, setValue] = useState("");
+  const [severity, setSeverity] = useState(job.severity === "911" ? "911" : "urgent");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [gate, setGate] = useState(null);   // { ok, reason, companies }
+  const [sent, setSent] = useState(false);
+
+  // Whether this is overflow at all. Asked of the server because it is the
+  // server that will refuse, and about the account's OWN roster only.
+  useEffect(() => {
+    let live = true;
+    api.overflowEligibility(job.id, trade)
+      .then((g) => { if (live) setGate(g); })
+      .catch((e) => { if (live) setErr(e?.body?.error || e?.message || "check_failed"); });
+    return () => { live = false; };
+  }, [job.id, trade]);
+
+  const split = overflowSplit(Math.round(Number(String(value).replace(/[^0-9.]/g, "")) * 100) || 0);
+
+  if (sent) {
+    return (
+      <div className="form sent-state">
+        <CheckCircle2 size={40} />
+        <h2>It's out there</h2>
+        <p>
+          Sent to contractors on SubSub who cover {catMeta(trade).label.toLowerCase()} and
+          opted in to overflow work. You'll see the ones who answer — there is no
+          list of who was asked, on purpose.
+        </p>
+        <p className="pf-note">
+          Closes {new Date(Date.now() + postWindowHours(severity) * 3600_000).toLocaleString()}.
+        </p>
+        <button className="btn-solid" onClick={onCancel}>Done</button>
+      </div>
+    );
+  }
+
+  if (gate && !gate.ok) {
+    return (
+      <div className="form">
+        <h2>You have somebody for this</h2>
+        <p className="form-sub">{job.title} · {catMeta(trade).label}</p>
+        <div className="doc-block">
+          <AlertTriangle size={17} />
+          <div>
+            <b>Overflow is for when your own list has nobody.</b>
+            <p>
+              {gate.companies.length === 1
+                ? `${gate.companies[0]} covers this trade and can take it.`
+                : `${gate.companies.slice(0, 3).join(", ")} cover this trade and can take it.`}
+              {" "}Assign one of them instead — they are yours, they know your sites,
+              and there is no reason to hand this to a stranger.
+            </p>
+          </div>
+        </div>
+        <div className="form-actions"><button className="btn-solid" onClick={onCancel}>Back</button></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="form">
+      <h2>Put this out to overflow</h2>
+      <p className="form-sub">{job.title} · {catMeta(trade).label}
+        {job.date ? ` · ${formatWhen(job.date, job.time)}` : ""}</p>
+
+      <div className="notify-note">
+        <Zap size={13} />
+        This goes to contractors who cover this trade and opted in — good ratings, time
+        on SubSub, current documents, verified licence. You'll see whoever answers.
+        Nobody gets a list of anybody.
+      </div>
+
+      <div className="fld">How urgent <span className="fld-note">sets how long it stays open</span>
+        <div className="pick-grid">
+          {["911", "urgent", "standard"].map((sv) => (
+            <button key={sv} type="button" className={`pick ${severity === sv ? "on" : ""}`}
+              onClick={() => setSeverity(sv)}>
+              {sv === "911" ? "Emergency" : sv === "urgent" ? "Urgent" : "Can wait"}
+              <span className="pick-sub"> · {postWindowHours(sv)}h</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <label className="fld">What the work is <span className="fld-note">they are deciding whether to drive to it</span>
+        <textarea rows={3} maxLength={2000} value={scope} onChange={(e) => setScope(e.target.value)}
+          placeholder="Burst riser in the basement, water off at the main, needs a section replaced." />
+      </label>
+
+      <label className="fld">Most you'll pay <span className="fld-note">optional — leave it blank and they quote you</span>
+        <input inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} placeholder="$" />
+      </label>
+
+      {split.gross > 0 && (
+        <p className="cov-hint">
+          {split.bps
+            ? `They see ${formatMoney(split.net / 100)} after SubSub's ${(split.bps / 100).toFixed(0)}% fee.`
+            : `They see ${formatMoney(split.gross / 100)}. ${overflowFeeText(split.bps)}`}
+        </p>
+      )}
+
+      {err && <p className="auto-err"><AlertTriangle size={12} /> {err}</p>}
+
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-solid" disabled={busy || !gate}
+          onClick={async () => {
+            setErr(""); setBusy(true);
+            try {
+              await onPost({ trade, severity, scope, value });
+              setBusy(false); setSent(true);
+            } catch (e) {
+              setBusy(false);
+              setErr(e?.body?.error === "own_roster_available"
+                ? "You have somebody of your own for this trade."
+                : e?.body?.error === "already_posted"
+                ? "This slot is already out to overflow."
+                : `Could not post it: ${e?.body?.error || e?.message || "unknown error"}`);
+            }
+          }}>
+          <Send size={14} /> {busy ? "Sending…" : "Send it out"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// The answers. Not candidates -- people who chose to put their hand up.
+function OverflowPosts({ posts, onPick, onCancelPost, onReload }) {
+  if (!posts.length) {
+    return <p className="pf-note">Nothing out to overflow. It appears here when your own
+      list has nobody for an urgent slot.</p>;
+  }
+  return (
+    <div className="ovf-list">
+      {posts.map((p) => (
+        <div key={p.id} className={`ovf-post st-${p.status}`}>
+          <div className="ovf-head">
+            <div>
+              <h4>{p.jobTitle} · {catMeta(p.trade).label}</h4>
+              <span className="pf-sub">
+                {p.status === "open" ? `Open until ${new Date(p.expiresAt).toLocaleString()}`
+                  : p.status === "filled" ? "Filled"
+                  : p.status === "cancelled" ? "Taken down"
+                  : "Closed — nobody answered in time"}
+                {p.value ? ` · up to ${formatMoney(p.value / 100)}` : ""}
+              </span>
+            </div>
+            {p.status === "open" && (
+              <button className="pf-mini" onClick={() => onCancelPost(p.id)}>Take it down</button>
+            )}
+          </div>
+          {p.responses.length === 0 ? (
+            <p className="ovf-none">
+              {p.status === "open"
+                ? "Nobody has answered yet. You'll see them here as they do."
+                : "Nobody answered."}
+            </p>
+          ) : (
+            <div className="ovf-answers">
+              {p.responses.map((r) => (
+                <div key={r.id} className="ovf-answer">
+                  <div className="ovf-who">
+                    <b>{r.company}</b>
+                    <span className="pf-sub">
+                      {[r.contact, r.where].filter(Boolean).join(" · ")}
+                    </span>
+                    <span className="pf-sub">
+                      {r.canStart ? `Can start ${r.canStart}` : "No start time given"}
+                      {r.price ? ` · ${formatMoney(r.price / 100)}` : ""}
+                    </span>
+                    {r.note && <span className="ovf-note-txt">{r.note}</span>}
+                  </div>
+                  <div className="ovf-act">
+                    {r.phone && <a className="pf-mini" href={`tel:${r.phone}`}><Phone size={12} /> Call</a>}
+                    {p.status === "open" && (
+                      <button className="btn-solid small" onClick={() => onPick(p.id, r.companyId)}>
+                        <Check size={13} /> Pick them
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// The contractor's side: their own standing, and the jobs they have been asked
+// about. Their reasons are things they can act on, which is why only they see
+// them.
+function OverflowOffers({ standing, offers, onOptIn, onRespond, categories }) {
+  const [trades, setTrades] = useState(() => standing?.overflowTrades || []);
+  const [saved, setSaved] = useState(false);
+  const on = !!standing?.overflowOptIn;
+
+  return (
+    <>
+      <section>
+        <h4><Zap size={14} /> Overflow work</h4>
+        <div className={`auto-card ${on ? "on" : ""}`}>
+          <Zap size={18} />
+          <div className="auto-card-main">
+            <span className="auto-title">{on ? "You're in" : "Not opted in"}</span>
+            <span className="auto-desc">
+              {on
+                ? "When an account has nobody of their own for an urgent job, it can reach you. Answering is never a commitment."
+                : "Accounts with nobody free for an urgent job can reach contractors who opt in. You choose which trades, and answering is never a commitment."}
+            </span>
+          </div>
+          <label className="auto-toggle">
+            <input type="checkbox" checked={on}
+              onChange={(e) => { onOptIn(e.target.checked, trades); setSaved(false); }} />
+            <span>{on ? "On" : "Off"}</span>
+          </label>
+        </div>
+
+        {on && (
+          <>
+            <div className="form-sec">Trades you want overflow for</div>
+            <div className="pick-grid">
+              {(categories || []).map((cid) => (
+                <button key={cid} type="button" className={`pick ${trades.includes(cid) ? "on" : ""}`}
+                  onClick={() => { setTrades((t) => t.includes(cid)
+                    ? t.filter((x) => x !== cid) : [...t, cid]); setSaved(false); }}>
+                  {catMeta(cid).label}
+                </button>
+              ))}
+            </div>
+            <div className="form-actions">
+              <button className="btn-solid" disabled={saved}
+                onClick={() => { onOptIn(true, trades); setSaved(true); }}>
+                {saved ? "Saved" : "Save trades"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Their own standing, told to them and nobody else. */}
+        {standing && !standing.eligible && (
+          <div className="doc-block" style={{ marginTop: 14 }}>
+            <AlertTriangle size={17} />
+            <div>
+              <b>Not eligible yet</b>
+              <ul className="ovf-reasons">
+                {standing.reasons.map((r) => <li key={r}>{ELIGIBILITY_TEXT[r] || r}</li>)}
+              </ul>
+            </div>
+          </div>
+        )}
+        {standing?.eligible && (
+          <p className="cov-hint"><CheckCircle2 size={13} /> You're eligible for overflow work.</p>
+        )}
+      </section>
+
+      <section>
+        <h4>Jobs you've been asked about</h4>
+        {offers.length === 0
+          ? <p className="muted">Nothing yet. These arrive by email too.</p>
+          : (
+            <div className="ovf-list">
+              {offers.map((o) => (
+                <div key={o.id} className={`ovf-post st-${o.status}`}>
+                  <div className="ovf-head">
+                    <div>
+                      <h4>{catMeta(o.trade).label} · {o.account}</h4>
+                      <span className="pf-sub">
+                        {[o.where, o.jobDate ? formatDay(o.jobDate) : null].filter(Boolean).join(" · ")}
+                        {o.gross ? ` · up to ${formatMoney(o.net / 100)}` : " · they'll take a quote"}
+                      </span>
+                      <span className="pf-sub">
+                        {o.status === "open" ? `Closes ${new Date(o.expiresAt).toLocaleString()}`
+                          : o.won ? "You got it" : o.status === "filled" ? "Went to somebody else"
+                          : o.status === "cancelled" ? "Taken down" : "Closed"}
+                      </span>
+                    </div>
+                  </div>
+                  {o.scope && <p className="ovf-note-txt">{o.scope}</p>}
+                  {o.status === "open" && (
+                    o.mine?.status === "offered"
+                      ? <div className="ovf-mine">
+                          <CheckCircle2 size={14} /> You put your hand up
+                          {o.mine.canStart ? ` — ${o.mine.canStart}` : ""}
+                          {o.mine.price ? ` · ${formatMoney(o.mine.price / 100)}` : ""}
+                          <button className="pf-mini" onClick={() => onRespond(o.id, { status: "withdrawn" })}>
+                            Withdraw
+                          </button>
+                        </div>
+                      : <OverflowAnswer offer={o} onRespond={onRespond} />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+      </section>
+    </>
+  );
+}
+
+function OverflowAnswer({ offer, onRespond }) {
+  const [open, setOpen] = useState(false);
+  const [canStart, setCanStart] = useState("");
+  const [price, setPrice] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  if (!open) {
+    return (
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={() => onRespond(offer.id, { status: "passed" })}>
+          Not for me
+        </button>
+        <button className="btn-solid" onClick={() => setOpen(true)}>
+          <Check size={14} /> I can do this
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="ovf-answer-form">
+      <label className="fld">When could you be there?
+        <input value={canStart} maxLength={40} onChange={(e) => setCanStart(e.target.value)}
+          placeholder="Tomorrow 8am" />
+      </label>
+      <label className="fld">Your price <span className="fld-note">optional</span>
+        <input inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="$" />
+      </label>
+      <label className="fld">Anything they should know
+        <textarea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} />
+      </label>
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={() => setOpen(false)}>Back</button>
+        <button className="btn-solid" disabled={busy || !canStart.trim()}
+          onClick={async () => {
+            setBusy(true);
+            try { await onRespond(offer.id, { status: "offered", canStart, price, note }); }
+            finally { setBusy(false); }
+          }}>
+          <Send size={14} /> {busy ? "Sending…" : "Put my hand up"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function PickJobSlot({ sub, jobs, allJobs, accountId, onPick, onNewJob, onNotify, onRequestDocs, onCancel }) {
   const ok = docsComplete(sub);
   const off = sub.unavailableDays || [];
@@ -16065,7 +16524,8 @@ function ConnectPane({ requests, onRespond, onReload }) {
 }
 
 function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
-  connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage }) {
+  connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage,
+  overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow }) {
   const [sub2, setSub2] = useState("trades");
   const caps = [...new Set(sub.categories.flatMap((c) => CAP_LIBRARY[c] || []))];
   const miss = missingDocs(sub);
@@ -16215,7 +16675,8 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
           <PageHead title="Job settings"
             sub="What you work in, where you go, and when you are free" />
           <div className="seg-tabs">
-            {[["trades", "Trades"], ["coverage", "Coverage"], ["availability", "Availability"]].map(([id, l]) => (
+            {[["trades", "Trades"], ["coverage", "Coverage"], ["availability", "Availability"],
+              ["overflow", "Overflow work"]].map(([id, l]) => (
               <button key={id} className={sub2 === id ? "on" : ""} onClick={() => setSub2(id)}>{l}</button>
             ))}
           </div>
@@ -16280,6 +16741,12 @@ function ContractorPortal({ sub, jobs, pane, mine, brand, me, orders, now,
           )}
 
           {sub2 === "coverage" && <MyCoverage sub={sub} onSave={onSetCoverage} />}
+
+          {sub2 === "overflow" && (
+            <OverflowOffers standing={overflowStanding} offers={overflowOffers}
+              onOptIn={onSetOverflowOptIn} onRespond={onRespondOverflow}
+              categories={sub.categories || []} />
+          )}
 
           {sub2 === "availability" && <MyAvailability sub={sub} jobs={jobs}
             onToggleCrewDay={onToggleCrewDay} onToggleCrewAvailable={onToggleCrewAvailable} />}
@@ -19444,6 +19911,33 @@ p.fld-note{margin:6px 0 0}
 .doc-row.doc-lapsed .doc-state{color:#8f2f2f;font-weight:700}
 .doc-row.doc-soon{background:#fffdf6;border-color:#ecd9b0}
 .lapse-why{margin:6px 0 0;font-size:12px;color:var(--red);line-height:1.4}
+/* overflow: answers, never candidates */
+.ovf-sec{margin-bottom:18px}
+.ovf-list{display:flex;flex-direction:column;gap:12px}
+.ovf-post{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--card)}
+.ovf-post.st-open{border-color:#ecd9b0;background:#fffdf6}
+.ovf-post.st-filled{background:#f2f8f4;border-color:#d4e7db}
+.ovf-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.ovf-head h4{margin:0 0 2px;font-size:14px}
+.ovf-none{margin:10px 0 0;font-size:12.5px;color:var(--ink-soft)}
+.ovf-answers{display:flex;flex-direction:column;gap:9px;margin-top:12px}
+.ovf-answer{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
+  padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+.ovf-who{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ovf-act{display:flex;align-items:center;gap:7px;flex:none;flex-wrap:wrap;justify-content:flex-end}
+.ovf-note-txt{font-size:12.5px;color:var(--ink-soft);line-height:1.45;margin:8px 0 0}
+.ovf-mine{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;
+  font-weight:600;color:#1f6b4a;flex-wrap:wrap}
+.ovf-answer-form{margin-top:12px;display:flex;flex-direction:column;gap:10px}
+.ovf-reasons{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:3px;
+  font-size:12.5px;color:var(--ink-soft);line-height:1.4}
+.ovf-pill{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:800;
+  color:#8a5a12;background:#fbf0dd;padding:4px 9px;border-radius:6px;white-space:nowrap}
+.pick-sub{font-weight:500;opacity:.7}
+@media (max-width:760px){
+  .ovf-answer,.ovf-head{flex-direction:column;align-items:stretch}
+  .ovf-act{justify-content:flex-start}
+}
 .auto-err{display:flex;align-items:center;gap:6px;margin:8px 0 0;font-size:12.5px;color:var(--red);line-height:1.45}
 .auto-card .mini{flex:none}
 .prev-subject{margin:0 0 8px;font-size:13px}

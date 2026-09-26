@@ -405,6 +405,25 @@ export const api = {
     + (note ? `&note=${encodeURIComponent(note)}` : "")),
   sendAutoScheduleRequest: (payload) => request("/notify/auto-schedule",
     { method: "POST", body: JSON.stringify(payload) }),
+
+  // Overflow. There is deliberately no call here that takes a trade and gives
+  // back companies -- see shared/overflow.js. The server decides who a
+  // broadcast reaches and never says.
+  overflowStanding: () => request("/overflow/standing"),
+  setOverflowOptIn: (optIn, trades) => request("/overflow/opt-in",
+    { method: "PUT", body: JSON.stringify({ optIn, trades }) }),
+  overflowEligibility: (jobId, trade) => request(
+    `/jobs/${encodeURIComponent(jobId)}/overflow/eligibility?trade=${encodeURIComponent(trade)}`),
+  postOverflow: (jobId, body) => request(`/jobs/${encodeURIComponent(jobId)}/overflow`,
+    { method: "POST", body: JSON.stringify(body) }),
+  overflowPosts: () => request("/overflow/posts"),
+  overflowOffers: () => request("/overflow/offers"),
+  respondOverflow: (postId, body) => request(`/overflow/${encodeURIComponent(postId)}/respond`,
+    { method: "POST", body: JSON.stringify(body) }),
+  pickOverflow: (postId, companyId) => request(`/overflow/${encodeURIComponent(postId)}/pick`,
+    { method: "POST", body: JSON.stringify({ companyId }) }),
+  cancelOverflow: (postId) => request(`/overflow/${encodeURIComponent(postId)}/cancel`,
+    { method: "POST" }),
   notifyLog: (companyId) => request("/notify/log"
     + (companyId ? `?companyId=${encodeURIComponent(companyId)}` : "")),
 
