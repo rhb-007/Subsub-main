@@ -35,7 +35,7 @@ import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
 import { eligible as overflowEligible, canBroadcast, overflowSplit, postClosed,
   postWindowHours, OVERFLOW_FEE_BPS, ELIGIBILITY } from "../shared/overflow.js";
 import { canHandOver, awaitingFrom, canDecide as canDecideTransfer,
-  canCancel as canCancelTransfer } from "../shared/handover.js";
+  canCancel as canCancelTransfer, inheritedShape, openWorkText } from "../shared/handover.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
 import {
@@ -4086,6 +4086,7 @@ export function missingSchema(err) {
   // The recent ones first, because several of them mention words an older
   // rule would claim. "overflow_posts has no column named severity" is 038,
   // not 023, and the severity rule below would have taken it.
+  if (/\bproperty_transfers\b|owner_account_id|requested_by_account_id/i.test(m)) return "039_building_handover";
   if (/\boverflow_(posts|invites|responses)\b|overflow_(opt_in|trades|since)/i.test(m)) return "038_overflow";
   if (/\bcompany_docs\b|\bdoc_reminders\b|superseded_at|policy_no|coverage_cents/i.test(m)) return "037_document_detail";
   if (/scope_kind/i.test(m)) return "036_wo_scope";
@@ -4602,9 +4603,42 @@ app.get("/api/jobs", async (c) => {
     }
   }
 
+  // Work the PREVIOUS operator is still running at a building this account has
+  // just taken on.
+  //
+  // Jobs do not move, so before this the incoming manager saw nothing: no sign
+  // a contractor was due Tuesday, nobody to let them in, nobody to verify it,
+  // and a tenant waiting on a leak they had never heard of. The contractor
+  // turns up at a building whose manager has no record of them.
+  //
+  // Found without a new column: this account operates the property, the job
+  // sits on somebody else's account, and it is not finished. Once the previous
+  // manager closes it out it drops off this list by itself and lives in the
+  // building's history, where it belongs.
+  let inheritedJobs = [];
+  if (auth.role !== "owner" && auth.role !== "tenant" && !auth.propertyIds) {
+    try {
+      const { results } = await c.env.DB.prepare(
+        `SELECT j.*, a.name AS prev_name, ru.name AS requested_by_name FROM jobs j
+           JOIN properties p ON p.id = j.property_id
+           LEFT JOIN accounts a ON a.id = j.account_id
+           LEFT JOIN users ru ON ru.id = j.requested_by
+          WHERE p.account_id = ? AND j.account_id != ?
+            AND j.status != 'completed'
+            AND j.withdrawn_at IS NULL AND j.declined_at IS NULL
+          ORDER BY COALESCE(j.date, j.created_at) ASC LIMIT 200`
+      ).bind(accountId, accountId).all();
+      inheritedJobs = results || [];
+    } catch (err) {
+      // Older databases have neither the withdrawn/declined columns nor 039.
+      // A missing column here must not empty the whole jobs screen.
+      if (!missingSchema(err)) throw err;
+    }
+  }
+
   // Work orders for both sets. The second query is scoped by JOB rather than by
   // account, because these jobs are on an account the caller is not part of.
-  const jobIds = [...jobs, ...ownedJobs, ...pastReports].map((j) => j.id);
+  const jobIds = [...jobs, ...ownedJobs, ...pastReports, ...inheritedJobs].map((j) => j.id);
   const woByJob = {};
   if (jobIds.length) {
     const { results: wos } = await c.env.DB.prepare(
@@ -4633,6 +4667,16 @@ app.get("/api/jobs", async (c) => {
       underPreviousManager: true, readOnly: true,
       managedBy: j.managed_by_name || null,
     })),
+    // Open work the previous operator is still finishing. NOT stripMoney'd and
+    // then handed over -- stripMoney only redacts for owners and tenants, and
+    // the caller here is an admin of their own account, so it would have passed
+    // the outgoing manager's prices and contractor straight through.
+    // inheritedShape decides what crosses instead: what is wrong with the
+    // building and when somebody is due, never who or for how much.
+    ...inheritedJobs.map((j) => inheritedShape(
+      { ...jobRowToJs(j, woByJob[j.id] || []),
+        ...(j.requested_by_name ? { requestedByName: j.requested_by_name } : {}) },
+      j.prev_name || null)),
   ]);
 });
 
@@ -6762,13 +6806,53 @@ app.get("/api/property-transfers", async (c) => {
     if (!missingSchema(err)) throw err;
     return c.json([]);
   }
-  return c.json((rows || []).map((r) => ({
-    ...transferShape(r),
-    // Whose move it is, computed from the shared rule rather than guessed at
-    // by each screen.
-    awaiting: awaitingFrom(transferShape(r)),
-    mine: r.from_account_id === accountId ? "from" : "to",
-  })));
+  // How much is still in flight at each building, so neither side decides
+  // blind. A count, never a list: what crosses at the moment of transfer is
+  // the same thing the waiver roll-up allows.
+  //
+  // It never blocks the transfer. A repair that is going nowhere is very often
+  // the reason somebody is changing agent in the first place, and refusing to
+  // release a building until the work is finished would hand the outgoing
+  // manager a hostage.
+  const openAt = {};
+  const pending = (rows || []).filter((r) => r.status === "pending");
+  if (pending.length) {
+    const ids = [...new Set(pending.map((r) => r.property_id))];
+    try {
+      // Grouped by account as well as property, and read back per transfer
+      // against its `from` side -- the party on their way out. Counting every
+      // open job at the building instead would disagree with the number the
+      // feeds record when it is accepted, which counts the same side, and two
+      // different answers to "how many repairs are outstanding" is worse than
+      // either of them.
+      const { results } = await c.env.DB.prepare(
+        `SELECT j.property_id, j.account_id, COUNT(*) AS n FROM jobs j
+          WHERE j.property_id IN (${ids.map(() => "?").join(",")})
+            AND j.status != 'completed'
+            AND j.withdrawn_at IS NULL AND j.declined_at IS NULL
+          GROUP BY j.property_id, j.account_id`
+      ).bind(...ids).all();
+      for (const r of results || []) openAt[`${r.property_id}|${r.account_id}`] = r.n;
+    } catch (err) { if (!missingSchema(err)) throw err; }
+  }
+
+  return c.json((rows || []).map((r) => {
+    const t = transferShape(r);
+    // Which end of this transfer the reader is standing at decides what the
+    // sentence says: one of them is keeping the work, the other is inheriting
+    // the fact of it.
+    const incoming = r.to_account_id === accountId;
+    const n = openAt[`${r.property_id}|${r.from_account_id}`] || 0;
+    return {
+      ...t,
+      // Whose move it is, computed from the shared rule rather than guessed at
+      // by each screen.
+      awaiting: awaitingFrom(t),
+      mine: r.from_account_id === accountId ? "from" : "to",
+      openWork: n,
+      openWorkText: r.status === "pending" ? openWorkText(n, incoming ? "incoming" : "outgoing") : null,
+    };
+  }));
 });
 
 // Ask for a building, or offer one.
@@ -7021,14 +7105,31 @@ app.post("/api/property-transfers/:id/decide", requireRole("admin", "pm", "owner
         WHERE id = ?`).bind(userId, t.id),
   ]);
 
-  await logEvent(c.env, accountId, userId, "property.transferred", t.propertyId,
-    { transferId: t.id, from: t.fromAccountId, to: t.toAccountId });
-  await logActivity(c.env, t.fromAccountId, null, "transfer_done",
-    `${row.property_name} was handed over. Every job you ran on it stays on your record.`);
-  await logActivity(c.env, t.toAccountId, null, "transfer_done",
-    `${row.property_name} is yours now.`);
+  // What is still in flight, counted AFTER the move so the number is the one
+  // both sides are now living with. Said out loud to each of them, because
+  // silence here is exactly how a repair gets dropped between two companies
+  // that each assumed the other had it.
+  let openNow = 0;
+  try {
+    const r = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jobs
+        WHERE property_id = ? AND account_id = ? AND status != 'completed'
+          AND withdrawn_at IS NULL AND declined_at IS NULL`
+    ).bind(t.propertyId, t.fromAccountId).first();
+    openNow = r?.n || 0;
+  } catch (err) { if (!missingSchema(err)) throw err; }
 
-  return c.json({ ok: true, status: "accepted", propertyId: t.propertyId });
+  await logEvent(c.env, accountId, userId, "property.transferred", t.propertyId,
+    { transferId: t.id, from: t.fromAccountId, to: t.toAccountId, openWork: openNow });
+  await logActivity(c.env, t.fromAccountId, null, "transfer_done",
+    `${row.property_name} was handed over. Every job you ran on it stays on your record.`
+    + (openNow ? ` ${openWorkText(openNow, "outgoing")}` : ""));
+  await logActivity(c.env, t.toAccountId, null, "transfer_done",
+    `${row.property_name} is yours now.`
+    + (openNow ? ` ${openWorkText(openNow, "incoming")}` : ""));
+
+  return c.json({ ok: true, status: "accepted", propertyId: t.propertyId,
+    openWork: openNow, openWorkText: openNow ? openWorkText(openNow, "incoming") : null });
 });
 
 // Appointing a manager. The inverse journey, same two-party rule.

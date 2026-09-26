@@ -50,6 +50,9 @@ let PROPS_OWNER = [
   { id: "p_cedar", accountId: "acc_dana", name: "12 Cedar St", address: "12 Cedar St",
     city: "Seattle", state: "WA", zip: "98101", units: 8, notes: "", ownedByAnother: false },
 ];
+const PROPS_PM_BASE = PROPS_PM;
+// Open work a previous operator is still finishing, on the PM's jobs screen.
+let JOBS_PM = [];
 let TRANSFERS = [];
 // Work the appointed manager has booked at the owner's building.
 let JOBS_OWNER = [];
@@ -81,7 +84,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
       assignments: {}, status: "active", readOnly: true, atOwnedProperty: true,
       managedBy: "Sound PM", createdAt: new Date().toISOString().slice(0, 10), photos: [] } }];
   }
-  if (path === "/api/jobs") return [200, WHICH === "pm" ? [] : JOBS_OWNER];
+  if (path === "/api/jobs") return [200, WHICH === "pm" ? JOBS_PM : JOBS_OWNER];
   if (path === "/api/invites" || path === "/api/connect-requests") return [200, []];
   const rq = /^\/api\/properties\/([^/]+)\/transfer$/.exec(path);
   if (rq && method === "POST") { requested.push({ id: rq[1], body }); return [201, { id: "tr1", awaiting: "acc_pm" }]; }
@@ -283,6 +286,11 @@ console.log("\n-- and they can watch the work at it, without touching it --");
       !card.buttons.some((b) => /replace|withdraw/i.test(b)), JSON.stringify(card.buttons));
     t.ck("no change order", !card.buttons.some((b) => /change order/i.test(b)), JSON.stringify(card.buttons));
     t.ck("no overflow button", !card.buttons.some((b) => /overflow/i.test(b)), JSON.stringify(card.buttons));
+    // This one was live: canComplete answers "may this ROLE complete jobs",
+    // which is not "may they complete THIS job", so an owner was offered Mark
+    // job complete on work their manager was running.
+    t.ck("and they cannot mark their manager's job complete",
+      !card.buttons.some((b) => /complete/i.test(b)), JSON.stringify(card.buttons));
     t.ck("it says whose job assigning it is",
       /their manager assigns this|handled by their manager/i.test(card.text), card.text);
     await ctx.close();
@@ -375,6 +383,122 @@ console.log("\n-- and they can watch the work at it, without touching it --");
     t.ck("and what is wrong", /boiler/i.test(asked[0]?.title || ""), String(asked[0]?.title));
     await ctx.close();
     PROPS_OWNER = PROPS_OWNER.slice(0, 1);
+  }
+  console.log("\n-- open repairs the previous manager is still finishing --");
+  {
+    TRANSFERS = [];
+    // Sound PM has just taken Cedar on. Cascade is still finishing two repairs
+    // at it: one with a contractor booked, one still waiting. Neither job row
+    // carries an accountId -- what crosses is the redacted shape, not the job.
+    PROPS_PM = [{ id: "p_cedar", accountId: "acc_pm", name: "12 Cedar St",
+      address: "12 Cedar St", city: "Seattle", state: "WA", zip: "98101", units: 8, notes: "" }];
+    JOBS_PM = [
+      { id: "job_leak", title: "Roof leak", propertyId: "p_cedar", trades: ["roofing"],
+        scope: "Water in the top flat", date: new Date(Date.now() + 4 * 86400000).toISOString().slice(0, 10),
+        time: "07:00", address: "12 Cedar St", area: "Seattle", zip: "98101", status: "active",
+        severity: "urgent", photos: [], createdAt: new Date().toISOString().slice(0, 10),
+        bookedTrades: ["roofing"], assignments: {}, requestedByName: "Tam Tenant",
+        previousManager: "Cascade Management", inherited: true, readOnly: true },
+      { id: "job_boiler", title: "Boiler service", propertyId: "p_cedar", trades: ["plumbing"],
+        scope: "Annual service", date: new Date(Date.now() + 9 * 86400000).toISOString().slice(0, 10),
+        time: "07:00", address: "12 Cedar St", area: "Seattle", zip: "98101", status: "active",
+        photos: [], createdAt: new Date().toISOString().slice(0, 10),
+        bookedTrades: [], assignments: {}, previousManager: "Cascade Management",
+        inherited: true, readOnly: true },
+    ];
+    const { ctx, page } = await openAs("pm");
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => /^Jobs/.test(b.innerText.trim().split("\n")[0]))?.click());
+    await wait(1100);
+    const cards = await page.evaluate(() => [...document.querySelectorAll(".job-card")].map((c) => ({
+      text: c.innerText.replace(/\s+/g, " ").trim(),
+      notMine: c.className.includes("not-mine"),
+      badge: c.querySelector(".job-inherited")?.innerText.trim() || null,
+      watching: c.querySelector(".job-watching")?.innerText.trim() || null,
+      buttons: [...c.querySelectorAll("button")].map((b) => b.innerText.trim()).filter(Boolean),
+    })));
+    // The whole point: a job row with no accountId on it must still reach the
+    // screen. The memo has dropped exactly this kind of flag before.
+    t.ck("the inherited repairs are on the jobs screen", cards.length === 2,
+      JSON.stringify(cards.map((c) => c.text.slice(0, 30))));
+    const leak = cards.find((c) => /Roof leak/.test(c.text));
+    t.ck("the card names who is finishing it",
+      /Cascade Management is finishing this/.test(leak?.badge || ""), String(leak?.badge));
+    // NOT the owner's sentence -- this is at their own building.
+    t.ck("and does not read as somebody else's building",
+      !leak?.watching, String(leak?.watching));
+    t.ck("it reads as one they do not run", leak?.notMine === true, String(leak?.notMine));
+    // What they need in order to run the building.
+    t.ck("a booked trade says somebody is coming",
+      /Contractor booked — let them in/.test(leak?.text || ""), leak?.text);
+    const boiler = cards.find((c) => /Boiler service/.test(c.text));
+    t.ck("and an unbooked one says nobody is yet",
+      /Nobody booked for this yet/.test(boiler?.text || ""), boiler?.text);
+    t.ck("the tenant who reported it is named", /Tam Tenant/.test(leak?.text || ""), leak?.text);
+    // THE NEGATIVE: none of the actions of an account that runs the work.
+    t.ck("no assign button", !leak.buttons.some((b) => /assign|find alternativ/i.test(b)),
+      JSON.stringify(leak.buttons));
+    t.ck("no replace or withdraw",
+      !leak.buttons.some((b) => /replace|withdraw/i.test(b)), JSON.stringify(leak.buttons));
+    t.ck("no change order", !leak.buttons.some((b) => /change order/i.test(b)), JSON.stringify(leak.buttons));
+    // Nor may they close out the previous manager's repair: completion is
+    // two-party and both parties are on the other account.
+    t.ck("and cannot mark it complete",
+      !leak.buttons.some((b) => /complete/i.test(b)), JSON.stringify(leak.buttons));
+    // And nothing about the previous manager's contractor or contract.
+    t.ck("no price on the card", !/\$[0-9]/.test(leak?.text || ""), leak?.text);
+    t.ck("no work order number", !/WO-/.test(leak?.text || ""), leak?.text);
+    // And the card must not contradict itself: "no contractor, no work order
+    // issued" sat right next to "contractor booked", because no assignments
+    // object crosses.
+    t.ck("it does not deny the contractor it just announced",
+      !/No contractor/.test(leak?.text || ""), leak?.text);
+    t.ck("it says whose work order it is",
+      /On Cascade Management's work order/.test(leak?.text || ""), leak?.text);
+    t.ck("and an unbooked trade has no work order yet",
+      /No work order yet/.test(boiler?.text || ""), boiler?.text);
+    await ctx.close();
+    JOBS_PM = []; PROPS_PM = PROPS_PM_BASE;
+  }
+
+  console.log("\n-- and the count is on the table before anybody accepts --");
+  {
+    PROPS_PM = PROPS_PM_BASE;
+    // An appointment waiting on Cascade to accept, at a building with three
+    // repairs still open on the owner's side.
+    TRANSFERS = [{ id: "tr9", propertyId: "p_cedar", propertyName: "12 Cedar St",
+      fromAccountId: "acc_dana", toAccountId: "acc_pm", requestedByAccountId: "acc_dana",
+      fromAccount: "Dana Holdings", toAccount: "Cascade Management",
+      direction: "owner_requested", kind: "appointment", status: "pending", note: null,
+      createdAt: new Date().toISOString(), decidedAt: null,
+      awaiting: "acc_pm", awaitingMe: true, mine: "to",
+      openWork: 3,
+      openWorkText: "3 open repairs at this building are being finished by the previous manager. "
+        + "You can see what and when, but it stays theirs to complete and to pay." }];
+    const { ctx, page } = await openAs("pm");
+    await toProperties(page);
+    const panel = await page.evaluate(() => {
+      const c = [...document.querySelectorAll(".prop-card")].find((x) => /Cedar/.test(x.innerText));
+      const h = c?.querySelector(".prop-handover");
+      return { open: h?.querySelector(".ph-open")?.innerText.replace(/\s+/g, " ").trim() || null,
+        small: h?.querySelector(".ph-small")?.innerText.replace(/\s+/g, " ").trim() || null,
+        buttons: [...(h?.querySelectorAll("button") || [])].map((b) => b.innerText.trim()) };
+    });
+    t.ck("the count is on the decision panel", /3 open repairs/.test(panel.open || ""), String(panel.open));
+    t.ck("and says it stays with the previous manager",
+      /being finished by the previous manager/.test(panel.open || ""), String(panel.open));
+    // It informs; it never blocks. Both answers are still offered.
+    t.ck("accepting is still offered", panel.buttons.some((b) => /accept/i.test(b)),
+      JSON.stringify(panel.buttons));
+    t.ck("and declining too", panel.buttons.some((b) => /decline/i.test(b)),
+      JSON.stringify(panel.buttons));
+    // The promise the panel makes has to be true: the jobs do not move.
+    t.ck("it no longer promises the jobs come too",
+      !/its jobs[^.]*become yours/i.test(panel.small || ""), String(panel.small));
+    t.ck("it says work under way stays with whoever started it",
+      /stays with the manager who started it/i.test(panel.small || ""), String(panel.small));
+    await ctx.close();
+    TRANSFERS = [];
   }
 } finally {
   await browser.close();

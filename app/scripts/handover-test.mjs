@@ -27,7 +27,7 @@
 
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
-import { canHandOver, awaitingFrom, canDecide, canCancel, MOVES, STAYS } from "../shared/handover.js";
+import { canHandOver, awaitingFrom, canDecide, canCancel, MOVES, STAYS, inheritedShape, isOpenWork } from "../shared/handover.js";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
@@ -721,6 +721,179 @@ console.log("\n-- and urgency does not let them spend the manager's money --");
     s2 === 201 && b2.emergency?.dispatched === true, `${s2} ${JSON.stringify(b2.emergency)}`);
   ck("against that account's own contractor",
     one(db2, `SELECT company_id FROM work_orders WHERE job_id = ?`, b2.id)?.company_id === "cmp_em");
+}
+
+console.log("\n-- the redaction rule, before a database is involved --");
+{
+  const job = {
+    id: "j1", title: "Roof leak", propertyId: "p_cedar", trades: ["roofing"],
+    scope: "Water in the top flat", date: "2026-10-06", severity: "urgent",
+    status: "active", requestedByName: "Tam Tenant",
+    assignments: { roofing: { id: "wo1", subId: "cmp_roof", wo: "WO-800001",
+      value: "18000", crewName: "Crew A", tradeScope: "Strip and replace" } },
+  };
+  const v = inheritedShape(job, "Cascade Management");
+  // What the building's new manager needs to run it.
+  ck("they are told what is wrong", v.title === "Roof leak" && v.scope === "Water in the top flat");
+  ck("and when somebody is due", v.date === "2026-10-06");
+  ck("and that the roof is covered", JSON.stringify(v.bookedTrades) === '["roofing"]');
+  ck("and how bad it is", v.severity === "urgent");
+  ck("and who reported it, since that tenant is theirs now", v.requestedByName === "Tam Tenant");
+  ck("and whose job it still is", v.previousManager === "Cascade Management");
+  ck("and that they may not touch it", v.readOnly === true && v.inherited === true);
+  // THE NEGATIVES. Everything here is the previous manager's relationship or
+  // their contract, and a manager taking on a forty-building portfolio must not
+  // walk away with forty contractors and what each was paid.
+  const flat = JSON.stringify(v);
+  ck("the contractor is not named", !/cmp_roof/.test(flat), flat);
+  ck("the price is not shown", !/18000/.test(flat), flat);
+  ck("the work order is not shown", !/WO-800001/.test(flat), flat);
+  ck("the crew is not shown", !/Crew A/.test(flat), flat);
+  // Present but empty. Every screen assumes a job has one, and handing them a
+  // job without it crashed the jobs list; empty is also the truthful answer,
+  // because this account has assigned nobody.
+  ck("assignments is empty rather than absent",
+    v.assignments && Object.keys(v.assignments).length === 0, JSON.stringify(v.assignments));
+
+  // Finished, withdrawn and declined work is not in flight.
+  ck("a completed job is not open work", isOpenWork({ status: "completed" }) === false);
+  ck("a withdrawn request is not open work",
+    isOpenWork({ status: "active", withdrawnAt: "2026-01-01" }) === false);
+  ck("a declined request is not open work",
+    isOpenWork({ status: "active", declinedAt: "2026-01-01" }) === false);
+  ck("an active job is", isOpenWork({ status: "active" }) === true);
+}
+
+console.log("\n-- open repairs when the building moves --");
+{
+  // The gap: jobs do not move, so the incoming manager saw nothing. A
+  // contractor turns up on Tuesday at a building whose manager has no record
+  // of them, and a tenant waits on a leak nobody has heard of.
+  const { db, env } = seed();
+  // Cascade holds Cedar outright here -- the state after an owner handed it to
+  // them, or a manager who owns the building they run. Appointing is the
+  // holder's move, so this is the seat that can make it.
+  db.exec(`UPDATE properties SET owner_account_id='acc_pm' WHERE id='p_cedar'`);
+  // Cascade is running two repairs at Cedar: one with a contractor booked, one
+  // still waiting. Plus one finished, which is history and not this list.
+  db.exec(`
+    INSERT INTO jobs(id,account_id,title,date,status,property_id,trades,scope,requested_by) VALUES
+      ('job_leak','acc_pm','Roof leak','${iso(4)}','active','p_cedar','["roofing"]','Water in the top flat','u_ten'),
+      ('job_boiler','acc_pm','Boiler service','${iso(9)}','active','p_cedar','["plumbing"]','Annual service',NULL);
+    INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status,value_cents)
+      VALUES ('wo_leak','WO-800002','job_leak','roofing','cmp_roof','en_roof','accepted',1800000);
+  `);
+
+  // Before the transfer, Sound PM has nothing to do with this building.
+  const [, before] = await json(await call(env, "u_far", "acc_other", "/jobs"));
+  ck("the incoming manager sees nothing yet",
+    !before.some((j) => j.id === "job_leak"), JSON.stringify(before.map((j) => j.id)));
+
+  // A leftover from an even earlier manager, still open at the same building.
+  // It is NOT part of what Cascade is handing over, so it must not be counted
+  // into "3 open repairs stay yours to finish" -- and the number the feeds
+  // record on acceptance counts Cascade's side, so a different rule here would
+  // make the panel and the feed disagree.
+  db.exec(`
+    INSERT INTO jobs(id,account_id,title,date,status,property_id,trades) VALUES
+      ('job_older','acc_dana','Older leftover','${iso(7)}','active','p_cedar','["roofing"]');
+  `);
+
+  // The request names the count, on both sides, before anybody decides.
+  const [, tr] = await json(await call(env, "u_pm", "acc_pm", "/properties/p_cedar/appoint",
+    { method: "POST", body: JSON.stringify({ subdomain: "sound" }) }));
+  const [, asked] = await json(await call(env, "u_far", "acc_other", "/property-transfers"));
+  const mine = asked.find((x) => x.id === tr.id);
+  ck("the incoming side is told how much is outstanding", mine?.openWork === 3,
+    JSON.stringify({ openWork: mine?.openWork }));
+  // Three, not four: somebody else's leftover at the same building is not part
+  // of this handover and is not the outgoing manager's to answer for.
+  ck("and only what the outgoing side is actually handing over",
+    mine?.openWork === 3 && !/4 open repairs/.test(mine?.openWorkText || ""), mine?.openWorkText);
+  ck("and what that means for them",
+    /being finished by the previous manager/.test(mine?.openWorkText || ""), mine?.openWorkText);
+  const [, theirs] = await json(await call(env, "u_pm", "acc_pm", "/property-transfers"));
+  ck("the outgoing side is told it stays theirs",
+    /stay yours to finish/.test(theirs.find((x) => x.id === tr.id)?.openWorkText || ""),
+    theirs.find((x) => x.id === tr.id)?.openWorkText);
+  // A count, not a list -- nothing here names a job or a contractor.
+  ck("and neither is handed a list",
+    !/job_leak|cmp_roof|Roof leak/.test(JSON.stringify(asked)), JSON.stringify(asked).slice(0, 200));
+
+  // Accepted. The building moves; the repairs stay where they happened.
+  const [sa, ba] = await json(await call(env, "u_far", "acc_other", `/property-transfers/${tr.id}/decide`,
+    { method: "POST", body: JSON.stringify({ accept: true }) }));
+  ck("the appointment is accepted", sa === 200 && ba.status === "accepted", `${sa} ${JSON.stringify(ba)}`);
+  ck("and the answer says what is outstanding", ba.openWork === 3, String(ba.openWork));
+  ck("the repairs did not move",
+    one(db, `SELECT account_id FROM jobs WHERE id='job_leak'`).account_id === "acc_pm");
+  // Both feeds, so neither walks away assuming the other picked it up.
+  ck("the incoming feed says somebody else is finishing them",
+    /being finished by the previous manager/.test(
+      db.prepare(`SELECT text FROM activity WHERE account_id='acc_other' AND kind='transfer_done'`).get()?.text || ""),
+    db.prepare(`SELECT text FROM activity WHERE account_id='acc_other' AND kind='transfer_done'`).get()?.text);
+  ck("the outgoing feed says they still are",
+    /stay yours to finish/.test(
+      db.prepare(`SELECT text FROM activity WHERE account_id='acc_pm' AND kind='transfer_done'`).get()?.text || ""),
+    db.prepare(`SELECT text FROM activity WHERE account_id='acc_pm' AND kind='transfer_done'`).get()?.text);
+
+  // And now the thing this exists for: the new manager can see it.
+  const [, after] = await json(await call(env, "u_far", "acc_other", "/jobs"));
+  const leak = after.find((j) => j.id === "job_leak");
+  ck("the incoming manager now sees the open repair", !!leak, JSON.stringify(after.map((j) => j.id)));
+  ck("named as the previous manager's", leak?.previousManager === "Cascade Management", String(leak?.previousManager));
+  ck("read-only to them", leak?.readOnly === true && leak?.inherited === true);
+  ck("with the trade somebody is coming for", JSON.stringify(leak?.bookedTrades) === '["roofing"]',
+    JSON.stringify(leak?.bookedTrades));
+  ck("and the tenant who reported it, who is their tenant now",
+    leak?.requestedByName === "Tam Tenant", String(leak?.requestedByName));
+  // The one still waiting on a contractor reads as waiting.
+  const boiler = after.find((j) => j.id === "job_boiler");
+  ck("work with nobody booked says so", JSON.stringify(boiler?.bookedTrades) === "[]",
+    JSON.stringify(boiler?.bookedTrades));
+  // THE NEGATIVES, over the wire this time.
+  const wire = JSON.stringify(after);
+  ck("the previous manager's contractor is not in the response", !/cmp_roof/.test(wire));
+  ck("nor what they are being paid", !/18000|1800000/.test(wire));
+  ck("nor their work order", !/WO-800002/.test(wire));
+
+  // Finished work is history, not an open repair.
+  ck("the job Cascade completed is not on the list",
+    !after.some((j) => j.id === "job_old"), JSON.stringify(after.map((j) => j.id)));
+
+  // And it clears itself: once the previous manager closes it out it drops off.
+  db.exec(`UPDATE jobs SET status='completed' WHERE id='job_leak'`);
+  const [, later] = await json(await call(env, "u_far", "acc_other", "/jobs"));
+  ck("closing it out takes it off the new manager's list",
+    !later.some((j) => j.id === "job_leak"), JSON.stringify(later.map((j) => j.id)));
+}
+
+console.log("\n-- and it is not a second door into another account's work --");
+{
+  const { db, env } = seed();
+  db.exec(`
+    INSERT INTO jobs(id,account_id,title,date,status,property_id,trades) VALUES
+      ('job_far','acc_other','Their own work','${iso(3)}','active','p_far','["roofing"]');
+  `);
+  // A building this account neither owns nor operates: nothing crosses.
+  const [, mine] = await json(await call(env, "u_pm", "acc_pm", "/jobs"));
+  ck("work at somebody else's building stays invisible",
+    !mine.some((j) => j.id === "job_far"), JSON.stringify(mine.map((j) => j.id)));
+
+  // A scoped guest seat at a building with inherited work sees its own scope
+  // and nothing through this door.
+  db.exec(`
+    UPDATE properties SET account_id='acc_other', owner_account_id='acc_other' WHERE id='p_cedar';
+    INSERT INTO jobs(id,account_id,title,date,status,property_id,trades) VALUES
+      ('job_inh','acc_pm','Left behind','${iso(2)}','active','p_cedar','["plumbing"]');
+  `);
+  const [, guest] = await json(await call(env, "u_theo", "acc_pm", "/jobs"));
+  ck("a scoped seat gets no inherited work",
+    !guest.some((j) => j.inherited), JSON.stringify(guest.map((j) => j.id)));
+  // The account that now operates it does.
+  const [, op] = await json(await call(env, "u_far", "acc_other", "/jobs"));
+  ck("the operating account does", op.some((j) => j.id === "job_inh" && j.inherited),
+    JSON.stringify(op.map((j) => j.id)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -33,7 +33,7 @@ import {
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
-  Maximize2, Share2, ImagePlus,
+  Maximize2, Share2, ImagePlus, History,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl } from "./lib/api";
 // The same file the Worker imports, so a problem cannot be an emergency in
@@ -2336,8 +2336,13 @@ export default function SubSub() {
   // -- their accountId is the manager's -- exactly as it did for properties, so
   // an owner saw the building on their list with nothing ever happening at it.
   // They are marked readOnly and every action on them is gated on that.
+  // Plus open work the PREVIOUS operator is still finishing at a building this
+  // account has just taken on. Those rows carry no accountId at all -- what
+  // crosses is deliberately not the job row -- so they have to be named here
+  // too, and leaving them out is how a new manager misses the contractor due
+  // on Tuesday.
   const jobs = useMemo(
-    () => allJobs.filter((j) => j.accountId === account.id || j.atOwnedProperty),
+    () => allJobs.filter((j) => j.accountId === account.id || j.atOwnedProperty || j.inherited),
     [allJobs, account.id]);
 
   // Users visible in THIS account, with their role in it.
@@ -4885,9 +4890,21 @@ export default function SubSub() {
                               because the answer to "why can't I edit this" has
                               to be on the card. */}
                           {j.readOnly && (
-                            <span className="job-watching" title={`Run by ${j.managedBy || "their manager"}`}>
-                              <Eye size={11} /> {j.managedBy || "Their manager"} runs this
-                            </span>
+                            j.inherited ? (
+                              // Left behind by the outgoing manager. A
+                              // different sentence on purpose: this one is at
+                              // THIS account's building, and somebody has to
+                              // know it is still coming without thinking it is
+                              // theirs to run.
+                              <span className="job-inherited"
+                                title={`Still being finished by ${j.previousManager || "the previous manager"}`}>
+                                <History size={11} /> {j.previousManager || "Previous manager"} is finishing this
+                              </span>
+                            ) : (
+                              <span className="job-watching" title={`Run by ${j.managedBy || "their manager"}`}>
+                                <Eye size={11} /> {j.managedBy || "Their manager"} runs this
+                              </span>
+                            )
                           )}
                           <span className={`job-phase ${done ? "done" : ""}`}>{j.withdrawnAt ? "withdrawn by tenant" : j.declinedAt ? "not approved" : done ? "completed" : "active"}</span>
                           {/* Only while it is genuinely news. A badge that
@@ -4907,6 +4924,14 @@ export default function SubSub() {
                         <div className="job-meta">
                           <span><Calendar size={12} /> {formatWhen(j.date, j.time) || j.date || "No date"}</span>
                           <span><MapPin size={12} /> {[j.address, j.area, j.zip].filter(Boolean).join(", ") || "No address"}</span>
+                          {/* Who asked for it. Somebody who requested work from
+                              another account -- an owner of the building, or a
+                              tenant who came with it -- is not a member of this
+                              account, so the users list will never name them and
+                              "somebody asked for work" is not actionable. */}
+                          {j.requestedByName && (
+                            <span title="Asked for by"><UserCog size={12} /> {j.requestedByName}</span>
+                          )}
                           {j.sqft && <span><Ruler size={12} /> {Number(j.sqft).toLocaleString()} sq ft</span>}
                           {j.materialSource && <span><Layers size={12} /> {j.materialSource}</span>}
                         </div>
@@ -4954,6 +4979,18 @@ export default function SubSub() {
                                   </button>
                                   {a.signedWO && <span className="ta-signed"><CheckCircle2 size={11} /> signed</span>}
                                 </div>
+                              ) : j.inherited ? (
+                                // On inherited work there IS no assignments
+                                // object, by design -- so "no contractor, no
+                                // work order issued" would flatly contradict
+                                // the line beside it saying somebody is booked.
+                                // What is true from this account's side is that
+                                // the work order is not theirs.
+                                <span className="trade-open-note">
+                                  {(j.bookedTrades || []).includes(t)
+                                    ? `On ${j.previousManager || "the previous manager"}'s work order`
+                                    : "No work order yet"}
+                                </span>
                               ) : <span className="trade-open-note">No contractor · no work order issued</span>}
                             </div>
                             {/* Every action on a trade row, gated in ONE place.
@@ -4963,7 +5000,16 @@ export default function SubSub() {
                                 somebody adds a ninth. */}
                             {j.readOnly ? (
                               <span className="trade-open-note">
-                                {a ? "Handled by their manager" : "Their manager assigns this"}
+                                {j.inherited
+                                  // No assignments object crosses, by design --
+                                  // who the contractor is and what they cost is
+                                  // the previous manager's business. The trade
+                                  // and the fact somebody is coming is what
+                                  // this account needs to run the building.
+                                  ? (j.bookedTrades || []).includes(t)
+                                    ? "Contractor booked — let them in"
+                                    : "Nobody booked for this yet"
+                                  : a ? "Handled by their manager" : "Their manager assigns this"}
                               </span>
                             ) : a ? (
                               <div className="trade-side">
@@ -5090,7 +5136,7 @@ export default function SubSub() {
                       </div>
                     )}
 
-                    {canComplete && (
+                    {canComplete && !j.readOnly && (
                       <div className="job-footer">
                         {!done ? (
                           <>
@@ -10909,11 +10955,26 @@ function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel,
                 : "Waiting on your property manager to release it."))}
         </p>
         {transfer.note && <p className="ph-note">“{transfer.note}”</p>}
+        {/* What is still in flight at this building, before anybody decides.
+            Never a blocker -- a repair going nowhere is very often exactly why
+            somebody is changing agent, and refusing to release a building until
+            the work is finished would hand the outgoing manager a hostage. But
+            deciding without knowing is how a contractor ends up turning up at a
+            building whose new manager has never heard of them. A count, from
+            the server; the names stay with the account that holds them. */}
+        {transfer.openWork > 0 && transfer.openWorkText && (
+          <p className="ph-open">
+            <Wrench size={12} /> {transfer.openWorkText}
+          </p>
+        )}
         {waitingOnMe ? (
           <>
             <p className="ph-small">
               {transfer.kind === "appointment"
-                ? "Accepting puts this building in your portfolio — its jobs, its tenants and its paperwork become yours to run."
+                // Said carefully: the tenants and the paperwork move, the jobs
+                // do not. This read "its jobs ... become yours to run", which
+                // is the one thing a handover never does.
+                ? "Accepting puts this building in your portfolio — its tenants and its paperwork become yours to run. Work already under way stays with the manager who started it."
                 : side === "manager"
                   ? "Every job you ran on it stays on your record. Nothing is copied and nothing is deleted."
                   : "The jobs run before now stay on your manager's record, and you will still be able to read them."}
@@ -21912,6 +21973,18 @@ p.fld-note{margin:6px 0 0}
 .job-watching{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;
   padding:3px 8px;border-radius:6px;background:var(--card);border:1px solid var(--line);
   color:var(--ink-soft);white-space:nowrap}
+/* How much is still in flight, on the handover decision panel. */
+.ph-open{display:flex;align-items:flex-start;gap:6px;font-size:12px;line-height:1.5;
+  margin-top:8px;padding:8px 10px;border-radius:7px;background:var(--card);
+  border:1px solid var(--ink-soft);color:var(--ink)}
+.ph-open svg{flex:none;margin-top:2px}
+/* Open work the PREVIOUS manager is still finishing at a building this account
+   has just taken on. Reads stronger than .job-watching because this one is at
+   YOUR building and somebody is turning up to it -- but the contrast comes from
+   weight and the full ink colour, not from another amber that fails AA. */
+.job-inherited{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;
+  padding:3px 8px;border-radius:6px;background:var(--card);border:1px solid var(--ink-soft);
+  color:var(--ink);white-space:nowrap}
 .ph-managed{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;
   padding:3px 8px;border-radius:6px;background:var(--paper);border:1px solid var(--line);
   color:var(--ink-soft);white-space:nowrap;flex:none}

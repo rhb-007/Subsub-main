@@ -117,3 +117,81 @@ export const STAYS = [
   "the manager's contractor roster and their engagements",
   "documents the manager verified, which belong to the contractor anyway",
 ];
+
+// ---- Work that is still in flight when the building moves ----------------
+//
+// The gap this closes: jobs do not move, so a building could change hands with
+// a repair half done and the incoming manager saw NOTHING. No sign that a
+// contractor was coming Tuesday, nobody to let them in, nobody to verify the
+// work, and a tenant waiting on a leak that the new manager had never heard
+// of. The contractor turns up at a building whose manager has no record of
+// them. That is the worst moment this product can produce, and it happened
+// silently.
+//
+// The fix is NOT to move the jobs. The outgoing manager issued the work order,
+// owes the money and is the party the contractor has an agreement with -- and
+// moving them would hand a departing client their ex-manager's book, which is
+// the accumulation refused everywhere else here.
+//
+// So the incoming manager gets the same shape the lien-waiver roll-up uses: a
+// COUNT, A TRADE AND A DATE, never a list of who. Enough to run the building
+// -- do not double-book the roof, let somebody in on Tuesday, tell the tenant
+// their leak is being dealt with -- and nothing that is a lead.
+
+// A job still in flight is one nobody has finished and nobody has called off.
+// `completed` is the end state; a withdrawn or declined request never started.
+export function isOpenWork(job = {}) {
+  if (job.status === "completed") return false;
+  if (job.withdrawnAt || job.declinedAt) return false;
+  return true;
+}
+
+// What the incoming operator may see of one job the previous one is running.
+//
+// Everything here is about the BUILDING: what is wrong, when somebody is due,
+// whether anybody is coming at all. Everything withheld is about the previous
+// manager's RELATIONSHIP and their CONTRACT: which company, for how much,
+// against which work order, with which crew. The new manager has neither, and
+// being handed them is not a side effect of taking on a building.
+export function inheritedShape(job = {}, previousManager = null) {
+  const booked = Object.keys(job.assignments || {});
+  return {
+    id: job.id, title: job.title, propertyId: job.propertyId,
+    address: job.address || null, area: job.area || null, zip: job.zip || null,
+    date: job.date || null, time: job.time || null,
+    // What is wrong with the building, which is theirs to know now.
+    trades: job.trades || [], scope: job.scope || null, severity: job.severity || null,
+    reportDetail: job.reportDetail || null, photos: job.photos || [],
+    status: job.status, createdAt: job.createdAt || null,
+    // Somebody IS coming for these trades. Who, for how much, and on whose
+    // work order are the previous manager's business -- so this is the trade
+    // and nothing else, and there is no assignments object to read through.
+    bookedTrades: booked,
+    // Empty, not absent. Every screen in the app assumes a job HAS an
+    // assignments object -- `j.trades.filter((t) => j.assignments[t])` in a
+    // dozen places -- and handing it one without crashed the jobs list
+    // outright. Empty is also the honest answer: THIS account has assigned
+    // nobody, and who the previous manager assigned is not in here.
+    assignments: {},
+    // The tenant who reported it is this account's tenant now, so their name
+    // is not somebody else's to withhold.
+    ...(job.requestedByName ? { requestedByName: job.requestedByName } : {}),
+    previousManager,
+    inherited: true, readOnly: true,
+  };
+}
+
+// The one line each side needs at the moment of transfer, so neither walks
+// away assuming the other picked it up. Silence here is how a repair gets
+// dropped between two companies that both thought it was handled.
+export function openWorkText(n, side) {
+  if (!n) return side === "incoming"
+    ? "Nothing is outstanding at this building."
+    : "You have no open work at this building.";
+  const what = n === 1 ? "1 open repair" : `${n} open repairs`;
+  return side === "incoming"
+    ? `${what} at this building ${n === 1 ? "is" : "are"} being finished by the previous manager. `
+      + "You can see what and when, but it stays theirs to complete and to pay."
+    : `${what} at this building ${n === 1 ? "stays" : "stay"} yours to finish. `
+      + "The new manager can see that it is outstanding, not who is doing it.";
+}

@@ -519,6 +519,8 @@ console.log("\n-- every recent migration names itself when it is missing --");
     ["no such table: doc_reminders", "037_document_detail"],
     ["no such column: scope_kind", "036_wo_scope"],
     ["no such table: lien_waivers", "035_waiver_chain"],
+    ["no such table: property_transfers", "039_building_handover"],
+    ["no such column: owner_account_id", "039_building_handover"],
     ["no such column: retainage_bps", "034_retainage"],
     ["no such table: wo_milestones", "033_job_ledger"],
     ["no such column: avatar_key", "032_user_avatar"],

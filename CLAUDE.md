@@ -216,6 +216,52 @@ refactor.
   because scoping our contractor to their building answers a question that is
   not ours to ask.
 
+  **Open repairs survive the move, without moving.** A building can change hands
+  with a repair half done, and because jobs do not move the incoming manager saw
+  *nothing*: no sign a contractor was due Tuesday, nobody to let them in, nobody
+  to verify the work, and a tenant waiting on a leak the new manager had never
+  heard of. The contractor turns up at a building whose manager has no record of
+  them. That is the worst moment this product can produce and it happened
+  silently.
+
+  The answer is not to move the jobs — the outgoing manager issued the work
+  order, owes the money, and is the party the contractor has an agreement with,
+  and moving them would hand a departing client their ex-manager's book. So the
+  incoming operator gets the **roll-up shape**: `inheritedShape` in
+  `app/shared/handover.js` passes what is wrong with the building and when
+  somebody is due, and withholds the company, the price, the crew and the work
+  order number. A count, a trade and a date — the same line the waiver roll-up
+  draws, for the same reason. No new column: a job is inherited when this
+  account operates the property, the job sits on another account, and it is not
+  finished, so it drops off by itself when the previous manager closes it out.
+
+  This is deliberately *stricter* than what an **owner** sees of work at a
+  building they appointed out, and the two must not be harmonised. The owner is
+  the client: the contractor is working on their building and they may know who.
+  The incoming manager is a rival firm, and a portfolio handover would hand them
+  every contractor on it. Same read-only shape, different redaction, for a
+  reason.
+
+  `assignments` on that shape is **empty, not absent**. Every screen assumes a
+  job has one (`j.trades.filter((t) => j.assignments[t])` in a dozen places) and
+  handing them a job without it white-screened the jobs list. Empty is also the
+  honest answer: this account has assigned nobody.
+
+  Both sides are **told at the moment of transfer**, on the decision panel and
+  in both feeds — silence there is exactly how a repair gets dropped between two
+  companies that each assumed the other had it. It never *blocks* the transfer:
+  a repair going nowhere is very often why somebody is changing agent, and
+  refusing to release a building until the work is finished hands the outgoing
+  manager a hostage.
+
+  Two things this uncovered, both live before it. The panel promised that
+  "its jobs ... become yours to run", which is the one thing a handover never
+  does. And `canComplete` answers "may this **role** complete jobs", not "may
+  they complete **this** job", so *Mark job complete* was offered on work
+  another account was running — an owner could close out their manager's repair.
+  Read-only means read-only, and the gate belongs with the other one, on
+  `j.readOnly`.
+
   An owner then holding their building may **appoint** a manager — the same
   two-party rule in reverse, and the manager must accept, because a building
   appearing in a portfolio unannounced is work, liability and possibly a plan
