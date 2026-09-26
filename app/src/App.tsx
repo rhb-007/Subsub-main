@@ -4698,7 +4698,19 @@ export default function SubSub() {
           onGoJobs={(p, phase) => { setJobProperty(p.id); setJobPhase(phase || "active"); setTab("jobs"); }}
           onOpenSub={(s) => { setSelected(s); setTab("contractors"); }}
           onNewJob={(p) => tryAddJob(null, p)} newAt={newPropertyAt}
-          canManage={runsTheAccount(role, membership)} asOwner={role === "owner"} />
+          canManage={runsTheAccount(role, membership)} asOwner={role === "owner"}
+          owners={users.filter((u) => memberships.some((m) => m.userId === u.id
+            && m.accountId === account.id && m.role === "owner"))
+            .map((u) => ({ ...u, propertyIds: (memberships.find((m) => m.userId === u.id
+              && m.accountId === account.id) || {}).propertyIds || [] }))}
+          onAddOwner={(p) => {
+            if (atSeatLimit) { setUpgradePrompt({ kind: "user" }); return; }
+            // The role and the building are the two things pressing this button
+            // has already said, so the form does not ask them again.
+            setUserForm({ role: "owner", propertyIds: [p.id] });
+          }}
+          onEditOwner={(u) => setEditUser(u)}
+          onResendInvite={resendInvite} />
       )}
 
       {tab === "calendar" && can("calendar") && (
@@ -5278,6 +5290,7 @@ export default function SubSub() {
           onDecline={() => setUpgradePrompt(null)} /></Modal>}
       {userForm && <Modal onClose={() => setUserForm(false)}>
         <UserForm subs={subs} properties={accountProperties} accountKind={kindOf(account)} onSubmit={addUser}
+          preset={userForm === true ? null : userForm}
           onCancel={() => setUserForm(false)} /></Modal>}
       {editUser && <Modal onClose={() => setEditUser(null)}>
         <UserForm subs={subs} properties={accountProperties} accountKind={kindOf(account)}
@@ -10770,10 +10783,77 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
 // ---- Properties (portfolio / property managers) -------------------------
 // Vendors can be scoped to specific properties. A vendor with none listed is
 // treated as available across the whole account, which is how a GC uses it.
-function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, onGoVendors, onGoJobs, newAt, canManage = true, asOwner = false }) {
+// The owners of one building, on the building.
+//
+// The relationship is a property scope on the owner's membership and is edited
+// from the user form too; nothing is stored twice. What this adds is the other
+// direction, and one thing the Users screen cannot show: an owner who was
+// granted a building and has never arrived. A property manager who ticked a box
+// believes they have given somebody access -- an invite that was never sent, or
+// never opened, looks identical from the Users list unless you go looking.
+function PropertyOwners({ property, owners, onAddOwner, onEditOwner, onResendInvite }) {
+  const waiting = owners.filter((u) => !u.hasLogin);
+  return (
+    <div className="prop-owners">
+      <div className="po-head">
+        <span className="po-lab"><Building2 size={12} /> Owners</span>
+        <button className="po-add" onClick={() => onAddOwner(property)}>
+          <Plus size={11} /> Add an owner
+        </button>
+      </div>
+      {owners.length === 0 ? (
+        <p className="prop-none">
+          Nobody owns this building on SubSub yet. An owner sees the work at their
+          own buildings and can request more — nothing else on the account.
+        </p>
+      ) : (
+        <div className="po-list">
+          {owners.map((u) => (
+            <div key={u.id} className="po-row">
+              <button className="po-who" onClick={() => onEditOwner(u)}>
+                <b>{u.name}</b>
+                <span className="po-mail">{u.email}</span>
+              </button>
+              {/* How many of their buildings this is, so a manager can tell an
+                  owner of one from an owner of thirty without leaving. */}
+              {(u.propertyIds || []).length > 1 && (
+                <span className="po-count">
+                  {(u.propertyIds || []).length} buildings
+                </span>
+              )}
+              {u.hasLogin
+                ? <span className="po-in"><CheckCircle2 size={11} /> Signed in</span>
+                : <SeatState u={u} onResend={onResendInvite} />}
+            </div>
+          ))}
+        </div>
+      )}
+      {waiting.length > 0 && (
+        <p className="po-warn">
+          <AlertTriangle size={12} />
+          {waiting.length === owners.length
+            ? owners.length === 1
+              ? "They cannot see anything here until they set a password."
+              : "None of them can see anything here until they set a password."
+            : `${waiting.length} of ${owners.length} cannot see anything here yet.`}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, onGoVendors, onGoJobs, newAt, canManage = true, asOwner = false,
+  owners = [], onAddOwner, onEditOwner, onResendInvite }) {
   const [form, setForm] = useState(null);   // null | {} | property
   const [assigning, setAssigning] = useState(null);   // the property whose vendor list is open
   const vendorsFor = (pid) => subs.filter((s) => (s.propertyIds || []).includes(pid));
+  // Who owns this building. The grant itself lives on the person's membership
+  // (membership_properties), which is the right place for it -- a building can
+  // have several owners and an owner several buildings. This is a second door
+  // onto the same relationship, because "who owns 12 Cedar St" is the question
+  // somebody running a portfolio actually asks, and answering it used to mean
+  // opening every user in turn and reading their tick list backwards.
+  const ownersFor = (pid) => owners.filter((u) => (u.propertyIds || []).includes(pid));
   const unscoped = subs.filter((s) => !(s.propertyIds || []).length);
   const jobsFor = (pid) => jobs.filter((j) => j.propertyId === pid);
 
@@ -10948,6 +11028,15 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                   <p className="prop-none">
                     No vendors scoped here yet — every vendor on the account can work it.
                   </p>
+                )}
+
+                {/* Owners, on the building. Not shown to an owner: two owners
+                    at the same building are both guests here, and one of them
+                    is not the account's to introduce to the other. */}
+                {canManage && !asOwner && (
+                  <PropertyOwners property={p} owners={ownersFor(p.id)}
+                    onAddOwner={onAddOwner} onEditOwner={onEditOwner}
+                    onResendInvite={onResendInvite} />
                 )}
 
                 {p.notes && <p className="prop-notes">{p.notes}</p>}
@@ -17275,11 +17364,15 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable }) {
 }
 
 // ---- Create / edit user -------------------------------------------------
-function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = true, properties = [], accountKind = DEFAULT_ACCOUNT_KIND, onSetAvatar }) {
+function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = true, properties = [], accountKind = DEFAULT_ACCOUNT_KIND, onSetAvatar, preset = null }) {
+  // `preset` is how "Add an owner" on a building arrives here: the role and
+  // that one building, already chosen, so the form opens on the person's name
+  // rather than on two answers they have already given by pressing the button.
   const [f, setF] = useState(existing
     ? { id: existing.id, name: existing.name, email: existing.email, role: existing.role,
         subId: existing.subId || "", propertyIds: existing.propertyIds || [] }
-    : { name: "", email: "", role: "pm", subId: "", propertyIds: [] });
+    : { name: "", email: "", role: preset?.role || "pm", subId: "",
+        propertyIds: preset?.propertyIds || [] });
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   // Building owner is only offered by an account that has owners on the other
   // side of the table, and never without buildings to attach them to. A role
@@ -21505,6 +21598,27 @@ p.fld-note{margin:6px 0 0}
 .prop-vendor svg{color:var(--amber)}
 .prop-more{font-size:11.5px;color:var(--ink-soft);align-self:center}
 .prop-none{font-size:12.5px;color:var(--ink-soft);margin-top:13px;line-height:1.45}
+/* owners, on the building */
+.prop-owners{margin-top:15px;padding-top:13px;border-top:1px solid var(--line)}
+.po-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.po-lab{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:800;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft)}
+.po-add{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--brand);
+  background:var(--card);color:var(--brand);font-size:11.5px;font-weight:700;
+  padding:5px 10px;border-radius:7px;cursor:pointer;font-family:inherit;flex:none}
+.po-add:hover{background:var(--paper)}
+.po-list{display:flex;flex-direction:column;gap:7px;margin-top:10px}
+.po-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.po-who{display:flex;flex-direction:column;gap:1px;align-items:flex-start;text-align:left;
+  border:0;background:none;padding:0;cursor:pointer;font-family:inherit;min-width:0}
+.po-who b{font-size:13px;color:var(--ink)}
+.po-who:hover b{color:var(--brand)}
+.po-mail{font-size:11.5px;color:var(--ink-soft)}
+.po-count{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:5px;
+  background:var(--paper);border:1px solid var(--line);color:var(--ink-soft);flex:none}
+.po-in{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:#1f6b4a;flex:none}
+.po-warn{display:flex;align-items:center;gap:6px;margin:10px 0 0;font-size:12px;
+  color:#8a5a12;line-height:1.4}
 .prop-notes{font-size:12.5px;color:var(--ink-soft);margin-top:10px;font-style:italic}
 .prop-job{margin-top:14px;align-self:flex-start;display:inline-flex;align-items:center;gap:6px;
   border:1px dashed var(--line);background:none;border-radius:8px;padding:9px 13px;
