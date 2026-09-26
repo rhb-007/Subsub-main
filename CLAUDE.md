@@ -298,6 +298,26 @@ refactor.
   buildings give the **same answer**, so this cannot be walked to find out who
   is on SubSub.
 
+- **A portfolio is scanned, so the property tile carries only what you scan
+  for.** Every card used to hold the vendor chips, the owners panel with its
+  invite chasing, the whole handover conversation, the notes and four buttons, in
+  330px columns. Eight buildings were several screens, and the question a
+  portfolio is opened to answer — which of these needs me — was below the fold on
+  card two. The tile is now the name, the address, who runs it when that is
+  somebody else, and the counts; `.prop-detail` in a wide modal holds the rest.
+  Roughly 97px and four to a row where it was 220px and three.
+
+  **The counts stay on the tile and stay followable.** "Five open jobs" with
+  nowhere to go was the original complaint about this screen, and burying the
+  numbers a tap deeper to make room would have undone that fix to pay for this
+  one. The name is the way in rather than the whole tile, because a button inside
+  a button is not a thing and the counts have to keep working as buttons.
+
+  The detail panel reads the property **out of props on every render**, not from
+  the row it was opened with. Editing, adding an owner or answering a handover
+  from inside it changes that row, and a panel still showing its opening copy is
+  the stale-snapshot bug this file has grown twice before.
+
 - **Completion is two-party and append-only.** The subcontractor marks work
   reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because

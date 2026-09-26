@@ -114,7 +114,10 @@ try {
   console.log("\n-- following a vendors count that is not zero --");
   await page.evaluate(() => [...document.querySelectorAll("button,a")].find((e) => /^Properties/.test(e.textContent.trim()))?.click());
   await wait(1600);
-  const vBtn = await clickStat(A.name, /assigned vendor/);
+  // Matches the word rather than the phrase: the tile shortened this to
+  // "N vendors" when the detail moved into its own panel, and which adjective
+  // the label carries is not what this test is about.
+  const vBtn = await clickStat(A.name, /vendor/);
   ck("the vendors count can be followed", !!vBtn, vBtn || "no stat-link matched");
   await wait(1600);
   const onVendors = await page.evaluate(() => ({
@@ -142,7 +145,7 @@ try {
   console.log("\n-- and a zero one offers the way to fix it --");
   await page.evaluate(() => [...document.querySelectorAll("button,a")].find((e) => /^Properties/.test(e.textContent.trim()))?.click());
   await wait(1600);
-  const zBtn = await clickStat(B.name, /assigned vendor/);
+  const zBtn = await clickStat(B.name, /vendor/);
   ck("the zero count can be followed too", !!zBtn && /^0 /.test(zBtn.trim()), zBtn || "not found");
   await wait(1200);
   const panel = await page.evaluate(() =>

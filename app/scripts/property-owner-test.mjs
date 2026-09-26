@@ -93,21 +93,59 @@ const toProperties = async (page) => {
     .find((b) => /^(Properties|Buildings)/.test(b.innerText.trim().split("\n")[0]))?.click());
   await wait(1000);
 };
-const cards = (page) => page.evaluate(() => [...document.querySelectorAll(".prop-card")].map((c) => ({
+// The tiles, as scanned. Owners are not on them any more -- they live in the
+// detail panel, which is the whole point of the tile being a tile.
+const tiles = (page) => page.evaluate(() => [...document.querySelectorAll(".prop-card")].map((c) => ({
   name: c.querySelector("h3")?.innerText.trim(),
   owners: c.querySelector(".prop-owners")?.innerText.replace(/\s+/g, " ").trim() || null,
-  rows: [...c.querySelectorAll(".po-row")].map((r) => r.innerText.replace(/\s+/g, " ").trim()),
-  // Specifically the one in the Owners panel. Other panels on this card have
-  // their own start buttons and must not be mistaken for this.
-  addBtn: !!c.querySelector(".prop-owners .po-add"),
 })));
+// One building's detail panel: open it by its name, read the Owners section,
+// then close it again so the next open starts clean.
+const openDetail = async (page, name) => {
+  await page.evaluate((n) => {
+    const c = [...document.querySelectorAll(".prop-card")]
+      .find((x) => x.querySelector("h3")?.innerText.trim() === n);
+    c?.querySelector(".pt-open")?.click();
+  }, name);
+  await wait(700);
+  const got = await page.evaluate(() => {
+    const d = document.querySelector(".prop-detail");
+    if (!d) return null;
+    return { name: d.querySelector("h2")?.innerText.trim(),
+      owners: d.querySelector(".prop-owners")?.innerText.replace(/\s+/g, " ").trim() || null,
+      rows: [...d.querySelectorAll(".po-row")].map((r) => r.innerText.replace(/\s+/g, " ").trim()),
+      // Specifically the one in the Owners panel. Other panels in here have
+      // their own start buttons and must not be mistaken for this.
+      addBtn: !!d.querySelector(".prop-owners .po-add") };
+  });
+  return got;
+};
+const closeDetail = async (page) => {
+  await page.evaluate(() => document.querySelector(".modal-close")?.click());
+  await wait(400);
+};
+// Every building's panel in turn, which is what "all three" now costs.
+const cards = async (page) => {
+  const names = await page.evaluate(() => [...document.querySelectorAll(".prop-card")]
+    .map((c) => c.querySelector("h3")?.innerText.trim()));
+  const out = [];
+  for (const n of names) { out.push(await openDetail(page, n)); await closeDetail(page); }
+  return out;
+};
 
 try {
   console.log("\n-- the owner is on the building now --");
   const { ctx, page, crashes } = await openAs("u_pm");
   await toProperties(page);
+  const shown = await tiles(page);
   const list = await cards(page);
-  t.ck("all three buildings are drawn", list.length === 3, JSON.stringify(list.map((c) => c.name)));
+  t.ck("all three buildings are drawn", shown.length === 3, JSON.stringify(shown.map((c) => c.name)));
+  // THE POINT OF THE TILE: the owners are not on it. A portfolio is scanned,
+  // and the old card put every panel on every building.
+  t.ck("and the tiles carry no owner panel",
+    shown.every((c) => c.owners === null), JSON.stringify(shown.map((c) => c.owners)));
+  t.ck("each one opens its own panel", list.length === 3 && list.every((c) => c && c.name),
+    JSON.stringify(list.map((c) => c?.name)));
 
   const cedar = list.find((c) => /Cedar/.test(c.name || ""));
   const elm = list.find((c) => /Elm/.test(c.name || ""));
@@ -144,9 +182,9 @@ try {
   console.log("\n-- adding an owner starts from the building --");
   {
     t.ck("every building offers it", list.every((c) => c.addBtn), JSON.stringify(list.map((c) => c.addBtn)));
+    await openDetail(page, list.find((c) => /Birch/.test(c.name)).name);
     await page.evaluate(() => {
-      const c = [...document.querySelectorAll(".prop-card")].find((x) => /Birch/.test(x.innerText));
-      c.querySelector(".po-add").click();
+      document.querySelector(".prop-detail .prop-owners .po-add")?.click();
     });
     await wait(1100);
     const form = await page.evaluate(() => {

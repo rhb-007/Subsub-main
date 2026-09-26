@@ -111,15 +111,49 @@ const toProperties = async (page) => {
     .find((b) => /^(Properties|Buildings)/.test(b.innerText.trim().split("\n")[0]))?.click());
   await wait(1000);
 };
-const card = (page, name) => page.evaluate((n) => {
-  const c = [...document.querySelectorAll(".prop-card")].find((x) => x.querySelector("h3")?.innerText.trim() === n);
-  if (!c) return null;
-  const h = c.querySelector(".prop-handover");
-  return { handover: h ? h.innerText.replace(/\s+/g, " ").trim() : null,
-    live: !!c.querySelector(".prop-handover.live"),
-    buttons: h ? [...h.querySelectorAll("button")].map((b) => b.innerText.trim()).filter(Boolean) : [],
-    managed: c.querySelector(".ph-managed")?.innerText.trim() || null };
-}, name);
+// Open a building's detail panel. The tile carries the name and the counts;
+// the handover conversation, the owners and the actions are all in here now.
+const openDetail = async (page, name) => {
+  await page.evaluate((n) => {
+    const c = [...document.querySelectorAll(".prop-card")]
+      .find((x) => x.querySelector("h3")?.innerText.trim() === n);
+    c?.querySelector(".pt-open")?.click();
+  }, name);
+  await wait(700);
+};
+const closeDetail = async (page) => {
+  await page.evaluate(() => document.querySelector(".modal-close")?.click());
+  await wait(400);
+};
+// What the open panel says. Left async and named `card` so the assertions below
+// keep reading as they did.
+const card = async (page, name) => {
+  await openDetail(page, name);
+  const got = await page.evaluate(() => {
+    const d = document.querySelector(".prop-detail");
+    if (!d) return null;
+    const h = d.querySelector(".prop-handover");
+    return { handover: h ? h.innerText.replace(/\s+/g, " ").trim() : null,
+      live: !!d.querySelector(".prop-handover.live"),
+      buttons: h ? [...h.querySelectorAll("button")].map((b) => b.innerText.trim()).filter(Boolean) : [],
+      cta: [...d.querySelectorAll(".pd-acts button")].map((b) => b.innerText.trim()).filter(Boolean),
+      managed: d.querySelector(".ph-managed")?.innerText.trim() || null };
+  });
+  await closeDetail(page);
+  return got;
+};
+// Acting on the open panel: click something in it by its label.
+const clickIn = async (page, name, re) => {
+  await openDetail(page, name);
+  const hit = await page.evaluate((rs) => {
+    const d = document.querySelector(".prop-detail");
+    const b = [...(d?.querySelectorAll("button") || [])]
+      .find((x) => new RegExp(rs, "i").test(x.innerText));
+    if (!b) return null; b.click(); return b.innerText.trim();
+  }, re.source);
+  await wait(700);
+  return hit;
+};
 
 try {
   console.log("\n-- the manager can offer a building its owner owns --");
@@ -144,14 +178,10 @@ try {
     t.ck("no appoint button on the card either",
       !elm.buttons.some((b) => /appoint/i.test(b)), JSON.stringify(elm.buttons));
 
+    await clickIn(page, "12 Cedar St", /hand over/);
     await page.evaluate(() => {
-      const c = [...document.querySelectorAll(".prop-card")].find((x) => /Cedar/.test(x.innerText));
-      [...c.querySelectorAll(".prop-handover button")].find((b) => /hand over/i.test(b.innerText))?.click();
-    });
-    await wait(600);
-    await page.evaluate(() => {
-      const c = [...document.querySelectorAll(".prop-card")].find((x) => /Cedar/.test(x.innerText));
-      [...c.querySelectorAll(".prop-handover button")].find((b) => /send the request/i.test(b.innerText))?.click();
+      const d = document.querySelector(".prop-detail");
+      [...d.querySelectorAll(".prop-handover button")].find((b) => /send the request/i.test(b.innerText))?.click();
     });
     await wait(1100);
     t.ck("sending it reaches the server", requested.length === 1 && requested[0].id === "p_cedar",
@@ -179,10 +209,7 @@ try {
       !c.buttons.some((b) => /hand it over|accept/i.test(b)), JSON.stringify(c.buttons));
     t.ck("only withdraw", c.buttons.length === 1 && /withdraw/i.test(c.buttons[0]), JSON.stringify(c.buttons));
 
-    await page.evaluate(() => {
-      const x = [...document.querySelectorAll(".prop-card")].find((y) => /Cedar/.test(y.innerText));
-      [...x.querySelectorAll(".prop-handover button")].find((b) => /withdraw/i.test(b.innerText))?.click();
-    });
+    await clickIn(page, "12 Cedar St", /withdraw/);
     await wait(1000);
     t.ck("withdrawing reaches the server", cancelled.includes("tr1"), JSON.stringify(cancelled));
     await ctx.close();
@@ -207,10 +234,7 @@ try {
     t.ck("it says the old jobs stay on the manager's record",
       /stay on your manager's record/i.test(c.handover), c.handover);
 
-    await page.evaluate(() => {
-      const x = [...document.querySelectorAll(".prop-card")].find((y) => /Cedar/.test(y.innerText));
-      [...x.querySelectorAll(".prop-handover button")].find((b) => /hand it over|accept/i.test(b.innerText))?.click();
-    });
+    await clickIn(page, "12 Cedar St", /hand it over|accept/);
     await wait(1100);
     t.ck("accepting reaches the server with accept true",
       decided.length === 1 && decided[0].body.accept === true, JSON.stringify(decided));
@@ -225,10 +249,7 @@ try {
     const c = await card(page, "12 Cedar St");
     t.ck("appointing is offered", /appoint a property manager/i.test(c?.handover || ""), c?.handover);
 
-    await page.evaluate(() => {
-      const x = [...document.querySelectorAll(".prop-card")].find((y) => /Cedar/.test(y.innerText));
-      [...x.querySelectorAll(".prop-handover button")].find((b) => /appoint/i.test(b.innerText))?.click();
-    });
+    await clickIn(page, "12 Cedar St", /appoint/);
     await wait(700);
     const form = await page.evaluate(() => {
       const h = document.querySelector(".prop-handover");
@@ -312,10 +333,7 @@ console.log("\n-- and they can watch the work at it, without touching it --");
     await toProperties(page);
     const c = await card(page, "12 Cedar St");
     t.ck("the card says who runs it", /managed by sound pm/i.test(c?.managed || ""), String(c?.managed));
-    const cta = await page.evaluate(() => {
-      const x = [...document.querySelectorAll(".prop-card")].find((y) => /Cedar/.test(y.innerText));
-      return [...x.querySelectorAll(".prop-cta button")].map((b) => b.innerText.trim());
-    });
+    const cta = (await card(page, "12 Cedar St"))?.cta || [];
     // They cannot book the work. They can ask for it -- the alternative is
     // watching your own building and having to ring somebody.
     t.ck("it offers to ask the manager", cta.some((b) => /ask your manager/i.test(b)), JSON.stringify(cta));
@@ -337,10 +355,7 @@ console.log("\n-- and they can watch the work at it, without touching it --");
       city: "Tacoma", state: "WA", zip: "98402", units: 4, notes: "" }];
     const { ctx, page } = await openAs("owner");
     await toProperties(page);
-    await page.evaluate(() => {
-      const x = [...document.querySelectorAll(".prop-card")].find((y) => /Cedar/.test(y.innerText));
-      [...x.querySelectorAll(".prop-cta button")].find((b) => /ask your manager/i.test(b.innerText))?.click();
-    });
+    await clickIn(page, "12 Cedar St", /ask your manager/);
     await wait(900);
     const form = await page.evaluate(() => {
       const f = document.querySelector(".modal .form") || document.querySelector(".form");
@@ -482,13 +497,14 @@ console.log("\n-- and they can watch the work at it, without touching it --");
         + "You can see what and when, but it stays theirs to complete and to pay." }];
     const { ctx, page } = await openAs("pm");
     await toProperties(page);
+    await openDetail(page, "12 Cedar St");
     const panel = await page.evaluate(() => {
-      const c = [...document.querySelectorAll(".prop-card")].find((x) => /Cedar/.test(x.innerText));
-      const h = c?.querySelector(".prop-handover");
+      const h = document.querySelector(".prop-detail .prop-handover");
       return { open: h?.querySelector(".ph-open")?.innerText.replace(/\s+/g, " ").trim() || null,
         small: h?.querySelector(".ph-small")?.innerText.replace(/\s+/g, " ").trim() || null,
         buttons: [...(h?.querySelectorAll("button") || [])].map((b) => b.innerText.trim()) };
     });
+    await closeDetail(page);
     t.ck("the count is on the decision panel", /3 open repairs/.test(panel.open || ""), String(panel.open));
     t.ck("and says it stays with the previous manager",
       /being finished by the previous manager/.test(panel.open || ""), String(panel.open));

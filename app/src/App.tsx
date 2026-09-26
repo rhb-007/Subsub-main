@@ -11152,6 +11152,7 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
   accountKind }) {
   const [form, setForm] = useState(null);   // null | {} | property
   const [assigning, setAssigning] = useState(null);   // the property whose vendor list is open
+  const [detail, setDetail] = useState(null);         // the property whose panel is open
   const vendorsFor = (pid) => subs.filter((s) => (s.propertyIds || []).includes(pid));
   // Who owns this building. The grant itself lives on the person's membership
   // (membership_properties), which is the right place for it -- a building can
@@ -11269,60 +11270,45 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
       ) : (
         <div className="prop-grid">
           {properties.map((p) => {
-            const vs = vendorsFor(p.id);
-            // Managing the ACCOUNT is not managing this building. One somebody
-            // else operates has no roster of ours scoped to it and never will:
-            // scoping our vendor to their building, or being told "every vendor
-            // on the account can work it", are both answers to a question that
-            // is not ours to ask.
-            const runs = canManage && !p.ownedNotOperated;
             const js = jobsFor(p.id);
             const open = js.filter((j) => j.status !== "completed").length;
+            const vs = vendorsFor(p.id);
+            // Managing the ACCOUNT is not managing this building -- see the
+            // detail panel, where the vendor affordances live.
+            const runs = canManage && !p.ownedNotOperated;
             return (
-              <div key={p.id} className="prop-card">
+              // Deliberately thin. A portfolio is something you scan, and the
+              // old card put the vendor list, the owners, the handover panel
+              // and four buttons on every one of them -- so four buildings
+              // filled the screen and the answer to "which of these needs me"
+              // was somewhere below the fold. What is left is what you scan
+              // FOR; everything else is one tap away in the detail panel.
+              <div key={p.id} className="prop-card tile">
                 <div className="prop-top">
-                  <div>
-                    <h3>{p.name}</h3>
+                  <div className="pt-id">
+                    <h3>
+                      <button className="pt-open" onClick={() => setDetail(p)}
+                        title={`Open ${p.name}`}>{p.name}</button>
+                    </h3>
                     <span className="prop-addr">
                       {[p.address, p.city, p.state, p.zip].filter(Boolean).join(", ")}
                     </span>
                   </div>
-                  {/* Somebody else runs this one. Said on the card, because
-                      almost nothing else on it applies to such a building. */}
+                  {/* Who runs it, which is identity rather than a warning: on a
+                      list mixing both, "is this one mine to run?" is not a
+                      question that should need a tap. */}
                   {p.ownedNotOperated && (
                     <span className="ph-managed" title={`Managed by ${p.managedBy || "another account"}`}>
-                      <Building2 size={11} /> Managed by {p.managedBy || "another account"}
+                      <Building2 size={11} /> {p.managedBy || "Another account"}
                     </span>
                   )}
-                  {canManage && !p.ownedNotOperated && (
-                    <div className="prop-actions">
-                      <button className="edit-btn" onClick={() => setForm(p)}><Pencil size={13} /> Edit</button>
-                      <button className="icon-x" title="Remove property"
-                        onClick={() => onRemove(p.id)}><Trash2 size={13} /></button>
-                    </div>
-                  )}
                 </div>
-
-                {/* The two counts were the answer to a question and no way
-                    to ask the next one: "five open jobs" and then nowhere to
-                    go. Both lead to the list they are counting, narrowed to
-                    this building. Units is not a link because there is
-                    nothing on the other side of it. */}
+                {/* The counts stay on the tile and stay followable. "Five open
+                    jobs" with nowhere to go was the original complaint about
+                    this screen; the numbers lead to the list they count,
+                    narrowed to this building. */}
                 <div className="prop-stats">
-                  <span><strong>{p.units || "—"}</strong> units</span>
-                  {runs && (
-                    vs.length > 0 ? (
-                      <button className="stat-link" onClick={() => onGoVendors(p)}>
-                        <strong>{vs.length}</strong> assigned vendor{vs.length === 1 ? "" : "s"}
-                      </button>
-                    ) : (
-                      // Nothing to look at, so this offers the thing they
-                      // would want instead.
-                      <button className="stat-link" onClick={() => setAssigning(p)}>
-                        <strong>0</strong> assigned vendors
-                      </button>
-                    )
-                  )}
+                  <span><strong>{p.units || "\u2014"}</strong> units</span>
                   {open > 0 ? (
                     <button className="stat-link" onClick={() => onGoJobs(p)}>
                       <strong>{open}</strong> open job{open === 1 ? "" : "s"}
@@ -11334,68 +11320,132 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                   ) : (
                     <span><strong>0</strong> open jobs</span>
                   )}
-                </div>
-
-                {/* The vendor list is the account's roster and its compliance
-                    state. An owner sees who is coming to their own jobs, in
-                    the job itself -- not who else is on the books. */}
-                {!runs ? null : vs.length > 0 ? (
-                  <div className="prop-vendors">
-                    {vs.slice(0, 6).map((v) => (
-                      <button key={v.id} className="prop-vendor" onClick={() => onOpenSub(v)}>
-                        {v.company}
-                        {!docsComplete(v) && <AlertTriangle size={11} />}
-                      </button>
-                    ))}
-                    {vs.length > 6 && <span className="prop-more">+{vs.length - 6} more</span>}
-                  </div>
-                ) : (
-                  <p className="prop-none">
-                    No vendors scoped here yet — every vendor on the account can work it.
-                  </p>
-                )}
-
-                {/* Owners, on the building. Not shown to an owner: two owners
-                    at the same building are both guests here, and one of them
-                    is not the account's to introduce to the other. */}
-                {canManage && !asOwner && (
-                  <PropertyOwners property={p} owners={ownersFor(p.id)}
-                    onAddOwner={onAddOwner} onEditOwner={onEditOwner}
-                    onResendInvite={onResendInvite} />
-                )}
-
-                {/* Which side of the conversation this screen is. An owner
-                    looking at a guest seat asks; a manager offers; somebody
-                    holding their own building appoints. */}
-                {onAskTransfer && (
-                  <PropertyHandover property={p} transfer={transferFor(p.id)}
-                    side={asOwner ? "owner-seat" : p.ownedByAnother ? "manager" : "holder"}
-                    ownerKind={isOwnerKind(accountKind)}
-                    onAsk={onAskTransfer} onDecide={onDecideTransfer}
-                    onCancel={onCancelTransfer} onAppoint={onAppointManager} />
-                )}
-
-                {p.notes && <p className="prop-notes">{p.notes}</p>}
-                <div className="prop-cta">
                   {runs && (
-                    <button className="prop-job" onClick={() => setAssigning(p)}>
-                      <Users size={12} /> Assign vendors
-                    </button>
+                    vs.length > 0 ? (
+                      <button className="stat-link" onClick={() => onGoVendors(p)}>
+                        <strong>{vs.length}</strong> vendor{vs.length === 1 ? "" : "s"}
+                      </button>
+                    ) : (
+                      <button className="stat-link" onClick={() => setAssigning(p)}>
+                        <strong>0</strong> vendors
+                      </button>
+                    )
                   )}
-                  {/* A building somebody else runs: they cannot book the work,
-                      but they can ask for it. The alternative is watching your
-                      own building and having to ring somebody. */}
-                  <button className="prop-job" onClick={() => onNewJob(p)}>
-                    <Plus size={12} /> {p.ownedNotOperated
-                      ? "Ask your manager"
-                      : asOwner ? "Request work here" : "New job here"}
-                  </button>
                 </div>
               </div>
             );
           })}
         </div>
       )}
+
+      {/* Everything the tile no longer carries. Opened from the name, wide
+          enough that the handover conversation and the owner list are not
+          squeezed into a third of a column the way they were on the card. */}
+      {detail && (() => {
+        // Read fresh out of props every render. Editing a property, adding an
+        // owner or answering a handover from in here changes the row, and a
+        // panel still showing the copy it opened with is the stale-snapshot
+        // bug this file has grown twice before.
+        const p = properties.find((x) => x.id === detail.id) || detail;
+        const vs = vendorsFor(p.id);
+        const js = jobsFor(p.id);
+        const open = js.filter((j) => j.status !== "completed").length;
+        const runs = canManage && !p.ownedNotOperated;
+        return (
+          <Modal wide onClose={() => setDetail(null)}>
+            <div className="prop-detail">
+              <div className="pd-head">
+                <div>
+                  <h2>{p.name}</h2>
+                  <span className="prop-addr">
+                    {[p.address, p.city, p.state, p.zip].filter(Boolean).join(", ")}
+                  </span>
+                </div>
+                {p.ownedNotOperated && (
+                  <span className="ph-managed" title={`Managed by ${p.managedBy || "another account"}`}>
+                    <Building2 size={11} /> Managed by {p.managedBy || "another account"}
+                  </span>
+                )}
+              </div>
+
+              <div className="pd-stats">
+                <span><strong>{p.units || "\u2014"}</strong> units</span>
+                <span><strong>{open}</strong> open job{open === 1 ? "" : "s"}</span>
+                {js.length - open > 0 && <span><strong>{js.length - open}</strong> finished</span>}
+                {runs && <span><strong>{vs.length}</strong> vendor{vs.length === 1 ? "" : "s"} scoped</span>}
+              </div>
+
+              {/* The vendor list is the account's roster and its compliance
+                  state. An owner sees who is coming to their own jobs, in the
+                  job itself -- not who else is on the books. */}
+              {!runs ? null : vs.length > 0 ? (
+                <div className="prop-vendors">
+                  {vs.slice(0, 12).map((v) => (
+                    <button key={v.id} className="prop-vendor" onClick={() => onOpenSub(v)}>
+                      {v.company}
+                      {!docsComplete(v) && <AlertTriangle size={11} />}
+                    </button>
+                  ))}
+                  {vs.length > 12 && <span className="prop-more">+{vs.length - 12} more</span>}
+                </div>
+              ) : (
+                <p className="prop-none">
+                  No vendors scoped here yet — every vendor on the account can work it.
+                </p>
+              )}
+
+              {/* Owners, on the building. Not shown to an owner: two owners at
+                  the same building are both guests here, and one of them is not
+                  the account's to introduce to the other. */}
+              {canManage && !asOwner && (
+                <PropertyOwners property={p} owners={ownersFor(p.id)}
+                  onAddOwner={onAddOwner} onEditOwner={onEditOwner}
+                  onResendInvite={onResendInvite} />
+              )}
+
+              {/* Which side of the conversation this screen is. An owner
+                  looking at a guest seat asks; a manager offers; somebody
+                  holding their own building appoints. */}
+              {onAskTransfer && (
+                <PropertyHandover property={p} transfer={transferFor(p.id)}
+                  side={asOwner ? "owner-seat" : p.ownedByAnother ? "manager" : "holder"}
+                  ownerKind={isOwnerKind(accountKind)}
+                  onAsk={onAskTransfer} onDecide={onDecideTransfer}
+                  onCancel={onCancelTransfer} onAppoint={onAppointManager} />
+              )}
+
+              {p.notes && <p className="prop-notes">{p.notes}</p>}
+
+              <div className="pd-acts">
+                {canManage && !p.ownedNotOperated && (
+                  <>
+                    <button className="btn-ghost small" onClick={() => setForm(p)}>
+                      <Pencil size={13} /> Edit
+                    </button>
+                    <button className="btn-ghost small danger" title="Remove property"
+                      onClick={() => { onRemove(p.id); setDetail(null); }}>
+                      <Trash2 size={13} /> Remove
+                    </button>
+                  </>
+                )}
+                {runs && (
+                  <button className="btn-ghost small" onClick={() => setAssigning(p)}>
+                    <Users size={13} /> Assign vendors
+                  </button>
+                )}
+                {/* A building somebody else runs: they cannot book the work,
+                    but they can ask for it. The alternative is watching your
+                    own building and having to ring somebody. */}
+                <button className="btn-solid small" onClick={() => { onNewJob(p); setDetail(null); }}>
+                  <Plus size={13} /> {p.ownedNotOperated
+                    ? "Ask your manager"
+                    : asOwner ? "Request work here" : "New job here"}
+                </button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
     </main>
   );
 }
@@ -21911,9 +21961,46 @@ p.fld-note{margin:6px 0 0}
 @media (max-width:640px){.theme-grid{grid-template-columns:1fr}}
 
 /* properties (portfolio / property managers) */
-.prop-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+/* Three to four per row at desk width, and they stay legible down to a phone.
+   330px columns with everything on the card meant four buildings filled a
+   screen; the tile carries what a portfolio is scanned for and the rest opens
+   in .prop-detail. */
+.prop-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:12px}
 .prop-card{background:var(--card);border:1px solid var(--line);border-radius:12px;
   padding:18px 20px;display:flex;flex-direction:column;box-shadow:var(--shadow)}
+.prop-card.tile{padding:13px 15px;gap:0;transition:border-color .12s,box-shadow .12s}
+.prop-card.tile:hover,.prop-card.tile:focus-within{border-color:var(--brand)}
+.pt-id{min-width:0}
+/* The name is the way in. A button rather than the whole tile, so the counts
+   beside it stay clickable in their own right -- a button inside a button is
+   not a thing, and the counts leading somewhere is what this screen was
+   missing in the first place. */
+.pt-open{background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;
+  text-align:left;cursor:pointer;width:100%}
+.pt-open:hover,.pt-open:focus-visible{color:var(--brand)}
+.pt-open:focus-visible{outline:2px solid var(--brand);outline-offset:3px;border-radius:4px}
+.prop-card.tile h3{font-size:15px;line-height:1.25}
+.prop-card.tile .prop-addr{font-size:11.5px;margin-top:2px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.prop-card.tile .prop-stats{margin-top:10px;padding:8px 0 0;border-bottom:0;gap:12px;
+  font-size:11.5px}
+.prop-card.tile .prop-stats strong{font-size:13px}
+.prop-card.tile .ph-managed{font-size:9.5px;padding:2px 6px;max-width:46%;
+  overflow:hidden;text-overflow:ellipsis}
+/* The detail panel: everything the tile stopped carrying. */
+.prop-detail{display:flex;flex-direction:column;gap:14px}
+.pd-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+  padding-right:28px}
+.pd-head h2{margin:0;font-size:20px;letter-spacing:-.02em}
+.pd-stats{display:flex;gap:18px;flex-wrap:wrap;padding:11px 0;
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  font-size:12.5px;color:var(--ink-soft)}
+.pd-stats strong{font-size:15px;color:var(--ink);font-weight:700}
+.pd-acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+  border-top:1px solid var(--line);padding-top:14px}
+.pd-acts .btn-ghost.danger{color:#a3342a}
+.pd-acts .btn-ghost.danger:hover{border-color:#a3342a;background:#fdf3f2}
+.pd-acts .btn-solid{margin-left:auto}
 .prop-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .prop-card h3{font-size:17px;letter-spacing:-.02em;margin:0}
 .prop-addr{display:block;font-size:12.5px;color:var(--ink-soft);margin-top:3px}
@@ -22015,8 +22102,9 @@ p.fld-note{margin:6px 0 0}
 .prop-cta{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
 .prop-cta .prop-job{margin-top:0}
 @media (max-width:560px){
-  .prop-grid{grid-template-columns:1fr}
+  .prop-grid{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
   .prop-stats{gap:12px}
+  .pd-acts .btn-solid{margin-left:0}
 }
 
 /* "Powered by" + SubSub logo on the white-labeled sign-in / sign-up pages.
