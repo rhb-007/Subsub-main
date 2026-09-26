@@ -1062,6 +1062,12 @@ body.nav-open{overflow:hidden}
     ubi_required: 'A general contractor needs a UBI number.',
     license_taken: 'That license number is already registered here. Email support@subsub.work and we will sort it out.',
     email_in_use: 'That email already has an account. Sign in instead.',
+    // Not the same thing, and the difference matters. A guest seat is access
+    // somebody else granted to their account -- signing in lands them there,
+    // which is not what they came here to make.
+    email_is_a_guest_seat: 'That address was invited onto somebody else\'s account, so it '
+      + 'cannot start a new one. Use a different address, or sign in and ask them to hand '
+      + 'your building over first.',
     invalid_subdomain: 'That sign-in address cannot be used. Use 3-40 letters, numbers or dashes.',
     invalid_email: 'That email address does not look right.',
     invalid_phone: 'A mobile number needs 10 digits.',

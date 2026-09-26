@@ -34,6 +34,8 @@ import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
 import { eligible as overflowEligible, canBroadcast, overflowSplit, postClosed,
   postWindowHours, OVERFLOW_FEE_BPS, ELIGIBILITY } from "../shared/overflow.js";
+import { canHandOver, awaitingFrom, canDecide as canDecideTransfer,
+  canCancel as canCancelTransfer } from "../shared/handover.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 import { verifyAccessJwt } from "./access.js";
 import {
@@ -372,6 +374,16 @@ const OWNER_ALLOWED = [
   [/^\/api\/logo\/[^/]+$/, ["GET"]],
   [/^\/api\/auth\/me$/, ["GET"]],
   [/^\/api\/account-users$/, ["GET"]],     // scoped: themselves only
+  // Letting themselves out. The route refuses any id but their own, which is
+  // what makes this safe to allow from a guest seat: an owner who has fired
+  // their property manager must not need that manager to release them.
+  [/^\/api\/account-users\/[^/]+$/, ["DELETE"]],
+  // Asking for their own building back, and answering an offer of it. Every
+  // one of these re-checks the seat's own property scope server-side.
+  [/^\/api\/properties\/[^/]+\/transfer$/, ["POST"]],
+  [/^\/api\/property-transfers$/, ["GET"]],
+  [/^\/api\/property-transfers\/[^/]+\/(decide|cancel)$/, ["POST"]],
+  [/^\/api\/properties\/[^/]+\/history$/, ["GET"]],
   [/^\/api\/properties$/, ["GET"]],        // scoped: their buildings
   [/^\/api\/jobs$/, ["GET", "POST"]],      // scoped; POST creates a request
   [/^\/api\/subs$/, ["GET"]],              // scoped: who works their buildings
@@ -401,6 +413,10 @@ const TENANT_ALLOWED = [
   [/^\/api\/logo\/[^/]+$/, ["GET"]],
   [/^\/api\/auth\/me$/, ["GET"]],
   [/^\/api\/account-users$/, ["GET"]],     // scoped: themselves only
+  // Letting themselves out. The route refuses any id but their own, which is
+  // what makes this safe to allow from a guest seat: an owner who has fired
+  // their property manager must not need that manager to release them.
+  [/^\/api\/account-users\/[^/]+$/, ["DELETE"]],
   [/^\/api\/properties$/, ["GET"]],        // scoped: their building
   [/^\/api\/jobs$/, ["GET", "POST"]],      // scoped: their own reports
   // Their own report: taken back, or corrected within ten minutes.
@@ -746,7 +762,31 @@ app.post("/api/signup", async (c) => {
     c.env.DB.prepare(`SELECT id FROM users WHERE lower(email) = lower(?)`).bind(email).first(),
   ]);
   if (subTaken) return c.json({ error: "subdomain_taken" }, 409);
-  if (emailTaken) return c.json({ error: "email_in_use" }, 409);
+  if (emailTaken) {
+    // "You already have an account" is not always true, and when it is wrong
+    // it is a dead end. Somebody holding a GUEST seat -- a building owner or a
+    // tenant invited by somebody else -- has no account of their own; they have
+    // access to another company's. Telling them to sign in drops them into that
+    // company's scoped view, which is not remotely the thing they were trying
+    // to create, and nothing on that screen offers a way out.
+    //
+    // So say which it is. The distinction is the difference between "use the
+    // password reset" and "you will need a different address, or take your
+    // building with you first".
+    const { results: seats } = await c.env.DB.prepare(
+      `SELECT m.role FROM memberships m JOIN users u ON u.id = m.user_id
+        WHERE lower(u.email) = lower(?)`
+    ).bind(email).all();
+    const roles = (seats || []).map((r) => r.role);
+    const onlyGuest = roles.length > 0 && roles.every((r) => ALWAYS_SCOPED_ROLES.includes(r));
+    return c.json({
+      error: onlyGuest ? "email_is_a_guest_seat" : "email_in_use",
+      // Which kind of guest, so the wording can name it. Never which account:
+      // whose building they are attached to is not something an unauthenticated
+      // signup form gets to confirm about an address somebody typed.
+      seat: onlyGuest ? (roles.includes("owner") ? "owner" : "tenant") : null,
+    }, 409);
+  }
   // companies.license is unique across the whole table, so this number may
   // already be on a contractor row somebody typed in. Adopting that row
   // would hand whoever knows a public licence number the documents on it,
@@ -2718,11 +2758,46 @@ app.patch("/api/me/avatar", async (c) => {
 });
 
 // Drops the membership, not the person — they may still belong elsewhere.
-app.delete("/api/account-users/:userId", requireRole("admin"), async (c) => {
-  const { accountId } = c.get("auth");
+//
+// Admin-only, EXCEPT that a guest may let themselves out. A building owner is a
+// guest in somebody else's account, and an owner who has just fired their
+// property manager should not need that manager's cooperation to stop being
+// attached to them -- the person they are trying to leave holds the only
+// button, which is the wrong way round. A tenant is the same case.
+//
+// An admin still cannot remove themselves this way; that is account deletion
+// wearing a disguise and is refused below.
+app.delete("/api/account-users/:userId", async (c) => {
+  const auth = c.get("auth");
+  const { accountId } = auth;
+  const target = c.req.param("userId");
+  const leavingOwnSeat = target === auth.userId && ALWAYS_SCOPED_ROLES.includes(auth.role);
+  if (!leavingOwnSeat && auth.role !== "admin") return c.json({ error: "forbidden" }, 403);
+  // The last admin walking out would leave an account nobody can administer.
+  if (target === auth.userId && auth.role === "admin") {
+    return c.json({ error: "cannot_remove_self" }, 409);
+  }
+
+  const seat = await c.env.DB.prepare(
+    `SELECT id, role FROM memberships WHERE user_id = ? AND account_id = ?`
+  ).bind(target, accountId).first();
+  if (!seat) return c.json({ error: "not_found" }, 404);
+
   await c.env.DB.prepare(`DELETE FROM memberships WHERE user_id = ? AND account_id = ?`)
-    .bind(c.req.param("userId"), accountId).run();
-  return c.json({ ok: true });
+    .bind(target, accountId).run();
+
+  // Said in the account's own feed either way. Somebody leaving is not a
+  // silent event for the account they were attached to -- a property manager
+  // whose client has walked needs to know without being told by the client.
+  const who = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(target).first();
+  await logActivity(c.env, accountId, leavingOwnSeat ? target : auth.userId,
+    leavingOwnSeat ? "seat_left" : "user_removed",
+    leavingOwnSeat
+      ? `${who?.name || "Somebody"} removed their own access to this account`
+      : `Removed ${who?.name || "a user"} from this account`);
+  await logEvent(c.env, accountId, auth.userId,
+    leavingOwnSeat ? "seat.left" : "seat.removed", target, { role: seat.role });
+  return c.json({ ok: true, left: leavingOwnSeat });
 });
 
 // Current account's own info — lets a resumed session (page reload) rebuild
@@ -6473,6 +6548,436 @@ app.get("/api/cron/hostname-sweep", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// Handing a building over
+// ---------------------------------------------------------------------------
+// shared/handover.js holds the rules and the reasoning. The three that matter:
+//
+//   TWO-PARTY. One side asks, the other agrees, and the side that asked has
+//   already agreed by asking. Nothing here lets one account move a building
+//   alone.
+//
+//   THE JOBS DO NOT MOVE. jobs.account_id is untouched, so the outgoing manager
+//   keeps every job they ran without anything being copied, and the owner can
+//   read their building's whole history across however many managers it has
+//   had. Deleting a manager's record to satisfy a departing client would be
+//   the wrong outcome the first time anybody disputes a job.
+//
+//   THE ROSTER DOES NOT MOVE. A manager's contractors are their own
+//   relationships; handing them over is the accumulation this product refuses
+//   everywhere else.
+
+// The accounts this person actually runs. Used so somebody acting through a
+// guest seat is still recognised as the party they are, without the seat itself
+// conferring anything.
+async function ownAccountIds(db, userId) {
+  const { results } = await db.prepare(
+    `SELECT account_id FROM memberships WHERE user_id = ? AND role = 'admin'`
+  ).bind(userId).all();
+  return (results || []).map((r) => r.account_id);
+}
+
+// One building, with both of its accounts. Readable by either side.
+async function propertyWithOwner(db, propertyId) {
+  const p = await db.prepare(
+    `SELECT id, account_id, owner_account_id, name FROM properties WHERE id = ?`
+  ).bind(propertyId).first();
+  if (!p) return null;
+  return { id: p.id, name: p.name, accountId: p.account_id,
+    ownerAccountId: p.owner_account_id || p.account_id };
+}
+
+const transferShape = (r) => ({
+  id: r.id, propertyId: r.property_id, propertyName: r.property_name || null,
+  fromAccountId: r.from_account_id, toAccountId: r.to_account_id,
+  requestedByAccountId: r.requested_by_account_id,
+  fromAccount: r.from_name || null, toAccount: r.to_name || null,
+  direction: r.direction, kind: r.kind, status: r.status, note: r.note,
+  createdAt: r.created_at, decidedAt: r.decided_at,
+});
+
+// Every request this account is part of, either end.
+app.get("/api/property-transfers", async (c) => {
+  const { accountId } = c.get("auth");
+  let rows;
+  try {
+    ({ results: rows } = await c.env.DB.prepare(
+      `SELECT t.*, p.name AS property_name,
+              af.name AS from_name, at2.name AS to_name
+         FROM property_transfers t
+         JOIN properties p ON p.id = t.property_id
+         LEFT JOIN accounts af ON af.id = t.from_account_id
+         LEFT JOIN accounts at2 ON at2.id = t.to_account_id
+        WHERE t.from_account_id = ? OR t.to_account_id = ?
+        ORDER BY t.created_at DESC LIMIT 100`
+    ).bind(accountId, accountId).all());
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.json([]);
+  }
+  return c.json((rows || []).map((r) => ({
+    ...transferShape(r),
+    // Whose move it is, computed from the shared rule rather than guessed at
+    // by each screen.
+    awaiting: awaitingFrom(transferShape(r)),
+    mine: r.from_account_id === accountId ? "from" : "to",
+  })));
+});
+
+// Ask for a building, or offer one.
+//
+// The owner side: an owner holding a seat on the managing account, with an
+// account of their own to receive it. The manager side: whoever operates it.
+app.post("/api/properties/:propertyId/transfer", requireRole("admin", "pm", "owner"), async (c) => {
+  const auth = c.get("auth");
+  const { accountId, userId } = auth;
+  const propertyId = c.req.param("propertyId");
+  const b = await c.req.json().catch(() => ({}));
+
+  let prop;
+  try {
+    prop = await propertyWithOwner(c.env.DB, propertyId);
+  } catch (err) {
+    const m = missingSchema(err);
+    if (!m) throw err;
+    return c.json({ error: "migration_needed", migration: m }, 503);
+  }
+  if (!prop) return c.json({ error: "not_found" }, 404);
+
+  // An owner asking. They must actually be an owner seat on the account that
+  // operates it, and they must say which of their own accounts receives it --
+  // resolved from their memberships, never taken from the request, or naming an
+  // account id would be enough to have somebody else's building delivered.
+  // Which ACCOUNT is asking, as a party to the building -- not the account the
+  // request happens to arrive through. An owner asking for their building is
+  // signed in to their SEAT on the manager's account, so auth.accountId is the
+  // manager; the party asking is the owner's own account. Getting this wrong
+  // records the manager as the requester and then waits on the owner to
+  // approve their own ask, which moves a building on one signature.
+  let direction, toAccountId, fromAccountId, requesterAccountId;
+  if (auth.role === "owner") {
+    if (prop.accountId !== accountId) return c.json({ error: "not_your_building" }, 403);
+    if (!(auth.propertyIds || []).includes(propertyId)) {
+      return c.json({ error: "not_your_building" }, 403);
+    }
+    const own = await c.env.DB.prepare(
+      `SELECT a.id FROM accounts a JOIN memberships m ON m.account_id = a.id
+        WHERE m.user_id = ? AND m.role = 'admin' LIMIT 1`
+    ).bind(userId).first();
+    // They have nowhere to put it. Said plainly, because the fix is to create
+    // an account and the message is the only thing that will tell them.
+    if (!own) return c.json({ error: "no_account_to_receive_it" }, 409);
+    direction = "owner_requested";
+    fromAccountId = prop.accountId;
+    toAccountId = own.id;
+    requesterAccountId = own.id;
+  } else {
+    // The manager offering. They must operate it, and the owner must have an
+    // account to receive it.
+    if (prop.accountId !== accountId) return c.json({ error: "not_your_building" }, 403);
+    const verdict = canHandOver(prop);
+    if (!verdict.ok) return c.json({ error: verdict.reason }, 409);
+    direction = "manager_offered";
+    fromAccountId = prop.accountId;
+    toAccountId = prop.ownerAccountId;
+    requesterAccountId = prop.accountId;
+  }
+
+  const id = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO property_transfers
+         (id, property_id, from_account_id, to_account_id, requested_by_account_id,
+          direction, kind, note, requested_by)
+       VALUES (?, ?, ?, ?, ?, ?, 'handover', ?, ?)`
+    ).bind(id, propertyId, fromAccountId, toAccountId, requesterAccountId, direction,
+      String(b.note || "").slice(0, 1000) || null, userId).run();
+  } catch (err) {
+    if (/UNIQUE constraint failed/i.test(String(err?.message || err))) {
+      return c.json({ error: "already_requested" }, 409);
+    }
+    const m = missingSchema(err);
+    if (!m) throw err;
+    return c.json({ error: "migration_needed", migration: m }, 503);
+  }
+
+  // Both sides told, in their own feeds, in their own words.
+  await logEvent(c.env, accountId, userId, "property.transfer_requested", propertyId,
+    { transferId: id, direction });
+  await logActivity(c.env, fromAccountId, direction === "manager_offered" ? userId : null,
+    "transfer_requested",
+    direction === "owner_requested"
+      ? `The owner of ${prop.name} has asked to take it over`
+      : `Offered to hand ${prop.name} to its owner`);
+  await logActivity(c.env, toAccountId, direction === "owner_requested" ? userId : null,
+    "transfer_requested",
+    direction === "owner_requested"
+      ? `Asked to be given ${prop.name}`
+      : `${prop.name} has been offered to you by its manager`);
+
+  return c.json({ id, direction,
+    awaiting: awaitingFrom({ status: "pending", requestedByAccountId: requesterAccountId,
+      fromAccountId, toAccountId }) }, 201);
+});
+
+// A building's whole history, readable by whoever OWNS it.
+//
+// This is the other half of "the jobs do not move". The outgoing manager keeps
+// every job they ran, so after a handover those rows belong to an account the
+// owner is no longer part of -- and without this the owner would hold a
+// building whose past they could not see, which is most of what they came for.
+//
+// Scoped to ownership, not to operation: an owner reads the work at a building
+// they own whoever ran it. It names the contractor on each job, which an owner
+// has always been able to see -- who came to their own jobs -- and nothing
+// about the manager's roster beyond the people who actually worked there.
+app.get("/api/properties/:propertyId/history", async (c) => {
+  const auth = c.get("auth");
+  const { accountId } = auth;
+  const propertyId = c.req.param("propertyId");
+
+  let prop;
+  try {
+    prop = await propertyWithOwner(c.env.DB, propertyId);
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.json({ jobs: [] });
+  }
+  if (!prop) return c.json({ error: "not_found" }, 404);
+
+  // Either the account that owns it, or the one operating it. An owner SEAT on
+  // the operating account also qualifies, but only for a building they are
+  // scoped to.
+  const owns = prop.ownerAccountId === accountId;
+  const operates = prop.accountId === accountId;
+  const scoped = auth.role === "owner" && (auth.propertyIds || []).includes(propertyId);
+  if (!owns && !operates && !scoped) return c.json({ error: "forbidden" }, 403);
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT j.id, j.title, j.date, j.status, j.completed_at, j.created_at,
+            j.account_id, a.name AS managed_by,
+            wo.trade, wo.status AS wo_status, wo.value_cents, co.company
+       FROM jobs j
+       LEFT JOIN accounts a ON a.id = j.account_id
+       LEFT JOIN work_orders wo ON wo.job_id = j.id AND wo.voided_at IS NULL
+       LEFT JOIN companies co ON co.id = wo.company_id
+      WHERE j.property_id = ?
+      ORDER BY COALESCE(j.date, j.created_at) DESC LIMIT 400`
+  ).bind(propertyId).all();
+
+  const byJob = {};
+  for (const r of results || []) {
+    const j = (byJob[r.id] ||= {
+      id: r.id, title: r.title, date: r.date, status: r.status,
+      completedAt: r.completed_at, createdAt: r.created_at,
+      // Who was running the building when this happened. The point of keeping
+      // the jobs where they were: the record says who is answerable for it.
+      managedBy: r.managed_by || null,
+      underPreviousManager: r.account_id !== prop.accountId,
+      trades: [],
+    });
+    if (r.trade) {
+      j.trades.push({ trade: r.trade, status: r.wo_status,
+        value: r.value_cents, company: r.company || null });
+    }
+  }
+  const jobs = Object.values(byJob);
+  return c.json({
+    propertyId, propertyName: prop.name,
+    ownedByYou: owns, operatedByYou: operates,
+    jobs,
+    // A count, so a screen can say "14 jobs under two previous managers"
+    // without listing accounts nobody needs named.
+    underPrevious: jobs.filter((j) => j.underPreviousManager).length,
+  });
+});
+
+// Agree, or refuse. Only the side that has not yet agreed may do either.
+app.post("/api/property-transfers/:id/decide", requireRole("admin", "pm", "owner"), async (c) => {
+  const auth = c.get("auth");
+  const { accountId, userId } = auth;
+  const b = await c.req.json().catch(() => ({}));
+  const accept = b.accept === true;
+
+  const row = await c.env.DB.prepare(
+    `SELECT t.*, p.name AS property_name FROM property_transfers t
+       JOIN properties p ON p.id = t.property_id WHERE t.id = ?`
+  ).bind(c.req.param("id")).first();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const t = transferShape(row);
+  if (t.status !== "pending") return c.json({ error: "already_decided" }, 409);
+
+  // The whole two-party rule, in one line. The requester has agreed by asking;
+  // only the other side decides.
+  // Which account this person speaks for here. An owner deciding an offer may
+  // arrive through their seat on the manager's account or through their own; the
+  // party is the same either way, so both are accepted and neither widens what
+  // they can decide.
+  const speaksFor = [accountId, ...(auth.role === "owner" ? await ownAccountIds(c.env.DB, userId) : [])];
+  if (!speaksFor.some((a) => canDecideTransfer(t, a))) {
+    return c.json({ error: "not_yours_to_decide" }, 403);
+  }
+
+  if (!accept) {
+    await c.env.DB.prepare(
+      `UPDATE property_transfers SET status = 'declined', decided_by = ?, decided_at = CURRENT_TIMESTAMP
+        WHERE id = ?`).bind(userId, t.id).run();
+    await logEvent(c.env, accountId, userId, "property.transfer_declined", t.propertyId, { transferId: t.id });
+    for (const acc of [t.fromAccountId, t.toAccountId]) {
+      await logActivity(c.env, acc, null, "transfer_declined",
+        `The handover of ${row.property_name} was declined`);
+    }
+    return c.json({ ok: true, status: "declined" });
+  }
+
+  // Accepted. The property moves and the jobs stay -- see the header. Written
+  // as a batch so a half-moved building cannot exist: the row that says who
+  // operates it and the row that says the handover happened land together.
+  // A handover gives the building to its owner, so both columns move. An
+  // APPOINTMENT gives only operation away: ownership stays with the owner, which
+  // is what lets them appoint somebody else later without asking permission.
+  const appointment = t.kind === "appointment";
+  await c.env.DB.batch([
+    appointment
+      ? c.env.DB.prepare(`UPDATE properties SET account_id = ? WHERE id = ?`)
+          .bind(t.toAccountId, t.propertyId)
+      : c.env.DB.prepare(
+          `UPDATE properties SET account_id = ?, owner_account_id = ? WHERE id = ?`
+        ).bind(t.toAccountId, t.toAccountId, t.propertyId),
+    // Tenants live at the building, so their seats follow it. A tenant is a
+    // person who reports a leak at that address; leaving them attached to an
+    // agent who no longer manages it would send their next report nowhere.
+    c.env.DB.prepare(
+      `UPDATE memberships SET account_id = ?
+        WHERE role = 'tenant' AND account_id = ?
+          AND id IN (SELECT membership_id FROM membership_properties WHERE property_id = ?)`
+    ).bind(t.toAccountId, t.fromAccountId, t.propertyId),
+    // On a handover the owner's guest seat on the old account is spent: they
+    // hold the building outright now, and a scoped seat pointing at a property
+    // that has left would show them an empty account. On an appointment there
+    // is no such seat to clear -- the owner was operating it themselves.
+    appointment
+      ? c.env.DB.prepare(`SELECT 1`)
+      : c.env.DB.prepare(
+          `DELETE FROM memberships WHERE account_id = ? AND role = 'owner'
+            AND id IN (SELECT membership_id FROM membership_properties WHERE property_id = ?)`
+        ).bind(t.fromAccountId, t.propertyId),
+    // The outgoing manager's vendor scoping for this building goes with the
+    // building's departure -- the engagements themselves are untouched, which
+    // is the distinction that matters: the manager keeps their contractors.
+    c.env.DB.prepare(
+      `DELETE FROM engagement_properties WHERE property_id = ?
+        AND engagement_id IN (SELECT id FROM engagements WHERE account_id = ?)`
+    ).bind(t.propertyId, t.fromAccountId),
+    c.env.DB.prepare(
+      `UPDATE property_transfers SET status = 'accepted', decided_by = ?, decided_at = CURRENT_TIMESTAMP
+        WHERE id = ?`).bind(userId, t.id),
+  ]);
+
+  await logEvent(c.env, accountId, userId, "property.transferred", t.propertyId,
+    { transferId: t.id, from: t.fromAccountId, to: t.toAccountId });
+  await logActivity(c.env, t.fromAccountId, null, "transfer_done",
+    `${row.property_name} was handed over. Every job you ran on it stays on your record.`);
+  await logActivity(c.env, t.toAccountId, null, "transfer_done",
+    `${row.property_name} is yours now.`);
+
+  return c.json({ ok: true, status: "accepted", propertyId: t.propertyId });
+});
+
+// Appointing a manager. The inverse journey, same two-party rule.
+//
+// An owner holding their own building hands OPERATION of it to a property
+// manager, and keeps ownership -- so they can do it again, to somebody else,
+// without asking anyone. That asymmetry is the point of separating
+// owner_account_id from account_id: the owner never loses the right to move
+// their own building again.
+//
+// The manager must accept. An account cannot have a building appear in its
+// portfolio because somebody else decided it should -- that is work, liability
+// and possibly a plan limit arriving unannounced.
+//
+// The manager is named by subdomain, not searched for. There is no endpoint
+// that takes a name and returns accounts: the owner is expected to know who
+// they are appointing, exactly as a contractor invite expects a whole email.
+app.post("/api/properties/:propertyId/appoint", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const propertyId = c.req.param("propertyId");
+  const b = await c.req.json().catch(() => ({}));
+  const subdomain = String(b.subdomain || "").trim().toLowerCase();
+  if (!subdomain) return c.json({ error: "subdomain_required" }, 400);
+
+  let prop;
+  try {
+    prop = await propertyWithOwner(c.env.DB, propertyId);
+  } catch (err) {
+    const m = missingSchema(err);
+    if (!m) throw err;
+    return c.json({ error: "migration_needed", migration: m }, 503);
+  }
+  if (!prop) return c.json({ error: "not_found" }, 404);
+  // Only the owner appoints, and only for a building they both own and hold.
+  // An account merely operating a building cannot sub-contract it onward.
+  if (prop.ownerAccountId !== accountId) return c.json({ error: "not_yours_to_appoint" }, 403);
+  if (prop.accountId !== accountId) return c.json({ error: "already_managed" }, 409);
+
+  // Whole value, exact match. A prefix here would be a directory of accounts.
+  const to = await c.env.DB.prepare(
+    `SELECT id, name, kind FROM accounts WHERE subdomain = ?`).bind(subdomain).first();
+  // Deliberately the same answer whether the subdomain is wrong or belongs to
+  // an account that cannot manage buildings: either way it is not somebody the
+  // caller gets told about.
+  if (!to || to.id === accountId
+    || !ACCOUNT_KINDS_WITH_PROPERTIES.includes(to.kind || "")) {
+    return c.json({ error: "no_such_manager" }, 404);
+  }
+
+  const id = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO property_transfers
+         (id, property_id, from_account_id, to_account_id, requested_by_account_id,
+          direction, kind, note, requested_by)
+       VALUES (?, ?, ?, ?, ?, 'owner_requested', 'appointment', ?, ?)`
+    ).bind(id, propertyId, accountId, to.id, accountId,
+      String(b.note || "").slice(0, 1000) || null, userId).run();
+  } catch (err) {
+    if (/UNIQUE constraint failed/i.test(String(err?.message || err))) {
+      return c.json({ error: "already_requested" }, 409);
+    }
+    throw err;
+  }
+
+  await logEvent(c.env, accountId, userId, "property.appointment_offered", propertyId,
+    { transferId: id, to: to.id });
+  await logActivity(c.env, accountId, userId, "appointment_offered",
+    `Asked ${to.name} to manage ${prop.name}`);
+  await logActivity(c.env, to.id, null, "appointment_offered",
+    `The owner of ${prop.name} has asked you to manage it`);
+  // The name is echoed because the caller typed the subdomain and is entitled
+  // to know they reached the right company before anybody accepts.
+  return c.json({ id, to: to.name, awaiting: to.id }, 201);
+});
+
+// Withdraw a request. Only whoever raised it.
+app.post("/api/property-transfers/:id/cancel", requireRole("admin", "pm", "owner"), async (c) => {
+  const auth = c.get("auth");
+  const { accountId, userId } = auth;
+  const row = await c.env.DB.prepare(
+    `SELECT * FROM property_transfers WHERE id = ?`).bind(c.req.param("id")).first();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const t = transferShape(row);
+  if (t.status !== "pending") return c.json({ error: "already_decided" }, 409);
+  const speaksFor = [accountId, ...(auth.role === "owner" ? await ownAccountIds(c.env.DB, userId) : [])];
+  if (!speaksFor.some((a) => canCancelTransfer(t, a))) {
+    return c.json({ error: "not_yours_to_cancel" }, 403);
+  }
+  await c.env.DB.prepare(
+    `UPDATE property_transfers SET status = 'cancelled', decided_by = ?, decided_at = CURRENT_TIMESTAMP
+      WHERE id = ?`).bind(userId, t.id).run();
+  await logEvent(c.env, accountId, userId, "property.transfer_cancelled", t.propertyId, { transferId: t.id });
+  return c.json({ ok: true, status: "cancelled" });
+});
+
+// ---------------------------------------------------------------------------
 // Overflow — broadcast, never browse
 // ---------------------------------------------------------------------------
 // shared/overflow.js holds the rules and the reasoning. The one property every
@@ -7116,10 +7621,39 @@ app.get("/api/properties", async (c) => {
   // not only in the browser, because the browser is not the thing being
   // trusted -- this endpoint answers a request, not a page.
   const scope = scopeClause(auth, "id");
+  // Buildings this account OPERATES, plus buildings it OWNS but has appointed
+  // somebody else to run. Without the second half, an owner who appoints a
+  // manager loses sight of their own building the moment they do it -- which
+  // would make appointing one feel like giving it away, and it is the opposite.
+  //
+  // A row that is owned and not operated is marked, because almost nothing on
+  // these screens applies to it: the owner does not assign that building's
+  // contractors or issue its work orders, their manager does.
+  let owned = { results: [] };
+  try {
+    owned = await c.env.DB.prepare(
+      `SELECT p.*, a.name AS operated_by_name FROM properties p
+         LEFT JOIN accounts a ON a.id = p.account_id
+        WHERE p.owner_account_id = ? AND p.account_id != ? ORDER BY p.name`
+    ).bind(auth.accountId, auth.accountId).all();
+  } catch (err) {
+    // A database without 039 has no owner_account_id and behaves exactly as it
+    // did before any of this.
+    if (!missingSchema(err)) throw err;
+  }
   const { results } = await c.env.DB.prepare(
     `SELECT * FROM properties WHERE account_id = ? ${scope.sql} ORDER BY name`
   ).bind(auth.accountId, ...scope.vals).all();
-  return c.json(results.map(propertyRowToJs));
+  return c.json([
+    ...results.map(propertyRowToJs),
+    // An owner's guest seat is scoped to named buildings and must not pick these
+    // up: a scoped seat seeing a building through a second door would defeat
+    // the scope.
+    ...(auth.role === "owner" || auth.role === "tenant" ? [] :
+      (owned.results || []).map((r) => ({
+        ...propertyRowToJs(r), managedBy: r.operated_by_name || null, ownedNotOperated: true,
+      }))),
+  ]);
 });
 
 app.post("/api/properties", requireRole("admin", "pm"), async (c) => {

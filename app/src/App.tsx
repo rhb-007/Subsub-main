@@ -9411,6 +9411,7 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
       const code = e?.body?.error;
       setErr(code === "weak_password" ? "Use at least 8 characters."
         : code === "email_required" ? "That email address doesn't look right."
+        : code === "email_is_a_guest_seat" ? "That address was invited onto somebody else's account, so it cannot start a new one. Use a different address, or sign in and ask them to hand your building over first."
         : code === "email_in_use_here" ? "That address is already in use here. Try another, or use Forgot password on the sign-in page."
         : code === "no_email_on_file" ? "There's no email address on your record, so there's nothing to sign in with. Ask your building manager to add one."
         : code === "rate_limited" ? "Too many attempts from this connection. Wait an hour and try again."

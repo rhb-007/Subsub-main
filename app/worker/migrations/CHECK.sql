@@ -55,4 +55,9 @@ SELECT
   (SELECT COUNT(*) FROM pragma_table_info('companies')   WHERE name='overflow_since')       AS m038_since,
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='overflow_posts')         AS m038_posts,
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='overflow_invites')       AS m038_invites,
-  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='overflow_responses')     AS m038_responses;
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='overflow_responses')     AS m038_responses,
+  (SELECT COUNT(*) FROM pragma_table_info('properties')  WHERE name='owner_account_id')     AS m039_owner,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='property_transfers')     AS m039_transfers,
+  -- Not a column check: 039's backfill must have left every building owned by
+  -- whoever holds it, or an unclaimed property can never be handed over.
+  (SELECT COUNT(*) FROM properties WHERE owner_account_id IS NULL)                          AS m039_unowned;

@@ -120,6 +120,52 @@ refactor.
   account — a seat on some other account cannot reach this engagement's
   switch, so counting it would leave the flag settable by nobody at all.
 
+- **A building can change hands, and it takes both parties.** A building owner
+  invited onto their property manager's account is a guest there. Until 039,
+  firing the manager cost them the building, its job history, its certificates
+  and their own view of all three — and they could not even let themselves out,
+  because the person they were leaving held the only button. That is the wrong
+  answer to "what happens to my building if I change agent", and it is the same
+  question a manager asks before putting a portfolio in here.
+
+  `properties.account_id` now means **who operates it**; `owner_account_id`
+  means **who owns it**. For every row that existed before 039 they are equal,
+  which is the truthful backfill. `app/shared/handover.js` holds the rules.
+
+  **Two-party, always.** One side asks, the other agrees, and the side that
+  asked has already agreed by asking — so it is always the *other* side that
+  decides. That rule reads the **requesting account off the row**, never from
+  which side is "the owner": on a handover the owner is the `to` side, on an
+  appointment they are the `from` side, so any rule phrased in owner/manager
+  terms points at the requester for one of the two and moves a building on one
+  signature. Note also that an owner asking is signed in to their *seat* on the
+  manager's account, so the account a request arrives through is not the party
+  making it.
+
+  **The jobs do not move.** `jobs.account_id` is untouched, so the outgoing
+  manager keeps every job they ran without anything being copied, and the owner
+  reads their building's whole history across however many managers it has had
+  (`GET /api/properties/:id/history`). Nothing is deleted to satisfy a departing
+  client — a job the manager ran is a job the manager may later be asked to
+  account for.
+
+  **The roster does not move.** A manager's contractors are their own
+  relationships. Only the building's *scoping* of them is cleared; the
+  engagements stay. Handing a departing client their ex-manager's book is the
+  accumulation this product refuses everywhere else.
+
+  **Tenants follow the building**, because a tenant is a person who reports a
+  leak at that address and their next report has to reach whoever manages it.
+
+  An owner then holding their building may **appoint** a manager — the same
+  two-party rule in reverse, and the manager must accept, because a building
+  appearing in a portfolio unannounced is work, liability and possibly a plan
+  limit. An appointment moves **operation only**, so the owner never loses the
+  right to move their building again. The manager is named by **whole
+  subdomain**, and an unknown one and a real account that cannot manage
+  buildings give the **same answer**, so this cannot be walked to find out who
+  is on SubSub.
+
 - **Completion is two-party and append-only.** The subcontractor marks work
   reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because
