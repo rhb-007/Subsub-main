@@ -247,5 +247,85 @@ console.log("\n-- and it is somebody's own paperwork, nobody else's --");
   ck("which is still live", !one(db, `SELECT revoked_at FROM doc_shares WHERE id = ?`, made.id).revoked_at);
 }
 
+console.log("\n-- and a connection has two ends --");
+{
+  // Accepting a request writes an engagement on the OTHER account and seats
+  // this team over there. Every engagement read in the Worker is "contractors
+  // I hire"; nothing read "accounts that hire me", so saying yes to somebody
+  // showed up nowhere at all on this side.
+  const { db, env } = seed();
+  db.exec(`
+    INSERT INTO accounts(id,name,subdomain,kind) VALUES
+      ('acc_pm','Cascade Management','cascade','property_manager'),
+      ('acc_far','Sound PM','sound','property_manager');
+    -- Cascade hires Ridge for roofing, and has issued work.
+    INSERT INTO engagements(id,account_id,company_id,status,categories,invited_at)
+      VALUES ('en_pm','acc_pm','cmp_ridge','active','["roofing","siding"]','2026-02-01 09:00:00');
+    INSERT INTO jobs(id,account_id,title,status) VALUES ('j1','acc_pm','Roof','active');
+    INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status)
+      VALUES ('wo1','WO-1','j1','roofing','cmp_ridge','en_pm','accepted');
+    -- An ended one, which is not a client any more.
+    INSERT INTO engagements(id,account_id,company_id,status,categories)
+      VALUES ('en_gone','acc_far','cmp_ridge','ended','["roofing"]');
+    -- And somebody else's engagement entirely, to prove the scope.
+    INSERT INTO engagements(id,account_id,company_id,status,categories)
+      VALUES ('en_other','acc_pm','cmp_other','active','["siding"]');
+  `);
+
+  const [s, b] = await json(await call(env, "u_sam", "acc_gc", "/clients"));
+  ck("the account can see who hires it", s === 200, `${s} ${JSON.stringify(b).slice(0, 80)}`);
+  // Two of them: the general contractor from the base fixture and the
+  // property manager added here. Both are real clients of this company.
+  ck("naming every one of them", b.length === 2, JSON.stringify(b.map((x) => x.name)));
+  const pm = b.find((x) => x.name === "Cascade Management");
+  ck("and what they hire us for",
+    JSON.stringify(pm.trades) === '["roofing","siding"]', JSON.stringify(pm.trades));
+  ck("what kind of outfit they are", pm.kind === "property_manager", String(pm.kind));
+  ck("how much work has come from them", pm.workOrders === 1, String(pm.workOrders));
+  ck("and since when", /2026-02-01/.test(String(pm.since)), String(pm.since));
+  // The work count is per client, not the company's total.
+  ck("and the other client's count is their own",
+    b.find((x) => x.name === "Outerhome").workOrders === 0,
+    String(b.find((x) => x.name === "Outerhome").workOrders));
+
+  // THE NEGATIVES.
+  ck("a finished relationship is not a client",
+    !b.some((x) => x.name === "Sound PM"), JSON.stringify(b.map((x) => x.name)));
+  ck("and somebody else's contractor is not our client",
+    !JSON.stringify(b).includes("cmp_other"), JSON.stringify(b));
+
+  // And when nobody hires them any more, the list empties rather than
+  // remembering.
+  const { db: db2, env: env2 } = seed();
+  db2.exec(`UPDATE engagements SET status='ended' WHERE company_id='cmp_ridge'`);
+  const [, b2] = await json(await call(env2, "u_sam", "acc_gc", "/clients"));
+  ck("a company nobody hires sees an empty list", b2.length === 0, JSON.stringify(b2));
+}
+
+console.log("\n-- and a hireable account can hold its own paperwork --");
+{
+  // The other half of the same gap. Uploading a document lived only in the
+  // contractor portal, and ROLES.admin has no portal -- so an account that
+  // could be hired had nowhere to put a certificate and nothing to send.
+  const { db, env } = seed();
+  db.exec(`
+    INSERT INTO users(id,name,email,auth_id) VALUES ('u_gc','GC Admin','gc@outerhome.test','auth_gc');
+    INSERT INTO memberships(id,user_id,account_id,role) VALUES ('m_gc','u_gc','acc_gc','admin');
+    INSERT INTO companies(id,company) VALUES ('cmp_oh','Outerhome');
+    UPDATE accounts SET company_id='cmp_oh' WHERE id='acc_gc';
+    INSERT INTO company_docs(id,company_id,kind,file_key,file_name,expires_on)
+      VALUES ('d_oh','cmp_oh','insurance','k/oh.pdf','ours.pdf','2027-01-31');
+  `);
+  const [s, b] = await json(await call(env, "u_gc", "acc_gc", "/my-company"));
+  ck("their own profile comes back", s === 200, String(s));
+  ck("with their own documents on it", !!b.docs?.insurance, JSON.stringify(Object.keys(b.docs || {})));
+  ck("including the expiry", b.docs.insurance.expiresOn === "2027-01-31",
+    String(b.docs.insurance.expiresOn));
+  // Which is what makes sending possible at all.
+  const [s2] = await json(await call(env, "u_gc", "acc_gc", "/doc-shares",
+    { method: "POST", body: JSON.stringify({ toEmail: "pm@cascade.test" }) }));
+  ck("and with one on file they can send it", s2 === 201, String(s2));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

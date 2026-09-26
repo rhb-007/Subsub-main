@@ -359,6 +359,8 @@ export const api = {
   rotateConnectCode: () => request("/connect/code/rotate", { method: "POST" }),
   myConnectRequests: () => request("/my-connect-requests"),
   // Sending your own paperwork to somebody who asked for it.
+  // The other end of a connection: accounts that hire us.
+  clients: () => request("/clients"),
   docShares: () => request("/doc-shares"),
   sendDocPack: (body) => request("/doc-shares", { method: "POST", body: JSON.stringify(body) }),
   revokeDocShare: (id) => request(`/doc-shares/${encodeURIComponent(id)}/revoke`, { method: "POST" }),

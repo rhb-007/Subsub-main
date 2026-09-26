@@ -2200,7 +2200,16 @@ app.get("/api/my-company", requireRole("admin", "pm"), async (c) => {
   // What it is worth filling in for: the lookup matches on these three and
   // nothing else, so a profile with none of them cannot be found by anybody.
   const findable = !!(co.email || co.phone || co.license);
-  return c.json({ ...myCompanyToJs(co), findable, code, url: code ? connectUrl(code) : null });
+  // And their own paperwork. A hireable account is asked for the same four
+  // documents any other subcontractor is, and until now the only screen that
+  // could upload them was the contractor portal -- which an admin does not
+  // have, so an account that could be hired had no way to hold a certificate.
+  let docs = {};
+  try {
+    docs = docShapeWithLegacy(await currentDocRows(c.env.DB, companyId), co);
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  return c.json({ ...myCompanyToJs(co), findable, code,
+    url: code ? connectUrl(code) : null, docs });
 });
 
 app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
@@ -6339,6 +6348,57 @@ app.post("/api/doc-shares", async (c) => {
   return c.json({ ...shareToJs({ id, to_email: toEmail, to_name: toName, note,
     created_at: new Date().toISOString(), expires_at: expires, view_count: 0 }),
     sent: !!sent?.ok }, 201);
+});
+
+// ---------------------------------------------------------------------------
+// Who hires you.
+//
+// A connection has two ends and only one of them was ever drawn. Accepting a
+// request writes an engagement on the OTHER account and seats this team over
+// there -- so the hiring side gains a contractor on its roster, and this side
+// gains nothing it can see. Every engagement read in this file is
+// `account_id = mine`, which is "the contractors I hire"; nothing anywhere
+// read `company_id = mine`, which is "the accounts that hire me".
+//
+// So a general contractor who said yes to a property manager on Tuesday could
+// find them in the account switcher and nowhere else, and had no answer at all
+// to "who do we work for".
+//
+// Nothing new crosses here. These are accounts that chose to engage this
+// company, and this company's people already hold a seat in each of them --
+// the relationship is mutual and already readable from the other side. What
+// this adds is the sentence, not the access.
+// ---------------------------------------------------------------------------
+app.get("/api/clients", async (c) => {
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json([]);
+  let rows;
+  try {
+    ({ results: rows } = await c.env.DB.prepare(
+      `SELECT en.id AS engagement_id, en.status, en.categories, en.invited_at,
+              a.id, a.name, a.subdomain, a.kind,
+              (SELECT COUNT(*) FROM work_orders wo
+                 JOIN jobs j ON j.id = wo.job_id
+                WHERE wo.company_id = en.company_id AND j.account_id = a.id
+                  AND wo.voided_at IS NULL) AS work_orders
+         FROM engagements en
+         JOIN accounts a ON a.id = en.account_id
+        WHERE en.company_id = ? AND en.status != 'ended'
+        ORDER BY a.name`
+    ).bind(companyId).all());
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.json([]);
+  }
+  return c.json((rows || []).map((r) => ({
+    id: r.id, name: r.name, subdomain: r.subdomain, kind: r.kind,
+    engagementId: r.engagement_id, status: r.status,
+    since: r.invited_at || null,
+    // What they hired us FOR. Their categories on the engagement, which is
+    // their decision about us rather than anything about their business.
+    trades: parseJson(r.categories, []) || [],
+    workOrders: r.work_orders || 0,
+  })));
 });
 
 // What they have sent, and whether anybody opened it. The view count is the

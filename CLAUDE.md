@@ -467,6 +467,30 @@ refactor.
   account or company id serves it to anybody who can guess an id. Nothing here
   is addressable by an id.
 
+  **A connection has two ends and only one was ever drawn.** Accepting a
+  request writes an engagement on the *other* account and seats this team over
+  there — so the hiring side gains a contractor and this side gains nothing it
+  can see. Every engagement read in the Worker is `account_id = mine`, which is
+  "the contractors I hire"; nothing read `company_id = mine`, which is "the
+  accounts that hire me". So a general contractor who said yes to a property
+  manager could find them in the account switcher and nowhere else, and had no
+  answer at all to "who do we work for". `GET /api/clients` is that list, on
+  the Contractors screen above the roster: the list below is who works for us
+  and this is who we work for. Nothing new crosses — these accounts chose to
+  engage this company and this company's people already hold a seat in each of
+  them. What it adds is the sentence, not the access.
+
+  **And a hireable account needs somewhere to keep its own paperwork.** Since
+  031 an account is a company, so it can be asked for the same four documents
+  as any subcontractor — but uploading one lived only in the contractor portal,
+  behind `can("portal")`, which `ROLES.admin` does not include. An account that
+  could be hired therefore had nowhere to put a certificate and nothing to
+  send. Both now sit in Account → Company beside the hireable profile, which is
+  where being hireable already lives. This is the same root as the connect
+  badge, and it is worth stating as a rule: **anything 031 made true of an
+  account-as-company has to have a home outside the contractor portal**, because
+  the seat that runs an account never has one.
+
   **Sending is gated on a document being uploaded, not verified.** Verification
   is each hiring account's own verdict and says nothing about whether the
   contractor has one to send — the common case is that they upload and somebody

@@ -2067,6 +2067,10 @@ export default function SubSub() {
   // in. A seat is only ever one of those, never both.
   const [connectOut, setConnectOut] = useState(null);   // ours, outgoing
   const [connectIn, setConnectIn] = useState(null);     // theirs, incoming
+  // The other end of every connection: accounts that hire US. Every engagement
+  // query in the Worker is "contractors I hire"; this is the other direction,
+  // and without it saying yes to somebody showed up nowhere on this account.
+  const [clients, setClients] = useState([]);
   const [addMenu, setAddMenu] = useState(false);
   const [editing, setEditing] = useState(null); // sub being edited
   const [tab, setTab] = useState("dashboard");
@@ -3366,6 +3370,16 @@ export default function SubSub() {
       if (err?.status === 403) { setConnectIn([]); setConnectOut([]); }
     }
   }, [loggedIn, currentAccountId, role]);
+
+  const refreshClients = useCallback(async () => {
+    if (!loggedIn) return;
+    try { setClients(await api.clients()); }
+    catch (err) { console.warn("[clients] load failed:", err); setClients([]); }
+  }, [loggedIn, currentAccountId]);
+
+  useEffect(() => { if (loggedIn) refreshClients(); else setClients([]); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loggedIn, currentAccountId]);
 
   useEffect(() => {
     if (loggedIn && (role === "contractor" || can("contractors"))) refreshConnects();
@@ -4683,6 +4697,44 @@ export default function SubSub() {
               alike on purpose and are two different lists answering two
               different questions, and nothing in the markup said which was
               which. */}
+          {/* The other end of the connection. On this screen because this is
+              already "the people we work with" -- the list below is who works
+              for us and this is who we work for, and having only one of the
+              two was how accepting a request could look like nothing
+              happened. */}
+          {clients.length > 0 && (
+            <section className="invited-strip is-client">
+              <h4 className="invited-h">
+                <ArrowRightLeft size={13} /> You work for
+                <span className="count">{clients.length}</span>
+                <span className="invited-sub">
+                  {clients.length === 1 ? "an account that hires you" : "accounts that hire you"}
+                </span>
+              </h4>
+              <div className="invited-row">
+                {clients.map((cl) => (
+                  <div key={cl.id} className="invited-card as-client">
+                    <span className="invited-chip ok">
+                      {ACCOUNT_KINDS[cl.kind]?.label || "On SubSub"}
+                    </span>
+                    <b>{cl.name}</b>
+                    <span className="invited-to">
+                      {cl.trades.length
+                        ? cl.trades.map((t) => catMeta(t).label).join(" · ")
+                        : "No trades set yet"}
+                    </span>
+                    <span className="invited-when">
+                      {cl.workOrders > 0
+                        ? `${cl.workOrders} work order${cl.workOrders === 1 ? "" : "s"}`
+                        : "No work yet"}
+                      {cl.since ? ` · since ${relTime(cl.since)}` : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {requestedMatches.length > 0 && (
             <section className="invited-strip is-asked">
               <h4 className="invited-h">
@@ -13366,6 +13418,59 @@ function HireablePanel({ accountName, requests = [], onRespond, onReload }) {
               {busy ? "Saving…" : "Save profile"}</button>
           </div>
 
+          {/* Their own paperwork. Until now the only screen that could upload
+              a certificate was the contractor portal, and ROLES.admin has no
+              portal -- so an account that could be hired had nowhere to hold
+              one, and nothing to send. Same root as the connect badge. */}
+          <div className="form-sec">Your documents</div>
+          <p className="panel-note">
+            The same four things you ask your own contractors for. Whoever hires you
+            reviews them, and they stay current for everybody you work with rather
+            than being re-sent one contractor at a time.
+          </p>
+          <div className="mydocs">
+            {DOC_KINDS.map((k) => {
+              const d = (loaded?.docs || {})[k];
+              const today = new Date().toISOString().slice(0, 10);
+              const lapsed = d?.expiresOn && d.expiresOn < today;
+              return (
+                <div key={k} className={`mydoc ${d ? (lapsed ? "bad" : "ok") : ""}`}>
+                  <div className="mydoc-main">
+                    <b>{DOC_LABELS[k]}</b>
+                    <span className="cx-sub">
+                      {!d ? "Not uploaded"
+                        : lapsed ? `Expired ${formatDay(d.expiresOn)} — send a replacement`
+                        : d.expiresOn ? `Current through ${formatDay(d.expiresOn)}`
+                        : d.fileName || "On file"}
+                    </span>
+                  </div>
+                  <label className="meas-upload compact">
+                    <Upload size={13} /> {d ? "Replace" : "Upload"}
+                    <input type="file" hidden onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setErr("");
+                      try {
+                        const { key } = await api.uploadFile(k, file);
+                        await api.uploadDocument(loaded.companyId, k, key, file.name);
+                        const fresh = await api.myCompany();
+                        setLoaded(fresh); setF((x) => ({ ...x, docs: fresh.docs }));
+                      } catch (ex) {
+                        console.error("[my-company] upload failed:", ex);
+                        setErr("That didn't upload. Try again in a moment.");
+                      }
+                    }} />
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* And sending them, which is the thing they are actually asked to
+              do several times a month. */}
+          <SendDocPack company={f.company || accountName}
+            anyOnFile={DOC_KINDS.some((k) => (loaded?.docs || {})[k])} />
+
           <div className="form-sec">Your code</div>
           <p className="panel-note">
             Show this to a general contractor and have them scan it. They can ask to work with you
@@ -20327,6 +20432,12 @@ body{background:var(--paper)}
    decision to make. */
 .invited-chip.no{background:color-mix(in srgb,var(--red) 10%,var(--card));
   border-color:color-mix(in srgb,var(--red) 32%,var(--line));color:var(--red)}
+/* The other end of a connection: an account that hires US. Not a card you act
+   on -- there is nothing waiting -- so it reads as a fact rather than as a
+   button, and it is the only one of these strips that is not a to-do. */
+.invited-chip.ok{background:var(--card);border-color:var(--ink-soft);color:var(--ink)}
+.invited-card.as-client{cursor:default;border-style:solid}
+.invited-card.as-client:hover{border-color:var(--line)}
 .invited-chip.req{display:inline-flex;align-items:center;gap:5px;
   background:color-mix(in srgb,var(--brand) 12%,var(--card));
   border-color:color-mix(in srgb,var(--brand) 35%,var(--line));color:var(--brand)}
@@ -20365,6 +20476,14 @@ body{background:var(--paper)}
 .cx-main{min-width:0;display:flex;flex-direction:column;gap:3px;flex:1 1 260px}
 .cx-main b{font-size:14.5px}
 /* ---- sending your own paperwork, and the page it lands on ---- */
+/* An account's own four documents, on the screen where being hireable lives. */
+.mydocs{display:flex;flex-direction:column;margin-bottom:16px}
+.mydoc{display:flex;gap:12px;align-items:center;justify-content:space-between;
+  padding:10px 0;border-top:1px solid var(--line)}
+.mydoc-main{min-width:0;display:flex;flex-direction:column;gap:2px}
+.mydoc-main b{font-size:13.5px}
+.mydoc.bad .cx-sub{color:#a3342a;font-weight:700}
+.meas-upload.compact{margin:0;padding:6px 11px;font-size:12px;flex:none}
 .pack-panel{border:1px solid var(--line);border-radius:12px;padding:15px 16px;
   margin-bottom:16px;background:var(--card)}
 .pack-head{display:flex;gap:14px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
