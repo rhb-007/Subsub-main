@@ -52,7 +52,7 @@ import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso } from "../shared/docs.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
-import { isOwnerKind } from "../shared/handover.js";
+import { isOwnerKind, seatDescription } from "../shared/handover.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -4511,13 +4511,26 @@ export default function SubSub() {
           ))}
           <div className="drawer-actions">
             <button onClick={() => setTab("account")}><UserCog size={15} /> My account</button>
+            {/* Every account this person holds a seat in, and WHAT THEY ARE in
+                it. "Switch to Cascade Management" on its own reads as taking
+                the place over -- which is the opposite of the truth when the
+                seat is a contractor one, created by accepting their request to
+                hire you. Where you land and what you can do there both follow
+                from the role, so the role is the half that was missing. */}
             {myMemberships.length > 1 && myMemberships.filter((m) => m.accountId !== account.id).map((m) => {
               const a = accounts.find((x) => x.id === m.accountId);
-              return a ? (
-                <button key={m.accountId} onClick={() => { setCurrentAccountId(m.accountId); setSelected(null); setPane("jobs"); }}>
-                  <ArrowUpDown size={15} /> Switch to {a.name}
+              if (!a) return null;
+              const what = seatDescription(m.role, roleLabelIn(kindOf(a), m.role));
+              return (
+                <button key={m.accountId} className="switch-acct"
+                  onClick={() => { setCurrentAccountId(m.accountId); setSelected(null); setPane("jobs"); }}>
+                  <ArrowUpDown size={15} />
+                  <span className="sw-main">
+                    <span className="sw-name">{a.name}</span>
+                    <span className="sw-what">{what}</span>
+                  </span>
                 </button>
-              ) : null;
+              );
             })}
             <button className="drawer-out" onClick={() => setLoggedIn(false)}><LogOut size={15} /> Sign out</button>
           </div>
@@ -20484,6 +20497,11 @@ body{background:var(--paper)}
 .mydoc-main b{font-size:13.5px}
 .mydoc.bad .cx-sub{color:#a3342a;font-weight:700}
 .meas-upload.compact{margin:0;padding:6px 11px;font-size:12px;flex:none}
+/* An account you hold a seat in, with what you are there under the name. */
+.switch-acct{align-items:flex-start}
+.sw-main{display:flex;flex-direction:column;gap:1px;min-width:0;text-align:left}
+.sw-name{font-weight:600}
+.sw-what{font-size:11px;font-weight:500;color:var(--ink-soft);line-height:1.35}
 .pack-panel{border:1px solid var(--line);border-radius:12px;padding:15px 16px;
   margin-bottom:16px;background:var(--card)}
 .pack-head{display:flex;gap:14px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}

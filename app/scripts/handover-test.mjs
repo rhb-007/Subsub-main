@@ -27,7 +27,7 @@
 
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
-import { canHandOver, awaitingFrom, canDecide, canCancel, MOVES, STAYS, inheritedShape, isOpenWork, canAppoint } from "../shared/handover.js";
+import { canHandOver, awaitingFrom, canDecide, canCancel, MOVES, STAYS, inheritedShape, isOpenWork, canAppoint, seatDescription } from "../shared/handover.js";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
@@ -1059,6 +1059,33 @@ console.log("\n-- and it is not a way to claim somebody else's building --");
   ck("but never on a building somebody else owns",
     canAppoint({ accountId: "a1", ownerAccountId: "a2", ownerDeclaredAt: "2026-09-26" },
       { accountId: "a1", accountKind: "property_manager" }).reason === "not_yours_to_appoint");
+}
+
+console.log("\n-- what you are in somebody else's account --");
+{
+  // The switcher said only "Switch to Cascade Management", which reads as
+  // taking the place over. The commonest second seat is the opposite of that:
+  // a contractor seat, created by accepting their request to hire you.
+  ck("a contractor seat says who hires whom",
+    seatDescription("contractor") === "you are their subcontractor",
+    seatDescription("contractor"));
+  ck("an owner seat says what is theirs",
+    /own a building they run/.test(seatDescription("owner")), seatDescription("owner"));
+  ck("a tenant seat says they live there",
+    /rent from them/.test(seatDescription("tenant")), seatDescription("tenant"));
+  // Anything else falls back to the role's own label, which ACCOUNT_KINDS may
+  // have renamed -- a general contractor's second seat is a project manager,
+  // not a property manager.
+  ck("and any other seat uses the label that account gives it",
+    seatDescription("pm", "Project manager") === "you are project manager there",
+    seatDescription("pm", "Project manager"));
+  ck("never leaving it blank", seatDescription("weird-new-role").length > 0,
+    seatDescription("weird-new-role"));
+  // THE NEGATIVE: none of them read as taking the account over.
+  for (const r of ["contractor", "owner", "tenant", "pm", "admin"]) {
+    ck(`a ${r} seat does not read as taking them over`,
+      !/^switch to|take over|manage them/i.test(seatDescription(r, "Admin")), seatDescription(r, "Admin"));
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

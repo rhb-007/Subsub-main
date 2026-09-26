@@ -491,6 +491,15 @@ refactor.
   account-as-company has to have a home outside the contractor portal**, because
   the seat that runs an account never has one.
 
+  **And the switcher says what you are over there.** Accepting a request seats
+  your whole team in *their* account as a **contractor** — so the menu grew an
+  entry reading "Switch to Cascade Management", which sounds like taking the
+  place over when it is the exact opposite: it is where they hire you.
+  `seatDescription` in `app/shared/handover.js` puts the relationship under the
+  name — *you are their subcontractor*, *you own a building they run*, *you
+  rent from them* — because where you land and what you can do there both
+  follow from the role, and the role was the half the menu never said.
+
   **Sending is gated on a document being uploaded, not verified.** Verification
   is each hiring account's own verdict and says nothing about whether the
   contractor has one to send — the common case is that they upload and somebody

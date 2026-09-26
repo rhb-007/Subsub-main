@@ -196,6 +196,24 @@ export function openWorkText(n, side) {
       + "The new manager can see that it is outstanding, not who is doing it.";
 }
 
+// What you are in an account that is not your own.
+//
+// The account switcher listed only "Switch to <name>", which reads as taking
+// the place over -- and the commonest second seat is the exact opposite of
+// that: a CONTRACTOR seat, created by accepting somebody's request to hire
+// you. Where you land and what you can do there both follow from the role, so
+// the role is the half the menu was missing.
+//
+// Phrased as the relationship rather than the role name, because "contractor"
+// is what the database calls it and "you are their subcontractor" is what the
+// person reading the menu needs to know.
+export function seatDescription(role, roleLabel) {
+  if (role === "contractor") return "you are their subcontractor";
+  if (role === "owner") return "you own a building they run";
+  if (role === "tenant") return "you rent from them";
+  return `you are ${String(roleLabel || role || "a member").toLowerCase()} there`;
+}
+
 // ---- Who may appoint a manager ------------------------------------------
 //
 // Appointing requires OWNING the building, which the API has always checked.
