@@ -17025,9 +17025,99 @@ function ConnectCode() {
 
 // Who has asked to work with you, and the answer. Also shared: a general
 // contractor gets asked exactly as a subcontractor does.
+// Who is asking. Loaded on demand from the request, because most of the time
+// nobody opens it and this is several counts across three tables.
+function AskerPanel({ requestId, onClose, onRespond }) {
+  const [a, setA] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api.connectAsker(requestId)
+      .then((r) => { if (alive) setA(r); })
+      .catch((e) => {
+        console.error("[connect] asker load failed:", e);
+        if (!alive) return;
+        setErr(e?.body?.error === "already_answered"
+          ? "This one has already been answered."
+          : "Could not load who is asking. Close and try again.");
+      });
+    return () => { alive = false; };
+  }, [requestId]);
+
+  const answer = async (accept) => {
+    setBusy(true); setErr("");
+    try { await onRespond(requestId, accept); onClose(); }
+    catch (e) {
+      console.error("[connect] respond failed:", e);
+      setErr("Could not send your answer. Try again.");
+      setBusy(false);
+    }
+  };
+
+  const KIND = { general_contractor: "General contractor", property_manager: "Property manager",
+    building_owner: "Building owner", portfolio_manager: "Commercial portfolio manager" };
+
+  return (
+    <div className="asker-panel">
+      {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
+      {!a && !err && <p className="cov-hint">Loading…</p>}
+      {a && (
+        <>
+          <span className="invited-chip req">Asking to work with you</span>
+          <h2>{a.account}</h2>
+          <p className="panel-note">
+            {KIND[a.kind] || "On SubSub"}
+            {a.since ? ` · on SubSub since ${new Date(a.since).toLocaleDateString(undefined,
+              { month: "long", year: "numeric" })}` : ""}
+          </p>
+
+          {/* What the decision actually turns on: is there work here, is it
+              near you, and is this a real operation or somebody who signed up
+              this morning. Counts and towns -- never their buildings' addresses
+              and never their contractor list. */}
+          <dl className="invited-facts">
+            {a.buildings > 0 && (
+              <><dt>Buildings</dt>
+                <dd>{a.buildings}{a.towns.length
+                  ? ` · ${a.towns.slice(0, 4).join(" · ")}${a.towns.length > 4 ? " and more" : ""}`
+                  : ""}</dd></>
+            )}
+            <dt>Work run through SubSub</dt>
+            <dd>{a.jobs === 0 ? "None yet" : `${a.jobs} job${a.jobs === 1 ? "" : "s"}`}</dd>
+            {a.trades.length > 0 && (
+              <><dt>Hires for</dt>
+                <dd>{a.trades.map((t) => catMeta(t).label).join(" · ")}</dd></>
+            )}
+            <dt>Asked</dt>
+            <dd>{relTime(a.createdAt)}{a.askedBy ? ` · by ${a.askedBy}` : ""}
+              {a.via === "code" ? " · by scanning your code" : ""}</dd>
+            {a.message && <><dt>They said</dt><dd>&ldquo;{a.message}&rdquo;</dd></>}
+          </dl>
+
+          <p className="cx-note">
+            Saying yes lets them send you work orders and see your trades, crews,
+            availability and compliance documents. Nothing else, and you can end it later.
+          </p>
+          <div className="form-actions">
+            <button className="pick" disabled={busy} onClick={() => answer(false)}>
+              <X size={13} /> Decline
+            </button>
+            <button className="btn-solid" disabled={busy} onClick={() => answer(true)}>
+              <Check size={15} /> {busy ? "…" : "Accept"}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ConnectRequests({ requests, onRespond, onReload, emptyNote }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  const [asker, setAsker] = useState(null);
   const answer = async (id, accept) => {
     setBusy(id); setErr("");
     try { await onRespond(id, accept); }
@@ -17046,7 +17136,12 @@ function ConnectRequests({ requests, onRespond, onReload, emptyNote }) {
       {pending.map((r) => (
         <div key={r.id} className="cx-req">
           <div className="cx-main">
-            <b>{r.account}</b>
+            {/* The name is the way in. Accepting on the strength of a name
+                alone is a decision made blind, and this is the screen where
+                the answer to "who are these people" belongs. */}
+            <button className="cx-open" onClick={() => setAsker(r.id)}>
+              {r.account} <ChevronRight size={13} />
+            </button>
             <span className="cx-sub">
               {r.via === "code" ? "Scanned your code" : "Found you on SubSub"} · {relTime(r.createdAt)}
             </span>
@@ -17069,6 +17164,12 @@ function ConnectRequests({ requests, onRespond, onReload, emptyNote }) {
         </div>
       ))}
       {err && <p className="cov-hint" role="alert">{err}</p>}
+      {asker && (
+        <Modal onClose={() => setAsker(null)}>
+          <AskerPanel requestId={asker} onClose={() => setAsker(null)}
+            onRespond={onRespond} />
+        </Modal>
+      )}
     </>
   );
 }
@@ -19968,6 +20069,17 @@ body{background:var(--paper)}
 .cx-req.spent{opacity:.6}
 .cx-main{min-width:0;display:flex;flex-direction:column;gap:3px;flex:1 1 260px}
 .cx-main b{font-size:14.5px}
+/* The way in to who is asking. Reads as the heading it replaces, with just
+   enough of an affordance to say it opens. */
+.cx-open{background:none;border:0;padding:0;margin:0;font:700 14.5px Inter,sans-serif;
+  color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;gap:3px;
+  align-self:flex-start;text-align:left}
+.cx-open:hover,.cx-open:focus-visible{color:var(--brand)}
+.cx-open:focus-visible{outline:2px solid var(--brand);outline-offset:3px;border-radius:4px}
+.cx-open svg{opacity:.5;flex:none}
+.asker-panel{display:flex;flex-direction:column;gap:10px}
+.asker-panel h2{margin:2px 0 0;font-size:21px;letter-spacing:-.02em}
+.asker-panel .form-actions{margin-top:4px}
 .cx-sub{font-size:11.5px;color:var(--ink-soft)}
 .cx-msg{font-size:13px;font-style:italic;color:var(--ink);margin-top:3px}
 .cx-note{font-size:11.5px;line-height:1.5;color:var(--ink-soft);margin-top:5px}

@@ -100,7 +100,8 @@
     "test:notify": "wrangler d1 execute subsub-db --config=./wrangler.toml --local --file=./scripts/tenant-notify-fixture.sql && node scripts/tenant-notify-test.mjs",
     "lint": "eslint .",
     "test:proptile": "node scripts/property-tile-test.mjs",
-    "test:connectin": "node scripts/connect-inbox-test.mjs"
+    "test:connectin": "node scripts/connect-inbox-test.mjs",
+    "test:asker": "node scripts/connect-asker-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

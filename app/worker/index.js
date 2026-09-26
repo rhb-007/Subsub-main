@@ -2273,6 +2273,85 @@ app.get("/api/my-connect-requests", async (c) => {
   return c.json(results.map(connectRequestToJs));
 });
 
+// Who is asking, for the account that has to decide.
+//
+// Accept and Decline with nothing but a name on the card is a decision made
+// blind: "they'll be able to send you work orders and see your documents" is
+// the consequence, and the question it begs -- who ARE these people -- had no
+// answer anywhere on the screen.
+//
+// This is not a directory and must never become one. Two things keep it from
+// being one, and both are structural rather than a matter of care:
+//
+//   It is keyed by the REQUEST, not by the account. There is no route here
+//   that takes an account id and describes it. The only way to see any of
+//   this is for that account to have asked YOU, and to still be waiting on
+//   your answer.
+//
+//   It is COUNTS AND AREAS, never lists. How many buildings and which towns,
+//   never an address. How much work has gone through, never which jobs. Their
+//   roster is not here at all: how many contractors a managing agent works
+//   with is their book, and it tells the answering side nothing about whether
+//   to say yes.
+//
+// The principle is the one overflow already runs on: answering an overflow
+// post makes you known to the account that posted it, because you chose to
+// answer. Asking to connect makes you known to the account you asked, for the
+// same reason and for exactly as long as the question is open.
+app.get("/api/my-connect-requests/:id/asker", async (c) => {
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ error: "forbidden" }, 403);
+
+  const row = await c.env.DB.prepare(
+    `SELECT cr.*, a.name AS account_name, a.kind, a.created_at AS account_created,
+            a.trades AS account_trades, u.name AS asked_by_name
+       FROM connect_requests cr
+       JOIN accounts a ON a.id = cr.account_id
+       LEFT JOIN users u ON u.id = cr.requested_by
+      WHERE cr.id = ? AND cr.company_id = ?`
+  ).bind(c.req.param("id"), companyId).first();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  // Only while it is theirs to answer. A declined request is finished
+  // business, and an accepted one means they are working together -- at which
+  // point this is not the screen that tells them about each other.
+  if (row.status !== "pending") return c.json({ error: "already_answered" }, 409);
+
+  // Where they work and how much of it there is. Counted, never listed.
+  let buildings = 0, towns = [];
+  try {
+    const r = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM properties WHERE account_id = ?`).bind(row.account_id).first();
+    buildings = r?.n || 0;
+    const { results } = await c.env.DB.prepare(
+      `SELECT DISTINCT city, state FROM properties
+        WHERE account_id = ? AND city IS NOT NULL AND city != '' ORDER BY city LIMIT 8`
+    ).bind(row.account_id).all();
+    towns = (results || []).map((x) => [x.city, x.state].filter(Boolean).join(", "));
+  } catch (err) { if (!missingSchema(err)) throw err; }
+
+  let jobs = 0;
+  try {
+    const r = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM jobs WHERE account_id = ?`).bind(row.account_id).first();
+    jobs = r?.n || 0;
+  } catch (err) { if (!missingSchema(err)) throw err; }
+
+  return c.json({
+    id: row.id,
+    account: row.account_name,
+    kind: row.kind,
+    since: row.account_created || null,
+    askedBy: row.asked_by_name || null,
+    via: row.via,
+    message: row.message || null,
+    createdAt: row.created_at,
+    buildings, towns, jobs,
+    // What the account says it hires. The reason this matters to the person
+    // deciding: work that never comes is not worth the paperwork.
+    trades: parseJson(row.account_trades, null) || [],
+  });
+});
+
 // Answer one. Accepting is what creates the engagement -- there is no other
 // way into this account's roster from here, which is the point of the whole
 // exercise.

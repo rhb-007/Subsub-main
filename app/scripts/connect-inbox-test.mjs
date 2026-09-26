@@ -39,7 +39,17 @@ const OH = {
 };
 
 let INCOMING = [];
-const answered = [];
+const answered = [], askedAbout = [];
+// What the account deciding may learn about the one asking. Counts and towns,
+// never a building's address and never their contractor list.
+let ASKER = {
+  id: "cr1", account: "Cascade Management", kind: "property_manager",
+  since: "2025-03-14T00:00:00Z", askedBy: "Priya Manager", via: "search",
+  message: "We have siding work in Ballard.",
+  createdAt: new Date(Date.now() - 15 * 3600 * 1000).toISOString(),
+  buildings: 14, towns: ["Seattle, WA", "Bellevue, WA", "Tacoma, WA"], jobs: 120,
+  trades: ["siding", "roofing"],
+};
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
@@ -47,6 +57,8 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/account") return [200, OH];
   if (path === "/api/my-connect-requests") return [200, INCOMING];
   if (path === "/api/connect-requests") return [200, []];
+  const ak = /^\/api\/my-connect-requests\/([^/]+)\/asker$/.exec(path);
+  if (ak) { askedAbout.push(ak[1]); return [200, { ...ASKER, id: ak[1] }]; }
   const rq = /^\/api\/my-connect-requests\/([^/]+)\/respond$/.exec(path);
   if (rq && method === "POST") {
     answered.push({ id: rq[1], accept: body?.accept });
@@ -121,7 +133,63 @@ try {
     await ctx.close();
   }
 
-  console.log("\n-- and answering it reaches the server --");
+  console.log("\n-- and you can see who is asking before you decide --");
+  {
+    INCOMING = [{
+      id: "cr1", account: "Cascade Management", accountId: "acc_pm",
+      company: "Outerhome", companyName: "Outerhome", contact: "Richard Braun",
+      city: "Seattle", state: "WA", via: "search", status: "pending",
+      message: "We have siding work in Ballard.",
+      createdAt: new Date(Date.now() - 15 * 3600 * 1000).toISOString(),
+    }];
+    answered.length = 0; askedAbout.length = 0;
+    const { ctx, page } = await open();
+    // The name is the way in.
+    await page.evaluate(() => {
+      const sec = [...document.querySelectorAll(".dash-sec")]
+        .find((s) => /asking to work with you/i.test(s.querySelector("h3")?.innerText || ""));
+      sec.querySelector(".cx-open")?.click();
+    });
+    await wait(1200);
+    const panel = await page.evaluate(() => {
+      const el = document.querySelector(".asker-panel");
+      if (!el) return null;
+      return { text: el.innerText.replace(/\s+/g, " ").trim(),
+        acts: [...el.querySelectorAll(".form-actions button")].map((b) => b.innerText.trim()) };
+    });
+    t.ck("the panel opens", !!panel, String(panel));
+    t.ck("and it asked about THAT request", askedAbout.length === 1 && askedAbout[0] === "cr1",
+      JSON.stringify(askedAbout));
+    // What the decision turns on.
+    t.ck("it says what kind of outfit they are", /Property manager/.test(panel.text), panel.text);
+    t.ck("and how long they have been here", /since March 2025/i.test(panel.text), panel.text);
+    t.ck("how many buildings", /14/.test(panel.text), panel.text);
+    t.ck("and which towns", /Seattle, WA/.test(panel.text) && /Tacoma, WA/.test(panel.text), panel.text);
+    t.ck("how much work has gone through", /120 jobs/.test(panel.text), panel.text);
+    t.ck("what they hire for", /Siding/i.test(panel.text), panel.text);
+    t.ck("and who actually asked", /Priya Manager/.test(panel.text), panel.text);
+    // The decision is takeable from here rather than sending them back.
+    t.ck("both answers are offered in the panel",
+      panel.acts.some((b) => /accept/i.test(b)) && panel.acts.some((b) => /decline/i.test(b)),
+      JSON.stringify(panel.acts));
+    // And it still says what saying yes costs.
+    t.ck("it repeats what accepting gives away",
+      /trades, crews, availability and compliance documents/i.test(panel.text), panel.text);
+
+    // Answering from inside the panel works and closes it.
+    await page.evaluate(() => {
+      const el = document.querySelector(".asker-panel");
+      [...el.querySelectorAll(".form-actions button")].find((b) => /accept/i.test(b.innerText))?.click();
+    });
+    await wait(1400);
+    t.ck("accepting from the panel reaches the server",
+      answered.length === 1 && answered[0].accept === true, JSON.stringify(answered));
+    t.ck("and the panel closes",
+      await page.evaluate(() => !document.querySelector(".asker-panel")));
+    await ctx.close();
+  }
+
+console.log("\n-- and answering it reaches the server --");
   {
     INCOMING = [{
       id: "cr1", account: "Cascade Management", accountId: "acc_pm",

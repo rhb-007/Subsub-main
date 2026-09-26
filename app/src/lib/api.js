@@ -358,6 +358,9 @@ export const api = {
   myConnectCode: () => request("/connect/code"),
   rotateConnectCode: () => request("/connect/code/rotate", { method: "POST" }),
   myConnectRequests: () => request("/my-connect-requests"),
+  // Who is asking, for the account deciding whether to say yes. Keyed by the
+  // request, never by the account -- see the note on the route.
+  connectAsker: (id) => request(`/my-connect-requests/${encodeURIComponent(id)}/asker`),
   respondConnect: (id, accept) =>
     request(`/my-connect-requests/${id}/respond`, { method: "POST", body: JSON.stringify({ accept }) }),
   acceptInvite: (token, data) =>

@@ -336,6 +336,29 @@ refactor.
   from inside it changes that row, and a panel still showing its opening copy is
   the stale-snapshot bug this file has grown twice before.
 
+- **The side being asked may see who is asking.** Accept and Decline with
+  nothing but a name is a decision made blind: the card says these people will
+  be able to send you work orders and read your compliance documents, and gave
+  no way at all to find out who they are. So a pending connect request opens a
+  profile of the **asking** account.
+
+  This is not the directory this product refuses, and the difference is
+  structural rather than a matter of care. The route is keyed by the
+  **request**, never by an account, so there is no endpoint that takes an
+  account id and describes it and nothing to walk. It answers only the company
+  the request was addressed to, and only while the request is still **pending**
+  — a declined one is finished business and an accepted one means they are
+  already working together. And it is **counts and areas, never lists**: how
+  many buildings and which towns, never an address; how much work has gone
+  through, never which jobs. Their contractor roster is not in it at all, and
+  not as a count either — that is their book, and it tells the answering side
+  nothing about whether to say yes.
+
+  The principle is the one overflow already runs on: answering a post makes you
+  known to the account that posted it, because you chose to answer. Asking to
+  connect makes you known to the account you asked, for the same reason and for
+  exactly as long as the question is open.
+
 - **A two-party handshake has to be visible to the second party.** Since 031
   an account is a company too, so a hiring account can ask *another account* to
   connect. The request was written, the asking side showed "waiting on their
