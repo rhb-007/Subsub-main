@@ -318,6 +318,26 @@ refactor.
   from inside it changes that row, and a panel still showing its opening copy is
   the stale-snapshot bug this file has grown twice before.
 
+- **A two-party handshake has to be visible to the second party.** Since 031
+  an account is a company too, so a hiring account can ask *another account* to
+  connect. The request was written, the asking side showed "waiting on their
+  answer", and the answering side showed nothing: the only screen rendering it
+  was Account → Company, and the amber badge that would have pointed at it sits
+  in the contractor portal's nav, inside `can("portal")` — which `ROLES.admin`
+  does not include. So a request sat pending forever with nobody able to find
+  it. The API was right the whole time; `/api/my-connect-requests` answers an
+  admin seat correctly, and `companyHasLogin` already refuses to create a
+  request nobody could answer.
+
+  It is on the **dashboard** now, above "Waiting on contractors" — its exact
+  mirror, one being who we are waiting on and the other who is waiting on us —
+  with the count badged on the nav so it is findable from anywhere. The general
+  rule this is an instance of: **whenever one side of a handshake is told it is
+  waiting on somebody, find the screen where that somebody answers, and check a
+  seat that role actually has.** Connect, handover, completion, overflow and job
+  approval are all this shape, and the badge living behind a capability the
+  answering role lacks is a silent way to break any of them.
+
 - **Completion is two-party and append-only.** The subcontractor marks work
   reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because

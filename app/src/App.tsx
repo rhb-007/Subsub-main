@@ -4411,6 +4411,14 @@ export default function SubSub() {
           {can("dashboard") && (
             <button className={tab === "dashboard" ? "on" : ""} onClick={() => setTab("dashboard")}>
               Dashboard
+              {/* Somebody has asked to work with this account and nothing
+                  moves until it is answered. Amber for the same reason a job
+                  request is: it is theirs to answer. The contractor portal's
+                  nav carries the same badge, but an admin has no portal --
+                  which is exactly how these requests went unanswered. */}
+              {incomingConnects.length > 0 && (
+                <span className="count amber">{incomingConnects.length}</span>
+              )}
             </button>
           )}
           {can("contractors") && (
@@ -4477,6 +4485,16 @@ export default function SubSub() {
       {tab === "dashboard" && can("dashboard") && (
         <AdminDashboard visits={visits} subs={subs} jobs={jobs} role={role} me={me} now={now}
           invites={invites} connectsOut={connectOut || []}
+          connectsIn={connectIn || []}
+          onRespondConnect={async (id, accept) => {
+            await api.respondConnect(id, accept);
+            await refreshConnects();
+            // Accepting seats this whole team in the hiring account, which is
+            // a new place to switch to: without a reload the account picker
+            // would not know it exists.
+            if (accept) await reloadAccounts?.();
+          }}
+          onReloadConnects={refreshConnects}
           hireable={isHireable(account)} myCompany={myCompany}
           onGoCompany={() => { setTab("account"); setOpenPane({ pane: "company", n: Date.now() }); }}
           onOpenInvite={(i) => setInvitedOpen(i)}
@@ -14911,6 +14929,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
 
 function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit",
   invites = [], connectsOut = [], onOpenInvite, onOpenConnect,
+  connectsIn = [], onRespondConnect, onReloadConnects,
   hireable = false, myCompany = null, onGoCompany }) {
   // Which request is being turned down, and why. One at a time: the reason
   // is the point, and a row of open boxes invites none of them being filled.
@@ -14965,6 +14984,10 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         reach: [r.city, r.state].filter(Boolean).join(", "),
         at: r.createdAt || null, sent: true })),
   ].sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))), [invites, connectsOut]);
+
+  // Only the ones still waiting on an answer. An accepted request is a
+  // contractor on the roster and a declined one is finished business.
+  const incoming = (connectsIn || []).filter((r) => r.status === "pending");
 
   const nonCompliant = subs.filter((s) => DOC_KINDS.some((k) => !s[k]));
   const toReview = subs.map((s) => ({ sub: s, kinds: pendingReviewDocs(s) })).filter((x) => x.kinds.length);
@@ -15248,6 +15271,23 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             );
           })}
           </DashRows>
+        </section>
+      )}
+
+      {/* Somebody is waiting on US. This had nowhere to live: since 031 an
+          account is a company too, so an admin can be asked to connect -- but
+          the only screen that rendered the request was Account > Company, and
+          the badge that would have pointed at it sits in the contractor
+          portal's nav, which an admin does not have. So the asking side read
+          "waiting on their answer" and the answering side had nothing to
+          answer. Above everything, because it is somebody else's business
+          held up on a yes or a no. */}
+      {!isOwner && incoming.length > 0 && (
+        <section className="dash-sec">
+          <h3><Send size={15} /> Asking to work with you
+            <span className="sec-count">{incoming.length}</span></h3>
+          <ConnectRequests requests={connectsIn} onRespond={onRespondConnect}
+            onReload={onReloadConnects} />
         </section>
       )}
 
