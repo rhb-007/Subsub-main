@@ -409,6 +409,24 @@ export const api = {
   // Overflow. There is deliberately no call here that takes a trade and gives
   // back companies -- see shared/overflow.js. The server decides who a
   // broadcast reaches and never says.
+  // Handing a building over. Two-party at every step -- shared/handover.js.
+  propertyTransfers: () => request("/property-transfers"),
+  requestTransfer: (propertyId, note) => request(
+    `/properties/${encodeURIComponent(propertyId)}/transfer`,
+    { method: "POST", body: JSON.stringify({ note: note || null }) }),
+  appointManager: (propertyId, subdomain, note) => request(
+    `/properties/${encodeURIComponent(propertyId)}/appoint`,
+    { method: "POST", body: JSON.stringify({ subdomain, note: note || null }) }),
+  decideTransfer: (id, accept) => request(
+    `/property-transfers/${encodeURIComponent(id)}/decide`,
+    { method: "POST", body: JSON.stringify({ accept }) }),
+  cancelTransfer: (id) => request(
+    `/property-transfers/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  propertyHistory: (propertyId) => request(
+    `/properties/${encodeURIComponent(propertyId)}/history`),
+  leaveAccount: (userId) => request(
+    `/account-users/${encodeURIComponent(userId)}`, { method: "DELETE" }),
+
   overflowStanding: () => request("/overflow/standing"),
   setOverflowOptIn: (optIn, trades) => request("/overflow/opt-in",
     { method: "PUT", body: JSON.stringify({ optIn, trades }) }),

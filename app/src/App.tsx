@@ -25,7 +25,7 @@ import {
   Search, Phone, Mail, MapPin, FileText, Shield, ScrollText, Calendar,
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
   Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList,
-  Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
+  Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, ArrowRightLeft, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
@@ -2040,6 +2040,7 @@ export default function SubSub() {
   const [assignSub, setAssignSub] = useState(null);       // { sub } -> pick job+trade
   const [notifying, setNotifying] = useState(null); // one-way system notification
   const [askingAuto, setAskingAuto] = useState(null); // "turn auto-schedule on?" request
+  const [transfers, setTransfers] = useState([]);   // buildings changing hands
   const [postingOverflow, setPostingOverflow] = useState(null); // { job, trade }
   const [overflowPosts, setOverflowPosts] = useState([]);
   const [overflowOffers, setOverflowOffers] = useState([]);
@@ -2315,8 +2316,14 @@ export default function SubSub() {
     .filter(Boolean), [engagements, companies, account.id, memberships]);
 
   // Properties belong to the account you're viewing.
+  // Buildings this account operates, PLUS buildings it owns and has appointed
+  // somebody else to run. Filtering on accountId alone dropped exactly the
+  // second kind -- their accountId is the manager's -- so an owner who
+  // appointed a manager watched their own building disappear, which would make
+  // appointing one feel like giving it away.
   const accountProperties = useMemo(
-    () => properties.filter((p) => p.accountId === account.id), [properties, account.id]);
+    () => properties.filter((p) => p.accountId === account.id || p.ownedNotOperated),
+    [properties, account.id]);
   const propName = (id) => (properties.find((p) => p.id === id) || {}).name || "—";
   // A vendor with no properties listed is available everywhere in the account.
   const servesProperty = (sub, propertyId) =>
@@ -2922,6 +2929,42 @@ export default function SubSub() {
     patchEngagement(companyId, { autoSchedule: on });
   };
 
+  // ---- handing a building over --------------------------------------------
+  // Two-party at every step. The server decides whose move it is and says so on
+  // each row; nothing here works it out, because the one way this breaks is a
+  // screen that thinks the requester is still owed a decision.
+  const loadTransfers = async () => {
+    try {
+      // Stored as they came. Whose move it is gets compared at RENDER against
+      // the account actually being looked at -- computing it here bound the
+      // answer to whatever `account` was when the fetch happened, which during
+      // hydration is not yet the account the screen ends up showing, and the
+      // side that had to decide was shown Withdraw instead.
+      setTransfers(await api.propertyTransfers() || []);
+    } catch (err) { console.warn("[transfers] unavailable:", err?.message || err); }
+  };
+  const askTransfer = async (propertyId, note) => {
+    await api.requestTransfer(propertyId, note);
+    await loadTransfers();
+    setBillingNote("Asked. It does not move until the other side agrees.");
+  };
+  const appointManager = async (propertyId, subdomain, note) => {
+    const made = await api.appointManager(propertyId, subdomain, note);
+    await loadTransfers();
+    setBillingNote(`Asked ${made.to} to manage it. They have to accept.`);
+  };
+  const decideTransfer = async (id, accept) => {
+    await api.decideTransfer(id, accept);
+    await loadTransfers();
+    if (accept) {
+      // The building has moved, so the roster, the jobs and the property list
+      // are all a different shape now.
+      await hydrateAccount(account.id, currentUserId, { quiet: true });
+      setBillingNote("Done. The jobs stay with whoever ran them — nothing was deleted.");
+    }
+  };
+  const cancelTransfer = async (id) => { await api.cancelTransfer(id); await loadTransfers(); };
+
   // ---- overflow -----------------------------------------------------------
   // Broadcast, never browse. There is no call here that asks the server for
   // companies, because no such route exists -- see shared/overflow.js.
@@ -3404,6 +3447,7 @@ export default function SubSub() {
       // Overflow, loaded separately: the routes 503 on a database without 038
       // and must not take the whole hydrate down with them.
       loadOverflow().catch((err) => console.warn("[overflow] unavailable:", err?.message || err));
+      loadTransfers().catch((err) => console.warn("[transfers] unavailable:", err?.message || err));
       setUniformOrders(uniformOrderRows);
       setServiceCalls(serviceCallRows);
       setProperties(propertyRows);
@@ -4710,7 +4754,10 @@ export default function SubSub() {
             setUserForm({ role: "owner", propertyIds: [p.id] });
           }}
           onEditOwner={(u) => setEditUser(u)}
-          onResendInvite={resendInvite} />
+          onResendInvite={resendInvite}
+          transfers={transfers} viewingAccountId={account.id}
+          onAskTransfer={askTransfer} onDecideTransfer={decideTransfer}
+          onCancelTransfer={cancelTransfer} onAppointManager={appointManager} />
       )}
 
       {tab === "calendar" && can("calendar") && (
@@ -10784,6 +10831,160 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
 // ---- Properties (portfolio / property managers) -------------------------
 // Vendors can be scoped to specific properties. A vendor with none listed is
 // treated as available across the whole account, which is how a GC uses it.
+// Handing a building over, on the building.
+//
+// Both sides of the conversation land in this one component, because it is one
+// object with two readings: an owner asking for their building and a manager
+// releasing it are the same row, and a screen that told each side a different
+// story about the same request would be the place the two-party rule quietly
+// broke. shared/handover.js decides whose move it is; nothing here guesses.
+function PropertyHandover({ property, transfer, side, onAsk, onDecide, onCancel, onAppoint }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState("");
+  const [appointing, setAppointing] = useState(false);
+  const [subdomain, setSubdomain] = useState("");
+
+  const act = async (fn) => {
+    setErr(""); setBusy(true);
+    try { await fn(); setAsking(false); setAppointing(false); }
+    catch (e) {
+      setErr(e?.body?.error === "no_account_to_receive_it"
+        ? "You need an account of your own before a building can be handed to you. Sign up as a building owner first, then ask again."
+        : e?.body?.error === "no_such_manager"
+        ? "No property manager on SubSub has that address. Check the spelling with them."
+        : e?.body?.error === "already_requested" ? "There is already a request open on this building."
+        : e?.body?.detail || e?.body?.error || e?.message || "That did not go through.");
+    } finally { setBusy(false); }
+  };
+
+  // Something is in flight. Whose move it is came from the server, which read
+  // it off the row -- see the note in shared/handover.js about why this is not
+  // worked out from who the owner is.
+  if (transfer && transfer.status === "pending") {
+    const mine = transfer.awaiting === transfer.requestedByAccountId; // never true; guards a bad payload
+    const waitingOnMe = transfer.awaitingMe;
+    return (
+      <div className="prop-handover live">
+        <div className="ph-head">
+          <span className="po-lab"><ArrowRightLeft size={12} /> Handover</span>
+        </div>
+        <p className="ph-text">
+          {transfer.kind === "appointment"
+            ? (waitingOnMe
+              ? `The owner of ${property.name} has asked you to manage it.`
+              : `Waiting on ${transfer.toAccount || "them"} to accept managing this building.`)
+            : (waitingOnMe
+              ? (side === "manager"
+                ? "The owner has asked to take this building over."
+                : "Your property manager has offered to hand this building to you.")
+              : (side === "manager"
+                ? "Waiting on the owner to accept."
+                : "Waiting on your property manager to release it."))}
+        </p>
+        {transfer.note && <p className="ph-note">“{transfer.note}”</p>}
+        {waitingOnMe ? (
+          <>
+            <p className="ph-small">
+              {transfer.kind === "appointment"
+                ? "Accepting puts this building in your portfolio — its jobs, its tenants and its paperwork become yours to run."
+                : side === "manager"
+                  ? "Every job you ran on it stays on your record. Nothing is copied and nothing is deleted."
+                  : "The jobs run before now stay on your manager's record, and you will still be able to read them."}
+            </p>
+            <div className="ph-acts">
+              <button className="btn-ghost small" disabled={busy}
+                onClick={() => act(() => onDecide(transfer.id, false))}>Decline</button>
+              <button className="btn-solid small" disabled={busy}
+                onClick={() => act(() => onDecide(transfer.id, true))}>
+                <Check size={13} /> {busy ? "…" : transfer.kind === "appointment" ? "Accept it" : "Hand it over"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="ph-acts">
+            <button className="pf-mini" disabled={busy}
+              onClick={() => act(() => onCancel(transfer.id))}>Withdraw</button>
+          </div>
+        )}
+        {err && <p className="auto-err"><AlertTriangle size={12} /> {err}</p>}
+      </div>
+    );
+  }
+
+  // Nothing in flight. What can be started depends on which side is looking.
+  return (
+    <div className="prop-handover">
+      {asking || appointing ? (
+        <>
+          <div className="ph-head">
+            <span className="po-lab">
+              <ArrowRightLeft size={12} /> {appointing ? "Appoint a manager" : "Handover"}
+            </span>
+          </div>
+          {appointing && (
+            <label className="fld">Their SubSub address
+              <input value={subdomain} placeholder="theircompany"
+                onChange={(e) => setSubdomain(e.target.value.trim().toLowerCase())} />
+              <span className="fld-note">
+                The part before .subsub.work. Ask them for it — there is no directory to search.
+              </span>
+            </label>
+          )}
+          <label className="fld">{appointing ? "Anything they should know" : "Why, if you want to say"}
+            <textarea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          {err && <p className="auto-err"><AlertTriangle size={12} /> {err}</p>}
+          <div className="ph-acts">
+            <button className="btn-ghost small" onClick={() => { setAsking(false); setAppointing(false); setErr(""); }}>
+              Cancel
+            </button>
+            <button className="btn-solid small"
+              disabled={busy || (appointing && !subdomain)}
+              onClick={() => act(() => appointing ? onAppoint(property.id, subdomain, note) : onAsk(property.id, note))}>
+              <Send size={13} /> {busy ? "Sending…" : appointing ? "Ask them to manage it" : "Send the request"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="ph-idle">
+          {side === "owner-seat" && (
+            <>
+              <button className="po-add" onClick={() => setAsking(true)}>
+                <ArrowRightLeft size={11} /> Ask to take this building over
+              </button>
+              <span className="ph-small">
+                Your manager has to agree. The work they have already done stays on their record.
+              </span>
+            </>
+          )}
+          {side === "manager" && property.ownedByAnother && (
+            <>
+              <button className="po-add" onClick={() => setAsking(true)}>
+                <ArrowRightLeft size={11} /> Hand over to the owner
+              </button>
+              <span className="ph-small">
+                They have to accept. Every job you ran on it stays yours.
+              </span>
+            </>
+          )}
+          {side === "holder" && (
+            <>
+              <button className="po-add" onClick={() => setAppointing(true)}>
+                <Building2 size={11} /> Appoint a property manager
+              </button>
+              <span className="ph-small">
+                They run it; you keep it. You can hand it to somebody else later without asking anyone.
+              </span>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // The owners of one building, on the building.
 //
 // The relationship is a property scope on the owner's membership and is edited
@@ -10844,7 +11045,8 @@ function PropertyOwners({ property, owners, onAddOwner, onEditOwner, onResendInv
 }
 
 function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, onGoVendors, onGoJobs, newAt, canManage = true, asOwner = false,
-  owners = [], onAddOwner, onEditOwner, onResendInvite }) {
+  owners = [], onAddOwner, onEditOwner, onResendInvite,
+  transfers = [], viewingAccountId, onAskTransfer, onDecideTransfer, onCancelTransfer, onAppointManager }) {
   const [form, setForm] = useState(null);   // null | {} | property
   const [assigning, setAssigning] = useState(null);   // the property whose vendor list is open
   const vendorsFor = (pid) => subs.filter((s) => (s.propertyIds || []).includes(pid));
@@ -10855,6 +11057,12 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
   // somebody running a portfolio actually asks, and answering it used to mean
   // opening every user in turn and reading their tick list backwards.
   const ownersFor = (pid) => owners.filter((u) => (u.propertyIds || []).includes(pid));
+  const transferFor = (pid) => {
+    const t = transfers.find((x) => x.propertyId === pid && x.status === "pending");
+    // Whose move it is, decided here against the account on screen. The server
+    // said who is awaited; this only asks whether that is us.
+    return t ? { ...t, awaitingMe: t.awaiting === viewingAccountId } : null;
+  };
   const unscoped = subs.filter((s) => !(s.propertyIds || []).length);
   const jobsFor = (pid) => jobs.filter((j) => j.propertyId === pid);
 
@@ -10970,7 +11178,14 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                       {[p.address, p.city, p.state, p.zip].filter(Boolean).join(", ")}
                     </span>
                   </div>
-                  {canManage && (
+                  {/* Somebody else runs this one. Said on the card, because
+                      almost nothing else on it applies to such a building. */}
+                  {p.ownedNotOperated && (
+                    <span className="ph-managed" title={`Managed by ${p.managedBy || "another account"}`}>
+                      <Building2 size={11} /> Managed by {p.managedBy || "another account"}
+                    </span>
+                  )}
+                  {canManage && !p.ownedNotOperated && (
                     <div className="prop-actions">
                       <button className="edit-btn" onClick={() => setForm(p)}><Pencil size={13} /> Edit</button>
                       <button className="icon-x" title="Remove property"
@@ -11040,6 +11255,16 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                     onResendInvite={onResendInvite} />
                 )}
 
+                {/* Which side of the conversation this screen is. An owner
+                    looking at a guest seat asks; a manager offers; somebody
+                    holding their own building appoints. */}
+                {onAskTransfer && (
+                  <PropertyHandover property={p} transfer={transferFor(p.id)}
+                    side={asOwner ? "owner-seat" : p.ownedByAnother ? "manager" : "holder"}
+                    onAsk={onAskTransfer} onDecide={onDecideTransfer}
+                    onCancel={onCancelTransfer} onAppoint={onAppointManager} />
+                )}
+
                 {p.notes && <p className="prop-notes">{p.notes}</p>}
                 <div className="prop-cta">
                   {canManage && (
@@ -11047,9 +11272,13 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                       <Users size={12} /> Assign vendors
                     </button>
                   )}
-                  <button className="prop-job" onClick={() => onNewJob(p)}>
-                    <Plus size={12} /> {asOwner ? "Request work here" : "New job here"}
-                  </button>
+                  {/* A building somebody else runs: raising work on it is
+                      their manager's job, not theirs. */}
+                  {!p.ownedNotOperated && (
+                    <button className="prop-job" onClick={() => onNewJob(p)}>
+                      <Plus size={12} /> {asOwner ? "Request work here" : "New job here"}
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -21620,6 +21849,19 @@ p.fld-note{margin:6px 0 0}
 .po-in{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:#1f6b4a;flex:none}
 .po-warn{display:flex;align-items:center;gap:6px;margin:10px 0 0;font-size:12px;
   color:#8a5a12;line-height:1.4}
+/* a building changing hands */
+.prop-handover{margin-top:13px;padding-top:12px;border-top:1px solid var(--line)}
+.prop-handover.live{background:#fffdf6;border:1px solid #ecd9b0;border-radius:11px;padding:13px;margin-top:14px}
+.ph-head{margin-bottom:8px}
+.ph-text{margin:0;font-size:13px;font-weight:600;line-height:1.45}
+.ph-note{margin:7px 0 0;font-size:12.5px;color:var(--ink-soft);font-style:italic;line-height:1.45}
+.ph-small{display:block;margin:7px 0 0;font-size:12px;color:var(--ink-soft);line-height:1.45}
+.ph-acts{display:flex;gap:8px;justify-content:flex-end;margin-top:11px;flex-wrap:wrap}
+.ph-idle{display:flex;flex-direction:column;gap:5px;align-items:flex-start}
+.ph-managed{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;
+  padding:3px 8px;border-radius:6px;background:var(--paper);border:1px solid var(--line);
+  color:var(--ink-soft);white-space:nowrap;flex:none}
+.btn-solid.small,.btn-ghost.small{padding:7px 13px;font-size:12.5px;border-radius:8px}
 .prop-notes{font-size:12.5px;color:var(--ink-soft);margin-top:10px;font-style:italic}
 .prop-job{margin-top:14px;align-self:flex-start;display:inline-flex;align-items:center;gap:6px;
   border:1px dashed var(--line);background:none;border-radius:8px;padding:9px 13px;

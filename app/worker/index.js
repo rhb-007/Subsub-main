@@ -7613,6 +7613,11 @@ const propertyRowToJs = (r) => ({
   id: r.id, accountId: r.account_id, name: r.name, address: r.address,
   city: r.city, state: r.state, zip: r.zip,
   units: r.units == null ? "" : r.units, notes: r.notes || "",
+  // Whether somebody else owns this building. A boolean, not the account id:
+  // the screen needs to know whether a handover is even possible, and which
+  // account it is belongs to the transfer record rather than to every property
+  // row every screen loads.
+  ownedByAnother: !!(r.owner_account_id && r.owner_account_id !== r.account_id),
 });
 
 app.get("/api/properties", async (c) => {
