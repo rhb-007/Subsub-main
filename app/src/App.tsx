@@ -22210,11 +22210,20 @@ p.fld-note{margin:6px 0 0}
 
 /* contractor: who they work for */
 .dash-hello .who-bar{margin-bottom:0;flex:none}
-.who-bar{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
-  border-radius:12px;padding:13px 16px;margin-bottom:16px;box-shadow:var(--shadow)}
-.who-txt{display:flex;flex-direction:column;min-width:0}
-.who-me{font-size:14.5px;font-weight:700;letter-spacing:-.01em}
-.who-for{font-size:11.5px;color:var(--ink-soft);font-weight:600}
+/* Reversed out, because this is the "where am I" line and a white card on a
+   near-white page was the one thing on the screen you could miss. A seat in
+   somebody else's account looks exactly like your own account otherwise: the
+   nav, the greeting and the layout are identical, and only this says which
+   company you are and who is hiring you. Ink rather than black -- it is the
+   same colour the type is set in, so it reads as part of the product. */
+.who-bar{display:flex;align-items:center;gap:12px;background:var(--ink);border:1px solid var(--ink);
+  border-radius:12px;padding:14px 18px;margin-bottom:16px;
+  box-shadow:0 2px 10px rgba(26,43,35,.18)}
+.who-txt{display:flex;flex-direction:column;gap:2px;min-width:0}
+.who-me{font-size:15px;font-weight:700;letter-spacing:-.01em;color:#fff}
+/* 7.4:1 on the ink. --ink-soft is the page's muted grey and would be 1.3:1
+   here, which is the trap of reusing a token across a reversed surface. */
+.who-for{font-size:11.5px;color:#a8bdb1;font-weight:600}
 
 /* brand settings */
 /* Profile and Company were capped at 620px while Subscription, Users and

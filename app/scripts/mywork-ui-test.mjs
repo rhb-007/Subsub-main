@@ -131,6 +131,39 @@ try {
     t.ck("the strip says how many companies this is for",
       /3 companies/.test(strip || ""), String(strip));
 
+    // Reversed out on purpose. A seat in somebody else's account looks exactly
+    // like your own -- same nav, same greeting, same layout -- and this line is
+    // the only thing that says which company you are and who is hiring you. It
+    // was a white card on a near-white page, which is the one thing on the
+    // screen you could miss.
+    const bar = await page.evaluate(() => {
+      const el = document.querySelector(".who-bar");
+      if (!el) return null;
+      const lum = (c) => {
+        const [r, g, b] = c.match(/\d+/g).slice(0, 3).map((n) => {
+          const v = Number(n) / 255;
+          return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const ratio = (a, b) => {
+        const [hi, lo] = lum(a) > lum(b) ? [lum(a), lum(b)] : [lum(b), lum(a)];
+        return (hi + 0.05) / (lo + 0.05);
+      };
+      const bg = getComputedStyle(el).backgroundColor;
+      const me = document.querySelector(".who-me");
+      const forr = document.querySelector(".who-for");
+      return { bg, bgLum: lum(bg),
+        meRatio: ratio(getComputedStyle(me).color, bg),
+        forRatio: ratio(getComputedStyle(forr).color, bg) };
+    });
+    t.ck("the who-am-I bar is reversed out, not a pale card",
+      bar && bar.bgLum < 0.1, JSON.stringify(bar));
+    t.ck("the company name is legible on it", bar.meRatio >= 4.5, String(bar.meRatio));
+    // --ink-soft is the page's muted grey and would be about 1.3:1 here. This
+    // is the trap of reusing a token across a reversed surface.
+    t.ck("and so is the line underneath, at AA", bar.forRatio >= 4.5, String(bar.forRatio));
+
     const cards = await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
       .map((c) => ({ away: c.classList.contains("jr-away"),
         text: c.innerText.replace(/\s+/g, " ").trim() })));

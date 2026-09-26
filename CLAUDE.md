@@ -550,6 +550,15 @@ refactor.
   tint, and the same sentence as before. `clientCount` is what decides, so the
   screen only changes shape once there is a second company to distinguish.
 
+  **The who-am-I bar is reversed out**, because a seat in somebody else's account
+  looks exactly like your own — same nav, same greeting, same layout — and
+  `.who-bar` is the only thing on the screen saying which company you are and who
+  is hiring you. As a white card on a near-white page it was the one thing you
+  could miss. Ink rather than black, so it reads as part of the product. Its text
+  colours are literals and not the page's tokens: `--ink-soft` is the muted grey
+  for a *light* surface and lands at about 1.3:1 here, which is the trap of
+  carrying a token across a reversed surface. A test pins both ratios.
+
   **And the switcher itself has a threshold.** A flat list with the relationship
   under each name is right at two or three seats and is what the drawer does. At
   twenty-five it is around 1,100px of two-line buttons below every nav item with
@@ -598,6 +607,30 @@ refactor.
   the switch, which is exactly what made it read as a broken account rather than
   a page that had not reloaded. **When a screen says a record is missing, check
   what account the data in state belongs to before looking for the record.**
+
+  **`companies` is a shared row, so writing to it needs a relationship.** One
+  certificate, one set of booleans, read by every account that engages them — so
+  `POST` and `DELETE /api/subs/:companyId/documents/:kind` are not writes to your
+  own data. Both checked the contractor and nobody else, which left an admin or a
+  project manager able to upload against, and delete from, **any company id**.
+
+  Reachable, not theoretical: `GET /api/account-by-subdomain/:s` is on the public
+  exemption list and answers with the account id, `ownCompanyId` derives
+  `cmp_own_<accountId>` from it, and `DELETE` then runs
+  `UPDATE companies SET insurance = 0` on a general contractor nobody involved has
+  any relationship with. `missingDocs` and `docsComplete` read those booleans, so
+  that takes them off every roster they are on and their clients are told they
+  cannot be assigned work; `supersedeDoc` on the `POST` side retires the row that
+  answers "were they insured on the day of that job".
+
+  `mayWriteCompanyDocs` is the check the **review** route three functions up
+  already did. Two deliberate differences. An **ended** engagement does not carry
+  the right to edit their paperwork afterwards — review may keep accepting any
+  engagement, because it writes its own account's verdict on its own row and
+  reaches nothing shared. And it answers **`not_found`, before the company is
+  looked up**, so a company that exists and one that does not give the same
+  reply: a `403` would confirm which derived ids are real, which is the oracle
+  the handover subdomain lookup already refuses to be.
 
   **Sending is gated on a document being uploaded, not verified.** Verification
   is each hiring account's own verdict and says nothing about whether the

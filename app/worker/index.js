@@ -6249,11 +6249,47 @@ app.post("/api/subs/:companyId/documents/:kind/review", requireRole("admin", "pm
 // engages them). Re-uploading reopens the review queue for EVERY account
 // that engages this company, not just the one who uploaded it — same
 // design as the prototype's uploadSubDoc().
+// May this seat write to this company's documents at all?
+//
+// `companies` is a SHARED row: one certificate, one set of booleans, read by
+// every account that engages them. So a write here is not a write to your own
+// data, and these two routes checked the contractor and nobody else -- an admin
+// or a project manager could upload against, and delete from, ANY company id.
+//
+// That was reachable rather than theoretical. GET /api/account-by-subdomain/:s
+// is on the public exemption list and answers with the account id; ownCompanyId
+// derives `cmp_own_<accountId>` from it; and DELETE then runs
+// `UPDATE companies SET insurance = 0` on a general contractor nobody involved
+// has any relationship with. missingDocs and docsComplete read those booleans,
+// so that takes them off every roster they are on and their clients are told
+// they cannot be assigned work -- and supersedeDoc on the POST side retires the
+// certificate row that answers "were they insured on the day of that job".
+//
+// The check the review route three functions up already does, applied to the
+// two routes that write the shared row. Stricter in one way: an ENDED
+// engagement is a finished relationship and does not carry the right to edit
+// their paperwork afterwards. Review may keep using any engagement -- it writes
+// its own account's verdict, on its own row, and reaches nothing shared.
+//
+// Answering `not_found` rather than `forbidden`, and BEFORE the company is
+// looked up, so a company that exists and one that does not give the same
+// reply. A 403 here would confirm which derived ids are real, which is the
+// same rule the handover subdomain lookup follows.
+async function mayWriteCompanyDocs(c, companyId) {
+  const auth = c.get("auth");
+  if (auth.role === "contractor") return auth.companyId === companyId;
+  const engaged = await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM engagements
+      WHERE account_id = ? AND company_id = ? AND status != 'ended' LIMIT 1`
+  ).bind(auth.accountId, companyId).first();
+  return !!engaged;
+}
+
 app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "contractor"), async (c) => {
   const auth = c.get("auth");
   const { companyId } = c.req.param();
   const kind = c.req.param("kind"); // insurance | bond | contract | w9
-  if (auth.role === "contractor" && auth.companyId !== companyId) return c.json({ error: "forbidden" }, 403);
+  if (!(await mayWriteCompanyDocs(c, companyId))) return c.json({ error: "not_found" }, 404);
   const body = await c.req.json();
   const { fileKey, fileName } = body;
 
@@ -6305,10 +6341,9 @@ app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "con
 });
 
 app.delete("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "contractor"), async (c) => {
-  const auth = c.get("auth");
   const { companyId } = c.req.param();
   const kind = c.req.param("kind");
-  if (auth.role === "contractor" && auth.companyId !== companyId) return c.json({ error: "forbidden" }, 403);
+  if (!(await mayWriteCompanyDocs(c, companyId))) return c.json({ error: "not_found" }, 404);
 
   const company = await c.env.DB.prepare(`SELECT doc_files FROM companies WHERE id = ?`).bind(companyId).first();
   if (!company) return c.json({ error: "not_found" }, 404);
