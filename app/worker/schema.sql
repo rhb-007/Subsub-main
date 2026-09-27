@@ -14,11 +14,22 @@ CREATE TABLE accounts (
   id                TEXT PRIMARY KEY,
   name              TEXT NOT NULL,
   subdomain         TEXT UNIQUE NOT NULL,
-  -- Who the account is. A general contractor has no building list; the other
-  -- three manage a standing portfolio and scope vendors to specific properties.
+  -- Who the account is. A general contractor and a subcontractor have no
+  -- building list; the other three manage a standing portfolio and scope
+  -- vendors to specific properties. A subcontractor is the one kind here that
+  -- is HIRED rather than hiring, and it exists because the
+  -- send-your-compliance-pack loop is aimed at them: without it a roofer had to
+  -- call itself a general contractor to get a hireable account.
+  --
+  -- Note that a database grown through the migrations has NO check here at all:
+  -- 003 added `kind` as plain TEXT on purpose, because constraining an existing
+  -- table needs a full rebuild. So this list and a live database can disagree,
+  -- and adding a kind means updating both this and 047. CHECK.sql reports which
+  -- shape the database in front of you actually has.
   kind              TEXT NOT NULL DEFAULT 'general_contractor'
-                      CHECK (kind IN ('general_contractor','property_manager',
-                                      'building_owner','portfolio_manager')),
+                      CHECK (kind IN ('general_contractor','subcontractor',
+                                      'property_manager','building_owner',
+                                      'portfolio_manager')),
   plan              TEXT NOT NULL DEFAULT 'basic' CHECK (plan IN ('basic','scale')),
   billing           TEXT NOT NULL DEFAULT 'monthly' CHECK (billing IN ('monthly','annual')),
   logo_key          TEXT,               -- R2 object key; NULL = default mark

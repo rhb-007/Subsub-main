@@ -34,12 +34,19 @@ SELECT
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='connect_requests')       AS m030_connect_requests,
   (SELECT COUNT(*) FROM pragma_table_info('companies')   WHERE name='connect_code')         AS m030_connect_code,
   (SELECT COUNT(*) FROM pragma_table_info('accounts')    WHERE name='company_id')           AS m031_account_company,
-  -- Not a column check: the point of 031 is that every GENERAL CONTRACTOR
-  -- has one. The other account kinds hire but are not hired, and must not.
+  -- Not a column check: the point of 031 is that every account that can BE
+  -- HIRED has one, and no other kind does. It read `general_contractor` alone
+  -- until `subcontractor` was added -- at which point the invariant would have
+  -- flagged every subcontractor account as an illegal company row while
+  -- silently allowing one with no company to be hired as. The list here has to
+  -- stay in step with HIREABLE_KINDS in worker/index.js; nothing enforces that
+  -- but this comment and the migration-gap test.
   (SELECT COUNT(*) FROM accounts
-    WHERE kind = 'general_contractor' AND company_id IS NULL)                               AS m031_gcs_without,
+    WHERE kind IN ('general_contractor','subcontractor')
+      AND company_id IS NULL)                                                               AS m031_hireable_without,
   (SELECT COUNT(*) FROM accounts
-    WHERE kind <> 'general_contractor' AND company_id IS NOT NULL)                          AS m031_others_with,
+    WHERE kind NOT IN ('general_contractor','subcontractor')
+      AND company_id IS NOT NULL)                                                           AS m031_others_with,
   (SELECT COUNT(*) FROM pragma_table_info('users')       WHERE name='avatar_key')           AS m032_avatar,
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_milestones')          AS m033_milestones,
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_events')              AS m033_events,
@@ -68,4 +75,25 @@ SELECT
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='quote_invites')            AS m043_quote_invites,
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_retouches')            AS m044_retouches,
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_share_optouts')        AS m044_optouts,
-  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_inboxes')              AS m045_inboxes;
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_inboxes')              AS m045_inboxes,
+  -- 046 is the one migration here that MOST DATABASES MUST NOT RUN, so this
+  -- reads the shape rather than asking whether a column arrived.
+  --
+  --   0  no CHECK on accounts.kind -- 003 added it as plain TEXT on purpose.
+  --      The subcontractor kind stores with nothing run. Do not run 046.
+  --   1  the OLD constraint, from a database built out of schema.sql. It
+  --      REFUSES 'subcontractor', and a subcontractor signing up gets a 409
+  --      and no account. Run 046's rebuild.
+  --   2  already widened. Nothing to do.
+  (SELECT CASE
+     WHEN (SELECT sql FROM sqlite_master WHERE type='table' AND name='accounts')
+            NOT LIKE '%CHECK (kind IN%' THEN 0
+     WHEN (SELECT sql FROM sqlite_master WHERE type='table' AND name='accounts')
+            LIKE '%''subcontractor''%' THEN 2
+     ELSE 1 END)                                                                            AS m046_kind_check,
+  -- And the index 046's rebuild has to put back, because CREATE TABLE AS SELECT
+  -- keeps the rows and drops everything else. Every branded page load looks an
+  -- account up by subdomain.
+  (SELECT COUNT(*) FROM sqlite_master
+    WHERE type='index' AND tbl_name='accounts'
+      AND (name='idx_accounts_subdomain' OR sql LIKE '%subdomain%'))                        AS m046_subdomain_unique;

@@ -433,8 +433,8 @@ body.nav-open{overflow:hidden}
     <div class="steps-bar" id="bar">
       <div data-state="now"><span class="sb-n">1</span> Your account</div>
       <div><span class="sb-n">2</span> Your company</div>
-      <div><span class="sb-n">3</span> Add subcontractors</div>
-      <div><span class="sb-n">4</span> Done</div>
+      <div id="barInvites"><span class="sb-n">3</span> Add subcontractors</div>
+      <div id="barDone"><span class="sb-n" id="barDoneN">4</span> Done</div>
     </div>
 
     <!-- STEP 1 -->
@@ -448,6 +448,12 @@ body.nav-open{overflow:hidden}
           <div class="roles">
             <label class="role"><input type="radio" name="role" value="General contractor" checked>
               <span>General contractor<em>You bid and build the work</em></span></label>
+            <!-- The only one here that is HIRED rather than hiring. It was
+                 missing, so a roofer following the send-your-paperwork loop had
+                 to call itself a general contractor to get an account at all --
+                 and then every screen called it one. -->
+            <label class="role"><input type="radio" name="role" value="Subcontractor">
+              <span>Subcontractor<em>You do the work for other contractors</em></span></label>
             <label class="role"><input type="radio" name="role" value="Property manager">
               <span>Property manager<em>You maintain units and doors</em></span></label>
             <label class="role"><input type="radio" name="role" value="Building owner">
@@ -479,7 +485,7 @@ body.nav-open{overflow:hidden}
     <!-- STEP 2 -->
     <section class="step" data-step="2">
       <h2>Your company</h2>
-      <p class="sl">This is what your subcontractors see when they sign in and on every work order
+      <p class="sl" id="companyLede">This is what your subcontractors see when they sign in and on every work order
         you issue.</p>
       <form id="f2">
         <div class="field"><label for="company">Company name</label>
@@ -521,7 +527,7 @@ body.nav-open{overflow:hidden}
 
         <div class="field" style="margin-top:6px">
           <label id="tradesLabel">Trades you work with</label>
-          <p class="fine">Pick everything you hire out. It sets what SubSub asks your
+          <p class="fine" id="tradesHint">Pick everything you hire out. It sets what SubSub asks your
             subcontractors to prove, and you can change it any time.</p>
           <div id="trades"></div>
         </div>
@@ -532,9 +538,9 @@ body.nav-open{overflow:hidden}
              ever hire, so they are not asked and this block stays hidden. -->
         <div class="field hide" id="gcCreds">
           <label for="license">Your license and UBI <span class="opt">optional</span></label>
-          <p class="fine">You can be hired through SubSub too — another general contractor can send
+          <p class="fine" id="gcCredsLede">You can be hired through SubSub too — another general contractor can send
             you work. Adding these is what makes that possible, and it is the same proof you will
-            ask of your own subcontractors. <b>You can do it later from your account</b> — several
+            ask of your own subcontractors. You can do it later from your account — several
             states have no contractor license at all, so this is never required to sign up.</p>
           <div class="two">
             <input id="license" placeholder="State license number" autocapitalize="characters" autocorrect="off" spellcheck="false">
@@ -668,6 +674,80 @@ body.nav-open{overflow:hidden}
   var inboxTok = (qs.get('inbox') || '').trim();
   if(!/^[A-Za-z0-9_-]{16,128}$/.test(inboxTok)) inboxTok = '';
   var SCALE_PRICE = { monthly: '$99/mo · unlimited', annual: '$990/yr · unlimited' };
+
+  /* ---- what the page says when the person being asked is HIRED ----------
+     A subcontractor has no subcontractors, no jobs and no buildings, so three
+     things on this page were asking them about a business they do not run:
+     a plan priced in contractor seats, "trades you work with -- pick everything
+     you hire out", and a whole step for inviting subcontractors. Answering
+     those is not a smaller version of the GC flow, it is a different set of
+     questions, so the page re-labels itself and drops the step rather than
+     leaving them to guess which boxes are for them.
+
+     Their plan is Basic and stays Basic: every limit on it counts
+     subcontractors, users and jobs, and they use none of the three. Showing
+     them a plan pill that says "3 subcontractors" invites the one question this
+     flow cannot afford -- am I about to be charged for sending a certificate. */
+  function paintRole(){
+    var sub = isSub();
+    if(sub){ plan = 'basic'; }
+    var barInv = document.getElementById('barInvites');
+    if(barInv){ barInv.classList.toggle('hide', sub); }
+    /* The step numbers are markup, not a counter, so hiding the third item is
+       not enough on its own: a bar reading 1, 2, 4 is worse than no bar. */
+    var doneN = document.getElementById('barDoneN');
+    if(doneN){ doneN.textContent = sub ? '3' : '4'; }
+    var pill = document.querySelector('.planpill');
+    if(pill){ pill.classList.toggle('hide', sub); }
+    /* And the two ways back to a price list that counts contractor seats. A
+       subcontractor who follows one is being asked to choose between two plans
+       neither of which describes anything they will use. */
+    Array.prototype.forEach.call(
+      document.querySelectorAll('a[href="pricing.html"]'), function(a){
+        a.classList.toggle('hide', sub);
+      });
+    var lede = document.querySelector('.ob-head .fine');
+    if(lede){
+      lede.textContent = sub
+        ? 'Three short steps, and it is free. You can change any of it later.'
+        : 'Four short steps. You can change any of it later.';
+    }
+    var tl = document.getElementById('tradesLabel');
+    if(tl){ tl.textContent = sub ? 'Trades you work in' : 'Trades you work with'; }
+    var th = document.getElementById('tradesHint');
+    if(th){
+      th.textContent = sub
+        ? 'Pick what you do. It is what a hiring contractor searches their own '
+          + 'roster by, and what SubSub asks you to prove.'
+        : 'Pick everything you hire out. It sets what SubSub asks your '
+          + 'subcontractors to prove, and you can change it any time.';
+    }
+    var co = document.getElementById('companyLede');
+    if(co){
+      co.textContent = sub
+        ? 'This is what appears on the paperwork you send, and what a hiring '
+          + 'contractor sees on their roster.'
+        : 'This is what your subcontractors see when they sign in and on every '
+          + 'work order you issue.';
+    }
+    /* The licence is optional for a GC and the reason it is worth giving is
+       different for a subcontractor: it is the thing that makes them hireable,
+       which is what they came for. */
+    var cl = document.getElementById('gcCredsLede');
+    if(cl){
+      cl.textContent = sub
+        ? 'This is what a hiring contractor checks before they send you work, and '
+          + 'SubSub verifies it against the state register so you are not asked '
+          + 'again. You can do it later from your account \u2014 several states have '
+          + 'no contractor license at all, so this is never required to sign up.'
+        : 'You can be hired through SubSub too \u2014 another general contractor can '
+          + 'send you work. Adding these is what makes that possible, and it is the '
+          + 'same proof you will ask of your own subcontractors. You can do it later '
+          + 'from your account \u2014 several states have no contractor license at all, '
+          + 'so this is never required to sign up.';
+    }
+    paintPlan();
+  }
 
   function paintPlan(){
     document.getElementById('planName').textContent = PLANS[plan].name;
@@ -923,16 +1003,24 @@ body.nav-open{overflow:hidden}
       sel.appendChild(o);
     }
   })();
-  /* The licence pair belongs to the one kind of account that can be hired. */
-  function isGC(){
+  /* The licence pair belongs to the kinds of account that can be HIRED, which
+     is now two of them. Asking a subcontractor for it is not the same request
+     as asking a general contractor: for a GC it unlocks something extra, and
+     for a subcontractor it is the whole reason they are here. */
+  function roleValue(){
     var el = document.querySelector('input[name="role"]:checked');
-    return !el || el.value === 'General contractor';
+    return el ? el.value : 'General contractor';
+  }
+  function isSub(){ return roleValue() === 'Subcontractor'; }
+  function isHireable(){
+    var v = roleValue();
+    return v === 'General contractor' || v === 'Subcontractor';
   }
   function syncGCCreds(){
-    document.getElementById('gcCreds').classList.toggle('hide', !isGC());
+    document.getElementById('gcCreds').classList.toggle('hide', !isHireable());
   }
   Array.prototype.forEach.call(document.querySelectorAll('input[name="role"]'), function(r){
-    r.addEventListener('change', syncGCCreds);
+    r.addEventListener('change', function(){ syncGCCreds(); paintRole(); });
   });
   syncGCCreds();
   document.getElementById('logoFile').addEventListener('change', function(){
@@ -969,6 +1057,11 @@ body.nav-open{overflow:hidden}
     // all -- so it was a question a real general contractor could not
     // answer. It is asked for again in the account, where it buys them
     // something: being hireable through SubSub.
+    //
+    // A subcontractor has nobody to invite, so step 3 is not a step they skip
+    // -- it is a step that does not exist for them, and offering it with a
+    // "Skip for now" button is asking a question to have it waved away.
+    if(isSub()){ finishUp(true); return; }
     go(3);
   });
 
@@ -1061,6 +1154,7 @@ body.nav-open{overflow:hidden}
         : 'https://api.subsub.work/api');
   var KINDS = {
     'General contractor': 'general_contractor',
+    'Subcontractor': 'subcontractor',
     'Property manager': 'property_manager',
     'Building owner': 'building_owner',
     'Commercial portfolio manager': 'portfolio_manager'
@@ -1212,6 +1306,20 @@ body.nav-open{overflow:hidden}
         if(btn){ btn.textContent = 'Sign in and add them'; }
       }
 
+      /* What happens next is not the same job. A hiring account approves
+         documents and creates jobs; a subcontractor uploads their four and
+         sends them to whoever asked, which is the reason they are here. */
+      if(isSub()){
+        var ticks = document.querySelectorAll('.step[data-step="4"] .ticks li span');
+        if(ticks[0]){
+          ticks[0].innerHTML = '<b>Next:</b> upload your insurance, bond, W-9 and signed '
+            + 'agreement. They live in your account and stay current.';
+        }
+        if(ticks[1]){
+          ticks[1].innerHTML = '<b>Then:</b> send the lot to anybody who asks, in one link '
+            + '\u2014 with the expiry live, which an attached PDF can never do.';
+        }
+      }
       if(dl){
         dl.textContent = res.body.needsConfirmation
           // One thing left, and it is the only thing on the screen that
@@ -1257,7 +1365,22 @@ body.nav-open{overflow:hidden}
   document.getElementById('skipInv').addEventListener('click', function(){ finishUp(true); });
 
   /* boot */
-  paintPlan();
+  /* Arriving from a page written for subcontractors -- the licensing reference,
+     or the compliance-pack pitch -- preselects the role they have already told
+     us, rather than opening on "General contractor" and asking them to correct
+     it. Matched against the radios' own values so a typo in a marketing link
+     falls back to the default instead of writing a kind nothing renders. */
+  (function(){
+    var want = (qs.get('as') || '').trim().toLowerCase();
+    if(!want) return;
+    var hit = null;
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="role"]'), function(r){
+      if(r.value.toLowerCase().replace(/[^a-z]/g, '') === want.replace(/[^a-z]/g, '')) hit = r;
+    });
+    if(hit){ hit.checked = true; }
+  })();
+  syncGCCreds();
+  paintRole();
   addRow();
   if(plan === 'basic'){ addRow(); addRow(); }  // three slots ready on Basic
 })();

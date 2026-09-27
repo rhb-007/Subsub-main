@@ -464,6 +464,24 @@ const ACCOUNT_KINDS = {
   general_contractor: { label: "General contractor", properties: false, invites: [],
                         hireable: true,
                         roleLabels: { pm: "Project manager" } },
+  // The company being hired, which every other kind here is not.
+  //
+  // The send-your-compliance-pack loop is aimed at subcontractors -- it is the
+  // only flywheel a product with no directory has -- and a roofer following it
+  // arrived at a signup form offering four ways to describe a business, all
+  // four of which HIRE. "General contractor" was the only one that got them a
+  // hireable account, so that is what they had to pick, and from then on the
+  // console, the switcher and their own sign-in page all called a roofing
+  // company a general contractor.
+  //
+  // Structurally this is `general_contractor` without the buildings, and that
+  // is the point: hireable, no properties, nobody to invite. It is a separate
+  // value rather than a label over the top because `kind` is what every screen
+  // reads to say what an account IS, and nothing downstream could tell a
+  // misfiled roofer from a real GC.
+  subcontractor:      { label: "Subcontractor", properties: false, invites: [],
+                        hireable: true,
+                        roleLabels: { pm: "Project manager" } },
   property_manager:   { label: "Property manager", properties: true, invites: ["owner"] },
   // A building owner's account has no owners to invite -- they are the owner.
   // The people they let in are managing agents, which is the ordinary

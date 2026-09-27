@@ -3590,16 +3590,29 @@ async function moveHostnameAfter(c, account, from) {
   return run;
 }
 
-const ACCOUNT_KINDS = ["general_contractor", "property_manager", "building_owner", "portfolio_manager"];
+// `subcontractor` is the newest and it is the one the growth loop needs. Every
+// other kind here HIRES; the send-your-compliance-pack flow is aimed at the
+// company being hired, and a roofer arriving from it had to call itself a
+// general contractor to get an account at all. Structurally it is a general
+// contractor without the buildings -- hireable, no properties, nobody to invite
+// -- and the reason it is its own value rather than a label on top of
+// `general_contractor` is that the console, the switcher and the branded
+// sign-in page all read `kind` to say what an account IS. A roofer told it is a
+// general contractor everywhere it looks has been misfiled, and nothing
+// downstream can tell the two apart.
+const ACCOUNT_KINDS = ["general_contractor", "subcontractor",
+  "property_manager", "building_owner", "portfolio_manager"];
 // The kinds that keep a building list, and so are the only ones with anything
 // for a tenant or a building owner to be attached to.
 const ACCOUNT_KINDS_WITH_PROPERTIES = ["property_manager", "building_owner", "portfolio_manager"];
 // And the kinds that can themselves be hired. A general contractor sells
-// siding on Tuesday and subs its gutters out on Wednesday; a property
-// manager, a portfolio manager and a building owner only ever hire. The
-// migration gives a company row to nobody else, and this is the check that
-// keeps it that way as accounts change kind.
-const HIREABLE_KINDS = ["general_contractor"];
+// siding on Tuesday and subs its gutters out on Wednesday, and a subcontractor
+// is hired by definition; a property manager, a portfolio manager and a
+// building owner only ever hire. 031 gives a company row to nobody else, and
+// this is the check that keeps it that way as accounts change kind -- so
+// adding a kind here is what mints its company row, and leaving it out is what
+// would give a subcontractor nothing to be hired AS.
+const HIREABLE_KINDS = ["general_contractor", "subcontractor"];
 
 // The trade categories an account can hire out -- the same thirty ids the app
 // renders from. Kept here too because the browser's copy is a convenience and
@@ -10363,7 +10376,7 @@ app.post("/api/platform/accounts", async (c) => {
   // The same row signing up creates. Without it a general contractor made
   // from this console cannot be found by the connect lookup at all -- they
   // exist, and nobody can ask to work with them -- and CHECK.sql counts them
-  // in m031_gcs_without. ensureAccountCompany would get there eventually, but
+  // in m031_hireable_without. ensureAccountCompany would get there eventually, but
   // only once somebody opened a screen that happened to need it.
   await ensureAccountCompany(c.env, id);
 

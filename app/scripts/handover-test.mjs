@@ -1174,7 +1174,7 @@ console.log("\n-- and a company row does not outlive being hireable --");
 // general contractor is a company since 031. The console's INSERT wrote the
 // account row and stopped, so a GC set up by staff existed and could not be
 // found by the connect lookup, could not be asked to connect, and had no code
-// to show -- CHECK.sql's m031_gcs_without is the count of them.
+// to show -- CHECK.sql's m031_hireable_without is the count of them.
 //
 // Reaching a staff route means being staff, and staff is Cloudflare Access, so
 // this mints a real Access token over a real keypair and serves the JWKS the

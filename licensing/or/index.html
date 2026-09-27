@@ -530,7 +530,12 @@ body.nav-open{overflow:hidden}
         seconds &mdash; with a page showing your carrier, policy number, cover and
         expiry, that updates itself when you renew. Free, and whoever you send it to
         needs no account.</p>
-      <a class="btn" href="https://subsub.work/get-started.html">Set up your compliance pack</a>
+      <!-- as=subcontractor, because the reader of THIS box is the company being
+           hired and the signup form opens on a role picker whose other four
+           options all hire. Without it a roofer has to describe itself as a
+           general contractor to finish, and every screen afterwards calls it
+           one. (No backticks in here: this sits inside a template literal.) -->
+      <a class="btn" href="https://subsub.work/get-started.html?as=subcontractor">Set up your compliance pack</a>
     </div>
 
     <div class="lic-cta lic-gc-cta">

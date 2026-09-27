@@ -604,6 +604,79 @@ refactor.
   exact wording and a form that deviates can be void, and lien law follows
   the property's state, not the signer's.
 
+- **A subcontractor is an account kind, because it is the one that gets hired.**
+  Every kind before it hires. The send-your-compliance-pack loop is aimed at the
+  company being *hired* — in a product with no directory it is the only flywheel
+  there is — and a roofer following it arrived at a signup form offering four
+  ways to describe a business, all four of which hire. `general_contractor` was
+  the only one that produced a hireable account, so that is what they picked, and
+  from then on the staff console, the account switcher and their own branded
+  sign-in page all called a roofing company a general contractor.
+
+  Structurally it is `general_contractor` without the buildings: `hireable`,
+  `properties: false`, nothing to invite. It is a separate **value** rather than a
+  label over the top because `kind` is what every screen reads to say what an
+  account *is*, and nothing downstream could tell a misfiled roofer from a real
+  GC.
+
+  **Adding it means three lists, not one.** `ACCOUNT_KINDS` (what the API will
+  store), `HIREABLE_KINDS` (what 031 mints a company row for — leave it out and
+  the account has nothing to be hired *as*, which is the only thing they came
+  for), and the browser's `ACCOUNT_KINDS` object. A kind the API accepts and the
+  app cannot render is an account nobody can open; a kind the app renders and the
+  API rejects is an account nobody can make.
+
+  **And CHECK.sql's invariant is about being hireable, not about being a GC.**
+  `m031_gcs_without` read `kind = 'general_contractor'` literally, so adding a
+  kind would have flagged every subcontractor as an illegal company row *and* let
+  one with no company be hired as. It is `m031_hireable_without` now, and its list
+  has to stay in step with `HIREABLE_KINDS`.
+
+  **The form re-labels itself rather than leaving them to guess.** Three things on
+  `get-started.html` were asking a subcontractor about a business they do not run:
+  a plan pill priced in contractor seats, "trades you work with — pick everything
+  you hire out", and a whole step for inviting their subcontractors. That step is
+  not one they *skip* — it does not exist for them, and offering it with a "Skip
+  for now" button is asking a question in order to wave it away. The step numbers
+  are markup rather than a counter, so dropping the third item means renumbering
+  the fourth: a bar reading 1, 2, 4 is worse than no bar. `?as=subcontractor` on
+  the licensing CTA preselects the role they have already told us, matched against
+  the radios' own values so a typo in a marketing link falls back to the default
+  instead of writing a kind nothing renders.
+
+  Their plan is Basic and stays Basic: every limit on it counts subcontractors,
+  users and jobs, and they use none of the three. A plan pill saying "3
+  subcontractors" invites the one question this flow cannot afford — *am I about
+  to be charged for sending a certificate.*
+
+  **Migration 046 is the one migration most databases must not run.** 003 added
+  `accounts.kind` as plain TEXT on purpose ("adding a CHECK to an existing table
+  needs a full table rebuild, and the API validates the value anyway"), so a
+  database grown through the migrations accepts the new kind with nothing run at
+  all. One built from `schema.sql` carries the CHECK and **refuses** it — which
+  surfaces to whoever is signing up as `signup_conflict`, a 409 and no account,
+  silent until the first subcontractor tries. So `m046_kind_check` reads the
+  *shape* rather than asking whether a column arrived: `0` nothing to do, `1` run
+  the rebuild, `2` already widened. A rebuild that is not needed is strictly worse
+  than doing nothing.
+
+  The rebuild is `CREATE TABLE ... AS SELECT`, which keeps every column and row
+  and drops every constraint — deliberately, because restating the whole
+  `accounts` table in a migration file means a stale copy silently dropping
+  columns it had not heard about. 003 already chose that side of the trade. But
+  the **index is not a constraint and is not optional**:
+  `GET /api/account-by-subdomain/:s` is on the public route list and runs on every
+  branded page load, so 046 puts it back and CHECK.sql counts it.
+
+  **`schema.sql` has drifted from the migrations and is not a safe fresh install.**
+  It is missing at least `accounts.company_id` (031) and
+  `properties.owner_account_id` (039), so CHECK.sql cannot even be run against a
+  database built from it. That is why the Worker tests here pass the columns they
+  need in `freshDb`'s `migrations` array, and why the signup route treats a
+  missing `company_id` as "a database without 031" and moves on quietly — which
+  is also how a missing company row reads as a bug in the route rather than a gap
+  in the harness.
+
 - **A subcontractor may send their own paperwork, and that is the growth
   loop.** Every other way into SubSub needs the hiring side to already be here:
   they look a contractor up, or they scan a code, and both need an account
@@ -1171,7 +1244,10 @@ refactor.
   bug report.** Beside the did-I-run-it columns are counts that must read
   zero: `m039_unowned` (properties with no `owner_account_id`),
   `m031_others_with` (a non-hireable account still holding a company row) and
-  `m031_gcs_without` (a general contractor with none). All three read `1` once,
+  `m031_hireable_without` (an account that can be hired with none — it read
+  `general_contractor` alone until the `subcontractor` kind was added, and a
+  literal there would have flagged every subcontractor as an illegal company row
+  while letting one with no company be hired as). All three read `1` once,
   and each was a different route writing a row the migration had already
   taught the schema to expect — 039 backfilled every property and
   `POST /api/properties` never learned to set the column; 031 made a general
