@@ -632,6 +632,22 @@ refactor.
   reply: a `403` would confirm which derived ids are real, which is the oracle
   the handover subdomain lookup already refuses to be.
 
+  **And it sends in one field, from the menu.** The panel on My Documents is for
+  *managing* what has been sent — the list, the view counts, revoking. That is
+  not the moment this loop is for: a general contractor asks for your insurance
+  while you are standing on their site, and the answer should be six seconds
+  long. So `QuickSend` sits beside **My QR code**, in the header menu and the
+  mobile drawer, because the two are the same kind of thing — give somebody your
+  details without a conversation. The code is how they add you; this is how they
+  get your paperwork.
+
+  One field, deliberately. No name, no note: every extra box is a reason to do
+  it later, and later is when people go back to attaching PDFs. The W-9 line is
+  on the form *before* they send rather than discovered after, and it is hidden
+  entirely when there is nothing on file, because the server refuses that with
+  `nothing_on_file` and a screen that offers a button the server will refuse is
+  a screen that lies.
+
   **Sending is gated on a document being uploaded, not verified.** Verification
   is each hiring account's own verdict and says nothing about whether the
   contractor has one to send — the common case is that they upload and somebody

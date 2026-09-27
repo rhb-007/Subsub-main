@@ -55,6 +55,7 @@ import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
 import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
+import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -2178,6 +2179,7 @@ export default function SubSub() {
   const canShowQr = role === "contractor"
     || ((role === "admin" || role === "pm") && isHireable(account));
 
+
   // What this person is, in the words the customer uses. A subcontractor signing
   // into someone else's portal is a contractor, not "a general contractor" — the
   // account type is the hiring side's identity, not theirs.
@@ -2948,6 +2950,22 @@ export default function SubSub() {
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loggedIn, currentAccountId, account.kind]);
+
+  // Sending the compliance pack, from the menu. Same family as the QR code --
+  // both are "give somebody my details without a conversation" -- so it lives
+  // in the same place rather than only on the documents screen, which is where
+  // somebody goes to MANAGE documents, not to answer a general contractor who
+  // has just asked for them on a job site.
+  //
+  // Gated on having something on file, matching the server, which refuses with
+  // nothing_on_file. A pack with nothing in it is a link to an empty page, and
+  // sending one teaches the recipient this is not worth opening next time. The
+  // rule this follows: presence, never verification -- whether some other
+  // account has reviewed a certificate says nothing about whether there is one
+  // to send.
+  const packSource = role === "contractor" ? mySub : myCompany?.docs;
+  const packOnFile = !!packSource && PACK_KINDS.some((k) => packSource[k]);
+  const canQuickSend = canShowQr && packOnFile;
 
   // Your own picture. The roster is re-read rather than patched locally,
   // because hasAvatar is what every circle on the page reads to decide
@@ -4477,6 +4495,7 @@ export default function SubSub() {
                         {qrOpen && <QrPeek code={qrCode} err={qrErr} onRetry={loadQr} />}
                       </>
                     )}
+                    {canQuickSend && <QuickSend />}
                     <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
                       <UserCog size={14} /> My account
                     </button>
@@ -4574,6 +4593,14 @@ export default function SubSub() {
                 <ChevronDown size={13} className={`um-caret ${qrOpen ? "up" : ""}`} />
               </button>
               {qrOpen && <QrPeek code={qrCode} err={qrErr} onRetry={loadQr} />}
+            </div>
+          )}
+          {/* Same reason the QR block stops propagation: every button in the
+              drawer closes it, which is right for a nav item and wrong for a
+              form somebody is typing into. */}
+          {canQuickSend && (
+            <div className="drawer-qr" onClick={(e) => e.stopPropagation()}>
+              <QuickSend />
             </div>
           )}
           {/* A tenant's two jobs, as two links: see what you've reported,
@@ -19712,6 +19739,94 @@ function QuoteAskCard({ q, onAnswer }) {
   );
 }
 
+// Sending your compliance pack from the menu, with an email address and
+// nothing else.
+//
+// The full panel on My Documents is for managing what has been sent: the list,
+// the view counts, revoking. This is the other half of the same act -- a
+// general contractor asks for your insurance while you are standing on their
+// site, and the answer should be six seconds long. So: one field, one button,
+// and no name or note, because every extra box is a reason to do it later and
+// "later" is when people go back to attaching PDFs.
+//
+// It sits beside My QR code because they are the same kind of thing: give
+// somebody your details without a conversation. The code is how they add you;
+// this is how they get your paperwork.
+function QuickSend() {
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sentTo, setSentTo] = useState("");
+  const [err, setErr] = useState("");
+
+  const send = async () => {
+    const to = email.trim();
+    if (!to) return;
+    setBusy(true); setErr("");
+    try {
+      await api.sendDocPack({ toEmail: to });
+      setSentTo(to); setEmail("");
+    } catch (e) {
+      console.error("[quick-send] failed:", e);
+      setErr(e?.body?.error === "invalid_email" ? "That address doesn't look right."
+        : e?.body?.error === "nothing_on_file" ? "Nothing on file to send yet."
+        : e?.body?.error === "rate_limited" ? "That's a lot of sending. Try again in an hour."
+        : e?.body?.error === "migration_needed" ? "The database isn't migrated yet."
+        : "Couldn't send it. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <>
+      <button className="um-qr" aria-expanded={open}
+        onClick={() => { setOpen((o) => !o); setSentTo(""); setErr(""); }}>
+        <Send size={14} /> Send my documents
+        <ChevronDown size={13} className={`um-caret ${open ? "up" : ""}`} />
+      </button>
+      {open && (
+        <div className="qsend-peek">
+          {sentTo ? (
+            <div className="qsend-done">
+              <CheckCircle2 size={15} />
+              <div>
+                <strong>Sent to {sentTo}</strong>
+                <span>They can open it for {SHARE_DAYS} days. It shows what your cover
+                  actually says, and stays right when you renew.</span>
+              </div>
+              <button className="qsend-again" onClick={() => setSentTo("")}>Send another</button>
+            </div>
+          ) : (
+            <>
+              <p className="qsend-what">
+                Sends your {PACK_KINDS.filter(inLink).map((k) => DOC_LABELS_INLINE[k]).join(", ")}
+                {" "}as a live page &mdash; carrier, policy number, cover and expiry, not an
+                attachment that goes stale.
+              </p>
+              <div className="qsend-row">
+                <input type="email" value={email} autoComplete="email"
+                  placeholder="their@email.com" aria-label="Where to send it"
+                  onChange={(e) => setEmail(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") send(); }} />
+                <button className="btn-solid" disabled={busy || !email.trim()} onClick={send}>
+                  {busy ? "Sending\u2026" : "Send"}
+                </button>
+              </div>
+              {/* Said before they send, not discovered after. It carries a tax
+                  number, and for a sole proprietor that is their social
+                  security number. */}
+              <p className="qsend-w9">
+                <Lock size={11} /> Your {DOC_LABELS.w9} shows as on file but stays behind a
+                sign-in.
+              </p>
+              {err && <p className="qsend-err">{err}</p>}
+            </>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function Modal({ children, onClose, wide }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -21740,6 +21855,33 @@ p.fld-note{margin:6px 0 0}
 /* The drawer closes on a button, so the code sits in a block of its own
    that does not pass the click on. */
 .drawer-qr{display:flex;flex-direction:column;margin:2px 0 6px}
+
+/* Quick send, beside the QR code. Same tinted block so the two read as one
+   family -- give somebody your details without a conversation -- and the same
+   width, so opening either does not resize the menu under the other. */
+.qsend-peek{margin:3px 4px 5px;padding:11px 12px;border-radius:10px;
+  background:#f4f8f6;border:1px solid #d9e3dd;color:#12211c}
+.qsend-what{margin:0 0 9px;font-size:11.5px;line-height:1.45;color:#43564d}
+.qsend-row{display:flex;gap:7px}
+.qsend-row input{flex:1;min-width:0;padding:8px 10px;font-size:13px;font-family:inherit;
+  color:var(--ink);background:#fff;border:1px solid #cdd9d2;border-radius:8px}
+.qsend-row input:focus{outline:2px solid var(--brand);outline-offset:1px;border-color:var(--brand)}
+.qsend-row .btn-solid{flex:none;padding:8px 14px;font-size:13px}
+/* The one piece of deliberate friction in the flow, said before they send
+   rather than discovered after. */
+.qsend-w9{display:flex;align-items:center;gap:5px;margin:8px 0 0;font-size:10.5px;
+  line-height:1.4;color:#5d6f67}
+.qsend-w9 svg{flex:none}
+.qsend-err{margin:8px 0 0;font-size:11.5px;color:var(--red);line-height:1.4}
+.qsend-done{display:flex;align-items:flex-start;gap:9px;flex-wrap:wrap}
+.qsend-done > svg{flex:none;color:var(--brand);margin-top:1px}
+.qsend-done > div{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.qsend-done strong{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qsend-done span{font-size:11px;line-height:1.45;color:#5d6f67}
+.qsend-again{border:1px solid #cdd9d2;background:#fff;color:var(--brand-dk);font-size:11px;
+  font-weight:700;padding:5px 10px;border-radius:7px;cursor:pointer;font-family:inherit;
+  flex:none;margin-left:24px}
+.qsend-again:hover{border-color:var(--brand)}
 .um-sec{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;
   color:var(--ink-soft);padding:10px 14px 5px;border-top:1px solid var(--line);margin-top:4px}
 .um-acct{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;
