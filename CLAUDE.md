@@ -733,6 +733,37 @@ refactor.
   that says whether sending paperwork this way is working at all, without which
   the renewal emails are going into the dark.
 
+  **And the snippet lives beside the form it is a copy of.** It sat on the
+  Contractors screen, which has the motive — that is where somebody thinks about
+  who works for them — but not the artifact: the form's colours, its preview and
+  its live address are all in Account → Company, and the snippet is the fourth
+  item in that list. So the panel is there and the Contractors screen keeps a
+  pointer. One implementation, two ways in; two copies would be two components
+  holding the same clipboard state.
+
+  It sits **outside** the `canBrand` branch it now neighbours, and that is
+  load-bearing rather than incidental. Branding is Scale-only; this is not,
+  because `POST /api/apply/:subdomain` looks an account up by subdomain and
+  checks no plan. Dropping the snippet inside that branch would have made the
+  cheapest growth lever a paid feature.
+
+  Which uncovered the thing that was already broken. `brand` is stripped on
+  Basic — `subdomain: "app"`, so a downgrade cannot print an address with no
+  certificate behind it — and the old gate read `brand.subdomain !== "app"`. So
+  **the embed panel had never once rendered for a Basic account**, while
+  `embedNudgeSweep` emailed those same accounts to tell them it existed. Same
+  shape as the connect badge behind `can("portal")`: told about something, with
+  no screen to find it on. The account row keeps its reserved subdomain either
+  way, so `applySubdomain={account.subdomain}` is what the panel reads. The
+  general rule: **`brand` is what gets shown, `account` is what is true — a
+  feature that is not plan-gated must not read its identity off `brand`.**
+
+  `liveHost` is the half that really is plan-dependent. `<sub>.subsub.work` only
+  resolves once the custom hostname is active, so on Basic the *hosted link* is
+  dead while the pasted form is fine — the link is withheld and the reason
+  given, because a screen offering a link that will not load is the same lie
+  QuickSend's W-9 line exists to avoid.
+
 - **The licensing reference publishes what it can stand behind, which is far
   fewer pages than the grid has cells.** Fifty-one jurisdictions times
   twenty-nine trades is 1,479 combinations, and the obvious move — generate all
@@ -787,6 +818,38 @@ refactor.
   rewritten by `npm run licensing`, never hand-edited — and `sitemap.xml` is
   written from the same `plan()` the pages are, so it cannot list a page that
   does not exist.
+
+  **Pages nobody links are pages nobody reads.** All thirteen shipped orphaned:
+  absent from the root `sitemap.xml`, with `licensing/sitemap.xml` never declared
+  in `robots.txt`, and nothing on subsub.work pointing at the directory. Every
+  page rendered correctly and no crawler could reach one — a wiring bug whose
+  only symptom is traffic that never arrives, which is why it has a test of its
+  own (`test:discover`). A Resources column in the footer, which the chrome slice
+  carries onto the generated pages at their own depth for free; the hub in the
+  root sitemap; the generated sitemap **declared beside** it rather than merged
+  into it, because it is written from `plan()` and a hand-kept copy would go
+  stale the first time a state is added; and a contextual link from each of the
+  four audience pages, where the anchor text can say what is on the other end.
+
+  **The markup answers the question the page is.** A trade page's H1 *is* the
+  search query, so each page carries `FAQPage`, plus a `WebPage` with
+  `dateModified` and the source as a `citation` — the "Checked <date>" line was
+  visible but not machine-readable, and currency is the entire claim these pages
+  make. The rule that keeps it safe: **every marked-up answer must be text the
+  reader can see.** Each pair is assembled from the same values the body renders,
+  and the test checks every answer word by word against the page's own visible
+  text — not verbatim, because the body puts "Who administers it" in a table cell
+  while the answer says "X administers it", but a fabricated answer scores 2/13
+  and fails. Where a state publishes no register that question is omitted rather
+  than answered thinly, and the index gets one pair rather than four
+  manufactured ones.
+
+  `JSON.stringify` does not escape `<`, and `data.js` is hand-edited prose, so a
+  source name containing `</script>` would have closed the block and turned the
+  rest of the page into markup. Everything goes through `ldJson`. The
+  `\uXXXX` guard is scoped past `<script>` blocks and past the embed panel's
+  code block for the same reason: both legitimately contain escapes, and the
+  guard is about an escape showing up as six characters in front of somebody.
 
 - **You may ask your own roster to price a job before you commit.** Part of
   "pre-award" already existed and nobody noticed: a work order with

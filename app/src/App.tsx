@@ -4941,14 +4941,26 @@ export default function SubSub() {
             </section>
           )}
 
-          {/* The roster filling itself. On this screen because this is where
-              somebody is already thinking about who works for them, and it is
-              the only acquisition channel that runs without them doing
-              anything once it is up. The nudge email points here. */}
-          {can("contractors") && subs.length > 0 && brand.subdomain
-            && brand.subdomain !== "app" && (
-            <EmbedApply subdomain={brand.subdomain} accountName={brand.name}
-              trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))} />
+          {/* The roster filling itself. The panel that does it lives in
+              Account -> Company, beside the branded form it is a copy of; this
+              is where somebody is thinking about who works for them, so it
+              keeps the sentence and points at the panel. Two entry points, one
+              implementation -- a second copy here would be two components
+              holding the same clipboard state. */}
+          {can("contractors") && subs.length > 0 && account.subdomain
+            && account.subdomain !== "app" && (
+            <p className="embed-ptr">
+              <Globe size={13} />
+              <span>Let contractors apply from your own website — a form you paste
+                into your site, and they land straight on your roster.</span>
+              {/* The same mechanism the set-up checklist uses to send somebody
+                  to a pane: a counter, so asking twice opens it twice. */}
+              <button className="lnk" onClick={() => {
+                setTab("account"); setOpenPane({ pane: "company", n: Date.now() });
+              }}>
+                Get the form
+              </button>
+            </p>
           )}
 
           {requestedMatches.length > 0 && (
@@ -5518,11 +5530,19 @@ export default function SubSub() {
         </main>
       ); })()}
 
+      {/* applySubdomain is the RESERVED subdomain, not brand.subdomain. On Basic
+          `brand` is stripped to subdomain "app" so a downgrade cannot print an
+          address with no certificate behind it -- but the account row keeps its
+          real one, and the pasted application form posts to
+          /api/apply/:subdomain, which checks no plan. Reading the display value
+          is what made the embed panel invisible to every Basic account while
+          the nudge email told them it existed. */}
       {tab === "account" && (
         <AccountView me={me} users={accountUsers} subs={subs} jobs={jobs} brand={brand} plan={plan} role={role}
           properties={accountProperties}
           seatCount={seatCount} atSeatLimit={atSeatLimit}
           jobsThisMonth={jobsThisMonth} canBrand={canBrand}
+          applySubdomain={account.subdomain}
           billing={billing} onSetBilling={setBilling}
           accountKind={kindOf(account)} onSetAccountKind={setAccountKind} roleLabel={roleLabel}
           accountTrades={account.trades} onSetAccountTrades={setAccountTrades}
@@ -13826,6 +13846,7 @@ function HireablePanel({ accountName, requests = [], onRespond, onReload }) {
 }
 
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
+  applySubdomain,
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
   accountTrades, onSetAccountTrades, subscriptionStatus, currentPeriodEnd, comped, cancelAtPeriodEnd,
   onSaveUser, onSaveBrand, onUpgrade, onManageBilling, billingBusy, billingErr,
@@ -14342,6 +14363,18 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                   <Check size={15} /> {bBusy ? "Saving…" : "Save branding"}</button>}
           </div>
         </div>
+      )}
+
+      {/* The same form, as something to paste. Beside the branded one because
+          they are the same form -- and outside the canBrand branch above,
+          because the pasted version works on Basic and the branding panel does
+          not. `applySubdomain` rather than `slug` or `brand.subdomain`: a
+          snippet built from an unsaved edit posts nowhere, and brand.subdomain
+          reads "app" on Basic. */}
+      {pane === "company" && canManage && applySubdomain && applySubdomain !== "app" && (
+        <EmbedApply subdomain={applySubdomain} accountName={brand.name}
+          trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))}
+          liveHost={hostnameStatus === "active"} />
       )}
 
       {pane === "users" && canManage && (
@@ -20100,9 +20133,26 @@ function QuickSend() {
 // away from putting SubSub in front of every other general contractor who asks
 // them for a certificate.
 //
+// It lives in Account -> Company, beside the branded form it is a copy of: that
+// is where somebody is already looking at the form's colours, its preview and
+// its live address, and the snippet is the fourth item in that list. The
+// Contractors screen has the motive but not the artifact, so it keeps a pointer
+// and nothing else -- one implementation, two ways in.
+//
+// Deliberately OUTSIDE the canBrand branch. Branding is Scale-only and this is
+// not: `POST /api/apply/:subdomain` looks an account up by subdomain and checks
+// no plan, so the pasted form works on Basic. Putting it inside the panel it
+// sits next to would have quietly made the cheapest growth lever a paid
+// feature, and `embedNudgeSweep` emails Basic accounts about it.
+//
+// `liveHost` is the one thing that really is plan-dependent: <sub>.subsub.work
+// only resolves once the custom hostname is active, so on Basic the HOSTED link
+// is dead while the pasted form is fine. Offering a link that will 404 is the
+// screen lying, which is the same rule QuickSend's W-9 line follows.
+//
 // Collapsed by default. This is a good idea somebody has on a Tuesday, not
-// something that should sit open above their roster every day.
-function EmbedApply({ subdomain, accountName, trades }) {
+// something that should sit open every day.
+function EmbedApply({ subdomain, accountName, trades, liveHost = true }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState("");
   const [preview, setPreview] = useState(false);
@@ -20131,19 +20181,27 @@ function EmbedApply({ subdomain, accountName, trades }) {
 
       {open && (
         <div className="embed-body">
-          <div className="embed-opt">
-            <div className="embed-opt-h">
-              <span className="embed-n">1</span>
-              <div>
-                <b>Just a link</b>
-                <em>For an email, a bid invitation, or a button on your site.</em>
+          {liveHost ? (
+            <div className="embed-opt">
+              <div className="embed-opt-h">
+                <span className="embed-n">1</span>
+                <div>
+                  <b>Just a link</b>
+                  <em>For an email, a bid invitation, or a button on your site.</em>
+                </div>
+                <button className="btn-ghost sm" onClick={() => copy("link", link)}>
+                  {copied === "link" ? "Copied" : "Copy link"}
+                </button>
               </div>
-              <button className="btn-ghost sm" onClick={() => copy("link", link)}>
-                {copied === "link" ? "Copied" : "Copy link"}
-              </button>
+              <code className="embed-link">{link}</code>
             </div>
-            <code className="embed-link">{link}</code>
-          </div>
+          ) : (
+            <p className="embed-note">
+              The pasted form below works now. The shareable link at{" "}
+              <b>{subdomain}.subsub.work</b> needs your own sign-in address, which
+              comes with Scale.
+            </p>
+          )}
 
           <div className="embed-opt">
             <div className="embed-opt-h">
@@ -20176,7 +20234,8 @@ function EmbedApply({ subdomain, accountName, trades }) {
           </div>
 
           <p className="embed-note">
-            Applications arrive under <b>Asked to connect</b> on this screen. Nobody is
+            Applications arrive under <b>Asked to connect</b> on the Contractors
+            screen. Nobody is
             added to your roster until you say so, and the form never asks for a
             password &mdash; whoever applies sets that themselves from the email.
           </p>
@@ -22998,6 +23057,18 @@ p.fld-note{margin:6px 0 0}
 /* ---- The embeddable application form ---------------------------------- */
 /* Collapsed by default: a good idea somebody has on a Tuesday, not something
    that sits open above their roster every day. */
+/* The pointer on the Contractors screen. A sentence and a way in, not a second
+   copy of the panel -- so it is a line of text, not a card competing with the
+   roster it sits above. */
+.embed-ptr{display:flex;align-items:flex-start;gap:9px;margin:0 0 14px;padding:11px 13px;
+  border:1px solid var(--line);border-radius:10px;background:var(--paper);
+  font-size:13px;line-height:1.5;color:var(--ink-soft)}
+.embed-ptr > svg{flex:none;margin-top:2px;color:var(--brand-dk)}
+.embed-ptr .lnk{flex:none;white-space:nowrap}
+@media (max-width:560px){
+  .embed-ptr{flex-wrap:wrap}
+  .embed-ptr .lnk{margin-left:22px}
+}
 .embed-strip{border:1px solid var(--line);border-radius:12px;background:var(--card);
   margin-bottom:16px;overflow:hidden}
 .embed-head{display:flex;align-items:center;gap:11px;width:100%;padding:13px 16px;

@@ -120,7 +120,8 @@
     "test:inboxui": "node scripts/inbox-ui-test.mjs",
     "licensing": "node scripts/build-licensing.mjs",
     "test:licensing": "node scripts/licensing-test.mjs",
-    "test:discover": "node scripts/discover-test.mjs"
+    "test:discover": "node scripts/discover-test.mjs",
+    "test:embedplace": "node scripts/embed-place-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
