@@ -906,6 +906,38 @@ refactor.
   that says whether sending paperwork this way is working at all, without which
   the renewal emails are going into the dark.
 
+  **And the claim could not be pressed.** `GET /api/inbox/:token` returns above
+  the logged-in gate, which is right — somebody opened a link to read what was
+  sent them, not to sign in — and it is also why the whole thing was inert. The
+  page was public to *everybody*, a signed-in admin included, so the one button
+  on it linked to `/?signup=1`, which **nothing in the bundle has ever handled**;
+  it fell through to the sign-in form, a password box in front of somebody who
+  had just said they have no account. `POST /api/inbox/:token/claim`, migration
+  045's table and the page all shipped, and no screen could reach the route.
+  Same shape as the connect badge behind `can("portal")` and the embed panel
+  behind `brand.subdomain`: three correct pieces and no way in.
+
+  The session is passed into the page, which stays public. Three people press
+  that button and they need three different things: an **admin** claims in place,
+  because they have an account and a signup form would ask them for a second one;
+  **another seat** — a project manager, a contractor, a tenant — cannot write
+  engagements, so it names who can rather than offering a button the server will
+  refuse; and **nobody at all** goes to `get-started.html`, because the account
+  has to exist before anything can be written to it.
+
+  The token travels in the **query string** the whole way, never this browser's
+  storage: signing up is two pages on another origin, and the token is what knows
+  *which* contractors are being claimed. `get-started.html` reads it, validates
+  its shape rather than trusting it, says on its last screen that the claim is
+  still waiting, and points *Sign in and add them* back at `/?inbox=<token>` —
+  not at a dashboard, which has no idea this person was mid-claim. And the
+  success state has to offer the way on, because claiming sets `claimed_at`: the
+  link is spent the moment it works, so coming back answers "already claimed".
+
+  `?signup=1` is now a redirect to the marketing form, and it stands down when
+  an inbox token is present — an admin holding the old link claims in place
+  rather than being bounced off the origin that knows what they came for.
+
   **And the snippet lives beside the form it is a copy of.** It sat on the
   Contractors screen, which has the motive — that is where somebody thinks about
   who works for them — but not the artifact: the form's colours, its preview and

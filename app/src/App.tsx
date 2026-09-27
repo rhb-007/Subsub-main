@@ -1825,6 +1825,14 @@ export default function SubSub() {
     if (typeof window === "undefined") return null;
     return new URLSearchParams(window.location.search).get("inbox");
   });
+  // And `?signup=1`, which meant "I want an account" and was handled by
+  // nothing at all -- so it fell through to the sign-in form, which is a
+  // password box in front of somebody who has just said they have no account.
+  // Creating one is on the marketing site (there is no signup form in this
+  // bundle), so this is a redirect rather than a view, and it carries any
+  // inbox token with it because that is what knows what the person came for.
+  const signupWanted = typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).has("signup");
   const [tenantInvite, setTenantInvite] = useState(null);
   const [tenantInviteErr, setTenantInviteErr] = useState("");
   // And the third: somebody added to the account itself. Its own parameter
@@ -4187,12 +4195,50 @@ export default function SubSub() {
     );
   }
 
+  // `?signup=1` is not a screen in this bundle and never was, so it fell
+  // through to the sign-in form -- a password box in front of somebody who has
+  // just said they do not have an account. Creating one lives on the marketing
+  // site, so this is a redirect.
+  //
+  // Above the logged-in gate, because a seat somebody else granted is not an
+  // account of your own and the answer is the same either way. And it stands
+  // down when there is an inbox token: `?signup=1&inbox=X` is the old claim
+  // link, and the inbox page below now handles every version of that person --
+  // claim in place if they are an admin, out to get-started if they are nobody.
+  // Bouncing them off this origin first would lose the page that knows what
+  // they came for.
+  if (signupWanted && !inboxToken) {
+    if (typeof window !== "undefined") {
+      window.location.replace("https://subsub.work/get-started.html");
+    }
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <div className="boot-wait" role="status" aria-live="polite">
+          <span className="boot-spin" aria-hidden="true" />
+          <span className="sr-only">Opening sign-up</span>
+        </div>
+      </div>
+    );
+  }
+
   // Same shape, same reason: no session, no branding, just the page.
+  //
+  // It sits above the logged-in gate, which is right -- somebody opened a link
+  // to read what was sent them -- and that is also why claiming never worked.
+  // The page was public to EVERYBODY, an already signed-in admin included, so
+  // the one button on it linked out to `?signup=1` for an account they already
+  // had, and `?signup=1` is a mode nothing has ever handled. Three things
+  // shipped and none of them could be pressed. So the session is passed in: the
+  // page stays public, and the claim knows whether there is anybody to claim
+  // onto. Guarded on `loggedIn`, because until then `role` and `account` are
+  // the demo seed rather than anybody's real seat.
   if (inboxToken) {
     return (
       <div className="ss-root">
         <style>{CSS}</style>
-        <DocInbox token={inboxToken} />
+        <DocInbox token={inboxToken}
+          seat={loggedIn ? { role, accountName: account?.name } : null} />
       </div>
     );
   }
@@ -17979,7 +18025,7 @@ function DocPack({ token }) {
 // auth, and it was emailed rather than linked straight through from a share --
 // holding a forwarded certificate is not proof somebody still reads that
 // mailbox, and this opens everything ever sent to it.
-function DocInbox({ token }) {
+function DocInbox({ token, seat = null }) {
   const [box, setBox] = useState(null);
   const [err, setErr] = useState("");
 
@@ -18077,17 +18123,7 @@ function DocInbox({ token }) {
 
         {/* The claim. Their roster is already built -- by the people who
             wanted to be on it -- which is the whole pitch. */}
-        <div className="inbox-claim">
-          <h3>Keep this, and be told before anything expires.</h3>
-          <p>
-            A free account keeps these {summary.companies} on one roster, chases the
-            certificates when they lapse, and lets you add the rest of your contractors.
-            You do not have to type any of it in — they already did.
-          </p>
-          <a className="btn-solid" href={`/?signup=1&inbox=${encodeURIComponent(token)}`}>
-            Claim these {summary.companies}
-          </a>
-        </div>
+        <InboxClaim token={token} count={summary.companies} seat={seat} />
       </div>
       <p className="pack-foot">Powered by SubSub</p>
     </div>
@@ -18102,6 +18138,107 @@ function docChip(d) {
   const days = Math.round(
     (Date.parse(`${d.expiresOn}T00:00:00Z`) - Date.now()) / 86400000);
   return days < 0 ? "bad" : days <= 30 ? "warn" : "ok";
+}
+
+// Turning what was sent into a roster, which is the point of the page and the
+// one thing it could not do.
+//
+// Three different people press this, and they need three different things:
+//
+//   AN ADMIN who is already signed in claims here and now. They have an
+//   account, so sending them to a signup form asks them to make a second one.
+//
+//   SOMEBODY ELSE'S SEAT -- a project manager, a contractor, a tenant -- cannot
+//   write engagements, so the honest answer is who can. Offering them a button
+//   the server will refuse is the lie QuickSend's W-9 line exists to avoid.
+//
+//   NOBODY AT ALL goes to get-started, carrying the token, and comes back to
+//   this page with a session. Claiming is not the signup: the account has to
+//   exist before anything can be written to it.
+//
+// The token travels in the query string the whole way rather than being stashed
+// in this browser, because signing up is two pages on another origin and a
+// value kept in one tab's storage does not survive the trip.
+function InboxClaim({ token, count, seat }) {
+  const [state, setState] = useState("idle");   // idle | busy | done | err
+  const [added, setAdded] = useState(0);
+  const admin = seat?.role === "admin";
+  const many = count === 1 ? "this contractor" : `these ${count}`;
+
+  if (state === "done") return (
+    <div className="inbox-claim done">
+      <h3><CheckCircle2 size={18} /> On your roster now</h3>
+      <p>
+        {added === 0
+          ? "They were already on it, so nothing changed."
+          : `${added} ${added === 1 ? "contractor is" : "contractors are"} on
+             ${seat?.accountName || "your account"}, with the paperwork they sent.
+             Nothing is assigned to anybody — sending you a certificate is
+             agreeing to be hireable, not agreeing to have been hired.`}
+      </p>
+      {/* This link is spent: claiming sets claimed_at, so coming back here
+          answers "already claimed". The way on has to be offered now. */}
+      <a className="btn-solid" href="/">Open SubSub</a>
+    </div>
+  );
+
+  if (!seat) return (
+    <div className="inbox-claim">
+      <h3>Keep this, and be told before anything expires.</h3>
+      <p>
+        A free account keeps {many} on one roster, chases the certificates when they
+        lapse, and lets you add the rest of your contractors. You do not have to type
+        any of it in — they already did.
+      </p>
+      {/* Back to this page afterwards, not to a dashboard: the token is what
+          knows which contractors are being claimed, and the claim happens here. */}
+      <a className="btn-solid"
+        href={`https://subsub.work/get-started.html?inbox=${encodeURIComponent(token)}`}>
+        Claim {many}
+      </a>
+      <p className="inbox-claim-fine">Free for three contractors. No card.</p>
+    </div>
+  );
+
+  if (!admin) return (
+    <div className="inbox-claim">
+      <h3>Keep this, and be told before anything expires.</h3>
+      <p>
+        Adding contractors to {seat.accountName || "this account"} is an admin&rsquo;s job,
+        and your seat here is not one. Forward this page to whoever runs the account and
+        they can claim {many} in one tap.
+      </p>
+    </div>
+  );
+
+  return (
+    <div className="inbox-claim">
+      <h3>Keep this, and be told before anything expires.</h3>
+      <p>
+        Put {many} on {seat.accountName || "your"} roster with the paperwork they already
+        sent, and SubSub chases the certificates when they lapse. You do not have to type
+        any of it in — they already did.
+      </p>
+      <button className="btn-solid" disabled={state === "busy"}
+        onClick={async () => {
+          setState("busy");
+          try {
+            const r = await api.claimInbox(token);
+            setAdded(r?.added || 0);
+            setState("done");
+          } catch (e) {
+            console.error("[inbox] claim failed:", e);
+            setState("err");
+          }
+        }}>
+        {state === "busy" ? "Adding\u2026" : `Add ${many} to ${seat.accountName || "my roster"}`}
+      </button>
+      {state === "err" && (
+        <p className="inbox-claim-fine err">That didn&rsquo;t save &mdash; nothing was added.
+          Try again in a moment.</p>
+      )}
+    </div>
+  );
 }
 
 function AskForInbox({ token }) {
@@ -22184,6 +22321,12 @@ body{background:var(--paper)}
 .inbox-claim{margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}
 .inbox-claim h3{margin:0 0 7px;font-size:17px;font-weight:700;letter-spacing:-.01em}
 .inbox-claim p{margin:0 0 14px;font-size:13.5px;line-height:1.55;color:var(--ink-soft);max-width:58ch}
+/* "Free for three contractors. No card." under the button, and the failure
+   line. Small, because it answers a worry rather than making a claim. */
+.inbox-claim-fine{margin:10px 0 0;font-size:11.5px;color:var(--ink-soft)}
+.inbox-claim-fine.err{color:var(--red);font-weight:600}
+.inbox-claim.done h3{display:flex;align-items:center;gap:8px;color:var(--brand-dk)}
+.inbox-claim.done h3 svg{flex:none;color:var(--brand)}
 @media (max-width:560px){.inbox-row{align-items:flex-start}.inbox-docs{flex:1 0 100%}}
 .pack-stats{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 14px;padding-bottom:12px;
   border-bottom:1px solid var(--line);font-size:11.5px;color:var(--ink-soft)}

@@ -658,6 +658,15 @@ body.nav-open{overflow:hidden}
   var plan = (qs.get('plan') || 'basic').toLowerCase();
   if(!PLANS[plan]) plan = 'basic';
   var billing = (qs.get('billing') || 'monthly').toLowerCase() === 'annual' ? 'annual' : 'monthly';
+  /* Arrived from a pack inbox: somebody has been sent compliance packs by
+     several subcontractors, asked for them on one page, and pressed Claim.
+     They need an account before anything can be written to one, so they come
+     through here -- and the token has to survive the trip, because the token
+     is what knows WHICH contractors are being claimed. Carried in the query
+     string rather than stashed in this tab, since the last screen hands off to
+     another origin. Kept only if it looks like one of our tokens. */
+  var inboxTok = (qs.get('inbox') || '').trim();
+  if(!/^[A-Za-z0-9_-]{16,128}$/.test(inboxTok)) inboxTok = '';
   var SCALE_PRICE = { monthly: '$99/mo · unlimited', annual: '$990/yr · unlimited' };
 
   function paintPlan(){
@@ -1170,7 +1179,14 @@ body.nav-open{overflow:hidden}
       // before anyone has opened the mailbox it belongs to is an account
       // that can be opened on somebody else's address.
       if(res.body.signInUrl){
-        document.getElementById('goApp').setAttribute('href', res.body.signInUrl);
+        /* Back to the inbox page, not to a dashboard. The claim happens there,
+           against the token, and a dashboard has no idea this person was in the
+           middle of claiming anything. */
+        document.getElementById('goApp').setAttribute('href',
+          inboxTok
+            ? res.body.signInUrl.replace(/\/+$/, '')
+              + '/?inbox=' + encodeURIComponent(inboxTok)
+            : res.body.signInUrl);
       }
 
       // Say their name and their company back to them. Somebody has just
@@ -1187,6 +1203,14 @@ body.nav-open{overflow:hidden}
       var invites = invitedCount === 0 ? ''
         : ' Your ' + invitedCount + ' subcontractor invite'
           + (invitedCount === 1 ? ' is' : 's are') + ' on the way.';
+      /* They came here to claim a stack of compliance packs, so the last
+         screen has to say that is still waiting rather than leave them
+         wondering whether it was lost between two pages. */
+      if(inboxTok){
+        invites += ' The contractors who sent you their paperwork are waiting to be '
+          + 'added \u2014 the button below picks that back up.';
+        if(btn){ btn.textContent = 'Sign in and add them'; }
+      }
 
       if(dl){
         dl.textContent = res.body.needsConfirmation
