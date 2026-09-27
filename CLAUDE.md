@@ -733,6 +733,61 @@ refactor.
   that says whether sending paperwork this way is working at all, without which
   the renewal emails are going into the dark.
 
+- **The licensing reference publishes what it can stand behind, which is far
+  fewer pages than the grid has cells.** Fifty-one jurisdictions times
+  twenty-nine trades is 1,479 combinations, and the obvious move — generate all
+  of them — produces 1,400 pages differing only in a state's name. That is the
+  shape search engines demote and readers stop trusting, and it would be the
+  loudest thing on the marketing site saying this product does not know what it
+  is talking about.
+
+  `app/shared/licensing.js` holds the rules and `content/licensing/data.js` holds
+  the facts, with `app/scripts/build-licensing.mjs` between them. Two rules do
+  the work.
+
+  **A combination earns a URL only when its answer differs from the state's
+  baseline.** `baseline` is what the state says about a trade it does not single
+  out, which for most states is most of the twenty-nine; `trades` carries only
+  the ones that differ. Everything else is `same_as_baseline` and points at the
+  state hub, which says the baseline once. `specific` means the entry says
+  something **different**, not that an entry exists — an early version checked
+  only whether the key was present, so a row restating the baseline in other
+  words counted as a difference and earned exactly the duplicate page this
+  refuses.
+
+  **Nothing publishes without a named source, a URL and a date it was checked**,
+  and the trade entry needs its **own** — not the baseline's. Spreading the
+  baseline's verification over the trade rows would let one checked fact vouch
+  for twenty-eight unchecked ones, which is the failure mode that makes
+  programmatic content worthless. `unverified` is the default, `STALE_AFTER_DAYS`
+  retires an answer that has gone quiet, and the generator **prints what it
+  skipped as a work queue** rather than shipping it: the skip report is how
+  anybody knows which statute still needs reading. So the expensive half is the
+  dataset, not the generator, and the schema makes that explicit.
+
+  A state hub publishes even where no trade differs, because "nothing here needs
+  a state licence" is a real answer people search for and it is the page every
+  skipped combination points at. A trade hub needs **more than one** state
+  saying something specific — below that it is a page listing one link.
+
+  **Two doors, because two people land on the same facts with opposite
+  problems.** A subcontractor checking what they need, and a hiring contractor
+  checking what to ask for. `ASKED_ANYWAY` is the bridge between them: the four
+  documents every hiring account asks for whatever the state requires, which is
+  the only reason either reader does anything. The subcontractor's door is the
+  send-your-paperwork loop; the hiring contractor's is a roster. Neither is a
+  directory — these pages answer a question about the law, and nothing on them
+  names a company on SubSub.
+
+  The pages reuse the marketing site's own chrome rather than copying it:
+  `content/licensing/chrome.mjs` slices the header, footer and stylesheet out of
+  `for-general-contractors.html` and rewrites relative links for depth, so the
+  site's nav cannot drift away from 2,000 generated pages. `PAGE_CSS` is appended
+  and every rule is prefixed `lic-`. `licensing/` is generated output — wiped and
+  rewritten by `npm run licensing`, never hand-edited — and `sitemap.xml` is
+  written from the same `plan()` the pages are, so it cannot list a page that
+  does not exist.
+
 - **You may ask your own roster to price a job before you commit.** Part of
   "pre-award" already existed and nobody noticed: a work order with
   `status = 'pending'` **is** a pre-award view — the subcontractor sees the job,

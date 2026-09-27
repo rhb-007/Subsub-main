@@ -117,7 +117,9 @@
     "test:embed": "node scripts/embed-test.mjs",
     "test:growth": "node scripts/growth-test.mjs",
     "test:inbox": "node scripts/inbox-test.mjs",
-    "test:inboxui": "node scripts/inbox-ui-test.mjs"
+    "test:inboxui": "node scripts/inbox-ui-test.mjs",
+    "licensing": "node scripts/build-licensing.mjs",
+    "test:licensing": "node scripts/licensing-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
