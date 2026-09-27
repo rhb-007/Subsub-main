@@ -5695,6 +5695,19 @@ export default function SubSub() {
               until it was closed and reopened. Looking it up by id each
               render costs nothing and makes every field here current. */}
           <SubDetail sub={subs.find((s) => s.id === selected.id) || selected}
+            /* The invite already out to them, so the card can say so rather
+               than offering to send one as if none existed. Matched on the
+               company first and the address second, because an invite raised
+               from the blank form carries no company id until it is redeemed
+               or this account adopts it. */
+            invite={(() => {
+              const me = subs.find((x) => x.id === selected.id) || selected;
+              const mail = (me.email || "").toLowerCase();
+              return openInvites.find((i) => i.companyId === me.id)
+                || (mail ? openInvites.find((i) => (i.email || "").toLowerCase() === mail) : null)
+                || null;
+            })()}
+            onInviteSent={refreshInvites}
             jobs={jobs} onSaveNotes={saveNotes} onRequestDocs={requestDocs}
             onSetAuto={(on) => setAutoSchedule(selected.id, on)}
             onAskAuto={() => { setAskingAuto(selected); setSelected(null); }}
@@ -20546,7 +20559,7 @@ function AutoScheduleCard({ sub, onSet, onAsk }) {
 //
 // Says the address before sending rather than after, because an invite to a
 // stale email is a fortnight of nobody knowing.
-function PortalInvite({ sub }) {
+function PortalInvite({ sub, invite, onSent }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(null);
   const [err, setErr] = useState("");
@@ -20555,12 +20568,17 @@ function PortalInvite({ sub }) {
   if (sub.hasPortal) return null;
 
   const to = sub.email || sub.phone || null;
+  // Already out, still live, nobody has opened it. The ask is a nudge, not a
+  // new invitation, and the button has to say which -- "Send invite" over a
+  // link already sitting in their inbox reads as a first contact and hides the
+  // thing worth knowing, which is that one went and nothing came back.
+  const waiting = !!invite;
 
   const send = async () => {
     setBusy(true); setErr("");
     try {
       const r = await api.inviteSubToPortal(sub.id);
-      if (r.emailed || r.texted) setDone(r);
+      if (r.emailed || r.texted) { setDone(r); onSent?.(); }
       else setErr(r.emailError === "mail_not_configured"
         ? "Email isn't switched on yet, so nothing went. Copy the link instead."
         : "That didn't send. Try again, or copy the link from the Contractors screen.");
@@ -20578,7 +20596,7 @@ function PortalInvite({ sub }) {
       <p className="portal-inv sent">
         <CheckCircle2 size={13} />
         <span>Invite {done.resent ? "sent again" : "sent"} to <b>{sub.email || sub.phone}</b>.
-          They set their own password from it.</span>
+          {done.resent ? " Same link as before, so the one they already have still works." : " They set their own password from it."}</span>
       </p>
     );
   }
@@ -20587,22 +20605,25 @@ function PortalInvite({ sub }) {
     <div className="portal-inv">
       <UserX size={13} />
       <div className="pi-main">
-        <b>No login yet</b>
-        <span>{to
-          ? <>Nobody can sign in as {sub.company}. Send them an invite to <b>{to}</b>.</>
-          : <>Nobody can sign in as {sub.company}, and there is no email or mobile on this record to send one to.</>}</span>
+        <b>{waiting ? "Invited, not opened yet" : "No login yet"}</b>
+        <span>{!to
+          ? <>Nobody can sign in as {sub.company}, and there is no email or mobile on this record to send one to.</>
+          : waiting
+            ? <>An invite is with <b>{to}</b>{invite.sentAt ? <> — last sent {relTime(invite.sentAt)}</> : null}.
+                Nobody has opened it yet.</>
+            : <>Nobody can sign in as {sub.company}. Send them an invite to <b>{to}</b>.</>}</span>
         {err && <span className="pi-err"><AlertTriangle size={12} /> {err}</span>}
       </div>
       {to && (
         <button className="btn-ghost sm" disabled={busy} onClick={send}>
-          <Mail size={13} /> {busy ? "Sending…" : "Send invite"}
+          <Mail size={13} /> {busy ? "Sending…" : waiting ? "Resend invite" : "Send invite"}
         </button>
       )}
     </div>
   );
 }
 
-function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto }) {
+function SubDetail({ sub, invite, onInviteSent, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto }) {
   const ready = sub.bond && sub.insurance && sub.contract;
   const [notes, setNotes] = useState(sub.notes || "");
   const [dirty, setDirty] = useState(false);
@@ -20643,7 +20664,7 @@ function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, 
         )}
         {/* On the record, because that is where somebody is standing when they
             notice nobody can sign in as this contractor. */}
-        <PortalInvite sub={sub} />
+        <PortalInvite sub={sub} invite={invite} onSent={onInviteSent} />
         <div className="di-chips">
           {(sub.propertyIds || []).length > 0 && (
             <span className="notify-chip" title="Properties this vendor is scoped to">

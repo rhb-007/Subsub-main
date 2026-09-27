@@ -1743,12 +1743,31 @@ app.post("/api/subs/:companyId/invite", requireRole("admin", "pm"), async (c) =>
   // An invite already out to this company is RESENT, not replaced. A second
   // live token for one contractor is two links in one inbox and a list that
   // reads as two people -- the same reason the resend route reuses its token.
+  //
+  // Matched on the ADDRESS as well as the company id, because every invite
+  // raised before this route existed came off the blank form and carries no
+  // company_id at all: that is only written on redemption. Looking only at the
+  // company id would have missed every one of them and minted a second live
+  // token for a contractor who already had one sitting in their inbox -- which
+  // is the exact thing this route refuses to do.
   const open = await c.env.DB.prepare(
     `SELECT * FROM sub_invites
-      WHERE account_id = ? AND company_id = ? AND used_at IS NULL AND revoked_at IS NULL
+      WHERE account_id = ? AND used_at IS NULL AND revoked_at IS NULL
         AND datetime(expires_at) > datetime('now')
+        AND (company_id = ?
+             OR (company_id IS NULL AND ? IS NOT NULL AND lower(email) = lower(?))
+             OR (company_id IS NULL AND ? IS NOT NULL AND phone = ?))
       ORDER BY created_at DESC LIMIT 1`
-  ).bind(accountId, companyId).first().catch(() => null);
+  ).bind(accountId, companyId, email, email, phone, phone).first().catch(() => null);
+
+  // Adopt it while we are here. From now on it names the company it is for, so
+  // redeeming it attaches the seat to this record rather than deduping its way
+  // back to it.
+  if (open && !open.company_id) {
+    await c.env.DB.prepare(`UPDATE sub_invites SET company_id = ? WHERE id = ?`)
+      .bind(companyId, open.id).run();
+    open.company_id = companyId;
+  }
 
   let row = open;
   if (!row) {

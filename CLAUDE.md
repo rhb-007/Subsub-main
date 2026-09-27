@@ -503,7 +503,18 @@ refactor.
 
   An invite already out is **resent, not replaced** — two live tokens for one
   contractor is two links in one inbox and a list that reads as two people, the
-  same reason `/api/invites/:id/resend` reuses its token. Somebody else's
+  same reason `/api/invites/:id/resend` reuses its token. Which is matched on
+  the **address as well as the company id**: every invite raised before this
+  route existed came off the blank form and carries no `company_id` at all, so
+  looking only at that column missed all of them and minted a second live token
+  for somebody who already had one — the exact thing the rule refuses. One found
+  that way is **adopted** on the way past, so from then on it names the company
+  it is for.
+
+  The card distinguishes the two, because "Send invite" over a link already
+  sitting in somebody's inbox reads as a first contact and hides the thing worth
+  knowing: one went and nothing came back. Outstanding reads *Invited, not
+  opened yet*, says when it last went, and the button says **Resend invite**. Somebody else's
   contractor and a company id that does not exist both answer `not_found`, so
   this cannot be walked to find out which ids are real.
 

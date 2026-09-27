@@ -142,7 +142,35 @@ try {
     ck("a second email went", mails.length === 2, String(mails.length));
   }
 
-  console.log("\n-- and the cases it refuses --");
+  console.log("\n-- an invite raised from the old blank form is found and adopted --");
+{
+  // Every invite made before this route existed carries NO company_id: that
+  // column is only written on redemption. Matching on it alone would miss all
+  // of them and mint a second live token for somebody who already has one --
+  // two links in one inbox, which is the exact thing this refuses to do.
+  ({ db, env } = seed()); mails.length = 0;
+  const expires = new Date(Date.now() + 20 * 864e5).toISOString();
+  db.prepare(
+    `INSERT INTO sub_invites(id,account_id,token,label,email,company_name,created_by,sent_at,expires_at)
+     VALUES ('inv_old','acc_pm',?, 'San Juan Exteriors','r.hb@outlook.com','San Juan Exteriors',
+             'u_priya','2026-09-01 10:00:00',?)`
+  ).run("f".repeat(64), expires);
+
+  const [s, b] = await json(await call(env, "u_priya", "acc_pm", "/subs/cmp_sj/invite"));
+  ck("it finds the one already out", s === 200 && b.resent === true, `${s} resent=${b.resent}`);
+
+  const rows = db.prepare(`SELECT id, token, company_id FROM sub_invites WHERE account_id='acc_pm'`).all();
+  ck("no second invite is minted", rows.length === 1, String(rows.length));
+  ck("and the token they already hold still works",
+    rows[0].token === "f".repeat(64), rows[0].token.slice(0, 8));
+  // Adopted on the way past, so redeeming it now binds to the right record.
+  ck("it is bound to the company from now on", rows[0].company_id === "cmp_sj",
+    String(rows[0].company_id));
+  ck("and it went again", mails.length === 1 && mails[0].to[0] === "r.hb@outlook.com",
+    JSON.stringify(mails[0]?.to));
+}
+
+console.log("\n-- and the cases it refuses --");
   {
     ({ db, env } = seed()); mails.length = 0;
     const [s1, b1] = await json(await call(env, "u_priya", "acc_pm", "/subs/cmp_ok/invite"));
