@@ -124,6 +124,15 @@ try {
       offered.some((b) => /Ask for quotes/i.test(b)), JSON.stringify(offered));
     t.ck("beside assigning, not instead of it",
       offered.some((b) => /Assign/i.test(b)), JSON.stringify(offered));
+    // The two ways to fill a slot from your OWN roster are one choice: award it
+    // at a price you name, or ask several what they would charge. Overflow is a
+    // different question -- it is for having nobody -- so it goes last rather
+    // than between them.
+    const iA = offered.findIndex((b) => /Assign/i.test(b));
+    const iQ = offered.findIndex((b) => /Ask for quotes/i.test(b));
+    const iO = offered.findIndex((b) => /^Overflow$/i.test(b));
+    t.ck("the two roster options sit together", iQ === iA + 1, `${iA} then ${iQ}`);
+    t.ck("and overflow comes after both", iO > iQ, `overflow at ${iO}, quotes at ${iQ}`);
 
     await page.evaluate(() => [...document.querySelectorAll(".trade-actions button")]
       .find((b) => /Ask for quotes/i.test(b.innerText))?.click());

@@ -5364,38 +5364,12 @@ export default function SubSub() {
                                 <button className="trade-assign" onClick={() => setAssigning({ job: j, trade: t })}>
                                   <Plus size={13} /> Assign &amp; issue WO
                                 </button>
-                                {/* Overflow, beside Assign rather than instead of
-                                    it. The modal checks whether this account has
-                                    anybody of their own first and refuses if they
-                                    do -- so the button being here is not an
-                                    invitation to skip your own roster, and the
-                                    server refuses it too. */}
-                                {(() => {
-                                  const out = overflowPosts.find((p) =>
-                                    p.jobId === j.id && p.trade === t && p.status === "open");
-                                  if (out) {
-                                    return (
-                                      <span className="ovf-pill" title={`Closes ${new Date(out.expiresAt).toLocaleString()}`}>
-                                        <Zap size={11} /> Out to overflow
-                                        {out.responses.length
-                                          ? ` · ${out.responses.length} answered`
-                                          : " · no answers yet"}
-                                      </span>
-                                    );
-                                  }
-                                  return (
-                                    <button className="trade-swap" onClick={() => setPostingOverflow({ job: j, trade: t })}>
-                                      <Zap size={12} /> Overflow
-                                    </button>
-                                  );
-                                })()}
-                                {/* And the third way to fill a slot: ask two or
-                                    three of your OWN roofers what they would
-                                    charge, before committing to any of them.
-                                    Assign issues a work order at a price you
-                                    name; this asks for the price first. Overflow
-                                    is for when you have nobody -- this is for
-                                    when you have several. */}
+                                {/* The other way to fill it from your own roster,
+                                    next to Assign because the two are one choice:
+                                    award it to somebody at a price you name, or
+                                    ask several of them what they would charge and
+                                    pick. Overflow below is a different question
+                                    -- it is for having nobody. */}
                                 {(() => {
                                   const q = quoteReqs.find((r) =>
                                     r.jobId === j.id && r.trade === t && r.status === "open");
@@ -5412,6 +5386,32 @@ export default function SubSub() {
                                   return (
                                     <button className="trade-swap" onClick={() => setAskQuotes({ job: j, trade: t })}>
                                       <FileText size={12} /> Ask for quotes
+                                    </button>
+                                  );
+                                })()}
+                                {/* Overflow last, because it is the only one of
+                                    the three that is not your own roster. The
+                                    modal checks whether this account has anybody
+                                    of their own first and refuses if they do --
+                                    so the button being here is not an invitation
+                                    to skip your own roster, and the server
+                                    refuses it too. */}
+                                {(() => {
+                                  const out = overflowPosts.find((p) =>
+                                    p.jobId === j.id && p.trade === t && p.status === "open");
+                                  if (out) {
+                                    return (
+                                      <span className="ovf-pill" title={`Closes ${new Date(out.expiresAt).toLocaleString()}`}>
+                                        <Zap size={11} /> Out to overflow
+                                        {out.responses.length
+                                          ? ` · ${out.responses.length} answered`
+                                          : " · no answers yet"}
+                                      </span>
+                                    );
+                                  }
+                                  return (
+                                    <button className="trade-swap" onClick={() => setPostingOverflow({ job: j, trade: t })}>
+                                      <Zap size={12} /> Overflow
                                     </button>
                                   );
                                 })()}
