@@ -405,6 +405,47 @@ refactor.
   The link lands on `AuthLanding`, which already takes a new password twice and
   handles an expired one. That half was right; only the asking was wrong.
 
+  **And the form behind it answers three different problems, not one.** The page
+  called Supabase's `/auth/v1/recover` straight from the browser, which answers
+  200 for an address it has never seen — deliberately, so it cannot be walked to
+  find out who has an account. So "a reset link is on its way" was said in three
+  situations and was true in one:
+
+  1. A real login. It sends.
+  2. A `users` row with `auth_id` null — added from the console, or an applicant
+     who never finished. Nothing in Supabase to recover, so nothing arrives.
+  3. **An invited subcontractor who never opened their link.** A sub invite is a
+     token; the `users` row is written by `createApplication` when they *redeem*
+     it. Before that there is no user, no password, and no amount of resetting
+     makes one — what they need is the invitation again.
+
+  Case 3 is not hypothetical: a roofer invited by a property manager, told a
+  link was coming, with no way out but somebody at the hiring account noticing.
+  Only the server can tell the three apart, so `POST /api/password-help` does —
+  creating the missing login before recovering for case 2, resending the **same
+  invite token** for case 3 (reissuing would kill the link already in their
+  inbox) — and **says the same sentence for all of them**.
+
+  Two properties hold it together and they pull against each other. It does the
+  right thing per case, and it answers **one status and one body** whichever
+  branch ran, because a form that replies differently for a known address is a
+  way to ask which of a list of addresses is on SubSub. Even the failure path
+  returns `{ok:true}`: a 500 on a known address and a 200 on an unknown one is
+  the same oracle wearing a different hat.
+
+  What makes it safe to expose at all: **every branch sends only to an address
+  already on a row here** — a user, or an open invite an account addressed to
+  them. An address SubSub holds nothing for gets nothing, so this cannot be
+  pointed at a stranger's inbox. Rate-limited twice, per address and per IP: the
+  first stops somebody mailbombing a person they know is here, the second stops
+  a list being worked through. And `redirect_to` is validated against
+  `*.subsub.work` rather than trusted, because an emailed link plus an unchecked
+  return address is an open redirect.
+
+  The confirmation names **both** readings every time — a password reset *or*
+  the invitation again — because it has to be true for either, and naming only
+  the one that applied would say which ran.
+
 - **Completion is two-party and append-only.** The subcontractor marks work
   reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because

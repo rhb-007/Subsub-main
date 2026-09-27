@@ -27,7 +27,6 @@
 //
 //   node scripts/reset-flow-test.mjs
 
-import { createServer } from "node:http";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
@@ -46,34 +45,20 @@ const ACCOUNT = {
   logoKey: null, subscriptionStatus: "active", hostnameStatus: "active",
 };
 
-// Supabase's auth endpoint, only as far as this flow reaches it. The browser
-// is on a branded host and this is 127.0.0.1, so the preflight has to pass.
-const recovers = [];
-const cors = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-headers": "*",
-  "access-control-allow-methods": "POST,GET,OPTIONS",
-};
-const auth = createServer((req, res) => {
-  if (req.method === "OPTIONS") { res.writeHead(204, cors); return res.end(); }
-  let body = "";
-  req.on("data", (c) => { body += c; });
-  req.on("end", () => {
-    if (req.url.startsWith("/auth/v1/recover")) {
-      try { recovers.push(JSON.parse(body || "{}")); } catch { recovers.push({}); }
-      // What Supabase answers whether or not the address exists.
-      res.writeHead(200, { ...cors, "content-type": "application/json" });
-      return res.end("{}");
-    }
-    res.writeHead(200, { ...cors, "content-type": "application/json" });
-    res.end("{}");
-  });
-});
-await new Promise((r) => auth.listen(8907, r));
+// The ask now goes to the Worker, not to Supabase: only the server can tell a
+// forgotten password from a users row with no login behind it from an invited
+// subcontractor who never opened their link, and it answers the same for all
+// three. password-help-test.mjs covers which branch runs; this covers what the
+// screen does with the one reply it gets.
+const asks = [];
 
 const web = serveApp({ dir: OUT, port: WEB });
-const api = serveApi({ port: API, routes: (path) => {
+const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, ACCOUNT];
+  if (path === "/api/password-help" && method === "POST") {
+    asks.push(body);
+    return [200, { ok: true }];
+  }
   return undefined;
 } });
 
@@ -149,22 +134,29 @@ try {
 
   console.log("\n-- sending, and what it says afterwards --");
   {
-    recovers.length = 0;
+    asks.length = 0;
     await click(page, "send reset link");
     await wait(900);
     const s = await shape(page);
 
-    t.ck("it reaches the auth service once", recovers.length === 1, JSON.stringify(recovers));
-    t.ck("for the address they typed", recovers[0]?.email === "r.hb@outlook.com",
-      JSON.stringify(recovers[0]));
+    t.ck("it reaches the server once", asks.length === 1, JSON.stringify(asks));
+    t.ck("for the address they typed", asks[0]?.email === "r.hb@outlook.com",
+      JSON.stringify(asks[0]));
+    // So a branded page returns you to itself rather than the shared one. The
+    // Worker refuses anything that is not a subsub.work address.
+    t.ck("and says where to come back to",
+      /cascade\.subsub\.work/.test(String(asks[0]?.origin)), String(asks[0]?.origin));
     t.ck("it confirms", s.oks.length === 1, JSON.stringify(s.oks));
     t.ck("and nothing is drawn as an error", s.errs.length === 0, JSON.stringify(s.errs));
     t.ck("no password box on the confirmation either", s.passwords === 0, String(s.passwords));
     // Enumeration. "If that address has an account" rather than "we sent it".
+    // It has to be true for somebody who forgot a password AND for a
+    // subcontractor who was invited and never opened the link -- so it names
+    // both, every time, which is also what stops it saying which one ran.
     t.ck("it does not confirm the address has an account",
-      /has an account/i.test(s.oks[0] || ""), String(s.oks[0]));
-    t.ck("it says what to do with the link",
-      /new password/i.test(s.oks[0] || ""), String(s.oks[0]));
+      /if we have anything for/i.test(s.oks[0] || ""), String(s.oks[0]));
+    t.ck("it offers the reset reading", /password reset/i.test(s.oks[0] || ""), String(s.oks[0]));
+    t.ck("and the invitation reading", /invitation/i.test(s.oks[0] || ""), String(s.oks[0]));
 
     // A success in a red box is a success nobody believes.
     const look = await page.evaluate(() => {
@@ -203,11 +195,11 @@ try {
     await wait(300);
     await typeIn(page, '.login-form input[type="email"]', "");
     await wait(200);
-    recovers.length = 0;
+    asks.length = 0;
     await click(page, "send reset link");
     await wait(600);
     const s = await shape(page);
-    t.ck("nothing is sent", recovers.length === 0, JSON.stringify(recovers));
+    t.ck("nothing is sent", asks.length === 0, JSON.stringify(asks));
     t.ck("it asks for one", s.errs.some((e) => /Enter your email address/i.test(e)),
       JSON.stringify(s.errs));
     t.ck("and does not claim it sent anything", s.oks.length === 0, JSON.stringify(s.oks));
@@ -218,7 +210,7 @@ try {
   t.ck("no escape sequence on screen", !/\\u[0-9a-f]{4}/i.test(seen), "");
   await ctx?.close?.();
 } finally {
-  await browser.close(); web.close(); api.close(); auth.close();
+  await browser.close(); web.close(); api.close();
 }
 
 t.done();

@@ -259,6 +259,10 @@ app.use("/api/*", async (c, next) => {
     // whole of the auth, nothing is addressable by an id, and a page that
     // needs an account is a page somebody with no account will not read.
     || /^\/api\/inbox\/[^/]+$/.test(c.req.path)
+    // Asking for a way back in. By definition nobody calling this has a
+    // session, and it answers identically whatever it finds, so there is
+    // nothing here to authenticate and nothing to learn from the reply.
+    || c.req.path === "/api/password-help"
     || c.req.path === "/api/stripe/webhook"
     || c.req.path === "/api/impersonation/end"
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
@@ -3214,6 +3218,133 @@ async function ensureAuthUser(env, email) {
   if (signed.error === "email_in_use") return { ok: true, created: false, authId: null };
   return { ok: false, error: signed.error, detail: signed.detail };
 }
+
+// ---------------------------------------------------------------------------
+// "I cannot get in" -- one door, three different problems behind it.
+// ---------------------------------------------------------------------------
+//
+// The sign-in page used to call Supabase's /auth/v1/recover straight from the
+// browser. That endpoint answers 200 for an address it has never seen --
+// deliberately, so it cannot be walked to find out who has an account -- which
+// means the page said "a reset link is on its way" in three quite different
+// situations and only one of them was true:
+//
+//   1. A real login. The link sends and arrives. Fine.
+//   2. A users row with auth_id null -- somebody added from the console, or an
+//      applicant who never finished. There is nothing in Supabase to recover,
+//      so nothing was ever going to arrive.
+//   3. AN INVITED SUBCONTRACTOR WHO NEVER OPENED THEIR LINK. A sub invite is a
+//      token; the users row is written by createApplication when they redeem
+//      it. So before that there is no user, no password, and no amount of
+//      resetting will make one -- what they actually need is the invite again.
+//
+// Case 3 is the one that cost an afternoon: a subcontractor invited by a
+// property manager, told a link was coming, with no way out except somebody at
+// the hiring account noticing. So this route does the right thing per case and
+// says the same sentence for all of them.
+//
+// WHY THIS IS NOT A WAY TO MAIL STRANGERS. Every branch sends only to an
+// address that is ALREADY on a row here -- a user, or an open invite somebody
+// at an account addressed to them. An address we hold nothing for gets nothing
+// sent, and the same reply. So it cannot be pointed at an arbitrary inbox, and
+// it cannot be used to discover which addresses are on SubSub: one reply, one
+// status code, whichever branch ran.
+async function openSubInviteFor(env, email) {
+  try {
+    return await env.DB.prepare(
+      `SELECT * FROM sub_invites
+        WHERE lower(email) = lower(?)
+          AND used_at IS NULL AND revoked_at IS NULL
+          AND datetime(expires_at) > datetime('now')
+        ORDER BY created_at DESC LIMIT 1`
+    ).bind(email).first();
+  } catch {
+    // 027 not applied: sub_invites has no email column, so there is nothing to
+    // match on. Not a failure of this route -- the other two branches stand.
+    return null;
+  }
+}
+
+// Only ever back to a SubSub address. The origin arrives from the browser so a
+// branded page returns you to itself rather than the shared one, but an
+// unchecked redirect_to is an open redirect with an emailed link attached.
+const safeReturnTo = (env, origin) => {
+  const domain = env.APP_DOMAIN || "subsub.work";
+  const ok = new RegExp(`^https://[a-z0-9-]+\\.${domain.replace(/\./g, "\\.")}$`);
+  return ok.test(String(origin || "")) ? String(origin) : `https://app.${domain}`;
+};
+
+app.post("/api/password-help", async (c) => {
+  // Two ceilings. The per-address one stops somebody mailbombing a person they
+  // know is here; the per-IP one stops a list being worked through.
+  const byIp = await rateLimit(c.env, "pwhelp-ip", clientIp(c), { limit: 20, windowMinutes: 60 });
+  if (!byIp.ok) return c.json({ ok: true });
+
+  const body = await c.req.json().catch(() => ({}));
+  const email = String(body?.email || "").trim().toLowerCase();
+  // Same answer for a malformed address as for a real one nobody here holds.
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return c.json({ ok: true });
+
+  const byEmail = await rateLimit(c.env, "pwhelp-addr", email, { limit: 5, windowMinutes: 60 });
+  if (!byEmail.ok) return c.json({ ok: true });
+
+  const returnTo = safeReturnTo(c.env, body?.origin);
+
+  try {
+    const user = await c.env.DB.prepare(
+      `SELECT id, email, auth_id FROM users WHERE lower(email) = lower(?)`).bind(email).first();
+
+    if (user) {
+      // Case 2 before case 1: recover against an address Supabase has never
+      // seen sends nothing, so the login has to exist first. Only when there
+      // is no evidence of one -- an auth_id means they have signed in before,
+      // and signing them up again spends a send against the hourly limit that
+      // the recover itself needs.
+      if (!user.auth_id) {
+        const made = await ensureAuthUser(c.env, email);
+        if (made.ok && made.authId) {
+          await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ?`)
+            .bind(made.authId, user.id).run().catch(() => {});
+        }
+      }
+      if (c.env.SUPABASE_URL && c.env.SUPABASE_ANON_KEY) {
+        const res = await fetch(`${c.env.SUPABASE_URL}/auth/v1/recover`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", apikey: c.env.SUPABASE_ANON_KEY },
+          body: JSON.stringify({ email, redirect_to: returnTo }),
+        }).catch(() => null);
+        // Logged, never returned. Whether Supabase was rate-limited is our
+        // problem to see and not something the form should differentiate on.
+        if (!res || !res.ok) console.warn("[pwhelp] recover failed for a known user:", res?.status);
+      }
+      return c.json({ ok: true });
+    }
+
+    // Case 3. No user row, so a reset is meaningless -- but if an account has
+    // an open invite out to this address, that link IS the way in, and sending
+    // it again is the same act as the account pressing resend. Same token, so
+    // the one already in their inbox keeps working.
+    const invite = await openSubInviteFor(c.env, email);
+    if (invite) {
+      const account = await c.env.DB.prepare(
+        `SELECT id, name, subdomain, theme, logo_key, use_default_mark, hostname_status
+           FROM accounts WHERE id = ?`).bind(invite.account_id).first();
+      if (account) {
+        await deliverSubInvite(c.env, { row: { ...invite, phone: null }, account,
+          accountId: account.id, userId: null });
+        await c.env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
+          .bind(invite.id).run().catch(() => {});
+      }
+    }
+    // Nothing held for this address: nothing sent, same reply.
+    return c.json({ ok: true });
+  } catch (err) {
+    // Even a failure answers the same way. A 500 on a known address and a 200
+    // on an unknown one is the oracle this route exists to avoid.
+    console.error("[pwhelp]", err?.message || err);
+    return c.json({ ok: true });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Branded hostnames

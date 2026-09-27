@@ -184,6 +184,20 @@ export const api = {
   applyToAccount: (subdomain, data) =>
     request(`/apply/${encodeURIComponent(subdomain)}`, { method: "POST", body: JSON.stringify(data) }),
 
+  // "I cannot get in." Public, because nobody calling it has a session, and it
+  // replaces calling Supabase's recover straight from the browser: that
+  // endpoint can only send a password reset, and two of the three reasons
+  // somebody is stuck here are not a forgotten password at all -- a users row
+  // with no Supabase login behind it, and an invited subcontractor who never
+  // opened their link and so has no login to reset. The Worker knows which,
+  // does the right one, and answers the same either way.
+  //
+  // `origin` so a branded sign-in page gets the link back to itself; the
+  // Worker refuses anything that is not a subsub.work address.
+  passwordHelp: (email) =>
+    request("/password-help", { method: "POST",
+      body: JSON.stringify({ email, origin: window.location.origin }) }),
+
   listSubs: () => request("/subs"),
   addSub: (sub) => request("/subs", { method: "POST", body: JSON.stringify(sub) }),
   patchSub: (companyId, patch) => request(`/subs/${companyId}`, { method: "PATCH", body: JSON.stringify(patch) }),

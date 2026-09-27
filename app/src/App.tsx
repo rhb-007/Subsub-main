@@ -19550,20 +19550,23 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
   const backToSignIn = () => { setErr(""); setResetSent(false); setMode("signin"); };
 
   const sendReset = async () => {
-    if (!supabaseEnabled) { setErr("Password reset isn't wired up in this demo."); return; }
     if (!email.trim()) { setErr("Enter your email address."); return; }
     setErr(""); setBusy(true);
-    // Back to the address they are standing on: somebody who starts at their
-    // own company's address should not be returned to the shared one.
-    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(),
-      { redirectTo: window.location.origin });
+    // The Worker rather than Supabase directly. Calling resetPasswordForEmail
+    // from here could only ever send a password reset, and two of the three
+    // reasons somebody is on this form are not a forgotten password: a users
+    // row with no Supabase login behind it, and an INVITED SUBCONTRACTOR who
+    // never opened their link -- a sub invite is a token and the users row is
+    // written when they redeem it, so before that there is no password to
+    // reset and what they need is the invite again. Only the server can tell
+    // those apart, and it answers the same whichever it finds.
+    await api.passwordHelp(email.trim()).catch(() => null);
     setBusy(false);
-    // Deliberately the same answer whether or not that address has an account.
-    // A reset form that says "no account found" is a way to ask which of a list
-    // of addresses is on SubSub, which is the enumeration this product refuses
-    // everywhere else. Supabase answers this way too; the screen only has to
-    // avoid undoing it.
-    if (error) setErr(error.message); else setResetSent(true);
+    // Always. The reply carries nothing to branch on, deliberately: a form
+    // that says "no account found" is a way to ask which of a list of
+    // addresses is on SubSub, which is the enumeration this product refuses
+    // everywhere else.
+    setResetSent(true);
   };
 
   return (
@@ -19597,13 +19600,20 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
           <div className="login-form">
             {resetSent ? (
               <>
+                {/* Both possibilities, always, whichever one actually ran. It
+                    has to be true for somebody who forgot a password AND for a
+                    subcontractor who was invited and never opened the link --
+                    and naming only the one that applied would say which, which
+                    is the thing this form does not answer. */}
                 <div className="login-ok"><CheckCircle2 size={13} />
-                  <span>If <b>{email.trim()}</b> has an account here, a reset link is on
-                    its way. Open it on this device and you can choose a new password.</span>
+                  <span>If we have anything for <b>{email.trim()}</b>, a link is on its
+                    way — either a password reset, or your invitation again if you were
+                    invited and never finished setting up. Open it on this device.</span>
                 </div>
                 <p className="login-note">
-                  Links work once and expire. If it has not arrived in a few minutes, check
-                  the spam folder before asking for another.
+                  Links work once and expire. If nothing arrives in a few minutes, check the
+                  spam folder — and if you were invited by a company you work for, ask them
+                  to send the invitation again.
                 </p>
                 <button className="btn-solid login-btn" onClick={backToSignIn}>
                   Back to sign in
