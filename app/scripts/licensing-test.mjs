@@ -26,8 +26,9 @@ import { createServer } from "node:http";
 import { extname } from "node:path";
 import { launch, tally, wait } from "./lib/stub-stack.mjs";
 import { plan, earnsPage, stateEarnsPage, answerFor, isVerified, isStale,
-  pagePath, pageUrl, STALE_AFTER_DAYS } from "../shared/licensing.js";
+  pagePath, pageUrl, STALE_AFTER_DAYS, isReviewed, reviewQueue } from "../shared/licensing.js";
 import { STATES } from "../../content/licensing/data.js";
+import { US_STATES } from "../shared/states.js";
 
 const root = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 const t = tally();
@@ -121,6 +122,81 @@ console.log("\n-- paths and urls line up --");
       === "licensing/tx/electrical.html");
   t.ck("and a trade hub does not", pageUrl({ kind: "tradeHub", trade: "electrical" })
     === "/licensing/trade/electrical.html");
+}
+
+console.log("\n-- every jurisdiction earns a hub --");
+{
+  // A reference covering eleven states reads as abandoned rather than partial:
+  // the reader whose state is missing concludes the whole thing is unreliable,
+  // and that judgement is applied to the forty that ARE there. So the map is
+  // complete, and `shared/states.js` is the list it has to be complete against
+  // -- fifty states and DC, territories absent on purpose, one list imported by
+  // the Worker and the browser and now by this too.
+  const have = new Set(STATES.map((st) => st.code));
+  const want = US_STATES.map((st) => st.code || st[0] || st);
+  t.ck("fifty states and DC", STATES.length === 51, String(STATES.length));
+  const gaps = want.filter((c) => !have.has(c));
+  t.ck("with nothing missing from shared/states.js", gaps.length === 0, gaps.join(" "));
+  const extra = [...have].filter((c) => !want.includes(c));
+  t.ck("and nothing in it that is not a jurisdiction", extra.length === 0, extra.join(" "));
+  t.ck("no state listed twice", new Set(STATES.map((x) => x.code)).size === STATES.length,
+    String(STATES.length));
+  // A hub publishing is the whole point -- a state that skips is a reader sent
+  // to a 404 from the index.
+  const skippedHubs = STATES.filter((st) => !stateEarnsPage(st, { today: TODAY }).ok);
+  t.ck("every one of them publishes", skippedHubs.length === 0,
+    skippedHubs.map((x) => x.code).join(" "));
+}
+
+console.log("\n-- and the dataset says which entries nobody has checked --");
+{
+  // An entry naming a real agency and a real URL, dated today, written by
+  // somebody who did not open the statute reads EXACTLY like one that was read
+  // line by line. That difference cannot live in a commit message, so it lives
+  // in the data: `reviewed` is the flag nobody gets for free, and the generator
+  // prints what is still owed a read.
+  t.ck("an entry with no flag is not reviewed", isReviewed({ source: "x" }) === false);
+  t.ck("and one that says so is", isReviewed({ reviewed: true }) === true);
+  // Not a truthy check: `reviewed: "yes"` is somebody guessing at the schema,
+  // and treating it as a read is the one thing this flag exists to prevent.
+  t.ck("a truthy value that is not true does not count",
+    isReviewed({ reviewed: "yes" }) === false && isReviewed({ reviewed: 1 }) === false);
+
+  const owed = reviewQueue(STATES);
+  t.ck("the queue names the state and what in it", owed.every((r) => r.state && r.what),
+    JSON.stringify(owed[0] || null));
+  t.ck("it covers baselines as well as trades",
+    owed.some((r) => r.what === "baseline"), JSON.stringify(owed.slice(0, 2)));
+  // The honest reading of today's dataset: nothing in it has been read back
+  // against its source, so the queue is the whole set. When somebody starts
+  // marking entries reviewed this number comes down, and that is the point --
+  // it must not be able to come down by an entry losing its flag silently.
+  const reviewed = STATES.filter((st) => isReviewed(st.baseline)).map((st) => st.code);
+  t.ck(`${reviewed.length} state baselines are recorded as checked`,
+    owed.length === reviewQueue(STATES).length, String(owed.length));
+  t.ck("and the queue is non-empty while any entry lacks the flag",
+    (reviewed.length === STATES.length) === (owed.length === 0),
+    `${reviewed.length} reviewed, ${owed.length} owed`);
+
+  // A published entry still needs a source and a URL -- publishing unreviewed
+  // is a decision about how much has been CHECKED, never a licence to publish
+  // an answer with nowhere to trace it.
+  const unsourced = STATES.filter((st) => !isVerified(st.baseline)).map((st) => st.code);
+  t.ck("unreviewed never means unsourced", unsourced.length === 0, unsourced.join(" "));
+  const noBody = STATES.filter((st) => {
+    const b = st.baseline || {};
+    // "none" and "local" legitimately have no state body to name.
+    return (b.licence === "state" || b.licence === "registration") && !b.body;
+  }).map((st) => st.code);
+  t.ck("and every state that licenses or registers names who administers it",
+    noBody.length === 0, noBody.join(" "));
+  const noRegistry = STATES.filter((st) => !st.registry?.name).map((st) => st.code);
+  t.ck("every state says where the register is, or that there is none",
+    noRegistry.length === 0, noRegistry.join(" "));
+  // A register claimed searchable has to have somewhere to search.
+  const badRegistry = STATES.filter((st) => st.registry?.searchable && !st.registry?.url)
+    .map((st) => st.code);
+  t.ck("and a searchable one has a URL", badRegistry.length === 0, badRegistry.join(" "));
 }
 
 console.log("\n-- the shipped dataset --");

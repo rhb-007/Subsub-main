@@ -1079,6 +1079,40 @@ refactor.
   skipped combination points at. A trade hub needs **more than one** state
   saying something specific — below that it is a page listing one link.
 
+  **All fifty-one publish, because a partial map reads as an abandoned one.** At
+  eleven states the reader whose state was missing concluded the whole reference
+  was unreliable — and applied that to the forty that *were* there. So every
+  jurisdiction earns a hub, checked against `app/shared/states.js` rather than a
+  hand-kept count, and a state whose hub would skip is a reader sent to a 404
+  from the index.
+
+  Which forces a distinction the schema did not previously make. An entry naming
+  a real agency and a real URL, dated today, written by somebody who **did not
+  open the statute** reads exactly like one that was read line by line. That
+  difference cannot live in a commit message, so it lives in the data:
+  `reviewed` is a per-entry flag nobody gets for free (`reviewed: "yes"` does not
+  count — a truthy value is somebody guessing at the schema), `reviewQueue()`
+  collects what is still owed a read, and `npm run licensing` prints it beside
+  the skip report. Today that queue is the **whole dataset**, which is the honest
+  reading: nothing in it has been checked back against its source, the original
+  three included.
+
+  It deliberately does **not** gate publishing, and the reason is a judgement
+  about what kind of claim each field is. *Does this state license contractors,
+  and which agency administers it* is a structural fact that is stable and cheap
+  to get right. *Work over $25,000 needs a licence* is a figure set in statute
+  that gets amended, and a page confidently naming last year's is worse than one
+  that named none — so the generator says to check thresholds first. What
+  unreviewed never means is **unsourced**: every published entry still carries a
+  source, a URL and a date, every state that licenses or registers names who
+  administers it, and a register claimed searchable has somewhere to search.
+
+  Trade entries on the forty new states are deliberately **empty**. A trade page
+  earns a URL only by saying something different from the baseline, and inventing
+  thirty differences per state would produce exactly the 1,400 near-duplicate
+  pages this design exists to refuse. They get added when somebody reads the
+  statute and finds a real difference.
+
   **The offer comes before the lists, and both doors go to SIGNING UP.** The
   index led with two directories and put the CTA at the bottom, which spends the
   persuasion the page the reader arrived from had already done. And both CTAs

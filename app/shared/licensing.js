@@ -39,6 +39,36 @@ export function isVerified(entry = {}) {
 // old and silent about it.
 export const STALE_AFTER_DAYS = 400;
 
+// Checked against the source, or written from somebody's knowledge of it?
+//
+// These are not the same claim and the difference cannot live in a commit
+// message. An entry naming a real agency and a real URL, dated today, written
+// by somebody who did not open the statute, is indistinguishable from one that
+// was read line by line -- and "one checked fact vouching for twenty-eight
+// unchecked ones" is the failure mode this schema exists to prevent. So an
+// entry says which it is, `reviewed` is the default nobody gets for free, and
+// the generator counts the ones still owed a read.
+//
+// It deliberately does NOT gate publishing. Fifty-one hubs where forty read
+// "we have not got to your state" is a worse reference than fifty-one that
+// name the right agency and carry a review queue, and a state hub's claim --
+// does this state license contractors, and who administers it -- is a
+// different order of claim from a trade-specific dollar threshold. What it
+// buys is that the queue is in the data, findable, per entry, rather than in
+// somebody's memory.
+export const isReviewed = (entry = {}) => entry.reviewed === true;
+export function reviewQueue(states = []) {
+  const out = [];
+  for (const st of states || []) {
+    for (const [what, entry] of [["baseline", st.baseline], ["quirk", st.quirk],
+      ...Object.entries(st.trades || {}).map(([id, e]) => [`trade:${id}`, e])]) {
+      if (!entry) continue;
+      if (!isReviewed(entry)) out.push({ state: st.code, what, source: entry.source || null });
+    }
+  }
+  return out;
+}
+
 export function isStale(entry = {}, today) {
   if (!entry.verifiedOn || !today) return false;
   const a = Date.parse(`${entry.verifiedOn}T00:00:00Z`);

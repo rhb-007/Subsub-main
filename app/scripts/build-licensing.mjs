@@ -12,7 +12,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readChrome, atDepth } from "../../content/licensing/chrome.mjs";
 import { STATES } from "../../content/licensing/data.js";
-import { plan, pagePath, pageUrl, baselineOf } from "../shared/licensing.js";
+import { plan, pagePath, pageUrl, baselineOf, reviewQueue } from "../shared/licensing.js";
 import { statePage, tradePage, tradeHubPage, indexPage } from "../../content/licensing/render.mjs";
 import { readFileSync } from "node:fs";
 
@@ -109,4 +109,24 @@ if (needWork.length) {
 
 const missing = STATES.filter((s) => !baselineOf(s).source);
 if (missing.length) console.log(`\n${missing.length} state(s) have no baseline source at all.`);
+
+// And the OTHER queue, which is the one that grows quietly. An entry naming a
+// real agency and a real URL, dated today, written by somebody who did not open
+// the statute reads exactly like one that was read line by line -- so `reviewed`
+// says which, and this prints what is still owed a read. Unlike the skip report
+// above, none of these is holding a page back: they are published, and this is
+// the list of pages whose numbers nobody has checked yet.
+const owed = reviewQueue(STATES);
+if (owed.length) {
+  const byState = new Map();
+  for (const r of owed) byState.set(r.state, (byState.get(r.state) || 0) + 1);
+  console.log(`\n${owed.length} published entr${owed.length === 1 ? "y" : "ies"} across `
+    + `${byState.size} state(s) not yet checked against the source:`);
+  const codes = [...byState.keys()];
+  for (let i = 0; i < codes.length; i += 13) {
+    console.log(`  ${codes.slice(i, i + 13).join(" ")}`);
+  }
+  console.log("  Dollar thresholds first: a figure set in statute gets amended, and a");
+  console.log("  page naming last year's is worse than one that named none.");
+}
 console.log("");
