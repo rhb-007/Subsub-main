@@ -940,6 +940,18 @@ refactor.
   skipped combination points at. A trade hub needs **more than one** state
   saying something specific — below that it is a page listing one link.
 
+  **The offer comes before the lists, and both doors go to SIGNING UP.** The
+  index led with two directories and put the CTA at the bottom, which spends the
+  persuasion the page the reader arrived from had already done. And both CTAs
+  pointed at `app.subsub.work`, which is the **sign-in** form — so a
+  subcontractor who read the page, wanted the thing, and tapped the button was
+  asked for a password they had never set. The whole point of these pages is
+  reaching people with no account; sending them to a login is a dead end at the
+  exact moment they were convinced. Both go to `get-started.html` now.
+
+  The four documents are the **compliance pack**, which is what a general
+  contractor calls them when they ask.
+
   **Two doors, because two people land on the same facts with opposite
   problems.** A subcontractor checking what they need, and a hiring contractor
   checking what to ask for. `ASKED_ANYWAY` is the bridge between them: the four

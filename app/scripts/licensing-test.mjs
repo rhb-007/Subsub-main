@@ -135,10 +135,18 @@ console.log("\n-- the shipped dataset --");
         JSON.stringify(tr.source));
     }
   }
-  // Not a directory. No company names anywhere in the dataset.
+  // Not a directory: no COMPANY is named anywhere in the dataset. This used to
+  // grep for "Roofing", which is a trade -- California licenses it as C-39 and
+  // Florida certifies it separately, so the word belongs in the facts. What
+  // must never appear is a company: a corporate suffix, or any of the fixture
+  // names the rest of this repo's tests seed.
   const flat = JSON.stringify(STATES);
-  t.ck("no company is named in it",
-    !/Roofing|Ridge|Bay Roofing|LLC\b/.test(flat), "");
+  const suffix = flat.match(/\b[A-Z][A-Za-z']+ (?:LLC|Inc\.?|Corp\.?|Ltd\.?)\b/);
+  t.ck("no company suffix appears", !suffix, suffix ? suffix[0] : "");
+  const fixtures = ["Ridge Roofing", "Alder Construction", "San Juan Exteriors",
+    "Outerhome", "Cascade Management", "Bay Roofing", "Arrived Roofing"];
+  const named = fixtures.filter((f) => flat.includes(f));
+  t.ck("and no company is named in it", named.length === 0, JSON.stringify(named));
 }
 
 console.log("\n-- and the generated pages actually render --");
@@ -345,8 +353,14 @@ console.log("\n-- and the generated pages actually render --");
     await pg.goto("http://127.0.0.1:5247/licensing/", { waitUntil: "domcontentloaded" });
     await wait(400);
     const idx = await pg.evaluate(() => document.body.innerText);
-    t.ck("the index explains why there is not a page per combination",
-      /Why there is not a page for every combination/i.test(idx), idx.slice(0, 120));
+    // The offer comes before the lists. Somebody landing here has already been
+    // persuaded by the page they came from; making them read two directories
+    // first spends that.
+    t.ck("the index leads with the offer, not the index",
+      idx.indexOf("compliance pack") < idx.indexOf("By state"),
+      `${idx.indexOf("compliance pack")} vs ${idx.indexOf("By state")}`);
+    t.ck("and it explains nothing about its own bookkeeping",
+      !/page for every combination/i.test(idx), "");
     await pg.close();
   } finally {
     await browser.close(); server.close();

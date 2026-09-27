@@ -233,12 +233,12 @@ ${ASKED_ANYWAY.map(([, label, note], i) => `      <li><span class="n">${i + 1}</
 const SUB_CTA = `
     <div class="lic-cta lic-sub-cta">
       <div class="who">If you are the contractor</div>
-      <h3>Send all four in one link, once.</h3>
+      <h3>Your compliance pack, sent in one link.</h3>
       <p>Keep them in one place and answer the next contractor who asks in about six
         seconds &mdash; with a page showing your carrier, policy number, cover and
         expiry, that updates itself when you renew. Free, and whoever you send it to
         needs no account.</p>
-      <a class="btn" href="https://app.subsub.work/">Set up your document pack</a>
+      <a class="btn" href="https://subsub.work/get-started.html">Set up your compliance pack</a>
     </div>`;
 
 const GC_CTA = (what) => `
@@ -248,7 +248,7 @@ const GC_CTA = (what) => `
       <p>${esc(what)} What you can always check is the insurance, the bond, and whether
         either has lapsed since the day it was emailed to you. That last part is where it
         usually goes wrong: a PDF attached in March says nothing about July.</p>
-      <a class="btn" href="https://app.subsub.work/">Keep a roster current</a>
+      <a class="btn" href="https://subsub.work/get-started.html">Keep a roster current</a>
     </div>`;
 
 // ---- state + trade ------------------------------------------------------
@@ -471,6 +471,7 @@ export function indexPage({ chrome, states, trades, today }) {
       hiring contractor will ask you for whatever the answer is. Every page says where its
       answer came from and when it was last checked.</p>
 
+${SUB_CTA}
     <h2>By state</h2>
     <div class="lic-grid">
 ${states.map((st) => {
@@ -485,21 +486,13 @@ ${hubs.length ? `
 ${hubs.map((t) => `      <a href="trade/${t.id}.html">${esc(t.label)}<em>Licensed separately in several states</em></a>`).join("\n")}
     </div>` : ""}
 
-    <p class="lic-src"><b>Why there is not a page for every combination.</b> Most states
-      apply one rule to most trades, so a page per state per trade would be the same answer
-      reworded 1,400 times. A trade gets its own page only where the state singles it out;
-      everything else is on the state's page, once.</p>
-${SUB_CTA}`;
+`;
   // One pair, and only because the answer is a section of the page. The index
   // is a directory of links, not a question -- manufacturing four to fill the
   // markup out is the thing the guidelines exist to stop.
-  const faq = [
-    { q: "Why is there not a page for every state and trade?",
-      a: "Most states apply one rule to most trades, so a page per state per trade would "
-        + "be the same answer reworded 1,400 times. A trade gets its own page only where "
-        + "the state singles it out; everything else is on the state's page, once." },
-    DOCS_QA,
-  ];
+  // The "why not a page per combination" pair went with the paragraph it was
+  // marked up from: every answer here has to be text the reader can see.
+  const faq = [DOCS_QA];
   return page({ chrome, faq,
     title: "Contractor licensing by state and trade | SubSub",
     description: "What each state requires of contractors, which trades are licensed "

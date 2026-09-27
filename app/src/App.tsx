@@ -14384,12 +14384,11 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
         </div>
       )}
 
-      {/* The same form, as something to paste. Beside the branded one because
-          they are the same form -- and outside the canBrand branch above,
-          because the pasted version works on Basic and the branding panel does
-          not. `applySubdomain` rather than `slug` or `brand.subdomain`: a
-          snippet built from an unsaved edit posts nowhere, and brand.subdomain
-          reads "app" on Basic. */}
+      {/* The same form, as something to paste. It sits directly under the
+          branding panel and is styled to run on from it, because they are the
+          same form -- but it is its own block rather than a row inside that
+          panel, because the panel is Scale-only and this is not. Moving it
+          inside is the regression test:embedplace exists to catch. */}
       {pane === "company" && canManage && applySubdomain && applySubdomain !== "app" && (
         <EmbedApply subdomain={applySubdomain} accountName={brand.name}
           trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))}
@@ -23407,6 +23406,12 @@ p.fld-note{margin:6px 0 0}
 }
 .embed-strip{border:1px solid var(--line);border-radius:12px;background:var(--card);
   margin-bottom:16px;overflow:hidden}
+/* On Account -> Company it follows the branding panel and is the same form in
+   another shape, so it runs on from it: the panel's own bottom gap plus this
+   one put a page-width of air between them and it read as an unrelated footer
+   below Save. It cannot live INSIDE that panel -- the panel is Scale-only and
+   the pasted form is not -- so the join is done with spacing instead. */
+.settings-panel + .embed-strip{margin-top:-6px;border-top-left-radius:0;border-top-right-radius:0}
 .embed-head{display:flex;align-items:center;gap:11px;width:100%;padding:13px 16px;
   border:0;background:none;cursor:pointer;font-family:inherit;text-align:left;color:var(--ink)}
 .embed-head:hover{background:var(--paper)}
