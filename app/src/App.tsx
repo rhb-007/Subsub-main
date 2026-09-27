@@ -19445,6 +19445,15 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  // Signing in and asking for a reset are two different questions, and this
+  // screen asked both at once: "Forgot password?" sent the email but left the
+  // password box, the Sign in button and any error already on screen exactly
+  // where they were. So somebody who pressed Sign in with no password and then
+  // pressed Forgot password was told "Enter your email and password" AND
+  // "Check your email for a reset link" together -- one of which is no longer
+  // true -- above a form still asking for the password they had just been sent
+  // a link to replace.
+  const [mode, setMode] = useState("signin");
   // "Create your password" only ever creates the LOGIN — it covers someone
   // who already has an internal users row, either because an admin added
   // them via Users → Add, or because they already applied through the
@@ -19534,15 +19543,27 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
     if (msg) setErr(msg);
   };
 
-  const forgotPassword = async () => {
+  // Asking is a screen, not a side effect of a link. Switching clears whatever
+  // the sign-in attempt left behind, because that message is about a form the
+  // person is no longer looking at.
+  const askToReset = () => { setErr(""); setPw(""); setResetSent(false); setUnconfirmed(false); setMode("reset"); };
+  const backToSignIn = () => { setErr(""); setResetSent(false); setMode("signin"); };
+
+  const sendReset = async () => {
     if (!supabaseEnabled) { setErr("Password reset isn't wired up in this demo."); return; }
-    if (!email.trim()) { setErr("Enter your email first, then tap this again."); return; }
+    if (!email.trim()) { setErr("Enter your email address."); return; }
+    setErr(""); setBusy(true);
     // Back to the address they are standing on: somebody who starts at their
     // own company's address should not be returned to the shared one.
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(),
       { redirectTo: window.location.origin });
-    if (error) setErr(error.message);
-    else setResetSent(true);
+    setBusy(false);
+    // Deliberately the same answer whether or not that address has an account.
+    // A reset form that says "no account found" is a way to ask which of a list
+    // of addresses is on SubSub, which is the enumeration this product refuses
+    // everywhere else. Supabase answers this way too; the screen only has to
+    // avoid undoing it.
+    if (error) setErr(error.message); else setResetSent(true);
   };
 
   return (
@@ -19568,6 +19589,49 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
           </div>
         )}
 
+        {/* Asking for a reset is its own screen. The password box, the Google
+            button and the Sign in button all belong to a question this person
+            has stopped asking, and leaving them up is what produced a form
+            demanding a password next to a message saying one is on its way. */}
+        {mode === "reset" ? (
+          <div className="login-form">
+            {resetSent ? (
+              <>
+                <div className="login-ok"><CheckCircle2 size={13} />
+                  <span>If <b>{email.trim()}</b> has an account here, a reset link is on
+                    its way. Open it on this device and you can choose a new password.</span>
+                </div>
+                <p className="login-note">
+                  Links work once and expire. If it has not arrived in a few minutes, check
+                  the spam folder before asking for another.
+                </p>
+                <button className="btn-solid login-btn" onClick={backToSignIn}>
+                  Back to sign in
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="login-note">
+                  Type the address you sign in with. We will email you a link that lets you
+                  set a new password.
+                </p>
+                <label className="fld">Email
+                  <input type="email" inputMode="email" autoComplete="username" autoFocus
+                    value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); }}
+                    placeholder="you@company.com"
+                    onKeyDown={(e) => e.key === "Enter" && sendReset()} />
+                </label>
+                {err && <div className="login-err"><AlertTriangle size={13} /> {err}</div>}
+                <button className="btn-solid login-btn" onClick={sendReset} disabled={busy}>
+                  <Mail size={15} /> {busy ? "Sending…" : "Send reset link"}
+                </button>
+                <button className="login-forgot" onClick={backToSignIn}>
+                  Back to sign in
+                </button>
+              </>
+            )}
+          </div>
+        ) : (
         <div className="login-form">
           {supabaseEnabled && (
             <>
@@ -19590,20 +19654,21 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
                   onKeyDown={(e) => e.key === "Enter" && submit()} />
               </label>
               {err && <div className="login-err"><AlertTriangle size={13} /> {err}</div>}
-              {resetSent && <div className="login-err" style={{ color: "var(--forest-lift)" }}><CheckCircle2 size={13} /> Check your email for a reset link.</div>}
               {unconfirmed && !resent && (
                 <button className="login-forgot" onClick={resendConfirmation} disabled={busy}>
                   Didn't get it? Send the confirmation email again
                 </button>
               )}
-              {resent && <div className="login-err" style={{ color: "var(--forest-lift)" }}><CheckCircle2 size={13} /> Sent again. Click the link in it, then sign in here.</div>}
+              {resent && <div className="login-ok"><CheckCircle2 size={13} />
+                <span>Sent again. Click the link in it, then sign in here.</span></div>}
               <button className="btn-solid login-btn" onClick={submit} disabled={busy}>
                 <Lock size={15} /> {busy ? "Please wait…" : "Sign in"}
               </button>
-          <button className="login-forgot" onClick={forgotPassword}>
+          <button className="login-forgot" onClick={askToReset}>
             Forgot password?
           </button>
         </div>
+        )}
 
         {onSignup && onSubdomain && (
           <button className="login-signup" onClick={onSignup}>
@@ -22511,6 +22576,15 @@ p.fld-note{margin:6px 0 0}
 .login-form .fld{margin-bottom:13px}
 .login-btn{width:100%;justify-content:center;padding:13px;margin-top:4px}
 .login-err{display:flex;align-items:center;gap:7px;background:#faece7;border:1px solid #f0d1c8;color:var(--red);font-size:12.5px;font-weight:600;padding:9px 11px;border-radius:9px;margin-bottom:12px}
+/* A success message is not an error in a different colour. This was
+   .login-err with an inline green text colour, which left the red box and the red
+   border around it -- so "Check your email for a reset link" was drawn as a
+   failure. align-items:flex-start because these run to two lines. */
+.login-ok{display:flex;align-items:flex-start;gap:7px;background:#e9f3ec;border:1px solid #c6e0d0;
+  color:var(--forest-lift);font-size:12.5px;font-weight:600;padding:9px 11px;border-radius:9px;
+  margin-bottom:12px;line-height:1.5}
+.login-ok > svg{flex:none;margin-top:2px}
+.login-ok b{font-weight:700;overflow-wrap:anywhere}
 .login-forgot{display:block;width:100%;border:0;background:none;color:var(--ink-soft);font-size:12.5px;font-weight:600;padding:11px 0 0;cursor:pointer;text-align:center}
 .login-forgot:hover{color:var(--brand)}
 .login-foot{font-size:11.5px;color:var(--ink-soft);margin-top:18px;text-align:center}

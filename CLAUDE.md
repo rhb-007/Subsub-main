@@ -379,6 +379,32 @@ refactor.
   approval are all this shape, and the badge living behind a capability the
   answering role lacks is a silent way to break any of them.
 
+- **Asking for a new password is a screen, not a side effect of a link.** The
+  branded sign-in page asked two questions at once: *Forgot password?* sent the
+  email and changed nothing else, so the password box, the *Sign in* button and
+  whatever error the last attempt had left were all still there. Press Sign in
+  with no password, then press Forgot password, and the page said **"Enter your
+  email and password"** and **"Check your email for a reset link"** together —
+  one of them no longer true — above a form still demanding the password a link
+  had just been sent to replace.
+
+  Both messages used `.login-err`, which has a red background and a red border;
+  the success only overrode its text colour, so a sent link was drawn as a
+  failure. `.login-ok` is the green one. **A success is not an error in a
+  different colour** — overriding `color` on a box whose background and border
+  carry the meaning changes the one part that was already fine.
+
+  Reset is its own mode now: email only, *Send reset link*, *Back to sign in*,
+  and switching clears whatever the sign-in attempt left, because that message
+  is about a form that is no longer on screen. The reply is **the same whether
+  or not the address has an account** — "if that address has an account here" —
+  since a reset form answering "no account found" is a way to ask which of a
+  list of addresses is on SubSub, which is the enumeration refused everywhere
+  else. Supabase answers that way too; the screen only has to avoid undoing it.
+
+  The link lands on `AuthLanding`, which already takes a new password twice and
+  handles an expired one. That half was right; only the asking was wrong.
+
 - **Completion is two-party and append-only.** The subcontractor marks work
   reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because
