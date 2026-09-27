@@ -123,7 +123,8 @@
     "test:discover": "node scripts/discover-test.mjs",
     "test:embedplace": "node scripts/embed-place-test.mjs",
     "test:resetflow": "node scripts/reset-flow-test.mjs",
-    "test:pwhelp": "node scripts/password-help-test.mjs"
+    "test:pwhelp": "node scripts/password-help-test.mjs",
+    "test:stuck": "node scripts/stuck-subs-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

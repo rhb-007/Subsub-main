@@ -446,6 +446,39 @@ refactor.
   the invitation again — because it has to be true for either, and naming only
   the one that applied would say which ran.
 
+  **And staff can see who never arrived.** Being on a roster and being able to
+  sign in are two different records: a `companies` row plus an `engagements` row
+  is what an account gets the moment it adds or invites somebody, and it is what
+  the Contractors screen draws. A login is a `users` row plus a `memberships`
+  row with role `contractor`, written only when somebody opens the invite link
+  and fills the form in. So an account can hold a roster of ten with nine unable
+  to get in, and nothing said so — not to the customer, and not to staff, because
+  the console reads accounts and their own users and carried sub invites
+  nowhere. The only way to find the roofer was SQL against D1.
+
+  `GET /api/platform/stuck-subs` and the console's **Not arrived** screen.
+  `app/shared/stuck.js` decides what counts, so the route and the tests cannot
+  disagree. Three populations, because they need three different actions: an
+  **unredeemed invite** (resend, or re-issue an expired one), a **company with
+  no seat behind it** (nobody can sign in as them at all), and a **seat never
+  signed in to**.
+
+  Two things carry the screen. **Ours is separated from theirs**: a send that
+  failed, or one that never happened, is SubSub owing somebody an email, while
+  an invite nobody has opened is a customer nudging a contractor — identical
+  from the outside, different jobs, so ours sorts first and is tinted. And
+  **one person is one row**: San Juan Exteriors had both an open invite and an
+  `invited` engagement, and listing both reads as two problems and doubles every
+  count.
+
+  Whether mail is configured at all is reported once at the top rather than as
+  fifteen identical row errors, because one cause explains all of them — and
+  `mail_not_configured` means no invitation, reset or notification has ever left
+  the building, which is the first thing to rule out before chasing anybody.
+  Acting on a row still means opening the account: resend and re-issue live on
+  its Contractors screen where the audit trail says who pressed them. This
+  screen is for **finding** them.
+
 - **Completion is two-party and append-only.** The subcontractor marks work
   reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because

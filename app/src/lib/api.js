@@ -519,6 +519,10 @@ export const api = {
     revenue: () => request("/platform/revenue"),
     health: () => request("/platform/health"),
     activity: (accountId) => request(`/platform/activity/${encodeURIComponent(accountId)}`),
+    // Subcontractors who were asked to join and never arrived. A roster row
+    // and a login are different records -- a company can sit on a roster with
+    // nobody able to sign in as them, and nothing said so from any screen.
+    stuckSubs: () => request("/platform/stuck-subs"),
     // `userId` picks which seat. Left out, the server takes an admin, which
     // is what it always did. Named, it takes that person -- so support can
     // see what a SUBCONTRACTOR sees, which is a different app from an

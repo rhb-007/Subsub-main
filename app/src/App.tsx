@@ -25,7 +25,7 @@ import {
   Search, Phone, Mail, MapPin, FileText, Shield, ScrollText, Calendar,
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
   Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList,
-  Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, ArrowRightLeft, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
+  Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, UserX, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, ArrowRightLeft, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
@@ -53,6 +53,7 @@ import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS,
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
+import { STAGES, STAGE_LABEL, STAGE_NOTE, isOurs } from "../shared/stuck.js";
 import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
@@ -6990,6 +6991,9 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     ["dashboard", "Dashboard", LayoutGrid],
     ["accounts", "Accounts", Building2],
     ["companies", "Companies", Users],
+    // A roster row and a login are different records, and the gap between them
+    // was invisible from every screen. This is the one that shows it.
+    ["stuck", "Not arrived", UserX],
     ...(admin.finance ? [["revenue", "Revenue", TrendingUp]] : []),
     ...(isSuper ? [["health", "Health", Activity]] : []),
   ];
@@ -7201,6 +7205,8 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
             )}
           </>
         )}
+
+        {screen === "stuck" && <StuckSubs />}
 
         {/* ===== ACCOUNTS ===== */}
         {screen === "accounts" && !openId && (
@@ -20320,6 +20326,145 @@ function EmbedApply({ subdomain, accountName, trades, liveHost = true }) {
   );
 }
 
+// Subcontractors who were asked to join and never arrived.
+//
+// The console read accounts and their own users; sub invites were in neither.
+// So when a contractor could not get in, staff had exactly the visibility the
+// customer had -- none -- and the only way to find out was SQL against D1.
+//
+// The column staff actually arrive wanting is "did the email go", so it is on
+// every row rather than a detail behind a tap. And the split that decides what
+// to do with a row is OURS versus THEIRS: a send that failed is SubSub owing
+// somebody an email, while an invite nobody has opened is a customer nudging a
+// contractor. Those are listed together because they look identical from the
+// outside, and separated by tint because they are not the same job.
+function StuckSubs() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [only, setOnly] = useState("");
+  const [copied, setCopied] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    api.platform.stuckSubs()
+      .then((d) => { if (live) setData(d); })
+      .catch((e) => { if (live) setErr(e?.body?.error || "Could not load that."); });
+    return () => { live = false; };
+  }, []);
+
+  if (err) return <div className="pf-panel"><h3>Not arrived</h3><p className="pf-note">{err}</p></div>;
+  if (!data) return <div className="pf-panel"><h3>Not arrived</h3><p className="pf-note">Loading…</p></div>;
+
+  const rows = only ? data.rows.filter((r) => r.stage === only) : data.rows;
+  const { summary } = data;
+
+  const copy = async (text, id) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(id); setTimeout(() => setCopied(""), 1800);
+    } catch { setCopied("no"); setTimeout(() => setCopied(""), 2500); }
+  };
+
+  return (
+    <>
+      <div className="pf-panel">
+        <h3>Subcontractors who never arrived</h3>
+        <p className="pf-note">
+          Being on a roster and being able to sign in are two different records. A company
+          can sit on an account&rsquo;s contractor list with nobody behind it who can log in,
+          and until this screen nothing said so.
+        </p>
+
+        {/* One cause explains every failed row, so say it once at the top
+            rather than making somebody read fifteen identical errors. */}
+        {!data.mailConfigured && (
+          <div className="pf-host-err">
+            <AlertTriangle size={14} /> <b>Mail is not configured on the Worker.</b> No
+            invitation, reset or notification has been sent by SubSub at all. Set
+            RESEND_API_KEY and MAIL_FROM before chasing anything below.
+          </div>
+        )}
+
+        <div className="stk-tally">
+          <button className={`stk-chip ${only === "" ? "on" : ""}`} onClick={() => setOnly("")}>
+            All <b>{summary.total}</b>
+          </button>
+          {STAGES.filter(([k]) => summary.byStage[k]).map(([k, label]) => (
+            <button key={k} className={`stk-chip ${isOurs(k) ? "ours" : ""} ${only === k ? "on" : ""}`}
+              onClick={() => setOnly(only === k ? "" : k)} title={STAGE_NOTE[k]}>
+              {label} <b>{summary.byStage[k]}</b>
+            </button>
+          ))}
+        </div>
+        {summary.ours > 0 && (
+          <p className="pf-act">
+            ▸ <b>{summary.ours}</b> of these are ours, not theirs — SubSub either never sent
+            the message or the send failed.
+          </p>
+        )}
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="pf-panel"><p className="pf-note">
+          {only ? "None in that state." : "Nobody is stuck. Every invited subcontractor has arrived."}
+        </p></div>
+      ) : (
+        <div className="pf-panel">
+          <div className="stk-rows">
+            {rows.map((r) => (
+              <div key={`${r.accountId}-${r.inviteId || r.companyId}-${r.stage}`}
+                className={`stk-row ${isOurs(r.stage) ? "ours" : ""}`}>
+                <div className="stk-main">
+                  <b className="stk-co">{r.company}</b>
+                  <span className={`stk-stage ${isOurs(r.stage) ? "ours" : ""}`}>
+                    {STAGE_LABEL[r.stage] || r.stage}
+                  </span>
+                  <span className="stk-acct">on {r.account}</span>
+                </div>
+
+                <div className="stk-meta">
+                  {r.contact && <span>{r.contact}</span>}
+                  {r.email
+                    ? <button className="stk-mail" onClick={() => copy(r.email, r.email)}>
+                        {copied === r.email ? "Copied" : r.email}
+                      </button>
+                    : <span className="stk-none">no address on the record</span>}
+                  {r.phone && <span>{r.phone}</span>}
+                </div>
+
+                <div className="stk-facts">
+                  <span>{STAGE_NOTE[r.stage]}</span>
+                  {r.since && <span>Added {relTime(r.since)}</span>}
+                  {r.sentAt && <span>Last sent {relTime(r.sentAt)}</span>}
+                  {r.expiresAt && <span>
+                    {new Date(r.expiresAt) < new Date()
+                      ? `Expired ${relTime(r.expiresAt)}`
+                      : `Expires ${relTime(r.expiresAt)}`}
+                  </span>}
+                  {/* The question staff arrive with. A row with no attempt at
+                      all reads differently from one that was tried and bounced,
+                      and both read differently from one that went. */}
+                  {r.lastEmail
+                    ? <span className={r.lastEmail.status === "failed" ? "stk-bad" : "stk-good"}>
+                        Mail {r.lastEmail.status}
+                        {r.lastEmail.error ? `: ${r.lastEmail.error}` : ""} ({relTime(r.lastEmail.at)})
+                      </span>
+                    : <span className="stk-bad">No email ever attempted to this address</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="pf-note stk-foot">
+            Acting on one of these means opening the account — the resend and re-issue
+            controls live on its Contractors screen, where the audit trail says who pressed
+            them. This screen is for finding them.
+          </p>
+        </div>
+      )}
+    </>
+  );
+}
+
 function Modal({ children, onClose, wide }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -24933,6 +25078,40 @@ p.fld-note{margin:6px 0 0}
 .pf-brand:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
 .pf-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;
   background:var(--amber);color:#1a1207;padding:3px 8px;border-radius:20px}
+/* Not arrived. Ours versus theirs is the split that decides what to do with a
+   row, so it is carried by tint rather than by reading each line. */
+.stk-tally{display:flex;flex-wrap:wrap;gap:7px;margin:14px 0 4px}
+.stk-chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);
+  background:var(--card);border-radius:20px;padding:6px 13px;font-size:12.5px;cursor:pointer;
+  color:var(--ink-soft)}
+.stk-chip b{color:var(--ink);font-weight:700}
+.stk-chip:hover{border-color:var(--brand)}
+.stk-chip.on{border-color:var(--brand);background:#eef5f1;color:var(--ink)}
+.stk-chip.ours{border-color:#e6cfc8;background:#fbf1ee;color:#8a3c22}
+.stk-chip.ours b{color:#8a3c22}
+.stk-chip.ours.on{border-color:#c5735a}
+.stk-rows{display:flex;flex-direction:column;gap:9px;margin-top:4px}
+.stk-row{border:1px solid var(--line);border-left:3px solid var(--line);border-radius:10px;
+  padding:12px 14px;background:var(--card)}
+.stk-row.ours{border-left-color:#c5735a;background:#fdf7f5}
+.stk-main{display:flex;align-items:baseline;flex-wrap:wrap;gap:9px}
+.stk-co{font-size:14.5px}
+.stk-stage{font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  padding:2px 9px;border-radius:20px;background:#eef2f0;color:var(--ink-soft)}
+.stk-stage.ours{background:#f5ded6;color:#8a3c22}
+.stk-acct{font-size:12.5px;color:var(--ink-soft)}
+.stk-meta{display:flex;flex-wrap:wrap;gap:12px;margin-top:6px;font-size:12.5px;color:var(--ink-soft)}
+.stk-mail{border:0;background:none;padding:0;font:inherit;color:var(--brand-dk);cursor:pointer;
+  text-decoration:underline;text-underline-offset:2px}
+.stk-none{font-style:italic}
+.stk-facts{display:flex;flex-wrap:wrap;gap:12px;margin-top:7px;font-size:12px;color:var(--ink-soft)}
+.stk-bad{color:#8a3c22;font-weight:600}
+.stk-good{color:var(--brand-dk)}
+.stk-foot{margin-top:14px}
+@media (max-width:560px){
+  .stk-meta,.stk-facts{gap:4px 10px}
+  .stk-row{padding:11px 12px}
+}
 .pf-nav{display:flex;gap:2px;flex:1}
 .pf-nav button{display:inline-flex;align-items:center;gap:7px;background:none;border:0;color:rgba(255,255,255,.7);
   font:600 13.5px Inter,sans-serif;padding:9px 13px;border-radius:8px;cursor:pointer}

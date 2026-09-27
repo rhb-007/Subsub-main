@@ -30,6 +30,7 @@ import { normalizeState } from "../shared/states.js";
 import { releaseAmounts, milestonesCover } from "../shared/money.js";
 import { chainStatus, SCOPE_KINDS } from "../shared/waivers.js";
 import { mayRetouch, isOptedOut, RETOUCH_WINDOW_DAYS } from "../shared/retouch.js";
+import { inviteStage, dedupe, rank, summarise } from "../shared/stuck.js";
 import { INBOX_DAYS, INBOX_ASKS_PER_HOUR, inboxState, inboxRow, rankInbox,
   inboxSummary } from "../shared/inbox.js";
 import { shouldNudgeEmbed, EMBED_NUDGE_AT } from "../shared/embed.js";
@@ -10443,6 +10444,145 @@ app.get("/api/platform/setup-check", async (c) => {
 // Every mail this account has been sent, and whether it went. The schema
 // has recorded this from the start and nothing ever showed it, so "did they
 // get the email?" was answered by guessing.
+// Subcontractors who were asked to join and never arrived.
+//
+// The console has always read accounts and their own users, and sub invites
+// were in neither -- so when a contractor could not get in, staff had no more
+// visibility than the customer did and the only recourse was SQL against D1.
+// That is exactly the hole a roofer fell down: invited by a property manager,
+// never sent the link, and nobody able to see it from any screen.
+//
+// Three populations, because there are three different ways to be stuck, and
+// they need different actions:
+//
+//   an INVITE that has not been redeemed  -- resend it, or re-issue an expired
+//     one, and say plainly when SubSub never sent it in the first place;
+//   a COMPANY on a roster with no seat behind it -- nobody can sign in as them
+//     at all, which the Contractors screen happily draws as a normal row;
+//   a SEAT that has never been signed in to -- the login exists and is unused.
+//
+// `shared/stuck.js` decides which is which, so this and the tests cannot
+// disagree about what counts as stuck.
+//
+// Staff-only, and it reads across every account, which is the one thing
+// /api/platform/* exists to be allowed to do. Never reach for it to serve a
+// customer screen.
+app.get("/api/platform/stuck-subs", async (c) => {
+  const { error } = await requireStaff(c);
+  if (error) return error;
+
+  const [accountsQ, invitesQ, engagementsQ, companiesQ, seatsQ] = await Promise.all([
+    c.env.DB.prepare(`SELECT id, name, subdomain, kind, hostname_status FROM accounts`).all(),
+    c.env.DB.prepare(
+      `SELECT id, account_id, label, email, phone, contact, company_name,
+              created_at, sent_at, expires_at, used_at, revoked_at, company_id
+         FROM sub_invites`).all().catch(() => ({ results: [] })),
+    c.env.DB.prepare(
+      // invited_at, not created_at: this table records when somebody was
+      // asked, which is the age that matters on a list of people who never
+      // turned up.
+      `SELECT id, account_id, company_id, status, invited_at FROM engagements`).all(),
+    c.env.DB.prepare(`SELECT id, company, contact, email, phone FROM companies`).all(),
+    c.env.DB.prepare(
+      `SELECT m.account_id, m.company_id, u.id AS user_id, u.name, u.email, u.auth_id
+         FROM memberships m JOIN users u ON u.id = m.user_id
+        WHERE m.role = 'contractor'`).all(),
+  ]);
+
+  // The last thing SubSub tried to send each address, which is the column that
+  // answers the question staff actually arrive with: did the email go?
+  const lastMail = {};
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT to_email, status, error, at, kind FROM email_log ORDER BY at ASC`).all();
+    for (const m of results) lastMail[String(m.to_email || "").toLowerCase()] = m;
+  } catch (err) {
+    console.warn("[stuck-subs] email_log unavailable:", err?.message || err);
+  }
+  const mailFor = (email) => {
+    const m = email ? lastMail[String(email).toLowerCase()] : null;
+    return m ? { status: m.status, error: m.error || null, at: m.at, kind: m.kind } : null;
+  };
+
+  const accounts = Object.fromEntries(accountsQ.results.map((a) => [a.id, a]));
+  const companies = Object.fromEntries(companiesQ.results.map((x) => [x.id, x]));
+  const acct = (id) => ({ accountId: id, account: accounts[id]?.name || "(gone)",
+    subdomain: accounts[id]?.subdomain || null });
+
+  const rows = [];
+
+  // 1. Invitations nobody redeemed.
+  for (const i of invitesQ.results || []) {
+    const lastEmail = mailFor(i.email);
+    const stage = inviteStage({
+      usedAt: i.used_at, revokedAt: i.revoked_at, expiresAt: i.expires_at,
+      sentAt: i.sent_at, lastEmail,
+    });
+    if (!stage) continue;
+    rows.push({
+      ...acct(i.account_id), kind: "invite", stage,
+      inviteId: i.id,
+      companyId: i.company_id || null,
+      company: i.company_name || i.label || "(unnamed)",
+      contact: i.contact || null,
+      email: i.email || null,
+      phone: i.phone || null,
+      since: i.created_at,
+      sentAt: i.sent_at || null,
+      expiresAt: i.expires_at || null,
+      lastEmail,
+    });
+  }
+
+  // 2. On a roster, with nobody who can sign in as them.
+  const seated = new Set((seatsQ.results || [])
+    .map((m) => `${m.account_id}:${m.company_id}`));
+  for (const e of engagementsQ.results || []) {
+    if (e.status === "ended") continue;
+    if (seated.has(`${e.account_id}:${e.company_id}`)) continue;
+    const co = companies[e.company_id];
+    // A company the account typed in and never intended to give a login to is
+    // a legitimate record, not a fault -- but staff still want to see it, so
+    // it is listed and labelled rather than filtered out on a guess.
+    rows.push({
+      ...acct(e.account_id), kind: "roster", stage: "no_login",
+      inviteId: null,
+      companyId: e.company_id,
+      company: co?.company || "(gone)",
+      contact: co?.contact || null,
+      email: co?.email || null,
+      phone: co?.phone || null,
+      since: e.invited_at,
+      sentAt: null, expiresAt: null,
+      lastEmail: mailFor(co?.email),
+    });
+  }
+
+  // 3. A seat that exists and has never been used.
+  for (const m of seatsQ.results || []) {
+    if (m.auth_id) continue;
+    const co = companies[m.company_id];
+    rows.push({
+      ...acct(m.account_id), kind: "seat", stage: "never_signed_in",
+      inviteId: null,
+      companyId: m.company_id,
+      company: co?.company || "(gone)",
+      contact: m.name || co?.contact || null,
+      email: m.email || co?.email || null,
+      phone: co?.phone || null,
+      since: null,
+      sentAt: null, expiresAt: null,
+      lastEmail: mailFor(m.email || co?.email),
+    });
+  }
+
+  const deduped = dedupe(rows);
+  return c.json({ rows: rank(deduped), summary: summarise(deduped),
+    // So the screen can say "no mail has ever left" rather than listing
+    // fifteen failures and leaving staff to infer the one cause.
+    mailConfigured: !!(c.env.RESEND_API_KEY && c.env.MAIL_FROM) });
+});
+
 app.get("/api/platform/accounts/:id/mail", async (c) => {
   const { error } = await requireStaff(c);
   if (error) return error;
