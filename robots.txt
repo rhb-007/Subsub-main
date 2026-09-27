@@ -13,3 +13,4 @@ User-agent: Google-Extended
 Allow: /
 
 Sitemap: https://subsub.work/sitemap.xml
+Sitemap: https://subsub.work/licensing/sitemap.xml

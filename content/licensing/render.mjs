@@ -98,17 +98,67 @@ export const depthOf = (canonical) => String(canonical)
   .replace(/\/[^/]*\.\w+$/, "")        // ".../electrical.html" -> ".../tx"
   .split("/").filter(Boolean).length;
 
-export function page({ chrome, title, description, canonical, crumbs, body }) {
+// Structured data, serialised for a <script> block.
+//
+// JSON.stringify does not escape "<", so a source name or a detail sentence in
+// data.js containing "</script>" would close the block and turn the rest of the
+// page into markup. That file is hand-edited prose, so this is a real path, not
+// a theoretical one.
+const ldJson = (obj) => JSON.stringify(obj)
+  .replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
+
+// The page's own question-and-answer markup.
+//
+// These pages ARE questions -- the H1 of a trade page is the search query --
+// and FAQPage is what lets an answer engine quote one rather than paraphrase
+// around it. Two rules, both of which matter more than the traffic:
+//
+//   EVERY ANSWER IS TEXT THAT IS VISIBLE ON THE PAGE. Marking up an answer the
+//   reader cannot see is what the FAQ rich-result guidelines call out, and it
+//   is the kind of thing that costs a whole site its eligibility. So each pair
+//   below is built from the same values the body renders, never from anything
+//   extra.
+//
+//   AND NOTHING IS MARKED UP THAT IS NOT ASKED. A page with no real question on
+//   it gets no FAQPage rather than a manufactured one.
+export function page({ chrome, title, description, canonical, crumbs, body,
+  faq = [], modified, citation }) {
   const { atDepth } = chrome;
   const depth = depthOf(canonical);
-  const ld = {
-    "@context": "https://schema.org",
+  const graph = [{
     "@type": "BreadcrumbList",
     itemListElement: crumbs.map((c, i) => ({
       "@type": "ListItem", position: i + 1, name: c.name,
       item: `${SITE}${c.url}`,
     })),
-  };
+  }];
+  // dateModified is the date somebody CHECKED the statute, which is the whole
+  // claim these pages make. It is on the page in words ("Checked 2026-09-12");
+  // this is the machine-readable half, and an answer engine deciding whether a
+  // licensing answer is current has nothing else to go on.
+  if (modified) {
+    graph.push({
+      "@type": "WebPage",
+      "@id": `${SITE}${canonical}`,
+      url: `${SITE}${canonical}`,
+      name: title,
+      description,
+      dateModified: modified,
+      isPartOf: { "@type": "WebSite", name: "SubSub", url: `${SITE}/` },
+      ...(citation ? { citation: { "@type": "CreativeWork", name: citation.name,
+        ...(citation.url ? { url: citation.url } : {}) } } : {}),
+    });
+  }
+  if (faq.length) {
+    graph.push({
+      "@type": "FAQPage",
+      mainEntity: faq.map(({ q, a }) => ({
+        "@type": "Question", name: q,
+        acceptedAnswer: { "@type": "Answer", text: a },
+      })),
+    });
+  }
+  const ld = { "@context": "https://schema.org", "@graph": graph };
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -122,7 +172,7 @@ ${chrome.fonts}
 <meta name="theme-color" content="#103528">
 ${chrome.css}
 <style>${PAGE_CSS}</style>
-<script type="application/ld+json">${JSON.stringify(ld)}</script>
+<script type="application/ld+json">${ldJson(ld)}</script>
 </head>
 <body>
 ${atDepth(chrome.header, depth)}
@@ -139,6 +189,26 @@ ${atDepth(chrome.footer, depth)}
 </html>
 `;
 }
+
+// The one question every page on this section answers, and the only Q&A pair
+// shared by all of them: its answer is the paragraph under "What you will be
+// asked for anyway" followed by the four labels, which is what that block
+// renders on every page.
+const DOCS_QA = {
+  q: "What documents will a hiring contractor ask for?",
+  a: "No state requirement does not mean no paperwork. Every hiring contractor and "
+    + "property manager worth working for asks for the same four things before anybody "
+    + "starts, and asks again every time one expires: "
+    + ASKED_ANYWAY.map(([, label]) => label).join(", ") + ".",
+};
+
+// Plain text from a value the body renders as HTML entities. The FAQ answer has
+// to be the visible text, so it has to be the same words -- just without the
+// markup the reader never sees.
+const plain = (s) => String(s == null ? "" : s)
+  .replace(/&mdash;/g, "\u2014").replace(/&ndash;/g, "\u2013")
+  .replace(/&middot;/g, "\u00b7").replace(/&ldquo;|&rdquo;/g, '"')
+  .replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 
 const pill = (lvl) => `<span class="lic-pill ${esc(lvl)}">${esc(LEVEL_LABEL[lvl] || lvl)}</span>`;
 
@@ -225,7 +295,24 @@ ${GC_CTA(needs
     ? `A ${trade.label.toLowerCase()} licence in ${state.name} can be looked up, and should be.`
     : `There is no ${state.name} licence number to check for this trade, because there isn't one.`)}
 ${relatedBlock(state, trade, others)}`;
-  return page({ chrome, title,
+  // Each answer is the visible text of the block it names, in plain words.
+  const faq = [
+    { q: `Do ${trade.label.toLowerCase()} contractors need a licence in ${state.name}?`,
+      a: `${needs ? "Yes" : "No"}. ${plain(a.detail || LEVEL_LABEL[a.licence])}` },
+    { q: `Who administers ${trade.label.toLowerCase()} licensing in ${state.name}?`,
+      a: a.body
+        ? `${plain(a.body)} administers it.`
+        : `Nobody at state level. ${state.name} does not administer a licence for this trade.` },
+    { q: `Is there a searchable ${state.name} licence register?`,
+      a: state.registry?.searchable
+        ? `Yes — ${plain(state.registry.name)}.`
+        : `No. ${state.name} publishes no searchable register for this trade.` },
+    DOCS_QA,
+  ];
+  return page({ chrome, title, faq,
+    modified: a.verifiedOn,
+    citation: (a.own || a).source
+      ? { name: plain((a.own || a).source), url: (a.own || a).sourceUrl } : null,
     description: `${needs ? "Yes" : "No"} — ${a.detail || LEVEL_LABEL[a.licence]} `
       + `What ${state.name} requires for ${trade.label.toLowerCase()} work, and what hiring `
       + `contractors ask for regardless.`,
@@ -305,7 +392,25 @@ ${state.cities?.length ? `
     <ul class="lic-chips">
 ${state.cities.map((c) => `      <li><span>${esc(c)}</span></li>`).join("\n")}
     </ul>` : ""}`;
-  return page({ chrome, title,
+  const faq = [
+    { q: `Does ${state.name} require a contractor licence?`,
+      a: plain(base.detail || LEVEL_LABEL[base.licence]) },
+    { q: `Which trades does ${state.name} treat differently?`,
+      a: differs.length
+        ? `${differs.length} of them: ${differs.map((t) => t.label).join(", ")}.`
+        : `None. ${state.name} applies the same rule to every trade.` },
+    // Only where there IS a register. Where there is none the page says "None"
+    // in a table cell and nothing more, which is too thin to mark up as an
+    // answer -- the same rule that keeps the index to one pair.
+    ...(state.registry?.searchable ? [{
+      q: `How do you check a ${state.name} contractor licence?`,
+      a: `${plain(state.registry.name)}${state.registry.note
+        ? `. ${plain(state.registry.note)}` : "."}` }] : []),
+    DOCS_QA,
+  ];
+  return page({ chrome, title, faq,
+    modified: base.verifiedOn,
+    citation: base.source ? { name: plain(base.source), url: base.sourceUrl } : null,
     description: `${base.detail || LEVEL_LABEL[base.licence]} Which trades ${state.name} `
       + `treats differently, and what hiring contractors ask for regardless.`,
     canonical: `/licensing/${state.code.toLowerCase()}/`,
@@ -334,7 +439,19 @@ ${rows.map(({ st, a }) => `      <a href="../${st.code.toLowerCase()}/${trade.id
       repeating it twenty-nine times.</p>
 ${askedAnyway()}
 ${SUB_CTA}`;
-  return page({ chrome, title,
+  // The freshest date across the states listed: the hub is only as current as
+  // its most recently checked row, and claiming the oldest would understate it
+  // while claiming a date nothing was checked on would be a lie.
+  const modified = rows.map(({ a }) => (a.own || a).verifiedOn).filter(Boolean).sort().pop();
+  const faq = [
+    { q: `Which states license ${trade.label.toLowerCase()} contractors separately?`,
+      a: rows.length
+        ? `${rows.map(({ st }) => st.name).join(", ")}. Where a state applies the same `
+          + `requirement to every trade, its own page says so once.`
+        : `None on record yet.` },
+    DOCS_QA,
+  ];
+  return page({ chrome, title, faq, modified,
     description: `Which states treat ${trade.label.toLowerCase()} differently from other `
       + `construction work, who administers the licence, and what hiring contractors ask for.`,
     canonical: `/licensing/trade/${trade.id}.html`,
@@ -373,7 +490,17 @@ ${hubs.map((t) => `      <a href="trade/${t.id}.html">${esc(t.label)}<em>License
       reworded 1,400 times. A trade gets its own page only where the state singles it out;
       everything else is on the state's page, once.</p>
 ${SUB_CTA}`;
-  return page({ chrome,
+  // One pair, and only because the answer is a section of the page. The index
+  // is a directory of links, not a question -- manufacturing four to fill the
+  // markup out is the thing the guidelines exist to stop.
+  const faq = [
+    { q: "Why is there not a page for every state and trade?",
+      a: "Most states apply one rule to most trades, so a page per state per trade would "
+        + "be the same answer reworded 1,400 times. A trade gets its own page only where "
+        + "the state singles it out; everything else is on the state's page, once." },
+    DOCS_QA,
+  ];
+  return page({ chrome, faq,
     title: "Contractor licensing by state and trade | SubSub",
     description: "What each state requires of contractors, which trades are licensed "
       + "separately, and what hiring contractors ask for regardless. Sourced and dated.",

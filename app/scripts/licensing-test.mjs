@@ -165,7 +165,12 @@ console.log("\n-- and the generated pages actually render --");
     page.includes("lic-sub-cta") && page.includes("lic-gc-cta"));
   t.ck("it says where the answer came from and when",
     /Checked 2026-09-12/.test(page) && /TDLR/.test(page));
-  t.ck("and no escape sequence leaked", !/\\u[0-9a-f]{4}/i.test(page));
+  // Scoped to what the reader sees. The JSON-LD block legitimately escapes "<"
+  // as \u003c so a source name in data.js cannot close the script tag; that is
+  // machine-readable data, not text on the page, and the guard here is about a
+  // literal escape sequence showing up as six characters in front of somebody.
+  const readerText = page.replace(/<script[\s\S]*?<\/script>/g, " ");
+  t.ck("and no escape sequence leaked", !/\\u[0-9a-f]{4}/i.test(readerText));
 
   // The sitemap must list what exists and nothing else.
   const map = readFileSync(join(out, "sitemap.xml"), "utf8");
@@ -211,6 +216,87 @@ console.log("\n-- and the generated pages actually render --");
   }
   t.ck("every relative reference resolves, on every page kind",
     relDead.length === 0, JSON.stringify(relDead.slice(0, 4)));
+
+  // Structured data, and the one rule that makes FAQPage safe to ship.
+  //
+  // These pages are questions -- a trade page's H1 IS the search query -- so
+  // FAQPage is what lets an answer engine quote one instead of paraphrasing
+  // around it. The rule it comes with is that the marked-up answer must be text
+  // the reader can see; marking up an answer that is not on the page is what
+  // costs a site its rich-result eligibility, and it is an easy thing to do by
+  // accident when the answer is assembled from data rather than copied.
+  //
+  // So every answer is checked WORD BY WORD against the page's own visible
+  // text. Not verbatim -- the body renders "Who administers it" in a table cell
+  // and the answer says "X administers it", which is the same fact in a
+  // sentence -- but a fabricated answer cannot pass, because its words are not
+  // there to find.
+  const visibleText = (html) => html
+    .replace(/<script[\s\S]*?<\/script>/g, " ")
+    .replace(/<style[\s\S]*?<\/style>/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&mdash;|&ndash;/g, " ").replace(/&middot;/g, " ")
+    .replace(/&ldquo;|&rdquo;|&quot;/g, '"').replace(/&amp;/g, "&")
+    .replace(/&[a-z]+;/g, " ")
+    .replace(/\s+/g, " ").toLowerCase();
+
+  const words = (t) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/)
+    .filter((w) => w.length > 3);
+
+  const ldOf = (html) => {
+    const m = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+    return m ? JSON.parse(m[1]) : null;
+  };
+
+  let faqPages = 0, badAnswers = [], noLd = [], noFaq = [], staleStamp = [];
+  for (const pg of pages) {
+    const html = readFileSync(join(root, pagePath(pg)), "utf8");
+    let ld = null;
+    try { ld = ldOf(html); } catch { /* parse failure falls through */ }
+    if (!ld || !Array.isArray(ld["@graph"])) { noLd.push(pagePath(pg)); continue; }
+
+    const faq = ld["@graph"].find((n) => n["@type"] === "FAQPage");
+    if (!faq) { noFaq.push(pagePath(pg)); continue; }
+    faqPages += 1;
+
+    const seen = visibleText(html);
+    for (const q of faq.mainEntity) {
+      const ws = words(q.acceptedAnswer.text);
+      const hit = ws.filter((w) => seen.includes(w)).length;
+      // Seven in ten. An answer that is a sentence around a value on the page
+      // scores well above this; one invented for the markup scores far below.
+      if (!ws.length || hit / ws.length < 0.7) {
+        badAnswers.push(`${pagePath(pg)}: ${q.name} (${hit}/${ws.length})`);
+      }
+    }
+
+    // dateModified is the machine-readable half of the "Checked <date>" line.
+    // If the two disagree, one of them is lying about how current the answer is.
+    const web = ld["@graph"].find((n) => n["@type"] === "WebPage");
+    if (web?.dateModified && !html.includes(web.dateModified)) {
+      staleStamp.push(`${pagePath(pg)}: ${web.dateModified} not on the page`);
+    }
+  }
+
+  t.ck("every page carries parseable structured data", noLd.length === 0,
+    JSON.stringify(noLd.slice(0, 3)));
+  t.ck("and every page carries FAQ markup", noFaq.length === 0,
+    JSON.stringify(noFaq.slice(0, 3)));
+  t.ck("on all of them", faqPages === pages.length, `${faqPages} of ${pages.length}`);
+  t.ck("every marked-up answer is text the reader can see",
+    badAnswers.length === 0, JSON.stringify(badAnswers.slice(0, 3)));
+  t.ck("and dateModified matches the date printed on the page",
+    staleStamp.length === 0, JSON.stringify(staleStamp.slice(0, 3)));
+
+  // A source name or a detail sentence in data.js is hand-edited prose, and
+  // JSON.stringify does not escape "<" -- so "</script>" in the dataset would
+  // close the block and turn the rest of the page into markup.
+  const anyPage = readFileSync(join(root, pagePath(pages[0])), "utf8");
+  const ldBlock = anyPage.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)[1];
+  t.ck("the structured data cannot close its own script tag",
+    !/[<>]/.test(ldBlock) && ldBlock.includes("\\u003c") === false
+      || !/[<>]/.test(ldBlock),
+    ldBlock.slice(0, 40));
 
   // Rendered, because a generator producing confident-looking broken HTML is
   // worse than one that crashes.
