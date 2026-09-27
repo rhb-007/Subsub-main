@@ -479,6 +479,34 @@ refactor.
   its Contractors screen where the audit trail says who pressed them. This
   screen is for **finding** them.
 
+  **And the account can finally act on one.** Finding them was only half of it:
+  there was no way to get a contractor *from* the roster *to* a login. The
+  Contractors screen drew a company with no seat behind it exactly like one with
+  a seat; the only invite flow started from a blank form, so it meant retyping a
+  name and an address the card was already showing, past a warning saying you
+  already have a contractor with that name; and `password-help` could only
+  resend an invite that already **existed**, which for a contractor nobody ever
+  invited is nothing at all. Three dead ends for the same person.
+
+  `POST /api/subs/:companyId/invite` is the missing step, started from the
+  record: prefilled from the company row, no warning, and on the card itself —
+  `PortalInvite` renders only when `!sub.hasPortal`, where somebody is standing
+  when they notice.
+
+  It writes `sub_invites.company_id` **at creation** rather than only on
+  redemption — same column, one step earlier, no migration — and
+  `createApplication` takes a `boundCompanyId` that outranks every guess below
+  it. That is load-bearing: deduping by licence or email only lands back on the
+  right row if the applicant retypes what the account already holds, and "close
+  enough, usually" is how a roster grows a second copy of somebody. Removing the
+  binding makes the test mint a second San Juan Exteriors.
+
+  An invite already out is **resent, not replaced** — two live tokens for one
+  contractor is two links in one inbox and a list that reads as two people, the
+  same reason `/api/invites/:id/resend` reuses its token. Somebody else's
+  contractor and a company id that does not exist both answer `not_found`, so
+  this cannot be walked to find out which ids are real.
+
 - **Completion is two-party and append-only.** The subcontractor marks work
   reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because

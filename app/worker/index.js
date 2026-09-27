@@ -922,11 +922,19 @@ app.post("/api/signup", async (c) => {
 // public form at a customer's own subdomain, and a one-time link the
 // customer generated and sent themselves. Identical work either way -- only
 // how the applicant got here differs, which is what `note` records.
-async function createApplication(env, account, body, note) {
+async function createApplication(env, account, body, note, { boundCompanyId = null } = {}) {
   const licenseKey = (body.license || "").trim().toUpperCase();
 
   let company = null;
-  if (licenseKey) {
+  // An invite raised from a contractor's own card names the company it is for.
+  // That beats every guess below: deduping by licence or email only lands back
+  // on the right row if the applicant retypes what the account already holds,
+  // and "close enough, usually" is how a roster grows a second copy of
+  // somebody.
+  if (boundCompanyId) {
+    company = await env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(boundCompanyId).first();
+  }
+  if (!company && licenseKey) {
     company = await env.DB.prepare(`SELECT * FROM companies WHERE UPPER(TRIM(license)) = ?`).bind(licenseKey).first();
   }
   if (!company && body.email) {
@@ -1683,6 +1691,98 @@ app.post("/api/invites/:id/resend", requireRole("admin", "pm"), async (c) => {
   });
 });
 
+// Invite a contractor who is ALREADY on the roster to get a login.
+//
+// Being on a roster and being able to sign in are two different records, and
+// there was no way to get from the first to the second. The Contractors screen
+// drew a company with no seat behind it exactly like one with a seat; the only
+// invite flow started from an empty form; and "Forgot password" could only
+// resend an invite that already existed. So a contractor an account had typed
+// in, or one whose invite was never created, had no path to a login at all --
+// not from their own card, not from the sign-in page, not from the console.
+//
+// This is the missing step, started from the record rather than from a blank
+// form: no retyping a name and an address the account already holds, and no
+// "you already have a contractor with this name" warning, because inviting
+// this one is the whole point.
+//
+// The invite carries `company_id` from the moment it is made rather than only
+// once it is spent, so redemption attaches the seat to THIS company instead of
+// deduping its way back to it by email and hoping the applicant types the same
+// one. Same column, one step earlier; no migration.
+app.post("/api/subs/:companyId/invite", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const companyId = c.req.param("companyId");
+
+  // Their own roster only. A company this account has no engagement with reads
+  // as missing rather than forbidden, the same answer mayWriteCompanyDocs
+  // gives, so this cannot be walked to find out which company ids are real.
+  const engaged = await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM engagements
+      WHERE account_id = ? AND company_id = ? AND status <> 'ended'`
+  ).bind(accountId, companyId).first();
+  if (!engaged) return c.json({ error: "not_found" }, 404);
+
+  const company = await c.env.DB.prepare(
+    `SELECT id, company, contact, email, phone FROM companies WHERE id = ?`).bind(companyId).first();
+  if (!company) return c.json({ error: "not_found" }, 404);
+
+  // Already has somebody who can sign in as them here. Sending another invite
+  // would be inviting a company that has already arrived.
+  const seat = await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM memberships
+      WHERE account_id = ? AND company_id = ? AND role = 'contractor'`
+  ).bind(accountId, companyId).first();
+  if (seat) return c.json({ error: "already_has_login" }, 409);
+
+  const body = await c.req.json().catch(() => ({}));
+  const email = String(body?.email ?? company.email ?? "").trim() || null;
+  const phone = normalizePhone(String(body?.phone ?? company.phone ?? "").trim()) || null;
+  if (!email && !phone) return c.json({ error: "no_contact" }, 400);
+
+  // An invite already out to this company is RESENT, not replaced. A second
+  // live token for one contractor is two links in one inbox and a list that
+  // reads as two people -- the same reason the resend route reuses its token.
+  const open = await c.env.DB.prepare(
+    `SELECT * FROM sub_invites
+      WHERE account_id = ? AND company_id = ? AND used_at IS NULL AND revoked_at IS NULL
+        AND datetime(expires_at) > datetime('now')
+      ORDER BY created_at DESC LIMIT 1`
+  ).bind(accountId, companyId).first().catch(() => null);
+
+  let row = open;
+  if (!row) {
+    const id = uid();
+    const token = newInviteToken();
+    const expires = new Date(Date.now() + INVITE_TTL_DAYS * 864e5).toISOString();
+    await c.env.DB.prepare(
+      `INSERT INTO sub_invites (id, account_id, token, label, email, phone, contact,
+                                company_name, company_id, created_by, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, accountId, token, company.company, email, phone,
+      company.contact || null, company.company, companyId, userId, expires).run();
+    row = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(id).first();
+  }
+
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  const sent = await deliverSubInvite(c.env, { row, account, accountId, userId });
+  if (sent.emailed || sent.texted) {
+    await c.env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .bind(row.id).run();
+  }
+  await logActivity(c.env, accountId, userId, open ? "invite_resent" : "invite_created",
+    sent.went ? `Invite to ${company.company} sent to ${sent.went}`
+      : `Invite to ${company.company} could not be sent`);
+
+  const after = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(row.id).first();
+  return c.json({
+    ...inviteRowToJs(after, account),
+    resent: !!open,
+    emailed: sent.emailed, texted: sent.texted,
+    emailError: sent.emailError, textError: sent.textError,
+  });
+});
+
 app.delete("/api/invites/:id", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
   // Scoped by account, so an id from another account is a miss rather than a
@@ -1757,7 +1857,10 @@ app.post("/api/invite/:token", async (c) => {
   const { companyId, userId: applicantId } = await createApplication(c.env, account, body,
     invite.email ? `Invited by email to ${invite.email}.`
       : invite.label ? `Applied through an invite link sent to ${invite.label}.`
-      : "Applied through an invite link.");
+      : "Applied through an invite link.",
+    // Set when the invite was raised from a contractor already on the roster,
+    // so the seat lands on that record rather than on a near-match of it.
+    { boundCompanyId: invite.company_id || null });
 
   // Spent, and only now -- an application that failed halfway should leave
   // the link usable rather than stranding somebody with a dead one.

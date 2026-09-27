@@ -330,6 +330,13 @@ export const api = {
   // new invite. Reissuing would break the link already sitting in somebody's
   // inbox, which is the opposite of what pressing "Send again" means.
   resendInvite: (id) => request(`/invites/${id}/resend`, { method: "POST" }),
+  // Invite a contractor who is already on the roster to get a login. Started
+  // from their record rather than a blank form, so nothing is retyped -- and
+  // the invite carries their company id, so redeeming it attaches the seat to
+  // that record instead of deduping its way back to it.
+  inviteSubToPortal: (companyId, body = {}) =>
+    request(`/subs/${encodeURIComponent(companyId)}/invite`,
+      { method: "POST", body: JSON.stringify(body) }),
   revokeInvite: (id) => request(`/invites/${id}`, { method: "DELETE" }),
   lookupInvite: (token) => request(`/invite/${encodeURIComponent(token)}`),
 

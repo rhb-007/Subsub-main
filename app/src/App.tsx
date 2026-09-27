@@ -20536,6 +20536,72 @@ function AutoScheduleCard({ sub, onSet, onAsk }) {
   );
 }
 
+// Getting a contractor who is already on the roster a login.
+//
+// A company with no seat behind it looked exactly like one with a seat, and
+// the only way to fix it was the blank invite form on the Contractors screen
+// -- retyping a name and an address this card is already showing, past a
+// warning saying you already have a contractor with that name. So the action
+// belongs here, on the record, where somebody is standing when they notice.
+//
+// Says the address before sending rather than after, because an invite to a
+// stale email is a fortnight of nobody knowing.
+function PortalInvite({ sub }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);
+  const [err, setErr] = useState("");
+
+  // Nothing to do for somebody who can already sign in.
+  if (sub.hasPortal) return null;
+
+  const to = sub.email || sub.phone || null;
+
+  const send = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = await api.inviteSubToPortal(sub.id);
+      if (r.emailed || r.texted) setDone(r);
+      else setErr(r.emailError === "mail_not_configured"
+        ? "Email isn't switched on yet, so nothing went. Copy the link instead."
+        : "That didn't send. Try again, or copy the link from the Contractors screen.");
+    } catch (e) {
+      const code = e?.body?.error;
+      setErr(code === "already_has_login" ? "They already have a login here."
+        : code === "no_contact" ? "There's no email or mobile on this record to send to. Add one with Edit."
+        : code === "not_found" ? "They're not on your contractor list."
+        : "Could not send it. Try again.");
+    } finally { setBusy(false); }
+  };
+
+  if (done) {
+    return (
+      <p className="portal-inv sent">
+        <CheckCircle2 size={13} />
+        <span>Invite {done.resent ? "sent again" : "sent"} to <b>{sub.email || sub.phone}</b>.
+          They set their own password from it.</span>
+      </p>
+    );
+  }
+
+  return (
+    <div className="portal-inv">
+      <UserX size={13} />
+      <div className="pi-main">
+        <b>No login yet</b>
+        <span>{to
+          ? <>Nobody can sign in as {sub.company}. Send them an invite to <b>{to}</b>.</>
+          : <>Nobody can sign in as {sub.company}, and there is no email or mobile on this record to send one to.</>}</span>
+        {err && <span className="pi-err"><AlertTriangle size={12} /> {err}</span>}
+      </div>
+      {to && (
+        <button className="btn-ghost sm" disabled={busy} onClick={send}>
+          <Mail size={13} /> {busy ? "Sending…" : "Send invite"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto }) {
   const ready = sub.bond && sub.insurance && sub.contract;
   const [notes, setNotes] = useState(sub.notes || "");
@@ -20575,6 +20641,9 @@ function SubDetail({ sub, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, 
         {(sub.city || sub.zip) && (
           <p className="detail-addr"><MapPin size={13} /> {[sub.city, sub.state, sub.zip].filter(Boolean).join(", ")}</p>
         )}
+        {/* On the record, because that is where somebody is standing when they
+            notice nobody can sign in as this contractor. */}
+        <PortalInvite sub={sub} />
         <div className="di-chips">
           {(sub.propertyIds || []).length > 0 && (
             <span className="notify-chip" title="Properties this vendor is scoped to">
@@ -23289,6 +23358,23 @@ p.fld-note{margin:6px 0 0}
 /* The pointer on the Contractors screen. A sentence and a way in, not a second
    copy of the panel -- so it is a line of text, not a card competing with the
    roster it sits above. */
+/* No login yet. Amber rather than red: a contractor who has not been invited
+   is unfinished business, not a fault. */
+.portal-inv{display:flex;align-items:flex-start;gap:10px;margin-top:11px;padding:11px 13px;
+  border:1px solid #e6d3ab;background:#fbf2e2;border-radius:10px;
+  font-size:13px;line-height:1.5;color:var(--amber-ink)}
+.portal-inv > svg{flex:none;margin-top:2px}
+.pi-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.pi-main b{font-weight:700}
+.pi-main span{color:var(--amber-ink);opacity:.92;overflow-wrap:anywhere}
+.pi-err{display:flex;align-items:flex-start;gap:6px;margin-top:5px;font-weight:600;opacity:1}
+.portal-inv .btn-ghost{flex:none;align-self:center;white-space:nowrap}
+.portal-inv.sent{align-items:center;border-color:#c6e0d0;background:#e9f3ec;color:var(--brand-dk)}
+.portal-inv.sent b{font-weight:700}
+@media (max-width:560px){
+  .portal-inv{flex-wrap:wrap}
+  .portal-inv .btn-ghost{margin-left:23px}
+}
 .embed-ptr{display:flex;align-items:flex-start;gap:9px;margin:0 0 14px;padding:11px 13px;
   border:1px solid var(--line);border-radius:10px;background:var(--paper);
   font-size:13px;line-height:1.5;color:var(--ink-soft)}
