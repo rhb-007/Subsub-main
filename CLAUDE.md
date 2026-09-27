@@ -698,6 +698,35 @@ refactor.
   does not put things on the company website. The email points at the panel
   rather than pasting eighty lines of HTML nobody can copy cleanly on a phone.
 
+  **And the demand side finally pulls.** Every other half of this loop pushes:
+  a subcontractor sends, an account scans a code, a sweep emails. A general
+  contractor who had been sent packs by three subcontractors held three
+  unrelated links, each expiring on its own schedule, and the value of having
+  them together grew with every new one while nothing added them up — so the
+  person with the most reason to want SubSub had the least reason to notice it
+  existed.
+
+  `GET /api/inbox/:token` is that page, and claiming it writes the
+  subcontractors onto the claiming account as engagements. **That is the cold
+  start solved by the people who wanted to be on it**: the subs did the data
+  entry, and a roster nobody typed is the thing every vertical SaaS fails to
+  get. They arrive as `invited`, not `active` — a document share is agreement to
+  be *hireable* by this person, not agreement to have been hired — and this is
+  not the accumulation the product refuses, because each one chose to send their
+  paperwork to that address.
+
+  **Reaching it costs a second email, and that is the whole design.** A share
+  token proves somebody holds one link that was emailed to an address; it does
+  **not** prove they control that address now. Certificates get forwarded — that
+  is most of what they are for — so linking straight through from a share would
+  let a forwarded certificate open every pack ever sent to the forwarder. So
+  `POST /api/pack/:token/inbox` names no address: it is read off the share and
+  the link goes there, because an endpoint that takes an address is an endpoint
+  that mails anybody's inbox to anybody. Neither the reply nor the screen ever
+  says **where** it went, for the same reason. An unknown token answers exactly
+  as a real one does. One live inbox link per address, `INBOX_DAYS` rather than
+  `SHARE_DAYS` because this one opens all of them, and claiming burns it.
+
   **And the funnel is visible at last.** `doc_shares.view_count` has been written
   since 041 and nothing added it up, so whether any of this works was unknowable.
   The send panel now shows sent, opened and how many companies — the one number
@@ -829,6 +858,12 @@ refactor.
 - D1 stops a multi-statement script at the first failing statement and does
   not undo what ran before it. `ALTER TABLE ... ADD COLUMN` is the statement
   that is not repeatable, so it goes in a paste of its own.
+- **A `\uXXXX` escape in JSX *text* is six literal characters**, not a
+  character — JSX only processes escapes inside string and template literals.
+  It has shipped twice: `Alder Construction \u00b7 Roofing` and
+  `says today \u2014 not what it said`. The browser tests now assert that no
+  `\uXXXX` survives into `document.body.innerText`, which catches the class
+  rather than the instance. Write the character, or put it in `{"…"}`.
 - Tests live in `app/scripts/*-test.mjs` and are registered in
   `package.json`. The ones ending in a browser harness build the real bundle
   and stub the API (`scripts/lib/stub-stack.mjs`) — no worker, no database.

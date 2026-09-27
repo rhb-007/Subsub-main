@@ -14,7 +14,7 @@ import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEm
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
   connectRequestEmail, connectRequestSms, workOrderIssuedSms,
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
-  docRenewedEmail, embedNudgeEmail } from "./mail.js";
+  docRenewedEmail, embedNudgeEmail, docInboxEmail } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -30,6 +30,8 @@ import { normalizeState } from "../shared/states.js";
 import { releaseAmounts, milestonesCover } from "../shared/money.js";
 import { chainStatus, SCOPE_KINDS } from "../shared/waivers.js";
 import { mayRetouch, isOptedOut, RETOUCH_WINDOW_DAYS } from "../shared/retouch.js";
+import { INBOX_DAYS, INBOX_ASKS_PER_HOUR, inboxState, inboxRow, rankInbox,
+  inboxSummary } from "../shared/inbox.js";
 import { shouldNudgeEmbed, EMBED_NUDGE_AT } from "../shared/embed.js";
 import { canRequestQuotes, quotableSubs, validInvitees, canQuote, validQuote,
   quoteJobShape, rankQuotes, canAward, requestState, MAX_INVITES } from "../shared/quotes.js";
@@ -253,6 +255,10 @@ app.use("/api/*", async (c, next) => {
     // Somebody a subcontractor sent their paperwork to. They have no account
     // -- not having to get one is the point -- and the token is the auth.
     || c.req.path.startsWith("/api/pack/")
+    // The inbox is the same exemption for the same reason: the token is the
+    // whole of the auth, nothing is addressable by an id, and a page that
+    // needs an account is a page somebody with no account will not read.
+    || /^\/api\/inbox\/[^/]+$/.test(c.req.path)
     || c.req.path === "/api/stripe/webhook"
     || c.req.path === "/api/impersonation/end"
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
@@ -7012,6 +7018,172 @@ app.get("/api/pack/:token", async (c) => {
 // share names the company, and the document id must be a current row of THAT
 // company of a kind the link is allowed to carry. An id from another company
 // -- or the W-9 from this one -- gets the same nothing.
+// ---------------------------------------------------------------------------
+// The inbox: every pack one person has been sent, on one page.
+//
+// This is the demand side of the growth loop and the only half that pulls. The
+// subcontractors do the data entry; the recipient accumulates a roster they did
+// not build; claiming it lands them in an account already populated. That is
+// the cold-start problem solved by the people who wanted to be on it.
+//
+// `shared/inbox.js` holds the rules; migration 045 holds the table.
+
+// "Show me everything sent to me." Asked from a pack page, answered by email.
+//
+// A share token proves somebody holds one link that was emailed to an address.
+// It does NOT prove they control that address now -- certificates get
+// forwarded, which is most of what they are for. Without a second email a
+// forwarded link would open every pack ever sent to the forwarder.
+//
+// So: the request names no address. It is read off the share, and the link
+// goes there. An endpoint that took an address would mail anybody's inbox to
+// anybody.
+app.post("/api/pack/:token/inbox", async (c) => {
+  try {
+    const share = await c.env.DB.prepare(
+      `SELECT to_email, to_name FROM doc_shares
+        WHERE token = ? AND revoked_at IS NULL`
+    ).bind(c.req.param("token")).first();
+    // Same answer either way, so this cannot be used to test a token.
+    if (!share) return c.json({ ok: true, sent: false });
+
+    const rl = await rateLimit(c.env, "inbox-ask", share.to_email,
+      { limit: INBOX_ASKS_PER_HOUR, windowMinutes: 60 });
+    if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+
+    // One live link per address: asking again replaces rather than leaving two
+    // keys to the same inbox loose.
+    await c.env.DB.prepare(
+      `UPDATE doc_inboxes SET revoked_at = CURRENT_TIMESTAMP
+        WHERE to_email = ? AND revoked_at IS NULL AND claimed_at IS NULL`
+    ).bind(share.to_email).run();
+
+    const token = shareToken();
+    const expires = new Date(Date.now() + INBOX_DAYS * 86400000)
+      .toISOString().slice(0, 19).replace("T", " ");
+    await c.env.DB.prepare(
+      `INSERT INTO doc_inboxes (id, token, to_email, expires_at) VALUES (?, ?, ?, ?)`
+    ).bind(uid(), token, share.to_email, expires).run();
+
+    const { results: mine } = await c.env.DB.prepare(
+      `SELECT COUNT(DISTINCT company_id) AS n FROM doc_shares
+        WHERE to_email = ? AND revoked_at IS NULL`
+    ).bind(share.to_email).all();
+    const mail = docInboxEmail({
+      toName: share.to_name, count: mine?.[0]?.n || 0, days: INBOX_DAYS,
+      link: `${APP_ORIGIN}/?inbox=${encodeURIComponent(token)}`,
+    });
+    const res = await sendEmail(c.env, { to: share.to_email, ...mail });
+    await logMail(c.env, { accountId: null, companyId: null, to: share.to_email,
+      kind: "doc_inbox", subject: mail.subject, result: res, sentBy: null });
+    // Never says WHICH address it went to. The person who asked knows; anybody
+    // holding a forwarded token learns nothing.
+    return c.json({ ok: true, sent: !!res?.ok });
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ ok: true, sent: false, skipped: "not_migrated" });
+    throw err;
+  }
+});
+
+// The inbox itself. Public, because a page that needs an account is not a page
+// somebody with no account will read -- and the token is the whole of the auth.
+app.get("/api/inbox/:token", async (c) => {
+  try {
+    const box = await c.env.DB.prepare(
+      `SELECT * FROM doc_inboxes WHERE token = ?`).bind(c.req.param("token")).first();
+    const state = inboxState({ token: box?.token, revokedAt: box?.revoked_at,
+      claimedAt: box?.claimed_at, expiresAt: box?.expires_at });
+    if (state !== "active") return c.json({ error: state === "unknown" ? "not_found" : state }, 404);
+
+    await c.env.DB.prepare(`UPDATE doc_inboxes SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .bind(box.id).run();
+
+    // The most recent live share per company. A second send replaced the
+    // first, so this is one row per subcontractor, not one per send.
+    const { results: shares } = await c.env.DB.prepare(
+      `SELECT ds.token, ds.company_id, ds.created_at, ds.expires_at,
+              co.company, co.contact, co.city, co.state
+         FROM doc_shares ds
+         JOIN companies co ON co.id = ds.company_id
+        WHERE ds.to_email = ? AND ds.revoked_at IS NULL
+          AND ds.created_at = (SELECT MAX(d2.created_at) FROM doc_shares d2
+                                WHERE d2.company_id = ds.company_id AND d2.to_email = ds.to_email
+                                  AND d2.revoked_at IS NULL)
+        ORDER BY ds.created_at DESC LIMIT 100`
+    ).bind(box.to_email).all();
+
+    const rows = [];
+    for (const sh of shares || []) {
+      const co = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`)
+        .bind(sh.company_id).first();
+      const docs = docShapeWithLegacy(await currentDocRows(c.env.DB, sh.company_id), co);
+      rows.push(inboxRow({
+        token: sh.token, company: sh.company, contact: sh.contact,
+        where: [sh.city, sh.state].filter(Boolean).join(", ") || null,
+        createdAt: sh.created_at, expiresAt: sh.expires_at,
+      }, PACK_KINDS.map((k) => ({ ...packRow({ ...(docs[k] || {}), kind: k }) }))));
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const ranked = rankInbox(rows, today);
+    return c.json({ rows: ranked, summary: inboxSummary(ranked, today),
+      expiresAt: box.expires_at });
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ error: "not_found" }, 404);
+    throw err;
+  }
+});
+
+// Turning it into an account's roster.
+//
+// The subcontractors chose to send this person their paperwork, which is
+// consent to a working relationship being recorded -- so these engagements are
+// not the accumulation this product refuses. They arrive as 'invited', the same
+// status as a company somebody typed in themselves: a document share is
+// agreement to be hireable by this person, not agreement to have been hired.
+app.post("/api/inbox/:token/claim", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  try {
+    const box = await c.env.DB.prepare(
+      `SELECT * FROM doc_inboxes WHERE token = ?`).bind(c.req.param("token")).first();
+    const state = inboxState({ token: box?.token, revokedAt: box?.revoked_at,
+      claimedAt: box?.claimed_at, expiresAt: box?.expires_at });
+    if (state !== "active") return c.json({ error: state === "unknown" ? "not_found" : state }, 404);
+
+    const { results: companies } = await c.env.DB.prepare(
+      `SELECT DISTINCT company_id FROM doc_shares
+        WHERE to_email = ? AND revoked_at IS NULL`
+    ).bind(box.to_email).all();
+
+    let added = 0;
+    for (const row of companies || []) {
+      try {
+        await c.env.DB.prepare(
+          `INSERT INTO engagements (id, account_id, company_id, status, notes)
+           VALUES (?, ?, ?, 'invited', ?)`
+        ).bind(uid(), accountId, row.company_id,
+          "Sent you their documents before you had an account.").run();
+        added += 1;
+      } catch (err) {
+        // Already on the roster. Claiming twice is the same outcome.
+        if (!/UNIQUE constraint failed/i.test(String(err?.message || err))) throw err;
+      }
+    }
+
+    await c.env.DB.prepare(
+      `UPDATE doc_inboxes SET claimed_at = CURRENT_TIMESTAMP, claimed_account_id = ? WHERE id = ?`
+    ).bind(accountId, box.id).run();
+    await logEvent(c.env, accountId, userId, "inbox.claimed", box.id, { added });
+    await logActivity(c.env, accountId, userId, "inbox_claimed",
+      `Added ${added} contractor${added === 1 ? "" : "s"} who had already sent their documents`);
+    return c.json({ ok: true, added });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+});
+
 // "Stop telling me when this renews."
 //
 // Keyed by the SHARE TOKEN, which the recipient already holds and which

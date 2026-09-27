@@ -386,6 +386,13 @@ export const api = {
   // nobody can unsubscribe anybody else.
   stopPackUpdates: (token, all) => request(`/pack/${encodeURIComponent(token)}/stop`,
     { method: "POST", body: JSON.stringify({ all: !!all }) }),
+  // Everything sent to one address. Asked for from a pack page and answered by
+  // email -- the request names no address, so this takes none.
+  askForInbox: (token) => request(`/pack/${encodeURIComponent(token)}/inbox`,
+    { method: "POST", body: "{}" }),
+  docInbox: (token) => request(`/inbox/${encodeURIComponent(token)}`),
+  claimInbox: (token) => request(`/inbox/${encodeURIComponent(token)}/claim`,
+    { method: "POST", body: "{}" }),
   // Who is asking, for the account deciding whether to say yes. Keyed by the
   // request, never by the account -- see the note on the route.
   connectAsker: (id) => request(`/my-connect-requests/${encodeURIComponent(id)}/asker`),

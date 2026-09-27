@@ -1817,6 +1817,13 @@ export default function SubSub() {
     if (typeof window === "undefined") return null;
     return new URLSearchParams(window.location.search).get("pack");
   });
+  // And the inbox: every pack sent to one address, on one page. Its own
+  // parameter for the same reason as the pack -- the holder has no account and
+  // is not trying to open one.
+  const [inboxToken] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("inbox");
+  });
   const [tenantInvite, setTenantInvite] = useState(null);
   const [tenantInviteErr, setTenantInviteErr] = useState("");
   // And the third: somebody added to the account itself. Its own parameter
@@ -4175,6 +4182,16 @@ export default function SubSub() {
       <div className="ss-root">
         <style>{CSS}</style>
         <DocPack token={packToken} />
+      </div>
+    );
+  }
+
+  // Same shape, same reason: no session, no branding, just the page.
+  if (inboxToken) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <DocInbox token={inboxToken} />
       </div>
     );
   }
@@ -17799,12 +17816,193 @@ function DocPack({ token }) {
           <a className="btn-solid small" href="/">Create a free account</a>
         </div>
       </div>
+      {/* The pull. Somebody reading one certificate very likely holds two or
+          three more links from other subcontractors, and the value of having
+          them together grows with each one -- which is the only thing here
+          that gets better without anybody doing anything.
+
+          It is asked for, not linked to: holding a forwarded certificate is
+          not proof this person still reads that mailbox, and the inbox opens
+          everything ever sent to it. */}
+      <AskForInbox token={token} />
       {/* The way out, where the person already is. A renewal sends them a
           fresh link because the old one expires, so this is where "stop" has
           to live -- an opt-out somebody has to create an account for is not an
           opt-out, and there is no other page they are ever on. */}
       <PackStop token={token} company={p.company} />
       <p className="pack-foot">Sent by {p.company} through SubSub</p>
+    </div>
+  );
+}
+
+// Every pack sent to one address, on one page.
+//
+// The demand side of the growth loop, and the only half that pulls. Three
+// subcontractors sent this person paperwork and they had three unrelated links;
+// the value of those grows with every new one and nothing added them up. So the
+// person with the most reason to want SubSub had the least reason to notice it.
+//
+// No account, like the pack page it comes from. The token is the whole of the
+// auth, and it was emailed rather than linked straight through from a share --
+// holding a forwarded certificate is not proof somebody still reads that
+// mailbox, and this opens everything ever sent to it.
+function DocInbox({ token }) {
+  const [box, setBox] = useState(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    api.docInbox(token)
+      .then((r) => { if (live) setBox(r); })
+      .catch((e) => {
+        if (!live) return;
+        const k = e?.body?.error;
+        setErr(k === "expired" ? "expired" : k === "claimed" ? "claimed"
+          : k === "revoked" ? "revoked" : "gone");
+      });
+    return () => { live = false; };
+  }, [token]);
+
+  if (err) {
+    return (
+      <div className="pack-wrap">
+        <div className="pack-card pack-gone">
+          <AlertTriangle size={26} />
+          <h2>{err === "expired" ? "That link has expired"
+            : err === "claimed" ? "This one has already been claimed"
+            : err === "revoked" ? "That link was replaced"
+            : "We couldn't find that"}</h2>
+          <p>
+            {err === "revoked"
+              ? "A newer link was sent to the same address. Use that one."
+              : err === "claimed"
+                ? "These contractors are on an account now. Sign in to see them."
+                : "Open any document link you were sent and ask again \u2014 it takes one tap."}
+          </p>
+        </div>
+        <p className="pack-foot">Powered by SubSub</p>
+      </div>
+    );
+  }
+  if (!box) return <div className="pack-wrap"><div className="pack-card">Loading…</div></div>;
+
+  const { rows = [], summary = {} } = box;
+  return (
+    <div className="pack-wrap wide">
+      <div className="pack-card">
+        <h2 className="inbox-h">Sent to you</h2>
+        <p className="inbox-sub">
+          {summary.companies === 1
+            ? "One subcontractor has"
+            : `${summary.companies} subcontractors have`} sent you their compliance
+          paperwork. This page shows what each one actually says today — not what it
+          said when it was emailed to you.
+        </p>
+
+        {/* The reason to have opened this at all, said first. A count and a
+            date, never a list, is the shape this product uses everywhere. */}
+        {(summary.expired > 0 || summary.soon > 0) && (
+          <div className={`inbox-alert${summary.expired ? " bad" : ""}`}>
+            <AlertTriangle size={15} />
+            <span>
+              {summary.expired > 0 && (
+                <b>{summary.expired} {summary.expired === 1 ? "document has" : "documents have"} expired
+                  since they were sent to you.</b>
+              )}
+              {summary.expired > 0 && summary.soon > 0 && " "}
+              {summary.soon > 0 && (
+                <>{summary.soon} more {summary.soon === 1 ? "expires" : "expire"} within 30 days.</>
+              )}
+            </span>
+          </div>
+        )}
+
+        <div className="inbox-list">
+          {rows.map((r) => (
+            <div key={r.token} className="inbox-row">
+              <div className="inbox-main">
+                <span className="inbox-co">{r.company}</span>
+                <span className="inbox-meta">
+                  {[r.contact, r.where].filter(Boolean).join(" \u00b7 ") || "\u2014"}
+                </span>
+              </div>
+              <div className="inbox-docs">
+                {r.docs.filter((d) => d.onFile).map((d) => (
+                  <span key={d.kind} className={`inbox-doc ${docChip(d)}`}>
+                    {DOC_LABELS_INLINE[d.kind]}
+                    {d.expiresOn && <em>{d.expiresOn}</em>}
+                  </span>
+                ))}
+                {r.docs.every((d) => !d.onFile) && (
+                  <span className="inbox-doc none">Nothing on file</span>
+                )}
+              </div>
+              <a className="btn-ghost sm" href={`/?pack=${encodeURIComponent(r.token)}`}>Open</a>
+            </div>
+          ))}
+        </div>
+
+        {/* The claim. Their roster is already built -- by the people who
+            wanted to be on it -- which is the whole pitch. */}
+        <div className="inbox-claim">
+          <h3>Keep this, and be told before anything expires.</h3>
+          <p>
+            A free account keeps these {summary.companies} on one roster, chases the
+            certificates when they lapse, and lets you add the rest of your contractors.
+            You do not have to type any of it in — they already did.
+          </p>
+          <a className="btn-solid" href={`/?signup=1&inbox=${encodeURIComponent(token)}`}>
+            Claim these {summary.companies}
+          </a>
+        </div>
+      </div>
+      <p className="pack-foot">Powered by SubSub</p>
+    </div>
+  );
+}
+
+// Green if it runs past 30 days, amber inside that, red if it has already gone.
+// The same three states shared/docs.js draws, applied to a page with no
+// account behind it.
+function docChip(d) {
+  if (!d.expiresOn) return "ok";
+  const days = Math.round(
+    (Date.parse(`${d.expiresOn}T00:00:00Z`) - Date.now()) / 86400000);
+  return days < 0 ? "bad" : days <= 30 ? "warn" : "ok";
+}
+
+function AskForInbox({ token }) {
+  const [state, setState] = useState("idle");   // idle | busy | sent | err
+  if (state === "sent") {
+    return (
+      <div className="inbox-ask done">
+        <CheckCircle2 size={15} />
+        {/* Deliberately not naming the address: a forwarded token would
+            otherwise tell the forwarder's colleague where it went. */}
+        <span>Sent. Check the inbox this document was emailed to.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="inbox-ask">
+      <div>
+        <b>Been sent paperwork by more than one contractor?</b>
+        <span>See every pack sent to this address on one page, with what has expired
+          since. We will email you the link.</span>
+      </div>
+      <button className="btn-ghost sm" disabled={state === "busy"}
+        onClick={async () => {
+          setState("busy");
+          try { await api.askForInbox(token); setState("sent"); }
+          catch (e) {
+            console.error("[inbox] ask failed:", e);
+            setState(e?.body?.error === "rate_limited" ? "rate" : "err");
+          }
+        }}>
+        {state === "busy" ? "Sending\u2026" : "Email me the link"}
+      </button>
+      {state === "err" && <p className="inbox-ask-err">That didn&rsquo;t send. Try again shortly.</p>}
+      {state === "rate" && <p className="inbox-ask-err">Already sent one recently &mdash; check your inbox.</p>}
     </div>
   );
 }
@@ -21499,6 +21697,44 @@ body{background:var(--paper)}
 .pack-cta span{font-size:12.5px;color:var(--ink-soft);line-height:1.55}
 .pack-cta a{margin-top:6px;text-decoration:none}
 .pack-foot{font-size:11.5px;color:var(--ink-soft)}
+/* ---- The inbox -------------------------------------------------------- */
+.pack-wrap.wide .pack-card{max-width:760px}
+.inbox-ask{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:18px;
+  padding:15px 17px;background:var(--paper);border:1px solid var(--line);border-radius:12px}
+.inbox-ask > div{flex:1;min-width:200px;display:flex;flex-direction:column;gap:3px}
+.inbox-ask b{font-size:13.5px}
+.inbox-ask span{font-size:12px;color:var(--ink-soft);line-height:1.5}
+.inbox-ask button{flex:none}
+.inbox-ask.done{color:var(--brand-dk);font-size:13px;font-weight:600}
+.inbox-ask.done svg{flex:none;color:var(--brand)}
+.inbox-ask-err{flex:1 0 100%;margin:0;font-size:12px;color:var(--red)}
+.inbox-h{margin:0 0 6px;font-size:22px;font-weight:700;letter-spacing:-.015em}
+.inbox-sub{margin:0 0 18px;font-size:13.5px;line-height:1.55;color:var(--ink-soft);max-width:60ch}
+.inbox-alert{display:flex;gap:9px;align-items:flex-start;padding:13px 15px;border-radius:11px;
+  background:#fbf2e2;border:1px solid #e6d3ab;color:var(--amber-ink);font-size:13px;
+  line-height:1.5;margin-bottom:18px}
+.inbox-alert.bad{background:#fbeeea;border-color:#e8c4b8;color:var(--red)}
+.inbox-alert svg{flex:none;margin-top:1px}
+.inbox-alert b{font-weight:700}
+.inbox-list{display:flex;flex-direction:column;gap:9px}
+.inbox-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:13px 15px;
+  border:1px solid var(--line);border-radius:11px;background:var(--card)}
+.inbox-main{display:flex;flex-direction:column;gap:2px;min-width:150px;flex:1}
+.inbox-co{font-size:14.5px;font-weight:600}
+.inbox-meta{font-size:11.5px;color:var(--ink-soft)}
+.inbox-docs{display:flex;gap:6px;flex-wrap:wrap;flex:2;min-width:190px}
+.inbox-doc{display:inline-flex;align-items:baseline;gap:5px;font-size:10.5px;font-weight:600;
+  padding:3px 9px;border-radius:20px;border:1px solid var(--line);background:var(--paper);
+  color:var(--ink-soft);text-transform:capitalize}
+.inbox-doc em{font-style:normal;font-variant-numeric:tabular-nums;opacity:.85}
+.inbox-doc.ok{background:#eef5f1;border-color:#cfe3d8;color:var(--brand-dk)}
+.inbox-doc.warn{background:#fbf2e2;border-color:#e6d3ab;color:var(--amber-ink)}
+.inbox-doc.bad{background:#fbeeea;border-color:#e8c4b8;color:var(--red)}
+.inbox-doc.none{font-style:italic;text-transform:none}
+.inbox-claim{margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}
+.inbox-claim h3{margin:0 0 7px;font-size:17px;font-weight:700;letter-spacing:-.01em}
+.inbox-claim p{margin:0 0 14px;font-size:13.5px;line-height:1.55;color:var(--ink-soft);max-width:58ch}
+@media (max-width:560px){.inbox-row{align-items:flex-start}.inbox-docs{flex:1 0 100%}}
 .pack-stats{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 14px;padding-bottom:12px;
   border-bottom:1px solid var(--line);font-size:11.5px;color:var(--ink-soft)}
 .pack-stats b{font-size:15px;font-weight:700;color:var(--ink);margin-right:4px;

@@ -780,3 +780,27 @@ invitations you already send.
 -- SubSub`;
   return { subject: `Let contractors apply to ${accountName} from your website`, text };
 }
+
+// "Everything sent to you, on one page." Asked for from a pack page, delivered
+// by email -- because holding a forwarded share proves somebody received mail
+// at an address once, not that they control it now.
+export function docInboxEmail({ toName, count, link, days }) {
+  const n = Number(count) || 0;
+  const many = n === 1 ? "one subcontractor has" : `${n} subcontractors have`;
+  const text = `Hi ${toName || "there"},
+
+You asked to see everything sent to this address. ${many} sent you their
+compliance paperwork through SubSub:
+
+  ${link}
+
+One page, every certificate, and the expiry on each -- including the ones that
+have already lapsed since they were sent to you. Nothing to sign up for.
+
+This link was emailed rather than shown straight away because holding one
+document link is not proof you still read this mailbox, and this one opens all
+of them. It lasts ${days} days.
+
+-- SubSub`;
+  return { subject: "Everything sent to you, on one page", text };
+}
