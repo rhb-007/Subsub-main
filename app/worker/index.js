@@ -13,7 +13,8 @@ import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEm
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
   connectRequestEmail, connectRequestSms, workOrderIssuedSms,
-  autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail } from "./mail.js";
+  autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
+  docRenewedEmail, embedNudgeEmail } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -28,6 +29,8 @@ import { normalizeState } from "../shared/states.js";
 // so a figure on screen and a figure written here cannot disagree.
 import { releaseAmounts, milestonesCover } from "../shared/money.js";
 import { chainStatus, SCOPE_KINDS } from "../shared/waivers.js";
+import { mayRetouch, isOptedOut, RETOUCH_WINDOW_DAYS } from "../shared/retouch.js";
+import { shouldNudgeEmbed, EMBED_NUDGE_AT } from "../shared/embed.js";
 import { canRequestQuotes, quotableSubs, validInvitees, canQuote, validQuote,
   quoteJobShape, rankQuotes, canAward, requestState, MAX_INVITES } from "../shared/quotes.js";
 import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
@@ -7009,6 +7012,44 @@ app.get("/api/pack/:token", async (c) => {
 // share names the company, and the document id must be a current row of THAT
 // company of a kind the link is allowed to carry. An id from another company
 // -- or the W-9 from this one -- gets the same nothing.
+// "Stop telling me when this renews."
+//
+// Keyed by the SHARE TOKEN, which the recipient already holds and which
+// already proves they are the person that link was made for. A dedicated
+// unsubscribe token would be a second secret to mint, store and leak; an
+// endpoint taking an email address would let anybody unsubscribe anybody.
+//
+// Public, because the whole point of the pack page is that reading it needs no
+// account -- and an opt-out somebody has to sign up for is not an opt-out.
+app.post("/api/pack/:token/stop", async (c) => {
+  try {
+    const share = await c.env.DB.prepare(
+      `SELECT company_id, to_email FROM doc_shares WHERE token = ?`
+    ).bind(c.req.param("token")).first();
+    // Deliberately not distinguishing a bad token from a good one: this
+    // answers ok either way, so it cannot be used to test whether a token is
+    // real. There is nothing to gain by being precise here.
+    if (share) {
+      const b = await c.req.json().catch(() => ({}));
+      // Everybody, or just this subcontractor. Saying stop about one is not
+      // saying it about the others, so the narrow one is the default.
+      const companyId = b.all ? null : share.company_id;
+      try {
+        await c.env.DB.prepare(
+          `INSERT INTO doc_share_optouts (id, to_email, company_id) VALUES (?, ?, ?)`
+        ).bind(uid(), share.to_email, companyId).run();
+      } catch (err) {
+        // Already said. Saying it twice is the same answer.
+        if (!/UNIQUE constraint failed/i.test(String(err?.message || err))) throw err;
+      }
+    }
+    return c.json({ ok: true });
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ ok: true, skipped: "not_migrated" });
+    throw err;
+  }
+});
+
 app.get("/api/pack/:token/file/:docId", async (c) => {
   const rl = await rateLimit(c.env, "pack-file", clientIp(c), { limit: 240, windowMinutes: 60 });
   if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
@@ -7613,6 +7654,177 @@ async function docExpirySweep(env) {
   }
   return { considered: (rows || []).length, sent, urgent, skipped };
 }
+
+// ---------------------------------------------------------------------------
+// Growth sweeps. Both are nightly, both are idempotent, and both write their
+// own suppression before they send -- a sweep that cannot be run twice safely
+// is a sweep nobody dares re-run after it fails halfway.
+
+// A renewal reaches the people the subcontractor already sent that document to.
+//
+// The pack page promises it stays current, and the link expires in SHARE_DAYS,
+// so a year later when the certificate actually renews every recipient is
+// holding a dead URL. This sends a fresh one. `shared/retouch.js` holds every
+// rule about who, how often, and why not; migration 044 holds the ledger.
+async function retouchSweep(env) {
+  const today = new Date().toISOString().slice(0, 10);
+  const skipped = {};
+  let sent = 0, considered = 0;
+  const skip = (why) => { skipped[why] = (skipped[why] || 0) + 1; };
+
+  let docs;
+  try {
+    // Current rows, uploaded recently, for a company that has a prior row of
+    // the same kind -- which is what makes it a renewal rather than a first.
+    ({ results: docs } = await env.DB.prepare(
+      `SELECT cd.id, cd.company_id, cd.kind, cd.expires_on, cd.uploaded_at,
+              co.company, co.contact,
+              (SELECT COUNT(*) FROM company_docs p
+                WHERE p.company_id = cd.company_id AND p.kind = cd.kind AND p.id != cd.id) AS priors
+         FROM company_docs cd
+         JOIN companies co ON co.id = cd.company_id
+        WHERE cd.superseded_at IS NULL
+          AND date(cd.uploaded_at) >= date(?, '-' || ? || ' days')
+        ORDER BY cd.uploaded_at DESC LIMIT 500`
+    ).bind(today, RETOUCH_WINDOW_DAYS).all());
+  } catch (err) {
+    if (missingSchema(err)) return { skipped: "not_migrated" };
+    throw err;
+  }
+
+  for (const d of docs || []) {
+    // Everybody this company ever sent that document to. Distinct by address:
+    // somebody sent to twice is one person, and the second share replaced the
+    // first anyway.
+    const { results: people } = await env.DB.prepare(
+      `SELECT ds.to_email, ds.to_name, MAX(ds.revoked_at) AS revoked_at
+         FROM doc_shares ds
+        WHERE ds.company_id = ?
+        GROUP BY ds.to_email`
+    ).bind(d.company_id).all();
+
+    for (const p of people || []) {
+      considered += 1;
+      const already = await env.DB.prepare(
+        `SELECT 1 AS yes FROM doc_retouches WHERE to_email = ? AND doc_id = ?`
+      ).bind(p.to_email, d.id).first();
+      const last = await env.DB.prepare(
+        `SELECT MAX(sent_at) AS at FROM doc_retouches WHERE to_email = ?`
+      ).bind(p.to_email).first();
+      const { results: outs } = await env.DB.prepare(
+        `SELECT company_id FROM doc_share_optouts WHERE to_email = ?`
+      ).bind(p.to_email).all();
+
+      const may = mayRetouch({
+        kind: d.kind, hasPrior: d.priors > 0, expiresOn: d.expires_on,
+        uploadedAt: d.uploaded_at, today,
+        alreadySentForThisDoc: !!already,
+        lastTouchedAt: last?.at || null,
+        optedOut: isOptedOut((outs || []).map((o) => ({ companyId: o.company_id })), d.company_id),
+        shareRevoked: !!p.revoked_at,
+      });
+      if (!may.ok) { skip(may.reason); continue; }
+
+      // Write the suppression FIRST. A send that succeeds and a ledger row
+      // that does not is how somebody gets the same email every night.
+      const retouchId = uid();
+      try {
+        await env.DB.prepare(
+          `INSERT INTO doc_retouches (id, company_id, to_email, doc_id) VALUES (?, ?, ?, ?)`
+        ).bind(retouchId, d.company_id, p.to_email, d.id).run();
+      } catch (err) {
+        // Another pass got there first. That is the index doing its job.
+        if (/UNIQUE constraint failed/i.test(String(err?.message || err))) { skip("raced"); continue; }
+        throw err;
+      }
+
+      // A fresh link, because theirs expired months ago. Same shape as any
+      // other share, so it appears in the subcontractor's own sent list and
+      // can be revoked with the rest.
+      const shareId = uid();
+      const token = shareToken();
+      const expires = new Date(Date.now() + SHARE_DAYS * 86400000)
+        .toISOString().slice(0, 19).replace("T", " ");
+      await env.DB.prepare(
+        `INSERT INTO doc_shares (id, token, company_id, sent_by, to_email, to_name, note, expires_at)
+         VALUES (?, ?, ?, NULL, ?, ?, NULL, ?)`
+      ).bind(shareId, token, d.company_id, p.to_email, p.to_name || null, expires).run();
+      await env.DB.prepare(`UPDATE doc_retouches SET share_id = ? WHERE id = ?`)
+        .bind(shareId, retouchId).run();
+
+      const mail = docRenewedEmail({
+        company: d.company, contact: d.contact, toName: p.to_name,
+        kind: d.kind, expiresOn: d.expires_on,
+        link: `${APP_ORIGIN}/?pack=${encodeURIComponent(token)}`,
+        days: SHARE_DAYS,
+      });
+      const res = await sendEmail(env, { to: p.to_email, ...mail });
+      await logMail(env, { accountId: null, companyId: d.company_id, to: p.to_email,
+        kind: "doc_renewed", subject: mail.subject, result: res, sentBy: null });
+      if (res?.ok) sent += 1;
+    }
+  }
+  return { considered, sent, skipped };
+}
+
+// Accounts that have just enough of a roster to want it to fill itself.
+//
+// The public application form has existed since the start and nobody knows it
+// is there. Nudged once, ever -- a growth email that repeats is a growth email
+// people filter, and there is no second thing to say.
+async function embedNudgeSweep(env) {
+  let rows;
+  try {
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT a.id, a.name, a.subdomain, COUNT(en.id) AS subs
+         FROM accounts a
+         JOIN engagements en ON en.account_id = a.id AND en.status != 'ended'
+        WHERE a.subdomain IS NOT NULL AND a.subdomain != 'app'
+          AND NOT EXISTS (SELECT 1 FROM events ev
+                           WHERE ev.account_id = a.id AND ev.kind = 'growth.embed_nudged')
+        GROUP BY a.id
+       HAVING COUNT(en.id) >= ?
+        LIMIT 200`
+    ).bind(EMBED_NUDGE_AT).all());
+  } catch (err) {
+    if (missingSchema(err)) return { skipped: "not_migrated" };
+    throw err;
+  }
+
+  let sent = 0;
+  for (const a of rows || []) {
+    if (!shouldNudgeEmbed(a.subs, false)) continue;
+    // Admins only. A project manager does not put things on the website, and
+    // a contractor seat in this account is somebody else's company.
+    const { results: admins } = await env.DB.prepare(
+      `SELECT u.email, u.name FROM memberships m JOIN users u ON u.id = m.user_id
+        WHERE m.account_id = ? AND m.role = 'admin' AND u.email IS NOT NULL LIMIT 3`
+    ).bind(a.id).all();
+    if (!admins?.length) continue;
+
+    // Suppression before the send, as above.
+    await logEvent(env, a.id, null, "growth.embed_nudged", null, { subs: a.subs });
+    for (const ad of admins) {
+      const mail = embedNudgeEmail({ name: ad.name, accountName: a.name,
+        subdomain: a.subdomain, subs: a.subs });
+      const res = await sendEmail(env, { to: ad.email, ...mail });
+      await logMail(env, { accountId: a.id, companyId: null, to: ad.email,
+        kind: "embed_nudge", subject: mail.subject, result: res, sentBy: null });
+      if (res?.ok) sent += 1;
+    }
+  }
+  return { accounts: (rows || []).length, sent };
+}
+
+app.get("/api/cron/retouch", async (c) => {
+  if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
+  return c.json(await retouchSweep(c.env));
+});
+
+app.get("/api/cron/embed-nudge", async (c) => {
+  if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
+  return c.json(await embedNudgeSweep(c.env));
+});
 
 app.get("/api/cron/doc-expiry", async (c) => {
   if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
@@ -10309,7 +10521,8 @@ export default {
     const nightly = event.cron === "0 3 * * *";
     const jobs = nightly
       ? [["hostnames", hostnameSweep], ["licenses", licenseSweep],
-         ["doc-expiry", docExpirySweep]]
+         ["doc-expiry", docExpirySweep], ["retouch", retouchSweep],
+         ["embed-nudge", embedNudgeSweep]]
       : [["hostnames", hostnameSweep]];
 
     ctx.waitUntil((async () => {

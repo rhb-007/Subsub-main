@@ -654,6 +654,56 @@ refactor.
   else asks before the first account has reviewed it. The server and the screen
   both gate on presence, and they must not disagree.
 
+- **The growth loop is automated in three places, and the rails are the
+  feature.** Supply brings demand in, which in a product with no directory is
+  the only flywheel available. Three sweeps and a snippet run it without anybody
+  doing anything, and every rule below exists to keep them a service rather than
+  a mailing list.
+
+  **A renewal re-reaches the people already sent that document.** The pack page
+  promises it stays current — and the link expires in `SHARE_DAYS`, so a year
+  later, when the certificate actually renews, every recipient is holding a dead
+  URL and the promise went quietly unkept. `retouchSweep` mints a fresh link and
+  sends it. This is the cheapest recurring reach SubSub has: wanted (they asked
+  for that document), annual per recipient per document, and landing on a general
+  contractor who mostly has no account at the moment they are reminded they have
+  a compliance problem.
+
+  `app/shared/retouch.js` holds every rule; migration 044 holds the ledger.
+  Load-bearing: it is **once per recipient per document row** (keyed on the row,
+  not the kind, so next year's certificate earns another send and a re-run of the
+  sweep earns none); **one email per recipient per `RETOUCH_QUIET_DAYS`** however
+  many documents renewed that week; only documents that **expire**, because "we
+  renewed our W-9" is not news; never a **revoked** share, which would undo a
+  decision the subcontractor made about their own paperwork; and never an expiry
+  already in the past. The **suppression row is written before the send**, because
+  a send that succeeds against a ledger row that does not is how somebody gets
+  the same email every night.
+
+  **The way out is the pack page itself**, keyed by the share token the recipient
+  already holds. No second secret to mint and leak, and no endpoint taking an
+  email address — which would let anybody unsubscribe anybody. An unknown token
+  answers exactly as a real one does, so it cannot be used to test whether a
+  token exists. Stopping one subcontractor is not stopping all of them, and both
+  are offered.
+
+  **The application form is something you paste, not a URL you remember.**
+  `/?apply=1` has existed since the start and nobody knew it was there.
+  `applyFormHtml` in `app/shared/embed.js` generates a self-contained snippet: no
+  dependencies, every CSS rule scoped under `#subsub-apply` so it cannot restyle
+  somebody's website, the account name escaped so it cannot close the script tag,
+  and a `<noscript>` route through. `embedNudgeSweep` tells an account it exists
+  **once, ever**, at `EMBED_NUDGE_AT` contractors — a growth email that repeats is
+  a growth email people filter — and to admins only, because a project manager
+  does not put things on the company website. The email points at the panel
+  rather than pasting eighty lines of HTML nobody can copy cleanly on a phone.
+
+  **And the funnel is visible at last.** `doc_shares.view_count` has been written
+  since 041 and nothing added it up, so whether any of this works was unknowable.
+  The send panel now shows sent, opened and how many companies — the one number
+  that says whether sending paperwork this way is working at all, without which
+  the renewal emails are going into the dark.
+
 - **You may ask your own roster to price a job before you commit.** Part of
   "pre-award" already existed and nobody noticed: a work order with
   `status = 'pending'` **is** a pre-award view — the subcontractor sees the job,

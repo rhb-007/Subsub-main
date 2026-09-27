@@ -724,3 +724,59 @@ export function workOrderIssuedSms({ job, trade, woNumber, account, respondBy })
   return `${who} has sent you work order ${woNumber} — ${trade}${where}.${by} `
     + `Accept or decline it in SubSub.`;
 }
+
+// A certificate renewed, to somebody who was already sent the old one.
+//
+// It leads with the thing they wanted -- the new expiry date -- and says why
+// they are hearing from us in the first line, because the second most likely
+// reaction to an unexpected email is "who is this". Short: they did not ask
+// for a newsletter, they asked for a certificate.
+export function docRenewedEmail({ company, contact, toName, kind, expiresOn, link, days }) {
+  const who = company || "A subcontractor";
+  const what = DOC_LABELS[kind] || kind;
+  const text = `Hi ${toName || "there"},
+
+${who} renewed their ${what.toLowerCase()}. It now runs to ${expiresOn}.
+
+  ${link}
+
+You are getting this because ${contact ? `${contact} at ${who}` : who} sent you
+their paperwork through SubSub, and the page they sent expires. This is a fresh
+link to the current documents \u2014 the carrier, the policy number, the coverage
+and the expiry on each one. Nothing to sign up for.
+
+The link lasts ${days} days. If you would rather not hear when their paperwork
+renews, there is a line at the bottom of that page to say so.
+
+-- sent on behalf of ${who}, through SubSub`;
+  return { subject: `${who} renewed their ${what.toLowerCase()}`, text };
+}
+
+// Told once, when an account has enough of a roster to want it to fill itself.
+//
+// It points at the screen rather than pasting eighty lines of HTML into an
+// email: nobody copies code cleanly out of an email on a phone, and the panel
+// has a Copy button and a preview.
+export function embedNudgeEmail({ name, accountName, subdomain, subs }) {
+  const text = `Hi ${name || "there"},
+
+You have ${subs} contractors on ${accountName} now. Here is the quickest way to
+get the next ones without chasing anybody.
+
+There is a form you can paste onto your own website. A contractor fills it in,
+and their application arrives on your Contractors screen with their trades and
+their contact details already filled in \u2014 you say yes or no. No plugins,
+nothing to host.
+
+It is on your Contractors screen, under "Let contractors apply from your own
+website". Copy the code, paste it where you want it, done.
+
+  https://${subdomain}.subsub.work/
+
+If you would rather just link to it, the same form is hosted for you at
+https://${subdomain}.subsub.work/?apply=1 \u2014 worth putting in the bid
+invitations you already send.
+
+-- SubSub`;
+  return { subject: `Let contractors apply to ${accountName} from your website`, text };
+}

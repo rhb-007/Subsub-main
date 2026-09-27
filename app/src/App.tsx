@@ -56,6 +56,7 @@ import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from ".
 import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
+import { applyFormHtml, applyLink } from "../shared/embed.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -4921,6 +4922,16 @@ export default function SubSub() {
                 ))}
               </div>
             </section>
+          )}
+
+          {/* The roster filling itself. On this screen because this is where
+              somebody is already thinking about who works for them, and it is
+              the only acquisition channel that runs without them doing
+              anything once it is up. The nudge email points here. */}
+          {can("contractors") && subs.length > 0 && brand.subdomain
+            && brand.subdomain !== "app" && (
+            <EmbedApply subdomain={brand.subdomain} accountName={brand.name}
+              trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))} />
           )}
 
           {requestedMatches.length > 0 && (
@@ -17788,8 +17799,46 @@ function DocPack({ token }) {
           <a className="btn-solid small" href="/">Create a free account</a>
         </div>
       </div>
+      {/* The way out, where the person already is. A renewal sends them a
+          fresh link because the old one expires, so this is where "stop" has
+          to live -- an opt-out somebody has to create an account for is not an
+          opt-out, and there is no other page they are ever on. */}
+      <PackStop token={token} company={p.company} />
       <p className="pack-foot">Sent by {p.company} through SubSub</p>
     </div>
+  );
+}
+
+function PackStop({ token, company }) {
+  const [open, setOpen] = useState(false);
+  const [done, setDone] = useState("");
+  const stop = async (all) => {
+    try {
+      await api.stopPackUpdates(token, all);
+      setDone(all ? "all" : "one");
+    } catch (e) { console.error("[pack] stop failed:", e); setDone("err"); }
+  };
+  if (done) {
+    return (
+      <p className="pack-stop done">
+        {done === "err"
+          ? "That didn't save. Try again in a moment."
+          : done === "all"
+            ? "Done \u2014 no more emails when anybody's paperwork renews."
+            : `Done \u2014 no more emails when ${company} renews. This page still works.`}
+      </p>
+    );
+  }
+  return open ? (
+    <p className="pack-stop">
+      <button onClick={() => stop(false)}>Just {company}</button>
+      <button onClick={() => stop(true)}>Any contractor</button>
+      <button className="plain" onClick={() => setOpen(false)}>Never mind</button>
+    </p>
+  ) : (
+    <button className="pack-stop plain" onClick={() => setOpen(true)}>
+      Stop emailing me when paperwork renews
+    </button>
   );
 }
 
@@ -17836,8 +17885,25 @@ function SendDocPack({ company, anyOnFile }) {
 
   const live = (shares || []).filter((x) => x.state === "active");
 
+  // The funnel, from the only side that can see it. The view count has been on
+  // every row since 041 and nothing added it up -- and "how many of these did
+  // anybody actually open" is the one number that says whether sending
+  // paperwork this way is working at all. Without it the renewal emails are
+  // being sent into the dark.
+  const all = shares || [];
+  const opened = all.filter((x) => (x.viewCount || 0) > 0);
+  const reach = new Set(all.map((x) => x.toEmail)).size;
+
   return (
     <div className="pack-panel">
+      {all.length > 0 && (
+        <div className="pack-stats">
+          <span><b>{all.length}</b> sent</span>
+          <span><b>{opened.length}</b> opened</span>
+          <span><b>{reach}</b> {reach === 1 ? "company" : "companies"}</span>
+          {live.length > 0 && <span className="pk-live"><b>{live.length}</b> live now</span>}
+        </div>
+      )}
       <div className="pack-head">
         <div>
           <h4><Send size={14} /> Send your paperwork</h4>
@@ -19827,6 +19893,101 @@ function QuickSend() {
   );
 }
 
+// "Put this on your website", with the thing to put.
+//
+// The hosted form at <sub>.subsub.work/?apply=1 has existed since the start and
+// nobody knows it is there. Telling somebody a URL is a thing they mean to do
+// and never do; giving them twelve lines to paste is done in a minute and then
+// works forever -- and a subcontractor who lands on a roster is one QuickSend
+// away from putting SubSub in front of every other general contractor who asks
+// them for a certificate.
+//
+// Collapsed by default. This is a good idea somebody has on a Tuesday, not
+// something that should sit open above their roster every day.
+function EmbedApply({ subdomain, accountName, trades }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState("");
+  const [preview, setPreview] = useState(false);
+  const html = useMemo(
+    () => applyFormHtml({ subdomain, accountName, trades }),
+    [subdomain, accountName, trades]);
+  const link = applyLink(subdomain);
+
+  const copy = async (what, text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(what); setTimeout(() => setCopied(""), 2200);
+    } catch { setCopied("no"); setTimeout(() => setCopied(""), 3000); }
+  };
+
+  return (
+    <section className="embed-strip">
+      <button className="embed-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <Globe size={14} />
+        <span className="embed-h">
+          <b>Let contractors apply from your own website</b>
+          <em>A form you paste into your site. They land straight on your roster.</em>
+        </span>
+        <ChevronDown size={14} className={`um-caret ${open ? "up" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="embed-body">
+          <div className="embed-opt">
+            <div className="embed-opt-h">
+              <span className="embed-n">1</span>
+              <div>
+                <b>Just a link</b>
+                <em>For an email, a bid invitation, or a button on your site.</em>
+              </div>
+              <button className="btn-ghost sm" onClick={() => copy("link", link)}>
+                {copied === "link" ? "Copied" : "Copy link"}
+              </button>
+            </div>
+            <code className="embed-link">{link}</code>
+          </div>
+
+          <div className="embed-opt">
+            <div className="embed-opt-h">
+              <span className="embed-n">2</span>
+              <div>
+                <b>The form itself</b>
+                <em>Paste it where you want it. No plugins, nothing to host,
+                  and it styles itself to your page.</em>
+              </div>
+              <button className="btn-solid sm" onClick={() => copy("html", html)}>
+                {copied === "html" ? "Copied" : "Copy the code"}
+              </button>
+            </div>
+            <pre className="embed-code"><code>{html}</code></pre>
+            {copied === "no" && (
+              <p className="embed-note">Your browser wouldn&rsquo;t let us copy that.
+                Select the code above and copy it by hand.</p>
+            )}
+            <button className="embed-prev-btn" onClick={() => setPreview((p) => !p)}>
+              {preview ? "Hide" : "Show"} what it looks like
+            </button>
+            {/* srcDoc, so the preview cannot inherit our stylesheet and lie
+                about how it will look on their page. */}
+            {preview && (
+              <iframe className="embed-prev" title="Preview of the application form"
+                sandbox="allow-scripts" srcDoc={`<!doctype html><meta charset="utf-8">
+                  <body style="margin:14px;font:15px/1.5 system-ui,sans-serif;color:#16241d">
+                  ${html}`} />
+            )}
+          </div>
+
+          <p className="embed-note">
+            Applications arrive under <b>Asked to connect</b> on this screen. Nobody is
+            added to your roster until you say so, and the form never asks for a
+            password &mdash; whoever applies sets that themselves from the email.
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function Modal({ children, onClose, wide }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -21338,6 +21499,19 @@ body{background:var(--paper)}
 .pack-cta span{font-size:12.5px;color:var(--ink-soft);line-height:1.55}
 .pack-cta a{margin-top:6px;text-decoration:none}
 .pack-foot{font-size:11.5px;color:var(--ink-soft)}
+.pack-stats{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 14px;padding-bottom:12px;
+  border-bottom:1px solid var(--line);font-size:11.5px;color:var(--ink-soft)}
+.pack-stats b{font-size:15px;font-weight:700;color:var(--ink);margin-right:4px;
+  font-variant-numeric:tabular-nums}
+.pack-stats .pk-live b{color:var(--brand)}
+.pack-stop{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center;
+  margin:14px 0 0;font-size:11.5px;color:var(--ink-soft)}
+.pack-stop button{font:inherit;font-size:11.5px;border:1px solid var(--line);background:var(--card);
+  color:var(--ink-soft);padding:4px 10px;border-radius:7px;cursor:pointer}
+.pack-stop button:hover{border-color:var(--brand);color:var(--brand-dk)}
+.pack-stop button.plain,button.pack-stop.plain{border:0;background:none;text-decoration:underline;
+  padding:4px 2px;display:block;margin:14px auto 0}
+.pack-stop.done{color:var(--brand-dk)}
 @media (max-width:640px){
   .pack-card{padding:20px}
   .pack-card h1{font-size:22px}
@@ -22584,6 +22758,44 @@ p.fld-note{margin:6px 0 0}
 .sec-count.amber{background:var(--amber);color:#fff}
 .dash-sec .job-card{margin-bottom:10px}
 .jr-card.past{opacity:.72}
+
+/* ---- The embeddable application form ---------------------------------- */
+/* Collapsed by default: a good idea somebody has on a Tuesday, not something
+   that sits open above their roster every day. */
+.embed-strip{border:1px solid var(--line);border-radius:12px;background:var(--card);
+  margin-bottom:16px;overflow:hidden}
+.embed-head{display:flex;align-items:center;gap:11px;width:100%;padding:13px 16px;
+  border:0;background:none;cursor:pointer;font-family:inherit;text-align:left;color:var(--ink)}
+.embed-head:hover{background:var(--paper)}
+.embed-head > svg:first-child{flex:none;color:var(--brand)}
+.embed-h{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.embed-h b{font-size:13.5px;font-weight:700}
+.embed-h em{font-size:11.5px;font-style:normal;color:var(--ink-soft);line-height:1.4}
+.embed-body{padding:4px 16px 16px;border-top:1px solid var(--line)}
+.embed-opt{padding:14px 0;border-bottom:1px solid var(--line)}
+.embed-opt:last-of-type{border-bottom:0}
+.embed-opt-h{display:flex;align-items:flex-start;gap:11px}
+.embed-opt-h > div{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.embed-opt-h b{font-size:13px;font-weight:700}
+.embed-opt-h em{font-size:11.5px;font-style:normal;color:var(--ink-soft);line-height:1.45}
+.embed-opt-h button{flex:none}
+.embed-n{flex:none;width:20px;height:20px;border-radius:50%;background:var(--brand);color:#fff;
+  font-size:11px;font-weight:800;display:grid;place-items:center;margin-top:1px}
+.embed-link{display:block;margin-top:9px;padding:9px 11px;background:var(--paper);
+  border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:12px;color:var(--ink);overflow-x:auto;white-space:nowrap}
+.embed-code{margin:10px 0 0;padding:12px 13px;background:#16241d;color:#cfe0d6;
+  border-radius:9px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11px;line-height:1.55;max-height:220px;overflow:auto;white-space:pre}
+.embed-code code{font:inherit;color:inherit;background:none}
+.embed-prev-btn{margin-top:9px;border:1px solid var(--line);background:var(--card);
+  color:var(--brand-dk);font-size:11.5px;font-weight:700;padding:5px 11px;border-radius:7px;
+  cursor:pointer;font-family:inherit}
+.embed-prev-btn:hover{border-color:var(--brand)}
+.embed-prev{display:block;width:100%;height:430px;margin-top:10px;border:1px solid var(--line);
+  border-radius:9px;background:#fff}
+.embed-note{margin:12px 0 0;font-size:11.5px;line-height:1.5;color:var(--ink-soft)}
+.embed-note b{color:var(--ink);font-weight:600}
 
 /* ---- Quotes ----------------------------------------------------------- */
 /* On the trade row, beside Assign and Overflow. */

@@ -382,6 +382,10 @@ export const api = {
   revokeDocShare: (id) => request(`/doc-shares/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
   // The public page. No session -- the token is the whole of the auth.
   docPack: (token) => request(`/pack/${encodeURIComponent(token)}`),
+  // Keyed by the token they already hold, so there is no second secret and
+  // nobody can unsubscribe anybody else.
+  stopPackUpdates: (token, all) => request(`/pack/${encodeURIComponent(token)}/stop`,
+    { method: "POST", body: JSON.stringify({ all: !!all }) }),
   // Who is asking, for the account deciding whether to say yes. Keyed by the
   // request, never by the account -- see the note on the route.
   connectAsker: (id) => request(`/my-connect-requests/${encodeURIComponent(id)}/asker`),
