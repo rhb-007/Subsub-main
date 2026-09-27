@@ -87,8 +87,20 @@ export const PAGE_CSS = `
 @media (max-width:520px){.lic-fact{flex-direction:column;gap:3px}.lic-fact .k{flex:none}}
 `;
 
-export function page({ chrome, depth, title, description, canonical, crumbs, body }) {
+// How far below the site root this page sits, taken from the canonical URL
+// rather than passed in. Every page already declares where it lives, and two
+// of the four kinds were given the wrong depth by hand -- the state hub and
+// the licensing index each came up one short, so the site's own nav and every
+// favicon 404ed on them. A number that has to agree with a path is a number
+// that will stop agreeing with it; deriving it cannot.
+export const depthOf = (canonical) => String(canonical)
+  .replace(/^\/+|\/+$/g, "")          // "/licensing/tx/" -> "licensing/tx"
+  .replace(/\/[^/]*\.\w+$/, "")        // ".../electrical.html" -> ".../tx"
+  .split("/").filter(Boolean).length;
+
+export function page({ chrome, title, description, canonical, crumbs, body }) {
   const { atDepth } = chrome;
+  const depth = depthOf(canonical);
   const ld = {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
@@ -212,8 +224,8 @@ ${SUB_CTA}
 ${GC_CTA(needs
     ? `A ${trade.label.toLowerCase()} licence in ${state.name} can be looked up, and should be.`
     : `There is no ${state.name} licence number to check for this trade, because there isn't one.`)}
-${relatedBlock(state, trade, others, 2)}`;
-  return page({ chrome, depth: 2, title,
+${relatedBlock(state, trade, others)}`;
+  return page({ chrome, title,
     description: `${needs ? "Yes" : "No"} — ${a.detail || LEVEL_LABEL[a.licence]} `
       + `What ${state.name} requires for ${trade.label.toLowerCase()} work, and what hiring `
       + `contractors ask for regardless.`,
@@ -293,7 +305,7 @@ ${state.cities?.length ? `
     <ul class="lic-chips">
 ${state.cities.map((c) => `      <li><span>${esc(c)}</span></li>`).join("\n")}
     </ul>` : ""}`;
-  return page({ chrome, depth: 1, title,
+  return page({ chrome, title,
     description: `${base.detail || LEVEL_LABEL[base.licence]} Which trades ${state.name} `
       + `treats differently, and what hiring contractors ask for regardless.`,
     canonical: `/licensing/${state.code.toLowerCase()}/`,
@@ -322,7 +334,7 @@ ${rows.map(({ st, a }) => `      <a href="../${st.code.toLowerCase()}/${trade.id
       repeating it twenty-nine times.</p>
 ${askedAnyway()}
 ${SUB_CTA}`;
-  return page({ chrome, depth: 2, title,
+  return page({ chrome, title,
     description: `Which states treat ${trade.label.toLowerCase()} differently from other `
       + `construction work, who administers the licence, and what hiring contractors ask for.`,
     canonical: `/licensing/trade/${trade.id}.html`,
@@ -361,7 +373,7 @@ ${hubs.map((t) => `      <a href="trade/${t.id}.html">${esc(t.label)}<em>License
       reworded 1,400 times. A trade gets its own page only where the state singles it out;
       everything else is on the state's page, once.</p>
 ${SUB_CTA}`;
-  return page({ chrome, depth: 0,
+  return page({ chrome,
     title: "Contractor licensing by state and trade | SubSub",
     description: "What each state requires of contractors, which trades are licensed "
       + "separately, and what hiring contractors ask for regardless. Sourced and dated.",
@@ -371,7 +383,7 @@ ${SUB_CTA}`;
 }
 
 // Internal linking is what makes a set of pages a section rather than a pile.
-function relatedBlock(state, trade, others, depth) {
+function relatedBlock(state, trade, others) {
   const sameState = others.sameState.filter((t) => t.id !== trade.id).slice(0, 3);
   const otherStates = others.otherStates.slice(0, 3);
   if (!sameState.length && !otherStates.length) return "";

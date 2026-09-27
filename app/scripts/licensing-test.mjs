@@ -20,7 +20,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { extname } from "node:path";
@@ -181,6 +181,36 @@ console.log("\n-- and the generated pages actually render --");
   const missing = urls.filter((u) => !existsSync(sitemapFile(u)));
   t.ck("and nothing that was not written", missing.length === 0,
     JSON.stringify(missing.slice(0, 3)));
+
+  // The site's own chrome, at the right depth on EVERY page kind.
+  //
+  // The header, footer and favicons are sliced out of a real page, where they
+  // link relatively -- so each generated page has to rewrite them for where it
+  // actually sits. Two of the four kinds were given that depth by hand and
+  // came up one short: the state hub and the licensing index shipped a nav
+  // pointing at /licensing/pricing.html and favicons that 404ed. The internal
+  // related-links check below did not catch it, because it only ever looked at
+  // a trade page, which happened to be right.
+  //
+  // So resolve every relative reference on every page against the real site
+  // root and require the file to be there. This is the assertion that makes
+  // the depth arithmetic untestable-by-inspection into a build failure.
+  const relDead = [];
+  for (const p of pages) {
+    const file = join(root, pagePath(p));
+    const html = readFileSync(file, "utf8");
+    const dir = dirname(pagePath(p));
+    for (const m of html.matchAll(/\b(?:href|src)="([^"]+)"/g)) {
+      const val = m[1];
+      if (/^(https?:|mailto:|tel:|#|\/|data:)/.test(val)) continue;
+      const target = join(root, dir, val.split("#")[0].split("?")[0]);
+      const hit = existsSync(target.endsWith("/") ? join(target, "index.html") : target)
+        || existsSync(join(target, "index.html"));
+      if (!hit) relDead.push(`${pagePath(p)} -> ${val}`);
+    }
+  }
+  t.ck("every relative reference resolves, on every page kind",
+    relDead.length === 0, JSON.stringify(relDead.slice(0, 4)));
 
   // Rendered, because a generator producing confident-looking broken HTML is
   // worse than one that crashes.
