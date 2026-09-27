@@ -1082,6 +1082,32 @@ refactor.
   `says today \u2014 not what it said`. The browser tests now assert that no
   `\uXXXX` survives into `document.body.innerText`, which catches the class
   rather than the instance. Write the character, or put it in `{"…"}`.
+- **Whoever runs this has a browser on an iPad and no terminal.** Every
+  instruction has to survive that. What works:
+
+  **Numbered steps, one action each, in order, to the end.** Never stop mid-task
+  to offer an alternative — finish the sequence, then offer the alternative
+  separately if it is worth raising at all.
+
+  **A direct URL beats describing a menu.** `dash.cloudflare.com/profile/api-tokens`
+  works on any device at any width; "tap the profile icon, top right" is a guess
+  about a layout that changes and collapses differently on a narrow screen.
+  GitHub's Settings tab hides behind `···` on an iPad, so
+  `github.com/<owner>/<repo>/settings/secrets/actions/new` is the instruction,
+  not "go to Settings".
+
+  **Exact strings in a code block**, because a secret name typed from prose gets
+  typed wrong and the failure is silent.
+
+  **End with "tell me when you've done step N", and "if a step doesn't match,
+  say which number and what you see instead."** That converts a wrong guess into
+  one correction rather than a dead end.
+
+  And do not narrate a UI from memory. Cloudflare's token form now requires an
+  Account Resource and a Zone Resource that "use the template and change
+  nothing" does not fill in — three rounds went on guesses before a screenshot
+  settled it in one. Ask for the screenshot early; it is cheaper than being
+  wrong twice.
 - Tests live in `app/scripts/*-test.mjs` and are registered in
   `package.json`. The ones ending in a browser harness build the real bundle
   and stub the API (`scripts/lib/stub-stack.mjs`) — no worker, no database.
