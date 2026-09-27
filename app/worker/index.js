@@ -1535,6 +1535,14 @@ const inviteRowToJs = (r, account) => ({
     : "open",
 });
 
+// Is there a real profile behind this invite, or a name somebody typed and
+// nothing else? The email and the form it lands on have to agree about this.
+// An email promising "a few minutes: your company details, the trades you
+// cover" over a link that opens a single password box has told somebody the
+// wrong thing about their own record -- and one saying "takes seconds" over a
+// blank three-step form is worse. So both read this.
+const inviteKnownEnough = (co) => !!(co && co.company && co.contact && co.email);
+
 // Sending one, by both routes. Lifted out of the create route so that
 // sending an invite again is the same act as sending it the first time --
 // same token, same wording, same reporting -- rather than a second
@@ -1546,15 +1554,22 @@ const inviteRowToJs = (r, account) => ({
 async function deliverSubInvite(env, { row, account, accountId, userId }) {
   const link = inviteUrl(account, row.token);
   const email = row.email || null, phone = row.phone || null;
+  // Raised from a contractor already on the roster, so the account typed all
+  // of this in and the link is only about a password.
+  const bound = row.company_id
+    ? await env.DB.prepare(`SELECT company, contact, email FROM companies WHERE id = ?`)
+        .bind(row.company_id).first().catch(() => null)
+    : null;
+  const known = inviteKnownEnough(bound);
   let mailResult = null, smsResult = null;
   if (email) {
-    const mail = subInviteEmail({ contact: row.contact, companyName: row.company_name, account, link });
+    const mail = subInviteEmail({ contact: row.contact, companyName: row.company_name, account, link, known });
     mailResult = await sendEmail(env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
     await logMail(env, { accountId, companyId: null, to: email, kind: "sub_invite",
       subject: mail.subject, result: mailResult, sentBy: userId });
   }
   if (phone) {
-    smsResult = await sendSms(env, { to: phone, body: subInviteSms({ companyName: row.company_name, account, link }) });
+    smsResult = await sendSms(env, { to: phone, body: subInviteSms({ companyName: row.company_name, account, link, known }) });
     await logSms(env, { accountId, companyId: null, to: phone, kind: "sub_invite", result: smsResult });
   }
   const emailed = !!mailResult?.ok, texted = !!smsResult?.ok;
@@ -1832,6 +1847,33 @@ async function lookupInvite(env, token) {
 
 app.get("/api/invite/:token", async (c) => {
   const { error, invite, account } = await lookupInvite(c.env, c.req.param("token"));
+  // An invite raised from a contractor's own card names the company it is for,
+  // and that company is already ON the roster with its details typed in. The
+  // form then asked them to enter all of it again, which is asking somebody to
+  // prove they read the email: what they actually need is a password.
+  //
+  // Their own record, answered to somebody holding a token that was emailed to
+  // them. No new exposure -- the token already lets its holder BECOME this
+  // company on this roster, which is strictly more than reading their own
+  // phone number.
+  let known = null;
+  if (!error && invite?.company_id) {
+    const co = await c.env.DB.prepare(
+      `SELECT company, contact, email, phone, license, ubi, city, state, zip
+         FROM companies WHERE id = ?`).bind(invite.company_id).first();
+    const en = await c.env.DB.prepare(
+      `SELECT categories FROM engagements WHERE account_id = ? AND company_id = ?`
+    ).bind(invite.account_id, invite.company_id).first();
+    if (co) {
+      known = {
+        company: co.company || null, contact: co.contact || null,
+        email: co.email || null, phone: co.phone || null,
+        license: co.license || null, ubi: co.ubi || null,
+        city: co.city || null, state: co.state || null, zip: co.zip || null,
+        categories: parseJson(en?.categories, []),
+      };
+    }
+  }
   // Every failure reads the same from outside: a token that was never valid
   // and one that was spent an hour ago are not worth telling apart for
   // somebody probing, and the person holding a real dead link needs the same
@@ -1847,6 +1889,13 @@ app.get("/api/invite/:token", async (c) => {
     phone: invite.phone || null,
     contact: invite.contact || null,
     companyName: invite.company_name || null,
+    // What the account already holds about them, when this invite was raised
+    // from their record. `enough` is the question the screen asks: is there a
+    // real profile here, or a name somebody typed and nothing else? Decided
+    // here rather than in the browser so the two cannot disagree about what
+    // counts as already filled in.
+    known,
+    knownEnough: inviteKnownEnough(known),
     account: {
       name: account.name, subdomain: account.subdomain,
       theme: parseJson(account.theme),

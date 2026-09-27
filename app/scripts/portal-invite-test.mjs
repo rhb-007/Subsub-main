@@ -63,14 +63,19 @@ const seed = () => {
       ('cmp_sj','San Juan Exteriors','Rob H','r.hb@outlook.com','2065550100'),
       ('cmp_ok','Arrived Roofing','Ada','ada@arrived.test','2065550111'),
       ('cmp_none','No Contact Ltd','Nobody',NULL,NULL),
+      ('cmp_thin','Thin Record Ltd',NULL,'thin@somewhere.test',NULL),
       ('cmp_far','Not Ours Inc','Stranger','far@away.test','2065550122');
     INSERT INTO engagements(id,account_id,company_id,status) VALUES
       ('e_sj','acc_pm','cmp_sj','invited'),
       ('e_ok','acc_pm','cmp_ok','active'),
       ('e_none','acc_pm','cmp_none','active'),
+      ('e_thin','acc_pm','cmp_thin','invited'),
       ('e_far','acc_other','cmp_far','active');
     INSERT INTO memberships(id,user_id,account_id,role,company_id) VALUES
       ('m_ada','u_ada','acc_pm','contractor','cmp_ok');
+    UPDATE engagements SET categories = '["roofing","gutters"]' WHERE id = 'e_sj';
+    UPDATE companies SET license='SANJUAN123AB', city='Seattle', state='WA', zip='98101'
+      WHERE id='cmp_sj';
   `);
   return { db, env: { DB: makeD1(db), RESEND_API_KEY: "re_stub",
     MAIL_FROM: "SubSub <no-reply@subsub.work>", APP_DOMAIN: "subsub.work" } };
@@ -169,6 +174,76 @@ try {
   ck("and it went again", mails.length === 1 && mails[0].to[0] === "r.hb@outlook.com",
     JSON.stringify(mails[0]?.to));
 }
+
+console.log("\n-- the link tells the form what the account already holds --");
+  {
+    // THE POINT OF THIS SECTION. An invite raised from a contractor's own card
+    // is addressed to somebody the account has ALREADY typed in, and the form
+    // it lands on asked them to type all of it again -- which is asking
+    // somebody to prove they read the email, and is where an invite gets
+    // abandoned. The one thing they actually lack is a password.
+    ({ db, env } = seed()); mails.length = 0;
+    await call(env, "u_priya", "acc_pm", "/subs/cmp_sj/invite");
+    const tk = db.prepare(`SELECT token FROM sub_invites WHERE account_id='acc_pm'`).get().token;
+
+    const [s, b] = await json(await worker.fetch(
+      new Request(`https://api.subsub.work/api/invite/${tk}`), env));
+    ck("the invite reads", s === 200, String(s));
+    ck("it says there is enough on file", b.knownEnough === true, String(b.knownEnough));
+    ck("the company, the contact and the address come off the record",
+      b.known?.company === "San Juan Exteriors" && b.known?.contact === "Rob H"
+      && b.known?.email === "r.hb@outlook.com" && b.known?.phone === "2065550100",
+      JSON.stringify(b.known));
+    ck("with the licence and the town, so neither is retyped",
+      b.known?.license === "SANJUAN123AB" && b.known?.city === "Seattle"
+      && b.known?.state === "WA" && b.known?.zip === "98101", JSON.stringify(b.known));
+    // The trades hang off the ENGAGEMENT, not the company: it is what this
+    // account hired them for.
+    ck("and the trades off the engagement",
+      JSON.stringify(b.known?.categories) === '["roofing","gutters"]',
+      JSON.stringify(b.known?.categories));
+
+    // The email has to say what the page will do. Promising "a few minutes:
+    // your company details, the trades you cover" over a link that opens one
+    // password box describes a form they will never see.
+    const html = mails[0]?.html || "";
+    ck("the email asks for a password", /choose a password|Choose one here/i.test(html),
+      html.slice(0, 120));
+    ck("and does not promise a form they will not see",
+      !/your company details, the trades you cover/.test(html));
+    ck("it says their details are already in", /already added|details are in/i.test(html));
+  }
+
+  console.log("\n-- and an invite with no record behind it still gets the full form --");
+  {
+    ({ db, env } = seed()); mails.length = 0;
+    // The old blank form: a label, an address, and no company_id at all.
+    const expires = new Date(Date.now() + 20 * 864e5).toISOString();
+    db.prepare(
+      `INSERT INTO sub_invites(id,account_id,token,label,email,company_name,created_by,expires_at)
+       VALUES ('inv_cold','acc_pm',?, 'Someone New','new@sub.test','Someone New','u_priya',?)`
+    ).run("a".repeat(64), expires);
+    const [, b] = await json(await worker.fetch(
+      new Request(`https://api.subsub.work/api/invite/${"a".repeat(64)}`), env));
+    ck("nothing is claimed to be known", b.known === null, JSON.stringify(b.known));
+    ck("so the form asks for everything", b.knownEnough === false, String(b.knownEnough));
+
+    // A row somebody started and abandoned is not a filled-in record. Half of
+    // one seeds a screen saying "we already have your details" over two blanks.
+    ({ db, env } = seed()); mails.length = 0;
+    await call(env, "u_priya", "acc_pm", "/subs/cmp_thin/invite");
+    const tk = db.prepare(
+      `SELECT token FROM sub_invites WHERE company_id='cmp_thin'`).get().token;
+    const [, b2] = await json(await worker.fetch(
+      new Request(`https://api.subsub.work/api/invite/${tk}`), env));
+    ck("a half-filled record does not count as enough",
+      b2.knownEnough === false, String(b2.knownEnough));
+    ck("though what there is of it is still returned",
+      b2.known?.company === "Thin Record Ltd" && b2.known?.contact === null,
+      JSON.stringify(b2.known));
+    ck("and its email is the full-application one",
+      /your company details, the trades you cover/.test(mails[0]?.html || ""));
+  }
 
 console.log("\n-- and the cases it refuses --");
   {

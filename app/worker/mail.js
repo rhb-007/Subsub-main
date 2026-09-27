@@ -363,9 +363,40 @@ This is an automated message from an unmonitored address. Replies aren't receive
 // Written to be read by somebody who has never heard of SubSub and has been
 // asked for paperwork by a general contractor they do know. So it leads with
 // who is asking, says what is wanted, and says what it is for.
-export function subInviteEmail({ contact, companyName, account, link }) {
+//
+// `known` says the invite was raised from a contractor already ON the roster:
+// the account typed their company, their contact and their trades in, so the
+// link opens a password box and nothing else. Promising "a few minutes: your
+// company details, the trades you cover" to that person describes a form they
+// will never see, and is why an invite that only wanted a password read like
+// a fresh application and went unopened. One predicate decides which wording
+// runs and which screen renders (`inviteKnownEnough` in the Worker), because
+// the email and the page disagreeing about it is the whole bug.
+export function subInviteEmail({ contact, companyName, account, link, known = false }) {
   const who = account?.name || "A general contractor";
-  const text = `Hi ${contact || "there"},
+  const text = known ? `Hi ${contact || "there"},
+
+${who} uses SubSub to keep subcontractor paperwork in one place, and has
+already added ${companyName || "your company"} to theirs. Your details are in --
+the only thing missing is a password of your own.
+
+Choose one here:
+  ${link}
+
+That is the whole job. Once you are in you can upload your insurance, bond,
+W-9 and signed agreement, and after ${who} has approved them you'll be sent
+work orders through SubSub and can accept or decline them from your phone.
+
+If anything ${who} typed is wrong, the same page lets you correct it.
+
+Your documents stay yours -- keep them current here and they are current for
+every contractor you work with on SubSub, not just this one.
+
+This link works once and expires in 30 days.
+
+-- ${who}, through SubSub
+
+This is an automated message from an unmonitored address. Replies aren't received.` : `Hi ${contact || "there"},
 
 ${who} uses SubSub to keep subcontractor paperwork in one place, and has
 invited ${companyName || "your company"} to join theirs.
@@ -386,7 +417,9 @@ This link works once and expires in 30 days.
 
 This is an automated message from an unmonitored address. Replies aren't received.`;
   return {
-    subject: `${who} has invited ${companyName || "you"} to join SubSub`,
+    subject: known
+      ? `${who} has added ${companyName || "you"} to SubSub — choose a password`
+      : `${who} has invited ${companyName || "you"} to join SubSub`,
     text,
     html: textToHtml(text, link),
   };
@@ -478,8 +511,12 @@ This is an automated message from an unmonitored address. Replies aren't receive
 
 // The same invite, short enough to survive one text message. Written to be
 // read on a lock screen on a roof: who is asking, what it is, the link.
-export function subInviteSms({ companyName, account, link }) {
+export function subInviteSms({ companyName, account, link, known = false }) {
   const who = account?.name || "A contractor";
+  // Same split as the email: a text telling somebody to set up an account,
+  // over a link that asks for a password, sends them looking for a form.
+  if (known) return `${who} has added ${companyName || "you"} to SubSub. `
+    + `Your details are in -- choose a password to sign in: ${link}`;
   return `${who} has invited ${companyName || "you"} to join them on SubSub. `
     + `Set up your account and upload your insurance and licence here: ${link}`;
 }

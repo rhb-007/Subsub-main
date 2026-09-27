@@ -125,7 +125,8 @@
     "test:resetflow": "node scripts/reset-flow-test.mjs",
     "test:pwhelp": "node scripts/password-help-test.mjs",
     "test:stuck": "node scripts/stuck-subs-test.mjs",
-    "test:portalinvite": "node scripts/portal-invite-test.mjs"
+    "test:portalinvite": "node scripts/portal-invite-test.mjs",
+    "test:inviteshort": "node scripts/invite-short-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

@@ -12000,17 +12000,39 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
   // Part-filled from the invite. Whoever sent it already typed the company
   // and the address; asking a contractor to type them again is asking them
   // to prove they read the email.
+  // When the invite was raised from a contractor already on the roster, the
+  // account has typed all of this in ALREADY -- so the form is seeded from
+  // their record rather than from the three fields the invite carries.
+  const known = invite?.known || null;
   const [f, setF] = useState({
-    company: invite?.companyName || "", contact: invite?.contact || "",
-    email: invite?.invitedEmail || "", phone: invite?.phone || "",
-    license: "", ubi: "",
+    company: known?.company || invite?.companyName || "",
+    contact: known?.contact || invite?.contact || "",
+    // The address the invite was SENT to wins over the one on the record.
+    // Submitting creates the login for whatever is in this box, and the
+    // mailbox the holder of this link demonstrably reads is the one it was
+    // mailed to -- a record whose address has since changed would otherwise
+    // mint a login at an inbox nobody can confirm.
+    email: invite?.invitedEmail || known?.email || "",
+    // Stored normalized (ten digits, no punctuation), and the input this
+    // seeds formats as you type -- so seeding it raw put a bare 2065550100
+    // in the box and in the summary beside it.
+    phone: formatPhone(known?.phone || invite?.phone || ""),
+    license: known?.license || "", ubi: known?.ubi || "",
     // No state. It used to be "WA" -- a pre-filled wrong answer for
     // forty-nine of them.
-    city: "", state: "", zip: "",
-    categories: [], warranty: "", crewCount: "1",
+    city: known?.city || "", state: known?.state || "", zip: known?.zip || "",
+    categories: known?.categories || [], warranty: "", crewCount: "1",
     notifyEmail: true, notifySms: false,
     password: "",
   });
+
+  // Two different people arrive on this form. One is applying cold and has to
+  // tell the account who they are. The other was already added BY the account,
+  // and is here for one reason: they have no password. Asking the second to
+  // retype their own company, trades and licence is asking them to prove they
+  // read the email, and it is where an invite gets abandoned.
+  const [correcting, setCorrecting] = useState(false);
+  const shortPath = !!invite?.knownEnough && !correcting;
   // On both paths now, invited or not. Applying already creates this person
   // a contractor membership on the account -- the password grants nothing
   // the application did not already grant, and offering it here is what
@@ -12028,6 +12050,33 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
       : [...x.categories, id],
   }));
   const [sent, setSent] = useState(false);
+
+  // One handler, two renders. This used to call onSubmit and set "sent" in the
+  // same breath, without waiting. An application that failed -- a spent link,
+  // a dropped connection, a refusal from the server -- showed "Thanks, we've
+  // got it" just the same, and the contractor went away believing a general
+  // contractor had their details. Same lie the demo booking page used to tell,
+  // in a different room.
+  const submit = async () => {
+    setSaving(true); setSendErr("");
+    try {
+      const r = await onSubmit(f);
+      setMadeLogin(r?.login || null);
+      setSent(true);
+    } catch (e) {
+      console.error("[apply] failed:", e);
+      const code = e?.body?.error;
+      setSendErr(
+        code === "used" ? "That invite has already been used. Ask for a new one."
+        : code === "expired" ? "That invite has expired. Ask for a new one."
+        : code === "revoked" ? "That invite was withdrawn. Ask whoever sent it."
+        : code === "invalid" ? "That invite link isn't valid. Check you copied all of it."
+        : code === "weak_password" ? "That password is too short — eight characters or more."
+        : code === "rate_limited" ? "Too many attempts from this connection. Wait a few minutes."
+        : e?.status >= 500 ? "SubSub had a problem saving that — nothing was sent. Try again in a moment."
+        : "We couldn't send that just now — nothing was sent. Try again.");
+    } finally { setSaving(false); }
+  };
 
   // Mobile is optional here, but a half-typed one is worse than none -- it
   // reads as reachable and never is.
@@ -12051,25 +12100,84 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
         <div className="wl-brand"><BrandMark brand={brand} height={30} />
           <span className="wl-brand-name">{brand.name}</span></div>
         <div className="wl-tick"><CheckCircle2 size={34} /></div>
-        <h1>Thanks — we've got it.</h1>
+        <h1>{shortPath ? "You're set." : "Thanks — we've got it."}</h1>
+        {/* On the short path nothing was applied for: the account already holds
+            the record, so "we'll review your details" describes a decision
+            that was made before the email went out. What is new is the
+            password. `correcting` cannot change after the send, so shortPath
+            still says which of the two routes ran. */}
         {madeLogin?.created && !madeLogin.needsConfirmation && !madeLogin.existed ? (
-          <p>{brand.name} will review your details. Your password is set — sign in with
+          <p>{shortPath ? "Your password is set" : `${brand.name} will review your details. Your password is set`} — sign in with
             <b> {f.email}</b> and you can upload your insurance, bond, W-9 and signed
             agreement now.</p>
         ) : madeLogin?.needsConfirmation ? (
-          <p>{brand.name} will review your details. Check <b>{f.email}</b> for a message
+          <p>{shortPath ? "" : `${brand.name} will review your details. `}Check <b>{f.email}</b> for a message
             confirming your address — click the link in it and your password works.</p>
         ) : madeLogin?.existed ? (
-          <p>{brand.name} will review your details. That address already had a SubSub login,
+          <p>{shortPath ? "" : `${brand.name} will review your details. `}That address already had a SubSub login,
             so sign in with the password you already use — the new one wasn't needed.</p>
         ) : (
-          <p>{brand.name} will review your details. You'll get an email at <b>{f.email}</b> with a
+          <p>{shortPath ? "" : `${brand.name} will review your details. `}You'll get an email at <b>{f.email}</b> with a
             link to set a password, then you can upload your insurance, bond, W-9 and signed
             agreement.</p>
         )}
         <p className="wl-fine">Nothing gets assigned to you until those are approved, so there's
           no rush today — but the sooner they're in, the sooner you can be scheduled.</p>
         <button className="wl-btn" onClick={onBackToLogin}>Go to sign in</button>
+      </div>
+      <PoweredBy className="wl-foot" height={15} />
+    </div>
+  );
+
+  // The short path. An invite raised from a contractor's own card is addressed
+  // to somebody the account has ALREADY typed in -- company, contact, address,
+  // trades, licence, all of it on the roster. Sending that person a three-step
+  // application form is asking them to retype what the email they just opened
+  // was sent about, and it is where an invite gets abandoned: the one thing
+  // they actually lack is a password.
+  //
+  // So they get one screen: here is what we hold, choose a password. The
+  // details are shown rather than hidden, because the point of showing them is
+  // that a wrong one can be corrected -- "Something not right?" drops through
+  // to the same full form, which is why this is a different render of the same
+  // state and not a different component.
+  if (shortPath) return (
+    <div className="wl-page" style={themeVars(t)}>
+      <div className="wl-card">
+        <div className="wl-brand"><BrandMark brand={brand} height={30} />
+          <span className="wl-brand-name">{brand.name}</span></div>
+
+        <h1>Choose a password</h1>
+        <p className="wl-lede">{brand.name} already has your details — you just need a
+          password to sign in and upload your insurance, bond, W-9 and signed agreement.</p>
+
+        <div className="wl-known">
+          <div><span>Company</span><b>{f.company}</b></div>
+          <div><span>Your name</span><b>{f.contact}</b></div>
+          <div><span>Email</span><b>{f.email}</b></div>
+          {f.phone ? <div><span>Mobile</span><b>{f.phone}</b></div> : null}
+          {f.categories.length ? (
+            <div><span>Trades</span><b>{f.categories.map((c) => catMeta(c).label).join(", ")}</b></div>
+          ) : null}
+        </div>
+        <button className="wl-fix" type="button" onClick={() => setCorrecting(true)}>
+          Something not right? Fill it in yourself
+        </button>
+
+        <label className="wl-fld" style={{ marginTop: 16 }}>Password{" "}
+          <span className="fld-note">at least 8 characters — this is how you sign in</span>
+          <input type="password" autoComplete="new-password" value={f.password}
+            onChange={(e) => set("password", e.target.value)} /></label>
+
+        <div className="wl-actions">
+          <button className="wl-btn-ghost" onClick={onBackToLogin}>I already have an account</button>
+          <button className="wl-btn" disabled={f.password.length < 8 || saving}
+            onClick={submit}>{saving ? "Setting it…" : "Set password and sign in"}</button>
+        </div>
+        {f.password && f.password.length < 8 && (
+          <p className="wl-err">A password needs at least 8 characters.</p>
+        )}
+        {sendErr && <p className="wl-err" role="alert">{sendErr}</p>}
       </div>
       <PoweredBy className="wl-foot" height={15} />
     </div>
@@ -12189,33 +12297,7 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
           {step < 3
             ? <button className="wl-btn" disabled={!stepOk} onClick={() => setStep(step + 1)}>Continue</button>
             : <button className="wl-btn" disabled={!stepOk || saving}
-                onClick={async () => {
-                  // This used to call onSubmit and set "sent" in the same
-                  // breath, without waiting. An application that failed --
-                  // a spent link, a dropped connection, a refusal from the
-                  // server -- showed "Thanks, we've got it" just the same,
-                  // and the contractor went away believing a general
-                  // contractor had their details. Same lie the demo booking
-                  // page used to tell, in a different room.
-                  setSaving(true); setSendErr("");
-                  try {
-                    const r = await onSubmit(f);
-                    setMadeLogin(r?.login || null);
-                    setSent(true);
-                  } catch (e) {
-                    console.error("[apply] failed:", e);
-                    const code = e?.body?.error;
-                    setSendErr(
-                      code === "used" ? "That invite has already been used. Ask for a new one."
-                      : code === "expired" ? "That invite has expired. Ask for a new one."
-                      : code === "revoked" ? "That invite was withdrawn. Ask whoever sent it."
-                      : code === "invalid" ? "That invite link isn't valid. Check you copied all of it."
-                      : code === "weak_password" ? "That password is too short — eight characters or more."
-                      : code === "rate_limited" ? "Too many attempts from this connection. Wait a few minutes."
-                      : e?.status >= 500 ? "SubSub had a problem saving that — nothing was sent. Try again in a moment."
-                      : "We couldn't send that just now — nothing was sent. Try again.");
-                  } finally { setSaving(false); }
-                }}>{saving ? "Sending…" : "Submit application"}</button>}
+                onClick={submit}>{saving ? "Sending…" : "Submit application"}</button>}
         </div>
         {/* Only what is actually wrong. Naming the required fields down here
             was answering a question the form should answer where they are:
@@ -24343,6 +24425,18 @@ p.fld-note{margin:6px 0 0}
 .wl-summary div:last-child{border-bottom:0}
 .wl-summary span{opacity:.65}
 .wl-summary b{text-align:right;font-weight:600}
+/* What the account already holds, on the short invite path. Tinted rather than
+   outlined like .wl-summary: this is not a recap of what they typed, it is
+   somebody else's record of them, and it is the thing the screen is about. */
+.wl-known{margin-top:18px;border:1px solid var(--wl-accent);border-radius:10px;overflow:hidden;
+  background:color-mix(in srgb, var(--wl-accent) 6%, transparent)}
+.wl-known div{display:flex;justify-content:space-between;gap:14px;padding:11px 14px;font-size:13.5px;
+  border-bottom:1px solid rgba(128,128,128,.18)}
+.wl-known div:last-child{border-bottom:0}
+.wl-known span{opacity:.65}
+.wl-known b{text-align:right;font-weight:600}
+.wl-fix{display:block;margin:10px 0 0;background:none;border:0;padding:0;color:var(--wl-accent);
+  font:600 13px inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 .wl-actions{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:24px;flex-wrap:wrap}
 .wl-btn{display:block;margin-top:16px;background:var(--wl-accent);color:var(--wl-btn-text);
   border:0;border-radius:9px;padding:14px 22px;font:700 15px inherit;cursor:pointer}

@@ -518,6 +518,40 @@ refactor.
   contractor and a company id that does not exist both answer `not_found`, so
   this cannot be walked to find out which ids are real.
 
+  **And the link asks for the one thing that is missing.** Sending it was only
+  half of the dead end. The token landed on the three-step application form —
+  company, contact, address, licence, trades, crews — every field of which the
+  account had already typed in, because raising the invite *from their card* is
+  what says so. Asking somebody to retype what the email they just opened was
+  sent about is asking them to prove they read it, and it is where an invite
+  gets abandoned. Being on a roster and being able to sign in are two different
+  records; the only thing missing from the second is a password.
+
+  So `GET /api/invite/:token` now answers `known` — the bound company's own row,
+  plus the trades off *this account's* engagement — and `knownEnough`, and the
+  form has a second render: their details shown back to them and one password
+  box. No new exposure: the token was emailed to that company and already lets
+  its holder *become* them on that roster, which is strictly more than reading
+  their own phone number back.
+
+  Three things hold it together. The details are **shown, not assumed**, and
+  *Fill it in yourself* drops through to the same full form with the same state
+  seeded into it — showing somebody a wrong record with no way to change it is
+  worse than not showing it, and a second component would be a second copy of
+  the form. It posts **the same body to the same route**, so there is one
+  application flow and `createApplication`'s `boundCompanyId` still lands the
+  seat on the right row. And the **email and the screen read one predicate**
+  (`inviteKnownEnough` in the Worker): an email promising "a few minutes: your
+  company details, the trades you cover" over a link that opens a single
+  password box has described a form they will never see, and one saying "takes
+  seconds" over a blank three-step form is worse. The subject changes too,
+  because *invited you to join* and *added you, choose a password* are different
+  news.
+
+  `knownEnough` wants a company, a contact **and** an address, not just a row: a
+  record somebody started and abandoned would otherwise seed a screen saying
+  "we already have your details" over two blanks.
+
 - **Completion is two-party and append-only.** The subcontractor marks work
   reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because
@@ -1162,4 +1196,11 @@ refactor.
 - Tests live in `app/scripts/*-test.mjs` and are registered in
   `package.json`. The ones ending in a browser harness build the real bundle
   and stub the API (`scripts/lib/stub-stack.mjs`) — no worker, no database.
+
+  **Each of those owns a pair of ports, and a new one has to pick unused
+  ones.** They pass on their own whichever ports they use, so a clash only
+  shows up as some *other* suite failing with `EADDRINUSE` when the two run
+  near each other — which reads as a regression in code the new test never
+  touched. `grep -rhoE '\b(5[0-9]{3}|8[0-9]{3})\b' app/scripts/*.mjs | sort
+  -un` is the list already taken.
 - Before claiming a fix works, revert it and confirm the test fails.
