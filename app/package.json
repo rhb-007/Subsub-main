@@ -110,7 +110,9 @@
     "test:switcherui": "node scripts/switcher-ui-test.mjs",
     "test:switchland": "node scripts/switch-land-test.mjs",
     "test:jobscope": "node scripts/job-scope-test.mjs",
-    "test:docwrite": "node scripts/docwrite-test.mjs"
+    "test:docwrite": "node scripts/docwrite-test.mjs",
+    "test:quotes": "node scripts/quotes-test.mjs",
+    "test:quotesui": "node scripts/quotes-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

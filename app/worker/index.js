@@ -28,6 +28,8 @@ import { normalizeState } from "../shared/states.js";
 // so a figure on screen and a figure written here cannot disagree.
 import { releaseAmounts, milestonesCover } from "../shared/money.js";
 import { chainStatus, SCOPE_KINDS } from "../shared/waivers.js";
+import { canRequestQuotes, quotableSubs, validInvitees, canQuote, validQuote,
+  quoteJobShape, rankQuotes, canAward, requestState, MAX_INVITES } from "../shared/quotes.js";
 import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { hasPortal, canSet as canSetAuto, AUTO_DENY_TEXT } from "../shared/autoschedule.js";
 import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
@@ -6546,6 +6548,310 @@ app.get("/api/clients", async (c) => {
 //
 // Voided orders are gone and withdrawn jobs are out of everything live, so
 // neither is here. Capped, because this is a list somebody scans.
+// ---- Quotes: asking your own roster to price a job ----------------------
+//
+// A work order with status 'pending' is already a pre-award view: they see the
+// job, the scope and the price, and accept or decline before anything is
+// committed. What these routes add is the case where the account does NOT know
+// the price yet and wants two or three of its own roofers to quote the same
+// trade first. Work orders cannot say that: issuing one commits to a number,
+// and issuing three for one trade collides on the live-WO index.
+//
+// Overflow's shape, pointed at the account's own roster. `shared/quotes.js`
+// holds the rules; migration 043 holds the tables.
+//
+// The line that must not move: an invited company may never learn who else was
+// asked, or what they quoted. Those are competing bids and one of them is the
+// price this account is about to pay. It is the same rule overflow_invites
+// follows, for a sharper reason.
+
+const quoteToJs = (r) => ({
+  id: r.id, requestId: r.request_id, companyId: r.company_id, status: r.status,
+  priceCents: r.price_cents, canStart: r.can_start, note: r.note,
+  invitedAt: r.invited_at, answeredAt: r.answered_at,
+  company: r.company || null,
+});
+const requestToJs = (r) => ({
+  id: r.id, jobId: r.job_id, accountId: r.account_id, trade: r.trade,
+  scope: r.scope, dueAt: r.due_at, status: r.status,
+  awardedCompanyId: r.awarded_company_id || null, awardedWoId: r.awarded_wo_id || null,
+  createdAt: r.created_at, closedAt: r.closed_at,
+});
+
+// Ask. The invitees are checked against the caller's OWN engagements here, not
+// trusted from the request -- a company id in the body is a claim, and the
+// roster is the only thing that makes it true.
+app.post("/api/jobs/:id/quote-requests", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId, role } = c.get("auth");
+  const jobId = c.req.param("id");
+  const b = await c.req.json().catch(() => ({}));
+  const trade = String(b.trade || "").trim();
+  if (!trade) return c.json({ error: "trade_required" }, 400);
+
+  const job = await c.env.DB.prepare(
+    `SELECT * FROM jobs WHERE id = ? AND account_id = ?`).bind(jobId, accountId).first();
+  if (!job) return c.json({ error: "not_found" }, 404);
+  if (!parseJson(job.trades, []).includes(trade)) return c.json({ error: "not_a_trade_on_this_job" }, 400);
+
+  try {
+    const live = await c.env.DB.prepare(
+      `SELECT 1 AS yes FROM work_orders
+        WHERE job_id = ? AND trade = ? AND voided_at IS NULL LIMIT 1`).bind(jobId, trade).first();
+    const open = await c.env.DB.prepare(
+      `SELECT 1 AS yes FROM quote_requests
+        WHERE job_id = ? AND trade = ? AND status = 'open' LIMIT 1`).bind(jobId, trade).first();
+    const may = canRequestQuotes(
+      { ...jobRowToJs(job, []), requestedBy: job.requested_by, approvedAt: job.approved_at,
+        withdrawnAt: job.withdrawn_at },
+      { role, hasOpenRequest: !!open, liveWorkOrder: !!live });
+    if (!may.ok) return c.json({ error: may.reason }, 409);
+
+    // The roster, for this trade. Their engagement is what makes them askable;
+    // nothing here searches or looks anybody up.
+    const { results: roster } = await c.env.DB.prepare(
+      `SELECT en.company_id AS id, en.status, en.categories
+         FROM engagements en WHERE en.account_id = ? AND en.status != 'ended'`
+    ).bind(accountId).all();
+    const subs = (roster || []).map((r) => ({ id: r.id, status: r.status,
+      categories: parseJson(r.categories, []) }));
+    const picked = validInvitees(b.companyIds || [], subs, trade);
+    if (!picked.ok) return c.json({ error: picked.reason, max: MAX_INVITES }, 400);
+
+    const id = uid();
+    await c.env.DB.prepare(
+      `INSERT INTO quote_requests (id, account_id, job_id, trade, scope, due_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, accountId, jobId, trade, (b.scope || "").trim() || null,
+      isoDay(b.dueAt), userId).run();
+    for (const companyId of picked.companyIds) {
+      await c.env.DB.prepare(
+        `INSERT INTO quote_invites (id, request_id, company_id) VALUES (?, ?, ?)`
+      ).bind(uid(), id, companyId).run();
+    }
+
+    await logEvent(c.env, accountId, userId, "quotes.requested", id,
+      { jobId, trade, asked: picked.companyIds.length });
+    await logActivity(c.env, accountId, userId, "quotes_requested",
+      `Asked ${picked.companyIds.length} contractor${picked.companyIds.length === 1 ? "" : "s"} to price ${trade} on "${job.title}"`);
+    await touchJob(c.env, jobId);
+    return c.json({ id, asked: picked.companyIds.length }, 201);
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+});
+
+// What came back. The account picked these companies, so it sees who they are
+// and what they said -- that is the comparison this exists for.
+app.get("/api/jobs/:id/quote-requests", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const jobId = c.req.param("id");
+  try {
+    const { results: reqs } = await c.env.DB.prepare(
+      `SELECT * FROM quote_requests WHERE job_id = ? AND account_id = ? ORDER BY created_at DESC`
+    ).bind(jobId, accountId).all();
+    if (!reqs?.length) return c.json([]);
+    const marks = reqs.map(() => "?").join(",");
+    const { results: invites } = await c.env.DB.prepare(
+      `SELECT qi.*, co.company FROM quote_invites qi
+         JOIN companies co ON co.id = qi.company_id
+        WHERE qi.request_id IN (${marks})`
+    ).bind(...reqs.map((r) => r.id)).all();
+    const byReq = {};
+    for (const i of invites || []) (byReq[i.request_id] ||= []).push(quoteToJs(i));
+    return c.json(reqs.map((r) => {
+      const list = rankQuotes(byReq[r.id] || []);
+      return { ...requestToJs(r), invites: list, state: requestState(requestToJs(r), list) };
+    }));
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.json([]);
+  }
+});
+
+// Ours to price. The redaction is the whole route: one job, at the shape
+// quoteJobShape allows, and nothing about anybody else who was asked.
+app.get("/api/my-quotes", async (c) => {
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json([]);
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT qi.id AS invite_id, qi.status, qi.price_cents, qi.can_start, qi.note,
+              qi.invited_at, qi.answered_at,
+              qr.id AS request_id, qr.trade, qr.scope, qr.due_at, qr.status AS request_status,
+              qr.awarded_company_id,
+              j.id AS job_id, j.title, j.address, j.area, j.zip, j.date, j.time,
+              j.severity, j.scope AS job_scope,
+              a.id AS account_id, a.name AS account_name, a.subdomain AS account_subdomain
+         FROM quote_invites qi
+         JOIN quote_requests qr ON qr.id = qi.request_id
+         JOIN jobs j ON j.id = qr.job_id
+         JOIN accounts a ON a.id = qr.account_id
+        WHERE qi.company_id = ? AND qi.status != 'withdrawn'
+          AND j.withdrawn_at IS NULL
+        ORDER BY qr.created_at DESC LIMIT 100`
+    ).bind(companyId).all();
+    return c.json((results || []).map((r) => ({
+      inviteId: r.invite_id, requestId: r.request_id,
+      status: r.status, requestStatus: r.request_status,
+      // Did we get it? Yes or no about OURSELVES -- never who did instead.
+      // "You were not picked" is theirs to know; who was picked, and for how
+      // much, is the account's business and the winner's.
+      wonIt: r.request_status === "awarded" && r.awarded_company_id === companyId,
+      priceCents: r.price_cents, canStart: r.can_start, note: r.note,
+      invitedAt: r.invited_at, answeredAt: r.answered_at, dueAt: r.due_at,
+      trade: r.trade,
+      accountId: r.account_id, accountName: r.account_name,
+      accountSubdomain: r.account_subdomain,
+      job: quoteJobShape({
+        id: r.job_id, title: r.title, address: r.address, area: r.area, zip: r.zip,
+        date: r.date, time: r.time, severity: r.severity, scope: r.job_scope,
+      }, { trade: r.trade, scope: r.scope }),
+    })));
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.json([]);
+  }
+});
+
+// Answering. Their own invite, found by its id and pinned to their company --
+// an id from somewhere else answers 404, the same as one that is not a row.
+app.post("/api/quotes/:inviteId", async (c) => {
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ error: "no_company" }, 403);
+  const b = await c.req.json().catch(() => ({}));
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT qi.*, qr.status AS request_status, qr.id AS req_id, qr.account_id, qr.trade,
+              j.title
+         FROM quote_invites qi
+         JOIN quote_requests qr ON qr.id = qi.request_id
+         JOIN jobs j ON j.id = qr.job_id
+        WHERE qi.id = ? AND qi.company_id = ?`
+    ).bind(c.req.param("inviteId"), companyId).first();
+    if (!row) return c.json({ error: "not_found" }, 404);
+
+    const may = canQuote({ status: row.status }, { status: row.request_status });
+    if (!may.ok) return c.json({ error: may.reason }, 409);
+
+    // Passing carries no price, and saying so is worth as much to the account
+    // as a number: three asked and two passed is an answer.
+    if (b.pass) {
+      await c.env.DB.prepare(
+        `UPDATE quote_invites SET status = 'passed', price_cents = NULL,
+           note = ?, answered_at = CURRENT_TIMESTAMP WHERE id = ?`
+      ).bind((b.note || "").trim() || null, row.id).run();
+      await logEvent(c.env, row.account_id, null, "quotes.passed", row.id,
+        { requestId: row.req_id, companyId });
+      return c.json({ ok: true, status: "passed" });
+    }
+
+    const q = validQuote(b);
+    if (!q.ok) return c.json({ error: q.reason }, 400);
+    await c.env.DB.prepare(
+      `UPDATE quote_invites SET status = 'quoted', price_cents = ?, can_start = ?,
+         note = ?, answered_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).bind(q.priceCents, q.canStart, q.note, row.id).run();
+
+    await logEvent(c.env, row.account_id, null, "quotes.quoted", row.id,
+      { requestId: row.req_id, companyId });
+    await logActivity(c.env, row.account_id, null, "quote_received",
+      `A quote came in for ${row.trade} on "${row.title}"`);
+    return c.json({ ok: true, status: "quoted", priceCents: q.priceCents });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+});
+
+// Awarding. This is the moment the pre-award view becomes a commitment, and
+// the number on the work order is the one THEY gave -- which is the whole
+// point of having asked.
+app.post("/api/quote-requests/:id/award", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  try {
+    const req = await c.env.DB.prepare(
+      `SELECT * FROM quote_requests WHERE id = ? AND account_id = ?`
+    ).bind(c.req.param("id"), accountId).first();
+    if (!req) return c.json({ error: "not_found" }, 404);
+
+    const invite = await c.env.DB.prepare(
+      `SELECT * FROM quote_invites WHERE request_id = ? AND company_id = ?`
+    ).bind(req.id, b.companyId || "").first();
+    if (!invite) return c.json({ error: "not_found" }, 404);
+
+    const may = canAward(requestToJs(req), quoteToJs(invite));
+    if (!may.ok) return c.json({ error: may.reason }, 409);
+
+    const engagement = await c.env.DB.prepare(
+      `SELECT * FROM engagements WHERE account_id = ? AND company_id = ?`
+    ).bind(accountId, invite.company_id).first();
+    if (!engagement || engagement.status === "ended") return c.json({ error: "not_engaged" }, 409);
+
+    // Nothing may be issued twice for one trade. Between asking and awarding
+    // somebody may have assigned it by hand, and the index would refuse the
+    // INSERT below with nothing on screen to explain it.
+    const live = await c.env.DB.prepare(
+      `SELECT 1 AS yes FROM work_orders
+        WHERE job_id = ? AND trade = ? AND voided_at IS NULL LIMIT 1`
+    ).bind(req.job_id, req.trade).first();
+    if (live) return c.json({ error: "already_issued" }, 409);
+
+    const job = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(req.job_id).first();
+    const autoScheduled = !!engagement.auto_schedule;
+    const woId = uid();
+    const respondBy = autoScheduled ? null
+      : new Date(Date.now() + windowMins("24h") * 60000).toISOString();
+    const woNumber = await withWoNumber((n) => c.env.DB.prepare(
+      `INSERT INTO work_orders
+        (id, wo_number, job_id, trade, company_id, engagement_id, crew_name, trade_scope,
+         value_cents, status, auto_scheduled, response_window, respond_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(woId, n, req.job_id, req.trade, invite.company_id, engagement.id, null,
+      req.scope || job?.scope || "", invite.price_cents,
+      autoScheduled ? "accepted" : "pending", autoScheduled ? 1 : 0,
+      autoScheduled ? null : "24h", respondBy).run());
+
+    await c.env.DB.prepare(
+      `UPDATE quote_requests SET status = 'awarded', awarded_company_id = ?,
+         awarded_wo_id = ?, closed_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).bind(invite.company_id, woId, req.id).run();
+
+    await logEvent(c.env, accountId, userId, "quotes.awarded", req.id,
+      { jobId: req.job_id, trade: req.trade, companyId: invite.company_id, woNumber });
+    await logActivity(c.env, accountId, userId, "quote_awarded",
+      `${woNumber} awarded for ${req.trade} on "${job?.title || "a job"}"`);
+    await touchJob(c.env, req.job_id);
+    return c.json({ ok: true, woId, woNumber, companyId: invite.company_id });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+});
+
+// Asked and thought better of it. The invites stay -- who was asked is a thing
+// that happened -- and everyone still sees it as closed rather than it simply
+// vanishing from their list with no explanation.
+app.post("/api/quote-requests/:id/cancel", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  try {
+    const res = await c.env.DB.prepare(
+      `UPDATE quote_requests SET status = 'cancelled', closed_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND account_id = ? AND status = 'open'`
+    ).bind(c.req.param("id"), accountId).run();
+    if (!res.meta?.changes) return c.json({ error: "not_found" }, 404);
+    await logEvent(c.env, accountId, userId, "quotes.cancelled", c.req.param("id"), {});
+    return c.json({ ok: true });
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.json({ error: "migration_needed", migration: "043_quotes" }, 503);
+  }
+});
+
 app.get("/api/my-work", async (c) => {
   const companyId = await seatCompany(c);
   if (!companyId) return c.json({ work: [] });

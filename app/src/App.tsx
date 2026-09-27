@@ -53,6 +53,8 @@ import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS,
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
+import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
+  MAX_INVITES } from "../shared/quotes.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -2077,6 +2079,11 @@ export default function SubSub() {
   const [clients, setClients] = useState([]);
   // Our own work at every client, not just the account we are standing in.
   const [myWork, setMyWork] = useState([]);
+  // Quotes. The account's outstanding questions, and the ones put to us.
+  const [quoteReqs, setQuoteReqs] = useState([]);
+  const [myQuotes, setMyQuotes] = useState([]);
+  const [askQuotes, setAskQuotes] = useState(null);      // { job, trade }
+  const [quotePanel, setQuotePanel] = useState(null);    // { job, trade }
   const [addMenu, setAddMenu] = useState(false);
   const [editing, setEditing] = useState(null); // sub being edited
   const [tab, setTab] = useState("dashboard");
@@ -3457,9 +3464,30 @@ export default function SubSub() {
     catch (err) { console.warn("[my-work] load failed:", err); setMyWork([]); }
   }, [loggedIn, currentAccountId]);
 
+  // Every open question this account has put to its roster, across its jobs.
+  // One call rather than per-job, because the trade rows that render the pill
+  // are already drawn by the time a per-job fetch would come back.
+  const refreshQuotes = useCallback(async () => {
+    if (!loggedIn) return;
+    try {
+      // The account's side, only for a seat that can act on it.
+      if (can("jobs") && role !== "contractor") {
+        const lists = await Promise.all((jobs || []).slice(0, 60)
+          .map((j) => api.jobQuoteRequests(j.id).catch(() => [])));
+        setQuoteReqs(lists.flat());
+      } else setQuoteReqs([]);
+    } catch (err) { console.warn("[quotes] load failed:", err); setQuoteReqs([]); }
+    try { setMyQuotes(await api.myQuotes()); }
+    catch (err) { console.warn("[my-quotes] load failed:", err); setMyQuotes([]); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loggedIn, currentAccountId, role, jobs]);
+
   useEffect(() => { if (loggedIn) { refreshClients(); refreshMyWork(); } else { setClients([]); setMyWork([]); } },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [loggedIn, currentAccountId]);
+  useEffect(() => { if (loggedIn) refreshQuotes(); else { setQuoteReqs([]); setMyQuotes([]); } },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loggedIn, currentAccountId, role, jobs.length]);
 
   useEffect(() => {
     if (loggedIn && (role === "contractor" || can("contractors"))) refreshConnects();
@@ -5334,6 +5362,32 @@ export default function SubSub() {
                                     </button>
                                   );
                                 })()}
+                                {/* And the third way to fill a slot: ask two or
+                                    three of your OWN roofers what they would
+                                    charge, before committing to any of them.
+                                    Assign issues a work order at a price you
+                                    name; this asks for the price first. Overflow
+                                    is for when you have nobody -- this is for
+                                    when you have several. */}
+                                {(() => {
+                                  const q = quoteReqs.find((r) =>
+                                    r.jobId === j.id && r.trade === t && r.status === "open");
+                                  if (q) {
+                                    const inCount = q.invites.filter((i) => i.status === "quoted").length;
+                                    return (
+                                      <button className={`qr-pill${inCount ? " has" : ""}`}
+                                        onClick={() => setQuotePanel({ job: j, trade: t })}>
+                                        <FileText size={11} /> {stateLabel(q.state,
+                                          { quoted: inCount, asked: q.invites.length })}
+                                      </button>
+                                    );
+                                  }
+                                  return (
+                                    <button className="trade-swap" onClick={() => setAskQuotes({ job: j, trade: t })}>
+                                      <FileText size={12} /> Ask for quotes
+                                    </button>
+                                  );
+                                })()}
                               </div>
                             )}
                           </div>
@@ -5495,6 +5549,11 @@ export default function SubSub() {
           <ContractorPortal sub={mySub} jobs={jobs} pane={pane} mine={myAssignments} brand={brand} me={me} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
             elsewhere={elsewhere}
             onGoClient={(accountId) => { setCurrentAccountId(accountId); setSelected(null); setPane("jobs"); }}
+            quotes={myQuotes}
+            onAnswerQuote={async (inviteId, body) => {
+              await api.answerQuote(inviteId, body);
+              await refreshQuotes();
+            }}
             connectRequests={connectIn || []}
             onRespondConnect={async (id, accept) => {
               await api.respondConnect(id, accept);
@@ -5591,6 +5650,49 @@ export default function SubSub() {
           heading carries what seatDescription was repeating on every row;
           ordered by what is waiting on the person there; searchable, over
           their own memberships only -- nothing is sent anywhere. */}
+      {/* Asking. The list is the account's OWN roster for that trade -- there
+          is nothing to search, because there is nothing here but people they
+          already work with. */}
+      {askQuotes && (() => {
+        const eligible = quotableSubs(
+          subs.filter((sb) => (sb.categories || []).includes(askQuotes.trade))
+            .map((sb) => ({ ...sb, status: sb.status || "active" })), askQuotes.trade);
+        return (
+          <Modal onClose={() => setAskQuotes(null)}>
+            <AskQuotes job={askQuotes.job} trade={askQuotes.trade} subs={eligible}
+              onCancel={() => setAskQuotes(null)}
+              onSend={async (body) => {
+                await api.askForQuotes(askQuotes.job.id, { trade: askQuotes.trade, ...body });
+                setAskQuotes(null);
+                await refreshQuotes();
+              }} />
+          </Modal>
+        );
+      })()}
+
+      {/* Comparing, and awarding. */}
+      {quotePanel && (() => {
+        const req = quoteReqs.find((r) => r.jobId === quotePanel.job.id
+          && r.trade === quotePanel.trade && r.status === "open");
+        if (!req) return null;
+        return (
+          <Modal onClose={() => setQuotePanel(null)} wide>
+            <QuotePanel req={req} job={quotePanel.job}
+              onAward={async (companyId) => {
+                await api.awardQuote(req.id, companyId);
+                setQuotePanel(null);
+                await refreshQuotes();
+                await hydrateAccount(account.id, currentUserId, { quiet: true });
+              }}
+              onCancelRequest={async () => {
+                await api.cancelQuoteRequest(req.id);
+                setQuotePanel(null);
+                await refreshQuotes();
+              }} />
+          </Modal>
+        );
+      })()}
+
       {switcherOpen && (
         <Modal onClose={() => { setSwitcherOpen(false); setSeatQuery(""); }}>
           <div className="seat-pick">
@@ -17790,7 +17892,8 @@ function SendDocPack({ company, anyOnFile }) {
   );
 }
 
-function ContractorPortal({ sub, jobs, pane, mine, elsewhere = [], onGoClient, brand, me, orders, now,
+function ContractorPortal({ sub, jobs, pane, mine, elsewhere = [], onGoClient,
+  quotes = [], onAnswerQuote, brand, me, orders, now,
   connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage,
   overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow }) {
   const [sub2, setSub2] = useState("trades");
@@ -17819,6 +17922,12 @@ function ContractorPortal({ sub, jobs, pane, mine, elsewhere = [], onGoClient, b
   // they are at three different companies and each one needs going to.
   const clientCount = new Set(elsewhere.map((m) => m.elsewhere.accountId)).size
     + (mine.length ? 1 : 0);
+
+  // Still being asked. An answered one drops out of the list rather than
+  // sitting there looking like it still needs something.
+  const openQuotes = quotes.filter((q) =>
+    q.requestStatus === "open" && q.status === "invited");
+  const sentQuotes = quotes.filter((q) => q.status === "quoted" || q.status === "passed");
 
   return (
     <main className="ss-main">
@@ -17919,6 +18028,23 @@ function ContractorPortal({ sub, jobs, pane, mine, elsewhere = [], onGoClient, b
             <div className="auto-strip"><Zap size={14} /> Auto-schedule is on — jobs matching your availability are booked directly.</div>
           )}
 
+          {/* Asked to price something, which is not the same as being offered
+              it. Above job requests because it is the earlier conversation --
+              and because a quote nobody sent is work that went elsewhere. */}
+          {openQuotes.length > 0 && (
+            <section className="dash-sec">
+              <h3><FileText size={15} /> Asked to quote
+                <span className="sec-count amber">{openQuotes.length}</span></h3>
+              <p className="portal-sec-note">
+                Nothing is committed by answering. If they pick you, you get a work
+                order at the price you gave and you still accept or decline it.
+              </p>
+              {openQuotes.map((q) => (
+                <QuoteAskCard key={q.inviteId} q={q} onAnswer={onAnswerQuote} />
+              ))}
+            </section>
+          )}
+
           {pending.length > 0 && (
             <section className="dash-sec">
               <h3><Clock size={15} /> Job requests <span className="sec-count amber">{pending.length}</span></h3>
@@ -17932,6 +18058,38 @@ function ContractorPortal({ sub, jobs, pane, mine, elsewhere = [], onGoClient, b
               ? <div className="dash-empty"><ClipboardList size={24} /><p>No upcoming jobs booked.</p></div>
               : upcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} />)}
           </section>
+
+          {/* What we already answered. A quote that vanishes the moment it is
+              sent is indistinguishable from one that never went, and "did I
+              price that?" is the question this list exists to answer. */}
+          {sentQuotes.length > 0 && (
+            <section className="dash-sec">
+              <h3><FileText size={15} /> Quotes you sent
+                <span className="sec-count">{sentQuotes.length}</span></h3>
+              {sentQuotes.map((q) => (
+                <div key={q.inviteId} className={`qs-row${q.wonIt ? " won" : ""}`}>
+                  <div className="qs-main">
+                    <span className="qs-title">{q.job.title}</span>
+                    <span className="qs-meta">
+                      {q.accountName} · {catMeta(q.trade).label}
+                      {q.job.address ? ` \u00b7 ${q.job.address}` : ""}
+                    </span>
+                  </div>
+                  {q.status === "passed"
+                    ? <span className="qs-state">You passed</span>
+                    : <span className="qs-price">{formatMoney(q.priceCents / 100)}</span>}
+                  {/* About us, never about who won. Who they picked and what
+                      they paid is theirs and the winner's. */}
+                  {q.requestStatus === "awarded" && (
+                    <span className={`qs-out ${q.wonIt ? "won" : "lost"}`}>
+                      {q.wonIt ? "You won it" : "Not this time"}
+                    </span>
+                  )}
+                  {q.requestStatus === "cancelled" && <span className="qs-out">Withdrawn</span>}
+                </div>
+              ))}
+            </section>
+          )}
 
           {past.length > 0 && (
             <section className="dash-sec">
@@ -19291,6 +19449,269 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
 }
 
 // ---- Modal shell ---------------------------------------------------------
+// ---- Quotes: asking your own roster before you commit ------------------
+//
+// Assign issues a work order at a price the ACCOUNT names. This asks for the
+// price first, from several of their own contractors at once, and awarding
+// issues the work order at the number the winner gave.
+//
+// The list is the roster for that trade and nothing else. There is nothing to
+// search here, because there is nobody here they do not already work with.
+function AskQuotes({ job, trade, subs, onSend, onCancel }) {
+  const M = catMeta(trade);
+  const [picked, setPicked] = useState([]);
+  const [scope, setScope] = useState(job.scope || "");
+  const [dueAt, setDueAt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const toggle = (id) => setPicked((p) =>
+    p.includes(id) ? p.filter((x) => x !== id) : p.length >= MAX_INVITES ? p : [...p, id]);
+
+  return (
+    <>
+      <h3>Ask for quotes</h3>
+      <p className="qa-sub">
+        <span className={`cat-badge cat-${trade}`}><M.icon size={12} /> {M.label}</span>
+        {" "}on <strong>{job.title}</strong>
+      </p>
+      <p className="panel-note">
+        Nobody is committed by this. They see the job and what you want priced, and
+        answer with a number and a date &mdash; then you pick one, and that is when
+        the work order is issued, at the price they gave.
+      </p>
+
+      {subs.length === 0 ? (
+        <p className="qa-none">
+          Nobody on your roster covers {M.label.toLowerCase()} yet. Add a contractor for
+          this trade, or use Overflow if you have nobody at all.
+        </p>
+      ) : (
+        <>
+          <div className="form-sec">Who to ask</div>
+          <div className="qa-picks">
+            {subs.map((sb) => {
+              const on = picked.includes(sb.id);
+              const full = !on && picked.length >= MAX_INVITES;
+              return (
+                <button key={sb.id} type="button" disabled={full}
+                  className={`qa-pick${on ? " on" : ""}`} onClick={() => toggle(sb.id)}>
+                  <span className="qa-name">{sb.company}</span>
+                  {on ? <Check size={14} /> : <Plus size={14} />}
+                </button>
+              );
+            })}
+          </div>
+          {/* Said out loud, because it is the difference between this and
+              overflow: they never find out about each other. */}
+          <p className="qa-priv">
+            <Lock size={12} /> None of them will see who else you asked, or what
+            anybody else quoted.
+          </p>
+
+          <label className="fld">
+            <span>What they are pricing</span>
+            <textarea rows={3} value={scope} onChange={(e) => setScope(e.target.value)}
+              placeholder="Strip and re-cover, 400sqm. Skip hire included." />
+            <em className="fld-note">Everybody asked reads this same text &mdash; a scope that
+              differs per contractor is not a comparison.</em>
+          </label>
+          <label className="fld">
+            <span>Quotes wanted by <em className="opt">(optional)</em></span>
+            <input type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
+            <em className="fld-note">A date to chase against. A late quote is still a quote.</em>
+          </label>
+
+          {err && <p className="form-err">{err}</p>}
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+            <button className="btn-solid" disabled={busy || picked.length === 0}
+              onClick={async () => {
+                setBusy(true); setErr("");
+                try { await onSend({ companyIds: picked, scope, dueAt: dueAt || null }); }
+                catch (ex) {
+                  console.error("[quotes] ask failed:", ex);
+                  setErr(ex?.body?.error === "already_issued"
+                    ? "Somebody has already been issued this trade."
+                    : "That didn't send. Try again in a moment.");
+                  setBusy(false);
+                }
+              }}>
+              {busy ? "Sending\u2026" : picked.length
+                ? `Ask ${picked.length} contractor${picked.length === 1 ? "" : "s"}`
+                : "Pick who to ask"}
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+// What came back. Cheapest first, a pass shown rather than hidden, and the
+// spread only once two people have answered -- one quote is a price, not a
+// comparison, and "lowest of 1" invites reading it as one.
+function QuotePanel({ req, job, onAward, onCancelRequest }) {
+  const M = catMeta(req.trade);
+  const [busy, setBusy] = useState(null);
+  const ranked = rankQuotes(req.invites || []);
+  const spread = quoteSpread(req.invites || []);
+  const quoted = ranked.filter((i) => i.status === "quoted");
+
+  return (
+    <>
+      <h3>Quotes for {M.label.toLowerCase()}</h3>
+      <p className="qa-sub"><strong>{job.title}</strong>{job.address ? ` \u00b7 ${job.address}` : ""}</p>
+      {req.scope && <p className="qp-scope">{req.scope}</p>}
+
+      <div className="qp-head">
+        <span>{stateLabel(requestState(req, ranked),
+          { quoted: quoted.length, asked: ranked.length })}</span>
+        {spread && (
+          <span className="qp-spread">
+            {formatMoney(spread.low / 100)}&ndash;{formatMoney(spread.high / 100)}
+            <em> &middot; {formatMoney(spread.spread / 100)} apart</em>
+          </span>
+        )}
+      </div>
+
+      <div className="qp-list">
+        {ranked.map((i, n) => (
+          <div key={i.id} className={`qp-row${i.status === "quoted" && n === 0 ? " best" : ""}`}>
+            <div className="qp-main">
+              <span className="qp-co">{i.company}</span>
+              {i.status === "quoted" ? (
+                <span className="qp-when">
+                  {i.canStart ? `Can start ${i.canStart}` : "No start date given"}
+                </span>
+              ) : (
+                <span className="qp-when">
+                  {i.status === "passed" ? (i.note || "Passed") : "No answer yet"}
+                </span>
+              )}
+              {i.status === "quoted" && i.note && <span className="qp-note">{i.note}</span>}
+            </div>
+            {i.status === "quoted" ? (
+              <>
+                <span className="qp-price">{formatMoney(i.priceCents / 100)}</span>
+                <button className="btn-solid sm" disabled={!!busy}
+                  onClick={async () => {
+                    setBusy(i.companyId);
+                    try { await onAward(i.companyId); }
+                    catch (ex) { console.error("[quotes] award failed:", ex); setBusy(null); }
+                  }}>
+                  {busy === i.companyId ? "Awarding\u2026" : "Award"}
+                </button>
+              </>
+            ) : (
+              <span className={`qp-state ${i.status}`}>
+                {i.status === "passed" ? "Passed" : "Waiting"}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <p className="panel-note">
+        Awarding issues the work order at the price they gave, and they still accept
+        or decline it as they would any other. Nobody else is told who won.
+      </p>
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancelRequest}>Cancel this request</button>
+      </div>
+    </>
+  );
+}
+
+// Being asked to price something, from the subcontractor's side.
+//
+// Deliberately NOT shaped like a job request: there is no deadline clock, no
+// accept and no decline, because nothing is on offer yet. What they are being
+// asked for is a number.
+function QuoteAskCard({ q, onAnswer }) {
+  const M = catMeta(q.trade);
+  const [open, setOpen] = useState(false);
+  const [price, setPrice] = useState("");
+  const [canStart, setCanStart] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const send = async (pass) => {
+    setBusy(true); setErr("");
+    try {
+      if (pass) { await onAnswer(q.inviteId, { pass: true, note: note || null }); return; }
+      const cents = Math.round(Number(moneyRaw(price) || 0) * 100);
+      if (!cents || cents <= 0) { setErr("Give a price to send."); setBusy(false); return; }
+      await onAnswer(q.inviteId, { priceCents: cents, canStart: canStart || null, note: note || null });
+    } catch (ex) {
+      console.error("[quotes] answer failed:", ex);
+      setErr("That didn't send. Try again in a moment.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="job-card jr-card qask">
+      <div className="jr-client">
+        <Building2 size={12} />
+        <span>For <strong>{q.accountName}</strong></span>
+        {q.dueAt && <span className="qask-due">Wanted by {q.dueAt}</span>}
+      </div>
+      <div className="job-card-head">
+        <div>
+          <h3>{q.job.title}</h3>
+          <div className="job-meta">
+            <span><Calendar size={12} /> {formatWhen(q.job.date, q.job.time) || q.job.date || "No date"}</span>
+            <span><MapPin size={12} /> {[q.job.address, q.job.area, q.job.zip].filter(Boolean).join(", ") || "No address"}</span>
+          </div>
+        </div>
+        <span className={`cat-badge cat-${q.trade}`}><M.icon size={12} /> {M.label}</span>
+      </div>
+      {q.job.scope && <p className="job-scope">{q.job.scope}</p>}
+
+      {!open ? (
+        <div className="portal-respond">
+          <span className="respond-label">What would you charge for this?</span>
+          <div className="respond-btns">
+            <button className="resp accept" onClick={() => setOpen(true)}>
+              <FileText size={13} /> Send a quote
+            </button>
+            <button className="resp decline" disabled={busy} onClick={() => send(true)}>
+              <X size={13} /> Pass
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="qask-form">
+          <label className="fld">
+            <span>Your price</span>
+            <input inputMode="decimal" value={price} placeholder="4,125.00"
+              onChange={(e) => setPrice(e.target.value)} />
+          </label>
+          <label className="fld">
+            <span>Earliest you could start <em className="opt">(optional)</em></span>
+            <input type="date" value={canStart} onChange={(e) => setCanStart(e.target.value)} />
+            <em className="fld-note">Often what decides it. The cheapest quote that starts in
+              March is not the cheapest.</em>
+          </label>
+          <label className="fld">
+            <span>Anything they should know <em className="opt">(optional)</em></span>
+            <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="Price assumes we can park on site." />
+          </label>
+          {err && <p className="form-err">{err}</p>}
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => setOpen(false)}>Back</button>
+            <button className="btn-solid" disabled={busy} onClick={() => send(false)}>
+              {busy ? "Sending\u2026" : "Send quote"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Modal({ children, onClose, wide }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -22021,6 +22442,77 @@ p.fld-note{margin:6px 0 0}
 .sec-count.amber{background:var(--amber);color:#fff}
 .dash-sec .job-card{margin-bottom:10px}
 .jr-card.past{opacity:.72}
+
+/* ---- Quotes ----------------------------------------------------------- */
+/* On the trade row, beside Assign and Overflow. */
+.qr-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
+  background:var(--card);color:var(--ink-soft);font-size:11px;font-weight:700;
+  padding:4px 9px;border-radius:7px;cursor:pointer;font-family:inherit}
+.qr-pill:hover{border-color:var(--brand);color:var(--brand-dk)}
+.qr-pill.has{border-color:#e6d3ab;background:#fbf2e2;color:var(--amber-ink)}
+
+/* Asking */
+.qa-sub{margin:0 0 10px;font-size:13px;color:var(--ink-soft);display:flex;
+  align-items:center;gap:7px;flex-wrap:wrap}
+.qa-none{margin:14px 0;font-size:13px;color:var(--ink-soft);line-height:1.5}
+.qa-picks{display:flex;flex-direction:column;gap:7px;margin-bottom:10px}
+.qa-pick{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  width:100%;padding:10px 13px;border:1px solid var(--line);background:var(--card);
+  border-radius:9px;cursor:pointer;font-family:inherit;font-size:13.5px;color:var(--ink)}
+.qa-pick:hover:not(:disabled){border-color:var(--brand)}
+.qa-pick.on{border-color:var(--brand);background:#eef5f1;color:var(--brand-dk);font-weight:600}
+.qa-pick:disabled{opacity:.45;cursor:default}
+.qa-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The difference between this and overflow, said rather than assumed. */
+.qa-priv{display:flex;align-items:center;gap:6px;margin:0 0 14px;font-size:11.5px;
+  color:var(--ink-soft);line-height:1.45}
+.qa-priv svg{flex:none}
+
+/* Comparing */
+.qp-scope{margin:0 0 12px;font-size:12.5px;color:var(--ink-soft);line-height:1.5;
+  padding-left:11px;border-left:2px solid var(--line)}
+.qp-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  flex-wrap:wrap;padding-bottom:8px;border-bottom:1px solid var(--line);
+  font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--ink-soft)}
+.qp-spread{font-variant-numeric:tabular-nums;letter-spacing:0;text-transform:none;
+  font-size:12.5px;font-weight:700;color:var(--ink)}
+.qp-spread em{font-style:normal;font-weight:500;color:var(--ink-soft)}
+.qp-list{display:flex;flex-direction:column;margin:2px 0 14px}
+.qp-row{display:flex;align-items:center;gap:12px;padding:12px 10px;
+  border-bottom:1px solid var(--line)}
+.qp-row:last-child{border-bottom:0}
+/* The cheapest, marked rather than merely first -- a list you scan from the
+   top is a list whose order you have to already know. */
+.qp-row.best{background:#eef5f1;border-radius:9px;border-bottom-color:transparent}
+.qp-main{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.qp-co{font-size:14px;font-weight:600}
+.qp-when{font-size:11.5px;color:var(--ink-soft)}
+.qp-note{font-size:11.5px;color:var(--ink-soft);font-style:italic}
+.qp-price{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;flex:none}
+.qp-state{font-size:11.5px;font-weight:700;color:var(--ink-soft);flex:none}
+.qp-state.passed{color:var(--red)}
+
+/* The subcontractor's side */
+.qask .jr-client{justify-content:flex-start}
+.qask-due{margin-left:auto;font-size:11px;font-weight:700;color:var(--amber-ink)}
+.qask-form{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.qs-row{display:flex;align-items:center;gap:12px;padding:11px 13px;background:var(--card);
+  border:1px solid var(--line);border-radius:10px;margin-bottom:8px}
+.qs-row.won{border-color:var(--brand)}
+.qs-main{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.qs-title{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qs-meta{font-size:11px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qs-price{font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums;flex:none}
+.qs-state{font-size:11.5px;color:var(--ink-soft);flex:none}
+.qs-out{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
+  padding:3px 8px;border-radius:20px;background:var(--line);color:var(--ink-soft);flex:none}
+.qs-out.won{background:var(--brand);color:#fff}
+@media (max-width:520px){
+  .qp-row{flex-wrap:wrap}
+  .qp-main{flex:1 1 100%}
+  .qs-row{flex-wrap:wrap}
+}
 /* A slot at another client, on a list that spans all of them. The tint and the
    left edge say "this one is not here" at a glance, without a separate section
    -- splitting the list by company is the switching this replaces. */

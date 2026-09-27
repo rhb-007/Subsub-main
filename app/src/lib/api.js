@@ -364,6 +364,19 @@ export const api = {
   // Every slot assigned to us, at every client. The portal's job list and its
   // badge both used to read /api/jobs, which is one account at a time.
   myWork: () => request("/my-work"),
+  // Asking your own roster to price a trade before you commit to anybody.
+  jobQuoteRequests: (jobId) => request(`/jobs/${encodeURIComponent(jobId)}/quote-requests`),
+  askForQuotes: (jobId, body) => request(`/jobs/${encodeURIComponent(jobId)}/quote-requests`,
+    { method: "POST", body: JSON.stringify(body) }),
+  awardQuote: (requestId, companyId) =>
+    request(`/quote-requests/${encodeURIComponent(requestId)}/award`,
+      { method: "POST", body: JSON.stringify({ companyId }) }),
+  cancelQuoteRequest: (requestId) =>
+    request(`/quote-requests/${encodeURIComponent(requestId)}/cancel`, { method: "POST", body: "{}" }),
+  // The other side: what we have been asked to price.
+  myQuotes: () => request("/my-quotes"),
+  answerQuote: (inviteId, body) => request(`/quotes/${encodeURIComponent(inviteId)}`,
+    { method: "POST", body: JSON.stringify(body) }),
   docShares: () => request("/doc-shares"),
   sendDocPack: (body) => request("/doc-shares", { method: "POST", body: JSON.stringify(body) }),
   revokeDocShare: (id) => request(`/doc-shares/${encodeURIComponent(id)}/revoke`, { method: "POST" }),

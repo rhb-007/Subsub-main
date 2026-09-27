@@ -638,6 +638,54 @@ refactor.
   else asks before the first account has reviewed it. The server and the screen
   both gate on presence, and they must not disagree.
 
+- **You may ask your own roster to price a job before you commit.** Part of
+  "pre-award" already existed and nobody noticed: a work order with
+  `status = 'pending'` **is** a pre-award view — the subcontractor sees the job,
+  the scope and the price, and accepts or declines before anything is
+  committed. What did not exist is the case where the account does not know the
+  price yet and wants two or three of its own roofers to quote the same trade
+  first. Work orders cannot express that: issuing one commits to a number, and
+  issuing three for one trade collides on the live-WO index.
+
+  So this is **overflow's shape pointed at the account's own roster**. Ask
+  several, they answer with a price and a date, you pick, and picking issues the
+  work order. `app/shared/quotes.js` holds the rules; migration 043 holds the
+  tables. **None of overflow's gates apply** — no opt-in, no three months, no
+  rating floor, no fee — because these are already your contractors, which is the
+  product. The precondition is overflow's exactly inverted: overflow is refused
+  when you *have* somebody of your own, and this is only available then.
+
+  Three things are load-bearing:
+
+  **Nothing travels sideways.** An invited company never learns who else was
+  asked, what they quoted, or who won. These are competing bids and one of them
+  is the price the account is about to pay — a sharper version of the reason
+  `overflow_invites` is server-side only. After an award each side is told about
+  **itself**: the winner that they won, everybody else that they did not, never
+  by whom or for how much.
+
+  **A quote request is a key to one job, never to the list.** It must not become
+  a second door into what the `/api/jobs` scoping closed. `quoteJobShape` passes
+  the job, the address, the date and the one trade they are pricing, and
+  withholds the other trades' assignments, the account's notes and the tenant's
+  report. `assignments` is empty, not absent — the same white-screen rule
+  `inheritedShape` follows, and the honest answer besides: nobody is assigned,
+  which is why they are being asked.
+
+  **Awarding issues the work order at the number they gave**, which is the whole
+  point of having asked, and it is still `pending` — they accept or decline it
+  like any other. Awarding to somebody who never answered is refused: that would
+  issue a work order at a price nobody agreed to.
+
+  On the screen it sits beside *Assign* and *Overflow* on a trade row with
+  nobody in it, because those are the three ways to fill a slot and they differ
+  by what you know: assign when you know who and what; ask for quotes when you
+  know who but not what; overflow when you do not have anybody. The
+  subcontractor's card is deliberately **not** shaped like a job request — no
+  countdown, no accept, no decline, because nothing is on offer yet. And a
+  spread is only shown once two people have answered: one quote is a price, not
+  a comparison, and "lowest of 1" invites reading it as one.
+
 - **Overflow is broadcast, not browse.** When an account has nobody on its
   own roster for an urgent job, it may broadcast to opted-in companies —
   general contractors included, since 031 made every one of them hireable.
