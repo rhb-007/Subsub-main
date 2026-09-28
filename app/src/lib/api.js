@@ -354,6 +354,9 @@ export const api = {
   // request comes from an account they are not in yet.
   // The company this ACCOUNT is: what another general contractor sees when
   // they look you up, and the details that make you findable at all.
+  // Decoration for the dashboard greeting. Answers {} for anything that goes
+  // wrong, including an account with no city on it, so callers never branch.
+  weather: () => request("/weather"),
   myCompany: () => request("/my-company"),
   saveMyCompany: (patch) => request("/my-company", { method: "PATCH", body: JSON.stringify(patch) }),
   // Milestones, verification and release. The plan call returns the parts,

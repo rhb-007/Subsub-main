@@ -53,6 +53,7 @@ const patched = [];
 const uploaded = [];
 const shared = [];
 const savedCompany = [];
+let WEATHER = {};
 let MY_COMPANY = {
   companyId: "cmp_own_acc_orcas", company: "Orcas Roofing", contact: "Jason",
   email: "jason@orcas.test", license: null, docs: {}, sharesSent: 0,
@@ -78,6 +79,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/my-company") return [200, MY_COMPANY];
   if (path === "/api/subs") return [200, []];
   if (path === "/api/jobs") return [200, []];
+  if (path === "/api/weather") return [200, WEATHER];
   if (path === "/api/account-users") return [200, [
     { id: "u_jason", name: "Jason", email: "jason@orcas.test", phone: null, role: "admin",
       subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false },
@@ -120,6 +122,81 @@ const navItems = (page) => page.evaluate(() =>
   [...document.querySelectorAll("nav.tabs button")].map((b) => b.innerText.replace(/\s+/g, " ").trim()));
 
 try {
+  console.log("\n-- the greeting knows what time it is --");
+  {
+    KIND = "subcontractor";
+    WEATHER = {};
+    // Frozen clocks, because a greeting that depends on when the suite runs
+    // is a greeting that fails at 5am and nobody knows why.
+    const at = async (hour) => {
+      const r = await visitApp(browser, { host: "orcasroofing", webPort: WEB,
+        seat: { userId: "u_jason", accountId: "acc_orcas" },
+        viewport: { width: 1200, height: 1400 },
+        onNewDocument: `(() => {
+          const H = ${hour};
+          const Real = Date;
+          class Fixed extends Real {
+            constructor(...a) { super(...(a.length ? a : [Real.now()])); }
+            getHours() { return H; }
+          }
+          Fixed.now = Real.now;
+          window.Date = Fixed;
+        })()` });
+      for (let n = 0; n < 30; n++) {
+        await wait(200);
+        if (await r.page.$(".dash-hello h2")) break;
+      }
+      const text = await r.page.evaluate(() =>
+        document.querySelector(".dash-hello h2")?.innerText.trim() || "");
+      await r.ctx.close();
+      return text;
+    };
+
+    t.ck("morning says morning", /^Good morning, Jason$/.test(await at(8)), await at(8));
+    t.ck("the afternoon says afternoon", /^Good afternoon, Jason$/.test(await at(14)));
+    t.ck("the evening says evening", /^Good evening, Jason$/.test(await at(20)));
+    // Somebody on a dashboard at 3am is doing something they will remember.
+    t.ck("and the small hours get their own", /^Still up, Jason$/.test(await at(3)));
+  }
+
+  console.log("\n-- and shows the weather when there is any --");
+  {
+    KIND = "subcontractor";
+    WEATHER = { tempF: 54.4, code: 61, place: "Seattle" };
+    const { ctx, page, crashes } = await open();
+    for (let n = 0; n < 30; n++) {
+      await wait(200);
+      if (await page.$(".hello-wx")) break;
+    }
+    const wx = await page.evaluate(() => {
+      const el = document.querySelector(".hello-wx");
+      return el ? { text: el.innerText.trim(), title: el.getAttribute("title") } : null;
+    });
+    t.ck("the chip is there", !!wx, String(wx));
+    t.ck("rounded to a whole degree", /^54°F/.test(wx?.text || ""), wx?.text);
+    t.ck("and named in words a roofer would use", /Rain$/.test(wx?.text || ""), wx?.text);
+    t.ck("with the place on the tooltip", wx?.title === "Seattle", String(wx?.title));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- and is silent when there is not --");
+  {
+    // Decoration. An account with no city on it, or an outbound call that
+    // failed, must cost a chip and never a dashboard.
+    KIND = "subcontractor";
+    WEATHER = {};
+    const { ctx, page, crashes } = await open();
+    await wait(900);
+    t.ck("no chip at all", await page.evaluate(() => !document.querySelector(".hello-wx")));
+    t.ck("but the greeting is still there",
+      await page.evaluate(() => /^Good /.test(
+        document.querySelector(".dash-hello h2")?.innerText.trim() || "")
+        || /^Still up/.test(document.querySelector(".dash-hello h2")?.innerText.trim() || "")));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
   console.log("\n-- the checklist a subcontractor gets --");
   {
     KIND = "subcontractor";

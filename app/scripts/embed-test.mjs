@@ -149,55 +149,91 @@ console.log("\n-- and it actually works in a browser --");
     const shape = await page.evaluate(() => ({
       fields: [...document.querySelectorAll("#subsub-apply [name]")].map((e) => e.name),
       required: [...document.querySelectorAll("#subsub-apply [required]")].map((e) => e.name),
-      trades: [...document.querySelectorAll("#subsub-apply select option")].map((o) => o.value),
+      trades: [...document.querySelectorAll("#subsub-apply .ss-chip")]
+        .map((b) => b.getAttribute("data-cat")),
+      steps: document.querySelectorAll("#subsub-apply .ss-step").length,
       // The host page's serif must not have been overridden.
       hostFont: getComputedStyle(document.querySelector("h1")).fontFamily,
     }));
-    t.ck("the form renders", shape.fields.length === 5, JSON.stringify(shape.fields));
+    // The same shape as the hosted form at /?apply=1: who you are, then what
+    // you do and where. A flat box with a multi-select for trades was a
+    // different product on somebody's website from the one the link goes to.
+    t.ck("it is the same two steps as the hosted form", shape.steps === 2, String(shape.steps));
+    t.ck("the form renders", shape.fields.length === 7, JSON.stringify(shape.fields));
+    t.ck("asking for a city and a ZIP like the hosted one does",
+      shape.fields.includes("city") && shape.fields.includes("zip"),
+      JSON.stringify(shape.fields));
+    // Not UBI. That is Washington's and nowhere else's, and a box nobody
+    // outside one state can fill in is the permanently-amber row again.
+    t.ck("and never for a UBI", !shape.fields.includes("ubi"), JSON.stringify(shape.fields));
+    // Ours, and not the customer's to remove -- the same reason the hosted
+    // pages carry it. A link rather than an image, because a snippet that
+    // fetches a logo file is a snippet with a dependency.
+    const by = await page.evaluate(() => {
+      const el = document.querySelector("#subsub-apply .ss-by");
+      return el ? { text: el.innerText.trim(), href: el.querySelector("a")?.getAttribute("href"),
+        img: !!el.querySelector("img") } : null;
+    });
+    t.ck("it carries a Powered by SubSub line", /powered by subsub/i.test(by?.text || ""),
+      JSON.stringify(by));
+    t.ck("linking to subsub.work", /^https:\/\/subsub\.work/.test(by?.href || ""), String(by?.href));
+    t.ck("and fetching no image to do it", by?.img === false, JSON.stringify(by));
     t.ck("asking only what the server requires",
       shape.required.join(",") === "company,contact,email", JSON.stringify(shape.required));
-    t.ck("with the trades passed in", shape.trades.join(",") === "roofing,siding,gutters");
+    t.ck("with the trades as chips, like the hosted form",
+      shape.trades.join(",") === "roofing,siding,gutters", shape.trades.join(","));
     t.ck("and the host page's own styling is untouched",
       /Georgia/.test(shape.hostFont), shape.hostFont);
 
     // Refuses to send without the three the server needs -- so somebody does
     // not watch a request fail for something the page could have said.
-    await page.evaluate(() => document.querySelector("#subsub-apply button").click());
+    await page.evaluate(() => document.querySelector("#subsub-apply .ss-next").click());
     await wait(400);
     t.ck("it will not send an empty form", posts.length === 0, JSON.stringify(posts));
-    t.ck("and says what is missing",
+    // Said on the step it is about. Walking somebody to the end and then
+    // telling them the first box was wrong is how a form gets abandoned.
+    t.ck("and says what is missing, on that step",
       /Company, your name and email are needed/.test(
         await page.evaluate(() => document.querySelector(".ss-msg").textContent)));
+    t.ck("and does not move on", await page.evaluate(() =>
+      !document.querySelector("#subsub-apply .ss-step[data-step='1']").hidden));
 
     // A refusal comes FIRST, because success is now terminal: it replaces the
     // form, so anything tested after it would be driving a hidden one.
     reply = [429, { error: "rate_limited" }];
-    await page.evaluate(() => {
-      const f = document.querySelector("#subsub-apply .ss-form");
-      f.company.value = "Pine"; f.contact.value = "Pip"; f.email.value = "pip@pine.test";
-      document.querySelector("#subsub-apply button").click();
-    });
-    await wait(700);
+    const fill = async (co, name, email, cats) => {
+      await page.evaluate((c, n, e, list) => {
+        const f = document.querySelector("#subsub-apply .ss-form");
+        f.company.value = c; f.contact.value = n; f.email.value = e;
+        document.querySelector("#subsub-apply .ss-next").click();
+        [...document.querySelectorAll("#subsub-apply .ss-chip")]
+          .filter((b) => list.includes(b.getAttribute("data-cat")))
+          .forEach((b) => { if (!b.classList.contains("on")) b.click(); });
+      }, co, name, email, cats);
+      await wait(400);
+      await page.evaluate(() => document.querySelector("#subsub-apply .ss-go").click());
+      await wait(700);
+    };
+    await fill("Pine", "Pip", "pip@pine.test", ["roofing"]);
     const bad = await page.evaluate(() => document.querySelector(".ss-msg").textContent);
     t.ck("a refusal is shown in the form", /Too many applications/.test(bad), bad);
     t.ck("and the button comes back",
-      await page.evaluate(() => !document.querySelector("#subsub-apply button").disabled));
+      await page.evaluate(() => !document.querySelector("#subsub-apply .ss-go").disabled));
     t.ck("and the form is still there to correct",
       await page.evaluate(() => !document.querySelector("#subsub-apply .ss-form").hidden));
 
     reply = [200, { ok: true }];
     posts.length = 0;
     await page.evaluate(() => {
+      document.querySelector("#subsub-apply .ss-back")?.click();
       const f = document.querySelector("#subsub-apply .ss-form");
       f.company.value = "Bay Roofing";
       f.contact.value = "Rae Bay";
       f.email.value = "rae@bayroofing.test";
       f.phone.value = "2065550111";
-      [...f.categories.options].find((o) => o.value === "roofing").selected = true;
-      [...f.categories.options].find((o) => o.value === "gutters").selected = true;
-      document.querySelector("#subsub-apply button").click();
     });
-    await wait(700);
+    await wait(300);
+    await fill("Bay Roofing", "Rae Bay", "rae@bayroofing.test", ["roofing", "gutters"]);
 
     t.ck("a filled form reaches the API", posts.length === 1, JSON.stringify(posts));
     t.ck("at the account's own path", posts[0]?.url === "/api/apply/outerhome", posts[0]?.url);

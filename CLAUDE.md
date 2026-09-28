@@ -317,6 +317,51 @@ refactor.
   a screen that never rendered is an assertion that cannot fail, and the first
   version of it was exactly that.
 
+- **The pasted form is the hosted form, or it is a different product.** The
+  snippet was one flat box with a multi-select for trades; `/?apply=1` is two
+  steps with chips, a city and a ZIP. Somebody who saw one and then followed a
+  link to the other met a stranger, and the panel offering both as *the* way in
+  had no answer for which was right.
+
+  `applyFormHtml` now draws the same two steps — who you are, then what you do
+  and where — with the same chips, and posts the same fields. Two deliberate
+  differences, both already decisions here: **no password**, because the form
+  never asks for one and whoever applies sets it from the email; and **no UBI**,
+  because that is Washington's and a box nobody outside one state can fill in is
+  the permanently-amber row wearing another hat. The licence is asked for, named
+  generically, because the snippet does not know the state.
+
+  Validation is **said on the step it is about**. Walking somebody to the end
+  and then telling them the first box was wrong is how a form gets abandoned.
+
+  And it carries **Powered by SubSub**, last and small, for the reason the
+  hosted pages do: the name is not the customer's to remove. A text link, never
+  an image — a snippet that fetches a logo file is a snippet with a dependency,
+  and every rule in it exists to keep it from needing anything.
+
+- **The greeting knows the hour, and the weather is decoration.** "Good to see
+  you" was hand-typed into five dashboards and said the same thing at 6am and
+  9pm. `greetingFor` in `app/shared/greeting.js` is the one rule; `Hello` is the
+  one component, so a sixth screen cannot grow a sixth wording.
+
+  The hour comes from the **reader's** clock, not the account's address: morning
+  is a fact about where somebody is standing, and a project manager opening a
+  laptop is not necessarily in the town the company is registered in. It is read
+  at render rather than held in state, so a dashboard left open over lunch does
+  not still say good morning.
+
+  The weather is fetched **server-side** (`GET /api/weather`, Open-Meteo, no
+  key), for three reasons: one cached call per account instead of one per tab;
+  the browser never talks to a third party, so nothing about who is looking at
+  SubSub leaves our origin; and an outbound host that goes down cannot take a
+  dashboard with it. What leaves is a town and a state — never a customer, a
+  person or a building.
+
+  **Every failure answers `{}`**, including an account with no city on it, so
+  callers never branch: no spinner, no error, no reserved space, and the
+  greeting renders alone. A weather chip is worth exactly as much as it costs,
+  and it must never cost a dashboard.
+
 - **A preview's address bar is a claim, and it was the wrong one.** The Branding
   tab carries two previews. One is the sign-in page; the other is the form a
   subcontractor fills in — and it had no title, so it read as an unlabelled

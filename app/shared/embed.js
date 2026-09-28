@@ -76,28 +76,52 @@ export function applyFormHtml({ subdomain, accountName, trades = [], theme = nul
   const accent = hex(theme && theme.accent, EMBED_DEFAULT_ACCENT);
   const btnText = hex(theme && theme.btnText, EMBED_DEFAULT_BTN_TEXT);
   const accentDark = darken(accent);
-  const options = trades
-    .map((t) => `        <option value="${esc(t.id)}">${esc(t.label)}</option>`)
+  const chips = trades
+    .map((t) => `        <button type="button" class="ss-chip" data-cat="${esc(t.id)}">${esc(t.label)}</button>`)
     .join("\n");
 
   return `<!-- Subcontractor application form for ${esc(name)} -->
 <div id="subsub-apply">
   <form class="ss-form" novalidate>
-    <label class="ss-f"><span>Company <b>*</b></span>
-      <input name="company" required autocomplete="organization" /></label>
-    <label class="ss-f"><span>Your name <b>*</b></span>
-      <input name="contact" required autocomplete="name" /></label>
-    <label class="ss-f"><span>Email <b>*</b></span>
-      <input name="email" type="email" required autocomplete="email" /></label>
-    <label class="ss-f"><span>Mobile</span>
-      <input name="phone" type="tel" autocomplete="tel" /></label>
-    <label class="ss-f"><span>What you do</span>
-      <select name="categories" multiple size="6">
-${options}
-      </select>
-      <em>Hold Ctrl (or Cmd) to pick more than one.</em></label>
-    <button type="submit">Apply to work with ${esc(name)}</button>
+    <div class="ss-steps"><span class="ss-dot on"></span><span class="ss-dot"></span></div>
+
+    <div class="ss-step" data-step="1">
+      <p class="ss-lede">Tell us about your company.</p>
+      <label class="ss-f"><span>Company <b>*</b></span>
+        <input name="company" required autocomplete="organization" /></label>
+      <label class="ss-f"><span>Your name <b>*</b></span>
+        <input name="contact" required autocomplete="name" /></label>
+      <div class="ss-row">
+        <label class="ss-f"><span>Email <b>*</b></span>
+          <input name="email" type="email" required autocomplete="email" /></label>
+        <label class="ss-f"><span>Mobile</span>
+          <input name="phone" type="tel" autocomplete="tel" /></label>
+      </div>
+      <label class="ss-f"><span>Contractor license #</span>
+        <input name="license" autocapitalize="characters" />
+        <em>Optional. It speeds up approval &mdash; we check it against the state registry.</em></label>
+    </div>
+
+    <div class="ss-step" data-step="2" hidden>
+      <p class="ss-lede">What do you do, and where?</p>
+      <span class="ss-label">Trades you cover <b>*</b></span>
+      <div class="ss-chips">
+${chips}
+      </div>
+      <div class="ss-row">
+        <label class="ss-f"><span>City</span>
+          <input name="city" autocomplete="address-level2" /></label>
+        <label class="ss-f"><span>ZIP</span>
+          <input name="zip" inputmode="numeric" autocomplete="postal-code" /></label>
+      </div>
+    </div>
+
     <p class="ss-msg" role="status" aria-live="polite"></p>
+    <div class="ss-actions">
+      <button type="button" class="ss-back" hidden>Back</button>
+      <button type="button" class="ss-next">Continue</button>
+      <button type="submit" class="ss-go" hidden>Apply to work with ${esc(name)}</button>
+    </div>
     <noscript><a href="${esc(applyLink(sub))}">Open the application form</a></noscript>
   </form>
   <div class="ss-done" role="status" aria-live="polite" hidden>
@@ -113,30 +137,48 @@ ${options}
     <p class="ss-done-sub">We look forward to working with you.</p>
     <p class="ss-done-sig">&mdash; The ${esc(name)} team</p>
   </div>
+  <p class="ss-by">Powered by <a href="https://subsub.work" target="_blank" rel="noopener">SubSub</a></p>
 </div>
 <style>
 #subsub-apply .ss-form{display:flex;flex-direction:column;gap:14px;max-width:460px;
   font:inherit;color:inherit}
-#subsub-apply .ss-f{display:flex;flex-direction:column;gap:5px;font-size:14px}
-#subsub-apply .ss-f > span{font-weight:600}
-#subsub-apply .ss-f b{color:#b5442e;font-weight:600}
-#subsub-apply .ss-f em{font-size:12px;opacity:.7;font-style:normal}
-#subsub-apply input,#subsub-apply select{font:inherit;font-size:15px;padding:9px 11px;
-  border:1px solid #c9d2cc;border-radius:8px;background:#fff;color:#16241d;width:100%}
-#subsub-apply input:focus,#subsub-apply select:focus{outline:2px solid ${accent};
-  outline-offset:1px;border-color:${accent}}
-#subsub-apply button{font:inherit;font-size:15px;font-weight:600;padding:11px 18px;
-  border:0;border-radius:8px;background:${accent};color:${btnText};cursor:pointer}
-#subsub-apply button:hover:not(:disabled){background:${accentDark}}
-#subsub-apply button:disabled{opacity:.6;cursor:default}
-#subsub-apply .ss-msg{margin:0;font-size:14px;line-height:1.45}
-#subsub-apply .ss-msg.ok{color:${accent}}
-#subsub-apply .ss-msg.bad{color:#b5442e}
 /* The hidden attribute is a UA rule at the weakest specificity, and .ss-form
    sets display:flex -- which beats it, so the form would stay on screen under
    the confirmation. Anything toggled with [hidden] here has to say so itself.
    (No backticks in this file's comments: it is all one template literal.) */
-#subsub-apply .ss-form[hidden],#subsub-apply .ss-done[hidden]{display:none}
+#subsub-apply .ss-form[hidden],#subsub-apply .ss-done[hidden],#subsub-apply .ss-step[hidden],
+#subsub-apply .ss-actions button[hidden]{display:none}
+#subsub-apply .ss-steps{display:flex;gap:6px}
+#subsub-apply .ss-dot{width:26px;height:4px;border-radius:2px;background:#d9e0db}
+#subsub-apply .ss-dot.on{background:${accent}}
+#subsub-apply .ss-step{display:flex;flex-direction:column;gap:14px}
+#subsub-apply .ss-lede{margin:0;font-size:14px;opacity:.75}
+#subsub-apply .ss-f{display:flex;flex-direction:column;gap:5px;font-size:14px}
+#subsub-apply .ss-f > span,#subsub-apply .ss-label{font-weight:600;font-size:14px}
+#subsub-apply .ss-f b,#subsub-apply .ss-label b{color:#b5442e;font-weight:600}
+#subsub-apply .ss-f em{font-size:12px;opacity:.7;font-style:normal}
+#subsub-apply .ss-row{display:flex;gap:12px;flex-wrap:wrap}
+#subsub-apply .ss-row > .ss-f{flex:1 1 150px}
+#subsub-apply input{font:inherit;font-size:15px;padding:9px 11px;
+  border:1px solid #c9d2cc;border-radius:8px;background:#fff;color:#16241d;width:100%;
+  box-sizing:border-box}
+#subsub-apply input:focus{outline:2px solid ${accent};
+  outline-offset:1px;border-color:${accent}}
+#subsub-apply .ss-chips{display:flex;flex-wrap:wrap;gap:7px}
+#subsub-apply .ss-chip{font:inherit;font-size:13px;padding:7px 12px;border-radius:20px;
+  border:1px solid #c9d2cc;background:#fff;color:#16241d;cursor:pointer}
+#subsub-apply .ss-chip.on{background:${accent};border-color:${accent};color:${btnText}}
+#subsub-apply .ss-actions{display:flex;gap:10px;align-items:center}
+#subsub-apply .ss-actions button{font:inherit;font-size:15px;font-weight:600;padding:11px 18px;
+  border:0;border-radius:8px;background:${accent};color:${btnText};cursor:pointer}
+#subsub-apply .ss-back{background:transparent !important;color:inherit !important;
+  border:1px solid #c9d2cc !important;font-weight:500 !important}
+#subsub-apply .ss-actions button:hover:not(:disabled){background:${accentDark}}
+#subsub-apply .ss-back:hover{background:#f3f5f4 !important}
+#subsub-apply .ss-actions button:disabled{opacity:.6;cursor:default}
+#subsub-apply .ss-msg{margin:0;font-size:14px;line-height:1.45}
+#subsub-apply .ss-msg.ok{color:${accent}}
+#subsub-apply .ss-msg.bad{color:#b5442e}
 #subsub-apply .ss-done{max-width:460px;text-align:center;padding:30px 22px;
   border:1px solid #c9d2cc;border-radius:12px;background:#f5faf7}
 #subsub-apply .ss-tick{display:block;margin:0 auto 14px;width:44px;height:44px;padding:7px;
@@ -149,6 +191,12 @@ ${options}
 #subsub-apply .ss-done-sig{margin:0 !important;font-size:13.5px !important;font-weight:600;
   color:#16241d !important}
 #subsub-apply .ss-done b{color:#16241d}
+/* Ours, and not the customer's to remove -- the same reason the hosted pages
+   carry it. Small, last, and a link rather than a logo file, because a
+   snippet that fetches an image is a snippet with a dependency. */
+#subsub-apply .ss-by{margin:14px 0 0;max-width:460px;text-align:center;font-size:11.5px;
+  opacity:.6}
+#subsub-apply .ss-by a{color:inherit;font-weight:600}
 </style>
 <script>
 (function () {
@@ -156,22 +204,71 @@ ${options}
   var form = root.querySelector(".ss-form");
   var msg = root.querySelector(".ss-msg");
   var done = root.querySelector(".ss-done");
-  var btn = root.querySelector("button");
+  var steps = root.querySelectorAll(".ss-step");
+  var dots = root.querySelectorAll(".ss-dot");
+  var back = root.querySelector(".ss-back");
+  var next = root.querySelector(".ss-next");
+  var go = root.querySelector(".ss-go");
+  var at = 1;
+
+  root.querySelectorAll(".ss-chip").forEach(function (b) {
+    b.addEventListener("click", function () {
+      b.classList.toggle("on");
+      b.setAttribute("aria-pressed", b.classList.contains("on") ? "true" : "false");
+    });
+  });
+  function chosen() {
+    return [].slice.call(root.querySelectorAll(".ss-chip.on"))
+      .map(function (b) { return b.getAttribute("data-cat"); });
+  }
+  function show(n) {
+    at = n;
+    for (var i = 0; i < steps.length; i++) steps[i].hidden = (i + 1) !== n;
+    for (var j = 0; j < dots.length; j++) {
+      if (j < n) dots[j].classList.add("on"); else dots[j].classList.remove("on");
+    }
+    back.hidden = n === 1;
+    next.hidden = n === steps.length;
+    go.hidden = n !== steps.length;
+    msg.className = "ss-msg"; msg.textContent = "";
+  }
+  // Said on the step it is about. Walking somebody to the end and then
+  // telling them the first box was wrong is how a form gets abandoned.
+  function trouble(n) {
+    var d = new FormData(form);
+    if (n === 1) {
+      if (!d.get("company") || !d.get("contact") || !d.get("email")) {
+        return "Company, your name and email are needed.";
+      }
+      if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(String(d.get("email")))) {
+        return "That email address doesn't look right.";
+      }
+      return null;
+    }
+    if (!chosen().length) return "Pick at least one trade.";
+    return null;
+  }
+  next.addEventListener("click", function () {
+    var bad = trouble(at);
+    if (bad) { msg.className = "ss-msg bad"; msg.textContent = bad; return; }
+    show(at + 1);
+  });
+  back.addEventListener("click", function () { show(at - 1); });
+
   form.addEventListener("submit", function (e) {
     e.preventDefault();
+    var bad = trouble(1) || trouble(2);
+    if (bad) { msg.className = "ss-msg bad"; msg.textContent = bad; return; }
     var d = new FormData(form);
-    var cats = [].slice.call(form.categories.selectedOptions || []).map(function (o) { return o.value; });
-    if (!d.get("company") || !d.get("contact") || !d.get("email")) {
-      msg.className = "ss-msg bad"; msg.textContent = "Company, your name and email are needed.";
-      return;
-    }
-    btn.disabled = true; msg.className = "ss-msg"; msg.textContent = "Sending\\u2026";
+    go.disabled = true; msg.className = "ss-msg"; msg.textContent = "Sending\\u2026";
     fetch("${esc(apiOrigin)}/api/apply/${esc(sub)}", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         company: d.get("company"), contact: d.get("contact"),
         email: d.get("email"), phone: d.get("phone") || null,
-        categories: cats, notifyEmail: true
+        license: d.get("license") || null,
+        city: d.get("city") || null, zip: d.get("zip") || null,
+        categories: chosen(), notifyEmail: true
       })
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
@@ -192,11 +289,14 @@ ${options}
         : err && err.error === "rate_limited"
           ? "Too many applications from here just now. Try again shortly."
           : "That didn't send. Please try again in a moment.";
-    }).then(function () { btn.disabled = false; });
+    }).then(function () { go.disabled = false; });
   });
+
+  show(1);
 })();
 </script>`;
 }
+
 
 // How many contractors an account has before it is worth telling them the
 // snippet exists. Nobody puts a hiring form on their website on day one: they

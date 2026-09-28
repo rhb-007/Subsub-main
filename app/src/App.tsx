@@ -59,6 +59,7 @@ import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
 import { applyFormHtml, applyLink } from "../shared/embed.js";
+import { greetingFor, weatherLine } from "../shared/greeting.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -1536,6 +1537,32 @@ function moneyLive(v) {
 const moneyRaw = (v) => String(v ?? "").replace(/[^0-9.]/g, "");
 
 // short day label like "Sep 16"
+// The line at the top of a dashboard.
+//
+// One component, because there are five of these screens -- the hiring
+// dashboard, the contractor portal, the owner's, the tenant's and uniforms --
+// and "Good to see you" was hand-typed into each. A greeting that says the
+// same thing at 6am and at 9pm is the sort of thing nobody complains about
+// and nobody reads twice either.
+//
+// The hour comes from the READER'S clock, not the account's address: morning
+// is a fact about where somebody is standing, and a project manager opening a
+// laptop is not necessarily in the town the company is registered in.
+//
+// The weather is decoration and is treated as such -- no spinner, no error,
+// no layout reserved for it. It appears if it arrives.
+function Hello({ name, weather }) {
+  // Re-read on every render rather than frozen in state: a dashboard left open
+  // over lunch should not still say good morning.
+  const line = weatherLine(weather);
+  return (
+    <h2>
+      {greetingFor(new Date().getHours())}{name ? `, ${name}` : ""}
+      {line && <span className="hello-wx" title={weather?.place || ""}>{line}</span>}
+    </h2>
+  );
+}
+
 function formatDay(dateStr) {
   if (!dateStr) return "";
   const d = new Date(`${dateStr}T12:00:00`);
@@ -3010,6 +3037,17 @@ export default function SubSub() {
   // it beyond one checklist row, and a missing migration must not put a red
   // banner over somebody's whole first morning.
   const [myCompany, setMyCompany] = useState(null);
+  // The weather behind the greeting. Fetched once per account, never awaited
+  // by anything, and a failure is silence: the greeting renders without it.
+  const [weather, setWeather] = useState(null);
+  useEffect(() => {
+    if (!loggedIn || !currentAccountId) { setWeather(null); return; }
+    let live = true;
+    api.weather()
+      .then((w) => { if (live && w && typeof w.tempF === "number") setWeather(w); })
+      .catch(() => { /* decoration */ });
+    return () => { live = false; };
+  }, [loggedIn, currentAccountId]);
   useEffect(() => {
     if (!loggedIn || !currentAccountId || !isHireable(account)) { setMyCompany(null); return; }
     let live = true;
@@ -4880,6 +4918,7 @@ export default function SubSub() {
              have their own Add buttons on the card, which go there, so nothing
              is unreachable; what changed is that one press no longer rings
              both halves, because they are no longer on one page. */
+          weather={weather}
           onManagePack={() => { setTab("account"); setOpenPane({ pane: "docs", focus: "docs", n: Date.now() }); }}
           onAddPackField={(which) => { setTab("account");
             setOpenPane({ pane: "company", focus: which === "ubi" ? "ubi" : "license", n: Date.now() }); }}
@@ -5763,7 +5802,7 @@ export default function SubSub() {
 
       {can("portal") && tab !== "account" && (
         mySub ? (
-          <ContractorPortal sub={mySub} jobs={jobs} pane={pane} mine={myAssignments} brand={brand} me={me} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
+          <ContractorPortal weather={weather} sub={mySub} jobs={jobs} pane={pane} mine={myAssignments} brand={brand} me={me} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
             elsewhere={elsewhere}
             onGoClient={(accountId) => { setCurrentAccountId(accountId); setSelected(null); setPane("jobs"); }}
             quotes={myQuotes}
@@ -16104,7 +16143,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   invites = [], connectsOut = [], onOpenInvite, onOpenConnect,
   connectsIn = [], onRespondConnect, onReloadConnects,
   hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null,
-  onManagePack = null, onAddPackField = null, onReloadCompany = null }) {
+  onManagePack = null, onAddPackField = null, onReloadCompany = null, weather = null }) {
   // Which request is being turned down, and why. One at a time: the reason
   // is the point, and a row of open boxes invites none of them being filled.
   const [declining, setDeclining] = useState(null);
@@ -16204,7 +16243,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
     <main className="ss-main">
       <div className="dash-hello">
         <div>
-          <h2>Good to see you, {first}</h2>
+          <Hello name={first} weather={weather} />
           <p>{isOwner
             ? (jobs.length === 0
                 ? `Nothing scheduled at your ${props.length === 1 ? "building" : "buildings"} yet.`
@@ -18970,7 +19009,7 @@ function SendDocPack({ company, anyOnFile }) {
   );
 }
 
-function ContractorPortal({ sub, jobs, pane, mine, elsewhere = [], onGoClient,
+function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [], onGoClient,
   quotes = [], onAnswerQuote, brand, me, orders, now,
   connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage,
   overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow }) {
@@ -19057,7 +19096,7 @@ function ContractorPortal({ sub, jobs, pane, mine, elsewhere = [], onGoClient,
           )}
           <div className="dash-hello">
             <div>
-              <h2>Good to see you, {first}</h2>
+              <Hello name={first} weather={weather} />
               <p>
                 {pending.length > 0
                   ? `${pending.length} job request${pending.length === 1 ? "" : "s"} waiting on you`
@@ -24802,6 +24841,12 @@ p.fld-note{margin:6px 0 0}
 /* admin dashboard */
 .dash-hello{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:18px}
 .dash-hello h2{margin:0;font-size:21px;letter-spacing:-.02em}
+/* The weather, beside the greeting rather than under it: it is a glance, not
+   a line of its own, and it must not move the heading when it fails to
+   arrive. */
+.hello-wx{margin-left:10px;font-size:12.5px;font-weight:600;letter-spacing:0;color:var(--ink-soft);
+  background:var(--paper);border:1px solid var(--line);border-radius:20px;padding:3px 10px;
+  white-space:nowrap;vertical-align:3px}
 .dash-hello p{margin:4px 0 0;font-size:13px;color:var(--ink-soft)}
 .dash-cta{display:flex;gap:8px;flex:none}
 .dash-card{text-align:left;border:1px solid var(--line);cursor:pointer;font-family:inherit}

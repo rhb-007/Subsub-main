@@ -38,6 +38,7 @@ import { canRequestQuotes, quotableSubs, validInvitees, canQuote, validQuote,
   quoteJobShape, rankQuotes, canAward, requestState, MAX_INVITES } from "../shared/quotes.js";
 import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { hasPortal, canSet as canSetAuto, AUTO_DENY_TEXT } from "../shared/autoschedule.js";
+import { WEATHER_TTL_MIN, weatherLabel } from "../shared/greeting.js";
 import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
 import { eligible as overflowEligible, canBroadcast, overflowSplit, postClosed,
@@ -2233,6 +2234,68 @@ const connectRequestToJs = (r) => ({
 // contractor and reading `reused` off the answer -- that has been true
 // since the dedupe was written. What is new is that they learn it BEFORE
 // typing a profile that would have been thrown away.
+// The weather where this account is, for the line at the top of the dashboard.
+//
+// Server-side rather than from the browser, for three reasons. The call is
+// cacheable once for everybody on the account instead of once per tab; the
+// browser never talks to a third party, so nothing about who is looking at
+// SubSub leaves our origin; and an outbound host that goes down cannot take a
+// dashboard with it.
+//
+// Open-Meteo: no key, no account, and it asks for a latitude and a longitude
+// rather than an address, so what leaves here is a town and a state -- not a
+// customer, not a person, not a building.
+//
+// It is DECORATION. Every failure answers {} and the screen shows a greeting
+// with no chip. Nothing on this route may ever be the reason a dashboard does
+// not load.
+const weatherCache = new Map();
+
+app.get("/api/weather", async (c) => {
+  const { accountId } = c.get("auth");
+  try {
+    const co = await c.env.DB.prepare(
+      `SELECT co.city AS city, co.state AS state
+         FROM accounts ac LEFT JOIN companies co ON co.id = ac.company_id
+        WHERE ac.id = ?`
+    ).bind(accountId).first();
+    const city = String(co?.city || "").trim();
+    const state = String(co?.state || "").trim();
+    // No address, no weather, and no apology: a dashboard that says "we do not
+    // know where you are" has spent a line to say nothing.
+    if (!city) return c.json({});
+
+    const key = `${city.toLowerCase()}|${state.toLowerCase()}`;
+    const hit = weatherCache.get(key);
+    if (hit && Date.now() - hit.at < WEATHER_TTL_MIN * 60_000) return c.json(hit.value);
+
+    const geo = await fetch(
+      `https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json`
+      + `&name=${encodeURIComponent(city)}`
+      + (state ? `&admin1=${encodeURIComponent(state)}` : "")
+    ).then((r) => r.json()).catch(() => null);
+    const place = geo?.results?.[0];
+    if (!place) { weatherCache.set(key, { at: Date.now(), value: {} }); return c.json({}); }
+
+    const wx = await fetch(
+      `https://api.open-meteo.com/v1/forecast?current=temperature_2m,weather_code`
+      + `&temperature_unit=fahrenheit&latitude=${place.latitude}&longitude=${place.longitude}`
+    ).then((r) => r.json()).catch(() => null);
+    const cur = wx?.current;
+    if (!cur || typeof cur.temperature_2m !== "number" || weatherLabel(cur.weather_code) === null) {
+      weatherCache.set(key, { at: Date.now(), value: {} });
+      return c.json({});
+    }
+
+    const value = { tempF: cur.temperature_2m, code: cur.weather_code, place: city };
+    weatherCache.set(key, { at: Date.now(), value });
+    return c.json(value);
+  } catch (err) {
+    console.warn("[weather] not read:", err?.message || err);
+    return c.json({});
+  }
+});
+
 app.get("/api/connect/lookup", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   const q = c.req.query();
