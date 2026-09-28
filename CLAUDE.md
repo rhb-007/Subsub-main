@@ -406,6 +406,45 @@ refactor.
   greeting renders alone. A weather chip is worth exactly as much as it costs,
   and it must never cost a dashboard.
 
+  **And that is what hid the bug for as long as it lasted.** The town was read
+  off `accounts.company_id → companies.city` and nowhere else — a column only
+  **hireable** kinds have, because 031 mints a company row for a general
+  contractor and a subcontractor and `m031_others_with` actively forbids one
+  for anybody else. So a property manager, a building owner and a portfolio
+  manager never got a failed lookup; they got a join that could not match, on
+  three of the five kinds. `{}` is the same reply for "nothing to show" and
+  "this query is wrong", which is the right trade for a dashboard and the
+  reason nothing on any screen could report it. Every browser test drove a
+  subcontractor, and the route had no server test at all.
+
+  `accountPlace` is the one place that decides now: the company row when there
+  is one, otherwise the **buildings**. Which is the more honest answer for those
+  three kinds anyway — a managing agent's weather is the weather where the work
+  is. Most common town across the portfolio, **owned as well as operated**,
+  because an owner who has appointed a manager still watches those buildings
+  and watching them is the entire reason they are here.
+
+  The tie-break (`ORDER BY n DESC, lower(TRIM(city)) ASC`) is there so one
+  account produces one cache key rather than two answers. Asserting the winner
+  against one fixture **passed with the whole `ORDER BY` deleted**, because
+  SQLite's `GROUP BY` hands the groups back in key order anyway — an
+  implementation detail, not a guarantee. The test seeds the same two towns in
+  **opposite insertion orders** and requires them to agree, which is the
+  property the clause actually buys.
+
+  **The general rule, and this file keeps relearning it: `company_id` is what a
+  hireable account has, not what an account has.** Anything reading it to answer
+  a question about the *account* is answering it for two kinds out of five.
+
+  Still open, and it needs a migration rather than a patch: **the city a
+  non-hireable account types at signup is validated and then discarded.** There
+  is no company row to put it in and no column on `accounts` to hold it, so a
+  brand-new property manager with no buildings yet still has nowhere to get a
+  town from. A backfill cannot help the accounts that already exist — the
+  address was never stored — so the buildings fallback is the only thing that
+  fixes them, and `accounts.city` / `.state` would only serve signups from the
+  day it ships.
+
 - **A preview's address bar is a claim, and it was the wrong one.** The Branding
   tab carries two previews. One is the sign-in page; the other is the form a
   subcontractor fills in — and it had no title, so it read as an unlabelled

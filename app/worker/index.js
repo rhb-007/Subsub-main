@@ -2257,19 +2257,74 @@ const connectRequestToJs = (r) => ({
 // not load.
 const weatherCache = new Map();
 
-app.get("/api/weather", async (c) => {
-  const { accountId } = c.get("auth");
+// Where an account IS, for the one purpose of naming a town to a weather API.
+//
+// This read `accounts.company_id -> companies.city` and nothing else, which is
+// a column only HIREABLE kinds have: 031 mints a company row for a general
+// contractor and a subcontractor, and CHECK.sql's m031_others_with forbids one
+// for anybody else. So a property manager, a building owner and a portfolio
+// manager did not get a failed lookup -- they got a join that could never
+// match, and answered `{}` every time. Three of the five kinds, silently, and
+// silently is the trap: every failure here answers `{}` on purpose, so "no
+// weather" is indistinguishable from "no weather YET" and nothing ever said
+// the query was wrong. The browser tests all drove a subcontractor.
+//
+// Their address is their BUILDINGS, which is the more honest answer for them
+// anyway: a managing agent's weather is the weather where the work is. Most
+// common town across the portfolio, tie-broken by name so one account always
+// produces one cache key. OWNED as well as operated, because an owner who has
+// appointed a manager still watches those buildings and watching them is the
+// entire reason they are here.
+//
+// The general rule this is an instance of, and it is the one this file keeps
+// relearning: `company_id` is what a hireable account has, not what an account
+// has. Anything reading it to answer a question about the ACCOUNT is answering
+// it for two kinds out of five.
+async function accountPlace(env, accountId) {
+  // What they said about themselves, when there is a row that can hold it.
   try {
-    const co = await c.env.DB.prepare(
+    const co = await env.DB.prepare(
       `SELECT co.city AS city, co.state AS state
-         FROM accounts ac LEFT JOIN companies co ON co.id = ac.company_id
+         FROM accounts ac JOIN companies co ON co.id = ac.company_id
         WHERE ac.id = ?`
     ).bind(accountId).first();
     const city = String(co?.city || "").trim();
-    const state = String(co?.state || "").trim();
+    if (city) return { city, state: String(co.state || "").trim() };
+  } catch (err) {
+    // A database without 031 has no company_id at all. Fall through to the
+    // buildings rather than taking the dashboard's greeting with it.
+    if (!missingSchema(err)) throw err;
+  }
+
+  // Otherwise the portfolio.
+  try {
+    const row = await env.DB.prepare(
+      `SELECT city, state, COUNT(*) AS n
+         FROM properties
+        WHERE (account_id = ? OR owner_account_id = ?)
+          AND city IS NOT NULL AND TRIM(city) <> ''
+        GROUP BY lower(TRIM(city)), lower(TRIM(COALESCE(state, '')))
+        ORDER BY n DESC, lower(TRIM(city)) ASC
+        LIMIT 1`
+    ).bind(accountId, accountId).first();
+    const city = String(row?.city || "").trim();
+    if (city) return { city, state: String(row.state || "").trim() };
+  } catch (err) {
+    // owner_account_id is 039.
+    if (!missingSchema(err)) throw err;
+  }
+
+  return null;
+}
+
+app.get("/api/weather", async (c) => {
+  const { accountId } = c.get("auth");
+  try {
+    const where = await accountPlace(c.env, accountId);
     // No address, no weather, and no apology: a dashboard that says "we do not
     // know where you are" has spent a line to say nothing.
-    if (!city) return c.json({});
+    if (!where) return c.json({});
+    const { city, state } = where;
 
     const key = `${city.toLowerCase()}|${state.toLowerCase()}`;
     const hit = weatherCache.get(key);
