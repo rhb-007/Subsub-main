@@ -135,4 +135,7 @@ SELECT
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='api_tokens')               AS m048_api_tokens,
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='job_sources')              AS m048_job_sources,
   (SELECT COUNT(*) FROM sqlite_master
-    WHERE type='index' AND name='ux_job_sources_external')                                    AS m048_dedupe_index;
+    WHERE type='index' AND name='ux_job_sources_external')                                    AS m048_dedupe_index,
+  -- 049. The account's CRM vocabulary, and the words that meant nothing.
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='crm_trade_rules')           AS m049_trade_rules,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='crm_unmapped')              AS m049_unmapped;

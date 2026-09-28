@@ -132,7 +132,8 @@
     "test:subedit": "node scripts/sub-edit-test.mjs",
     "test:schemadrift": "node --no-warnings scripts/schema-drift-test.mjs",
     "test:weather": "node --no-warnings scripts/weather-test.mjs",
-    "test:apiingest": "node --no-warnings scripts/api-ingest-test.mjs"
+    "test:apiingest": "node --no-warnings scripts/api-ingest-test.mjs",
+    "test:jobnimbus": "node --no-warnings scripts/jobnimbus-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

@@ -1997,6 +1997,63 @@ refactor.
   checked by pointing the link at a page that does not exist and watching it
   fail.
 
+- **JobNimbus cannot call the generic endpoint, and the reason is not a
+  rename.** `/api/v1/jobs` is for somebody writing code. Three things stop a
+  CRM being that somebody. Its automation Webhook action takes a **URL and
+  nothing else** — no field for a header, so `Authorization: Bearer` cannot be
+  set. It sends **its own field names** (`jnid`, `date_start`,
+  `address_line1`). And it has **no concept of a trade**: nothing in the
+  payload says `roofing`.
+
+  Two of those are translation. The third is an account decision, and it is
+  what `app/shared/crmmap.js` and migration 049 exist for.
+
+  The token therefore travels in the **path** —
+  `/api/v1/hooks/jobnimbus/:token` — which is the same shape and the same
+  reasoning as `/api/pack/:token`: a 32-byte random value either way, and the
+  only door a system that cannot set a header can come through.
+  `apiCallerByPathToken` shares every check with the header route rather than
+  being a lighter one, and a test drives a downgraded account at it to prove
+  the plan gate still fires.
+
+  **A job whose words map to nothing still ARRIVES, and that is the whole
+  design.** Refusing it is the worst answer available: the webhook does not
+  get a 200, so it retries, so it keeps not getting one — and **nobody is
+  told**. The job never lands, the account never learns it did not, and the
+  only symptom is work quietly missing from SubSub. So it lands with no
+  trades, the reply says `needsTrades` while whoever is setting it up is still
+  looking at the screen, and the unrecognised words are **counted** in
+  `crm_unmapped`. "Three jobs arrived with type Roof Replacement" is a
+  question somebody answers in one tap; "some jobs had no trades" is a
+  mystery. Answering it **clears the row**, because a queue that keeps
+  answered work in it stops meaning anything.
+
+  Three properties of the matching, each mutation-tested. It is **union, not
+  first-match**: a job tagged both roof and gutters needs both trades, and
+  picking one silently drops a slot discovered when the gutter crew never
+  turns up. It is **whole-value and case-insensitive, never a prefix** — a
+  rule for `Roofing` catching `Roofing Inspection — no work` is how a roofer
+  ends up on a job nobody is roofing, which is the same instinct the connect
+  lookup follows for a different reason. And a rule matches **one named
+  field**, never a sweep of the payload, so somebody can read their own rules
+  back and know what each does.
+
+  Two traps in their data. `date_start` is **epoch seconds**; read as
+  milliseconds it lands in 1970 and the job sits in a calendar nobody will
+  scroll to. And `address_line2` is an **addition to a street, never a street**
+  — "Unit B" with no line1 would otherwise satisfy the has-a-location check
+  with nothing a contractor can be sent to.
+
+  `ingestJob` is **one implementation**, shared by the generic endpoint and
+  every CRM-shaped receiver. Two copies of an insert carrying duplicate
+  protection this specific is two places for the guard to rot.
+
+  Worth recording because it decides the architecture: JobNimbus **API access
+  is gated to their ~$550/month tier**, while automations and webhooks are
+  available on the ~$225 one. A webhook receiver therefore reaches far more of
+  their customers than a pull integration using their API key would — and we
+  never hold somebody's CRM credential.
+
 - **Overflow is broadcast, not browse.** When an account has nobody on its
   own roster for an urgent job, it may broadcast to opted-in companies —
   general contractors included, since 031 made every one of them hireable.

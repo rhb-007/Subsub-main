@@ -1581,3 +1581,37 @@ CREATE TABLE IF NOT EXISTS job_sources (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_job_sources_external
   ON job_sources(account_id, source, external_id);
+
+-- ---------------------------------------------------------------------------
+-- 049. What a CRM's own words mean in SubSub trades.
+-- ---------------------------------------------------------------------------
+-- JobNimbus has no concept of a trade, so the account maps its own vocabulary
+-- once and every job after that lands with its trades on it.
+CREATE TABLE IF NOT EXISTS crm_trade_rules (
+  id          TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  source      TEXT NOT NULL,
+  match_kind  TEXT NOT NULL,
+  match_value TEXT NOT NULL,
+  trades      TEXT NOT NULL,
+  created_by  TEXT REFERENCES users(id),
+  created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_crm_rules
+  ON crm_trade_rules(account_id, source, match_kind, match_value);
+
+-- Words that arrived and meant nothing. An unmapped job still ARRIVES --
+-- refusing it would make the CRM retry forever with nobody told -- so what
+-- failed to match is kept here, counted, as a one-tap work queue.
+CREATE TABLE IF NOT EXISTS crm_unmapped (
+  id          TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  source      TEXT NOT NULL,
+  match_kind  TEXT NOT NULL,
+  match_value TEXT NOT NULL,
+  hits        INTEGER NOT NULL DEFAULT 0,
+  last_seen   TEXT,
+  created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_crm_unmapped
+  ON crm_unmapped(account_id, source, match_kind, match_value);

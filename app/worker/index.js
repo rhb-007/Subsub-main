@@ -21,7 +21,8 @@ import { sendSms, toE164 } from "./sms.js";
 // never taken from what the browser claims -- otherwise a dripping tap could
 // be labelled urgent and call somebody out at the account's expense.
 import { severityOf } from "../shared/emergency.js";
-import { validateIngest } from "../shared/ingest.js";
+import { validateIngest, SOURCES } from "../shared/ingest.js";
+import { tradesFor, validRule } from "../shared/crmmap.js";
 // The same fifty states the browser offers, so a client that sends
 // something else -- an old build, a script, a typo that got through --
 // cannot put it in the database.
@@ -10279,7 +10280,25 @@ async function apiCaller(c) {
     return { res: apiError(c, 401, "missing_token",
       "Send your SubSub API token as: Authorization: Bearer <token>.") };
   }
+  return apiCallerForToken(c, raw);
+}
 
+// The same caller, with the token read off the PATH instead of a header.
+//
+// Not a weaker door -- every check below is the one the header route makes.
+// It exists because a JobNimbus automation webhook takes a URL and offers no
+// field for a header, so a token that can only arrive in a header cannot
+// arrive at all. Same shape and same reasoning as /api/pack/:token.
+async function apiCallerByPathToken(c) {
+  const raw = String(c.req.param("token") || "").trim();
+  if (!raw) {
+    return { res: apiError(c, 401, "missing_token",
+      "The webhook URL must end with your SubSub webhook token.") };
+  }
+  return apiCallerForToken(c, raw);
+}
+
+async function apiCallerForToken(c, raw) {
   let row;
   try {
     row = await c.env.DB.prepare(
@@ -10346,6 +10365,100 @@ async function touchApiToken(env, token) {
 }
 
 // POST /api/v1/jobs -- the one endpoint a CRM calls.
+// Creating the job, and the retry protection. ONE implementation: the generic
+// endpoint and every CRM-shaped receiver go through here, because two copies
+// of an insert this careful is two places for the duplicate guard to rot.
+//
+// Answers a plain object rather than a Response, so each caller can shape its
+// own reply -- the JobNimbus one has to report the trade mapping too.
+async function ingestJob(c, { accountId, token, source, job: j }) {
+  if (j.propertyId) {
+    const prop = await c.env.DB.prepare(
+      `SELECT id FROM properties WHERE id = ? AND account_id = ?`
+    ).bind(j.propertyId, accountId).first();
+    // not_found for somebody else's building as well as one that does not
+    // exist: a 403 would confirm which property ids are real.
+    if (!prop) {
+      return { error: "property_not_found", status: 404,
+        message: "No building with that propertyId on this account." };
+    }
+  }
+
+  // The retry. Asked before the insert AND enforced by the unique index
+  // after it: the index is what is correct when two deliveries arrive at
+  // once, this is what makes the ordinary retry cheap and hands back the id.
+  let seen;
+  try {
+    seen = await c.env.DB.prepare(
+      `SELECT job_id FROM job_sources
+        WHERE account_id = ? AND source = ? AND external_id = ?`
+    ).bind(accountId, source, j.externalId).first();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return { error: "migration_needed", status: 503,
+      message: "This SubSub environment has not had migration 048 applied yet.",
+      extra: { migration } };
+  }
+  if (seen) {
+    await touchApiToken(c.env, token);
+    return { jobId: seen.job_id, duplicate: true };
+  }
+
+  const id = uid();
+  // created_by is deliberately NULL: no person created this. Provenance goes
+  // on job_sources, where it is true.
+  const cols = ["id", "account_id", "title", "client", "address", "area", "zip",
+    "sqft", "stories", "date", "time", "trades", "scope", "property_id",
+    "materials_paid_by", "material_source", "notes", "created_by"];
+  const vals = [id, accountId, j.title, j.client, j.address, j.area, j.zip,
+    j.sqft, j.stories, j.date, j.time, JSON.stringify(j.trades || []), j.scope, j.propertyId,
+    j.materialsPaidBy, j.materialSource, j.notes, null];
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO jobs (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`
+    ).bind(...vals).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return { error: "migration_needed", status: 503,
+      message: "This SubSub database is behind the code.", extra: { migration } };
+  }
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO job_sources (job_id, account_id, source, external_id, token_id)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(id, accountId, source, j.externalId, token.id).run();
+  } catch (err) {
+    // The unique index fired: a second delivery landed between the check and
+    // here. The other one won; report the job that exists rather than leaving
+    // one nothing points at.
+    const other = await c.env.DB.prepare(
+      `SELECT job_id FROM job_sources WHERE account_id = ? AND source = ? AND external_id = ?`
+    ).bind(accountId, source, j.externalId).first().catch(() => null);
+    if (other) {
+      await c.env.DB.prepare(`DELETE FROM jobs WHERE id = ?`).bind(id).run().catch(() => {});
+      await touchApiToken(c.env, token);
+      return { jobId: other.job_id, duplicate: true };
+    }
+    throw err;
+  }
+
+  await logEvent(c.env, accountId, null, "job.created", id,
+    { title: j.title, via: "api", source, externalId: j.externalId });
+  await logActivity(c.env, accountId, null, "job_created",
+    (j.trades || []).length
+      ? `${j.title} arrived from ${source === "other" ? "your CRM" : source} and needs contractors`
+      // Said differently when nothing mapped, because the thing to do is
+      // different: this one cannot be assigned until somebody says what
+      // trade it is.
+      : `${j.title} arrived from ${source === "other" ? "your CRM" : source} and needs a trade`);
+  await touchApiToken(c.env, token);
+  return { jobId: id, duplicate: false };
+}
+
 app.post("/api/v1/jobs", async (c) => {
   const ctx = await apiCaller(c);
   if (ctx.res) return ctx.res;
@@ -10361,100 +10474,13 @@ app.post("/api/v1/jobs", async (c) => {
       "Some fields were missing or not understood. See `errors` for which.",
       { errors: check.errors });
   }
-  const j = check.job;
 
-  // A named building has to be one of theirs. Checked before anything is
-  // written, and answering not_found for a building on somebody else's
-  // account as well as one that does not exist -- a 403 would confirm which
-  // property ids are real, which is the oracle refused everywhere else here.
-  if (j.propertyId) {
-    const prop = await c.env.DB.prepare(
-      `SELECT id FROM properties WHERE id = ? AND account_id = ?`
-    ).bind(j.propertyId, accountId).first();
-    if (!prop) {
-      return apiError(c, 404, "property_not_found",
-        "No building with that propertyId on this account.");
-    }
-  }
+  const res = await ingestJob(c, { accountId, token, source: check.job.source, job: check.job });
+  if (res.error) return apiError(c, res.status, res.error, res.message, res.extra || {});
 
-  // The retry. Asked BEFORE the insert as well as being enforced by the
-  // unique index after it: the index is what makes this correct under two
-  // deliveries arriving at once, and this is what makes the ordinary retry
-  // cheap and gives it the job id back.
-  let seen;
-  try {
-    seen = await c.env.DB.prepare(
-      `SELECT job_id FROM job_sources
-        WHERE account_id = ? AND source = ? AND external_id = ?`
-    ).bind(accountId, j.source, j.externalId).first();
-  } catch (err) {
-    const migration = missingSchema(err);
-    if (!migration) throw err;
-    return apiError(c, 503, "migration_needed",
-      "This SubSub environment has not had migration 048 applied yet.", { migration });
-  }
-  if (seen) {
-    await touchApiToken(c.env, token);
-    // 200 rather than 201, and `duplicate: true`, so a caller that counts
-    // creations is not told it made one. The job id is the same one, which is
-    // what a retrying webhook actually needs.
-    return c.json({ ok: true, duplicate: true, jobId: seen.job_id,
-      url: `https://app.subsub.work/?job=${seen.job_id}` });
-  }
-
-  const id = uid();
-  // created_by is deliberately NULL: no person created this. Nothing reads
-  // the column, and naming the token's owner would put a sentence in the
-  // audit trail saying somebody did a thing they did not do. Provenance goes
-  // on job_sources, where it is true.
-  const cols = ["id", "account_id", "title", "client", "address", "area", "zip",
-    "sqft", "stories", "date", "time", "trades", "scope", "property_id",
-    "materials_paid_by", "material_source", "notes", "created_by"];
-  const vals = [id, accountId, j.title, j.client, j.address, j.area, j.zip,
-    j.sqft, j.stories, j.date, j.time, JSON.stringify(j.trades), j.scope, j.propertyId,
-    j.materialsPaidBy, j.materialSource, j.notes, null];
-
-  try {
-    await c.env.DB.prepare(
-      `INSERT INTO jobs (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`
-    ).bind(...vals).run();
-  } catch (err) {
-    const migration = missingSchema(err);
-    if (!migration) throw err;
-    return apiError(c, 503, "migration_needed",
-      "This SubSub database is behind the code.", { migration });
-  }
-
-  try {
-    await c.env.DB.prepare(
-      `INSERT INTO job_sources (job_id, account_id, source, external_id, token_id)
-       VALUES (?, ?, ?, ?, ?)`
-    ).bind(id, accountId, j.source, j.externalId, token.id).run();
-  } catch (err) {
-    // The unique index fired, which means a second delivery of the same job
-    // landed between the check above and here. The other one won; this one
-    // reports the job that exists rather than leaving a job nothing points
-    // at. Deleting ours keeps "one external id, one job" true.
-    const other = await c.env.DB.prepare(
-      `SELECT job_id FROM job_sources WHERE account_id = ? AND source = ? AND external_id = ?`
-    ).bind(accountId, j.source, j.externalId).first().catch(() => null);
-    if (other) {
-      await c.env.DB.prepare(`DELETE FROM jobs WHERE id = ?`).bind(id).run().catch(() => {});
-      await touchApiToken(c.env, token);
-      return c.json({ ok: true, duplicate: true, jobId: other.job_id,
-        url: `https://app.subsub.work/?job=${other.job_id}` });
-    }
-    throw err;
-  }
-
-  await logEvent(c.env, accountId, null, "job.created", id,
-    { title: j.title, via: "api", source: j.source, externalId: j.externalId });
-  await logActivity(c.env, accountId, null, "job_created",
-    `${j.title} arrived from ${j.source === "other" ? "your CRM" : j.source} and needs contractors`);
-  await touchApiToken(c.env, token);
-
-  return c.json({ ok: true, duplicate: false, jobId: id, trades: j.trades,
-    url: `https://app.subsub.work/?job=${id}` }, 201);
+  return c.json({ ok: true, duplicate: res.duplicate, jobId: res.jobId,
+    trades: check.job.trades,
+    url: `https://app.subsub.work/?job=${res.jobId}` }, res.duplicate ? 200 : 201);
 });
 
 // ---- The tokens themselves, from inside the account ----------------------
@@ -10530,6 +10556,251 @@ app.delete("/api/api-tokens/:id", requireRole("admin"), async (c) => {
   await logActivity(c.env, accountId, userId, "api_token_revoked", `Revoked an API token: ${row.name}`);
   return c.json({ ok: true });
 });
+
+// ---------------------------------------------------------------------------
+// JobNimbus, specifically
+// ---------------------------------------------------------------------------
+// `/api/v1/jobs` is the endpoint for somebody writing code. JobNimbus is not
+// somebody writing code, and three things stop it calling that endpoint:
+//
+//   1. Its automation Webhook action takes a URL and nothing else. There is
+//      no field for a header, so `Authorization: Bearer` cannot be set. The
+//      token therefore travels in the PATH -- the same reason, and the same
+//      shape, as /api/pack/:token, which is in this file for exactly this
+//      constraint. It is a 32-byte random value either way; what changes is
+//      that a URL is likelier to be written down, so this route is the one
+//      place a token can be rotated without touching anything else.
+//   2. It sends its own field names: `jnid`, `date_start`, `address_line1`.
+//   3. It has NO CONCEPT OF A TRADE. Nothing in the payload says `roofing`.
+//
+// The third is the one that needs an account decision rather than a rename,
+// and `app/shared/crmmap.js` is where it lives.
+//
+// A job whose words map to nothing STILL ARRIVES. Refusing it is the worst
+// available answer: the webhook does not get a 200, so it retries, so it
+// keeps not getting one, and nobody is told -- the work simply is not in
+// SubSub and the only way to find out is to notice. So it lands with no
+// trades and the unrecognised words are counted in `crm_unmapped`, which is
+// a question somebody can answer in one tap.
+
+// JobNimbus dates are epoch seconds on the payloads that carry them, and
+// sometimes an ISO string. Both are read; anything else is treated as absent
+// rather than guessed at, because a job on the wrong day is worse than a job
+// with no day.
+function jnDate(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number" || /^\d+$/.test(String(v))) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    // Seconds, not milliseconds: JobNimbus sends seconds, and a value that
+    // large read as ms lands in 1970.
+    const d = new Date(n * 1000);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString().slice(0, 10);
+  }
+  const s = String(v).trim();
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(s);
+  return m ? m[1] : null;
+}
+
+const jnStr = (v) => (v == null ? "" : String(v).trim());
+
+// Their shape to ours. Named separately from the route so the mapping is
+// readable on its own and the test can drive it directly.
+export function fromJobNimbus(p) {
+  // line2 is an ADDITION to a street, never a street on its own: "Unit B"
+  // with no line1 is not somewhere a contractor can be sent, and letting it
+  // stand alone would pass the has-a-location check with nothing usable.
+  const line1 = jnStr(p?.address_line1);
+  const street = line1
+    ? [line1, jnStr(p?.address_line2)].filter(Boolean).join(", ")
+    : "";
+  // A job in JobNimbus is often named only by its customer, so the display
+  // name is the fallback rather than a generated string: "Job JN-1041" tells
+  // somebody less than the customer's name does.
+  const title = jnStr(p?.name) || jnStr(p?.display_name)
+    || [jnStr(p?.first_name), jnStr(p?.last_name)].filter(Boolean).join(" ")
+    || jnStr(p?.number) || "Job from JobNimbus";
+  return {
+    externalId: jnStr(p?.jnid) || jnStr(p?.number) || jnStr(p?.external_id),
+    title: title.slice(0, 200),
+    date: jnDate(p?.date_start) || jnDate(p?.date_created),
+    address: street || null,
+    area: jnStr(p?.city) || null,
+    zip: jnStr(p?.zip) || null,
+    client: jnStr(p?.display_name)
+      || [jnStr(p?.first_name), jnStr(p?.last_name)].filter(Boolean).join(" ") || null,
+    scope: jnStr(p?.description) || null,
+  };
+}
+
+app.post("/api/v1/hooks/jobnimbus/:token", async (c) => {
+  const ctx = await apiCallerByPathToken(c);
+  if (ctx.res) return ctx.res;
+  const { token, accountId } = ctx;
+  const SOURCE = "jobnimbus";
+
+  let body;
+  try { body = await c.req.json(); }
+  catch { return apiError(c, 400, "invalid_json", "The request body must be valid JSON."); }
+
+  // JobNimbus wraps the record on some events and sends it bare on others.
+  const p = (body && typeof body === "object" && !Array.isArray(body))
+    ? (body.data && typeof body.data === "object" ? body.data : body)
+    : null;
+  if (!p) return apiError(c, 400, "invalid_body", "The request body must be a JSON object.");
+
+  const j = fromJobNimbus(p);
+  // Only the things that cannot be recovered. Trades are deliberately NOT in
+  // here: an unmapped job arrives and is flagged, and refusing it would make
+  // the webhook retry forever with nobody told.
+  const missing = [];
+  if (!j.externalId) missing.push("jnid");
+  if (!j.date) missing.push("date_start");
+  if (!j.address && !j.area) missing.push("address_line1");
+  if (missing.length) {
+    return apiError(c, 400, "invalid_request",
+      `This JobNimbus record is missing ${missing.join(", ")}, which SubSub needs to schedule work.`,
+      { errors: missing.map((f) => ({ field: f, code: "required" })) });
+  }
+
+  let rules = [];
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT match_kind, match_value, trades FROM crm_trade_rules
+        WHERE account_id = ? AND source = ?`
+    ).bind(accountId, SOURCE).all();
+    rules = (results || []).map((r) => ({
+      match: r.match_kind, value: r.match_value, trades: parseJson(r.trades, []),
+    }));
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return apiError(c, 503, "migration_needed",
+      "This SubSub environment has not had migration 049 applied yet.", { migration });
+  }
+
+  const mapped = tradesFor(p, rules, { tradeIds: TRADE_IDS });
+
+  // Record the words we did not understand BEFORE creating the job, so a
+  // failure to write the job does not leave the queue claiming a gap that
+  // produced nothing. Never fails the request: a work queue that can break an
+  // integration is worse than one with a hole in it.
+  if (!mapped.trades.length) {
+    for (const u of mapped.unmatched) {
+      try {
+        await c.env.DB.prepare(
+          `INSERT INTO crm_unmapped (id, account_id, source, match_kind, match_value, hits, last_seen)
+           VALUES (?, ?, ?, ?, ?, 1, datetime('now'))
+           ON CONFLICT (account_id, source, match_kind, match_value)
+             DO UPDATE SET hits = hits + 1, last_seen = datetime('now')`
+        ).bind(uid(), accountId, SOURCE, u.kind, u.value.slice(0, 120)).run();
+      } catch (err) {
+        console.warn("[jobnimbus] unmapped not recorded:", err?.message || err);
+      }
+    }
+  }
+
+  const res = await ingestJob(c, {
+    accountId, token, source: SOURCE,
+    job: {
+      externalId: j.externalId, title: j.title, date: j.date,
+      trades: mapped.trades,
+      time: "07:00",
+      address: j.address, area: j.area, zip: j.zip, client: j.client,
+      scope: j.scope, propertyId: null, notes: null,
+      materialsPaidBy: null, materialSource: null, sqft: null, stories: null,
+    },
+  });
+  if (res.error) return apiError(c, res.status, res.error, res.message, res.extra || {});
+
+  // The reply says what happened to the trades, because the integrator
+  // setting this up needs to see the mapping work -- and needs to see it not
+  // working while they are still looking at it, rather than a week later.
+  return c.json({
+    ok: true, duplicate: res.duplicate, jobId: res.jobId,
+    trades: mapped.trades,
+    needsTrades: mapped.trades.length === 0,
+    unmapped: mapped.unmatched.map((u) => `${u.kind}:${u.value}`),
+    url: `https://app.subsub.work/?job=${res.jobId}`,
+  }, res.duplicate ? 200 : 201);
+});
+
+// ---- The rules, from inside the account ----------------------------------
+app.get("/api/crm-rules", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  try {
+    const rules = await c.env.DB.prepare(
+      `SELECT id, source, match_kind, match_value, trades FROM crm_trade_rules
+        WHERE account_id = ? ORDER BY match_kind, match_value`
+    ).bind(accountId).all();
+    const gaps = await c.env.DB.prepare(
+      `SELECT id, source, match_kind, match_value, hits, last_seen FROM crm_unmapped
+        WHERE account_id = ? ORDER BY hits DESC, last_seen DESC LIMIT 50`
+    ).bind(accountId).all();
+    return c.json({
+      rules: (rules.results || []).map((r) => ({
+        id: r.id, source: r.source, match: r.match_kind, value: r.match_value,
+        trades: parseJson(r.trades, []),
+      })),
+      // What arrived meaning nothing, commonest first -- the work queue.
+      unmapped: (gaps.results || []).map((r) => ({
+        id: r.id, source: r.source, match: r.match_kind, value: r.match_value,
+        hits: r.hits, lastSeen: r.last_seen,
+      })),
+    });
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ rules: [], unmapped: [] });
+    throw err;
+  }
+});
+
+app.post("/api/crm-rules", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const rule = validRule(b, { tradeIds: TRADE_IDS });
+  if (!rule) return c.json({ error: "invalid_rule" }, 400);
+  const source = SOURCES.includes(String(b?.source || "").toLowerCase())
+    ? String(b.source).toLowerCase() : "jobnimbus";
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO crm_trade_rules (id, account_id, source, match_kind, match_value, trades, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (account_id, source, match_kind, match_value)
+         DO UPDATE SET trades = excluded.trades`
+    ).bind(uid(), accountId, source, rule.match, rule.value,
+      JSON.stringify(rule.trades), userId).run();
+    // Answering the question clears it from the queue. Leaving it would make
+    // the list read as work still to do, which is how a queue stops meaning
+    // anything.
+    await c.env.DB.prepare(
+      `DELETE FROM crm_unmapped
+        WHERE account_id = ? AND source = ? AND match_kind = ? AND lower(match_value) = lower(?)`
+    ).bind(accountId, source, rule.match, rule.value).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+
+  await logEvent(c.env, accountId, userId, "crm_rule.saved", null,
+    { source, match: rule.match, value: rule.value, trades: rule.trades });
+  return c.json({ ok: true });
+});
+
+app.delete("/api/crm-rules/:id", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = c.req.param("id");
+  const row = await c.env.DB.prepare(
+    `SELECT id FROM crm_trade_rules WHERE id = ? AND account_id = ?`
+  ).bind(id, accountId).first().catch(() => null);
+  if (!row) return c.json({ error: "not_found" }, 404);
+  await c.env.DB.prepare(`DELETE FROM crm_trade_rules WHERE id = ?`).bind(id).run();
+  await logEvent(c.env, accountId, userId, "crm_rule.removed", id, {});
+  return c.json({ ok: true });
+});
+
 
 // ---------------------------------------------------------------------------
 // Staff are deliberately not a role in the app's own role table: they get a
