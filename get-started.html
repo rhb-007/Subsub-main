@@ -756,7 +756,15 @@ body.nav-open{overflow:hidden}
     document.getElementById('invOf').textContent = plan==='basic' ? 'of 3 on Basic' : 'on Scale — no limit';
     var brandOn = PLANS[plan].branding;
     document.getElementById('brandBlock').classList.toggle('hide', !brandOn);
-    document.getElementById('brandLocked').classList.toggle('hide', brandOn);
+    /* The Scale upsell is hidden from a subcontractor, not just reworded. It
+       says "on Basic your SUBCONTRACTORS sign in through SubSub", and they have
+       none -- and what Scale actually sells (unlimited subcontractors, users
+       and jobs, plus branding for a roster they do not keep) answers no
+       question they have. Offering it here would also contradict the rest of
+       this flow, which drops the plan pill and the price links for the same
+       reason. Here in paintPlan rather than paintRole because paintRole calls
+       this last, and a hide set before it would be undone. */
+    document.getElementById('brandLocked').classList.toggle('hide', brandOn || isSub());
     document.getElementById('invHint').textContent = plan==='basic'
       ? 'Add up to three now. You can invite more any time.'
       : 'Add as many as you like now, or invite more later.';
@@ -1124,11 +1132,16 @@ body.nav-open{overflow:hidden}
     upBox.classList.add('hide');
   });
 
-  document.getElementById('trades').addEventListener('click', function(e){
-    var b = e.target.closest('button');
-    if(!b) return;
-    b.setAttribute('aria-pressed', b.getAttribute('aria-pressed')==='true' ? 'false' : 'true');
-  });
+  /* NO DELEGATED HANDLER ON #trades. There used to be one here, toggling
+     aria-pressed exactly as the per-chip listener above already does -- so
+     every click ran both, toggled twice, and netted to nothing. A chip could
+     not be selected at all, and step 2 refuses to continue without at least
+     one trade, so PUBLIC SIGNUP WAS BLOCKED for every account kind.
+
+     The delegated one shipped in the first version of this page; the per-chip
+     one arrived later with the thirty categories and did not remove it. Two
+     handlers doing one job is the bug, and the surviving one is the per-chip
+     listener because it also clears the "pick at least one trade" error. */
 
   // How many subcontractors were invited, kept for the closing copy. The
   // copy itself is written once the API has answered, since what to say

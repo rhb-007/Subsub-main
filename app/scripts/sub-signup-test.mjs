@@ -492,6 +492,67 @@ try {
     await page.close();
   }
 
+  console.log("\n-- and a trade can actually be picked --");
+  {
+    // Not a subcontractor question at all in the end, which is why it is worth
+    // a test rather than a fix: #trades carried a DELEGATED click handler
+    // toggling aria-pressed, and each chip carried its own doing the same. Both
+    // ran on one click, so every selection toggled twice and netted to nothing.
+    // Step 2 refuses to continue without at least one trade, so public signup
+    // was blocked -- for every account kind, since the first version of this
+    // page. It surfaced on the subcontractor flow only because that is the
+    // screen somebody was looking at.
+    const { page, crashes } = await open("?as=subcontractor");
+    const pressed = () => page.evaluate(() =>
+      [...document.querySelectorAll('#trades button[aria-pressed="true"]')]
+        .map((b) => b.getAttribute("data-trade")));
+    const tap = (trade) => page.evaluate((t) =>
+      document.querySelector(`#trades button[data-trade="${t}"]`).click(), trade);
+
+    t.ck("nothing is picked to begin with", (await pressed()).length === 0);
+    await tap("roofing"); await wait(120);
+    t.ck("one tap selects it", JSON.stringify(await pressed()) === '["roofing"]',
+      JSON.stringify(await pressed()));
+    await tap("gutters"); await wait(120);
+    t.ck("and a second adds rather than replaces",
+      (await pressed()).length === 2, JSON.stringify(await pressed()));
+    // A double handler would also break DEselecting, in the other direction.
+    await tap("roofing"); await wait(120);
+    t.ck("tapping again removes just that one",
+      JSON.stringify(await pressed()) === '["gutters"]', JSON.stringify(await pressed()));
+
+    // And the thing the selection is FOR: step 2 will not continue without one.
+    t.ck("exactly one handler is bound to the chips, not two",
+      await page.evaluate(() => {
+        // Count how far one synthetic click moves it. Two handlers cancel out.
+        const b = document.querySelector('#trades button[data-trade="siding"]');
+        const was = b.getAttribute("aria-pressed");
+        b.click();
+        const now = b.getAttribute("aria-pressed");
+        b.click();
+        return was !== now;
+      }));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await page.close();
+  }
+
+  console.log("\n-- and Scale is not sold to somebody it cannot help --");
+  {
+    // "On Basic your SUBCONTRACTORS sign in through SubSub" -- they have none,
+    // and what Scale sells (unlimited subcontractors, users and jobs, branding
+    // for a roster they do not keep) answers no question they have.
+    const { page, crashes } = await open();
+    const locked = () => page.evaluate(() =>
+      !document.getElementById("brandLocked")?.classList.contains("hide"));
+    t.ck("a general contractor on Basic is still told about it", (await locked()) === true);
+    await pick(page, "Subcontractor");
+    t.ck("a subcontractor is not", (await locked()) === false);
+    await pick(page, "General contractor");
+    t.ck("and it comes back if they change their mind", (await locked()) === true);
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await page.close();
+  }
+
   console.log("\n-- arriving from a page written for subcontractors --");
   {
     // The licensing CTA says "Set up your compliance pack" to somebody who has
