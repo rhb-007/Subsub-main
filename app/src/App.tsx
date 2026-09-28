@@ -4768,7 +4768,7 @@ export default function SubSub() {
           {isHireable(account) && (role === "admin" || role === "pm") && (
             <button className={tab === "account" ? "" : ""}
               onClick={() => { setTab("account"); setOpenPane({ pane: "docs", focus: "docs", n: Date.now() }); }}>
-              My documents
+              Compliance pack
               {/* Presence, not approval -- nobody verifies their own, so a
                   count built on missingDocs() would read 4 forever. And the
                   REQUIRED ones only: a badge that will not clear until
@@ -14114,12 +14114,12 @@ function HireablePanel({ section = "profile", accountName, requests = [], focus 
 
   return (
     <div className="portal-panel settings-panel">
-      <h4>{isDocs ? "My documents" : "Working as a subcontractor"}</h4>
+      <h4>{isDocs ? "Your compliance pack" : "Working as a subcontractor"}</h4>
       <p className="panel-note">
         {isDocs ? (
-          <>The paperwork you are asked for over and over. Whoever hires you reviews it, and
-            it stays current for everybody you work with rather than being re-sent one
-            contractor at a time.</>
+          <>The four documents a general contractor asks for before they will put you on a
+            job. Whoever hires you reviews them, and they stay current for everybody you
+            work with rather than being re-sent one contractor at a time.</>
         ) : (
           <>You hire contractors here. You can also be hired: another general contractor can find
             {" "}<b>{accountName || "your company"}</b> on SubSub and ask to work with you, and
@@ -14280,7 +14280,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     .concat(canManage ? [["company", "Company"]] : [])
     .concat(canManage ? [["branding", "Branding"]] : [])
     // Only an account that can be hired has paperwork of its own to keep.
-    .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["docs", "My documents"]] : [])
+    .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["docs", "Compliance pack"]] : [])
     .concat(canManage ? [["users", "Users"]] : [])
     // Only where there are buildings for tenants to be in.
     .concat(canManage && ACCOUNT_KINDS[accountKind].properties ? [["tenants", "Tenants"]] : [])
@@ -14577,6 +14577,24 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
         </>
       )}
 
+      {/* The company's own details FIRST.
+          This tab opened on the account kind, then the twenty-nine-chip trades
+          grid, then the emergency contractor -- three panels of settings -- and
+          the company's name, contact, licence and address were below all of it.
+          That is the thing somebody comes to this tab to change, and the thing
+          the licence and UBI rows on the pack card send them to, so it was a
+          scroll away from both. Settings are what you change once; this is what
+          you correct.
+
+          One component, two sections, and only ever one of them mounted -- so
+          there is still a single fetch and a single source of truth for the
+          company row. Two components would be two of each. */}
+      {pane === "company" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
+        <HireablePanel section="profile" accountName={brand?.name} requests={incomingConnects}
+          focus={openPane?.focus} focusN={openPane?.n}
+          onRespond={onRespondConnect} onReload={onReloadConnects} />
+      )}
+
       {pane === "company" && canManage && (
         <div className="portal-panel settings-panel">
           <h4>Account type</h4>
@@ -14612,14 +14630,6 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {/* Only a general contractor. The other three kinds hire and are not
           hired, so this panel would be a QR code for something they will
           never do. */}
-      {/* One component, two sections, and only ever one of them mounted --
-          so there is still a single fetch and a single source of truth for the
-          company row. Two components would be two of each. */}
-      {pane === "company" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
-        <HireablePanel section="profile" accountName={brand?.name} requests={incomingConnects}
-          focus={openPane?.focus} focusN={openPane?.n}
-          onRespond={onRespondConnect} onReload={onReloadConnects} />
-      )}
 
       {pane === "docs" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
         <HireablePanel section="docs" accountName={brand?.name} requests={incomingConnects}
@@ -18787,7 +18797,7 @@ function SendDocPack({ company, anyOnFile }) {
       )}
       <div className="pack-head">
         <div>
-          <h4><Send size={14} /> Send your paperwork</h4>
+          <h4><Send size={14} /> Send your compliance pack</h4>
           <p className="panel-note">
             A contractor asking for your insurance? Send it from here instead of
             attaching it to an email. They see the carrier, the policy number, the
@@ -18803,7 +18813,7 @@ function SendDocPack({ company, anyOnFile }) {
       </div>
 
       {!anyOnFile && (
-        <p className="cov-hint">Upload a document below and you can send it from here.</p>
+        <p className="cov-hint">Add one of the documents above and you can send the pack from here.</p>
       )}
 
       {sent && (
@@ -22109,7 +22119,17 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
     radii: covRadii(existing.coverage).length ? covRadii(existing.coverage).map((r) => ({ ...r })) : [{ zip: "", miles: 25 }],
     rating: existing.rating || 0,
     bond: existing.bond, insurance: existing.insurance, contract: existing.contract,
-    docFiles: { bond: existing.docFiles?.bond || null, insurance: existing.docFiles?.insurance || null, contract: existing.docFiles?.contract || null },
+    // Spread FIRST, so a kind this form has no control for survives an edit.
+    // It knows about three; DOC_KINDS has four. Listing them flat replaced the
+    // whole object on save and quietly deleted the W-9 of anybody who had
+    // uploaded one -- their client's roster then read "not on file" for a
+    // document that was, and `supersedeDoc` had already retired nothing,
+    // because no upload happened. Silent, and only visible to the contractor
+    // when somebody asked them for it again.
+    docFiles: { ...(existing.docFiles || {}),
+      bond: existing.docFiles?.bond || null,
+      insurance: existing.docFiles?.insurance || null,
+      contract: existing.docFiles?.contract || null },
     available: existing.available, notes: existing.notes || "",
   } : {
     company: "", contact: "", phone: "", email: "", categories: [], caps: [],
@@ -22644,9 +22664,19 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
               {existing ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Add subcontractor</>}
             </button>}
       </div>
-      {!stepOk && (
+      {/* The hint used to be gated on THIS step being incomplete, while the
+          Save button is gated on ALL THREE being complete. So standing on step
+          three with step two unfinished -- which is every contractor who came
+          in through the public application form, since they arrive with no
+          capability and no coverage area -- the button was dead and the screen
+          said nothing at all. A disabled control with no reason beside it is
+          indistinguishable from a broken one, and that is what it was reported
+          as.
+          So: when the step in front of you is fine but Save is still refused,
+          name the step that is holding it and offer the way there. */}
+      {(!stepOk || (step === 3 && !valid)) && (
         <p className="cov-hint">
-          {step === 1
+          {!stepOk ? (step === 1
             ? !subEmailOk ? (f.notifyEmail && !f.email.trim()
                 ? "Add an email address, or turn off email notifications."
                 : "That email address does not look right — check for a missing @.")
@@ -22655,7 +22685,17 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
                 : "A mobile number needs 10 digits.")
             : "Company, contact and at least one notification method are needed."
             : step === 2 ? `Still to do: ${andList(step2Missing)}.`
-            : "Add at least one crew with a named member."}
+            : "Add at least one crew with a named member.")
+          : (
+            <>
+              Not saved yet: <b>{!step1Ok ? "Company" : "Trades & coverage"}</b>{" "}
+              {!step1Ok
+                ? "needs a contact and a way to reach them."
+                : `still needs you to ${andList(step2Missing)}.`}{" "}
+              <button type="button" className="lnk"
+                onClick={() => setStep(!step1Ok ? 1 : 2)}>Go there</button>
+            </>
+          )}
         </p>
       )}
     </div>

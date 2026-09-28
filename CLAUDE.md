@@ -378,6 +378,34 @@ refactor.
   party butting into somebody else's hiring. A test pins that the word SubSub
   does not appear on it.
 
+- **A disabled control with no reason beside it is indistinguishable from a
+  broken one.** `SubForm`'s Save is gated on **all three** steps being complete;
+  the hint under it was gated on **the current** step being incomplete. So
+  standing on step three with step two unfinished, the button was dead and the
+  screen said nothing at all — reported, correctly, as "won't let me edit".
+
+  It is not an edge case. A contractor who arrives through the public
+  application form has no capability and no coverage area, so step two can never
+  be satisfied by accident, and the roster's own Edit button is the first thing
+  anybody presses on them. The hint now fires on `!stepOk || (step === 3 &&
+  !valid)`, names the step that is holding it and offers the way there. The
+  general rule: **whenever a control's disabled condition is wider than the
+  message beside it, there is a state where it is dead and silent** — and the
+  test for it has to put the form in exactly that state, with the current step
+  passing.
+
+- **A form that edits part of a record must not replace the whole of it.**
+  `SubForm` knows about three documents; `DOC_KINDS` has four. Its `docFiles`
+  was built by listing `bond`, `insurance` and `contract` flat, and `build()`
+  sends that object as the new value — so **saving any edit deleted the W-9
+  reference** of anybody who had uploaded one. Their client's roster then read
+  "not on file" for a document that was, and nothing had superseded it, because
+  no upload happened. Silent, and only visible when somebody asked for it again.
+
+  Spread the existing object first, then override what the form controls. The
+  same shape guards every partial editor here, and the test asserts the W-9
+  survives a save rather than asserting the three the form knows about.
+
 - **A UBI is Washington's, so it is asked for in Washington and nowhere else.**
   The Unified Business Identifier does not exist in the other fifty
   jurisdictions. It is on the subcontractor's set-up checklist and on the
@@ -1742,8 +1770,8 @@ refactor.
   a *set-up* step, because nothing about their account is unfinished until they
   do it.
 
-  And **My documents is in the nav** for any account that can be hired, opening
-  the panel that already exists in Account → Company rather than a second copy
+  And **the compliance pack is in the nav** for any account that can be hired,
+  opening the panel that already exists in Account rather than a second copy
   of it — two copies would be two components holding the same upload state. Its
   badge counts **presence, not approval**: `missingDocs()` asks whether a hiring
   account has verified a document and nobody verifies their own, so it would

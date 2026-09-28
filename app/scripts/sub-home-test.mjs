@@ -460,23 +460,23 @@ try {
     await ctx.close();
   }
 
-  console.log("\n-- My documents is reachable from the nav --");
+  console.log("\n-- the compliance pack is reachable from the nav --");
   {
     KIND = "subcontractor";
     MY_COMPANY = { ...MY_COMPANY, docs: { insurance: { fileName: "coi.pdf" } }, sharesSent: 0 };
     const { ctx, page, crashes } = await open();
     const nav = await navItems(page);
-    t.ck("it is in the nav at all", nav.some((x) => /^My documents/i.test(x)), nav.join(" | "));
+    t.ck("it is in the nav at all", nav.some((x) => /^Compliance pack/i.test(x)), nav.join(" | "));
     // Presence, not approval: nobody verifies your own documents, so a badge
     // built on missingDocs() would read 4 after all four were uploaded. And
     // REQUIRED only -- the signed agreement is optional, so counting it would
     // leave a red number that never clears, which is how people learn to stop
     // reading badges. Insurance is on file, so: bond and W-9.
-    const item = nav.find((x) => /^My documents/i.test(x)) || "";
+    const item = nav.find((x) => /^Compliance pack/i.test(x)) || "";
     t.ck("and badges the two required ones not on file", /\b2\b/.test(item), item);
 
     await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
-      .find((b) => /^My documents/i.test(b.innerText))?.click());
+      .find((b) => /^Compliance pack/i.test(b.innerText))?.click());
     for (let n = 0; n < 25; n++) {
       await wait(200);
       if (await page.$(".mydocs")) break;
@@ -498,18 +498,23 @@ try {
     MY_COMPANY = { ...MY_COMPANY, state: "WA", license: "", ubi: "",
       docs: { insurance: { fileName: "coi.pdf" } }, sharesSent: 0 };
     const { ctx, page, crashes } = await open();
-    // In through My documents, which is the route somebody actually takes and
+    // In through the compliance pack, which is the route somebody actually takes and
     // the one the suite already proves works.
     await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
-      .find((b) => /^My documents/i.test(b.innerText))?.click());
+      .find((b) => /^Compliance pack/i.test(b.innerText))?.click());
     for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".mydocs")) break; }
     const tabs = await page.evaluate(() =>
       [...document.querySelectorAll("button")].map((b) => b.innerText.trim())
-        .filter((x) => ["Profile", "Company", "Branding", "My documents", "Users",
+        .filter((x) => ["Profile", "Company", "Branding", "Compliance pack", "Users",
           "Tenants", "Subscription"].includes(x)));
 
     t.ck("Branding is its own tab", tabs.includes("Branding"), tabs.join(" | "));
-    t.ck("and so is My documents", tabs.includes("My documents"), tabs.join(" | "));
+    // Branded, because "My documents" is not what a general contractor calls
+    // them when they ask: they ask for your compliance pack, and the dashboard
+    // card has said so all along.
+    t.ck("and the documents tab is the compliance pack",
+      tabs.includes("Compliance pack"), tabs.join(" | "));
+    t.ck("not called My documents any more", !tabs.includes("My documents"), tabs.join(" | "));
     t.ck("Company is still there", tabs.includes("Company"), tabs.join(" | "));
 
     // Company keeps what the ACCOUNT is, and hands over what it was carrying
@@ -525,6 +530,19 @@ try {
       qr: !!document.querySelector(".cx-code"),
     }));
     t.ck("Company still says what the account is", co.kind === true, JSON.stringify(co));
+    // The details FIRST. This tab opened on the account kind, the trades grid
+    // and the emergency contractor -- three panels of settings -- with the
+    // company's own name, licence and address below all of it. Settings are
+    // what you change once; this is what you correct.
+    const order = await page.evaluate(() => {
+      const panels = [...document.querySelectorAll(".settings-panel")];
+      const idx = (re) => panels.findIndex((x) => re.test(x.querySelector("h4")?.innerText || ""));
+      return { details: idx(/working as a subcontractor/i), kind: idx(/account type/i),
+        headings: panels.map((x) => x.querySelector("h4")?.innerText.trim()) };
+    });
+    t.ck("the company details are the first panel", order.details === 0,
+      JSON.stringify(order.headings));
+    t.ck("above the account type", order.details < order.kind, JSON.stringify(order.headings));
     t.ck("and still holds the licence and UBI", co.licence === true, JSON.stringify(co));
     t.ck("but no longer the documents", co.docs === false, JSON.stringify(co));
     t.ck("nor the embed snippet", co.embed === false, JSON.stringify(co));
@@ -535,11 +553,11 @@ try {
     // tab on a Scale account, where the assertion can actually fail.
 
     await page.evaluate(() => [...document.querySelectorAll("button")]
-      .find((b) => b.innerText.trim() === "My documents")?.click());
+      .find((b) => b.innerText.trim() === "Compliance pack")?.click());
     await wait(700);
     const dp = await page.evaluate(() => ({
       docs: !!document.querySelector(".mydocs"),
-      send: /Send your paperwork/i.test(document.body.innerText),
+      send: /Send your compliance pack/i.test(document.body.innerText),
       // One fetch, one source of truth: the two halves are one component with
       // a section prop, and only ever one of them is mounted.
       copies: document.querySelectorAll(".mydocs").length,
@@ -741,7 +759,8 @@ try {
     // They are still hireable, so the pack itself has not gone anywhere.
     t.ck("but the compliance pack card is still there",
       await page.evaluate(() => !!document.querySelector(".cpack")));
-    t.ck("and so is My documents", (await navItems(page)).some((x) => /^My documents/i.test(x)));
+    t.ck("and so is the compliance pack",
+      (await navItems(page)).some((x) => /^Compliance pack/i.test(x)));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -758,8 +777,8 @@ try {
     t.ck("and are not asked for a compliance pack of their own",
       !/compliance pack/i.test(all), all);
     // They can be hired too, so the documents item is theirs as well.
-    t.ck("but My documents is there, because they can be hired",
-      (await navItems(page)).some((x) => /^My documents/i.test(x)));
+    t.ck("but the compliance pack is there, because they can be hired",
+      (await navItems(page)).some((x) => /^Compliance pack/i.test(x)));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -771,8 +790,8 @@ try {
     const { ctx, page, crashes } = await open();
     // A landlord is nobody's subcontractor; an item answering 403 is worse
     // than no item.
-    t.ck("no My documents for a property manager",
-      !(await navItems(page)).some((x) => /^My documents/i.test(x)),
+    t.ck("no compliance pack for a property manager",
+      !(await navItems(page)).some((x) => /^Compliance pack/i.test(x)),
       (await navItems(page)).join(" | "));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
