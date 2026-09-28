@@ -23,6 +23,26 @@
 export const DOC_KINDS = ["insurance", "bond", "contract", "w9"];
 // The ones with a shelf life. A contract and a W-9 are signed once.
 export const EXPIRING_KINDS = ["insurance", "bond"];
+
+// And the ones a subcontractor is not failing for want of.
+//
+// A signed subcontractor agreement is the hiring account's OWN paperwork --
+// their terms, on their form, which plenty of general contractors never ask
+// for at all. Insurance, a bond and a W-9 are the subcontractor's own records
+// and every client wants the same three; an agreement is a document that only
+// exists once somebody sends one.
+//
+// So it is still uploadable and still travels in the pack, and it is not
+// counted against the subcontractor on their own screens. A row that most
+// people can never tick is the permanently-amber failure this module was
+// written to prevent, wearing a different colour.
+//
+// This is about the SUBCONTRACTOR'S own view of their paperwork. A hiring
+// account still tracks all four on its roster, because whether they require an
+// agreement is their call and not ours to answer for them.
+export const OPTIONAL_KINDS = ["contract"];
+export const isOptionalDoc = (kind) => OPTIONAL_KINDS.includes(kind);
+export const REQUIRED_KINDS = DOC_KINDS.filter((k) => !isOptionalDoc(k));
 // How close counts as close. Thirty days is a renewal cycle; three is a
 // phone call.
 export const WARN_DAYS = 30;

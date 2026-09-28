@@ -185,13 +185,25 @@ try {
       })));
     t.ck("the card is there", rows.length > 0, JSON.stringify(rows.length));
     const row = (re) => rows.find((r) => re.test(r.label || "")) || {};
-    t.ck("a current document reads through its expiry",
-      /Through/i.test(row(/insurance/i).note || ""), JSON.stringify(row(/insurance/i)));
-    t.ck("a lapsed one says so and is marked",
-      /Expired/i.test(row(/bond/i).note || "") && row(/bond/i).state === "bad",
+    // The date, not just "on file" -- a certificate current today and lapsing
+    // Friday is the whole reason this card exists, and "on file" is the claim
+    // an attached PDF already makes and cannot keep.
+    t.ck("a current document carries its expiry date",
+      /Expires/i.test(row(/insurance/i).note || "") && /2027/.test(row(/insurance/i).note || ""),
+      JSON.stringify(row(/insurance/i)));
+    t.ck("and is green", /tone-green/.test(row(/insurance/i).state || ""),
+      JSON.stringify(row(/insurance/i)));
+    t.ck("a lapsed one says so and is red",
+      /Expired/i.test(row(/bond/i).note || "") && /tone-red/.test(row(/bond/i).state || ""),
       JSON.stringify(row(/bond/i)));
     t.ck("one not added says that", /Not added/i.test(row(/w-9/i).note || ""),
       JSON.stringify(row(/w-9/i)));
+    // Optional, and off this card. It is the HIRING account's own form, and
+    // plenty of contractors never send one -- so a row for it here is a to-do
+    // most subcontractors can never tick.
+    t.ck("no signed-agreement row on the dashboard card",
+      !rows.some((r) => /agreement/i.test(r.label || "")),
+      JSON.stringify(rows.map((r) => r.label)));
     // The dot carries the state, so it must not be the only thing that does.
     t.ck("every row says its state in words too",
       rows.every((r) => (r.note || "").length > 0), JSON.stringify(rows));
@@ -225,6 +237,76 @@ try {
     t.ck("a partial pack says what is still missing",
       /still to come/i.test(note) && /W-9/i.test(note), note);
     t.ck("and does not claim to be complete", !/everything is on file/i.test(note), note);
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- the dot is a traffic light, and amber is the point of it --");
+  {
+    // Green / amber / red comes from docStatus in shared/docs.js, not from a
+    // comparison written on the card. A second opinion on "close to expiring"
+    // would make this card disagree with every roster in the product about the
+    // same certificate.
+    KIND = "subcontractor";
+    const iso = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+    MY_COMPANY = { ...MY_COMPANY, state: "OR", license: "CCB-1", ubi: "",
+      docs: {
+        insurance: { fileName: "coi.pdf", expiresOn: iso(400) },   // green
+        bond: { fileName: "bond.pdf", expiresOn: iso(12) },        // amber
+        w9: { fileName: "w9.pdf" },                                // green, never expires
+      }, sharesSent: 0 };
+    const { ctx, page, crashes } = await open();
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".cpack")) break; }
+    const rows = await page.evaluate(() =>
+      [...document.querySelectorAll(".cpack-rows li")].map((li) => ({
+        label: li.querySelector(".cpr-lab")?.innerText.trim(),
+        note: li.querySelector(".cpr-note")?.innerText.trim(),
+        cls: li.className.trim(),
+        tick: !!li.querySelector(".cpr-dot svg"),
+      })));
+    const r = (re) => rows.find((x) => re.test(x.label || "")) || {};
+
+    t.ck("plenty of room left is green", /tone-green/.test(r(/insurance/i).cls || ""),
+      JSON.stringify(r(/insurance/i)));
+    t.ck("inside the warning window is amber", /tone-amber/.test(r(/bond/i).cls || ""),
+      JSON.stringify(r(/bond/i)));
+    // A blank expiry means "does not expire", never "unknown" -- if it meant
+    // doubt, two thirds of every roster would sit permanently amber and people
+    // would learn to ignore the colour.
+    t.ck("no expiry means it does not expire, so green",
+      /tone-green/.test(r(/w-9/i).cls || "") && /on file/i.test(r(/w-9/i).note || ""),
+      JSON.stringify(r(/w-9/i)));
+
+    // The colour must not be the only thing that says it.
+    t.ck("amber says how long is left in words too", /\d+d\b/.test(r(/bond/i).note || ""),
+      JSON.stringify(r(/bond/i)));
+    t.ck("and still names the date", /Expires/i.test(r(/bond/i).note || ""),
+      JSON.stringify(r(/bond/i)));
+    // A tick means "nothing to do". Amber is on file AND needs renewing.
+    t.ck("green carries the tick", r(/insurance/i).tick === true, JSON.stringify(r(/insurance/i)));
+    t.ck("amber does not", r(/bond/i).tick === false, JSON.stringify(r(/bond/i)));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- and the optional agreement never holds the pack back --");
+  {
+    // All three REQUIRED documents, no agreement. The pack is done.
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "OR", license: "CCB-1", ubi: "",
+      docs: { insurance: { fileName: "a" }, bond: { fileName: "b" }, w9: { fileName: "d" } },
+      sharesSent: 0 };
+    const { ctx, page, crashes } = await open();
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".cpack")) break; }
+    const go = await page.evaluate(() => ({
+      cls: document.querySelector(".cpack-go")?.className || "",
+      note: document.querySelector(".cpack-sendnote")?.innerText || "",
+      sub: document.querySelector(".cpack-sub")?.innerText || "",
+    }));
+    t.ck("three of three counts as complete", /btn-solid/.test(go.cls), go.cls);
+    t.ck("and it says so", /everything is on file/i.test(go.note), go.note);
+    t.ck("no agreement is named as outstanding", !/agreement/i.test(go.note), go.note);
+    t.ck("and the readiness line does not count it", !/of 5\b/.test(go.sub), go.sub);
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -386,9 +468,12 @@ try {
     const nav = await navItems(page);
     t.ck("it is in the nav at all", nav.some((x) => /^My documents/i.test(x)), nav.join(" | "));
     // Presence, not approval: nobody verifies your own documents, so a badge
-    // built on missingDocs() would read 4 after all four were uploaded.
+    // built on missingDocs() would read 4 after all four were uploaded. And
+    // REQUIRED only -- the signed agreement is optional, so counting it would
+    // leave a red number that never clears, which is how people learn to stop
+    // reading badges. Insurance is on file, so: bond and W-9.
     const item = nav.find((x) => /^My documents/i.test(x)) || "";
-    t.ck("and badges the three not on file", /\b3\b/.test(item), item);
+    t.ck("and badges the two required ones not on file", /\b2\b/.test(item), item);
 
     await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
       .find((b) => /^My documents/i.test(b.innerText))?.click());

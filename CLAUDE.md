@@ -165,6 +165,60 @@ refactor.
   time it has been written here: **a screen must not be stricter than the route
   behind it, any more than it may be looser.**
 
+- **The dot is a traffic light, and the amber is the whole point of it.** The
+  pack card had two colours and hand-rolled its own `d.expiresOn < today`, so a
+  certificate lapsing on Friday was drawn exactly like one good for another
+  year. Green on file, **amber inside `WARN_DAYS`**, red expired or never added
+  — and it comes from `docStatus` in `app/shared/docs.js` rather than a
+  comparison written on the card, because a second opinion on "close" would make
+  this card disagree with every roster in the product about the same document.
+
+  **Every row carries its date.** "On file" is the claim an attached PDF already
+  makes and cannot keep, and the live expiry is the one thing this product has
+  that an emailed certificate does not. The year rides along only when it is not
+  the current one, so the common row stays short enough to sit beside a button.
+
+  Three things hold the colours honest. **Expired and never-added share red and
+  are told apart by the words** — they are different problems, a missing
+  certificate makes somebody ask and an expired one makes everybody stop asking,
+  but neither is cover; the never-added dot is hollow, because a row nothing has
+  been done to is a to-do rather than a failure. **A blank expiry is green**, not
+  amber: `docs.js` has said since it was written that null means "does not
+  expire", and treating it as doubt would put two thirds of every roster
+  permanently amber until people learned to ignore the colour. And **the tick is
+  green only** — amber is on file *and* needs renewing, so a tick over it reads
+  as "nothing to do here".
+
+  The CSS trap this caught: the tone rules sat above a later `.cpack-rows li.ok
+  .cpr-dot{background:var(--brand)}` left from the previous pass, and `.ok` is
+  still on amber rows. A colour set twice in one stylesheet is a colour decided
+  by ordering, so nothing below the tone block may re-declare a dot background.
+
+- **A signed subcontractor agreement is optional, because it is the hiring
+  account's own paperwork.** Insurance, a bond and a W-9 are the subcontractor's
+  own records and every client wants the same three. An agreement is the other
+  party's form, on their terms, which plenty of general contractors never send at
+  all — so a row demanding one is a to-do most subcontractors can never tick,
+  which is the permanently-amber failure `docs.js` was written to prevent wearing
+  a different colour.
+
+  `OPTIONAL_KINDS` and `REQUIRED_KINDS` in `app/shared/docs.js`, named once so
+  the card, the badge and the send gate cannot hold three opinions. It is **off
+  the dashboard card entirely**, still uploadable in Account → Company where it
+  is labelled *optional*, and still carried in a sent pack when there is one. The
+  nav badge counts required kinds only — a red number that never clears is how
+  people learn to stop reading badges, the same reason that badge already counts
+  presence rather than approval.
+
+  **What this deliberately does not change: the hiring side.** `DOC_KINDS` still
+  drives roster compliance, assignment gating, the portal's "all four on file"
+  and overflow eligibility, because whether a general contractor requires an
+  agreement is *their* call — the same rule that makes verification each hiring
+  account's own verdict. Making it optional there too would take a real signal
+  away from the accounts that do require one. The right answer if it comes up is
+  per-account, not a global default, and it is a product decision rather than a
+  refactor.
+
 - **Landing somewhere is not the same as pointing at something.** *Manage* on
   the pack card opens the panel it always did — one implementation, not a second
   copy — but a page that only scrolls has answered "here is your company

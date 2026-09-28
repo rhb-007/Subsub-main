@@ -48,7 +48,8 @@ import { US_STATES, stateName } from "../shared/states.js";
 import { splitEven, releaseAmounts } from "../shared/money.js";
 import { chainReasonText } from "../shared/waivers.js";
 import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/autoschedule.js";
-import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS,
+import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
+  isOptionalDoc, docStatus as docStatusOf,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso } from "../shared/docs.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -1539,6 +1540,18 @@ function formatDay(dateStr) {
   if (!dateStr) return "";
   const d = new Date(`${dateStr}T12:00:00`);
   return isNaN(d) ? dateStr : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+// An expiry, which is the one date on this screen where the YEAR matters:
+// "Expires Jun 30" reads as this June to somebody looking at a certificate
+// that runs to next June. Carried only when it is not the current year, so
+// the common row stays short enough to sit beside a button.
+function formatExpiry(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(`${dateStr}T12:00:00`);
+  if (isNaN(d)) return dateStr;
+  const opts = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString(undefined, opts);
 }
 // A renewal date, from a full ISO timestamp rather than a plain date string --
 // Stripe's period end carries a time, and "renews 20 Sep 2027" wants the year
@@ -4756,9 +4769,15 @@ export default function SubSub() {
             <button className={tab === "account" ? "" : ""}
               onClick={() => { setTab("account"); setOpenPane({ pane: "company", focus: "docs", n: Date.now() }); }}>
               My documents
-              {myCompany && DOC_KINDS.filter((k) => !(myCompany.docs || {})[k]).length > 0 && (
+              {/* Presence, not approval -- nobody verifies their own, so a
+                  count built on missingDocs() would read 4 forever. And the
+                  REQUIRED ones only: a badge that will not clear until
+                  somebody uploads an agreement nobody asked them for is a
+                  permanent red number, which is how people learn to stop
+                  reading badges. */}
+              {myCompany && REQUIRED_KINDS.filter((k) => !(myCompany.docs || {})[k]).length > 0 && (
                 <span className="count red">
-                  {DOC_KINDS.filter((k) => !(myCompany.docs || {})[k]).length}
+                  {REQUIRED_KINDS.filter((k) => !(myCompany.docs || {})[k]).length}
                 </span>
               )}
             </button>
@@ -14147,9 +14166,9 @@ function HireablePanel({ accountName, requests = [], focus = null, focusN = 0, o
               one, and nothing to send. Same root as the connect badge. */}
           <div className="form-sec">Your documents</div>
           <p className="panel-note">
-            The same four things you ask your own contractors for. Whoever hires you
-            reviews them, and they stay current for everybody you work with rather
-            than being re-sent one contractor at a time.
+            The things you are asked for over and over. Whoever hires you reviews them, and
+            they stay current for everybody you work with rather than being re-sent one
+            contractor at a time.
           </p>
           <div className="mydocs">
             {DOC_KINDS.map((k) => {
@@ -14159,9 +14178,16 @@ function HireablePanel({ accountName, requests = [], focus = null, focusN = 0, o
               return (
                 <div key={k} className={`mydoc ${d ? (lapsed ? "bad" : "ok") : ""} ${isLit(`doc:${k}`) ? "lit" : ""}`}>
                   <div className="mydoc-main">
-                    <b>{DOC_LABELS[k]}</b>
+                    <b>{DOC_LABELS[k]}
+                      {/* Still here, still uploadable -- plenty of hiring
+                          accounts do send one. It is just not something the
+                          subcontractor is short of until somebody asks. */}
+                      {isOptionalDoc(k) && <span className="mydoc-opt">optional</span>}
+                    </b>
                     <span className="cx-sub">
-                      {!d ? "Not uploaded"
+                      {!d ? (isOptionalDoc(k)
+                          ? "Not uploaded — only needed if a contractor sends you one"
+                          : "Not uploaded")
                         : lapsed ? `Expired ${formatDay(d.expiresOn)} — send a replacement`
                         : d.expiresOn ? `Current through ${formatDay(d.expiresOn)}`
                         : d.fileName || "On file"}
@@ -20744,29 +20770,56 @@ function CompliancePack({ company, onManage, onAddField, onReload }) {
     } finally { setBusyKind(""); }
   };
 
+  // Every row carries a colour and the date behind it. The colour comes from
+  // docStatus in shared/docs.js rather than a comparison written here: it
+  // already knows that a blank expiry means "does not expire" and that thirty
+  // days is close, and a second opinion on either would make this card
+  // disagree with every roster in the product about the same certificate.
+  //
+  //   green   on file, with room
+  //   amber   on file, expiring inside WARN_DAYS
+  //   red     expired, or never added
+  //
+  // Expired and never-added share a colour and are told apart by the words,
+  // which is the rule this card already followed: the dot carries the state,
+  // so it must not be the only thing that does. They are different problems --
+  // a missing certificate makes somebody ask and an expired one makes
+  // everybody stop asking -- but neither is cover.
   const rows = [
-    ...PACK_KINDS.map((k) => {
+    // The signed agreement is not on this list. It is the HIRING account's own
+    // paperwork, on their form, and plenty of contractors never ask for one --
+    // so a row for it here is a to-do most subcontractors can never tick. It
+    // is still uploadable in Account -> Company and still travels in the pack.
+    ...PACK_KINDS.filter((k) => !isOptionalDoc(k)).map((k) => {
       const d = docs[k];
-      const lapsed = d?.expiresOn && d.expiresOn < today;
+      const st2 = docStatusOf(d, today);
       return { key: k, label: DOC_LABELS_INLINE[k] || DOC_LABELS[k] || k,
         // A document row can be answered here. A licence number cannot -- it is
         // a column somebody types, not a file, and a button reading "Upload"
         // over a text field is a screen that lies.
         file: true,
-        on: !!d, bad: !!lapsed,
-        note: !d ? "Not added"
-          : lapsed ? `Expired ${formatDay(d.expiresOn)}`
-          : d.expiresOn ? `Through ${formatDay(d.expiresOn)}` : "On file" };
+        on: !!d, tone: st2.state === "missing" || st2.state === "expired" ? "red"
+          : st2.state === "expiring" ? "amber" : "green",
+        // The date is on every row that has one, because "current" without a
+        // date is the claim an attached PDF already makes and cannot keep.
+        // Amber adds how long is left, so the colour is not the only thing
+        // separating it from green.
+        note: st2.state === "missing" ? "Not added"
+          : st2.state === "expired" ? `Expired ${formatExpiry(d.expiresOn)}`
+          : st2.state === "expiring"
+            ? `Expires ${formatExpiry(d.expiresOn)} · ${st2.days === 0 ? "today" : `${st2.days}d`}`
+          : d.expiresOn ? `Expires ${formatExpiry(d.expiresOn)}` : "On file" };
     }),
     { key: "license", label: st ? `${st} license` : "License", file: false,
-      on: !!company.license, bad: false,
+      on: !!company.license, tone: company.license ? "green" : "red",
       note: company.license || "Not added" },
     // Washington only. A UBI does not exist elsewhere, and a permanently
     // un-tickable row is worse than no row.
-    ...(st === "WA" ? [{ key: "ubi", label: "UBI", file: false, on: !!company.ubi, bad: false,
+    ...(st === "WA" ? [{ key: "ubi", label: "UBI", file: false, on: !!company.ubi,
+      tone: company.ubi ? "green" : "red",
       note: company.ubi || "Not added" }] : []),
   ];
-  const ready = rows.filter((r) => r.on && !r.bad).length;
+  const ready = rows.filter((r) => r.tone === "green").length;
   // Two different questions, and they must not be collapsed into one.
   //
   // `canSend` is what the SERVER allows: one document on file is a pack worth
@@ -20780,9 +20833,12 @@ function CompliancePack({ company, onManage, onAddField, onReload }) {
   // there is. Hiding the button until the other three arrive would refuse the
   // one send the product was built to make, on a screen whose own menu offers
   // it anyway.
+  // Anything on file is sendable (the server refuses only nothing_on_file), but
+  // "done" counts the REQUIRED ones -- otherwise a pack is never complete
+  // until somebody uploads an agreement nobody asked them for.
   const canSend = PACK_KINDS.some((k) => docs[k]);
-  const packDone = PACK_KINDS.every((k) => docs[k]);
-  const missingDocs = PACK_KINDS.filter((k) => !docs[k]);
+  const packDone = REQUIRED_KINDS.every((k) => docs[k]);
+  const missingDocs = REQUIRED_KINDS.filter((k) => !docs[k]);
 
   return (
     <section className="cpack">
@@ -20799,19 +20855,22 @@ function CompliancePack({ company, onManage, onAddField, onReload }) {
       </p>
       <ul className="cpack-rows">
         {rows.map((r) => (
-          <li key={r.key} className={r.bad ? "bad" : r.on ? "ok" : ""}>
+          <li key={r.key} className={`tone-${r.tone} ${r.on ? "ok" : ""}`}>
             {/* The tick IS the confirmation -- an empty ring while it is
                 missing, a filled check once it is on file. One mark in one
                 place, so the row reads at a glance rather than being decoded. */}
+            {/* The tick is for green only. Amber IS on file, so it keeps the
+                filled dot, but a tick over something that needs renewing
+                reads as "nothing to do here". */}
             <span className="cpr-dot" aria-hidden="true">
-              {r.on && !r.bad && <Check size={10} strokeWidth={3.5} />}
+              {r.tone === "green" && <Check size={10} strokeWidth={3.5} />}
             </span>
             <span className="cpr-lab">{r.label}</span>
             <span className="cpr-note">{r.note}</span>
             {busyKind === r.key ? (
               <span className="cpr-busy">Uploading{"\u2026"}</span>
             ) : r.file ? (
-              <label className={`cpr-do ${r.on && !r.bad ? "quiet" : ""}`}>
+              <label className={`cpr-do ${r.tone === "green" ? "quiet" : ""}`}>
                 <Upload size={12} /> {r.on ? "Replace" : "Upload"}
                 <input type="file" hidden disabled={!!busyKind}
                   onChange={(e) => { upload(r.key, e.target.files?.[0]); e.target.value = ""; }} />
@@ -22820,18 +22879,28 @@ body{background:var(--paper)}
 .cpr-dot{width:16px;height:16px;border-radius:50%;flex:none;display:flex;align-items:center;
   justify-content:center;color:#fff;background:transparent;
   border:1.5px solid var(--ink-soft)}
-.cpack-rows li.ok .cpr-dot{background:var(--brand);border-color:var(--brand)}
-.cpack-rows li.bad .cpr-dot{background:var(--red);border-color:var(--red)}
+/* Green on file, amber expiring inside WARN_DAYS, red expired or never
+   added. The words tell expired and never-added apart; the colour only says
+   whether it is cover. */
+.cpack-rows li.tone-green .cpr-dot{background:var(--brand);border-color:var(--brand)}
+.cpack-rows li.tone-amber .cpr-dot{background:var(--amber);border-color:var(--amber)}
+.cpack-rows li.tone-red .cpr-dot{background:var(--red);border-color:var(--red)}
+.cpack-rows li.tone-amber .cpr-note{color:var(--amber-ink);font-weight:600}
+.cpack-rows li.tone-red .cpr-note{color:var(--red);font-weight:600}
+/* Never added is a to-do, not a failure -- the row has had nothing done to
+   it yet, so the dot is outlined rather than solid. Expired is solid,
+   because something that WAS cover has stopped being cover. */
+.cpack-rows li.tone-red:not(.ok) .cpr-dot{background:transparent}
+.cpack-rows li.tone-red:not(.ok) .cpr-note{font-weight:500;color:var(--ink-soft)}
 .cpr-lab{font-weight:600;flex:1;min-width:0}
 .cpr-note{font-size:11.5px;color:var(--ink-soft);text-align:right;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;max-width:48%}
-.cpack-rows li.bad .cpr-note{color:var(--red);font-weight:600}
+
 .cpack-empty{margin:0;font-size:12px;color:var(--ink-soft);line-height:1.5}
 /* The tick is the confirmation, so the ring has to be big enough to hold one.
-   Empty while it is missing, filled once it is on file -- one mark, one place. */
+   The COLOUR is set by the tone rules above -- nothing here may re-declare a
+   dot background, or a later .ok rule silently beats amber. */
 .cpr-dot{border:1.5px solid var(--line)}
-.cpack-rows li.ok .cpr-dot{background:var(--brand);border-color:var(--brand)}
-.cpack-rows li.bad .cpr-dot{background:var(--red);border-color:var(--red)}
 .cpr-note{flex:none}
 .cpr-lab{flex:1}
 
@@ -22849,6 +22918,9 @@ body{background:var(--paper)}
 .cpr-do.quiet:hover{opacity:1;color:var(--brand)}
 .cpr-busy{flex:none;font-size:11.5px;color:var(--ink-soft);font-weight:600}
 .cpack-err{margin:0 0 10px;font-size:12px;color:var(--red);font-weight:600}
+.mydoc-opt{margin-left:7px;font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--ink-soft);background:var(--paper);border:1px solid var(--line);
+  border-radius:20px;padding:2px 7px;vertical-align:1px}
 
 .cpack-send{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin-top:2px}
 .cpack-go{display:inline-flex;align-items:center;gap:7px}
