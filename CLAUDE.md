@@ -90,21 +90,43 @@ refactor.
   gate that lives in the browser is a suggestion. The refusal names the kind so
   the screen can offer the way out rather than just saying no.
 
-  **It is not a plan prompt and must not read like one.** Switching costs
-  nothing, they stay on Basic, and nothing is lost — both kinds are hireable, so
-  the company row, the documents, the licence, the QR code and every pack
-  already sent survive untouched (`PATCH /api/account` only clears `company_id`
-  when moving to a kind that *cannot* be hired, and then refuses with
-  `hired_by_others` if anybody already hires them). Leading with a price, or a
-  warning, would be asking for money and worry over a setting. What it *does*
-  change is said plainly, because it changes their home screen: the checklist
-  becomes the hiring one and their sign-in page stops calling them a
-  subcontractor. Reversible in Account → Company, which is worth saying to
-  somebody deciding whether to press a button that renames their business.
+  **So the screen asks a question, and is not an upgrade prompt in any part —
+  including the parts that are not words.** *Do you want to hire subcontractors
+  too?*, with what saying yes lets them do, and a yes/no. Not "you need a
+  general contractor account", which announces a requirement to somebody who
+  may simply not hire anybody.
 
-  The plan is a separate axis and stays one. Basic is free for three
-  contractors, one user and five jobs a month; Scale is volume. Neither has
-  anything to do with which direction the account faces.
+  The first version said nothing about money and still read as an upsell,
+  because it wore the upgrade gate's chrome: `up-badge` is the amber tint that
+  means a limit has been hit, `up-buy` is the green box a price sits in, and
+  between them sat a plan name and a line of plan limits. Somebody reading that
+  shape has decided what the screen is before the first sentence. Hence `bh-*`:
+  a neutral badge, a plain button row, and a test that fails if the form wears
+  `up-form`, `up-badge`, `up-gets` or `up-buy`. **Copy is not the only thing
+  that makes a screen an upsell**, which is the general form of this and the
+  reason the guard is on the markup rather than only the words.
+
+  **Naming the plan is the specific mistake, even to say it is included.** It
+  cannot reassure without first raising the question it is reassuring about —
+  the same reason the plan pill came off the subcontractor's signup, where a
+  line reading "3 subcontractors" invited *am I about to be charged for sending
+  a certificate*. One clause says there is nothing to pay; the words Basic,
+  Scale, upgrade, plan, a `$` and any count of contractors, users or jobs appear
+  nowhere, and a test pins each of those.
+
+  Nothing is lost either — both kinds are hireable, so the company row, the
+  documents, the licence, the QR code and every pack already sent survive
+  untouched (`PATCH /api/account` only clears `company_id` when moving to a kind
+  that *cannot* be hired, and then refuses with `hired_by_others` if anybody
+  already hires them). What it *does* change is said plainly, because it changes
+  their home screen: the checklist becomes the hiring one and their sign-in page
+  stops calling them a subcontractor. Reversible in Account → Company, which is
+  worth saying to somebody deciding whether to press a button that renames their
+  business.
+
+  The plan is a separate axis and stays one. Neither Basic nor Scale has
+  anything to do with which direction the account faces, so neither belongs on
+  this screen.
 
 - **A UBI is Washington's, so it is asked for in Washington and nowhere else.**
   The Unified Business Identifier does not exist in the other fifty

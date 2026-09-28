@@ -248,39 +248,66 @@ try {
     await ctx.close();
   }
 
-  console.log("\n-- pressing New job offers the switch, not a price --");
+  console.log("\n-- pressing New job asks a question, and never sells a plan --");
   {
     // Creating a job is the hiring side's act. Sending a pack is the other
     // direction -- it says you work for somebody. So this is where a
-    // subcontractor account stops being one, and it costs nothing.
+    // subcontractor account stops being one, and the screen ASKS rather than
+    // prompting an upgrade: it costs nothing, so a price, a plan name or a
+    // limit on it would be inventing a transaction.
     KIND = "subcontractor";
     MY_COMPANY = { ...MY_COMPANY, state: "WA", docs: { insurance: { fileName: "c.pdf" } } };
     patched.length = 0;
     const { ctx, page, crashes } = await open();
     await page.evaluate(() => [...document.querySelectorAll("button")]
       .find((b) => /^\+?\s*New job$/i.test(b.innerText.trim()))?.click());
-    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".up-form")) break; }
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".bh-form")) break; }
     const said = await page.evaluate(() =>
-      document.querySelector(".up-form")?.innerText.replace(/\s+/g, " ").trim() || "");
+      document.querySelector(".bh-form")?.innerText.replace(/\s+/g, " ").trim() || "");
+    const head = await page.evaluate(() =>
+      document.querySelector(".bh-form h2")?.innerText.trim() || "");
 
     t.ck("something opened", said.length > 0, said.slice(0, 60));
-    t.ck("it explains that a job means hiring",
-      /creating a job means you are hiring/i.test(said), said.slice(0, 120));
-    // NOT a plan prompt. It costs nothing and they keep everything.
-    t.ck("it says it is free", /it is free/i.test(said), said);
-    t.ck("and that nothing is lost",
-      /keep everything/i.test(said) && /untouched/i.test(said), said);
-    t.ck("no price and no upsell on it",
-      !/\$/.test(said) && !/\bScale\b/.test(said) && !/upgrade/i.test(said), said);
+    // It is a question. Not "you need a general contractor account", which is a
+    // requirement being announced -- somebody who does not hire anybody should
+    // be able to read the heading and answer no.
+    t.ck("the heading is a question", head.endsWith("?"), head);
+    t.ck("and it asks about hiring", /hire/i.test(head), head);
+    t.ck("it says why the button did nothing",
+      /creating a job means somebody is going to work for you/i.test(said), said.slice(0, 160));
+    t.ck("and what saying yes lets them do",
+      /roster/i.test(said) && /create jobs/i.test(said), said);
+    // Nothing is bought here, so nothing about buying is on it -- and that
+    // includes the reassurance. Naming a plan to say it is included still
+    // raises the question it is answering.
+    t.ck("nothing to pay is said once", /nothing to pay/i.test(said), said);
+    t.ck("no plan is named at all",
+      !/\$/.test(said) && !/\bBasic\b/.test(said) && !/\bScale\b/.test(said)
+        && !/upgrade/i.test(said) && !/\bplan\b/i.test(said), said);
+    t.ck("and no limit is quoted",
+      !/\b\d+\s+(contractors?|users?|jobs?)\b/i.test(said), said);
+    t.ck("nothing they set up is lost",
+      /nothing you have set up changes/i.test(said) && /still be hired/i.test(said), said);
     t.ck("it says what will change on their screen",
       /checklist/i.test(said) && /sign-in/i.test(said), said);
     t.ck("and that it is reversible", /change it back/i.test(said), said);
     t.ck("no job form opened behind it",
       await page.evaluate(() => !document.querySelector(".job-form")));
 
-    // And pressing it switches the account rather than only closing.
-    await page.evaluate(() => [...document.querySelectorAll(".up-form button")]
-      .find((b) => /switch to general contractor/i.test(b.innerText))?.click());
+    // The chrome is the other half, and the words were clean before it was.
+    // `up-badge` is the amber tint that means a limit has been hit and `up-buy`
+    // is the green box a price sits in, so wearing either says "upgrade" to
+    // somebody who has not read a word yet.
+    t.ck("it does not wear the upgrade gate's chrome",
+      await page.evaluate(() => {
+        const f = document.querySelector(".bh-form");
+        return !!f && !f.classList.contains("up-form")
+          && !f.querySelector(".up-badge, .up-buy, .up-gets, .up-amt");
+      }));
+
+    // And pressing yes switches the account rather than only closing.
+    await page.evaluate(() => [...document.querySelectorAll(".bh-form button")]
+      .find((b) => /^yes\b/i.test(b.innerText.trim()))?.click());
     for (let n = 0; n < 30 && !patched.length; n++) await wait(200);
     t.ck("confirming patches the account", patched.length === 1, JSON.stringify(patched));
     t.ck("to the hiring kind", patched[0]?.kind === "general_contractor",

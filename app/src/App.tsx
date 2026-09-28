@@ -5984,7 +5984,7 @@ export default function SubSub() {
           onUpgrade={() => startCheckout(billing)}
           onDecline={() => setUpgradePrompt(null)} /></Modal>}
       {becomeHiring && <Modal onClose={() => setBecomeHiring(false)}>
-        <BecomeHiring account={account} subs={subs}
+        <BecomeHiring account={account}
           onCancel={() => setBecomeHiring(false)}
           onConfirm={async () => {
             await api.patchAccount({ kind: "general_contractor" });
@@ -12455,18 +12455,29 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
 // the one doing the hiring. Sending your pack to somebody is the opposite
 // direction: it says you work for them.
 //
-// This is NOT a plan prompt and must not read like one. It costs nothing, they
-// stay on Basic, and nothing they signed up for is lost -- both kinds are
-// hireable, so the company row, the documents, the licence, the QR code and
-// every pack already sent survive the change untouched. Leading with a price,
-// or with a warning, would be asking for money and worry over a setting.
+// So this ASKS A QUESTION -- do you want to be a general contractor as well --
+// and it is not an upgrade prompt in any part, including the parts that are not
+// words. The first version said nothing about money and still read as one,
+// because it wore the upgrade gate's chrome: `up-badge` is the amber tint that
+// means a limit has been hit, `up-buy` is the green box a price sits in, and
+// between them sat a plan name and a line of plan limits. Somebody reading that
+// shape has already decided what the screen is before the sentence. Hence
+// `bh-*`: a neutral badge, a plain button row, and NO plan named at all.
+//
+// Naming the plan is the specific mistake. It cannot reassure without first
+// raising the question it is reassuring about -- the same reason the plan pill
+// came off the subcontractor's signup, where a line reading "3 subcontractors"
+// invited "am I about to be charged for sending a certificate". One clause says
+// there is nothing to pay and the word Basic appears nowhere.
 //
 // What it does change is said plainly, because it changes their home screen:
 // the set-up checklist becomes the hiring one and their sign-in page stops
 // calling them a subcontractor. Reversible in Account settings, which is worth
 // saying to somebody deciding whether to press a button that renames their
-// business.
-function BecomeHiring({ account, subs, onCancel, onConfirm }) {
+// business. And nothing they came here for moves -- both kinds are hireable, so
+// the company row, the documents, the licence, the QR code and every pack
+// already sent survive the change untouched.
+function BecomeHiring({ account, onCancel, onConfirm }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const go = async () => {
@@ -12479,34 +12490,32 @@ function BecomeHiring({ account, subs, onCancel, onConfirm }) {
     }
   };
   return (
-    <div className="form up-form">
-      <span className="up-badge"><Users size={13} /> Account type</span>
-      <h2>Creating a job means you are hiring</h2>
-      <p className="up-sub">
-        {account.name} is set up as a subcontractor — a company that gets hired. Sending your
-        compliance pack says you work for somebody; creating a job is the other direction, so
-        it needs a general contractor account.
+    <div className="form bh-form">
+      <span className="bh-badge"><Users size={13} /> Account type</span>
+      <h2>Do you want to hire subcontractors too?</h2>
+      <p className="bh-sub">
+        Creating a job means somebody is going to work for you, and {account.name} is set up as a
+        subcontractor — a company that gets hired. Say yes and you can build a roster, ask for
+        their documents and create jobs, as well as being hired yourself.
       </p>
-      <p className="up-gets">
-        <strong>It is free, and you keep everything.</strong> You stay on Basic. Your documents,
-        your licence, your QR code and every pack you have already sent are untouched — you can
-        still be hired, and the contractors who have your link keep seeing it stay current.
+      <p className="bh-keep">
+        <strong>Nothing you have set up changes, and there is nothing to pay.</strong> Your
+        documents, your licence, your QR code and every compliance pack you have already sent stay
+        exactly as they are — you can still be hired, and the contractors holding your link keep
+        seeing it stay current.
       </p>
       <ul className="bh-changes">
         <li>Your set-up checklist becomes the hiring one — bring contractors in, approve their
           documents, create a job.</li>
         <li>Your sign-in page stops calling you a subcontractor.</li>
-        <li>{subs.length > 0
-          ? `Your ${subs.length} contractor${subs.length === 1 ? "" : "s"} stay exactly where they are.`
-          : "Basic covers three contractors, one user and five jobs a month, free."}</li>
       </ul>
-      <p className="up-fine">You can change it back any time in Account → Company.</p>
+      <p className="bh-fine">You can change it back any time in Account → Company.</p>
       {err && <p className="wl-err" role="alert">{err}</p>}
-      <div className="up-buy">
+      <div className="bh-go">
         <button className="btn-solid" disabled={busy} onClick={go}>
-          {busy ? "Switching\u2026" : "Switch to general contractor"}
+          {busy ? "Saving\u2026" : "Yes, I hire subcontractors"}
         </button>
-        <button className="btn-ghost" disabled={busy} onClick={onCancel}>Not yet</button>
+        <button className="btn-ghost" disabled={busy} onClick={onCancel}>No, not for now</button>
       </div>
     </div>
   );
@@ -22630,10 +22639,26 @@ body{background:var(--paper)}
 .pack-cta span{font-size:12.5px;color:var(--ink-soft);line-height:1.55}
 .pack-cta a{margin-top:6px;text-decoration:none}
 .pack-foot{font-size:11.5px;color:var(--ink-soft)}
+/* Becoming the hiring side. Its own chrome rather than the upgrade gate's,
+   because that one's amber badge says "you have hit a limit" and its green box
+   is where a price goes -- and this costs nothing and is not a limit. A neutral
+   tint and a plain button row: the screen is a question, so it should look like
+   one. */
+.bh-form{gap:0}
+.bh-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.05em;background:var(--paper);color:var(--ink-soft);
+  border:1px solid var(--line);padding:5px 10px;border-radius:20px;margin-bottom:12px}
+.bh-form h2{font-size:23px;letter-spacing:-.03em;margin:0}
+.bh-sub{margin-top:8px;font-size:14.5px;color:var(--ink-soft);line-height:1.5;max-width:46ch}
+.bh-keep{font-size:14px;color:var(--ink-soft);line-height:1.55;background:var(--paper);
+  border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin-top:16px}
+.bh-keep strong{color:var(--ink);font-weight:700}
 .bh-changes{list-style:none;margin:14px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
 .bh-changes li{position:relative;padding-left:18px;font-size:13.5px;line-height:1.55;color:var(--ink-soft)}
 .bh-changes li::before{content:"";position:absolute;left:0;top:8px;width:6px;height:6px;
   border-radius:50%;background:var(--brand)}
+.bh-fine{margin-top:14px;font-size:12.5px;color:var(--ink-soft)}
+.bh-go{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px}
 
 /* ---- The compliance pack, on the dashboard ----------------------------- */
 .cpack{grid-column:span 1;background:var(--card);border:1px solid var(--line);border-radius:14px;
@@ -25683,6 +25708,11 @@ p.fld-note{margin:6px 0 0}
   .up-buy{flex-direction:column;align-items:stretch;gap:12px}
   .up-go{width:100%;justify-content:center}
   .up-form h2{font-size:20px}
+
+  /* and the account-type question, which has its own chrome */
+  .bh-go{flex-direction:column;align-items:stretch}
+  .bh-go button{width:100%;justify-content:center}
+  .bh-form h2{font-size:20px}
 
   /* plans + uniforms on phones */
   .plan-grid{grid-template-columns:1fr}
