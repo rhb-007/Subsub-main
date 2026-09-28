@@ -4851,6 +4851,17 @@ export default function SubSub() {
           hireable={isHireable(account)} myCompany={myCompany} kind={kindOf(account)}
           onGoCompany={() => { setTab("account"); setOpenPane({ pane: "company", n: Date.now() }); }}
           onGoDocs={() => { setTab("account"); setOpenPane({ pane: "company", focus: "docs", n: Date.now() }); }}
+          /* "Manage" on the pack card. Same panel, but it lands on the whole
+             pack -- the licence and the UBI as well as the four documents --
+             because that is what the card is a summary OF. `focus` decides
+             what arrives highlighted, so one panel serves three ways in. */
+          onManagePack={() => { setTab("account"); setOpenPane({ pane: "company", focus: "pack", n: Date.now() }); }}
+          onAddPackField={(which) => { setTab("account");
+            setOpenPane({ pane: "company", focus: which === "ubi" ? "ubi" : "license", n: Date.now() }); }}
+          onReloadCompany={async () => {
+            try { setMyCompany(await api.myCompany()); }
+            catch (e) { console.warn("[my-company] reload failed:", e?.body?.error || e?.message || e); }
+          }}
           onOpenInvite={(i) => setInvitedOpen(i)}
           onOpenConnect={() => setTab("network")}
           accountId={account.id} trades={account.trades} subLimit={PLANS[plan].limit}
@@ -13985,7 +13996,7 @@ function companyErrorText(e) {
 // lookup matches on an email, a mobile or a licence number and on nothing
 // else, which the panel says rather than leaving somebody to wonder why
 // they cannot be found.
-function HireablePanel({ accountName, requests = [], onRespond, onReload }) {
+function HireablePanel({ accountName, requests = [], focus = null, focusN = 0, onRespond, onReload }) {
   const [f, setF] = useState(null);
   const [loaded, setLoaded] = useState(null);
   const [err, setErr] = useState("");
@@ -14003,6 +14014,53 @@ function HireablePanel({ accountName, requests = [], onRespond, onReload }) {
       });
     return () => { alive = false; };
   }, []);
+
+  // Where somebody asked to land, and what arrives ringed.
+  //
+  // Scrolling to the right part of a long page is half of it. The other half
+  // is saying WHICH thing: somebody arriving from "Manage" on the pack card
+  // has a specific question -- what is still missing -- and a page that merely
+  // scrolls has answered "here is your company profile" instead.
+  //
+  // So it highlights only what is still OUTSTANDING. Ringing a certificate
+  // already on file points at the wrong thing, and ringing all six when five
+  // are done buries the one that matters. With nothing outstanding it scrolls
+  // and rings nothing, which is the honest answer: there is nothing to do here.
+  //
+  // It waits for `loaded`, because "which of these is missing" is a question
+  // only the loaded row can answer -- running before it arrives would ring
+  // everything, every time, including the documents somebody has already
+  // uploaded. And it runs off `focusN` as well as `focus`, so asking for the
+  // same place twice takes you there twice.
+  const [lit, setLit] = useState([]);
+  useEffect(() => {
+    if (!focus || !loaded) return;
+    const docs = loaded.docs || {};
+    const scope = focus === "docs" ? DOC_KINDS.map((k) => `doc:${k}`)
+      : focus === "license" ? ["license"]
+      : focus === "ubi" ? ["ubi"]
+      : focus === "pack" ? [...DOC_KINDS.map((k) => `doc:${k}`), "license",
+          ...((loaded.state || "") === "WA" ? ["ubi"] : [])]
+      : [];
+    const want = scope.filter((t) => t === "license" ? !loaded.license
+      : t === "ubi" ? !loaded.ubi
+      : !docs[t.slice(4)]);
+    // The pack is both halves of the page, so it lands on the first of them
+    // and the documents follow underneath. Everything else lands on itself.
+    const anchor = focus === "docs" ? ".mydocs" : ".fld-nums";
+    const t = setTimeout(() => {
+      document.querySelector(anchor)
+        ?.scrollIntoView({ behavior: "smooth", block: focus === "pack" ? "start" : "center" });
+      setLit(want);
+    }, 120);
+    // Four seconds rather than a blink: the licence field and the documents
+    // are far enough apart on a phone that a highlight finishing before the
+    // scroll does is a highlight nobody saw.
+    const off = setTimeout(() => setLit([]), 4200);
+    return () => { clearTimeout(t); clearTimeout(off); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, focusN, loaded]);
+  const isLit = (t) => lit.includes(t);
 
   const set = (k, v) => { setF((x) => ({ ...x, [k]: v })); setSaved(false); setErr(""); };
   const save = async () => {
@@ -14064,10 +14122,10 @@ function HireablePanel({ accountName, requests = [], onRespond, onReload }) {
               <input inputMode="tel" value={f.phone} onChange={(e) => set("phone", formatPhone(e.target.value))}
                 placeholder="(206) 555-0100" /></label>
           </div>
-          <div className="fld-row">
-            <label className="fld">Licence number
+          <div className="fld-row fld-nums">
+            <label className={`fld ${isLit("license") ? "lit" : ""}`}>Licence number
               <input value={f.license} onChange={(e) => set("license", e.target.value)} placeholder="RAINIRR891QZ" /></label>
-            <label className="fld">UBI <span className="fld-note">optional</span>
+            <label className={`fld ${isLit("ubi") ? "lit" : ""}`}>UBI <span className="fld-note">optional</span>
               <input value={f.ubi} onChange={(e) => set("ubi", e.target.value)} placeholder="601 234 567" /></label>
           </div>
           <div className="fld-row">
@@ -14099,7 +14157,7 @@ function HireablePanel({ accountName, requests = [], onRespond, onReload }) {
               const today = new Date().toISOString().slice(0, 10);
               const lapsed = d?.expiresOn && d.expiresOn < today;
               return (
-                <div key={k} className={`mydoc ${d ? (lapsed ? "bad" : "ok") : ""}`}>
+                <div key={k} className={`mydoc ${d ? (lapsed ? "bad" : "ok") : ""} ${isLit(`doc:${k}`) ? "lit" : ""}`}>
                   <div className="mydoc-main">
                     <b>{DOC_LABELS[k]}</b>
                     <span className="cx-sub">
@@ -14184,13 +14242,11 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // it, so it has to land on the right part of a long page. One
   // implementation, two ways in -- the same call the embed snippet makes,
   // because two copies would be two components holding the same upload state.
-  useEffect(() => {
-    if (openPane?.focus !== "docs") return;
-    const t = setTimeout(() => {
-      document.querySelector(".mydocs")?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, 120);
-    return () => clearTimeout(t);
-  }, [openPane]);
+  // "My documents" in the nav, and "Manage" on the pack card, open THIS panel
+  // rather than a second copy of it, so the request has to say which part of a
+  // long page it is about. `focus` travels down to HireablePanel, which owns
+  // both the documents and the state that says which of them are missing --
+  // scrolling and highlighting from up here would mean guessing at both.
   const [confirmCancel, setConfirmCancel] = useState(false);
 
   // profile form
@@ -14481,6 +14537,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           never do. */}
       {pane === "company" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
         <HireablePanel accountName={brand?.name} requests={incomingConnects}
+          focus={openPane?.focus} focusN={openPane?.n}
           onRespond={onRespondConnect} onReload={onReloadConnects} />
       )}
 
@@ -15852,7 +15909,8 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
 function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit",
   invites = [], connectsOut = [], onOpenInvite, onOpenConnect,
   connectsIn = [], onRespondConnect, onReloadConnects,
-  hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null }) {
+  hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null,
+  onManagePack = null, onAddPackField = null, onReloadCompany = null }) {
   // Which request is being turned down, and why. One at a time: the reason
   // is the point, and a row of open boxes invites none of them being filled.
   const [declining, setDeclining] = useState(null);
@@ -16075,7 +16133,10 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             which refuses an empty pack with nothing_on_file: a screen offering
             a button the server will refuse is a screen that lies. */}
         {hireable && myCompany && (
-          <CompliancePack company={myCompany} onGoDocs={onGoDocs || onGoCompany} />
+          <CompliancePack company={myCompany}
+            onManage={onManagePack || onGoDocs || onGoCompany}
+            onAddField={onAddPackField || onGoCompany}
+            onReload={onReloadCompany} />
         )}
       </div>
 
@@ -20652,36 +20713,82 @@ function QuoteAskCard({ q, onAnswer }) {
 // never added. The licence and the UBI sit alongside the four documents
 // because they are asked for in the same breath, even though they are columns
 // rather than files.
-function CompliancePack({ company, onGoDocs }) {
+function CompliancePack({ company, onManage, onAddField, onReload }) {
   const docs = company.docs || {};
   const today = new Date().toISOString().slice(0, 10);
   const st = company.state || "";
+  // Which row is mid-upload, and what went wrong. Per row, because uploading a
+  // bond should not grey out the certificate beside it.
+  const [busyKind, setBusyKind] = useState("");
+  const [err, setErr] = useState("");
+  const [sending, setSending] = useState(false);
+
+  // The upload is done HERE rather than by sending them to the Company page.
+  // The row already names the missing thing and the person is looking at it;
+  // making them travel to a second screen to answer the question this one just
+  // asked is where a checklist item goes cold. Same two calls the Company
+  // panel makes, so there is one upload path and not two.
+  const upload = async (kind, file) => {
+    if (!file) return;
+    setBusyKind(kind); setErr("");
+    try {
+      const { key } = await api.uploadFile(kind, file);
+      await api.uploadDocument(company.companyId, kind, key, file.name);
+      // Re-read rather than patch in place: the row's note is the expiry the
+      // SERVER worked out, and a locally invented "On file" would disagree
+      // with it the moment a certificate carries a date.
+      if (onReload) await onReload();
+    } catch (ex) {
+      console.error("[pack] upload failed:", ex);
+      setErr("That didn't upload. Try again in a moment.");
+    } finally { setBusyKind(""); }
+  };
+
   const rows = [
     ...PACK_KINDS.map((k) => {
       const d = docs[k];
       const lapsed = d?.expiresOn && d.expiresOn < today;
       return { key: k, label: DOC_LABELS_INLINE[k] || DOC_LABELS[k] || k,
+        // A document row can be answered here. A licence number cannot -- it is
+        // a column somebody types, not a file, and a button reading "Upload"
+        // over a text field is a screen that lies.
+        file: true,
         on: !!d, bad: !!lapsed,
         note: !d ? "Not added"
           : lapsed ? `Expired ${formatDay(d.expiresOn)}`
           : d.expiresOn ? `Through ${formatDay(d.expiresOn)}` : "On file" };
     }),
-    { key: "license", label: st ? `${st} license` : "License",
+    { key: "license", label: st ? `${st} license` : "License", file: false,
       on: !!company.license, bad: false,
       note: company.license || "Not added" },
     // Washington only. A UBI does not exist elsewhere, and a permanently
     // un-tickable row is worse than no row.
-    ...(st === "WA" ? [{ key: "ubi", label: "UBI", on: !!company.ubi, bad: false,
+    ...(st === "WA" ? [{ key: "ubi", label: "UBI", file: false, on: !!company.ubi, bad: false,
       note: company.ubi || "Not added" }] : []),
   ];
   const ready = rows.filter((r) => r.on && !r.bad).length;
+  // Two different questions, and they must not be collapsed into one.
+  //
+  // `canSend` is what the SERVER allows: one document on file is a pack worth
+  // opening, and it refuses only `nothing_on_file`. `packDone` is whether all
+  // four documents are there, which is what earns the prominent CTA.
+  //
+  // The send is offered from the first document rather than the fourth, and
+  // that is deliberate: the moment this whole loop exists for is a general
+  // contractor asking for your INSURANCE while you are standing on their site,
+  // and a subcontractor who has uploaded exactly that is the commonest state
+  // there is. Hiding the button until the other three arrive would refuse the
+  // one send the product was built to make, on a screen whose own menu offers
+  // it anyway.
   const canSend = PACK_KINDS.some((k) => docs[k]);
+  const packDone = PACK_KINDS.every((k) => docs[k]);
+  const missingDocs = PACK_KINDS.filter((k) => !docs[k]);
 
   return (
     <section className="cpack">
       <div className="cpack-head">
         <h3><ShieldCheck size={16} /> Your compliance pack</h3>
-        <button className="sh-all" onClick={onGoDocs}>
+        <button className="sh-all" onClick={onManage}>
           Manage <ChevronRight size={14} />
         </button>
       </div>
@@ -20693,20 +20800,55 @@ function CompliancePack({ company, onGoDocs }) {
       <ul className="cpack-rows">
         {rows.map((r) => (
           <li key={r.key} className={r.bad ? "bad" : r.on ? "ok" : ""}>
-            <span className="cpr-dot" aria-hidden="true" />
+            {/* The tick IS the confirmation -- an empty ring while it is
+                missing, a filled check once it is on file. One mark in one
+                place, so the row reads at a glance rather than being decoded. */}
+            <span className="cpr-dot" aria-hidden="true">
+              {r.on && !r.bad && <Check size={10} strokeWidth={3.5} />}
+            </span>
             <span className="cpr-lab">{r.label}</span>
             <span className="cpr-note">{r.note}</span>
+            {busyKind === r.key ? (
+              <span className="cpr-busy">Uploading{"\u2026"}</span>
+            ) : r.file ? (
+              <label className={`cpr-do ${r.on && !r.bad ? "quiet" : ""}`}>
+                <Upload size={12} /> {r.on ? "Replace" : "Upload"}
+                <input type="file" hidden disabled={!!busyKind}
+                  onChange={(e) => { upload(r.key, e.target.files?.[0]); e.target.value = ""; }} />
+              </label>
+            ) : !r.on ? (
+              // Not a file, so it cannot be answered here. It goes to the field
+              // on the Company page, which arrives highlighted.
+              <button className="cpr-do" onClick={() => onAddField && onAddField(r.key)}>Add</button>
+            ) : null}
           </li>
         ))}
       </ul>
+      {err && <p className="cpack-err" role="alert">{err}</p>}
       {canSend ? (
-        <QuickSend inline />
+        <div className="cpack-send">
+          <button className={packDone ? "btn-solid cpack-go" : "btn-ghost cpack-go"}
+            onClick={() => setSending(true)}>
+            <Send size={14} /> Send to contractor
+          </button>
+          <span className="cpack-sendnote">
+            {packDone
+              ? "Everything is on file. They see the carrier, the cover and the expiry, live."
+              : `You can send what is on file now — ${andList(missingDocs.map((k) => DOC_LABELS_INLINE[k] || DOC_LABELS[k]))} still to come.`}
+          </span>
+        </div>
       ) : (
         <p className="cpack-empty">
-          Add one document and you can send the pack — the link shows what your cover
+          Add one document above and you can send the pack — the link shows what your cover
           actually says, and stays right when you renew.
         </p>
       )}
+      {sending && <Modal onClose={() => setSending(false)}>
+        <div className="form qs-modal">
+          <h2>Send your compliance pack</h2>
+          <QuickSend inline />
+        </div>
+      </Modal>}
     </section>
   );
 }
@@ -22675,7 +22817,8 @@ body{background:var(--paper)}
 /* The dot carries the state, so it is not the only thing that does: the note
    beside it says the same in words, for anybody who cannot tell the colours
    apart. */
-.cpr-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--line);
+.cpr-dot{width:16px;height:16px;border-radius:50%;flex:none;display:flex;align-items:center;
+  justify-content:center;color:#fff;background:transparent;
   border:1.5px solid var(--ink-soft)}
 .cpack-rows li.ok .cpr-dot{background:var(--brand);border-color:var(--brand)}
 .cpack-rows li.bad .cpr-dot{background:var(--red);border-color:var(--red)}
@@ -22684,6 +22827,41 @@ body{background:var(--paper)}
   overflow:hidden;text-overflow:ellipsis;max-width:48%}
 .cpack-rows li.bad .cpr-note{color:var(--red);font-weight:600}
 .cpack-empty{margin:0;font-size:12px;color:var(--ink-soft);line-height:1.5}
+/* The tick is the confirmation, so the ring has to be big enough to hold one.
+   Empty while it is missing, filled once it is on file -- one mark, one place. */
+.cpr-dot{border:1.5px solid var(--line)}
+.cpack-rows li.ok .cpr-dot{background:var(--brand);border-color:var(--brand)}
+.cpack-rows li.bad .cpr-dot{background:var(--red);border-color:var(--red)}
+.cpr-note{flex:none}
+.cpr-lab{flex:1}
+
+/* Answering the row from the row. A label rather than a button because it
+   wraps a file input -- same control the Company panel uses, so there is one
+   upload path and not two. */
+.cpr-do{display:inline-flex;align-items:center;gap:5px;flex:none;cursor:pointer;
+  font-family:inherit;font-size:11.5px;font-weight:700;letter-spacing:.01em;
+  color:var(--brand);background:var(--paper);border:1px solid var(--line);
+  border-radius:7px;padding:4px 9px;white-space:nowrap}
+.cpr-do:hover{border-color:var(--brand);background:#fff}
+/* Already on file, so Replace is available but should not compete with the
+   rows that still need doing. */
+.cpr-do.quiet{color:var(--ink-soft);opacity:.55}
+.cpr-do.quiet:hover{opacity:1;color:var(--brand)}
+.cpr-busy{flex:none;font-size:11.5px;color:var(--ink-soft);font-weight:600}
+.cpack-err{margin:0 0 10px;font-size:12px;color:var(--red);font-weight:600}
+
+.cpack-send{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin-top:2px}
+.cpack-go{display:inline-flex;align-items:center;gap:7px}
+.cpack-sendnote{font-size:11.5px;color:var(--ink-soft);line-height:1.5}
+.qs-modal h2{margin:0 0 4px;font-size:20px;letter-spacing:-.02em}
+
+/* Arriving highlighted. A ring and a tinted surface rather than a border
+   change, because a border that thickens moves everything next to it by a
+   pixel and the whole panel appears to twitch. */
+@keyframes litIn{from{box-shadow:0 0 0 0 rgba(20,122,73,0)}to{box-shadow:0 0 0 3px rgba(20,122,73,.22)}}
+.fld.lit input,.mydoc.lit{border-radius:9px;animation:litIn .25s ease-out forwards}
+.mydoc.lit{background:#f2f8f4}
+.fld.lit{color:var(--brand)}
 /* Already inside a card, so it drops the popover's own chrome. */
 .qsend-peek.inline{position:static;margin:0;box-shadow:none;border:0;padding:0;background:none;
   width:auto;min-width:0}

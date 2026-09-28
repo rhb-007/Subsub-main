@@ -50,6 +50,8 @@ const ACCOUNT = (kind) => ({
 
 let KIND = "subcontractor";
 const patched = [];
+const uploaded = [];
+const shared = [];
 let MY_COMPANY = {
   companyId: "cmp_own_acc_orcas", company: "Orcas Roofing", contact: "Jason",
   email: "jason@orcas.test", license: null, docs: {}, sharesSent: 0,
@@ -72,6 +74,24 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     { id: "u_jason", name: "Jason", email: "jason@orcas.test", phone: null, role: "admin",
       subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false },
   ]];
+  // Uploading from the pack card is the real two-call path: the file to R2,
+  // then the row against the company. The stub answers both and records the
+  // second, so the test can say WHICH document was uploaded and against which
+  // company id rather than only that something happened.
+  if (path.startsWith("/api/uploads/")) return [200, { key: `k_${path.split("/")[3]}` }];
+  const doc = path.match(/^\/api\/subs\/([^/]+)\/documents\/([^/]+)$/);
+  if (doc && method === "POST") {
+    uploaded.push({ companyId: doc[1], kind: doc[2], ...body });
+    // The server works the expiry out, so the card has to re-read rather than
+    // invent one -- which is what makes a stale row visible here.
+    MY_COMPANY = { ...MY_COMPANY,
+      docs: { ...MY_COMPANY.docs, [doc[2]]: { fileName: body?.fileName || "f.pdf" } } };
+    return [200, { ok: true }];
+  }
+  if (path === "/api/doc-shares" && method === "POST") {
+    shared.push(body);
+    return [200, { ok: true }];
+  }
   return undefined;
 } });
 
@@ -184,9 +204,143 @@ try {
     t.ck("no UBI row outside Washington",
       !rows.some((r) => /UBI/i.test(r.label || "")), JSON.stringify(rows.map((r) => r.label)));
 
-    // And the send is in the card, not behind a menu.
-    t.ck("the send field is right there",
-      await page.evaluate(() => !!document.querySelector(".cpack .qsend-row input")));
+    // And the send is in the card, as one button rather than an always-open
+    // form: six rows plus a field and a paragraph made the card longer than
+    // the thing it summarises.
+    const sendBtn = await page.evaluate(() =>
+      document.querySelector(".cpack-go")?.innerText.replace(/\s+/g, " ").trim() || "");
+    t.ck("there is a send CTA on the card", /send to contractor/i.test(sendBtn), sendBtn);
+    t.ck("and the form is not open until it is pressed",
+      await page.evaluate(() => !document.querySelector(".cpack .qsend-row input")));
+    await page.evaluate(() => document.querySelector(".cpack-go")?.click());
+    for (let n = 0; n < 25; n++) { await wait(150); if (await page.$(".qs-modal")) break; }
+    t.ck("pressing it opens the email form in a modal",
+      await page.evaluate(() => !!document.querySelector(".qs-modal .qsend-row input")));
+
+    // Only two of four are on file here, so it must not claim the pack is
+    // complete -- and it must still offer the send, because the server allows
+    // it and the commonest ask is for the certificate alone.
+    const note = await page.evaluate(() =>
+      document.querySelector(".cpack-sendnote")?.innerText.replace(/\s+/g, " ").trim() || "");
+    t.ck("a partial pack says what is still missing",
+      /still to come/i.test(note) && /W-9/i.test(note), note);
+    t.ck("and does not claim to be complete", !/everything is on file/i.test(note), note);
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- every pack row can be answered from the row --");
+  {
+    // The card named the missing thing and then offered no way to supply it,
+    // so the only route from "certificate of insurance: Not added" to a
+    // certificate on file was Account, Company, scroll. That is where a
+    // checklist item goes cold.
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "WA", license: "", ubi: "",
+      docs: { insurance: { fileName: "coi.pdf" } }, sharesSent: 0 };
+    uploaded.length = 0;
+    const { ctx, page, crashes } = await open();
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".cpack")) break; }
+
+    const controls = await page.evaluate(() =>
+      [...document.querySelectorAll(".cpack-rows li")].map((li) => ({
+        label: li.querySelector(".cpr-lab")?.innerText.trim(),
+        cta: li.querySelector(".cpr-do")?.innerText.replace(/\s+/g, " ").trim() || "",
+        file: !!li.querySelector(".cpr-do input[type=file]"),
+        tick: !!li.querySelector(".cpr-dot svg"),
+      })));
+    const c = (re) => controls.find((x) => re.test(x.label || "")) || {};
+
+    t.ck("a missing document offers Upload", /^Upload$/i.test(c(/bond/i).cta), JSON.stringify(c(/bond/i)));
+    t.ck("and it really is a file input", c(/bond/i).file === true, JSON.stringify(c(/bond/i)));
+    t.ck("one on file offers Replace instead", /^Replace$/i.test(c(/insurance/i).cta),
+      JSON.stringify(c(/insurance/i)));
+    // The confirmation. An empty ring while it is missing, a tick once it is
+    // there -- one mark, in one place, so the row reads at a glance.
+    t.ck("and carries a tick", c(/insurance/i).tick === true, JSON.stringify(c(/insurance/i)));
+    t.ck("a missing one does not", c(/bond/i).tick === false, JSON.stringify(c(/bond/i)));
+
+    // A licence number is a column somebody types, not a file. A button
+    // reading Upload over a text field is a screen that lies.
+    t.ck("the licence row says Add, not Upload", /^Add$/i.test(c(/license/i).cta),
+      JSON.stringify(c(/license/i)));
+    t.ck("and offers no file input", c(/license/i).file === false, JSON.stringify(c(/license/i)));
+    t.ck("nor does the UBI row", /^Add$/i.test(c(/UBI/i).cta) && c(/UBI/i).file === false,
+      JSON.stringify(c(/UBI/i)));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- and uploading from the card actually uploads --");
+  {
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "OR", license: "CCB-1", ubi: "",
+      docs: { insurance: { fileName: "coi.pdf" } }, sharesSent: 0 };
+    uploaded.length = 0;
+    const { ctx, page, crashes } = await open();
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".cpack")) break; }
+
+    // Drive the real input rather than calling the handler, so the wiring
+    // between the label, the hidden input and the two API calls is what is
+    // under test.
+    const handle = await page.evaluateHandle(() => {
+      const li = [...document.querySelectorAll(".cpack-rows li")]
+        .find((x) => /bond/i.test(x.querySelector(".cpr-lab")?.innerText || ""));
+      return li?.querySelector("input[type=file]");
+    });
+    const el = handle.asElement();
+    t.ck("the bond row has a file input to drive", !!el);
+    if (el) {
+      const tmp = join(app, "dist-subhome-test", "bond.pdf");
+      (await import("node:fs")).writeFileSync(tmp, "%PDF-1.4 bond");
+      await el.uploadFile(tmp);
+      for (let n = 0; n < 40 && !uploaded.length; n++) await wait(150);
+    }
+    t.ck("it uploaded exactly once", uploaded.length === 1, JSON.stringify(uploaded));
+    t.ck("against the right document", uploaded[0]?.kind === "bond", JSON.stringify(uploaded[0]));
+    t.ck("and the caller's own company", uploaded[0]?.companyId === "cmp_own_acc_orcas",
+      JSON.stringify(uploaded[0]));
+
+    // Re-read, not patched in place: the row's note is the expiry the SERVER
+    // worked out, so a locally invented "On file" would disagree with it the
+    // moment a certificate carries a date.
+    for (let n = 0; n < 40; n++) {
+      await wait(150);
+      const done = await page.evaluate(() => {
+        const li = [...document.querySelectorAll(".cpack-rows li")]
+          .find((x) => /bond/i.test(x.querySelector(".cpr-lab")?.innerText || ""));
+        return !!li && li.classList.contains("ok");
+      });
+      if (done) break;
+    }
+    const after = await page.evaluate(() => {
+      const li = [...document.querySelectorAll(".cpack-rows li")]
+        .find((x) => /bond/i.test(x.querySelector(".cpr-lab")?.innerText || ""));
+      return { ok: li?.classList.contains("ok"), tick: !!li?.querySelector(".cpr-dot svg"),
+        cta: li?.querySelector(".cpr-do")?.innerText.trim() };
+    });
+    t.ck("the row ticks over without a reload", after.ok === true && after.tick === true,
+      JSON.stringify(after));
+    t.ck("and now offers Replace", /Replace/i.test(after.cta || ""), JSON.stringify(after));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- a complete pack leads with the send --");
+  {
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "OR", license: "CCB-1", ubi: "",
+      docs: { insurance: { fileName: "a" }, bond: { fileName: "b" },
+        contract: { fileName: "c" }, w9: { fileName: "d" } }, sharesSent: 0 };
+    const { ctx, page, crashes } = await open();
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".cpack")) break; }
+    const go = await page.evaluate(() => {
+      const b = document.querySelector(".cpack-go");
+      return { cls: b?.className || "", note: document.querySelector(".cpack-sendnote")?.innerText || "" };
+    });
+    t.ck("the CTA is the primary button once everything is on file",
+      /btn-solid/.test(go.cls), go.cls);
+    t.ck("and says so", /everything is on file/i.test(go.note), go.note);
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -244,6 +398,69 @@ try {
     }
     t.ck("pressing it lands on the documents themselves",
       await page.evaluate(() => !!document.querySelector(".mydocs")));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- Manage lands on the pack and rings what is outstanding --");
+  {
+    // Scrolling to the right part of a long page is half of it. Somebody
+    // pressing Manage has a specific question -- what is still missing -- and
+    // a page that only scrolls has answered "here is your company profile".
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "WA", license: "", ubi: "",
+      docs: { insurance: { fileName: "coi.pdf" } }, sharesSent: 0 };
+    const { ctx, page, crashes } = await open();
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".cpack")) break; }
+    await page.evaluate(() => [...document.querySelectorAll(".cpack .sh-all")]
+      .find((b) => /manage/i.test(b.innerText))?.click());
+    for (let n = 0; n < 40; n++) { await wait(200); if (await page.$(".mydocs")) break; }
+
+    t.ck("it opens the company panel", await page.evaluate(() => !!document.querySelector(".mydocs")));
+    t.ck("and not a second copy of the documents",
+      await page.evaluate(() => document.querySelectorAll(".mydocs").length === 1),
+      String(await page.evaluate(() => document.querySelectorAll(".mydocs").length)));
+
+    for (let n = 0; n < 40; n++) { await wait(150); if (await page.$(".mydoc.lit")) break; }
+    const lit = await page.evaluate(() => ({
+      docs: [...document.querySelectorAll(".mydoc")].map((d) => ({
+        label: d.querySelector("b")?.innerText.trim(), lit: d.classList.contains("lit") })),
+      license: !!document.querySelector(".fld-nums .fld.lit input"),
+      licenseLit: [...document.querySelectorAll(".fld-nums .fld")]
+        .map((f) => ({ label: (f.innerText || "").split("\n")[0].trim(), lit: f.classList.contains("lit") })),
+    }));
+    const d = (re) => lit.docs.find((x) => re.test(x.label || "")) || {};
+
+    // Only what is OUTSTANDING. Ringing a certificate already on file points
+    // at the wrong thing; ringing all six when five are done buries the one
+    // that matters.
+    t.ck("a missing document is ringed", d(/surety bond/i).lit === true, JSON.stringify(lit.docs));
+    t.ck("and so is the W-9", d(/W-9/i).lit === true, JSON.stringify(lit.docs));
+    t.ck("one already on file is NOT ringed", d(/certificate of insurance/i).lit === false,
+      JSON.stringify(lit.docs));
+    // The pack is both halves of the page, so the licence and the UBI come too.
+    t.ck("the blank licence field is ringed",
+      lit.licenseLit.some((f) => /licence/i.test(f.label) && f.lit), JSON.stringify(lit.licenseLit));
+    t.ck("and the blank UBI, in Washington",
+      lit.licenseLit.some((f) => /UBI/i.test(f.label) && f.lit), JSON.stringify(lit.licenseLit));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- and it rings nothing when there is nothing to do --");
+  {
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "OR", license: "CCB-1", ubi: "",
+      docs: { insurance: { fileName: "a" }, bond: { fileName: "b" },
+        contract: { fileName: "c" }, w9: { fileName: "d" } }, sharesSent: 0 };
+    const { ctx, page, crashes } = await open();
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".cpack")) break; }
+    await page.evaluate(() => [...document.querySelectorAll(".cpack .sh-all")]
+      .find((b) => /manage/i.test(b.innerText))?.click());
+    for (let n = 0; n < 40; n++) { await wait(200); if (await page.$(".mydocs")) break; }
+    await wait(600);
+    t.ck("nothing is ringed when everything is done",
+      await page.evaluate(() => !document.querySelector(".lit")));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

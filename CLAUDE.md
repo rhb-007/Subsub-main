@@ -128,6 +128,64 @@ refactor.
   anything to do with which direction the account faces, so neither belongs on
   this screen.
 
+- **The pack card is where the pack is assembled, not a report on it.** Six rows
+  naming what was missing, with nothing on any of them to do about it: the only
+  route from *certificate of insurance — Not added* to a certificate on file was
+  Account, Company, scroll. That is where a checklist item goes cold, and it is
+  the same shape as every other entry in this file — a screen that knows the
+  answer and offers no way in.
+
+  Every row now carries its own control, and **what the control is follows what
+  the row is**. The four documents take an upload, done in place, through the
+  same two calls the Company panel makes so there is one upload path and not
+  two. The licence and the UBI cannot: they are columns somebody types, not
+  files, and a button reading *Upload* over a text field is the screen-that-lies
+  rule pointed at a widget. Those say **Add** and go to the field. The tick in
+  the row's ring is the confirmation — empty while it is missing, filled once it
+  is on file — because one mark in one place reads at a glance, where a second
+  badge has to be decoded.
+
+  The upload **re-reads the company** rather than patching the row in place. The
+  note is the expiry the *server* worked out, so a locally invented "On file"
+  disagrees with it the moment a certificate carries a date. Removing the reload
+  is what the test catches.
+
+  **Send is a CTA that opens the form, and it appears from the FIRST document,
+  not the fourth.** The always-open field made the card longer than the thing it
+  summarises, so it is one button and a modal. But the gate stays where the
+  server put it: `POST /api/doc-shares` refuses only `nothing_on_file`, and the
+  moment this entire loop exists for is a general contractor asking for your
+  **insurance** while you are standing on their site — a subcontractor holding
+  exactly that and nothing else is the commonest state there is. Hiding the
+  button until the other three arrive would refuse the one send the product was
+  built to make, on a screen whose own header menu offers it anyway. What
+  completeness changes is **prominence, not permission**: at four documents the
+  CTA is the primary button and says everything is on file; below that it is
+  quiet and names what is still to come. The general rule, and this is the third
+  time it has been written here: **a screen must not be stricter than the route
+  behind it, any more than it may be looser.**
+
+- **Landing somewhere is not the same as pointing at something.** *Manage* on
+  the pack card opens the panel it always did — one implementation, not a second
+  copy — but a page that only scrolls has answered "here is your company
+  profile" when the question was "what is still missing".
+
+  So `openPane.focus` scrolls **and** highlights, and it highlights only what is
+  **outstanding**. Ringing a certificate already on file points at the wrong
+  thing; ringing all six when five are done buries the one that matters; and
+  with nothing outstanding it rings nothing at all, which is the honest answer.
+  `focus` takes four values because there are four ways in — `docs` from the nav,
+  `license` and `ubi` from a row's *Add*, and `pack` from *Manage*, which is both
+  halves of the page and so lands on the first of them.
+
+  It lives in `HireablePanel` and **waits for `loaded`**, which is the part worth
+  stating: "which of these is missing" is a question only the fetched row can
+  answer, and running the effect before it arrives rings everything, every time,
+  including the documents somebody has already uploaded. It keys off `focusN` as
+  well as `focus`, so asking for the same place twice takes you there twice. And
+  the ring is a `box-shadow` rather than a border, because a border that thickens
+  moves everything beside it by a pixel and the whole panel appears to twitch.
+
 - **A UBI is Washington's, so it is asked for in Washington and nowhere else.**
   The Unified Business Identifier does not exist in the other fifty
   jurisdictions. It is on the subcontractor's set-up checklist and on the
