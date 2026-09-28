@@ -96,6 +96,35 @@ console.log("\n-- signing up does not require a licence --");
     codes.join(",") === US_STATES.map(([c]) => c).join(","), "drifted from shared/states.js");
 }
 
+console.log("\n-- and the SERVER agrees, which is where this went wrong --");
+{
+  // This section only ever read get-started.html. So the form was changed to
+  // say "optional ... never required to sign up" and the server went on
+  // refusing a hireable signup without a licence AND a UBI -- a screen
+  // promising one thing while the API did another, which is the exact failure
+  // this file keeps catching elsewhere. Nobody noticed because the only test
+  // asserting the server's behaviour asserted the OLD rule.
+  //
+  // A UBI is Washington's Unified Business Identifier. There is no such number
+  // to give in the other fifty jurisdictions, so demanding one is not a
+  // stricter policy, it is an unanswerable question -- the same shape as the
+  // state licence this whole file is about.
+  const w = readFileSync(join(app, "worker", "index.js"), "utf8");
+  ck("signing up does not refuse for a missing licence",
+    !/error: "license_required"/.test(w), "the gate is back in the Worker");
+  ck("nor for a missing UBI",
+    !/error: "ubi_required"/.test(w), "the UBI gate is back in the Worker");
+  // The form must not carry copy for a refusal that cannot happen: that is the
+  // wording somebody reinstates the gate from.
+  const html2 = readFileSync(join(app, "..", "get-started.html"), "utf8");
+  ck("and the form carries no message for either",
+    !/license_required|ubi_required/.test(html2), "dead error copy is still there");
+  // What is NOT dropped: a licence given is still deduped, so two accounts
+  // cannot claim the same one.
+  ck("a licence that is already registered is still refused",
+    /error: "license_taken"/.test(w), "the dedupe went with it");
+}
+
 console.log("\n-- and the licence is asked for where it buys something --");
 {
   const ui = readFileSync(join(app, "src", "App.tsx"), "utf8");

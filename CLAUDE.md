@@ -675,6 +675,38 @@ refactor.
   subcontractors" invites the one question this flow cannot afford — *am I about
   to be charged for sending a certificate.*
 
+  **And the whole point is that they never have to be invited.** Every other way
+  into SubSub needs the hiring side to already be here. A subcontractor signs up,
+  puts their pack together and sends it — no invite, no roster, no client. Six
+  gates stand between signing up and a pack landing in somebody's inbox and each
+  reads a different thing, so `test:subsignup` walks the lot end to end rather
+  than testing them one at a time. Two of them were shut.
+
+  **`mayWriteCompanyDocs` asked "do I hire this company", and for yourself the
+  answer is always no.** The security fix that added it was right — `companies`
+  is a shared row and `cmp_own_<accountId>` is derivable from a public route —
+  but the relationship it checks is an engagement, and an account nobody has
+  hired yet has none. So a hireable account could not upload its own
+  certificate: the panel rendered and the button answered `404`. It now accepts
+  the caller's **own** company row, resolved through `seatCompany` so the read
+  and write paths cannot disagree about which row is "mine", and read off the
+  **session's** account id rather than the URL — deriving somebody else's still
+  gets nowhere, because it cannot equal your own.
+
+  **And signing up refused without a licence and a UBI.** The form has said
+  *optional … never required to sign up* the whole time, so the screen promised
+  one thing and the server did another. A UBI is Washington's Unified Business
+  Identifier: there is no such number to give in the other fifty jurisdictions,
+  so the gate was unsatisfiable for most of the country rather than merely
+  annoying — the same shape as the state-licence question this product already
+  decided against twice.
+
+  It survived because **`test:states` only ever read `get-started.html`**, and
+  the one test that did assert the server asserted the *old* rule. Both now
+  check the Worker. The general lesson, which is this file's oldest: when a
+  decision changes what a form says, find the route that enforces it — a screen
+  and an API disagreeing is not a smaller bug than either being wrong.
+
   **Migration 046 is the one migration most databases must not run.** 003 added
   `accounts.kind` as plain TEXT on purpose ("adding a CHECK to an existing table
   needs a full table rebuild, and the API validates the value anyway"), so a

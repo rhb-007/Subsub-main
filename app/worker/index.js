@@ -773,8 +773,21 @@ app.post("/api/signup", async (c) => {
   const zip = String(b.zip || "").trim().slice(0, 20) || null;
 
   if (!company) return c.json({ error: "company_required" }, 400);
-  if (hireable && !license) return c.json({ error: "license_required" }, 400);
-  if (hireable && !ubi) return c.json({ error: "ubi_required" }, 400);
+  // Neither a licence nor a UBI is required to sign up, for any kind.
+  //
+  // This used to refuse a hireable signup without both, and the form has said
+  // "optional ... never required to sign up" the whole time -- so the screen
+  // promised one thing and the server refused. Worse, a UBI is Washington's
+  // Unified Business Identifier: there is no such number to give in the other
+  // fifty jurisdictions, so the gate was unsatisfiable for most of the country
+  // rather than merely annoying.
+  //
+  // The decision it was contradicting is an old one: several states license no
+  // contractors at all, so it was a question a real general contractor could
+  // not answer, and it cost signups for nothing. Credentials are asked for
+  // inside the account, in the set-up checklist, where they buy something --
+  // being hireable, and later being eligible for overflow. A licence GIVEN here
+  // is still deduped and still verified; only the refusal is gone.
   if (!personName) return c.json({ error: "name_required" }, 400);
   if (!EMAIL_RE.test(email)) return c.json({ error: "invalid_email" }, 400);
   // Mobile stays optional, but a half-typed one is worse than none: it reads
@@ -6605,6 +6618,25 @@ app.post("/api/subs/:companyId/documents/:kind/review", requireRole("admin", "pm
 async function mayWriteCompanyDocs(c, companyId) {
   const auth = c.get("auth");
   if (auth.role === "contractor") return auth.companyId === companyId;
+  // Their OWN account's company row, which is not a shared row needing a
+  // relationship -- it is this account's own paperwork.
+  //
+  // Without this, an account that can be hired but has not been yet could not
+  // upload its own certificate: the engagement check below asks "do I hire
+  // them", and the answer for yourself is always no. That closed the
+  // send-your-compliance-pack loop at its first step for exactly the person it
+  // exists for -- a subcontractor who signed up on their own rather than being
+  // invited, who by definition has no client yet. The panel rendered and the
+  // upload answered 404, which is the screen-that-lies failure this file keeps
+  // coming back to.
+  //
+  // Resolved through seatCompany, the same function the read path and
+  // /api/doc-shares use, so the two cannot disagree about which row is "mine".
+  // And it reads the account id off the SESSION, never off the URL: the hole
+  // this check was added to close was that `cmp_own_<accountId>` is derivable
+  // from a public route, and deriving somebody else's still gets nowhere here
+  // because it cannot equal your own.
+  if (auth.accountId && (await seatCompany(c)) === companyId) return true;
   const engaged = await c.env.DB.prepare(
     `SELECT 1 AS yes FROM engagements
       WHERE account_id = ? AND company_id = ? AND status != 'ended' LIMIT 1`

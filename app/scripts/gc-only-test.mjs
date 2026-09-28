@@ -171,14 +171,29 @@ try {
     const post = (body) => fetch(`${API}/signup`, { method: "POST",
       headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
+    // This used to assert the opposite -- that a hireable signup was REFUSED
+    // without a licence and a UBI. It was refused, and the form beside it has
+    // said "optional ... never required to sign up" the whole time, so the
+    // screen promised one thing and the server did another. Worse, a UBI is
+    // Washington's Unified Business Identifier: there is no such number to give
+    // in the other fifty jurisdictions, so the gate was unsatisfiable for most
+    // of the country rather than merely annoying. And it closed the
+    // send-your-compliance-pack loop at the door for the people it exists for.
+    //
+    // The decision it contradicted is recorded and old: credentials are asked
+    // for inside the account, in the set-up checklist, where they buy
+    // something. A licence GIVEN here is still deduped and still verified.
     let r = await post(base({}));
     let b = await r.json();
-    ck("a licence number is required", r.status === 400 && b.error === "license_required", `${r.status} ${b.error}`);
-    r = await post(base({ license: `GCLIC${S.toUpperCase()}` }));
+    ck("no licence is demanded at the door", r.status === 201 || r.status === 200,
+      `${r.status} ${b.error || ""}`);
+    r = await post(base({ license: `GCLIC${S.toUpperCase()}`, subdomain: `sgnl${S}`,
+      email: `gcl.${S}@signup.test` }));
     b = await r.json();
-    ck("and so is a UBI", r.status === 400 && b.error === "ubi_required", `${r.status} ${b.error}`);
+    ck("nor a UBI alongside one", r.status === 201 || r.status === 200,
+      `${r.status} ${b.error || ""}`);
 
-    // Neither is asked of the kinds that only hire.
+    // Neither is asked of the kinds that only hire, which was true before too.
     r = await post({ ...base({}), kind: "property_manager", subdomain: `sgnpm${S}`, email: `pm.${S}@signup.test` });
     ck("a property manager is not asked for either", r.status === 201 || r.status === 200, `${r.status}`);
 

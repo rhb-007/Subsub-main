@@ -183,6 +183,152 @@ const SITE = 5257;
   }
 }
 
+// ---- the whole point, end to end --------------------------------------
+// The reason this kind exists: a subcontractor can sign up, put their
+// compliance pack together and send it to a general contractor WITHOUT being
+// invited by anybody first. Every other way into SubSub needs the hiring side
+// to already be here.
+//
+// Six different gates stand between signing up and a pack landing in somebody's
+// inbox, and each reads a different thing. Any one of them reverting to a
+// `general_contractor` literal breaks the loop silently, so this walks the lot
+// rather than testing them one at a time.
+{
+  console.log("\n-- a subcontractor signs up and sends a pack, uninvited --");
+  const { default: worker } = await import("../worker/index.js");
+  const SCHEMA = readFileSync(join(app, "worker", "schema.sql"), "utf8");
+  const { makeD1: mk, freshDb: fresh } = await import("./lib/d1-sqlite.mjs");
+
+  const mails = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    if (u.includes("api.resend.com")) {
+      const b = (() => { try { return JSON.parse(opts.body || "{}"); } catch { return {}; } })();
+      mails.push({ to: [].concat(b.to || []), html: b.html || b.text || "" });
+      return new Response(JSON.stringify({ id: "m1" }), { status: 200 });
+    }
+    if (/supabase/.test(u)) return new Response("{}", { status: 200 });
+    return realFetch(url, opts);
+  };
+
+  try {
+    // schema.sql has drifted a long way from the migrations -- it is missing
+    // accounts.company_id (031), companies.connect_code (030), and the
+    // company_docs and doc_shares tables (037, 041) -- so a database built from
+    // it alone is not the shape any live one has. The migration FILES are read
+    // rather than restated, which is the pattern doc-share-test already uses:
+    // a hand-copied CREATE goes stale the first time somebody adds a column.
+    const mig = (f) => readFileSync(join(app, "worker", "migrations", f), "utf8");
+    const db = fresh({ base: SCHEMA, migrations: [
+      "ALTER TABLE accounts ADD COLUMN hostname_status TEXT;",
+      "ALTER TABLE accounts ADD COLUMN company_id TEXT REFERENCES companies(id);",
+      mig("030_connect_requests.sql"),
+      mig("037_document_detail.sql"),
+      mig("041_doc_shares.sql"),
+    ] });
+    const env = { DB: mk(db), RESEND_API_KEY: "re_stub",
+      MAIL_FROM: "SubSub <no-reply@subsub.work>", APP_DOMAIN: "subsub.work" };
+
+    // 1. Sign up. Nobody invited them; there is no invite token in this flow.
+    const signup = await worker.fetch(new Request("https://api.subsub.work/api/signup", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "subcontractor", company: "Ridge Roofing",
+        name: "Sam Ridge", email: "sam@ridge.test", password: "hunter2hunter2",
+        subdomain: "ridgeroofing", plan: "basic", trades: ["roofing"],
+        license: "RIDGE123AB", city: "Seattle", state: "WA", zip: "98101" }),
+    }), env);
+    const made = await signup.json().catch(() => ({}));
+    t.ck("1. they get an account", signup.status === 201,
+      `${signup.status} ${JSON.stringify(made)}`);
+    if (signup.status !== 201) throw new Error("signup failed: " + JSON.stringify(made));
+
+    const seat = { "X-User-Id": made.userId, "X-Account-Id": made.accountId,
+      "Content-Type": "application/json" };
+    const call = (path, opts = {}) => worker.fetch(new Request(
+      `https://api.subsub.work/api${path}`,
+      { ...opts, headers: { ...seat, ...(opts.headers || {}) } }), env);
+
+    // 2. Their company row is readable by their own admin seat. This is the
+    //    gate that answers not_hireable for a property manager.
+    const mine = await call("/my-company");
+    const mineBody = await mine.json().catch(() => ({}));
+    t.ck("2. they can read their own company", mine.status === 200,
+      `${mine.status} ${JSON.stringify(mineBody).slice(0, 80)}`);
+    t.ck("   with the licence they typed at signup",
+      mineBody.license === "RIDGE123AB", String(mineBody.license));
+    // The route answers `companyId`, not `id`.
+    const myCompanyId = mineBody.companyId;
+    t.ck("   and names the row that is theirs",
+      typeof myCompanyId === "string" && myCompanyId.startsWith("cmp_own_"),
+      String(myCompanyId));
+
+    // 3. Upload. THE ONE THAT WAS BROKEN. mayWriteCompanyDocs asked "do I hire
+    //    this company", and for yourself the answer is always no -- so a
+    //    hireable account nobody had hired yet got a 404 uploading its own
+    //    certificate, with the panel rendered and the button dead.
+    const nobodyHiresThem = db.prepare(
+      "SELECT COUNT(*) AS n FROM engagements WHERE account_id = ?").get(made.accountId).n;
+    t.ck("3. nobody has engaged them, which is the whole case",
+      nobodyHiresThem === 0, String(nobodyHiresThem));
+    const up = await call(`/subs/${myCompanyId}/documents/insurance`, {
+      method: "POST",
+      body: JSON.stringify({ fileKey: "k1", fileName: "coi.pdf",
+        issuer: "Cascade Mutual", policyNo: "POL-1",
+        coverageCents: 200000000, expiresOn: "2027-06-30" }),
+    });
+    t.ck("   they can upload their own insurance", up.status < 300,
+      `${up.status} ${(await up.clone().text()).slice(0, 80)}`);
+    t.ck("   and it is on the company row",
+      db.prepare("SELECT insurance FROM companies WHERE id = ?").get(myCompanyId).insurance === 1);
+
+    // 4. Send it. This is the growth loop: the recipient needs no account.
+    const share = await call("/doc-shares", {
+      method: "POST",
+      body: JSON.stringify({ toEmail: "priya@cascade.test", kinds: ["insurance"] }),
+    });
+    const shareBody = await share.json().catch(() => ({}));
+    t.ck("4. they can send the pack", share.status < 300,
+      `${share.status} ${JSON.stringify(shareBody).slice(0, 90)}`);
+    t.ck("   and it went to the address they typed",
+      mails.some((m) => m.to.includes("priya@cascade.test")),
+      JSON.stringify(mails.map((m) => m.to)));
+
+    // 5. And the recipient reads it with no account at all, which is what
+    //    makes this supply-brings-demand rather than another invite.
+    const token = db.prepare("SELECT token FROM doc_shares WHERE company_id = ?")
+      .get(myCompanyId)?.token;
+    t.ck("5. a share token exists", !!token, String(token));
+    const pack = await worker.fetch(new Request(
+      `https://api.subsub.work/api/pack/${token}`), env);
+    const packBody = await pack.json().catch(() => ({}));
+    t.ck("   the pack page opens with no session", pack.status === 200, String(pack.status));
+    t.ck("   naming the company", packBody.company === "Ridge Roofing", String(packBody.company));
+    t.ck("   and carrying the expiry, which an attached PDF cannot",
+      (packBody.docs || []).some((d) => d.kind === "insurance" && d.expiresOn === "2027-06-30"),
+      JSON.stringify(packBody.docs));
+
+    // And the line that must not move while fixing the above: somebody else's
+    // company is still not writable. The hole this check was added to close is
+    // that cmp_own_<accountId> is derivable from a public route.
+    db.exec(`INSERT INTO accounts(id,name,subdomain,kind) VALUES
+      ('acc_other','Someone Else','elsewhere','general_contractor');
+      INSERT INTO companies(id,company) VALUES ('cmp_own_acc_other','Someone Else');
+      UPDATE accounts SET company_id='cmp_own_acc_other' WHERE id='acc_other';`);
+    const hack = await call("/subs/cmp_own_acc_other/documents/insurance", {
+      method: "POST", body: JSON.stringify({ fileKey: "k2", fileName: "x.pdf" }),
+    });
+    t.ck("6. and another account's company is still not theirs to write",
+      hack.status === 404, String(hack.status));
+    t.ck("   answering not_found, so derived ids cannot be confirmed",
+      (await hack.json().catch(() => ({}))).error === "not_found");
+    t.ck("   and nothing was written",
+      db.prepare("SELECT insurance FROM companies WHERE id='cmp_own_acc_other'").get().insurance === 0);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 // ---- 046, the migration most databases must not run --------------------
 // `accounts.kind` was added by migration 003 as PLAIN TEXT, deliberately: "the
 // CHECK constraint is deliberately omitted: adding one to an existing table
