@@ -4723,6 +4723,25 @@ export default function SubSub() {
               Availability
             </button>
           )}
+          {/* An account that can be HIRED keeps its own four documents, and
+              until now the only nav item for them was "My Documents" inside
+              the contractor portal -- which ROLES.admin does not have. So a
+              subcontractor who signed up as their own account had a compliance
+              pack with no way to reach it but Account, then Company, then
+              scroll. The panel is unchanged and this opens it; a second copy
+              would be two components holding the same upload state.
+              The red count is the same one the portal's item carries. */}
+          {isHireable(account) && (role === "admin" || role === "pm") && (
+            <button className={tab === "account" ? "" : ""}
+              onClick={() => { setTab("account"); setOpenPane({ pane: "company", focus: "docs", n: Date.now() }); }}>
+              My documents
+              {myCompany && DOC_KINDS.filter((k) => !(myCompany.docs || {})[k]).length > 0 && (
+                <span className="count red">
+                  {DOC_KINDS.filter((k) => !(myCompany.docs || {})[k]).length}
+                </span>
+              )}
+            </button>
+          )}
           {can("jobs") && (
             <button className={tab === "jobs" ? "on" : ""} onClick={() => setTab("jobs")}>
               Jobs <span className="count">{jobs.length}</span>
@@ -4808,8 +4827,9 @@ export default function SubSub() {
             if (accept) await reloadAccounts?.();
           }}
           onReloadConnects={refreshConnects}
-          hireable={isHireable(account)} myCompany={myCompany}
+          hireable={isHireable(account)} myCompany={myCompany} kind={kindOf(account)}
           onGoCompany={() => { setTab("account"); setOpenPane({ pane: "company", n: Date.now() }); }}
+          onGoDocs={() => { setTab("account"); setOpenPane({ pane: "company", focus: "docs", n: Date.now() }); }}
           onOpenInvite={(i) => setInvitedOpen(i)}
           onOpenConnect={() => setTab("network")}
           accountId={account.id} trades={account.trades} subLimit={PLANS[plan].limit}
@@ -8080,6 +8100,20 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
 // was arriving as a fragment on the sign-in page and being shown to nobody,
 // so a link that did not work looked exactly like a link that did.
 function AuthLanding({ flow, brand, onDone, onCancel }) {
+  // The themed surface needs the theme, and this screen was wearing the class
+  // without it.
+  //
+  // `.wl-themed .btn-solid` sets `background: var(--wl-accent) !important`. With
+  // no themeVars on the wrapper that variable is undefined, and a property set
+  // to an undefined var is invalid at computed-value time -- which does not
+  // fall back to the cascade, it resets to the INITIAL value. So the green went
+  // transparent and the text colour went dark, and "Save password and continue"
+  // rendered as a line of text with a padlock. Somebody confirming their email
+  // could not tell it was the button.
+  //
+  // The trap generalises: a `var()` in an `!important` rule is a way to delete a
+  // property on any surface that forgot to define it, and it fails silently.
+  const wl = themeOf(brand);
   const [pw, setPw] = useState("");
   const [again, setAgain] = useState("");
   const [busy, setBusy] = useState(false);
@@ -8121,7 +8155,7 @@ function AuthLanding({ flow, brand, onDone, onCancel }) {
   };
 
   return (
-    <div className="login-wrap wl-themed">
+    <div className="login-wrap wl-themed" style={themeVars(wl)}>
       <div className="login-card">
         <div className="login-brand">
           <div className="login-logo-wrap"><BrandMark brand={brand} height={38} /></div>
@@ -14038,6 +14072,17 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // plain value, so asking for the same pane twice opens it twice instead
   // of the second request doing nothing.
   useEffect(() => { if (openPane) setPane(openPane.pane); }, [openPane]);
+  // "My documents" in the nav opens THIS panel rather than a second copy of
+  // it, so it has to land on the right part of a long page. One
+  // implementation, two ways in -- the same call the embed snippet makes,
+  // because two copies would be two components holding the same upload state.
+  useEffect(() => {
+    if (openPane?.focus !== "docs") return;
+    const t = setTimeout(() => {
+      document.querySelector(".mydocs")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [openPane]);
   const [confirmCancel, setConfirmCancel] = useState(false);
 
   // profile form
@@ -14963,14 +15008,67 @@ function UniformAdmin({ orders, subs, onDecide }) {
 // for, documents decide who can be assigned, so a job created before either
 // is a job with nobody to give it to.
 function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, onInvite, onAddSub, onNewJob, onGoContractors, properties, onAddProperty,
-  hireable = false, myCompany = null, onGoCompany }) {
+  hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null }) {
   const key = `subsub.gs.${accountId}`;
   const [hidden, setHidden] = useState(() => {
     try { return localStorage.getItem(key) === "1"; } catch { return false; }
   });
 
   const approved = subs.filter((s) => DOC_KINDS.every((k) => s[k]));
-  const steps = [
+
+  // A subcontractor's checklist is not a shorter version of a hiring
+  // account's, it is a different list.
+  //
+  // Theirs said "bring your subcontractors in", "approve their documents" and
+  // "create your first job" -- three things a roofer who signed up to send a
+  // compliance pack is not here to do, and one of them ("0 of 3") reads as a
+  // quota they are failing. What they actually have to do is put four
+  // documents in and send them to somebody, which is the loop the whole
+  // account exists for.
+  //
+  // They can still hire, and the Contractors screen is there when they want
+  // it. It is not a SET-UP step, because nothing about their account is
+  // unfinished until they do it.
+  const sub = kind === "subcontractor";
+  const myDocs = (myCompany && myCompany.docs) || {};
+  const onFile = DOC_KINDS.filter((k) => myDocs[k]);
+  const subSteps = [
+    {
+      id: "trades", done: Array.isArray(trades) && trades.length > 0,
+      title: "Tell us what you work in",
+      note: "Your trades are what a hiring contractor searches their own roster by.",
+      actions: [{ label: "Pick trades", onClick: onGoAccount, solid: true }],
+    },
+    {
+      id: "pack", done: onFile.length === DOC_KINDS.length,
+      title: `Add your compliance pack — ${onFile.length} of ${DOC_KINDS.length}`,
+      // Named rather than counted, because "2 of 4" does not say which two are
+      // missing and that is the only thing worth knowing here.
+      note: onFile.length === DOC_KINDS.length
+        ? "Insurance, bond, signed agreement and W-9 are all on file."
+        : `Still to add: ${DOC_KINDS.filter((k) => !myDocs[k])
+            .map((k) => DOC_LABELS[k] || k).join(", ")}. `
+          + "They stay yours, and the expiry stays live for everybody you have sent them to.",
+      actions: [{ label: "Add a document", onClick: onGoDocs || onGoCompany, solid: true }],
+    },
+    {
+      id: "send", done: (myCompany?.sharesSent || 0) > 0,
+      title: "Send it to a contractor who asked",
+      note: "One field, one link. They need no account to open it, and when you renew, "
+        + "what they are looking at renews with you.",
+      actions: [{ label: "Send my pack", onClick: onGoDocs || onGoCompany, solid: true }],
+    },
+    {
+      id: "license", done: !!(myCompany && myCompany.license),
+      title: "Add your license number",
+      note: "It is checked against your state's registry, so a hiring contractor does not "
+        + "have to ask. No state license where you are? Leave it — your email and mobile "
+        + "still make you findable.",
+      actions: [{ label: "Add it", onClick: onGoCompany, solid: true }],
+    },
+  ];
+
+  const steps = sub ? subSteps : [
     {
       id: "trades", done: Array.isArray(trades) && trades.length > 0,
       title: "Tell us what you hire out",
@@ -15624,7 +15722,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
 function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit",
   invites = [], connectsOut = [], onOpenInvite, onOpenConnect,
   connectsIn = [], onRespondConnect, onReloadConnects,
-  hireable = false, myCompany = null, onGoCompany }) {
+  hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null }) {
   // Which request is being turned down, and why. One at a time: the reason
   // is the point, and a row of open boxes invites none of them being filled.
   const [declining, setDeclining] = useState(null);
@@ -15832,7 +15930,8 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
           subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
           onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors}
           properties={properties} onAddProperty={onAddProperty}
-          hireable={hireable} myCompany={myCompany} onGoCompany={onGoCompany} />}
+          hireable={hireable} myCompany={myCompany} onGoCompany={onGoCompany}
+          kind={kind} onGoDocs={onGoDocs} />}
       </div>
 
       {/* An owner gets their own row. Reusing the account's -- unassigned

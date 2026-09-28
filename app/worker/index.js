@@ -797,9 +797,25 @@ app.post("/api/signup", async (c) => {
   if (!subdomain) return c.json({ error: "invalid_subdomain" }, 400);
 
   const realAuth = !!(c.env.SUPABASE_URL && c.env.SUPABASE_ANON_KEY);
-  if (realAuth && String(b.password || "").length < 8) {
+  // A password is OPTIONAL here, and the form no longer asks for one.
+  //
+  // It used to be required, and then the confirmation email's link asked for a
+  // new one twice -- so somebody signing up chose a password, never used it,
+  // and was asked to choose again before they could get in. Three password
+  // boxes for one password.
+  //
+  // Confirming by email is the step that cannot be skipped (the address has to
+  // be proved before the account is usable), and that link lands on a screen
+  // that already takes a password properly, with a repeat. So that is where it
+  // is set, and signup mints a random one nobody is ever told -- Supabase needs
+  // a value, and one that is never transmitted back cannot be used by anybody.
+  // The way in is the emailed link, or the reset form; both end at the same
+  // screen.
+  const chosen = String(b.password || "");
+  if (realAuth && chosen && chosen.length < 8) {
     return c.json({ error: "weak_password" }, 400);
   }
+  const authPassword = chosen || randomSecret();
 
   // Check both uniqueness constraints up front, so the caller gets a field
   // name back instead of a bare constraint violation.
@@ -845,7 +861,7 @@ app.post("/api/signup", async (c) => {
 
   let authId = null, needsConfirmation = false;
   if (realAuth) {
-    const signed = await supabaseSignUp(c.env, email, b.password);
+    const signed = await supabaseSignUp(c.env, email, authPassword);
     if (!signed.ok) {
       const status = signed.error === "email_in_use" ? 409
         : signed.error === "auth_unreachable" ? 502 : 400;
@@ -910,6 +926,10 @@ app.post("/api/signup", async (c) => {
 
   return c.json({
     ok: true, accountId, userId, subdomain, kind,
+    // Whether they chose one. False means the only way in is the emailed
+    // link, which the closing screen has to say rather than telling somebody
+    // to "sign in with the password you just chose".
+    hasPassword: !!chosen,
     // The app is reached at the account's own subdomain once DNS is pointed
     // at it; the caller decides whether to send them there or to app.*.
     // Branding, and with it a company hostname, is a Scale feature. A Basic
@@ -2408,8 +2428,17 @@ app.get("/api/my-company", requireRole("admin", "pm"), async (c) => {
   try {
     docs = docShapeWithLegacy(await currentDocRows(c.env.DB, companyId), co);
   } catch (err) { if (!missingSchema(err)) throw err; }
+  // How many packs this company has sent. A count, not the list -- the
+  // set-up checklist needs to know whether the loop has been round once, and
+  // the panel that manages shares fetches them properly when it is opened.
+  // Tolerant of a database without 041, like everything else that reads it.
+  let sharesSent = 0;
+  try {
+    sharesSent = (await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM doc_shares WHERE company_id = ?`).bind(companyId).first())?.n || 0;
+  } catch (err) { if (!missingSchema(err)) throw err; }
   return c.json({ ...myCompanyToJs(co), findable, code,
-    url: code ? connectUrl(code) : null, docs });
+    url: code ? connectUrl(code) : null, docs, sharesSent });
 });
 
 app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
@@ -6744,6 +6773,15 @@ app.delete("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "c
 // A token that is worth being a secret. 32 bytes of CSPRNG, base64url --
 // never derived from the company, the recipient or the clock, all of which a
 // recipient already knows and could otherwise walk.
+// A password nobody is ever told, for an account whose owner will set their
+// own through the emailed link. Full entropy rather than something memorable:
+// the point is that it is unusable, not that it is typeable.
+function randomSecret() {
+  const b = new Uint8Array(24);
+  crypto.getRandomValues(b);
+  return "Ss1!" + btoa(String.fromCharCode(...b)).replace(/[^A-Za-z0-9]/g, "");
+}
+
 function shareToken() {
   const b = new Uint8Array(32);
   crypto.getRandomValues(b);

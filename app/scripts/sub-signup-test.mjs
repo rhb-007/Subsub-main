@@ -568,6 +568,32 @@ try {
     await page.close();
   }
 
+  console.log("\n-- and it asks for the password once, not three times --");
+  {
+    // Signing up used to take a password, and then the confirmation link asked
+    // for a new one twice -- three boxes for one password, and the first was
+    // never used. Confirming the address is the step that cannot be skipped, so
+    // the password is set on the screen that link lands on.
+    const { page, crashes } = await open();
+    t.ck("the signup form has no password field",
+      await page.evaluate(() => !document.getElementById("pw")));
+    t.ck("nor any password input at all on step 1",
+      await page.evaluate(() =>
+        document.querySelectorAll('.step[data-step="1"] input[type=password]').length === 0));
+    // And it must not silently require one it no longer shows.
+    await page.evaluate(() => {
+      document.getElementById("name").value = "Jason";
+      document.getElementById("email").value = "jason@orcas.test";
+      document.querySelector("#f1 button[type=submit]").click();
+    });
+    await wait(400);
+    const on = await page.evaluate(() => [...document.querySelectorAll(".step")]
+      .filter((x) => x.hasAttribute("data-on")).map((x) => x.dataset.step));
+    t.ck("step 1 completes without one", on.includes("2"), JSON.stringify(on));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await page.close();
+  }
+
   console.log("\n-- and the confirmation says what the account is for --");
   {
     // Driven all the way to step 4 with the API stubbed, because the points are
@@ -593,7 +619,6 @@ try {
     await page.evaluate(() => {
       document.getElementById("name").value = "Jason";
       document.getElementById("email").value = "jason@orcas.test";
-      document.getElementById("pw").value = "hunter2hunter2";
       document.querySelector("#f1 button[type=submit]").click();
     });
     await wait(500);

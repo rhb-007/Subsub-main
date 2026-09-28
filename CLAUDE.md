@@ -1393,6 +1393,44 @@ refactor.
 - D1 stops a multi-statement script at the first failing statement and does
   not undo what ran before it. `ALTER TABLE ... ADD COLUMN` is the statement
   that is not repeatable, so it goes in a paste of its own.
+- **A `var()` inside an `!important` rule deletes the property on any surface
+  that forgot to define it.** `.wl-themed .btn-solid` sets
+  `background: var(--wl-accent) !important`, and `AuthLanding` wore `wl-themed`
+  without `themeVars`. A property set to an undefined custom property is invalid
+  at computed-value time, which does **not** fall back to the cascade — it
+  resets to the *initial* value. So the green went transparent, the text colour
+  went dark, and *Save password and continue* rendered as a line of text with a
+  padlock: the one control on the screen, invisible as a control. It fails
+  silently and it fails only on the surface that forgot, which is why it
+  survived. Wearing the themed class means setting the theme.
+
+- **One password, asked for once.** Signing up took a password, then the
+  confirmation link asked for a new one twice — three boxes for one password,
+  and the first was never used. Confirming the address is the step that cannot
+  be skipped, so that is where it is set; signup mints a random one nobody is
+  ever told, because Supabase needs a value and one that is never transmitted
+  back cannot be used by anybody. `hasPassword` comes back on the signup reply
+  so the closing screen cannot tell somebody to "sign in with the password you
+  just chose" when there is not one.
+
+- **A subcontractor's set-up checklist is a different list, not a shorter one.**
+  Theirs said *Bring your subcontractors in — 0 of 3*, *Approve their documents*
+  and *Create your first job*: three things a roofer is not here to do, one of
+  them reading as a quota they are already failing on a screen they have just
+  arrived at. Theirs is the four documents and sending them, which is the loop
+  the account exists for. It **names** what is missing rather than only counting
+  — "2 of 4" does not say which two, and that is the only thing worth knowing
+  at that moment. They can still hire, and Contractors is still there; it is not
+  a *set-up* step, because nothing about their account is unfinished until they
+  do it.
+
+  And **My documents is in the nav** for any account that can be hired, opening
+  the panel that already exists in Account → Company rather than a second copy
+  of it — two copies would be two components holding the same upload state. Its
+  badge counts **presence, not approval**: `missingDocs()` asks whether a hiring
+  account has verified a document and nobody verifies their own, so it would
+  have read 4 after all four were uploaded. Same rule the send gate follows.
+
 - **A `\uXXXX` escape in JSX *text* is six literal characters**, not a
   character — JSX only processes escapes inside string and template literals.
   It has shipped twice: `Alder Construction \u00b7 Roofing` and

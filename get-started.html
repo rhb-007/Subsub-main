@@ -472,8 +472,13 @@ body.nav-open{overflow:hidden}
           <div class="field"><label for="phone">Mobile</label>
             <input id="phone" type="tel" autocomplete="tel" inputmode="numeric"
               maxlength="13" placeholder="(206)555-0100"></div>
-          <div class="field"><label for="pw">Password</label>
-            <input id="pw" type="password" autocomplete="new-password" required></div>
+          <!-- NO PASSWORD HERE. It used to be asked for, and then the
+               confirmation email's link asked for a new one twice -- so
+               somebody chose a password, never used it, and had to choose
+               again before they could get in. Three boxes for one password.
+               Confirming the address is the step that cannot be skipped, and
+               that link lands on a screen that already takes a password
+               properly, with a repeat. So it is set there. -->
         </div>
         <div class="form-nav">
           <a class="btn btn-ghost" href="pricing.html">Back to plans</a>
@@ -844,7 +849,7 @@ body.nav-open{overflow:hidden}
       clearFieldError(this);
     });
   }
-  ['name','email','pw'].forEach(function(id){
+  ['name','email'].forEach(function(id){
     var el = document.getElementById(id);
     if(el) el.addEventListener('input', function(){ clearFieldError(this); });
   });
@@ -854,10 +859,9 @@ body.nav-open{overflow:hidden}
     e.preventDefault();
     var nameEl = document.getElementById('name');
     var emailEl = document.getElementById('email');
-    var pwEl = document.getElementById('pw');
     var bad = null;
 
-    [nameEl, emailEl, pwEl, phoneEl].forEach(clearFieldError);
+    [nameEl, emailEl, phoneEl].forEach(clearFieldError);
 
     if(!nameEl.value.trim()) bad = markField(nameEl, 'Enter your name.');
 
@@ -872,8 +876,6 @@ body.nav-open{overflow:hidden}
     if(phoneEl && phoneEl.value.trim() && phoneDigits(phoneEl.value).length !== 10){
       bad = markField(phoneEl, 'A mobile number needs 10 digits.') || bad;
     }
-
-    if(pwEl.value.length < 8) bad = markField(pwEl, 'Use a password of at least 8 characters.') || bad;
 
     if(bad){
       // Focus the topmost problem, not the last one found.
@@ -1237,7 +1239,6 @@ body.nav-open{overflow:hidden}
       name: document.getElementById('name').value.trim(),
       email: document.getElementById('email').value.trim(),
       phone: (document.getElementById('phone') || {}).value || '',
-      password: document.getElementById('pw').value,
       company: company.value.trim(),
       subdomain: (sub.value.trim() || company.value.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,20)),
       trades: pickedTrades(),
@@ -1369,13 +1370,20 @@ body.nav-open{overflow:hidden}
         }
       }
       if(dl){
+        /* Nobody chose a password here any more, so the second branch can no
+           longer say "the password you just chose". Both roads now end at the
+           emailed link, which is where the password is set -- and if Supabase
+           is ever configured to confirm addresses automatically, the honest
+           instruction is the reset form rather than a password that does not
+           exist. */
         dl.textContent = res.body.needsConfirmation
           // One thing left, and it is the only thing on the screen that
           // matters -- so it leads, rather than trailing a list of details.
-          ? co + ' is on SubSub. One last step: open the confirmation link we just '
-            + 'sent to ' + payload.email + ', and you can sign in.' + invites
-          : co + ' is on SubSub. Sign in with ' + payload.email + ' and the password '
-            + 'you just chose.' + invites;
+          ? co + ' is on SubSub. One last step: open the link we just sent to '
+            + payload.email + ' \u2014 it confirms the address and lets you pick '
+            + 'a password.' + invites
+          : co + ' is on SubSub. Use "Forgot password?" on the sign-in page with '
+            + payload.email + ' to pick a password, and you are in.' + invites;
       }
       if(btn && res.body.needsConfirmation){ btn.textContent = 'Go to sign-in'; }
       done();

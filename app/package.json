@@ -128,6 +128,7 @@
     "test:portalinvite": "node scripts/portal-invite-test.mjs",
     "test:inviteshort": "node scripts/invite-short-test.mjs",
     "test:subsignup": "node scripts/sub-signup-test.mjs",
+    "test:subhome": "node scripts/sub-home-test.mjs",
     "test:schemadrift": "node --no-warnings scripts/schema-drift-test.mjs"
   },
   "dependencies": {
