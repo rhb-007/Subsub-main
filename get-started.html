@@ -1321,14 +1321,51 @@ body.nav-open{overflow:hidden}
          documents and creates jobs; a subcontractor uploads their four and
          sends them to whoever asked, which is the reason they are here. */
       if(isSub()){
-        var ticks = document.querySelectorAll('.step[data-step="4"] .ticks li span');
-        if(ticks[0]){
-          ticks[0].innerHTML = '<b>Next:</b> upload your insurance, bond, W-9 and signed '
-            + 'agreement. They live in your account and stay current.';
-        }
-        if(ticks[1]){
-          ticks[1].innerHTML = '<b>Then:</b> send the lot to anybody who asks, in one link '
-            + '\u2014 with the expiry live, which an attached PDF can never do.';
+        /* What a subcontractor gets, and every line of it is something that
+           exists. The first two are the sequence they are in the middle of;
+           the rest is what the account turns out to be for, which is the half
+           nobody discovers by clicking around.
+
+           Deliberately NOT here: "see every client's work in one list". That
+           screen is ContractorPortal, behind can("portal"), and ROLES.admin
+           does not include it -- so the person reading this cannot reach it
+           from the account they just made. Work does arrive, in the client's
+           account, once that client hires them, and that is what line three
+           says instead. Marketing a screen somebody cannot open is the
+           screen-that-lies failure in its most expensive form: on the page
+           where they decided to trust us.
+
+           Overflow is line five and is phrased as EARNED, because it is:
+           4.0+ over three rated jobs, five completed, ninety days, current
+           documents and a verified licence (ELIGIBILITY in shared/overflow.js).
+           A new account does not qualify, and promising it today would be a
+           promise that quietly fails for a quarter. */
+        var list = document.querySelector('.step[data-step="4"] .ticks');
+        if(list){
+          var TICK = '<svg width="19" height="19" viewBox="0 0 18 18" fill="none" '
+            + 'stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg>';
+          var points = [
+            '<b>Next:</b> upload your insurance, bond, W-9 and signed agreement. '
+              + 'They live in your account and stay current.',
+            '<b>Then:</b> send the lot to anybody who asks, in one link \u2014 with the '
+              + 'expiry live, which an attached PDF can never do.',
+            '<b>Work comes to you here.</b> A contractor who hires you sends the work '
+              + 'order through SubSub \u2014 the scope, the price and the date on it \u2014 '
+              + 'and you accept or decline from your phone.',
+            '<b>Your crews, your calendar.</b> Mark a crew off for a week and nobody can '
+              + 'book it. What you have agreed to is one list, not six text threads.',
+            '<b>Sub out your own work on the same account.</b> When you are the one '
+              + 'hiring, your roster, your work orders and the same insurance checks are '
+              + 'already here. You do not need a second account to be a general '
+              + 'contractor.',
+            '<b>And work you did not go looking for.</b> Once your documents are current '
+              + 'and you have a few finished jobs behind you, contractors with nobody of '
+              + 'their own for a trade can reach you. Earned, not bought \u2014 there is no '
+              + 'listing to pay for.'
+          ];
+          list.innerHTML = points.map(function(p){
+            return '<li>' + TICK + '<span>' + p + '</span></li>';
+          }).join('');
         }
       }
       if(dl){

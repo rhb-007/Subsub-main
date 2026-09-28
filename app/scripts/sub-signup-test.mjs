@@ -568,6 +568,87 @@ try {
     await page.close();
   }
 
+  console.log("\n-- and the confirmation says what the account is for --");
+  {
+    // Driven all the way to step 4 with the API stubbed, because the points are
+    // written by the success handler and a test that never submits never sees
+    // them. Reading the rendered list, not the source.
+    const { page, crashes } = await open("?as=subcontractor");
+    // The form posts cross-origin to api.subsub.work, so the PREFLIGHT has to be
+    // answered as well -- a stub that only handles the POST gets "blocked by
+    // CORS policy" and the page shows "we could not reach the server", which
+    // looks exactly like the form being broken.
+    const CORS = { "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "*",
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS" };
+    await page.setRequestInterception(true);
+    page.on("request", (r) => {
+      if (!/\/api\/signup$/.test(r.url())) return r.continue();
+      if (r.method() === "OPTIONS") return r.respond({ status: 204, headers: CORS });
+      return r.respond({ status: 201, contentType: "application/json", headers: CORS,
+        body: JSON.stringify({ ok: true, accountId: "acc_x", userId: "u_x",
+          subdomain: "orcas", kind: "subcontractor",
+          signInUrl: "https://app.subsub.work", needsConfirmation: true }) });
+    });
+    await page.evaluate(() => {
+      document.getElementById("name").value = "Jason";
+      document.getElementById("email").value = "jason@orcas.test";
+      document.getElementById("pw").value = "hunter2hunter2";
+      document.querySelector("#f1 button[type=submit]").click();
+    });
+    await wait(500);
+    await page.evaluate(() => {
+      document.getElementById("company").value = "Orcas Roofing";
+      document.querySelector('#trades button[data-trade="roofing"]').click();
+      document.querySelector("#f2 button[type=submit]").click();
+    });
+    for (let n = 0; n < 40; n++) {
+      await wait(150);
+      const on = await page.evaluate(() => [...document.querySelectorAll(".step")]
+        .filter((x) => x.hasAttribute("data-on")).map((x) => x.dataset.step));
+      if (on.includes("4")) break;
+    }
+    const points = await page.evaluate(() =>
+      [...document.querySelectorAll('.step[data-step="4"] .ticks li')]
+        .map((li) => li.innerText.replace(/\s+/g, " ").trim()));
+    const onStep = await page.evaluate(() => [...document.querySelectorAll(".step")]
+      .filter((x) => x.hasAttribute("data-on")).map((x) => x.dataset.step));
+    // Asserted properly: the step-4 list is in the DOM whether or not it is
+    // SHOWN, so "there are list items" passes without ever getting there.
+    t.ck("it reached the confirmation", onStep.includes("4"),
+      JSON.stringify(onStep) + " " + JSON.stringify(
+        await page.evaluate(() => [...document.querySelectorAll("[role=alert],.field-err")]
+          .map((e) => e.textContent.trim()).slice(0, 2))));
+    t.ck("more than the two it shipped with", points.length >= 5, String(points.length));
+
+    const all = points.join(" | ");
+    t.ck("the paperwork loop is there", /one link/i.test(all) && /expiry/i.test(all), all.slice(0, 80));
+    t.ck("work arriving is there", /work order/i.test(all) && /accept or decline/i.test(all));
+    t.ck("the calendar is there", /crew/i.test(all) && /book/i.test(all));
+    t.ck("and that they can hire too", /hiring|sub out/i.test(all) && /second account/i.test(all));
+
+    // THE LOAD-BEARING NEGATIVE. ContractorPortal is behind can("portal") and
+    // ROLES.admin does not include it, so the cross-client list does not exist
+    // for the person reading this page. Promising it here would be the
+    // screen-that-lies failure at its most expensive: on the page where
+    // somebody decided to trust us.
+    t.ck("it does NOT promise every client in one list",
+      !/(all|every).{0,24}client.{0,24}(one|single) (list|place|screen)/i.test(all), all);
+    t.ck("nor a dashboard of work it cannot open",
+      !/one list of (your )?work/i.test(all), all);
+
+    // And overflow is phrased as earned, because ELIGIBILITY makes it so:
+    // ninety days, five completed jobs, 4.0 over three rated ones.
+    const of = points.find((p) => /did not go looking|reach you/i.test(p)) || "";
+    t.ck("overflow is offered as earned, not immediate",
+      /once/i.test(of) && /(finished|completed)/i.test(of), of);
+    t.ck("and never as a listing somebody buys", !/pay for|listing to pay/i.test(of) || /no listing/i.test(of), of);
+
+    // A general contractor's confirmation is untouched.
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await page.close();
+  }
+
   console.log("\n-- a link with a typo in it falls back rather than breaking --");
   {
     // Matched against the radios' own values, so a marketing link that says
