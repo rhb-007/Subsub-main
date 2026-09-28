@@ -29,7 +29,7 @@ import {
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
-  Globe, RefreshCw, ExternalLink, ImageOff, ScanLine, ArrowRight,
+  Globe, RefreshCw, ExternalLink, ImageOff, ScanLine, ArrowRight, Code2,
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
@@ -4767,7 +4767,7 @@ export default function SubSub() {
               The red count is the same one the portal's item carries. */}
           {isHireable(account) && (role === "admin" || role === "pm") && (
             <button className={tab === "account" ? "" : ""}
-              onClick={() => { setTab("account"); setOpenPane({ pane: "company", focus: "docs", n: Date.now() }); }}>
+              onClick={() => { setTab("account"); setOpenPane({ pane: "docs", focus: "docs", n: Date.now() }); }}>
               My documents
               {/* Presence, not approval -- nobody verifies their own, so a
                   count built on missingDocs() would read 4 forever. And the
@@ -4869,12 +4869,18 @@ export default function SubSub() {
           onReloadConnects={refreshConnects}
           hireable={isHireable(account)} myCompany={myCompany} kind={kindOf(account)}
           onGoCompany={() => { setTab("account"); setOpenPane({ pane: "company", n: Date.now() }); }}
-          onGoDocs={() => { setTab("account"); setOpenPane({ pane: "company", focus: "docs", n: Date.now() }); }}
+          onGoDocs={() => { setTab("account"); setOpenPane({ pane: "docs", focus: "docs", n: Date.now() }); }}
           /* "Manage" on the pack card. Same panel, but it lands on the whole
              pack -- the licence and the UBI as well as the four documents --
              because that is what the card is a summary OF. `focus` decides
              what arrives highlighted, so one panel serves three ways in. */
-          onManagePack={() => { setTab("account"); setOpenPane({ pane: "company", focus: "pack", n: Date.now() }); }}
+          /* Manage lands on My documents, because the documents are the bulk of
+             the pack and they now have a tab of their own. The licence and the
+             UBI live on Company with the rest of the company record -- they
+             have their own Add buttons on the card, which go there, so nothing
+             is unreachable; what changed is that one press no longer rings
+             both halves, because they are no longer on one page. */
+          onManagePack={() => { setTab("account"); setOpenPane({ pane: "docs", focus: "docs", n: Date.now() }); }}
           onAddPackField={(which) => { setTab("account");
             setOpenPane({ pane: "company", focus: which === "ubi" ? "ubi" : "license", n: Date.now() }); }}
           onReloadCompany={async () => {
@@ -5092,7 +5098,7 @@ export default function SubSub() {
               {/* The same mechanism the set-up checklist uses to send somebody
                   to a pane: a counter, so asking twice opens it twice. */}
               <button className="lnk" onClick={() => {
-                setTab("account"); setOpenPane({ pane: "company", n: Date.now() });
+                setTab("account"); setOpenPane({ pane: "branding", n: Date.now() });
               }}>
                 Get the form
               </button>
@@ -14015,7 +14021,8 @@ function companyErrorText(e) {
 // lookup matches on an email, a mobile or a licence number and on nothing
 // else, which the panel says rather than leaving somebody to wonder why
 // they cannot be found.
-function HireablePanel({ accountName, requests = [], focus = null, focusN = 0, onRespond, onReload }) {
+function HireablePanel({ section = "profile", accountName, requests = [], focus = null, focusN = 0, onRespond, onReload }) {
+  const isDocs = section === "docs";
   const [f, setF] = useState(null);
   const [loaded, setLoaded] = useState(null);
   const [err, setErr] = useState("");
@@ -14055,21 +14062,20 @@ function HireablePanel({ accountName, requests = [], focus = null, focusN = 0, o
   useEffect(() => {
     if (!focus || !loaded) return;
     const docs = loaded.docs || {};
-    const scope = focus === "docs" ? DOC_KINDS.map((k) => `doc:${k}`)
+    // Each section answers only for what it actually renders. Asking the
+    // profile half to ring a document it is not drawing would set a highlight
+    // on nothing and clear it four seconds later.
+    const scope = isDocs
+      ? (focus === "docs" ? DOC_KINDS.map((k) => `doc:${k}`) : [])
       : focus === "license" ? ["license"]
       : focus === "ubi" ? ["ubi"]
-      : focus === "pack" ? [...DOC_KINDS.map((k) => `doc:${k}`), "license",
-          ...((loaded.state || "") === "WA" ? ["ubi"] : [])]
       : [];
     const want = scope.filter((t) => t === "license" ? !loaded.license
       : t === "ubi" ? !loaded.ubi
       : !docs[t.slice(4)]);
-    // The pack is both halves of the page, so it lands on the first of them
-    // and the documents follow underneath. Everything else lands on itself.
-    const anchor = focus === "docs" ? ".mydocs" : ".fld-nums";
+    const anchor = isDocs ? ".mydocs" : ".fld-nums";
     const t = setTimeout(() => {
-      document.querySelector(anchor)
-        ?.scrollIntoView({ behavior: "smooth", block: focus === "pack" ? "start" : "center" });
+      document.querySelector(anchor)?.scrollIntoView({ behavior: "smooth", block: "center" });
       setLit(want);
     }, 120);
     // Four seconds rather than a blink: the licence field and the documents
@@ -14078,7 +14084,8 @@ function HireablePanel({ accountName, requests = [], focus = null, focusN = 0, o
     const off = setTimeout(() => setLit([]), 4200);
     return () => { clearTimeout(t); clearTimeout(off); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, focusN, loaded]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, focusN, loaded, isDocs]);
   const isLit = (t) => lit.includes(t);
 
   const set = (k, v) => { setF((x) => ({ ...x, [k]: v })); setSaved(false); setErr(""); };
@@ -14107,11 +14114,17 @@ function HireablePanel({ accountName, requests = [], focus = null, focusN = 0, o
 
   return (
     <div className="portal-panel settings-panel">
-      <h4>Working as a subcontractor</h4>
+      <h4>{isDocs ? "My documents" : "Working as a subcontractor"}</h4>
       <p className="panel-note">
-        You hire contractors here. You can also be hired: another general contractor can find
-        {" "}<b>{accountName || "your company"}</b> on SubSub and ask to work with you, and
-        this is what they see. Nothing here is on your own contractors&rsquo; screens.
+        {isDocs ? (
+          <>The paperwork you are asked for over and over. Whoever hires you reviews it, and
+            it stays current for everybody you work with rather than being re-sent one
+            contractor at a time.</>
+        ) : (
+          <>You hire contractors here. You can also be hired: another general contractor can find
+            {" "}<b>{accountName || "your company"}</b> on SubSub and ask to work with you, and
+            this is what they see. Nothing here is on your own contractors&rsquo; screens.</>
+        )}
       </p>
 
       {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
@@ -14119,6 +14132,7 @@ function HireablePanel({ accountName, requests = [], focus = null, focusN = 0, o
 
       {f && (
         <>
+          {!isDocs && <>
           {/* The one thing worth saying out loud: a profile with none of the
               three things the lookup matches on cannot be found by anybody,
               and nothing else on the page would ever tell them. */}
@@ -14160,16 +14174,15 @@ function HireablePanel({ accountName, requests = [], focus = null, focusN = 0, o
               {busy ? "Saving…" : "Save profile"}</button>
           </div>
 
+          </>}
+
           {/* Their own paperwork. Until now the only screen that could upload
               a certificate was the contractor portal, and ROLES.admin has no
               portal -- so an account that could be hired had nowhere to hold
-              one, and nothing to send. Same root as the connect badge. */}
-          <div className="form-sec">Your documents</div>
-          <p className="panel-note">
-            The things you are asked for over and over. Whoever hires you reviews them, and
-            they stay current for everybody you work with rather than being re-sent one
-            contractor at a time.
-          </p>
+              one, and nothing to send. Same root as the connect badge.
+              Its own tab since: it is the screen a hireable account opens most
+              and it was the fifth panel down inside another one. */}
+          {isDocs && <>
           <div className="mydocs">
             {DOC_KINDS.map((k) => {
               const d = (loaded?.docs || {})[k];
@@ -14219,7 +14232,9 @@ function HireablePanel({ accountName, requests = [], focus = null, focusN = 0, o
               do several times a month. */}
           <SendDocPack company={f.company || accountName}
             anyOnFile={DOC_KINDS.some((k) => (loaded?.docs || {})[k])} />
+          </>}
 
+          {!isDocs && <>
           <div className="form-sec">Your code</div>
           <p className="panel-note">
             Show this to a general contractor and have them scan it. They can ask to work with you
@@ -14230,6 +14245,7 @@ function HireablePanel({ accountName, requests = [], focus = null, focusN = 0, o
           <div className="form-sec">Asking to work with you{pending.length > 0 ? ` (${pending.length})` : ""}</div>
           <ConnectRequests requests={requests} onRespond={onRespond} onReload={onReload}
             emptyNote="Nobody has asked yet. When somebody does, it lands here and nothing happens until you answer." />
+          </>}
         </>
       )}
     </div>
@@ -14252,8 +14268,27 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // scoped roles this account has anybody to hand out.
   const tenantSeats = users.filter((u) => u.role === "tenant");
   const staffSeats = users.filter((u) => u.role !== "tenant");
+  // Company was one tab holding seven panels: account kind, the whole trades
+  // grid, the emergency contractor, the hireable profile, four documents, the
+  // send panel, a QR code, incoming requests, the branding studio and the embed
+  // snippet. It scrolled for pages, and the things people open it for most --
+  // their documents, their branding -- were furthest down.
+  //
+  // Three tabs, split by what the thing IS rather than by size:
+  //   Company        what this account is and how it hires
+  //   Branding       what other people see -- sign-in page, and the form they
+  //                  apply through, which is the same artifact
+  //   My documents   the paperwork, and sending it
+  //
+  // My documents earns a tab of its own because it is referenced constantly:
+  // it is the one screen a hireable account opens weekly, and it was the fifth
+  // panel down inside another tab.
   const panes = [["profile", "Profile"]]
-    .concat(canManage ? [["company", "Company"], ["users", "Users"]] : [])
+    .concat(canManage ? [["company", "Company"]] : [])
+    .concat(canManage ? [["branding", "Branding"]] : [])
+    // Only an account that can be hired has paperwork of its own to keep.
+    .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["docs", "My documents"]] : [])
+    .concat(canManage ? [["users", "Users"]] : [])
     // Only where there are buildings for tenants to be in.
     .concat(canManage && ACCOUNT_KINDS[accountKind].properties ? [["tenants", "Tenants"]] : [])
     .concat(canManage ? [["billing", "Subscription"]] : []);
@@ -14561,13 +14596,22 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {/* Only a general contractor. The other three kinds hire and are not
           hired, so this panel would be a QR code for something they will
           never do. */}
+      {/* One component, two sections, and only ever one of them mounted --
+          so there is still a single fetch and a single source of truth for the
+          company row. Two components would be two of each. */}
       {pane === "company" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
-        <HireablePanel accountName={brand?.name} requests={incomingConnects}
+        <HireablePanel section="profile" accountName={brand?.name} requests={incomingConnects}
           focus={openPane?.focus} focusN={openPane?.n}
           onRespond={onRespondConnect} onReload={onReloadConnects} />
       )}
 
-      {pane === "company" && canManage && !canBrand && (
+      {pane === "docs" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
+        <HireablePanel section="docs" accountName={brand?.name} requests={incomingConnects}
+          focus={openPane?.focus} focusN={openPane?.n}
+          onRespond={onRespondConnect} onReload={onReloadConnects} />
+      )}
+
+      {pane === "branding" && canManage && !canBrand && (
         <div className="portal-panel settings-panel">
           <h4>Company branding</h4>
           <div className="doc-block with-cta">
@@ -14582,7 +14626,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
         </div>
       )}
 
-      {pane === "company" && canManage && canBrand && (
+      {pane === "branding" && canManage && canBrand && (
         <div className="portal-panel settings-panel">
           <h4>Company branding</h4>
           <p className="panel-note">What your contractors see when they sign in. SubSub stays in the background.</p>
@@ -14771,7 +14815,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           same form -- but it is its own block rather than a row inside that
           panel, because the panel is Scale-only and this is not. Moving it
           inside is the regression test:embedplace exists to catch. */}
-      {pane === "company" && canManage && applySubdomain && applySubdomain !== "app" && (
+      {/* The application form belongs with branding, not with the account's
+          own settings: it is a thing OTHER people see, and its colours, its
+          preview and its live address are all on this tab already. */}
+      {pane === "branding" && canManage && applySubdomain && applySubdomain !== "app" && (
         <EmbedApply subdomain={applySubdomain} accountName={brand.name}
           trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))}
           liveHost={hostnameStatus === "active"} />
@@ -21020,6 +21067,46 @@ function QuickSend({ inline = false }) {
 //
 // Collapsed by default. This is a good idea somebody has on a Tuesday, not
 // something that should sit open every day.
+// The snippet's code and the form it draws, in one modal.
+//
+// Both answer the same question -- "what am I actually pasting" -- and they
+// answered it in two places, eighty lines of <pre> inline on the tab plus a
+// toggle below it. Nobody reads pasted HTML on a page; they copy it and look
+// at it once. So it is one tap from the copy button, and the two views are
+// tabs rather than a stack, because you want one or the other.
+//
+// The preview is an iframe with srcDoc and no allow-same-origin, so it cannot
+// inherit our stylesheet and lie about how it will look on their page.
+function EmbedCodeModal({ html, copied, onCopy, onClose }) {
+  const [view, setView] = useState("form");
+  return (
+    <Modal wide onClose={onClose}>
+      <div className="form ecm">
+        <h2>The application form</h2>
+        <p className="up-sub">This is what the twelve lines draw on your website, and the
+          markup that draws it. Nothing here needs hosting or a plugin.</p>
+        <div className="ecm-tabs" role="tablist">
+          <button role="tab" aria-selected={view === "form"} className={view === "form" ? "on" : ""}
+            onClick={() => setView("form")}><Eye size={13} /> The form</button>
+          <button role="tab" aria-selected={view === "code"} className={view === "code" ? "on" : ""}
+            onClick={() => setView("code")}><Code2 size={13} /> The code</button>
+          <button className="btn-solid sm ecm-copy" onClick={onCopy}>
+            {copied ? "Copied" : "Copy the code"}
+          </button>
+        </div>
+        {view === "form" ? (
+          <iframe className="ecm-prev" title="What the application form looks like"
+            sandbox="allow-scripts" srcDoc={`<!doctype html><meta charset="utf-8">
+              <body style="margin:16px;font:15px/1.5 system-ui,sans-serif;color:#16241d">
+              ${html}`} />
+        ) : (
+          <pre className="ecm-code"><code>{html}</code></pre>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 function EmbedApply({ subdomain, accountName, trades, liveHost = true }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState("");
@@ -21082,24 +21169,24 @@ function EmbedApply({ subdomain, accountName, trades, liveHost = true }) {
               <button className="btn-solid sm" onClick={() => copy("html", html)}>
                 {copied === "html" ? "Copied" : "Copy the code"}
               </button>
+              <button className="embed-code-btn" onClick={() => setPreview(true)}
+                title="See the code and what it looks like"
+                aria-label="See the code and what it looks like">
+                <Code2 size={15} />
+              </button>
             </div>
-            <pre className="embed-code"><code>{html}</code></pre>
+            {/* Eighty lines of markup sat inline under this, which is most of
+                why the tab scrolled forever -- and nobody reads pasted HTML on
+                a page, they copy it. So the copy button is the panel and the
+                code is one tap away, beside the form it is a copy OF rather
+                than at the bottom of the page. */}
             {copied === "no" && (
               <p className="embed-note">Your browser wouldn&rsquo;t let us copy that.
-                Select the code above and copy it by hand.</p>
-            )}
-            <button className="embed-prev-btn" onClick={() => setPreview((p) => !p)}>
-              {preview ? "Hide" : "Show"} what it looks like
-            </button>
-            {/* srcDoc, so the preview cannot inherit our stylesheet and lie
-                about how it will look on their page. */}
-            {preview && (
-              <iframe className="embed-prev" title="Preview of the application form"
-                sandbox="allow-scripts" srcDoc={`<!doctype html><meta charset="utf-8">
-                  <body style="margin:14px;font:15px/1.5 system-ui,sans-serif;color:#16241d">
-                  ${html}`} />
+                Open the code and copy it by hand.</p>
             )}
           </div>
+          {preview && <EmbedCodeModal html={html} copied={copied === "html"}
+            onCopy={() => copy("html", html)} onClose={() => setPreview(false)} />}
 
           <p className="embed-note">
             Applications arrive under <b>Asked to connect</b> on the Contractors
@@ -22918,6 +23005,23 @@ body{background:var(--paper)}
 .cpr-do.quiet:hover{opacity:1;color:var(--brand)}
 .cpr-busy{flex:none;font-size:11.5px;color:var(--ink-soft);font-weight:600}
 .cpack-err{margin:0 0 10px;font-size:12px;color:var(--red);font-weight:600}
+.embed-code-btn{flex:none;display:inline-flex;align-items:center;justify-content:center;
+  width:32px;height:32px;border-radius:8px;border:1px solid var(--line);background:var(--paper);
+  color:var(--ink-soft);cursor:pointer}
+.embed-code-btn:hover{border-color:var(--brand);color:var(--brand);background:#fff}
+.ecm{gap:0}
+.ecm h2{margin:0;font-size:21px;letter-spacing:-.02em}
+.ecm-tabs{display:flex;align-items:center;gap:6px;margin:16px 0 12px;flex-wrap:wrap}
+.ecm-tabs button[role=tab]{display:inline-flex;align-items:center;gap:6px;font-family:inherit;
+  font-size:13px;font-weight:700;color:var(--ink-soft);background:transparent;cursor:pointer;
+  border:1px solid transparent;border-radius:8px;padding:6px 11px}
+.ecm-tabs button[role=tab].on{color:var(--ink);background:var(--paper);border-color:var(--line)}
+.ecm-copy{margin-left:auto}
+.ecm-prev{width:100%;height:min(58vh,460px);border:1px solid var(--line);border-radius:10px;
+  background:#fff;display:block}
+.ecm-code{margin:0;max-height:min(58vh,460px);overflow:auto;background:#16241d;color:#d8e6dd;
+  border-radius:10px;padding:14px 16px;font-size:11.5px;line-height:1.6;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;-webkit-overflow-scrolling:touch}
 .mydoc-opt{margin-left:7px;font-size:10px;font-weight:700;text-transform:uppercase;
   letter-spacing:.05em;color:var(--ink-soft);background:var(--paper);border:1px solid var(--line);
   border-radius:20px;padding:2px 7px;vertical-align:1px}

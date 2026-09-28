@@ -487,6 +487,68 @@ try {
     await ctx.close();
   }
 
+  console.log("\n-- Account is four tabs now, not one that scrolls forever --");
+  {
+    // Company held seven panels: account kind, the whole trades grid, the
+    // emergency contractor, the hireable profile, four documents, the send
+    // panel, a QR code, incoming requests, the branding studio and eighty
+    // lines of embed markup. The things people open it for most were furthest
+    // down.
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "WA", license: "", ubi: "",
+      docs: { insurance: { fileName: "coi.pdf" } }, sharesSent: 0 };
+    const { ctx, page, crashes } = await open();
+    // In through My documents, which is the route somebody actually takes and
+    // the one the suite already proves works.
+    await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
+      .find((b) => /^My documents/i.test(b.innerText))?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".mydocs")) break; }
+    const tabs = await page.evaluate(() =>
+      [...document.querySelectorAll("button")].map((b) => b.innerText.trim())
+        .filter((x) => ["Profile", "Company", "Branding", "My documents", "Users",
+          "Tenants", "Subscription"].includes(x)));
+
+    t.ck("Branding is its own tab", tabs.includes("Branding"), tabs.join(" | "));
+    t.ck("and so is My documents", tabs.includes("My documents"), tabs.join(" | "));
+    t.ck("Company is still there", tabs.includes("Company"), tabs.join(" | "));
+
+    // Company keeps what the ACCOUNT is, and hands over what it was carrying
+    // for other people.
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => b.innerText.trim() === "Company")?.click());
+    await wait(700);
+    const co = await page.evaluate(() => ({
+      docs: !!document.querySelector(".mydocs"),
+      embed: !!document.querySelector(".embed-strip"),
+      licence: !!document.querySelector(".fld-nums"),
+      kind: /Account type/i.test(document.body.innerText),
+    }));
+    t.ck("Company still says what the account is", co.kind === true, JSON.stringify(co));
+    t.ck("and still holds the licence and UBI", co.licence === true, JSON.stringify(co));
+    t.ck("but no longer the documents", co.docs === false, JSON.stringify(co));
+    t.ck("nor the embed snippet", co.embed === false, JSON.stringify(co));
+    // The branding studio is NOT asserted here on purpose: .brand-preview only
+    // renders on Scale and this account is Basic, so a check for its absence
+    // would pass whatever the tab said. test:embedplace covers the branding
+    // tab on a Scale account, where the assertion can actually fail.
+
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => b.innerText.trim() === "My documents")?.click());
+    await wait(700);
+    const dp = await page.evaluate(() => ({
+      docs: !!document.querySelector(".mydocs"),
+      send: /Send your paperwork/i.test(document.body.innerText),
+      // One fetch, one source of truth: the two halves are one component with
+      // a section prop, and only ever one of them is mounted.
+      copies: document.querySelectorAll(".mydocs").length,
+    }));
+    t.ck("the documents are on their own tab", dp.docs === true, JSON.stringify(dp));
+    t.ck("with the send panel beside them", dp.send === true, JSON.stringify(dp));
+    t.ck("and there is exactly one of them", dp.copies === 1, String(dp.copies));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
   console.log("\n-- Manage lands on the pack and rings what is outstanding --");
   {
     // Scrolling to the right part of a long page is half of it. Somebody
@@ -501,7 +563,7 @@ try {
       .find((b) => /manage/i.test(b.innerText))?.click());
     for (let n = 0; n < 40; n++) { await wait(200); if (await page.$(".mydocs")) break; }
 
-    t.ck("it opens the company panel", await page.evaluate(() => !!document.querySelector(".mydocs")));
+    t.ck("it opens the documents panel", await page.evaluate(() => !!document.querySelector(".mydocs")));
     t.ck("and not a second copy of the documents",
       await page.evaluate(() => document.querySelectorAll(".mydocs").length === 1),
       String(await page.evaluate(() => document.querySelectorAll(".mydocs").length)));
@@ -523,11 +585,12 @@ try {
     t.ck("and so is the W-9", d(/W-9/i).lit === true, JSON.stringify(lit.docs));
     t.ck("one already on file is NOT ringed", d(/certificate of insurance/i).lit === false,
       JSON.stringify(lit.docs));
-    // The pack is both halves of the page, so the licence and the UBI come too.
-    t.ck("the blank licence field is ringed",
-      lit.licenseLit.some((f) => /licence/i.test(f.label) && f.lit), JSON.stringify(lit.licenseLit));
-    t.ck("and the blank UBI, in Washington",
-      lit.licenseLit.some((f) => /UBI/i.test(f.label) && f.lit), JSON.stringify(lit.licenseLit));
+    // The licence and the UBI are on Company now, with the rest of the company
+    // record, and they have their own Add buttons on the card that go there.
+    // So Manage rings the documents and nothing else -- one press cannot ring
+    // two tabs.
+    t.ck("the licence field is not on this tab", lit.licenseLit.length === 0,
+      JSON.stringify(lit.licenseLit));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

@@ -83,13 +83,15 @@ const open = async () => {
   return v;
 };
 
-// Account -> Company, through the nav the user actually has.
+// Account -> Branding, through the nav the user actually has. The panel moved
+// off Company with the branding studio: the snippet is a thing OTHER people
+// see, and its colours, its preview and its live address are all on that tab.
 const toCompany = async (page) => {
   await page.evaluate(() => [...document.querySelectorAll("nav button, .nav-item, header button")]
     .find((b) => /My account|Account/i.test(b.innerText || ""))?.click());
   await wait(500);
   await page.evaluate(() => [...document.querySelectorAll("button")]
-    .find((b) => b.innerText.trim() === "Company")?.click());
+    .find((b) => b.innerText.trim() === "Branding")?.click());
   await wait(700);
 };
 
@@ -99,13 +101,13 @@ const panel = (page) => page.evaluate(() => {
 });
 
 try {
-  console.log("\n-- it is in Account -> Company, beside the branded form --");
+  console.log("\n-- it is in Account -> Branding, beside the branded form --");
   {
     ACCOUNT = mkAccount("scale", "active");
     const { ctx, page, crashes } = await open();
     await toCompany(page);
 
-    t.ck("the panel is on the company pane", !!(await panel(page)));
+    t.ck("the panel is on the branding pane", !!(await panel(page)));
     const near = await page.evaluate(() => {
       const strip = document.querySelector(".embed-strip");
       const brand = document.querySelector(".brand-preview");
@@ -123,6 +125,35 @@ try {
     t.ck("with the hosted link, because the address resolves",
       /outerhome\.subsub\.work/.test(body || ""), (body || "").slice(0, 120));
     t.ck("and the code to paste", /Copy the code/.test(body || ""));
+    // Eighty lines of markup used to sit inline here, which is most of why the
+    // tab scrolled forever. Nobody reads pasted HTML on a page -- they copy it
+    // -- so the code is one tap away, beside the form it is a copy OF.
+    t.ck("the markup is not dumped on the page",
+      await page.evaluate(() => !document.querySelector(".embed-code")));
+    await page.evaluate(() => document.querySelector(".embed-code-btn")?.click());
+    await wait(500);
+    const modal = await page.evaluate(() => {
+      const m = document.querySelector(".ecm");
+      if (!m) return null;
+      return { tabs: [...m.querySelectorAll("[role=tab]")].map((b) => b.innerText.trim()),
+        form: !!m.querySelector(".ecm-prev"), code: !!m.querySelector(".ecm-code"),
+        copy: /Copy the code/.test(m.innerText) };
+    });
+    t.ck("the icon opens a modal", !!modal, String(modal));
+    t.ck("showing the form by default", modal?.form === true, JSON.stringify(modal));
+    t.ck("with a tab for the code", (modal?.tabs || []).some((x) => /code/i.test(x)),
+      JSON.stringify(modal?.tabs));
+    t.ck("and one for the form", (modal?.tabs || []).some((x) => /form/i.test(x)),
+      JSON.stringify(modal?.tabs));
+    t.ck("and you can copy from in there", modal?.copy === true, JSON.stringify(modal));
+    await page.evaluate(() => [...document.querySelectorAll(".ecm [role=tab]")]
+      .find((b) => /code/i.test(b.innerText))?.click());
+    await wait(300);
+    t.ck("the code tab shows the actual markup",
+      await page.evaluate(() => /subsub-apply/.test(
+        document.querySelector(".ecm-code")?.innerText || "")));
+    await page.evaluate(() => document.querySelector(".modal-close")?.click());
+    await wait(300);
     // The panel moved, so the sentence naming where applications land had to
     // stop saying "this screen".
     t.ck("it names the screen applications land on",
@@ -137,7 +168,8 @@ try {
     // link are excluded, and everything the panel says in its own voice is not.
     const seen = await page.evaluate(() => {
       const clone = document.body.cloneNode(true);
-      clone.querySelectorAll(".embed-code, .embed-link, .embed-prev").forEach((n) => n.remove());
+      clone.querySelectorAll(".embed-code, .embed-link, .embed-prev, .ecm-code, .ecm-prev")
+        .forEach((n) => n.remove());
       return clone.innerText;
     });
     const leak = seen.match(/.{0,50}\\u[0-9a-f]{4}.{0,50}/i);

@@ -240,6 +240,77 @@ refactor.
   the ring is a `box-shadow` rather than a border, because a border that thickens
   moves everything beside it by a pixel and the whole panel appears to twitch.
 
+- **Account is four tabs, because Company was ten panels.** It held the account
+  kind, the whole twenty-nine-chip trades grid, the emergency contractor, the
+  hireable profile, four documents, the send panel, a QR code, incoming connect
+  requests, the branding studio and eighty lines of embed markup — and the two
+  things people open it for most, their documents and their branding, were
+  furthest down it.
+
+  Split by **what the thing is**, not by length: **Company** is what this account
+  *is* and how it hires; **Branding** is what other people *see*, which is why the
+  application form lives there rather than with the account's own settings —
+  its colours, its preview and its live address were already on that tab;
+  **My documents** is the paperwork and sending it. It earns a tab because it is
+  the screen a hireable account opens weekly and it was the fifth panel down
+  inside another one.
+
+  `HireablePanel` takes a `section` prop rather than being split into two
+  components, and **only one section is ever mounted**, so there is still one
+  fetch and one source of truth for the company row. Two components would be two
+  of each, which is the duplicate-upload-state trap this file already refuses for
+  My documents.
+
+  The cost, stated because it is a real loss: `focus: "pack"` used to ring the
+  documents *and* the licence and UBI, and those are now on different tabs, so
+  one press cannot ring both. *Manage* lands on My documents and rings the
+  documents; the licence and UBI rows on the pack card have their own **Add**
+  buttons that go to Company and ring the field. Nothing is unreachable, but the
+  single gesture that covered the whole pack is gone, and that was the price of
+  the tab being readable.
+
+- **Nobody reads pasted HTML on a page; they copy it.** Eighty lines of markup
+  sat inline in the embed panel, which was most of why the tab scrolled forever,
+  with a separate toggle below it to preview the form. Both answered the same
+  question — *what am I actually pasting* — in two places.
+
+  One `Code2` icon beside **Copy the code** opens a modal with the form and the
+  markup as **tabs**, because you want one or the other, not a stack. The preview
+  is an iframe with `srcDoc` and no `allow-same-origin`, so it cannot inherit our
+  stylesheet and lie about how it will look on somebody else's page.
+
+  The `\uXXXX` guard and the CSS-scoping check both had to learn about it: the
+  guard's clone now strips `.ecm-code` and `.ecm-prev` as well, because that
+  block legitimately displays source, and `embed-test` strips CSS comments before
+  reading selectors, since a comment above a rule was being read as part of it.
+
+- **A confirmation replaces the form; it does not sit above a blank one.** The
+  pasted form said *"Thanks — that's with Outerhome. Check your email."* and then
+  called `form.reset()`, so an empty form sat under it. That reads as an
+  invitation to send it again, which is how one applicant becomes three rows on
+  somebody's roster — and the sentence said nothing about what actually happens.
+
+  It is a centred panel now, with a tick, naming who has it, saying **a person
+  reads every application and nobody joins a roster until they say so**, and
+  where to watch. The form is hidden, so success is terminal; `embed-test` tests
+  the refusal **first** for that reason, because anything after success would be
+  driving a hidden form.
+
+  Two traps, both already in this file and both hit again. **A backtick in a
+  comment closes the template literal** — `embed.js` is one big template, so its
+  comments cannot contain one. And **`[hidden]` is a UA rule at the weakest
+  specificity**: `.ss-form` sets `display:flex`, which beats it, so the form
+  stayed on screen under the confirmation until `.ss-form[hidden]{display:none}`
+  said otherwise.
+
+  What the copy must **not** say: that an email has been sent. `applicantWayIn`
+  invites a new applicant and deliberately does *not* mail somebody who already
+  has a login, so "check your email" is false for one of the two — and a form
+  that words itself differently for a known address is the enumeration oracle
+  refused everywhere else. *"If there is anything for you to do next, it arrives
+  at <address>"* is true either way, and a test pins that no wording claiming a
+  send creeps back in.
+
 - **A UBI is Washington's, so it is asked for in Washington and nowhere else.**
   The Unified Business Identifier does not exist in the other fifty
   jurisdictions. It is on the subcontractor's set-up checklist and on the

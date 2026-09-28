@@ -61,6 +61,16 @@ ${options}
     <p class="ss-msg" role="status" aria-live="polite"></p>
     <noscript><a href="${esc(applyLink(sub))}">Open the application form</a></noscript>
   </form>
+  <div class="ss-done" role="status" aria-live="polite" hidden>
+    <svg class="ss-tick" viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"
+      fill="none" stroke="currentColor" stroke-width="2.5"
+      stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <h3>That&rsquo;s with ${esc(name)}</h3>
+    <p>They read every application themselves. Nobody joins their roster until they
+      say so, and they will come back to you directly.</p>
+    <p class="ss-done-sub">If there is anything for you to do next, it arrives at
+      <b class="ss-done-em"></b>.</p>
+  </div>
 </div>
 <style>
 #subsub-apply .ss-form{display:flex;flex-direction:column;gap:14px;max-width:460px;
@@ -80,12 +90,27 @@ ${options}
 #subsub-apply .ss-msg{margin:0;font-size:14px;line-height:1.45}
 #subsub-apply .ss-msg.ok{color:#1f6b4a}
 #subsub-apply .ss-msg.bad{color:#b5442e}
+/* The hidden attribute is a UA rule at the weakest specificity, and .ss-form
+   sets display:flex -- which beats it, so the form would stay on screen under
+   the confirmation. Anything toggled with [hidden] here has to say so itself.
+   (No backticks in this file's comments: it is all one template literal.) */
+#subsub-apply .ss-form[hidden],#subsub-apply .ss-done[hidden]{display:none}
+#subsub-apply .ss-done{max-width:460px;text-align:center;padding:30px 22px;
+  border:1px solid #c9d2cc;border-radius:12px;background:#f5faf7}
+#subsub-apply .ss-tick{display:block;margin:0 auto 14px;width:44px;height:44px;padding:7px;
+  box-sizing:border-box;border-radius:50%;background:#1f6b4a;color:#fff}
+#subsub-apply .ss-done h3{margin:0 0 10px;font:inherit;font-size:19px;font-weight:700;
+  line-height:1.3;color:#16241d}
+#subsub-apply .ss-done p{margin:0;font-size:14.5px;line-height:1.55;color:#4a5a51}
+#subsub-apply .ss-done-sub{margin-top:10px !important;font-size:13px !important}
+#subsub-apply .ss-done b{color:#16241d}
 </style>
 <script>
 (function () {
   var root = document.getElementById("subsub-apply");
   var form = root.querySelector(".ss-form");
   var msg = root.querySelector(".ss-msg");
+  var done = root.querySelector(".ss-done");
   var btn = root.querySelector("button");
   form.addEventListener("submit", function (e) {
     e.preventDefault();
@@ -106,9 +131,14 @@ ${options}
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
         if (!r.ok) throw body;
-        msg.className = "ss-msg ok";
-        msg.textContent = "Thanks \\u2014 that's with ${esc(name)}. Check your email.";
-        form.reset();
+        // The form is REPLACED, not reset. A blank form under "we got it"
+        // reads as an invitation to send it again, which is how an account
+        // ends up with the same applicant three times.
+        var em = root.querySelector(".ss-done-em");
+        if (em) em.textContent = String(d.get("email") || "");
+        form.hidden = true;
+        done.hidden = false;
+        if (done.scrollIntoView) done.scrollIntoView({ block: "nearest" });
       });
     }).catch(function (err) {
       msg.className = "ss-msg bad";

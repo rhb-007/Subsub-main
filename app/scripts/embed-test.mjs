@@ -45,7 +45,10 @@ console.log("\n-- the snippet is safe to paste into somebody else's page --");
   const html = applyFormHtml({ subdomain: "outerhome", accountName: "Outerhome", trades: TRADES });
   // Every rule scoped under the root id. A bare `input{...}` would restyle
   // their whole website, which is the fastest way to have it ripped back out.
-  const css = /<style>([\s\S]*?)<\/style>/.exec(html)[1];
+  // Comments out first: the selector is whatever precedes a {, and a /* ... */
+  // above a rule would otherwise be read as part of its selector and fail a
+  // check that is about where the rules APPLY.
+  const css = /<style>([\s\S]*?)<\/style>/.exec(html)[1].replace(/\/\*[\s\S]*?\*\//g, "");
   const rules = css.split("}").map((r) => r.split("{")[0].trim()).filter(Boolean);
   t.ck("every CSS rule is scoped to the snippet",
     rules.every((r) => r.split(",").every((sel) => sel.trim().startsWith("#subsub-apply"))),
@@ -121,6 +124,24 @@ console.log("\n-- and it actually works in a browser --");
       /Company, your name and email are needed/.test(
         await page.evaluate(() => document.querySelector(".ss-msg").textContent)));
 
+    // A refusal comes FIRST, because success is now terminal: it replaces the
+    // form, so anything tested after it would be driving a hidden one.
+    reply = [429, { error: "rate_limited" }];
+    await page.evaluate(() => {
+      const f = document.querySelector("#subsub-apply .ss-form");
+      f.company.value = "Pine"; f.contact.value = "Pip"; f.email.value = "pip@pine.test";
+      document.querySelector("#subsub-apply button").click();
+    });
+    await wait(700);
+    const bad = await page.evaluate(() => document.querySelector(".ss-msg").textContent);
+    t.ck("a refusal is shown in the form", /Too many applications/.test(bad), bad);
+    t.ck("and the button comes back",
+      await page.evaluate(() => !document.querySelector("#subsub-apply button").disabled));
+    t.ck("and the form is still there to correct",
+      await page.evaluate(() => !document.querySelector("#subsub-apply .ss-form").hidden));
+
+    reply = [200, { ok: true }];
+    posts.length = 0;
     await page.evaluate(() => {
       const f = document.querySelector("#subsub-apply .ss-form");
       f.company.value = "Bay Roofing";
@@ -143,23 +164,38 @@ console.log("\n-- and it actually works in a browser --");
       JSON.stringify(posts[0]?.body.categories));
     t.ck("it never sends a password", !("password" in (posts[0]?.body || {})));
 
-    const ok = await page.evaluate(() => document.querySelector(".ss-msg").textContent);
-    t.ck("and it says so, naming who it went to", /that's with Outerhome/i.test(ok), ok);
-    t.ck("the form clears for the next one",
-      await page.evaluate(() => document.querySelector("#subsub-apply .ss-form").company.value === ""));
-
-    // A refusal has to reach the person, not the console.
-    reply = [429, { error: "rate_limited" }];
-    await page.evaluate(() => {
-      const f = document.querySelector("#subsub-apply .ss-form");
-      f.company.value = "Pine"; f.contact.value = "Pip"; f.email.value = "pip@pine.test";
-      document.querySelector("#subsub-apply button").click();
+    // The confirmation REPLACES the form. A blank form under "we got it" reads
+    // as an invitation to send it again, which is how one applicant becomes
+    // three rows on somebody's roster.
+    const after = await page.evaluate(() => {
+      const root = document.querySelector("#subsub-apply");
+      const done = root.querySelector(".ss-done");
+      return {
+        formGone: getComputedStyle(root.querySelector(".ss-form")).display === "none",
+        doneShown: !!done && !done.hidden && getComputedStyle(done).display !== "none",
+        text: done ? done.innerText.replace(/\s+/g, " ").trim() : "",
+        tick: !!done?.querySelector(".ss-tick"),
+        centred: done ? getComputedStyle(done).textAlign : "",
+      };
     });
-    await wait(700);
-    const bad = await page.evaluate(() => document.querySelector(".ss-msg").textContent);
-    t.ck("a refusal is shown in the form", /Too many applications/.test(bad), bad);
-    t.ck("and the button comes back",
-      await page.evaluate(() => !document.querySelector("#subsub-apply button").disabled));
+    t.ck("the form is gone", after.formGone, String(after.formGone));
+    t.ck("and the confirmation is in its place", after.doneShown, String(after.doneShown));
+    t.ck("with a tick", after.tick);
+    t.ck("centred", after.centred === "center", after.centred);
+    t.ck("it names who has it", /that[\u2019']s with Outerhome/i.test(after.text), after.text);
+    // What actually happens next, which the old one never said: a human reads
+    // it, and nobody joins a roster until they say so.
+    t.ck("it says a person will read it",
+      /read every application/i.test(after.text), after.text);
+    t.ck("and that nothing happens until they do",
+      /nobody joins their roster until they say so/i.test(after.text), after.text);
+    t.ck("and where to watch", /rae@bayroofing\.test/.test(after.text), after.text);
+    // The reply is identical whether or not that address already has a login,
+    // because a form that says "we emailed you" for one and not the other is a
+    // way to ask which of a list of addresses is on SubSub.
+    t.ck("without claiming an email was sent",
+      !/we (have )?(e-?mailed|sent you)/i.test(after.text)
+        && !/check your (e-?mail|inbox)/i.test(after.text), after.text);
     t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
   } finally {
     await browser.close(); host.close(); api.close();
