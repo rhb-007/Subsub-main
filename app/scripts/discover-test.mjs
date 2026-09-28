@@ -110,31 +110,50 @@ console.log("\nand the app's links to this site land somewhere");
     .map((m) => m[1]).filter((x, i, a) => a.indexOf(x) === i);
   ck("the app links out at all", outbound.length > 0, JSON.stringify(outbound));
 
-  // Every path either is a file in this repo, or is redirected to one.
   const redirects = new Map();
   for (const line of readFileSync(join(root, "_redirects"), "utf8").split("\n")) {
     const parts = line.trim().split(/\s+/);
     if (parts.length >= 2 && parts[0].startsWith("/")) redirects.set(parts[0], parts[1]);
   }
+
+  // Every path is a file in this repo, or a redirect to one -- and an
+  // extensionless path counts, because Cloudflare Pages serves /pricing from
+  // pricing.html. Modelling that here rather than demanding a redirect is the
+  // whole lesson of this section: see below.
+  const resolves = (p) => {
+    const rel = p.replace(/^\/+/, "") || "index.html";
+    const f = join(root, rel);
+    return existsSync(f) || existsSync(f + ".html") || existsSync(join(f, "index.html"));
+  };
   const broken = [];
   for (const path of outbound) {
     const p = "/" + path.replace(/^\/+/, "");
     const target = redirects.get(p) || p;
-    const file = join(root, target.replace(/^\//, "") || "index.html");
-    const ok = existsSync(file)
-      || existsSync(file.endsWith("/") ? join(file, "index.html") : file + "/index.html");
-    if (!ok) broken.push(`${p}${redirects.has(p) ? ` -> ${target}` : ""}`);
+    if (!resolves(target)) broken.push(`${p}${redirects.has(p) ? ` -> ${target}` : ""}`);
   }
-  ck("every one of them resolves to a page or a redirect", broken.length === 0,
-    JSON.stringify(broken));
+  ck("every one of them resolves to a page", broken.length === 0, JSON.stringify(broken));
 
-  // Named outright, because this one is the signup funnel and a silent 404 on
-  // it looks exactly like nobody wanting to sign up.
+  // Named outright, because this one is the signup funnel and a silent failure
+  // on it looks exactly like nobody wanting to sign up.
   ck("the sign-up link is one of them",
     outbound.includes("pricing") || outbound.includes("pricing.html"),
     JSON.stringify(outbound));
-  ck("and /pricing is redirected rather than left to a platform default",
-    redirects.get("/pricing") === "/pricing.html", String(redirects.get("/pricing")));
+
+  // AND THE RULE THAT REPLACED THE ONE THAT BROKE THE SITE.
+  //
+  // This used to assert the opposite -- that `/pricing` MUST have a redirect to
+  // `/pricing.html`, added so the sign-up link would not "rest on a platform
+  // default that is not in this repo". Pages' default turned out to be the
+  // opposite of the assumption: it serves /pricing from pricing.html AND
+  // redirects /pricing.html to /pricing. So the rule closed the circle, and the
+  // pricing page answered "too many redirects occurred" until it was removed.
+  //
+  // A redirect whose target differs from its source only by ".html" is a loop,
+  // whichever direction it is written in.
+  const loops = [...redirects.entries()].filter(([from, to]) =>
+    from.replace(/\.html$/, "") === to.replace(/\.html$/, ""));
+  ck("no redirect differs from its source only by .html", loops.length === 0,
+    JSON.stringify(loops));
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

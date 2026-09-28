@@ -298,8 +298,18 @@ try {
     await page.click(".user-btn");
     await wait(250);
     await page.click(".um-qr");
-    await wait(900);
-    const said = await page.$eval(".qrp", (n) => n.innerText);
+    // Polled rather than slept on. A fixed 900ms is a guess about how fast the
+    // machine is, and it is the wrong guess exactly when the machine is busy --
+    // this read "still loading" once during a full test sweep and passed five
+    // times in a row on its own, which is the signature of a timing assumption
+    // rather than a bug. The panel starts on a loading state and swaps to the
+    // error, so waiting for the error IS the assertion's own precondition.
+    let said = "";
+    for (let n = 0; n < 40; n++) {
+      said = await page.$eval(".qrp", (x) => x.innerText).catch(() => "");
+      if (/030_connect_requests/.test(said)) break;
+      await wait(100);
+    }
     t.ck("it says which migration, not 'loading' for ever",
       /030_connect_requests/.test(said), said.replace(/\s+/g, " ").slice(0, 120));
     t.ck("and offers a retry", /try again/i.test(said), said.replace(/\s+/g, " ").slice(0, 120));

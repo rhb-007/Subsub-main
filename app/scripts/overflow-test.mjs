@@ -464,7 +464,22 @@ console.log("\n-- and on a database that has not run 038 yet --");
   // thing that cannot work has to say so in a sentence naming the file --
   // rather than opening a form, taking a description of an emergency, and
   // then failing.
+  //
+  // This used to be built by simply NOT passing 038 -- which worked only
+  // because schema.sql was thirty-five migrations behind and did not have the
+  // overflow tables either. Now that schema.sql is current, that state has to
+  // be constructed on purpose rather than inherited from a bug, so 038 is
+  // undone explicitly. Saying it out loud is better anyway: the reader can see
+  // which objects this case is about.
   const db = freshDb({ base: SCHEMA, migrations: [M023, M024, M031, M037] });
+  db.exec(`
+    DROP TABLE IF EXISTS overflow_responses;
+    DROP TABLE IF EXISTS overflow_invites;
+    DROP TABLE IF EXISTS overflow_posts;
+    ALTER TABLE companies DROP COLUMN overflow_since;
+    ALTER TABLE companies DROP COLUMN overflow_trades;
+    ALTER TABLE companies DROP COLUMN overflow_opt_in;
+  `);
   db.exec(`
     INSERT INTO accounts(id,name,subdomain,kind) VALUES ('acc1','Cascade','cascade','property_manager');
     INSERT INTO companies(id,company) VALUES ('cmp_a','Some Plumber');

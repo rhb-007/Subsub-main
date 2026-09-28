@@ -149,6 +149,21 @@ const hit = (page) => page.evaluate(() => {
   const el = document.querySelector(".inv-name-hit");
   return el ? el.innerText.replace(/\s+/g, " ").trim() : null;
 });
+// For the cases that EXPECT a match. A fixed sleep after typing is a guess
+// about how fast the machine is, and it is the wrong guess exactly when the
+// machine is busy -- this read null once during a full test sweep and passed
+// three times in a row on its own. The absence cases below still use `hit`
+// directly, because there is nothing to wait for and polling for a thing that
+// should never appear would only slow the run down.
+const hitWhenReady = async (page) => {
+  let said = null;
+  for (let n = 0; n < 30; n++) {
+    said = await hit(page);
+    if (said) return said;
+    await wait(100);
+  }
+  return said;
+};
 
 try {
   console.log("\n-- typing a name you already work with --");
@@ -160,7 +175,7 @@ try {
     t.ck("two letters is too little to guess from", (await hit(page)) === null, String(await hit(page)));
 
     await typeName(page, "Enterprise");
-    const said = await hit(page);
+    const said = await hitWhenReady(page);
     t.ck("the contractor is surfaced", /Enterprise Roofing/i.test(said || ""), String(said));
     t.ck("it says where the match came from",
       /your own contractors/i.test(said || "") && /not a search of subsub/i.test(said || ""), String(said));
@@ -192,7 +207,7 @@ try {
   {
     const { ctx, page, crashes } = await openInvite();
     await typeName(page, "Northwest Glass");
-    const said = await hit(page);
+    const said = await hitWhenReady(page);
     t.ck("the outstanding invite is surfaced", /Northwest Glass/i.test(said || ""), String(said));
     t.ck("with when it went and that it is unfinished",
       /invited/i.test(said || "") && /not finished/i.test(said || ""), String(said));
