@@ -317,6 +317,32 @@ refactor.
   a screen that never rendered is an assertion that cannot fail, and the first
   version of it was exactly that.
 
+- **A preview's address bar is a claim, and it was the wrong one.** The Branding
+  tab carries two previews. One is the sign-in page; the other is the form a
+  subcontractor fills in — and it had no title, so it read as an unlabelled
+  black box, with an address bar showing the bare subdomain. That is the
+  SIGN-IN page's address. A preview whose address is not the address of the
+  thing it previews is worse than one with no address at all, because it is
+  read and believed.
+
+  It is titled **Sign up form** now, its bar reads `<sub>.subsub.work/?apply=1`,
+  and the `</>` that opens its markup sits in that header rather than in a
+  second panel further down. The icon came **off** the embed panel in the same
+  change: two buttons holding one modal is two places to keep in step, and the
+  person wondering what the form is made of is looking at the picture of it. The
+  embed panel keeps *Copy the code*, because its job is getting the snippet onto
+  their website rather than explaining it.
+
+  The markup is generated from **`th`, the editor's live theme**, not the saved
+  one — it opens from the preview directly above it, and code that disagreed
+  with the picture over it would be the worse of the two lies. It is memoised,
+  because the colour pickers re-render on every drag and it walks thirty trades
+  to build eighty lines.
+
+  The test scopes its selectors (`.embed-strip .embed-code-btn`,
+  `.sf-head .embed-code-btn`). A bare `.embed-code-btn` found whichever existed
+  and passed either way — which it did, silently, the first time this moved.
+
 - **Nobody reads pasted HTML on a page; they copy it.** Eighty lines of markup
   sat inline in the embed panel, which was most of why the tab scrolled forever,
   with a separate toggle below it to preview the form. Both answered the same

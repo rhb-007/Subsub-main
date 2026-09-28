@@ -127,10 +127,24 @@ try {
     t.ck("and the code to paste", /Copy the code/.test(body || ""));
     // Eighty lines of markup used to sit inline here, which is most of why the
     // tab scrolled forever. Nobody reads pasted HTML on a page -- they copy it
-    // -- so the code is one tap away, beside the form it is a copy OF.
+    // -- so the code is one tap away, from the Sign up form preview it draws.
     t.ck("the markup is not dumped on the page",
       await page.evaluate(() => !document.querySelector(".embed-code")));
-    await page.evaluate(() => document.querySelector(".embed-code-btn")?.click());
+    // And it is opened from the PREVIEW, not from here: two buttons holding
+    // one modal is two places to keep in step. Scoped selectors, because a
+    // bare .embed-code-btn would find the preview's and pass either way.
+    t.ck("this panel carries no second code button",
+      await page.evaluate(() => !document.querySelector(".embed-strip .embed-code-btn")));
+    t.ck("the Sign up form block is titled",
+      await page.evaluate(() => /sign up form/i.test(
+        document.querySelector(".sf-head h5")?.innerText || "")),
+      await page.evaluate(() => document.querySelector(".sf-head h5")?.innerText || ""));
+    // The address on the preview is the address of the thing it previews.
+    t.ck("and its address bar is the form's own URL",
+      await page.evaluate(() => /\/\?apply=1$/.test(
+        document.querySelector(".theme-preview .tp-bar span")?.innerText.trim() || "")),
+      await page.evaluate(() => document.querySelector(".theme-preview .tp-bar span")?.innerText.trim() || ""));
+    await page.evaluate(() => document.querySelector(".sf-head .embed-code-btn")?.click());
     await wait(500);
     const modal = await page.evaluate(() => {
       const m = document.querySelector(".ecm");

@@ -14321,6 +14321,13 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   const [b, setB] = useState({ ...brand });
   const [th, setTh] = useState(() => themeOf(brand));
   const [bSaved, setBSaved] = useState(false);
+  // The snippet's markup, opened from the preview it draws rather than from a
+  // second panel further down. Generated from `th` -- the colours in the
+  // editor, not the saved ones -- because it opens from the preview directly
+  // above it, and code disagreeing with the picture over it is the worse of
+  // the two lies.
+  const [applyCode, setApplyCode] = useState(false);
+  const [applyCopied, setApplyCopied] = useState(false);
   const [bErr, setBErr] = useState("");
   // A tenant's own notification choices. Defaults fill whatever the row has
   // not said yet, so an old row reads the same as a new one.
@@ -14349,6 +14356,12 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   };
   const [adding, setAdding] = useState(false);
   const slug = (b.subdomain || "").toLowerCase().replace(/[^a-z0-9-]/g, "");
+  // Memoised: the theme editor re-renders on every keystroke and every colour
+  // drag, and this walks thirty trades to build eighty lines of markup.
+  const applySnippet = useMemo(
+    () => applyFormHtml({ subdomain: slug || applySubdomain, accountName: b.name,
+      trades: CATEGORIES.map((c) => ({ id: c.id, label: c.label })), theme: th }),
+    [slug, applySubdomain, b.name, th]);
   // Only complain once there is something to complain about: an empty field
   // somebody has not reached yet is not an error, it is an empty field.
   const subProblem = slug ? subdomainProblem(slug) : null;
@@ -14782,9 +14795,22 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             );
           })()}
 
+          {/* It had no name, so two previews on one tab read as "the sign-in
+              page" and an unlabelled black box. And its address bar showed the
+              bare subdomain, which is the SIGN-IN page rather than this one: a
+              preview whose address is not the address of the thing it previews
+              is worse than one with no address at all. */}
+          <div className="sf-head">
+            <h5>Sign up form</h5>
+            <button type="button" className="embed-code-btn" onClick={() => setApplyCode(true)}
+              title="See the code and what it looks like"
+              aria-label="See the code and what it looks like">
+              <Code2 size={15} />
+            </button>
+          </div>
           <div className="theme-preview" style={themeVars(th)}>
             <div className="tp-bar">
-              <span>{slug || "yourcompany"}.subsub.work</span>
+              <span>{slug || "yourcompany"}.subsub.work/?apply=1</span>
             </div>
             <div className="tp-body">
               <div className="tp-card">
@@ -14818,6 +14844,19 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               </span>
             )}
           </div>
+
+          {applyCode && (
+            <EmbedCodeModal
+              html={applySnippet}
+              copied={applyCopied}
+              onCopy={async () => {
+                try {
+                  await navigator.clipboard.writeText(applySnippet);
+                  setApplyCopied(true); setTimeout(() => setApplyCopied(false), 2200);
+                } catch { /* the code is on screen to copy by hand */ }
+              }}
+              onClose={() => { setApplyCode(false); setApplyCopied(false); }} />
+          )}
 
           {bErr && <p className="fld-err"><AlertTriangle size={12} /> {bErr}</p>}
 
@@ -21202,11 +21241,11 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
               <button className="btn-solid sm" onClick={() => copy("html", html)}>
                 {copied === "html" ? "Copied" : "Copy the code"}
               </button>
-              <button className="embed-code-btn" onClick={() => setPreview(true)}
-                title="See the code and what it looks like"
-                aria-label="See the code and what it looks like">
-                <Code2 size={15} />
-              </button>
+              {/* No code icon here. The same markup is one tap from the Sign
+                  up form preview above, where somebody is standing when they
+                  wonder what it is; two ways in would be two buttons holding
+                  one modal. This panel's job is getting it onto their website,
+                  which is the Copy button. */}
             </div>
             {/* Eighty lines of markup sat inline under this, which is most of
                 why the tab scrolled forever -- and nobody reads pasted HTML on
@@ -23081,6 +23120,12 @@ body{background:var(--paper)}
 .cpr-do.quiet:hover{opacity:1;color:var(--brand)}
 .cpr-busy{flex:none;font-size:11.5px;color:var(--ink-soft);font-weight:600}
 .cpack-err{margin:0 0 10px;font-size:12px;color:var(--red);font-weight:600}
+/* The sign-up form preview's own header, so the block has a name and its
+   markup has somewhere to live that is not a second panel. */
+.sf-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 0}
+.sf-head h5{margin:0;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--brand-dk)}
+.sf-head + .theme-preview{margin-top:8px}
 .embed-code-btn{flex:none;display:inline-flex;align-items:center;justify-content:center;
   width:32px;height:32px;border-radius:8px;border:1px solid var(--line);background:var(--paper);
   color:var(--ink-soft);cursor:pointer}
