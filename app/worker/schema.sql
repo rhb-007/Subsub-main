@@ -1546,3 +1546,38 @@ CREATE INDEX IF NOT EXISTS ix_inbox_token ON doc_inboxes (token);
 -- 047: is this company offering to be hired? NULL means not answered; the
 -- effective default comes from the account kind (see openToHire in the Worker).
 ALTER TABLE companies ADD COLUMN open_to_hire INTEGER;
+
+-- ---------------------------------------------------------------------------
+-- 048. The API an account's CRM posts scheduled jobs to.
+-- ---------------------------------------------------------------------------
+-- The token is never stored, only a SHA-256 of it, so a copy of this table is
+-- not a set of working keys to every customer's integration. It is therefore
+-- shown exactly once, when it is minted. `prefix` is kept in the clear because
+-- it is the only way to tell three tokens apart without reading any of them.
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id            TEXT PRIMARY KEY,
+  account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  prefix        TEXT NOT NULL,
+  token_hash    TEXT NOT NULL,
+  created_by    TEXT REFERENCES users(id),
+  created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+  last_used_at  TEXT,
+  revoked_at    TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_api_tokens_hash ON api_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS ix_api_tokens_account ON api_tokens(account_id);
+
+-- Where a job came from. The unique index is what makes a retried webhook
+-- return the job it already created rather than a second one -- a constraint,
+-- not a convenience: dropping it silently allows the duplicate.
+CREATE TABLE IF NOT EXISTS job_sources (
+  job_id       TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+  account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  source       TEXT NOT NULL,
+  external_id  TEXT NOT NULL,
+  token_id     TEXT REFERENCES api_tokens(id),
+  created_at   TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_job_sources_external
+  ON job_sources(account_id, source, external_id);

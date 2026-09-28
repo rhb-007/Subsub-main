@@ -127,4 +127,12 @@ SELECT
   -- means not answered, never "no", and the effective default is open -- so
   -- this counts the column, not the answers.
   (SELECT COUNT(*) FROM pragma_table_info('companies')
-    WHERE name = 'open_to_hire')                                                            AS m047_open_to_hire;
+    WHERE name = 'open_to_hire')                                                            AS m047_open_to_hire,
+  -- 048. The CRM API: the tokens, and the row that makes a retried webhook
+  -- return the job it already made. ux_job_sources_external is counted
+  -- separately because it is the constraint doing that work -- the table
+  -- without it takes the duplicate and reports success.
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='api_tokens')               AS m048_api_tokens,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='job_sources')              AS m048_job_sources,
+  (SELECT COUNT(*) FROM sqlite_master
+    WHERE type='index' AND name='ux_job_sources_external')                                    AS m048_dedupe_index;

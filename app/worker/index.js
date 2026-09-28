@@ -21,6 +21,7 @@ import { sendSms, toE164 } from "./sms.js";
 // never taken from what the browser claims -- otherwise a dripping tap could
 // be labelled urgent and call somebody out at the account's expense.
 import { severityOf } from "../shared/emergency.js";
+import { validateIngest } from "../shared/ingest.js";
 // The same fifty states the browser offers, so a client that sends
 // something else -- an old build, a script, a typo that got through --
 // cannot put it in the database.
@@ -264,6 +265,13 @@ app.use("/api/*", async (c, next) => {
     // Asking for a way back in. By definition nobody calling this has a
     // session, and it answers identically whatever it finds, so there is
     // nothing here to authenticate and nothing to learn from the reply.
+    // The CRM API. It authenticates with its own bearer token against
+    // api_tokens rather than a user session -- there is no person here, and a
+    // CRM cannot hold one. It does the whole check inline (token, plan, kind,
+    // rate limit) rather than being merely exempt: skipping this middleware
+    // is not the same as being unauthenticated, and the comment above is the
+    // rule this must not break.
+    || c.req.path.startsWith("/api/v1/")
     || c.req.path === "/api/password-help"
     || c.req.path === "/api/stripe/webhook"
     || c.req.path === "/api/impersonation/end"
@@ -10203,6 +10211,326 @@ app.get("/api/work-orders/:id/revised", async (c) => {
 
 // ---------------------------------------------------------------------------
 // Platform console — SubSub's own staff
+
+// ---------------------------------------------------------------------------
+// The CRM API: scheduled jobs arriving from somebody else's system
+// ---------------------------------------------------------------------------
+// A job gets scheduled in JobNimbus, their CRM posts it here, and it lands in
+// SubSub as a job with unassigned trade slots -- which is what the dashboard
+// counts and what the account opened SubSub to do. Nothing here finds or
+// assigns a contractor: this is the arrival, and a person still picks.
+//
+// `app/shared/ingest.js` holds the field rules, because the route, the
+// published documentation and the tests all have to agree about them and a
+// field required by one and optional in another is an integration that fails
+// at 2am against a page saying it should work.
+//
+// Three properties carry this and each is easy to destroy by accident.
+//
+// THE TOKEN IS NEVER STORED. `api_tokens.token_hash` is a SHA-256 of it, the
+// way a password would be, so a copy of that table is not a working key to
+// every customer's integration. It follows that it can be shown exactly once,
+// and the screen says so rather than offering a "view" that cannot work.
+//
+// A RETRY MUST NOT DUPLICATE. A webhook that does not get a 200 sends again,
+// and one scheduled job becoming four is four contractors asked to show up on
+// a Tuesday. `job_sources` and its unique index are what make the second POST
+// return the first job; this is why `externalId` is required.
+//
+// THE PLAN IS CHECKED ON EVERY CALL, not only when the token is minted. A
+// downgrade has to stop the integration, or Scale is a thing you buy once.
+
+const API_TOKEN_PREFIX = "ssk_";
+// Shown in the token list so somebody holding three can tell them apart
+// without being able to read any of them.
+const API_TOKEN_SHOWN = 11;
+
+function mintApiToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const body = btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return API_TOKEN_PREFIX + body;
+}
+
+async function hashApiToken(raw) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Scale, or comped -- which outranks Stripe and is sometimes exactly right.
+// `accounts.plan` is already written to 'scale' for a comped account, so the
+// second half is belt and braces rather than the rule.
+const accountOnScale = (a) => a?.plan === "scale" || !!a?.comped;
+
+// Everything the API answers has this shape, so an integrator writing error
+// handling once handles all of it. `docs` is on every failure because the
+// person reading it is looking at a log, not at our website.
+const API_DOCS_URL = "https://subsub.work/developers";
+const apiError = (c, status, error, message, extra = {}) =>
+  c.json({ error, message, docs: API_DOCS_URL, ...extra }, status);
+
+// Resolves the bearer token to an account, or answers. Returns null when it
+// has already answered, so callers `if (!ctx) return;` -- there is no second
+// place that decides what a bad token means.
+async function apiCaller(c) {
+  const header = c.req.header("Authorization") || "";
+  const raw = /^Bearer\s+(.+)$/i.exec(header.trim())?.[1]?.trim();
+  if (!raw) {
+    return { res: apiError(c, 401, "missing_token",
+      "Send your SubSub API token as: Authorization: Bearer <token>.") };
+  }
+
+  let row;
+  try {
+    row = await c.env.DB.prepare(
+      `SELECT t.id, t.account_id, t.revoked_at, t.last_used_at,
+              a.plan AS plan, a.comped AS comped, a.kind AS kind
+         FROM api_tokens t JOIN accounts a ON a.id = t.account_id
+        WHERE t.token_hash = ?`
+    ).bind(await hashApiToken(raw)).first();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return { res: apiError(c, 503, "migration_needed",
+      "This SubSub environment has not had migration 048 applied yet.", { migration }) };
+  }
+
+  // A revoked token and one that never existed answer identically. A separate
+  // "revoked" reply tells somebody holding a stolen key that it WAS real and
+  // which account it belonged to, which is a fact they have no business
+  // collecting -- the same rule the connect lookup follows.
+  if (!row || row.revoked_at) {
+    return { res: apiError(c, 401, "invalid_token", "That token is not valid.") };
+  }
+
+  // Checked here rather than only at minting, so a downgrade actually stops
+  // the integration. Named plainly, because the person reading this log can
+  // do something about it.
+  if (!accountOnScale(row)) {
+    return { res: apiError(c, 403, "scale_required",
+      "The SubSub API is part of the Scale plan. This account is on Basic.") };
+  }
+
+  // Creating a job is the hiring side's act, exactly as it is on the screen.
+  // A subcontractor account has nobody to assign, so a job posted to one
+  // would arrive with slots that can never be filled.
+  if (!HIRING_KINDS.includes(row.kind)) {
+    return { res: apiError(c, 403, "not_a_hiring_account",
+      "This account is not set up to hire subcontractors, so it cannot take jobs.",
+      { kind: row.kind }) };
+  }
+
+  const limit = await rateLimit(c.env, "api-ingest", row.account_id, { limit: 300, windowMinutes: 1 });
+  if (!limit.ok) {
+    return { res: apiError(c, 429, "rate_limited",
+      "Too many requests. This endpoint accepts 300 per minute per account.") };
+  }
+
+  return { token: row, accountId: row.account_id };
+}
+
+// Written at most once a minute. A write on every call would make the busiest
+// integration the slowest, and the question this answers -- "is this token
+// actually being used" -- does not need the second hand.
+async function touchApiToken(env, token) {
+  const last = token.last_used_at ? Date.parse(token.last_used_at + "Z") : 0;
+  if (Number.isFinite(last) && Date.now() - last < 60_000) return;
+  try {
+    await env.DB.prepare(`UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?`)
+      .bind(token.id).run();
+  } catch (err) {
+    // Recording that a token was used must never fail the thing it was used
+    // for. Same rule the activity log follows.
+    console.warn("[api] last_used not recorded:", err?.message || err);
+  }
+}
+
+// POST /api/v1/jobs -- the one endpoint a CRM calls.
+app.post("/api/v1/jobs", async (c) => {
+  const ctx = await apiCaller(c);
+  if (ctx.res) return ctx.res;
+  const { token, accountId } = ctx;
+
+  let body;
+  try { body = await c.req.json(); }
+  catch { return apiError(c, 400, "invalid_json", "The request body must be valid JSON."); }
+
+  const check = validateIngest(body, { tradeIds: TRADE_IDS });
+  if (!check.ok) {
+    return apiError(c, 400, "invalid_request",
+      "Some fields were missing or not understood. See `errors` for which.",
+      { errors: check.errors });
+  }
+  const j = check.job;
+
+  // A named building has to be one of theirs. Checked before anything is
+  // written, and answering not_found for a building on somebody else's
+  // account as well as one that does not exist -- a 403 would confirm which
+  // property ids are real, which is the oracle refused everywhere else here.
+  if (j.propertyId) {
+    const prop = await c.env.DB.prepare(
+      `SELECT id FROM properties WHERE id = ? AND account_id = ?`
+    ).bind(j.propertyId, accountId).first();
+    if (!prop) {
+      return apiError(c, 404, "property_not_found",
+        "No building with that propertyId on this account.");
+    }
+  }
+
+  // The retry. Asked BEFORE the insert as well as being enforced by the
+  // unique index after it: the index is what makes this correct under two
+  // deliveries arriving at once, and this is what makes the ordinary retry
+  // cheap and gives it the job id back.
+  let seen;
+  try {
+    seen = await c.env.DB.prepare(
+      `SELECT job_id FROM job_sources
+        WHERE account_id = ? AND source = ? AND external_id = ?`
+    ).bind(accountId, j.source, j.externalId).first();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return apiError(c, 503, "migration_needed",
+      "This SubSub environment has not had migration 048 applied yet.", { migration });
+  }
+  if (seen) {
+    await touchApiToken(c.env, token);
+    // 200 rather than 201, and `duplicate: true`, so a caller that counts
+    // creations is not told it made one. The job id is the same one, which is
+    // what a retrying webhook actually needs.
+    return c.json({ ok: true, duplicate: true, jobId: seen.job_id,
+      url: `https://app.subsub.work/?job=${seen.job_id}` });
+  }
+
+  const id = uid();
+  // created_by is deliberately NULL: no person created this. Nothing reads
+  // the column, and naming the token's owner would put a sentence in the
+  // audit trail saying somebody did a thing they did not do. Provenance goes
+  // on job_sources, where it is true.
+  const cols = ["id", "account_id", "title", "client", "address", "area", "zip",
+    "sqft", "stories", "date", "time", "trades", "scope", "property_id",
+    "materials_paid_by", "material_source", "notes", "created_by"];
+  const vals = [id, accountId, j.title, j.client, j.address, j.area, j.zip,
+    j.sqft, j.stories, j.date, j.time, JSON.stringify(j.trades), j.scope, j.propertyId,
+    j.materialsPaidBy, j.materialSource, j.notes, null];
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO jobs (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`
+    ).bind(...vals).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return apiError(c, 503, "migration_needed",
+      "This SubSub database is behind the code.", { migration });
+  }
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO job_sources (job_id, account_id, source, external_id, token_id)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(id, accountId, j.source, j.externalId, token.id).run();
+  } catch (err) {
+    // The unique index fired, which means a second delivery of the same job
+    // landed between the check above and here. The other one won; this one
+    // reports the job that exists rather than leaving a job nothing points
+    // at. Deleting ours keeps "one external id, one job" true.
+    const other = await c.env.DB.prepare(
+      `SELECT job_id FROM job_sources WHERE account_id = ? AND source = ? AND external_id = ?`
+    ).bind(accountId, j.source, j.externalId).first().catch(() => null);
+    if (other) {
+      await c.env.DB.prepare(`DELETE FROM jobs WHERE id = ?`).bind(id).run().catch(() => {});
+      await touchApiToken(c.env, token);
+      return c.json({ ok: true, duplicate: true, jobId: other.job_id,
+        url: `https://app.subsub.work/?job=${other.job_id}` });
+    }
+    throw err;
+  }
+
+  await logEvent(c.env, accountId, null, "job.created", id,
+    { title: j.title, via: "api", source: j.source, externalId: j.externalId });
+  await logActivity(c.env, accountId, null, "job_created",
+    `${j.title} arrived from ${j.source === "other" ? "your CRM" : j.source} and needs contractors`);
+  await touchApiToken(c.env, token);
+
+  return c.json({ ok: true, duplicate: false, jobId: id, trades: j.trades,
+    url: `https://app.subsub.work/?job=${id}` }, 201);
+});
+
+// ---- The tokens themselves, from inside the account ----------------------
+// Admin only. A project manager runs work; wiring the company's CRM to it is
+// an account-level decision, and a token is a key to create jobs on it.
+app.get("/api/api-tokens", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, name, prefix, created_at, last_used_at, revoked_at
+         FROM api_tokens WHERE account_id = ? ORDER BY created_at DESC`
+    ).bind(accountId).all();
+    return c.json((results || []).map((r) => ({
+      id: r.id, name: r.name, prefix: r.prefix, createdAt: r.created_at,
+      lastUsedAt: r.last_used_at, revokedAt: r.revoked_at,
+    })));
+  } catch (err) {
+    if (missingSchema(err)) return c.json([]);
+    throw err;
+  }
+});
+
+app.post("/api/api-tokens", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const acct = await c.env.DB.prepare(
+    `SELECT plan, comped, kind FROM accounts WHERE id = ?`).bind(accountId).first();
+  // The same gate the API itself applies, here so the screen and the route
+  // cannot disagree about who may have one.
+  if (!accountOnScale(acct)) return c.json({ error: "scale_required" }, 403);
+  if (!HIRING_KINDS.includes(acct?.kind)) return c.json({ error: "not_a_hiring_account" }, 403);
+
+  const b = await c.req.json().catch(() => ({}));
+  const name = String(b?.name || "").trim().slice(0, 60);
+  if (!name) return c.json({ error: "name_required" }, 400);
+
+  const raw = mintApiToken();
+  const id = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO api_tokens (id, account_id, name, prefix, token_hash, created_by)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(id, accountId, name, raw.slice(0, API_TOKEN_SHOWN), await hashApiToken(raw), userId).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+
+  await logEvent(c.env, accountId, userId, "api_token.created", id, { name });
+  await logActivity(c.env, accountId, userId, "api_token_created", `Created an API token: ${name}`);
+  // The only time the token is ever returned. There is no route that reads
+  // one back, because there is nothing stored that could answer.
+  return c.json({ id, name, prefix: raw.slice(0, API_TOKEN_SHOWN), token: raw }, 201);
+});
+
+app.delete("/api/api-tokens/:id", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = c.req.param("id");
+  // Scoped to the account, so a token id from somewhere else is not found
+  // rather than forbidden.
+  const row = await c.env.DB.prepare(
+    `SELECT id, name FROM api_tokens WHERE id = ? AND account_id = ?`
+  ).bind(id, accountId).first().catch(() => null);
+  if (!row) return c.json({ error: "not_found" }, 404);
+
+  // Revoked, not deleted. The jobs it created are real work somebody may
+  // already be booked for, and "where did these come from" has to stay
+  // answerable after the key is turned off.
+  await c.env.DB.prepare(
+    `UPDATE api_tokens SET revoked_at = datetime('now') WHERE id = ? AND revoked_at IS NULL`
+  ).bind(id).run();
+  await logEvent(c.env, accountId, userId, "api_token.revoked", id, { name: row.name });
+  await logActivity(c.env, accountId, userId, "api_token_revoked", `Revoked an API token: ${row.name}`);
+  return c.json({ ok: true });
+});
+
 // ---------------------------------------------------------------------------
 // Staff are deliberately not a role in the app's own role table: they get a
 // separate surface on a separate hostname, checked here on every route.

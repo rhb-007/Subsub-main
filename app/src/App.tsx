@@ -13600,6 +13600,146 @@ function Avatar({ user, className = "" }) {
 
 // Choosing one. Used by an admin on somebody else's row and by anybody on
 // their own profile, so the write is a prop rather than baked in.
+// The keys an account's CRM posts scheduled jobs with.
+//
+// Three things about this screen follow from the server rather than being
+// design choices, and undoing any of them makes it lie.
+//
+// A TOKEN IS SHOWN ONCE. What the database holds is a SHA-256 of it, so there
+// is no route that could read one back and none is offered. The panel says so
+// at the moment it matters -- while the token is on screen -- rather than in
+// help text nobody reads first.
+//
+// REVOKED, NOT DELETED. The jobs a token created are real work somebody may
+// already be booked for, so the row stays and the list keeps showing it. A
+// revoked row that vanished would make "where did these jobs come from"
+// unanswerable the moment somebody tidied up.
+//
+// AND THE PANEL IS NOT THE GATE. `requireRole("admin")` and the Scale check
+// are both on the route. This decides what is worth showing, not what is
+// allowed, which is why a Basic account gets the explanation rather than
+// nothing at all: a feature you cannot see is a feature you cannot buy.
+function ApiTokens({ isScale }) {
+  const [rows, setRows] = useState(null);
+  const [name, setName] = useState("");
+  const [minted, setMinted] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const load = async () => {
+    try { setRows(await api.apiTokens()); }
+    catch { setRows([]); }
+  };
+  useEffect(() => { if (isScale) load(); }, [isScale]);
+
+  const create = async () => {
+    const n = name.trim();
+    if (!n) return;
+    setBusy(true); setErr("");
+    try {
+      const made = await api.createApiToken(n);
+      setMinted(made);
+      setName("");
+      await load();
+    } catch (e) {
+      setErr(e?.body?.error === "scale_required"
+        ? "The API is part of Scale."
+        : "Could not create that token. Try again.");
+    }
+    setBusy(false);
+  };
+
+  const revoke = async (t) => {
+    if (!window.confirm(`Revoke "${t.name}"? Anything using it stops working immediately. Jobs it already created stay.`)) return;
+    try { await api.revokeApiToken(t.id); await load(); }
+    catch { setErr("Could not revoke that token."); }
+  };
+
+  return (
+    <div className="portal-panel settings-panel">
+      <h4>API tokens</h4>
+      <p className="panel-note">
+        Post scheduled jobs straight into SubSub from JobNimbus or whatever you schedule in.
+        They arrive with their trades unassigned, ready for you to pick contractors.{" "}
+        <a href="https://subsub.work/developers" target="_blank" rel="noopener">Read the API docs</a>.
+      </p>
+
+      {!isScale ? (
+        /* Named plainly rather than hidden. Somebody whose CRM could feed
+           this needs to know it exists before they can decide to pay for it. */
+        <p className="cov-hint">The API is part of Scale. Your plan is on the Billing tab.</p>
+      ) : (
+        <>
+          {/* Shown once, and said while it is on screen rather than
+              afterwards, because afterwards is too late to act on. */}
+          {minted && (
+            <div className="tok-new" role="status">
+              <p className="tok-new-lede">
+                <CheckCircle2 size={14} /> Copy this now — it is not shown again.
+              </p>
+              <code className="tok-val">{minted.token}</code>
+              <div className="tok-new-acts">
+                <button type="button" className="btn-solid" onClick={() => {
+                  navigator.clipboard?.writeText(minted.token);
+                  setCopied(true);
+                }}>
+                  <Copy size={14} /> {copied ? "Copied" : "Copy token"}
+                </button>
+                <button type="button" className="btn-quiet" onClick={() => { setMinted(null); setCopied(false); }}>
+                  Done
+                </button>
+              </div>
+              <p className="cov-hint">
+                SubSub stores only a fingerprint of this, so nobody here can read it back to you —
+                including us. Lost it? Revoke it and make another.
+              </p>
+            </div>
+          )}
+
+          <div className="add-city-row">
+            <input value={name} maxLength={60} placeholder="What is it for? e.g. JobNimbus"
+              onChange={(e) => { setName(e.target.value); setErr(""); }}
+              onKeyDown={(e) => e.key === "Enter" && create()} />
+            <button type="button" className="btn-solid" disabled={!name.trim() || busy} onClick={create}>
+              <Plus size={14} /> {busy ? "Creating…" : "Create token"}
+            </button>
+          </div>
+          {err && <p className="fld-err" role="alert">{err}</p>}
+
+          {rows === null ? null : rows.length === 0 ? (
+            <p className="cov-hint">No tokens yet.</p>
+          ) : (
+            <ul className="tok-list">
+              {rows.map((t) => (
+                <li key={t.id} className={t.revokedAt ? "tok-row off" : "tok-row"}>
+                  <div className="tok-main">
+                    <b>{t.name}</b>
+                    <span className="cx-sub">
+                      <code>{t.prefix}…</code>
+                      {t.revokedAt
+                        ? " · revoked"
+                        : t.lastUsedAt
+                          ? ` · last used ${t.lastUsedAt.slice(0, 10)}`
+                          /* Never used is worth saying: it is the difference
+                             between "the CRM is wired up" and "somebody made
+                             a token and nothing ever called it". */
+                          : " · never used"}
+                    </span>
+                  </div>
+                  {!t.revokedAt && (
+                    <button type="button" className="cpr-do quiet" onClick={() => revoke(t)}>Revoke</button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function AvatarPicker({ user, onSave }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -14695,6 +14835,21 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               Still gated on the account being hireable and on a seat that runs
               it, because that has not changed -- a code for a company nobody
               can hire is a code for nothing. */}
+          {/* The key an account's CRM authenticates with.
+              On Profile because that is where the QR code and the other
+              give-something-to-somebody-else things are, and because it is
+              the tab an admin opens for their own settings rather than the
+              company's. Admin only: a project manager runs work, but wiring
+              the company's scheduling system to SubSub is an account-level
+              decision and a token is a key to create jobs on it.
+
+              Scale, checked on the SERVER on every call as well as here --
+              hiding the panel is not a gate, and a downgrade has to stop an
+              integration that is already running. */}
+          {canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && (
+            <ApiTokens isScale={plan === "scale"} />
+          )}
+
           {canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
             <div className="portal-panel settings-panel">
               {/* Named the way the header menu names it. The menu entry has
@@ -23298,6 +23453,29 @@ body{background:var(--paper)}
 /* The same traffic light the dashboard card draws, on the tab where somebody
    actually acts on it. Green on file, amber inside WARN_DAYS, red expired or
    never added; hollow when nothing has been done to the row yet. */
+/* The API token panel. The minted token gets a box of its own because it is
+   on screen once and the copy button has to be the obvious thing in it. */
+.tok-new{border:1px solid var(--brand);background:var(--paper);border-radius:10px;
+  padding:13px 14px;margin:2px 0 14px}
+.tok-new-lede{display:flex;align-items:center;gap:6px;margin:0 0 9px;font-size:12.5px;
+  font-weight:700;color:var(--brand-dk)}
+/* Breaks anywhere: a 47-character key in a fixed-width box otherwise runs off
+   the side on a phone, where copying it by hand is the fallback. */
+.tok-val{display:block;font-size:12px;line-height:1.5;word-break:break-all;
+  background:var(--card);border:1px solid var(--line);border-radius:7px;padding:9px 10px}
+.tok-new-acts{display:flex;gap:8px;align-items:center;margin:10px 0 8px}
+.btn-quiet{font-family:inherit;font-size:12.5px;font-weight:600;color:var(--ink-soft);
+  background:transparent;border:0;cursor:pointer;padding:6px 4px}
+.btn-quiet:hover{color:var(--ink)}
+.tok-list{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column}
+.tok-row{display:flex;gap:12px;align-items:center;justify-content:space-between;
+  padding:10px 0;border-top:1px solid var(--line)}
+.tok-main{min-width:0;display:flex;flex-direction:column;gap:2px;flex:1;text-align:left}
+.tok-main b{font-size:13.5px}
+.tok-main code{font-size:11.5px}
+/* A revoked token stays listed, because the jobs it created are still here
+   and "where did these come from" has to keep an answer. Dimmed, not hidden. */
+.tok-row.off{opacity:.5}
 .mydoc{align-items:center}
 /* The expiry gets a column of its own rather than being buried in the status
    line, because "when does this run out" is the question the whole pack is

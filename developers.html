@@ -1,0 +1,632 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SubSub API — post scheduled jobs from your CRM</title>
+<meta name="description" content="Post scheduled jobs straight into SubSub from JobNimbus or any CRM. One endpoint, a token you create in your account, and the job arrives ready to assign contractors to.">
+<link rel="canonical" href="https://subsub.work/developers">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0C1C16;
+  --forest:#103528;
+  --forest-lift:#1B4835;
+  --forest-line:#28563F;
+  --bone:#F4F6F4;
+  --white:#fff;
+  --gold:#E39B32;
+  --gold-dk:#C07D1C;
+  --rule:#DCE3DF;
+  --muted:#5D6F67;
+  --red:#9B3A22;
+  --max:1180px;
+  --r:10px;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{margin:0;background:var(--white);color:var(--ink);
+  font:400 17px/1.62 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:'Bricolage Grotesque',Inter,sans-serif;font-weight:700;
+  letter-spacing:-.035em;line-height:1.04;margin:0}
+p{margin:0}
+a{color:inherit}
+svg{display:block}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 30px}
+.narrow{max-width:780px;margin:0 auto;padding:0 30px}
+
+/* ---------- buttons ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;
+  font:600 15.5px/1 Inter,sans-serif;text-decoration:none;cursor:pointer;
+  padding:14px 22px;border-radius:8px;border:1.5px solid transparent;
+  transition:background .15s,color .15s,border-color .15s}
+.btn-gold{background:var(--gold);color:#20160A}
+.btn-gold:hover{background:var(--gold-dk)}
+.btn-forest{background:var(--forest);color:#fff}
+.btn-forest:hover{background:var(--ink)}
+.btn-ghost{border-color:var(--ink);color:var(--ink);background:none}
+.btn-ghost:hover{background:var(--ink);color:#fff}
+.btn-ghost-d{border-color:var(--forest-line);color:#fff;background:none}
+.btn-ghost-d:hover{background:var(--forest-lift)}
+.btn-sm{padding:11px 16px;font-size:14.5px}
+.btn-lg{padding:16px 26px;font-size:16.5px}
+.btn-block{width:100%}
+.btn:disabled,.btn[aria-disabled="true"]{opacity:.5;cursor:not-allowed}
+:focus-visible{outline:2.5px solid var(--gold);outline-offset:2px}
+
+/* ---------- header ---------- */
+header.site{background:var(--forest);color:#fff;position:sticky;top:0;z-index:60}
+.bar{display:flex;align-items:center;gap:30px;height:70px}
+.logo{display:flex;align-items:center;text-decoration:none}
+.ss-logo{display:block;height:24px;width:auto}
+nav.top{margin-left:auto;display:flex;align-items:center;gap:26px;font-size:15px}
+nav.top a{text-decoration:none;color:#C6D6CC}
+nav.top a:hover{color:#fff}
+nav.top a[aria-current]{color:#fff}
+/* The gold CTA is a button, not a nav link: nav.top a (0,1,2) outranks
+   .btn-gold (0,1,0), so without this the label inherits the pale link
+   color on desktop and #fff in the drawer — 1.54:1 and 2.33:1 on gold.
+   This restores the button's own dark ink at every width: 7.62:1. */
+nav.top a.btn-gold{color:#20160A}
+nav.top a.btn-gold:hover{color:#20160A}
+
+/* ---------- generic sections ---------- */
+.sec{padding:86px 0}
+.sec-bone{background:var(--bone);border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.sec-forest{background:var(--forest);color:#fff}
+.sec-forest h2{color:#fff}
+.h-xl{font-size:clamp(38px,5.3vw,64px)}
+.h-lg{font-size:clamp(28px,3.7vw,44px)}
+.h-md{font-size:clamp(24px,3vw,34px)}
+.lede{font-size:19px;color:var(--muted);margin-top:18px;max-width:52ch}
+.lede-d{font-size:19px;color:#B9CDC2;margin-top:18px;max-width:48ch}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;
+  color:var(--gold-dk);background:#FBF2E4;border-radius:20px;padding:6px 13px;margin-bottom:20px}
+.eyebrow-d{color:var(--gold);background:rgba(227,155,50,.14)}
+.cta-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:32px}
+.fine{font-size:13px;color:var(--muted)}
+.fine-d{font-size:14px;color:#8FA79B}
+
+/* ---------- page hero (audience pages) ---------- */
+.phero{background:var(--forest);color:#fff;padding:64px 0 76px}
+.phero h1{color:#fff;max-width:17ch}
+.phero-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
+
+/* ---------- checklists ---------- */
+.ticks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:13px}
+.ticks li{display:grid;grid-template-columns:19px 1fr;gap:12px;font-size:15.5px;line-height:1.5;color:var(--muted)}
+.ticks li b{color:var(--ink);font-weight:600}
+.ticks li.off{color:#A9B8B0}
+.ticks li.off b{color:#A9B8B0;font-weight:500}
+.ticks-d li{color:#C6D6CC}
+.ticks-d li b{color:#fff}
+
+/* ---------- panel card ---------- */
+.card{background:var(--white);border:1px solid var(--rule);border-radius:var(--r);padding:30px}
+.card-pad-lg{padding:34px}
+.shadow-lift{box-shadow:0 24px 60px rgba(0,0,0,.28)}
+
+/* ---------- pain / gain rows ---------- */
+.rows2{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:44px}
+.stack{display:flex;flex-direction:column;gap:16px}
+.pain{display:grid;grid-template-columns:auto 1fr;gap:14px;padding:18px 20px;
+  background:var(--white);border:1px solid var(--rule);border-radius:var(--r)}
+.pain .mk{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;flex:none;margin-top:1px}
+.mk-bad{background:#FAEAE5;color:var(--red)}
+.mk-good{background:#E7F1EA;color:var(--forest-lift)}
+.pain h3{font-size:16.5px;letter-spacing:-.02em}
+.pain p{margin-top:6px;font-size:14.5px;color:var(--muted);line-height:1.5}
+
+/* ---------- audience grid (index) ---------- */
+.auds{display:grid;grid-template-columns:repeat(2,1fr);gap:26px;margin-top:44px}
+.aud{display:block;text-decoration:none;padding-top:22px;border-top:2px solid var(--forest);
+  transition:border-color .15s}
+.aud:hover{border-color:var(--gold)}
+.aud h3{font-size:20px;letter-spacing:-.02em}
+.aud p{margin-top:9px;font-size:15.5px;color:var(--muted);line-height:1.55}
+.aud .more{display:inline-block;margin-top:12px;font-size:14.5px;font-weight:600;color:var(--forest-lift)}
+.aud:hover .more{color:var(--gold-dk)}
+
+/* ---------- pricing ---------- */
+.plans{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:44px}
+.plan{background:var(--white);border:1.5px solid var(--rule);border-radius:var(--r);
+  padding:32px;display:flex;flex-direction:column}
+.plan.lead{border-color:var(--forest);box-shadow:5px 5px 0 var(--forest)}
+.plan-n{font-family:'Bricolage Grotesque';font-weight:700;font-size:17px;letter-spacing:-.02em}
+.plan-sub{font-size:13.5px;color:var(--muted);margin-top:5px}
+.plan-p{font-family:'Bricolage Grotesque';font-weight:800;font-size:50px;letter-spacing:-.045em;
+  margin-top:16px;line-height:1}
+.plan-p em{font-family:Inter;font-style:normal;font-size:15px;font-weight:500;letter-spacing:0;color:var(--muted)}
+.plan ul{margin:24px 0 28px;flex:1}
+.plan .btn{margin-top:auto}
+
+/* comparison table */
+.cmp{width:100%;border-collapse:collapse;margin-top:52px;font-size:15.5px}
+.cmp th,.cmp td{text-align:left;padding:15px 16px;border-bottom:1px solid var(--rule)}
+.cmp thead th{font:700 15px/1 'Bricolage Grotesque';letter-spacing:-.02em;border-bottom:2px solid var(--ink)}
+.cmp th:first-child{width:46%}
+.cmp td:not(:first-child),.cmp th:not(:first-child){text-align:center;width:27%}
+.cmp tbody th{font-weight:500;color:var(--ink);font-family:Inter;font-size:15.5px;letter-spacing:0}
+.cmp .yes{color:var(--forest-lift);font-weight:600}
+.cmp .no{color:#A9B8B0}
+
+/* ---------- steps (onboarding) ---------- */
+.steps-bar{display:flex;gap:0;margin-bottom:36px;border:1px solid var(--rule);border-radius:var(--r);overflow:hidden}
+.steps-bar div{flex:1;padding:14px 16px;font-size:14px;font-weight:600;color:var(--muted);
+  background:var(--bone);border-right:1px solid var(--rule);display:flex;align-items:center;gap:9px}
+.steps-bar div:last-child{border-right:0}
+.steps-bar div[data-state="now"]{background:var(--white);color:var(--ink)}
+.steps-bar div[data-state="done"]{background:var(--white);color:var(--forest-lift)}
+.sb-n{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--rule);background:#fff;
+  display:grid;place-items:center;font-size:12px;flex:none}
+.steps-bar div[data-state="now"] .sb-n{background:var(--forest);border-color:var(--forest);color:#fff}
+.steps-bar div[data-state="done"] .sb-n{background:var(--forest-lift);border-color:var(--forest-lift);color:#fff}
+
+/* ---------- forms ---------- */
+form{display:flex;flex-direction:column;gap:22px}
+fieldset{border:0;margin:0;padding:0}
+legend{font:600 15px/1 Inter;padding:0;margin-bottom:13px}
+.field label{display:block;font:600 14.5px/1 Inter;margin-bottom:8px}
+.field input,.field select,.field textarea{width:100%;padding:14px 15px;border:1.5px solid var(--rule);
+  border-radius:8px;background:var(--white);font:400 16px Inter,sans-serif;color:var(--ink)}
+.field textarea{resize:vertical}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--forest);outline:none}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+.roles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.role{position:relative}
+.role input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer}
+.role span{display:block;padding:15px 16px;border:1.5px solid var(--rule);border-radius:8px;
+  font-size:15px;font-weight:600;line-height:1.3;cursor:pointer;transition:border-color .15s,background .15s}
+.role span em{display:block;font-style:normal;font-size:12.5px;font-weight:400;color:var(--muted);margin-top:4px}
+.role input:checked + span{border-color:var(--forest);background:#F1F6F3}
+.role input:focus-visible + span{outline:2.5px solid var(--gold);outline-offset:2px}
+.url{display:flex;align-items:stretch;border:1.5px solid var(--rule);border-radius:8px;overflow:hidden;background:#fff}
+.url input{border:0;border-radius:0;flex:1;min-width:0}
+.url input:focus{outline:none}
+.url b{padding:0 14px;font-size:15px;color:var(--muted);font-weight:500;background:var(--bone);
+  display:flex;align-items:center;border-left:1.5px solid var(--rule);white-space:nowrap}
+.form-nav{display:flex;gap:12px;justify-content:space-between;align-items:center;flex-wrap:wrap}
+
+/* invite rows */
+.inv{display:flex;flex-direction:column;gap:12px}
+.inv-row{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end}
+.inv-row .field{margin:0}
+.icon-x{border:1.5px solid var(--rule);background:#fff;width:46px;height:49px;border-radius:8px;
+  display:grid;place-items:center;cursor:pointer;color:var(--muted);flex:none}
+.icon-x:hover{border-color:var(--red);color:var(--red)}
+.add-line{align-self:flex-start;border:1.5px dashed var(--rule);background:none;color:var(--forest-lift);
+  font:600 14.5px Inter;padding:12px 16px;border-radius:8px;cursor:pointer}
+.add-line:hover{border-color:var(--forest-lift)}
+.limit{display:flex;align-items:flex-start;gap:11px;background:#FBF2E4;border:1px solid #EDD9B6;
+  border-radius:8px;padding:13px 15px;font-size:14px;color:#7A5210;line-height:1.5}
+.limit b{color:#5E3E08}
+.seatline{font-size:13.5px;color:var(--muted)}
+
+/* calendar */
+.cal{border:1px solid var(--rule);border-radius:var(--r);padding:20px;background:#fff}
+.cal-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.cal-hd b{font:700 16px 'Bricolage Grotesque';letter-spacing:-.02em}
+.cal-nav{display:flex;gap:6px}
+.cal-nav button{border:1.5px solid var(--rule);background:#fff;width:34px;height:34px;border-radius:7px;
+  cursor:pointer;color:var(--ink);font-size:15px;line-height:1}
+.cal-nav button:hover:not(:disabled){border-color:var(--forest)}
+.cal-nav button:disabled{opacity:.4;cursor:not-allowed}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+.cal-dow{text-align:center;font-size:11.5px;font-weight:600;color:var(--muted);padding-bottom:5px}
+.cal-day{aspect-ratio:1;border:1.5px solid var(--rule);background:#fff;border-radius:7px;cursor:pointer;
+  font:600 14.5px Inter;color:var(--ink)}
+.cal-day:hover:not(:disabled){border-color:var(--forest);background:#F1F6F3}
+.cal-day:disabled{border-color:transparent;color:#C3CFC8;cursor:not-allowed;background:none}
+.cal-day[aria-pressed="true"]{background:var(--forest);border-color:var(--forest);color:#fff}
+.slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;margin-top:16px}
+.slot{border:1.5px solid var(--rule);background:#fff;border-radius:7px;padding:11px 8px;cursor:pointer;
+  font:600 14px Inter;color:var(--ink)}
+.slot:hover{border-color:var(--forest)}
+.slot[aria-pressed="true"]{background:var(--forest);border-color:var(--forest);color:#fff}
+.pick-note{margin-top:14px;font-size:14px;color:var(--muted)}
+.pick-note b{color:var(--ink)}
+
+/* done state */
+.done{display:none;background:var(--white);border:1.5px solid var(--forest);border-radius:var(--r);padding:34px}
+.done.on{display:block}
+.done h2{font-size:26px}
+.done p{margin-top:12px;color:var(--muted);font-size:16px}
+.done ul{margin-top:20px}
+.hide{display:none !important}
+
+/* ---------- cta band ---------- */
+.band{background:var(--forest);color:#fff;padding:72px 0}
+.band-in{display:flex;align-items:center;justify-content:space-between;gap:40px;flex-wrap:wrap}
+.band h2{color:#fff;max-width:22ch}
+.band p{color:#B9CDC2;margin-top:14px;max-width:46ch}
+
+/* ---------- footer ---------- */
+footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
+.foot{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:32px}
+.foot h4{font:700 14px 'Bricolage Grotesque';color:#fff;margin:0 0 12px;letter-spacing:-.01em}
+.foot-brand{margin-bottom:12px}
+.ss-foot{height:20px;opacity:.9}
+.foot a{text-decoration:none;display:block;padding:4px 0}
+.foot a:hover{color:#fff}
+.foot-note{margin-top:8px;max-width:34ch;line-height:1.55}
+
+/* ---------- responsive ---------- */
+@media (max-width:1000px){
+  .phero-grid{grid-template-columns:1fr;gap:44px}
+  .cmp th:first-child{width:40%}
+}
+@media (max-width:760px){
+  .rows2,.auds,.plans,.foot{grid-template-columns:1fr}
+  .steps-bar{flex-direction:column}
+  .steps-bar div{border-right:0;border-bottom:1px solid var(--rule)}
+  .steps-bar div:last-child{border-bottom:0}
+  .inv-row{grid-template-columns:1fr;gap:10px}
+  .icon-x{width:100%;height:44px}
+}
+@media (max-width:560px){
+  .wrap,.narrow{padding:0 20px}
+  .sec,.band{padding:56px 0}
+  .phero{padding:48px 0 60px}
+  .two,.three,.roles{grid-template-columns:1fr}
+  .card,.plan{padding:24px 20px}
+  .cmp{font-size:14px}
+  .cmp th,.cmp td{padding:12px 8px}
+  .cal{padding:14px}
+  .band-in{flex-direction:column;align-items:flex-start}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none !important;animation:none !important}
+  html{scroll-behavior:auto}
+}
+  @media (max-width:560px){
+    .aw-url{max-width:none;width:100%;margin-left:0;order:3}
+    .aw-chrome{flex-wrap:wrap}
+    .s-row{grid-template-columns:1fr;gap:7px}
+    .s-row .chip{justify-self:start}
+  }
+.foot-legal{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  margin-top:30px;padding-top:20px;border-top:1px solid rgba(255,255,255,.12);font-size:13.5px}
+.foot-legal-links{display:flex;gap:20px;flex-wrap:wrap}
+.foot-legal a{text-decoration:none;display:inline;padding:0}
+.foot-legal a:hover{color:#fff;text-decoration:underline;text-underline-offset:3px}
+@media (max-width:560px){.foot-legal{flex-direction:column;align-items:flex-start;gap:12px}}
+
+/* ---------- mobile nav ---------- */
+.nav-toggle{display:none;margin-left:auto;align-items:center;justify-content:center;
+  width:44px;height:44px;border:1px solid var(--forest-line);border-radius:9px;
+  background:none;cursor:pointer;flex:none;padding:0}
+.nav-toggle span{display:block;width:19px;height:2px;background:#fff;border-radius:2px;
+  position:relative;transition:transform .18s,opacity .18s}
+.nav-toggle span::before,.nav-toggle span::after{content:"";position:absolute;left:0;
+  width:19px;height:2px;background:#fff;border-radius:2px;transition:transform .18s,top .18s}
+.nav-toggle span::before{top:-6px}
+.nav-toggle span::after{top:6px}
+.nav-toggle[aria-expanded="true"] span{background:transparent}
+.nav-toggle[aria-expanded="true"] span::before{top:0;transform:rotate(45deg)}
+.nav-toggle[aria-expanded="true"] span::after{top:0;transform:rotate(-45deg)}
+body.nav-open{overflow:hidden}
+
+@media (max-width:900px){
+  .nav-toggle{display:flex}
+  nav.top{position:fixed;inset:70px 0 0;background:var(--forest);
+    flex-direction:column;align-items:stretch;gap:0;margin:0;padding:10px 0 32px;
+    overflow-y:auto;transform:translateY(-8px);opacity:0;pointer-events:none;
+    transition:opacity .18s,transform .18s;z-index:59}
+  nav.top[data-open="true"]{transform:none;opacity:1;pointer-events:auto}
+  nav.top a{display:block;padding:16px 30px;font-size:17px;color:#fff;
+    border-bottom:1px solid rgba(255,255,255,.08)}
+  nav.top a:last-child{border-bottom:0}
+  nav.top a[aria-current]{background:var(--forest-lift)}
+  nav.top a.keep{margin:20px 30px 0;text-align:center;justify-content:center;
+    border-bottom:0;font-size:16px;padding:15px 20px}
+}
+
+@media (max-width:560px){
+  /* long strings shouldn't push the layout wide */
+  .legal-body p,.legal-body li,.lede,.lede-d{overflow-wrap:break-word}
+  .aw-url b,.r-meta,.s-meta{overflow-wrap:anywhere}
+  /* headline sizes on small phones */
+  .h-xl{font-size:31px}
+  .h-lg{font-size:26px}
+  /* tap targets */
+  nav.top a,.btn{min-height:44px}
+  .btn{padding-top:13px;padding-bottom:13px}
+}
+@media (max-width:400px){
+  .wrap,.narrow{padding:0 16px}
+  .cta-row{flex-direction:column;align-items:stretch}
+  .cta-row .btn{width:100%;justify-content:center}
+}
+  .all-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:26px 28px;margin-top:40px}
+  .all-item h3{font-size:17px;letter-spacing:-.02em}
+  .all-item p{margin-top:8px;font-size:14.5px;color:var(--muted);line-height:1.55}
+  .all-item{padding-top:16px;border-top:2px solid var(--forest)}
+  @media (max-width:900px){.all-grid{grid-template-columns:1fr 1fr;gap:22px 24px}}
+  @media (max-width:600px){.all-grid{grid-template-columns:1fr}}
+</style>
+<style>
+/* Scoped to this page. Everything is prefixed dev- so it cannot reach the
+   chrome it sits inside. */
+.dev-wrap{max-width:860px;margin:0 auto;padding:44px 20px 72px}
+.dev-wrap h1{font-size:clamp(30px,4.4vw,44px);letter-spacing:-.02em;margin:0 0 12px}
+.dev-lede{font-size:17px;line-height:1.6;color:#4a5550;margin:0 0 30px}
+.dev-wrap h2{font-size:21px;letter-spacing:-.01em;margin:38px 0 10px}
+.dev-wrap h3{font-size:15px;margin:26px 0 8px}
+.dev-wrap p,.dev-wrap li{font-size:15px;line-height:1.65}
+.dev-wrap p,.dev-wrap li{color:#3c4744}
+.dev-wrap ul{padding-left:20px}
+.dev-wrap code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;
+  background:#eef2f0;border-radius:4px;padding:1.5px 5px}
+.dev-pre{background:#12201b;color:#dfe9e4;border-radius:10px;padding:16px 18px;overflow-x:auto;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.6;
+  margin:12px 0 4px}
+.dev-pre code{background:none;color:inherit;padding:0;font-size:inherit}
+.dev-tbl{width:100%;border-collapse:collapse;margin:12px 0 4px;font-size:14px}
+.dev-tbl th,.dev-tbl td{text-align:left;padding:9px 10px;border-bottom:1px solid #e3e9e6;
+  vertical-align:top}
+.dev-tbl th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#6b7873}
+.dev-tbl td code{white-space:nowrap}
+.dev-req{color:#1f6b4a;font-weight:700;font-size:12px}
+.dev-opt{color:#8a948f;font-size:12px}
+.dev-note{border-left:3px solid #1f6b4a;background:#f3f8f5;padding:13px 16px;margin:18px 0;
+  border-radius:0 8px 8px 0}
+.dev-note p{margin:0}
+.dev-note p + p{margin-top:9px}
+.dev-cta{display:inline-block;background:#1f6b4a;color:#fff;text-decoration:none;font-weight:700;
+  font-size:15px;padding:13px 22px;border-radius:9px;margin-top:8px}
+</style>
+</head>
+<body>
+<header class="site">
+  <div class="wrap bar">
+    <a class="logo" href="index.html"><svg class="ss-logo" width="105.7" height="24" viewBox="36 62 502 114" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SubSub"><path fill="#E39B32" d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/><path fill="#E39B32" d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/><path fill="#E39B32" d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/><path fill="#FFFFFF" d="M159.95,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C178.27,159.09,166.67,155.94,159.95,151.25z"/><path fill="#FFFFFF" d="M281.36,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.82,11.47c5.49,0,10-3.63,10-12.55v-25.59H281.36z"/><path fill="#FFFFFF" d="M345.6,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C333.93,103.69,345.6,114.19,345.6,131.05z M326.78,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S326.78,139.19,326.78,131.05z"/><path fill="#FFFFFF" d="M345.41,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C363.74,159.09,352.13,155.94,345.41,151.25z"/><path fill="#FFFFFF" d="M466.81,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.83,11.47c5.49,0,10-3.63,10-12.55v-25.59H466.81z"/><path fill="#FFFFFF" d="M531.05,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C519.38,103.69,531.05,114.19,531.05,131.05z M512.22,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S512.22,139.19,512.22,131.05z"/></svg></a>
+    <button class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="siteNav" aria-label="Menu"><span></span></button>
+    <nav class="top" id="siteNav">
+      <a href="index.html#lifecycle">Platform</a>
+      <a href="index.html#who">Who it's for</a>
+      <a href="pricing.html">Pricing</a>
+      <a href="book-a-demo.html">Book a demo</a>
+      <a href="https://app.subsub.work">Sign in</a>
+      <a href="pricing.html" class="keep btn btn-gold btn-sm">Get started</a>
+    </nav>
+  </div>
+</header>
+<main class="dev-wrap">
+<h1>Post scheduled jobs into SubSub</h1>
+<p class="dev-lede">
+  When a job gets scheduled in your CRM, send it here. It arrives in SubSub as a job with its
+  trades unassigned — which is the queue you open SubSub to clear — and you pick who does the work.
+  One endpoint, one token, no SDK.
+</p>
+
+<div class="dev-note">
+  <p><strong>The API is part of the Scale plan.</strong> Create your token in SubSub under
+  <strong>My account → Profile → API tokens</strong>. It is shown once, when you create it:
+  SubSub stores only a fingerprint of it, so nobody here can read it back to you.</p>
+</div>
+
+<h2>The endpoint</h2>
+<pre class="dev-pre"><code>POST https://api.subsub.work/api/v1/jobs
+Authorization: Bearer ssk_your_token_here
+Content-Type: application/json</code></pre>
+
+<h2>A complete example</h2>
+<pre class="dev-pre"><code>curl -X POST https://api.subsub.work/api/v1/jobs \
+  -H "Authorization: Bearer $SUBSUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "externalId": "JN-1041",
+    "source": "jobnimbus",
+    "title": "Reroof — 14 Alder Way",
+    "trades": ["roofing", "gutters"],
+    "date": "2026-10-14",
+    "time": "08:00",
+    "address": "14 Alder Way",
+    "area": "Seattle",
+    "zip": "98101",
+    "client": "M. Okafor",
+    "sqft": 2400,
+    "stories": 2,
+    "scope": "Tear off and replace, 30yr architectural."
+  }'</code></pre>
+
+<pre class="dev-pre"><code>HTTP/1.1 201 Created
+
+{
+  "ok": true,
+  "duplicate": false,
+  "jobId": "5b0f…",
+  "trades": ["roofing", "gutters"],
+  "url": "https://app.subsub.work/?job=5b0f…"
+}</code></pre>
+
+<h2>Required fields</h2>
+<p>
+  Five things, and only five. Everything a job <em>can</em> carry is accepted, but requiring a
+  square footage no CRM holds would make the integration fail over a number nobody needs — so
+  required here means the job cannot do its work without it.
+</p>
+<table class="dev-tbl">
+  <tr><th>Field</th><th>Type</th><th>What it is</th></tr>
+  <tr>
+    <td><code>externalId</code> <span class="dev-req">required</span></td>
+    <td>string</td>
+    <td>Your own id for this job. This is what makes a retry safe — see below. Max 200 characters.</td>
+  </tr>
+  <tr>
+    <td><code>title</code> <span class="dev-req">required</span></td>
+    <td>string</td>
+    <td>What the job is called. Max 200 characters.</td>
+  </tr>
+  <tr>
+    <td><code>trades</code> <span class="dev-req">required</span></td>
+    <td>string[]</td>
+    <td>At least one. These become the unassigned slots you fill. See the list below.</td>
+  </tr>
+  <tr>
+    <td><code>date</code> <span class="dev-req">required</span></td>
+    <td>string</td>
+    <td><code>YYYY-MM-DD</code>. The scheduled day.</td>
+  </tr>
+  <tr>
+    <td><code>address</code> <em>or</em> <code>propertyId</code> <span class="dev-req">required</span></td>
+    <td>string</td>
+    <td>Where the work is. Use <code>propertyId</code> for a building already on your account,
+      <code>address</code> for anywhere else.</td>
+  </tr>
+</table>
+
+<h2>Optional fields</h2>
+<table class="dev-tbl">
+  <tr><th>Field</th><th>Type</th><th>What it is</th></tr>
+  <tr><td><code>source</code> <span class="dev-opt">optional</span></td><td>string</td>
+    <td>Which system it came from: <code>jobnimbus</code>, <code>acculynx</code>,
+      <code>servicetitan</code>, <code>housecall_pro</code>, <code>roofsnap</code> or
+      <code>other</code>. Defaults to <code>other</code>.</td></tr>
+  <tr><td><code>time</code> <span class="dev-opt">optional</span></td><td>string</td>
+    <td>24-hour <code>HH:MM</code>. Defaults to <code>07:00</code>.</td></tr>
+  <tr><td><code>client</code> <span class="dev-opt">optional</span></td><td>string</td>
+    <td>The homeowner or customer name.</td></tr>
+  <tr><td><code>area</code>, <code>zip</code> <span class="dev-opt">optional</span></td><td>string</td>
+    <td>City and postal code.</td></tr>
+  <tr><td><code>scope</code> <span class="dev-opt">optional</span></td><td>string</td>
+    <td>What the work involves. This is what a contractor reads on the work order.</td></tr>
+  <tr><td><code>sqft</code>, <code>stories</code> <span class="dev-opt">optional</span></td><td>number</td>
+    <td>Size of the building.</td></tr>
+  <tr><td><code>materialSource</code>, <code>materialsPaidBy</code> <span class="dev-opt">optional</span></td>
+    <td>string</td><td>Where materials come from and who pays for them.</td></tr>
+  <tr><td><code>notes</code> <span class="dev-opt">optional</span></td><td>string</td>
+    <td>Anything else worth carrying across.</td></tr>
+</table>
+
+<h2>Retries will not duplicate</h2>
+<p>
+  Webhooks retry. If your CRM does not get a <code>200</code> or <code>201</code> back, it sends
+  again — and without something to recognise the second delivery by, one scheduled job becomes four
+  jobs on your roster and four contractors asked to show up on a Tuesday.
+</p>
+<p>
+  That is what <code>externalId</code> is for. Send the same one twice and the second call returns
+  <code>200</code> with <code>"duplicate": true</code> and the id of the job that already exists.
+  Nothing is created. You can retry as many times as you like.
+</p>
+<pre class="dev-pre"><code>HTTP/1.1 200 OK
+
+{
+  "ok": true,
+  "duplicate": true,
+  "jobId": "5b0f…",
+  "url": "https://app.subsub.work/?job=5b0f…"
+}</code></pre>
+<p>
+  Ids are scoped to your account and your <code>source</code>, so another SubSub customer using the
+  same CRM with the same job number does not collide with you.
+</p>
+
+<h2>When something is wrong</h2>
+<p>
+  Errors name the field, with a code your integration can branch on and a message for whoever ends
+  up reading the log.
+</p>
+<pre class="dev-pre"><code>HTTP/1.1 400 Bad Request
+
+{
+  "error": "invalid_request",
+  "message": "Some fields were missing or not understood. See `errors` for which.",
+  "docs": "https://subsub.work/developers",
+  "errors": [
+    { "field": "trades", "code": "unknown_trade", "message": "\"juggling\" is not a trade SubSub knows." },
+    { "field": "date", "code": "invalid", "message": "date must be a real calendar day, as YYYY-MM-DD." }
+  ]
+}</code></pre>
+
+<table class="dev-tbl">
+  <tr><th>Status</th><th>Error</th><th>What to do</th></tr>
+  <tr><td>400</td><td><code>invalid_request</code></td><td>Read <code>errors</code>; each names a field.</td></tr>
+  <tr><td>400</td><td><code>invalid_json</code></td><td>The body was not valid JSON.</td></tr>
+  <tr><td>401</td><td><code>missing_token</code></td><td>Send <code>Authorization: Bearer &lt;token&gt;</code>.</td></tr>
+  <tr><td>401</td><td><code>invalid_token</code></td><td>The token is wrong or has been revoked. Create a new one.</td></tr>
+  <tr><td>403</td><td><code>scale_required</code></td><td>The account is on Basic. The API is part of Scale.</td></tr>
+  <tr><td>403</td><td><code>not_a_hiring_account</code></td><td>This account is set up as a subcontractor, so it has nobody to assign.</td></tr>
+  <tr><td>404</td><td><code>property_not_found</code></td><td>No building with that <code>propertyId</code> on this account.</td></tr>
+  <tr><td>429</td><td><code>rate_limited</code></td><td>300 requests per minute per account. Back off and retry.</td></tr>
+</table>
+
+<h2>Trades</h2>
+<p>Use these exact ids in <code>trades</code>:</p>
+<p>
+  <code>roofing</code> <code>siding</code> <code>windows_doors</code> <code>gutters</code>
+  <code>soffit_fascia</code> <code>coping</code> <code>masonry</code> <code>solar</code>
+  <code>framing</code> <code>concrete</code> <code>foundation</code> <code>excavation</code>
+  <code>demolition</code> <code>electrical</code> <code>plumbing</code> <code>hvac</code>
+  <code>insulation</code> <code>drywall</code> <code>painting</code> <code>flooring</code>
+  <code>tile_stone</code> <code>cabinets_counters</code> <code>trim_carpentry</code>
+  <code>deck_fence</code> <code>hardscaping</code> <code>landscaping</code>
+  <code>garage_doors</code> <code>restoration</code> <code>cleaning</code>
+</p>
+
+<h2>Keeping the token safe</h2>
+<ul>
+  <li>It is shown once. SubSub stores a SHA-256 of it, not the token, so it cannot be read back — by you or by us. Lost it? Revoke it and make another.</li>
+  <li>It belongs to one account and can only create jobs on that account.</li>
+  <li>Revoke it any time under <strong>My account → Profile</strong>. Anything using it stops immediately; jobs it already created stay, because that work is real.</li>
+  <li>Keep it server-side. Anyone holding it can create jobs on your account.</li>
+</ul>
+
+<h2>What happens next</h2>
+<p>
+  The job lands on your Jobs screen with its trades unassigned, and it counts toward
+  <em>Unassigned trade slots</em> on your dashboard. From there it is the ordinary SubSub flow:
+  assign a contractor per trade, or ask several of yours to quote it, and SubSub checks their
+  insurance and licence before the work order goes out.
+</p>
+<p><a class="dev-cta" href="get-started.html">Get started with SubSub</a></p>
+
+</main>
+<footer class="site">
+  <div class="wrap foot">
+    <div>
+      <div class="foot-brand"><svg class="ss-logo ss-foot" width="88.1" height="20" viewBox="36 62 502 114" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SubSub"><path fill="#E39B32" d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/><path fill="#E39B32" d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/><path fill="#E39B32" d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/><path fill="#FFFFFF" d="M159.95,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C178.27,159.09,166.67,155.94,159.95,151.25z"/><path fill="#FFFFFF" d="M281.36,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.82,11.47c5.49,0,10-3.63,10-12.55v-25.59H281.36z"/><path fill="#FFFFFF" d="M345.6,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C333.93,103.69,345.6,114.19,345.6,131.05z M326.78,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S326.78,139.19,326.78,131.05z"/><path fill="#FFFFFF" d="M345.41,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C363.74,159.09,352.13,155.94,345.41,151.25z"/><path fill="#FFFFFF" d="M466.81,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.83,11.47c5.49,0,10-3.63,10-12.55v-25.59H466.81z"/><path fill="#FFFFFF" d="M531.05,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C519.38,103.69,531.05,114.19,531.05,131.05z M512.22,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S512.22,139.19,512.22,131.05z"/></svg></div>
+      <p class="foot-note">Contractor management for the trades — onboarding, approvals,
+        compliance, scheduling and payment in one place.</p>
+    </div>
+    <div>
+      <h4>Product</h4>
+      <a href="index.html#lifecycle">Platform</a>
+      <a href="pricing.html">Pricing</a>
+      <a href="book-a-demo.html">Book a demo</a>
+    </div>
+    <div>
+      <h4>Who it's for</h4>
+      <a href="for-general-contractors.html">General contractors</a>
+      <a href="for-property-managers.html">Property managers</a>
+      <a href="for-building-owners.html">Building owners</a>
+      <a href="for-portfolio-managers.html">Portfolio managers</a>
+    </div>
+    <div>
+      <h4>Resources</h4>
+      <a href="licensing/">Licensing by state</a>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="foot-legal">
+      <span>&copy; 2026 SubSub, LLC. All rights reserved.</span>
+      <nav class="foot-legal-links">
+        <a href="privacy-policy.html">Privacy Policy</a>
+        <a href="terms-of-use.html">Terms of Use</a>
+      </nav>
+    </div>
+  </div>
+
+</footer>
+</body>
+</html>

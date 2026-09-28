@@ -359,6 +359,12 @@ export const api = {
   weather: () => request("/weather"),
   myCompany: () => request("/my-company"),
   saveMyCompany: (patch) => request("/my-company", { method: "PATCH", body: JSON.stringify(patch) }),
+  // The keys an account's CRM authenticates with. `create` is the only call
+  // that ever returns a token, because nothing stored could answer a read --
+  // what is in the database is a SHA-256 of it.
+  apiTokens: () => request("/api-tokens"),
+  createApiToken: (name) => request("/api-tokens", { method: "POST", body: JSON.stringify({ name }) }),
+  revokeApiToken: (id) => request(`/api-tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),
   // Milestones, verification and release. The plan call returns the parts,
   // the event log and the releases together: a screen that fetches three
   // renders three different moments.

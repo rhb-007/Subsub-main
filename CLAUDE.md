@@ -1909,6 +1909,94 @@ refactor.
   spread is only shown once two people have answered: one quote is a price, not
   a comparison, and "lowest of 1" invites reading it as one.
 
+- **A CRM posts the job; a person still picks who does it.** A general
+  contractor schedules work in JobNimbus, and until now retyped it into SubSub
+  or did not use SubSub for it. `POST /api/v1/jobs` is that job arriving by
+  itself, landing with its **trades unassigned** — which is the *Unassigned
+  trade slots* tile already on the dashboard, and the thing an account opens
+  SubSub to clear. Nothing about finding or assigning a contractor happens on
+  the API, and that is the line: this is the arrival, not the hiring.
+
+  `app/shared/ingest.js` holds the field rules, because three things have to
+  agree about them and they get written by different hands at different times —
+  the route, the published documentation, and the tests. A field required by
+  the route and optional in the docs is an integration that fails at 2am
+  against a page saying it should work.
+
+  **Required means five fields, not every column a job has.** The instinct is
+  to require the lot. That is wrong in the direction this file refuses
+  elsewhere: `sqft`, `stories` and the material supplier are optional on the
+  screen a person uses, and an API stricter than the form makes an integration
+  fail over a number no CRM holds. Required is `externalId`, `title`, `trades`,
+  `date`, and a location — each one a thing the job cannot work without.
+  `trades` because it is what becomes the slots, so a job without them arrives
+  and lands nowhere; `date` because the whole premise is a *scheduled* job and
+  without it this is a lead endpoint, which it is not.
+
+  **`externalId` is the one nobody asks for and every integration needs.** A
+  webhook that does not get a 200 sends again, and one scheduled job becoming
+  four is four contractors asked to show up on a Tuesday — discovered when they
+  do. So the CRM's own id is required, and a second delivery answers **200 with
+  `duplicate: true`** and the id of the job that already exists, rather than
+  201 and another row.
+
+  Two mechanisms hold that and **they are not interchangeable**. The route asks
+  before inserting, which makes the ordinary retry cheap and hands back the job
+  id; `ux_job_sources_external` is what is correct when two deliveries arrive at
+  **once**, which the pre-check cannot cover by construction. Removing either
+  one alone leaves a sequential retry test passing, so the unique constraint is
+  asserted **directly** — otherwise the half that matters under load could go
+  with nothing noticing. Scoped to the account as well as the source, because
+  two customers on JobNimbus will both have a job numbered 1041.
+
+  **The token is never stored.** `api_tokens.token_hash` is a SHA-256, the way
+  a password would be, so a copy of that table is not a working key to every
+  customer's integration. It follows that it can be shown exactly once, and the
+  panel says so **while the token is on screen** rather than in help text read
+  afterwards, which is too late to act on. `prefix` is kept in the clear
+  because it is the only way somebody holding three tokens can tell which row
+  is which without reading any of them.
+
+  **Revoked, not deleted.** The jobs a token created are real work somebody may
+  already be booked for, so the row stays and the list keeps showing it dimmed:
+  "where did these jobs come from" has to survive somebody turning the key off.
+
+  **Scale is checked on every call, not only at minting** — otherwise it is a
+  thing you buy once and keep. And a **revoked token answers exactly as a
+  made-up one does**: a separate `token_revoked` reply tells somebody holding a
+  stolen key that it was real and whose account it belonged to, which is the
+  same oracle the connect lookup and the handover subdomain lookup both refuse
+  to be. The test compares the two replies rather than trusting the wording.
+
+  A subcontractor account cannot take one, for the reason it cannot create a
+  job on the screen: it has nobody to assign, so the slots could never be
+  filled. `/api/v1/*` is on the public-route exemption list and does its whole
+  check inline — **exempt from the session middleware is not the same as
+  unauthenticated**, and a test posts a signed-in seat's headers at it to prove
+  they are not a way in.
+
+  `created_by` is deliberately **NULL**: no person created it. Nothing reads
+  that column, and naming the token's owner would put a sentence in the audit
+  trail saying somebody did a thing they did not do. Provenance lives on
+  `job_sources`, where it is true.
+
+  Migration 048 is **one paste and no `ALTER TABLE`.** The obvious shape was two
+  columns on `jobs`, and `ADD COLUMN` is the one statement that cannot be run
+  twice — so it would need its own paste and an operator who gets the order
+  right. A separate table also reads correctly: where a job came from is a fact
+  about how it arrived, not about the work. Every statement is `IF NOT EXISTS`,
+  so running the file again does nothing.
+
+  The docs are `developers.html`, built from the site's **own** header, footer
+  and stylesheet through `content/licensing/chrome.mjs` rather than a copy, so
+  the nav cannot drift. It is a hand-written page committed to the repo, not
+  generated output — the body is prose about an API and regenerating it on
+  every build would mean it could not be edited without a script. `/developers`
+  needs **no `_redirects` entry**: Pages already serves it from the file, and
+  the extensionless rules in there loop. `test:discover` walks it, which was
+  checked by pointing the link at a page that does not exist and watching it
+  fail.
+
 - **Overflow is broadcast, not browse.** When an account has nobody on its
   own roster for an urgent job, it may broadcast to opted-in companies —
   general contractors included, since 031 made every one of them hireable.
