@@ -1542,3 +1542,7 @@ CREATE TABLE IF NOT EXISTS doc_inboxes (
 CREATE INDEX IF NOT EXISTS ix_inbox_email ON doc_inboxes (to_email, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS ix_inbox_token ON doc_inboxes (token);
+
+-- 047: is this company offering to be hired? NULL means not answered; the
+-- effective default comes from the account kind (see openToHire in the Worker).
+ALTER TABLE companies ADD COLUMN open_to_hire INTEGER;

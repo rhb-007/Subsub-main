@@ -2083,6 +2083,42 @@ async function ensureAccountCompany(env, accountId) {
 // those to connect would be a request nobody could ever accept, so the
 // lookup does not offer it -- the ordinary add-them-yourself path still
 // works exactly as before.
+// Is this company offering to be hired?
+//
+// Being findable used to be a side effect of filling a profile in: an email,
+// a mobile or a licence on the row, and any account typing one of those whole
+// values could ask you to connect. Right for a subcontractor, who is here to
+// be hired. Wrong for a general contractor, who signed up to run a roster and
+// may have no wish to work under anybody -- and was never asked.
+//
+// `open_to_hire` NULL means NOT ANSWERED, never "no". The effective default
+// comes from what kind of account owns the row: a subcontractor account is
+// open, every hiring kind is closed, and a company with a contractor seat but
+// no account of its own is open, because that is somebody on a roster and
+// being asked is the whole loop. So the column never needed a backfill guess,
+// and an account that has never seen the switch behaves the way its kind
+// implies.
+async function openToHire(env, companyId) {
+  let row;
+  try {
+    row = await env.DB.prepare(
+      `SELECT co.open_to_hire AS flag, ac.kind AS kind
+         FROM companies co LEFT JOIN accounts ac ON ac.company_id = co.id
+        WHERE co.id = ?`
+    ).bind(companyId).first();
+  } catch (err) {
+    // No column yet: a database without 047 behaves exactly as it did before,
+    // which is open. Nothing silently disappears off a lookup mid-migration.
+    if (missingSchema(err)) return true;
+    throw err;
+  }
+  if (!row) return false;
+  if (row.flag !== null && row.flag !== undefined) return !!row.flag;
+  // Not answered. No owning account means a seat on somebody's roster: open.
+  if (!row.kind) return true;
+  return row.kind === "subcontractor";
+}
+
 async function companyHasLogin(env, companyId) {
   const row = await env.DB.prepare(
     `SELECT 1 AS yes FROM memberships WHERE company_id = ? AND role = 'contractor' LIMIT 1`
@@ -2249,6 +2285,16 @@ app.get("/api/connect/lookup", requireRole("admin", "pm"), async (c) => {
   // would be a request no one could ever accept, so it is not offered and
   // the ordinary add-them-yourself path carries on as it always has.
   if (!(await companyHasLogin(c.env, co.id))) return c.json({ found: false, reason: "no_account" });
+
+  // Not offering to be hired, which is a different answer from "nobody is
+  // behind this row".
+  //
+  // It answers like an address nobody here has ever seen -- a bare
+  // `found: false`, no reason -- and NOT like `no_account`. `no_account` says
+  // "this address is on SubSub and nobody can answer for it", which is both
+  // untrue here and a fact about them that a stranger typing addresses has no
+  // business collecting. Not findable is not findable.
+  if (!(await openToHire(c.env, co.id))) return c.json({ found: false });
 
   const pending = !!(await c.env.DB.prepare(
     `SELECT 1 AS yes FROM connect_requests WHERE account_id = ? AND company_id = ? AND status = 'pending'`
@@ -2437,7 +2483,12 @@ app.get("/api/my-company", requireRole("admin", "pm"), async (c) => {
     sharesSent = (await c.env.DB.prepare(
       `SELECT COUNT(*) AS n FROM doc_shares WHERE company_id = ?`).bind(companyId).first())?.n || 0;
   } catch (err) { if (!missingSchema(err)) throw err; }
+  // The switch, as the SERVER works it out -- effective value, not the raw
+  // column -- so the browser renders one answer rather than re-deriving the
+  // default from the account kind and getting a third opinion.
+  const open = await openToHire(c.env, companyId);
   return c.json({ ...myCompanyToJs(co), findable, code,
+    openToHire: open, openAnswered: co.open_to_hire !== null && co.open_to_hire !== undefined,
     url: code ? connectUrl(code) : null, docs, sharesSent });
 });
 
@@ -2475,8 +2526,27 @@ app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
     state: b.state === undefined ? undefined : normalizeState(b.state),
     zip: str(b.zip, 20),
   };
+  // The switch. Its own write, because it is the one field here that can be
+  // sent alone -- flipping it must not require a whole profile, and must not
+  // trip "nothing_to_change" or "name_required" on the way.
+  if (b.openToHire !== undefined) {
+    try {
+      await c.env.DB.prepare(`UPDATE companies SET open_to_hire = ? WHERE id = ?`)
+        .bind(b.openToHire ? 1 : 0, companyId).run();
+      await logEvent(c.env, accountId, userId,
+        b.openToHire ? "company.open_to_hire" : "company.closed_to_hire", companyId, {});
+    } catch (err) {
+      if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "047_open_to_hire" }, 503);
+      throw err;
+    }
+  }
+
   const set = Object.entries(fields).filter(([, v]) => v !== undefined);
-  if (!set.length) return c.json({ error: "nothing_to_change" }, 400);
+  if (!set.length) {
+    // Answering only the switch is a complete request, not an empty one.
+    if (b.openToHire !== undefined) return c.json({ ok: true });
+    return c.json({ error: "nothing_to_change" }, 400);
+  }
   // A company row with no name is not a thing anybody can be shown.
   if (fields.company === null) return c.json({ error: "name_required" }, 400);
 

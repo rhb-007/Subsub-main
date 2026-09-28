@@ -14032,7 +14032,7 @@ function HireablePanel({ section = "profile", accountName, requests = [], focus 
   useEffect(() => {
     let alive = true;
     api.myCompany()
-      .then((r) => { if (alive) { setLoaded(r); setF(r); } })
+      .then((r) => { if (alive) { setLoaded(r); setF(r); setOpenHire(!!r.openToHire); } })
       .catch((e) => {
         console.error("[my-company] load failed:", e);
         if (!alive) return;
@@ -14058,6 +14058,11 @@ function HireablePanel({ section = "profile", accountName, requests = [], focus 
   // everything, every time, including the documents somebody has already
   // uploaded. And it runs off `focusN` as well as `focus`, so asking for the
   // same place twice takes you there twice.
+  // Mirrors the server's answer rather than deriving one: openToHire is the
+  // EFFECTIVE value, defaulted from the account kind when nobody has touched
+  // the column, so the switch shows what a lookup would actually do.
+  const [openHire, setOpenHire] = useState(false);
+  const [openBusy, setOpenBusy] = useState(false);
   const [lit, setLit] = useState([]);
   useEffect(() => {
     if (!focus || !loaded) return;
@@ -14121,9 +14126,9 @@ function HireablePanel({ section = "profile", accountName, requests = [], focus 
             job. Whoever hires you reviews them, and they stay current for everybody you
             work with rather than being re-sent one contractor at a time.</>
         ) : (
-          <>You hire contractors here. You can also be hired: another general contractor can find
-            {" "}<b>{accountName || "your company"}</b> on SubSub and ask to work with you, and
-            this is what they see. Nothing here is on your own contractors&rsquo; screens.</>
+          <>You hire subcontractors here, but you can also be hired as one: another general
+            contractor can find {" "}<b>{accountName || "your company"}</b> on SubSub and ask to
+            work with you, and this is what they see. Keep it up to date.</>
         )}
       </p>
 
@@ -14133,15 +14138,51 @@ function HireablePanel({ section = "profile", accountName, requests = [], focus 
       {f && (
         <>
           {!isDocs && <>
-          {/* The one thing worth saying out loud: a profile with none of the
-              three things the lookup matches on cannot be found by anybody,
-              and nothing else on the page would ever tell them. */}
-          <div className={`hire-state ${loaded?.findable ? "on" : "off"}`}>
+          {/* The switch, above everything it governs.
+              Being findable used to be a side effect of having filled the
+              profile in: an email, a mobile or a licence on the row, and any
+              account typing one of those whole values could ask you to
+              connect. That is right for a subcontractor, who is here to be
+              hired, and wrong for a general contractor who signed up to run a
+              roster -- and nobody ever asked them. The server decides the
+              default from the account kind and sends the answer, so this
+              renders one opinion rather than deriving a second. */}
+          <div className={`open-hire ${openHire ? "on" : ""}`}>
+            <button type="button" role="switch" aria-checked={openHire}
+              className="oh-switch" disabled={openBusy}
+              onClick={async () => {
+                const next = !openHire;
+                setOpenHire(next); setOpenBusy(true); setErr("");
+                try {
+                  await api.saveMyCompany({ openToHire: next });
+                  setLoaded((x) => (x ? { ...x, openToHire: next, openAnswered: true } : x));
+                } catch (ex) {
+                  console.error("[open-to-hire] failed:", ex);
+                  setOpenHire(!next);
+                  setErr("That didn't save. Try again in a moment.");
+                } finally { setOpenBusy(false); }
+              }}>
+              <span className="oh-knob" />
+            </button>
+            <div>
+              <strong>Available to be hired as a subcontractor</strong>
+              <span>
+                {openHire
+                  ? "Another general contractor who already has your email, mobile or licence number can find you and ask to work with you. You still decide."
+                  : "Off. Nobody can look you up and ask \u2014 your QR code still works, because handing somebody that is you asking them."}
+              </span>
+            </div>
+          </div>
+
+          {/* Only worth saying when the switch is on: a profile with none of
+              the three things the lookup matches on cannot be found by
+              anybody, and nothing else on the page would ever tell them. */}
+          {openHire && <div className={`hire-state ${loaded?.findable ? "on" : "off"}`}>
             {loaded?.findable
               ? <><CheckCircle2 size={15} /> <span>Another contractor can find you by the details below.</span></>
               : <><AlertTriangle size={15} /> <span>Nobody can find you yet. Add an email, a mobile or a licence
                   number — those are the three things a search matches on.</span></>}
-          </div>
+          </div>}
 
           <label className="fld">Company name <span className="fld-note">how you are listed</span>
             <input value={f.company} onChange={(e) => set("company", e.target.value)} placeholder={accountName || "Your company"} /></label>
@@ -14187,9 +14228,20 @@ function HireablePanel({ section = "profile", accountName, requests = [], focus 
             {DOC_KINDS.map((k) => {
               const d = (loaded?.docs || {})[k];
               const today = new Date().toISOString().slice(0, 10);
-              const lapsed = d?.expiresOn && d.expiresOn < today;
+              // The same light, from the same place as the dashboard card:
+              // docStatus in shared/docs.js. This tab is where somebody comes
+              // to DO something about their paperwork, so it cannot be the one
+              // screen that answers "is this current?" differently from the
+              // card that sent them here.
+              const st = docStatusOf(d, today);
+              const tone = st.state === "missing" || st.state === "expired" ? "red"
+                : st.state === "expiring" ? "amber" : "green";
+              const lapsed = st.state === "expired";
               return (
-                <div key={k} className={`mydoc ${d ? (lapsed ? "bad" : "ok") : ""} ${isLit(`doc:${k}`) ? "lit" : ""}`}>
+                <div key={k} className={`mydoc tone-${tone} ${d ? (lapsed ? "bad" : "ok") : ""} ${isLit(`doc:${k}`) ? "lit" : ""}`}>
+                  <span className="mydoc-dot" aria-hidden="true">
+                    {tone === "green" && <Check size={10} strokeWidth={3.5} />}
+                  </span>
                   <div className="mydoc-main">
                     <b>{DOC_LABELS[k]}
                       {/* Still here, still uploadable -- plenty of hiring
@@ -14198,11 +14250,14 @@ function HireablePanel({ section = "profile", accountName, requests = [], focus 
                       {isOptionalDoc(k) && <span className="mydoc-opt">optional</span>}
                     </b>
                     <span className="cx-sub">
-                      {!d ? (isOptionalDoc(k)
+                      {st.state === "missing" ? (isOptionalDoc(k)
                           ? "Not uploaded — only needed if a contractor sends you one"
                           : "Not uploaded")
-                        : lapsed ? `Expired ${formatDay(d.expiresOn)} — send a replacement`
-                        : d.expiresOn ? `Current through ${formatDay(d.expiresOn)}`
+                        : st.state === "expired"
+                          ? `Expired ${formatExpiry(d.expiresOn)} — send a replacement`
+                        : st.state === "expiring"
+                          ? `Expires ${formatExpiry(d.expiresOn)} · ${st.days === 0 ? "today" : `${st.days}d`} — renew it`
+                        : d.expiresOn ? `Current through ${formatExpiry(d.expiresOn)}`
                         : d.fileName || "On file"}
                     </span>
                   </div>
@@ -14580,9 +14635,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             <div className="portal-panel settings-panel">
               <h4>Your code</h4>
               <p className="panel-note">
-                Show this to a general contractor and have them scan it. They can ask to work
-                with you without anybody spelling out an email address — and you still decide,
-                on <b>Company</b>.
+                Show this to a general contractor and have them scan it. It is the quickest way
+                for them to get your compliance pack, see when you are free and send you work —
+                without anybody spelling out an email address. You still decide, on <b>Company</b>.
               </p>
               <ConnectCode />
             </div>
@@ -14668,7 +14723,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {pane === "branding" && canManage && canBrand && (
         <div className="portal-panel settings-panel">
           <h4>Company branding</h4>
-          <p className="panel-note">What your contractors see when they sign in. SubSub stays in the background.</p>
+          <p className="panel-note">What your subcontractors see when they sign in. SubSub stays in the background.</p>
 
           <div className="brand-preview">
             <div className="bp-chrome">
@@ -23163,6 +23218,34 @@ body{background:var(--paper)}
 .cpack-err{margin:0 0 10px;font-size:12px;color:var(--red);font-weight:600}
 /* The sign-up form preview's own header, so the block has a name and its
    markup has somewhere to live that is not a second panel. */
+/* The same traffic light the dashboard card draws, on the tab where somebody
+   actually acts on it. Green on file, amber inside WARN_DAYS, red expired or
+   never added; hollow when nothing has been done to the row yet. */
+.mydoc{align-items:center}
+.mydoc-dot{width:16px;height:16px;border-radius:50%;flex:none;display:flex;align-items:center;
+  justify-content:center;color:#fff;background:transparent;border:1.5px solid var(--line);
+  margin-right:11px}
+.mydoc.tone-green .mydoc-dot{background:var(--brand);border-color:var(--brand)}
+.mydoc.tone-amber .mydoc-dot{background:var(--amber);border-color:var(--amber)}
+.mydoc.tone-red.ok .mydoc-dot{background:var(--red);border-color:var(--red)}
+.mydoc.tone-amber .cx-sub{color:var(--amber-ink);font-weight:600}
+.mydoc.tone-red.ok .cx-sub{color:var(--red);font-weight:600}
+/* Available to be hired. A real switch rather than a checkbox, because it is
+   the one control on this panel that changes who can reach you. */
+.open-hire{display:flex;align-items:flex-start;gap:13px;margin:0 0 16px;padding:13px 15px;
+  border:1px solid var(--line);border-radius:11px;background:var(--paper)}
+.open-hire.on{background:#f2f8f4;border-color:#d4e7db}
+.open-hire > div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.open-hire strong{font-size:13.5px;color:var(--ink)}
+.open-hire span{font-size:12.5px;color:var(--ink-soft);line-height:1.5}
+.oh-switch{flex:none;width:42px;height:24px;border-radius:20px;border:1px solid var(--line);
+  background:#dfe5e1;position:relative;cursor:pointer;padding:0;margin-top:1px;
+  transition:background .15s ease}
+.open-hire.on .oh-switch{background:var(--brand);border-color:var(--brand)}
+.oh-switch:disabled{opacity:.6;cursor:default}
+.oh-knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .15s ease}
+.open-hire.on .oh-knob{transform:translateX(18px)}
 .sf-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 0}
 .sf-head h5{margin:0;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
   color:var(--brand-dk)}

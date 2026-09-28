@@ -1,0 +1,19 @@
+-- 047: is this company offering to be hired?
+--
+-- Until now, being FINDABLE was a side effect of having filled a profile in:
+-- an email, a mobile or a licence number on the companies row, and any account
+-- typing one of those whole values could ask you to connect. That is right for
+-- a subcontractor, who is here to be hired. It is wrong for a general
+-- contractor, who signed up to run a roster and may have no interest at all in
+-- working under somebody else -- and nobody ever asked them.
+--
+-- So it becomes a thing somebody says out loud, the same shape as
+-- `scope_kind = 'labor_only'` and `owner_declared_at`: a value with a person
+-- and a time against it, rather than an absence nobody recorded.
+--
+-- NULL means NOT ANSWERED, and that is deliberate. The effective default is
+-- worked out from the account kind -- a subcontractor account is open, every
+-- hiring kind is closed -- so this column never has to be backfilled with a
+-- guess, and an account that has never seen the switch behaves the way its
+-- kind implies. Once somebody touches it, the column is the answer.
+ALTER TABLE companies ADD COLUMN open_to_hire INTEGER;

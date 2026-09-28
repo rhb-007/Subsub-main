@@ -404,6 +404,37 @@ refactor.
   party butting into somebody else's hiring. A test pins that the word SubSub
   does not appear on it.
 
+- **Being findable is something you say, not a side effect of filling a form
+  in.** An email, a mobile or a licence on the `companies` row was all it took:
+  any account typing one of those whole values could ask you to connect. That is
+  right for a subcontractor, who is here to be hired. It is wrong for a general
+  contractor who signed up to run a roster and may have no wish to work under
+  anybody — and nobody ever asked them.
+
+  Migration 047 adds `companies.open_to_hire`, and it is the same shape as
+  `scope_kind = 'labor_only'` and `owner_declared_at`: something somebody says
+  out loud rather than an absence nobody recorded. **NULL means not answered**,
+  never "no" — the effective default comes from the account kind, so the column
+  never needed a backfill guess and an account that has never seen the switch
+  behaves the way its kind implies. A subcontractor account is open; every
+  hiring kind is closed; a company with a contractor seat and no account of its
+  own is open, because that is somebody on a roster and being asked is the whole
+  loop. `openToHire` in the Worker is the one place that decides, and
+  `/api/my-company` returns the **effective** value so the browser renders one
+  answer instead of deriving a second.
+
+  **It gates the lookup, not the code.** A QR code is somebody handing their
+  details over, which is them asking; the switch is about strangers who hold
+  your address. The screen says so, because otherwise turning it off reads as
+  going dark everywhere.
+
+  And a closed account answers **like an address nobody here has ever seen** — a
+  bare `found: false`, no reason — rather than `no_account`. `no_account` says
+  "this address is on SubSub and nobody can answer for it", which is untrue here
+  and is a fact about them a stranger typing addresses has no business
+  collecting. Not findable is not findable, and the test compares the two
+  replies rather than trusting the wording.
+
 - **A roster entry is two records, and only one of them is yours.** `companies`
   is shared — one name, one contact, one licence, one set of document booleans,
   read by *every* account that engages them. `engagements` is per-account: the

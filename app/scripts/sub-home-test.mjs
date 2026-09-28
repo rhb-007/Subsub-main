@@ -52,6 +52,7 @@ let KIND = "subcontractor";
 const patched = [];
 const uploaded = [];
 const shared = [];
+const savedCompany = [];
 let MY_COMPANY = {
   companyId: "cmp_own_acc_orcas", company: "Orcas Roofing", contact: "Jason",
   email: "jason@orcas.test", license: null, docs: {}, sharesSent: 0,
@@ -67,6 +68,13 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   }
   if (path.startsWith("/api/account-by-subdomain/")) return [200, ACCOUNT(KIND)];
   if (path === "/api/account") return [200, ACCOUNT(KIND)];
+  if (path === "/api/my-company" && method === "PATCH") {
+    savedCompany.push(body);
+    if (body && body.openToHire !== undefined) {
+      MY_COMPANY = { ...MY_COMPANY, openToHire: !!body.openToHire, openAnswered: true };
+    }
+    return [200, { ok: true }];
+  }
   if (path === "/api/my-company") return [200, MY_COMPANY];
   if (path === "/api/subs") return [200, []];
   if (path === "/api/jobs") return [200, []];
@@ -456,6 +464,117 @@ try {
       await page.evaluate(() => !document.querySelector(".cpack .qsend-row input")));
     t.ck("and it says what unlocks it",
       await page.evaluate(() => !!document.querySelector(".cpack-empty")));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- being hired as a subcontractor is a switch, and it is off by default --");
+  {
+    // Findable used to be a side effect of having filled the profile in: an
+    // email, a mobile or a licence on the row, and any account typing one of
+    // those whole values could ask you to connect. Right for a subcontractor,
+    // wrong for a general contractor who signed up to run a roster -- and
+    // nobody ever asked them.
+    KIND = "general_contractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "OR", docs: {}, sharesSent: 0,
+      openToHire: false, openAnswered: false };
+    savedCompany.length = 0;
+    const { ctx, page, crashes } = await open();
+    await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
+      .find((b) => /^Compliance pack/i.test(b.innerText))?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".mydocs")) break; }
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => b.innerText.trim() === "Company")?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".open-hire")) break; }
+
+    const sw = await page.evaluate(() => {
+      const el = document.querySelector(".open-hire");
+      return el ? { on: el.classList.contains("on"),
+        checked: el.querySelector("[role=switch]")?.getAttribute("aria-checked"),
+        text: el.innerText.replace(/\s+/g, " ").trim(),
+        findable: !!document.querySelector(".hire-state") } : null;
+    });
+    t.ck("the switch is there", !!sw, String(sw));
+    t.ck("and a general contractor starts closed", sw?.on === false, JSON.stringify(sw));
+    t.ck("said in the markup too, not only the colour", sw?.checked === "false", String(sw?.checked));
+    t.ck("it names what it does",
+      /available to be hired as a subcontractor/i.test(sw?.text || ""), sw?.text);
+    // The QR code is somebody handing their details over, which is asking --
+    // so it keeps working whatever the lookup does.
+    t.ck("and says the QR code still works", /qr code still works/i.test(sw?.text || ""), sw?.text);
+    // Nothing to say about being findable while nobody can look you up.
+    t.ck("the findable line is hidden while it is off", sw?.findable === false, JSON.stringify(sw));
+
+    await page.evaluate(() => document.querySelector(".open-hire [role=switch]")?.click());
+    for (let n = 0; n < 30 && !savedCompany.length; n++) await wait(150);
+    t.ck("flipping it saves", savedCompany.length === 1, JSON.stringify(savedCompany));
+    t.ck("sending only the switch", Object.keys(savedCompany[0] || {}).join(",") === "openToHire",
+      JSON.stringify(savedCompany[0]));
+    t.ck("and turning it on", savedCompany[0]?.openToHire === true, JSON.stringify(savedCompany[0]));
+    await wait(400);
+    t.ck("the findable line appears once it is on",
+      await page.evaluate(() => !!document.querySelector(".hire-state")));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- and a subcontractor account starts open, because that is why they are here --");
+  {
+    KIND = "subcontractor";
+    // The SERVER decides the default from the account kind and sends the
+    // answer; the screen renders it rather than deriving a second opinion.
+    MY_COMPANY = { ...MY_COMPANY, openToHire: true, openAnswered: false };
+    const { ctx, page, crashes } = await open();
+    await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
+      .find((b) => /^Compliance pack/i.test(b.innerText))?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".mydocs")) break; }
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => b.innerText.trim() === "Company")?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".open-hire")) break; }
+    t.ck("a subcontractor starts open",
+      await page.evaluate(() => !!document.querySelector(".open-hire.on")));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- the pack tab carries the same lights as the card --");
+  {
+    KIND = "subcontractor";
+    const iso = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+    MY_COMPANY = { ...MY_COMPANY, state: "OR", openToHire: true,
+      docs: {
+        insurance: { fileName: "coi.pdf", expiresOn: iso(400) },
+        bond: { fileName: "bond.pdf", expiresOn: iso(9) },
+        w9: { fileName: "w9.pdf" },
+      }, sharesSent: 0 };
+    const { ctx, page, crashes } = await open();
+    await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
+      .find((b) => /^Compliance pack/i.test(b.innerText))?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".mydocs")) break; }
+    const rows = await page.evaluate(() =>
+      [...document.querySelectorAll(".mydoc")].map((d) => ({
+        label: d.querySelector("b")?.innerText.trim(),
+        cls: d.className, note: d.querySelector(".cx-sub")?.innerText.trim(),
+        tick: !!d.querySelector(".mydoc-dot svg") })));
+    const r = (re) => rows.find((x) => re.test(x.label || "")) || {};
+
+    // This tab is where somebody acts on their paperwork, so it cannot answer
+    // "is this current?" differently from the card that sent them here.
+    t.ck("plenty of room left is green", /tone-green/.test(r(/certificate of insurance/i).cls || ""),
+      JSON.stringify(r(/certificate of insurance/i)));
+    t.ck("and carries the tick", r(/certificate of insurance/i).tick === true,
+      JSON.stringify(r(/certificate of insurance/i)));
+    t.ck("inside the warning window is amber", /tone-amber/.test(r(/surety bond/i).cls || ""),
+      JSON.stringify(r(/surety bond/i)));
+    t.ck("which says how long is left", /\d+d\b/.test(r(/surety bond/i).note || ""),
+      JSON.stringify(r(/surety bond/i)));
+    t.ck("and what to do about it", /renew it/i.test(r(/surety bond/i).note || ""),
+      JSON.stringify(r(/surety bond/i)));
+    t.ck("never added is red", /tone-red/.test(r(/subcontractor agreement/i).cls || ""),
+      JSON.stringify(r(/subcontractor agreement/i)));
+    // A blank expiry means does not expire, never unknown.
+    t.ck("no expiry means green, not amber", /tone-green/.test(r(/W-9/i).cls || ""),
+      JSON.stringify(r(/W-9/i)));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

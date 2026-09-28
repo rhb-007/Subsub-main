@@ -419,6 +419,53 @@ const SITE = 5257;
     t.ck("   and it stuck",
       /Good on flat roofs/.test(
         db.prepare("SELECT notes FROM engagements WHERE id='eng_own'").get().notes || ""));
+
+    // 9. Being findable is a thing you say, not a side effect of a filled-in
+    // profile. A general contractor who signed up to run a roster is not
+    // offering to work under anybody, and nobody ever asked them.
+    //
+    // The switch gates the LOOKUP -- somebody typing your whole email, mobile
+    // or licence. It does not gate the QR code, because handing somebody that
+    // is you asking them.
+    db.exec(`INSERT INTO companies(id,company,email) VALUES
+        ('cmp_gc','A General Contractor','gc@findme.test'),
+        ('cmp_sub','A Subcontractor','sub@findme.test');
+      INSERT INTO accounts(id,name,subdomain,kind,company_id) VALUES
+        ('acc_gc','A General Contractor','agc','general_contractor','cmp_gc'),
+        ('acc_sub','A Subcontractor','asub','subcontractor','cmp_sub');
+      INSERT INTO users(id,name,email) VALUES ('u_gc','G','gc@findme.test'),('u_sb','S','sub@findme.test');
+      INSERT INTO memberships(id,user_id,account_id,role,company_id) VALUES
+        ('m_gc','u_gc','acc_gc','admin',NULL),
+        ('m_sb','u_sb','acc_sub','admin',NULL);`);
+
+    const look = async (email) => {
+      const r = await call(`/connect/lookup?email=${encodeURIComponent(email)}`);
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    };
+
+    // Unanswered column, so the default comes from the account kind.
+    const gc = await look("gc@findme.test");
+    t.ck("9. a general contractor is not findable by default", gc.body.found === false,
+      JSON.stringify(gc.body));
+    const sub = await look("sub@findme.test");
+    t.ck("   a subcontractor is, because that is why they are here",
+      sub.body.found === true, JSON.stringify(sub.body));
+
+    // The refusal must look like every other miss. A separate reason would
+    // say "this address is on SubSub but is not available", which is a fact
+    // about them a stranger typing addresses has no business collecting.
+    const nobody = await look("nobody@nowhere.test");
+    t.ck("   and a closed account answers exactly as an unknown address does",
+      gc.body.reason === nobody.body.reason || (!gc.body.reason && !nobody.body.reason),
+      `${gc.body.reason} vs ${nobody.body.reason}`);
+
+    // Answering the switch overrides the default, both ways.
+    db.exec(`UPDATE companies SET open_to_hire = 1 WHERE id = 'cmp_gc'`);
+    t.ck("   switching it on makes them findable",
+      (await look("gc@findme.test")).body.found === true);
+    db.exec(`UPDATE companies SET open_to_hire = 0 WHERE id = 'cmp_sub'`);
+    t.ck("   and a subcontractor may switch it off",
+      (await look("sub@findme.test")).body.found === false);
   } finally {
     globalThis.fetch = realFetch;
   }

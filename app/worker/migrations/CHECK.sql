@@ -96,6 +96,8 @@ SELECT
   -- branded page load looks an account up by subdomain, and two accounts
   -- holding one address is the worst row this table can carry.
   --
+  (SELECT COUNT(*) FROM pragma_table_info('companies')
+    WHERE name = 'open_to_hire')                                  AS m047_open_to_hire,
   -- Asked as "is subdomain unique, by any means" rather than "does an index
   -- with this name exist". A database built from schema.sql gets its
   -- uniqueness from the inline UNIQUE on the column, which SQLite implements
