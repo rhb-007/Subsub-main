@@ -1,0 +1,162 @@
+# Deploy the customer app (app.subsub.work and every *.subsub.work).
+#
+# This is the third of three, and the reason it exists is the reason the
+# console's workflow next door exists: something shipped SubSub that nobody
+# here could see, press, or find the failure of.
+#
+# The API has deploy-api.yml. The console has deploy-admin.yml. The customer
+# app -- the bundle every customer actually looks at -- had neither. It is a
+# Cloudflare Pages project, `subsub-app`, wired straight to this repository on
+# Cloudflare's side, so it builds on push with no record in the Actions tab.
+# When it stops shipping, GitHub is green, the API deploys fine, and the only
+# symptom is that the screens do not change. That is precisely what happened:
+# a day of content changes went in, every deploy here reported success, and
+# none of it reached anybody.
+#
+# A deploy nobody can press is a deploy nobody can fix. So this is a button:
+#
+#   Actions tab -> "Deploy customer app" -> Run workflow. Works from a phone.
+#
+# It needs the same four values deploy-admin.yml does -- CLOUDFLARE_API_TOKEN
+# and CLOUDFLARE_ACCOUNT_ID as repository secrets, plus VITE_SUPABASE_URL and
+# VITE_SUPABASE_ANON_KEY as secrets OR variables. The token additionally needs
+# "Account -> Cloudflare Pages -> Edit", which the Worker deploys do not use.
+#
+# ALWAYS THE ANON (publishable) KEY. Never service_role: this bundle is
+# downloaded by every customer and anything in it is public.
+#
+# Deliberately `workflow_dispatch` only, for now. A push trigger on a deploy
+# path that has never once been watched run would ship to every customer on
+# the strength of a guess about a project name. One green run establishes the
+# wiring; the push trigger goes in after that, and then this matches the other
+# two.
+name: Deploy customer app
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-app
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      # Pressing Run workflow is asking for a deploy, so a missing credential
+      # is a failure that names itself rather than a quiet no-op.
+      - name: Check the credentials are set
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          [ -n "$TOKEN" ]   || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "$ACCOUNT" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      - name: Lint
+        working-directory: app
+        run: npm run lint
+
+      # Refuse rather than ship. An app built without these has no sign-in
+      # configured, and deploying it to app.subsub.work would lock out every
+      # customer at once behind a form that cannot work -- which reads as the
+      # product being down, not as a missing repository value.
+      - name: Check the build variables are set
+        env:
+          SUPA_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
+          SUPA_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          missing=""
+          [ -n "$SUPA_URL" ] || missing="$missing VITE_SUPABASE_URL"
+          [ -n "$SUPA_KEY" ] || missing="$missing VITE_SUPABASE_ANON_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing build value(s):$missing"
+            echo "Add them under Settings -> Secrets and variables -> Actions, as"
+            echo "secrets or variables. Use the ANON (publishable) key, never the"
+            echo "service_role key -- this bundle is public."
+            exit 1
+          fi
+
+      # VITE_BUILD is deliberately UNSET. App.tsx reads
+      #   VITE_BUILD === "platform" ? "platform" : "tenant"
+      # so unset is the customer app. Setting it here would build the console.
+      - name: Build the customer app
+        working-directory: app
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
+        run: npm run build
+
+      # The mirror of the console's check, and it matters in the same way.
+      # Both builds write to dist/ and only VITE_BUILD decides which is in
+      # there, so it is proved AFTER the build rather than assumed from the
+      # variable. Deploying the console to app.subsub.work would put a staff
+      # sign-in in front of every customer.
+      #
+      # Two assertions, because absence alone is not proof: an empty or
+      # half-written bundle would satisfy "no console string" perfectly well.
+      - name: Check it is the customer app we built
+        working-directory: app
+        run: |
+          if grep -rqF "SubSub internal console" dist/assets/*.js; then
+            echo "::error::The built bundle is the CONSOLE, not the customer app."
+            echo "VITE_BUILD leaked in. Deploying this would put the staff sign-in"
+            echo "in front of every customer."
+            exit 1
+          fi
+          if ! grep -rqF "Powered by SubSub" dist/assets/*.js; then
+            echo "::error::The built bundle does not look like the customer app."
+            echo "The pasted application form's Powered by SubSub line is missing, so"
+            echo "this is not a complete tenant build."
+            exit 1
+          fi
+          echo "customer app built"
+
+      - name: Deploy
+        working-directory: app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler pages deploy dist \
+            --project-name=subsub-app \
+            --branch="${{ github.ref_name }}" \
+            --commit-dirty=true
+
+      # Which URL it landed on is the whole question, so say it rather than
+      # claiming success. Pages only serves the custom domain from its own
+      # configured production branch; any other branch is a preview, and a
+      # preview that reports "deployed" is how this went unnoticed in the
+      # first place.
+      - name: Say what happened
+        if: success()
+        run: |
+          {
+            echo "### subsub-app deployed from \`${{ github.sha }}\`"
+            echo ""
+            echo "Branch: \`${{ github.ref_name }}\`"
+            echo ""
+            echo "Check the Deploy step's output for the URL it went to. If it names a"
+            echo "\`*.pages.dev\` preview rather than app.subsub.work, then this branch is"
+            echo "not the Pages project's production branch and the live site has not"
+            echo "changed."
+          } >> "$GITHUB_STEP_SUMMARY"
