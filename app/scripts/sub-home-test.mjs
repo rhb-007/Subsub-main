@@ -74,6 +74,9 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     if (body && body.openToHire !== undefined) {
       MY_COMPANY = { ...MY_COMPANY, openToHire: !!body.openToHire, openAnswered: true };
     }
+    if (body && body.coverage !== undefined) {
+      MY_COMPANY = { ...MY_COMPANY, coverage: body.coverage };
+    }
     return [200, { ok: true }];
   }
   if (path === "/api/my-company") return [200, MY_COMPANY];
@@ -545,16 +548,19 @@ try {
     await ctx.close();
   }
 
-  console.log("\n-- being hired as a subcontractor is a switch, and it is off by default --");
+  console.log("\n-- being hired as a subcontractor is a switch, and saying no is honoured --");
   {
     // Findable used to be a side effect of having filled the profile in: an
     // email, a mobile or a licence on the row, and any account typing one of
-    // those whole values could ask you to connect. Right for a subcontractor,
-    // wrong for a general contractor who signed up to run a roster -- and
-    // nobody ever asked them.
+    // those whole values could ask you to connect. Nobody was ever asked
+    // whether they wanted that, so `open_to_hire` is the asking.
+    //
+    // The default is OPEN for every hireable kind -- this drives the screen
+    // off an account that has ANSWERED no, which is the only thing that
+    // closes a lookup.
     KIND = "general_contractor";
     MY_COMPANY = { ...MY_COMPANY, state: "OR", docs: {}, sharesSent: 0,
-      openToHire: false, openAnswered: false };
+      openToHire: false, openAnswered: true };
     savedCompany.length = 0;
     const { ctx, page, crashes } = await open();
     await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
@@ -572,7 +578,7 @@ try {
         findable: !!document.querySelector(".hire-state") } : null;
     });
     t.ck("the switch is there", !!sw, String(sw));
-    t.ck("and a general contractor starts closed", sw?.on === false, JSON.stringify(sw));
+    t.ck("and an account that said no reads closed", sw?.on === false, JSON.stringify(sw));
     t.ck("said in the markup too, not only the colour", sw?.checked === "false", String(sw?.checked));
     t.ck("it names what it does",
       /available to be hired as a subcontractor/i.test(sw?.text || ""), sw?.text);
@@ -595,11 +601,37 @@ try {
     await ctx.close();
   }
 
-  console.log("\n-- and a subcontractor account starts open, because that is why they are here --");
+  console.log("\n-- and an account nobody has asked starts open, whatever kind it is --");
+  {
+    // NULL means not answered, never no, and the effective default is open.
+    // A general contractor is the case that changed: the first version
+    // derived the default from the kind and closed them, which meant the
+    // growth loop quietly did not work for them until they found a switch
+    // nobody had told them about.
+    //
+    // The SERVER decides and sends the effective answer; the screen renders
+    // it rather than deriving a second opinion from the kind.
+    KIND = "general_contractor";
+    MY_COMPANY = { ...MY_COMPANY, openToHire: true, openAnswered: false };
+    const { ctx, page, crashes } = await open();
+    await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
+      .find((b) => /^Compliance pack/i.test(b.innerText))?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".mydocs")) break; }
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => b.innerText.trim() === "Company")?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".open-hire")) break; }
+    t.ck("a general contractor starts open",
+      await page.evaluate(() => !!document.querySelector(".open-hire.on")));
+    t.ck("and it is said in the markup too",
+      await page.evaluate(() => document.querySelector(".open-hire [role=switch]")
+        ?.getAttribute("aria-checked")) === "true");
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- and so does a subcontractor, because that is why they are here --");
   {
     KIND = "subcontractor";
-    // The SERVER decides the default from the account kind and sends the
-    // answer; the screen renders it rather than deriving a second opinion.
     MY_COMPANY = { ...MY_COMPANY, openToHire: true, openAnswered: false };
     const { ctx, page, crashes } = await open();
     await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
@@ -632,6 +664,7 @@ try {
       [...document.querySelectorAll(".mydoc")].map((d) => ({
         label: d.querySelector("b")?.innerText.trim(),
         cls: d.className, note: d.querySelector(".cx-sub")?.innerText.trim(),
+        exp: d.querySelector(".mydoc-exp")?.innerText.replace(/\s+/g, " ").trim(),
         tick: !!d.querySelector(".mydoc-dot svg") })));
     const r = (re) => rows.find((x) => re.test(x.label || "")) || {};
 
@@ -643,8 +676,8 @@ try {
       JSON.stringify(r(/certificate of insurance/i)));
     t.ck("inside the warning window is amber", /tone-amber/.test(r(/surety bond/i).cls || ""),
       JSON.stringify(r(/surety bond/i)));
-    t.ck("which says how long is left", /\d+d\b/.test(r(/surety bond/i).note || ""),
-      JSON.stringify(r(/surety bond/i)));
+    t.ck("which says how long is left",
+      /\d+ days? left/i.test(r(/surety bond/i).note || ""), JSON.stringify(r(/surety bond/i)));
     t.ck("and what to do about it", /renew it/i.test(r(/surety bond/i).note || ""),
       JSON.stringify(r(/surety bond/i)));
     t.ck("never added is red", /tone-red/.test(r(/subcontractor agreement/i).cls || ""),
@@ -652,6 +685,134 @@ try {
     // A blank expiry means does not expire, never unknown.
     t.ck("no expiry means green, not amber", /tone-green/.test(r(/W-9/i).cls || ""),
       JSON.stringify(r(/W-9/i)));
+
+    // And the date gets a column of its own. It was inside the status
+    // sentence, which is the one line nobody scans -- and "when does this run
+    // out" is the question the whole pack exists to answer.
+    t.ck("every row has an expiry column",
+      rows.length > 0 && rows.every((x) => !!x.exp), JSON.stringify(rows));
+    t.ck("and the column is labelled",
+      rows.every((x) => /expires/i.test(x.exp || "")), JSON.stringify(rows.map((x) => x.exp)));
+    t.ck("a dated document shows its date",
+      /\b\d{1,2}\b/.test((r(/certificate of insurance/i).exp || "").replace(/expires/i, "")),
+      JSON.stringify(r(/certificate of insurance/i)));
+    // An empty cell would read as missing data rather than as a document with
+    // no shelf life, which is the same mistake `docs.js` refuses in colour.
+    t.ck("and a blank expiry says so in words",
+      /does not expire/i.test(r(/W-9/i).exp || ""), JSON.stringify(r(/W-9/i)));
+    t.ck("nothing on file has nothing to show",
+      /—|-/.test((r(/subcontractor agreement/i).exp || "").replace(/expires/i, "")),
+      JSON.stringify(r(/subcontractor agreement/i)));
+
+    // Left-justified, which is a claim about four rows and not about one.
+    // `.mydoc` is `justify-content:space-between` with three children, so
+    // without `flex:1` on the label column the free space is shared BETWEEN
+    // the items and every row puts its date at a different x -- four labels
+    // of different lengths dragging four dates around with them. The label
+    // column has to be the one that grows.
+    //
+    // Asserting `text-align` would pass either way: the default computes to
+    // `start` already, so the rule is a guard rather than the fix, and a test
+    // on it is a test that cannot fail.
+    const cols = await page.evaluate(() =>
+      [...document.querySelectorAll(".mydoc")].map((d) => ({
+        label: Math.round(d.querySelector(".mydoc-main b").getBoundingClientRect().left),
+        exp: Math.round(d.querySelector(".mydoc-exp").getBoundingClientRect().left),
+      })));
+    t.ck("every label starts at the same x",
+      cols.length === 4 && new Set(cols.map((c) => c.label)).size === 1, JSON.stringify(cols));
+    t.ck("and so does every date, so they read as a table",
+      cols.length === 4 && new Set(cols.map((c) => c.exp)).size === 1, JSON.stringify(cols));
+    t.ck("with the dates to the right of the labels",
+      cols.every((c) => c.exp > c.label), JSON.stringify(cols));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- where they will work is asked on Company, and only while open --");
+  {
+    // A hiring account looking for somebody matches on trade AND area, so a
+    // hireable account with no coverage is a company that can be found and
+    // never matched. The roster has asked every contractor on it since the
+    // start; an account's own company row was the one that never was.
+    //
+    // The same panel the roster uses, not a second one: an account's own
+    // coverage and one they typed in are one record type.
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "WA", zip: "98101", docs: {}, sharesSent: 0,
+      openToHire: true, openAnswered: true,
+      coverage: { mode: "cities", cities: [], radii: [] } };
+    savedCompany.length = 0;
+    const { ctx, page, crashes } = await open();
+    await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
+      .find((b) => /^Compliance pack/i.test(b.innerText))?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".mydocs")) break; }
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => b.innerText.trim() === "Company")?.click());
+    for (let n = 0; n < 40; n++) { await wait(200); if (await page.$(".cov-toggle")) break; }
+
+    // Scoped to the panel the toggle is IN. `.portal-panel` nests, so a
+    // `find` over all of them lands on an ancestor and reads somebody else's
+    // chips -- which is the assertion-that-cannot-fail trap in miniature.
+    const cov = await page.evaluate(() => {
+      const el = document.querySelector(".cov-toggle")?.closest(".portal-panel");
+      return el ? { text: el.innerText.replace(/\s+/g, " ").trim(),
+        modes: [...el.querySelectorAll(".cov-toggle button")].map((b) => b.innerText.trim()),
+        cities: el.querySelectorAll(".pick-grid .pick").length,
+        copies: document.querySelectorAll(".cov-toggle").length } : null;
+    });
+    t.ck("the panel is there", !!cov, String(cov));
+    t.ck("and there is one of it", cov?.copies === 1, JSON.stringify(cov?.copies));
+    t.ck("it offers named cities", /specific cities/i.test((cov?.modes || []).join(" ")),
+      JSON.stringify(cov?.modes));
+    t.ck("or a radius from a ZIP", /zip radius/i.test((cov?.modes || []).join(" ")),
+      JSON.stringify(cov?.modes));
+    t.ck("with cities to pick", (cov?.cities || 0) > 0, String(cov?.cities));
+    // Nothing set is not a neutral state: it is a company nobody can be
+    // matched to, and the panel has to say so rather than look finished.
+    t.ck("and it says what no coverage costs",
+      /won.t be matched/i.test(cov?.text || ""), cov?.text);
+
+    await page.evaluate(() => {
+      const el = document.querySelector(".cov-toggle").closest(".portal-panel");
+      el.querySelector(".pick-grid .pick")?.click();
+    });
+    await wait(200);
+    await page.evaluate(() => {
+      const el = document.querySelector(".cov-toggle").closest(".portal-panel");
+      [...el.querySelectorAll("button")].find((b) => /^save/i.test(b.innerText.trim()))?.click();
+    });
+    for (let n = 0; n < 30 && !savedCompany.length; n++) await wait(150);
+    t.ck("saving sends it", savedCompany.length === 1, JSON.stringify(savedCompany));
+    // Its own question, so it saves on its own -- the profile above it should
+    // not have to be re-submitted to record where somebody works.
+    t.ck("and sends only the coverage",
+      Object.keys(savedCompany[0] || {}).join(",") === "coverage", JSON.stringify(savedCompany[0]));
+    t.ck("with a city on it",
+      (savedCompany[0]?.coverage?.cities || []).length === 1, JSON.stringify(savedCompany[0]));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- and not asked at all once they have closed the door --");
+  {
+    // Coverage on a company nobody can look up is a form nobody reads. This
+    // is the honest version of the rule the rest of the file keeps: a screen
+    // must not ask for something that buys the reader nothing.
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, openToHire: false, openAnswered: true };
+    const { ctx, page, crashes } = await open();
+    await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
+      .find((b) => /^Compliance pack/i.test(b.innerText))?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".mydocs")) break; }
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => b.innerText.trim() === "Company")?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".open-hire")) break; }
+    // The precondition, or "no coverage panel" is an assertion that cannot
+    // fail: it would also pass on a screen that never rendered.
+    t.ck("the Company section opened", await page.evaluate(() => !!document.querySelector(".open-hire")));
+    t.ck("and there is no coverage panel on it",
+      await page.evaluate(() => !document.querySelector(".cov-toggle")));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -773,12 +934,23 @@ try {
     }
     const pr = await page.evaluate(() => {
       const el = document.querySelector(".cx-code");
+      const panel = el?.closest(".portal-panel");
       return { there: !!el,
-        heading: /Your code/i.test(document.body.innerText),
+        heading: panel?.querySelector("h4")?.innerText.trim() || "",
+        note: panel?.querySelector(".panel-note")?.innerText.replace(/\s+/g, " ").trim() || "",
         copies: document.querySelectorAll(".cx-code").length };
     });
     t.ck("the QR code is on Profile", pr.there === true, JSON.stringify(pr));
-    t.ck("under its own heading", pr.heading === true, JSON.stringify(pr));
+    // Named the way the header menu names it. Two names for one object is how
+    // somebody concludes there are two of them.
+    t.ck("under the name the menu already uses", /^my qr code$/i.test(pr.heading), pr.heading);
+    // It is not "here is a code". It is the reason to hold it up: the whole
+    // send-your-pack loop in one gesture, on somebody else's job site.
+    t.ck("and it says what scanning it does",
+      /compliance pack/i.test(pr.note) && /schedule/i.test(pr.note) && /jobs/i.test(pr.note),
+      pr.note);
+    t.ck("told as the quickest way, not as a feature",
+      /quickest/i.test(pr.note), pr.note);
     t.ck("and only once", pr.copies === 1, String(pr.copies));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();

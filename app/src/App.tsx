@@ -14292,14 +14292,24 @@ function HireablePanel({ section = "profile", accountName, requests = [], focus 
                       {st.state === "missing" ? (isOptionalDoc(k)
                           ? "Not uploaded — only needed if a contractor sends you one"
                           : "Not uploaded")
-                        : st.state === "expired"
-                          ? `Expired ${formatExpiry(d.expiresOn)} — send a replacement`
+                        : st.state === "expired" ? "Expired — send a replacement"
                         : st.state === "expiring"
-                          ? `Expires ${formatExpiry(d.expiresOn)} · ${st.days === 0 ? "today" : `${st.days}d`} — renew it`
-                        : d.expiresOn ? `Current through ${formatExpiry(d.expiresOn)}`
+                          ? `Renew it — ${st.days === 0 ? "expires today" : `${st.days} day${st.days === 1 ? "" : "s"} left`}`
                         : d.fileName || "On file"}
                     </span>
                   </div>
+                  {/* The date in its own column. It was inside the status
+                      sentence, which is the one place nobody scans -- and
+                      "when does this run out" is the question the whole pack
+                      exists to answer. A blank expiry says so in words, because
+                      an empty cell reads as missing data rather than as a
+                      document that does not expire. */}
+                  <span className="mydoc-exp">
+                    <b>Expires</b>
+                    {st.state === "missing" ? "—"
+                      : d.expiresOn ? formatExpiry(d.expiresOn)
+                      : "Does not expire"}
+                  </span>
                   <label className="meas-upload compact">
                     <Upload size={13} /> {d ? "Replace" : "Upload"}
                     <input type="file" hidden onChange={async (e) => {
@@ -14329,6 +14339,21 @@ function HireablePanel({ section = "profile", accountName, requests = [], focus 
           </>}
 
           {!isDocs && <>
+          {/* Where they will work. The same panel, the same column and the same
+              shape the roster already uses for every contractor on it -- an
+              account's own coverage and one they typed in are one record type,
+              not two. It saves on its own, because it is its own question and
+              should not need the profile above it re-submitted.
+              Only worth asking while they are open to being hired: coverage on
+              a company nobody can find is a form nobody reads. */}
+          {openHire && loaded && (
+            <MyCoverage sub={{ ...loaded, coverage: loaded.coverage || { mode: "cities", cities: [], radii: [] } }}
+              onSave={async (coverage) => {
+                await api.saveMyCompany({ coverage });
+                setLoaded((x) => (x ? { ...x, coverage } : x));
+              }} />
+          )}
+
           <div className="form-sec">Asking to work with you{pending.length > 0 ? ` (${pending.length})` : ""}</div>
           <ConnectRequests requests={requests} onRespond={onRespond} onReload={onReload}
             emptyNote="Nobody has asked yet. When somebody does, it lands here and nothing happens until you answer." />
@@ -14672,11 +14697,14 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               can hire is a code for nothing. */}
           {canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
             <div className="portal-panel settings-panel">
-              <h4>Your code</h4>
+              {/* Named the way the header menu names it. The menu entry has
+                  said "My QR code" since it was added, and a panel calling the
+                  same thing something else is two names for one object. */}
+              <h4>My QR code</h4>
               <p className="panel-note">
-                Show this to a general contractor and have them scan it. It is the quickest way
-                for them to get your compliance pack, see when you are free and send you work —
-                without anybody spelling out an email address. You still decide, on <b>Company</b>.
+                Show this to a general contractor and have them scan it. This is the quickest and
+                easiest way for them to get your compliance pack as well as view your schedule and
+                assign you new jobs!
               </p>
               <ConnectCode />
             </div>
@@ -14895,13 +14923,18 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               preview whose address is not the address of the thing it previews
               is worse than one with no address at all. */}
           <div className="sf-head">
-            <h5>Sign up form</h5>
+            <h5>Hosted sign up form</h5>
             <button type="button" className="embed-code-btn" onClick={() => setApplyCode(true)}
               title="See the code and what it looks like"
               aria-label="See the code and what it looks like">
               <Code2 size={15} />
             </button>
           </div>
+          <p className="panel-note sf-note">
+            Below is the hosted sign up form that drops subcontractor entries directly into SubSub,
+            where you can vet them, read their compliance packs, see their availability and schedule
+            them for jobs. Nothing here needs hosting or a plugin.
+          </p>
           <div className="theme-preview" style={themeVars(th)}>
             <div className="tp-bar">
               <span>{slug || "yourcompany"}.subsub.work/?apply=1</span>
@@ -23093,10 +23126,15 @@ body{background:var(--paper)}
 .mydocs{display:flex;flex-direction:column;margin-bottom:16px}
 .mydoc{display:flex;gap:12px;align-items:center;justify-content:space-between;
   padding:10px 0;border-top:1px solid var(--line)}
-.mydoc-main{min-width:0;display:flex;flex-direction:column;gap:2px}
+.mydoc-main{min-width:0;display:flex;flex-direction:column;gap:2px;flex:1;text-align:left}
 .mydoc-main b{font-size:13.5px}
 .mydoc.bad .cx-sub{color:#a3342a;font-weight:700}
-.meas-upload.compact{margin:0;padding:6px 11px;font-size:12px;flex:none}
+/* Fixed width, because the label alternates between Upload and Replace and
+   the row is justify-content:space-between: a six-pixel difference in the
+   LAST item moves the expiry column of that one row, and a column that is
+   almost aligned reads as a mistake rather than as a table. */
+.meas-upload.compact{margin:0;padding:6px 11px;font-size:12px;flex:none;
+  width:104px;box-sizing:border-box}
 /* An account you hold a seat in, with what you are there under the name. */
 .switch-acct{align-items:flex-start}
 .sw-main{display:flex;flex-direction:column;gap:1px;min-width:0;text-align:left}
@@ -23261,6 +23299,18 @@ body{background:var(--paper)}
    actually acts on it. Green on file, amber inside WARN_DAYS, red expired or
    never added; hollow when nothing has been done to the row yet. */
 .mydoc{align-items:center}
+/* The expiry gets a column of its own rather than being buried in the status
+   line, because "when does this run out" is the question the whole pack is
+   for and it was the one thing you had to read a sentence to find. Fixed
+   width so four rows line up as a table; it collapses on a phone, where a
+   column that narrow is a column of wrapped fragments. */
+.mydoc-exp{flex:none;width:136px;text-align:right;font-size:12.5px;color:var(--ink-soft);
+  font-variant-numeric:tabular-nums}
+.mydoc-exp b{display:block;font-size:10px;font-weight:800;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-soft);opacity:.7}
+.mydoc.tone-amber .mydoc-exp{color:var(--amber-ink);font-weight:600}
+.mydoc.tone-red.ok .mydoc-exp{color:var(--red);font-weight:600}
+@media (max-width: 620px){ .mydoc-exp{display:none} }
 .mydoc-dot{width:16px;height:16px;border-radius:50%;flex:none;display:flex;align-items:center;
   justify-content:center;color:#fff;background:transparent;border:1.5px solid var(--line);
   margin-right:11px}
@@ -23288,7 +23338,12 @@ body{background:var(--paper)}
 .sf-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 0}
 .sf-head h5{margin:0;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
   color:var(--brand-dk)}
-.sf-head + .theme-preview{margin-top:8px}
+/* The description sits between the heading and the picture now, so the old
+   adjacent-sibling rule stopped matching and nothing replaced it -- a margin
+   set by a selector that no longer selects anything is a gap that silently
+   went back to the browser's default. */
+.sf-head + .sf-note{margin:7px 0 0}
+.sf-note + .theme-preview{margin-top:10px}
 .embed-code-btn{flex:none;display:inline-flex;align-items:center;justify-content:center;
   width:32px;height:32px;border-radius:8px;border:1px solid var(--line);background:var(--paper);
   color:var(--ink-soft);cursor:pointer}

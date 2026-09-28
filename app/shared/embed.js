@@ -137,7 +137,11 @@ ${chips}
     <p class="ss-done-sub">We look forward to working with you.</p>
     <p class="ss-done-sig">&mdash; The ${esc(name)} team</p>
   </div>
-  <p class="ss-by">Powered by <a href="https://subsub.work" target="_blank" rel="noopener">SubSub</a></p>
+  <a class="ss-by" href="https://subsub.work" target="_blank" rel="noopener"
+    aria-label="Powered by SubSub — visit subsub.work">
+    <span>Powered by</span>
+    <svg viewBox="36 62 502 114" height="13" role="img" aria-hidden="true" fill="currentColor"><path d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/><path d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/><path d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/><path d="M159.95,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C178.27,159.09,166.67,155.94,159.95,151.25z"/><path d="M281.36,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.82,11.47c5.49,0,10-3.63,10-12.55v-25.59H281.36z"/><path d="M345.6,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C333.93,103.69,345.6,114.19,345.6,131.05z M326.78,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S326.78,139.19,326.78,131.05z"/><path d="M345.41,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C363.74,159.09,352.13,155.94,345.41,151.25z"/><path d="M466.81,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.83,11.47c5.49,0,10-3.63,10-12.55v-25.59H466.81z"/></svg>
+  </a>
 </div>
 <style>
 #subsub-apply .ss-form{display:flex;flex-direction:column;gap:14px;max-width:460px;
@@ -192,11 +196,15 @@ ${chips}
   color:#16241d !important}
 #subsub-apply .ss-done b{color:#16241d}
 /* Ours, and not the customer's to remove -- the same reason the hosted pages
-   carry it. Small, last, and a link rather than a logo file, because a
-   snippet that fetches an image is a snippet with a dependency. */
-#subsub-apply .ss-by{margin:14px 0 0;max-width:460px;text-align:center;font-size:11.5px;
-  opacity:.6}
-#subsub-apply .ss-by a{color:inherit;font-weight:600}
+   carry it. The real mark, drawn INLINE rather than fetched: a snippet that
+   loads an image is a snippet with a dependency, and one that breaks leaves a
+   broken-image icon on somebody's website. Mono, so it takes the colour of
+   whatever page it lands on instead of asserting ours. */
+#subsub-apply .ss-by{display:flex;align-items:center;justify-content:center;gap:6px;
+  margin:16px 0 0;max-width:460px;font-size:11.5px;opacity:.55;color:inherit;
+  text-decoration:none}
+#subsub-apply .ss-by:hover{opacity:.9}
+#subsub-apply .ss-by svg{height:13px;width:auto;display:block;flex:none}
 </style>
 <script>
 (function () {

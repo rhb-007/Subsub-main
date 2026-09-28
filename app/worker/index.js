@@ -2092,13 +2092,21 @@ async function ensureAccountCompany(env, accountId) {
 // be hired. Wrong for a general contractor, who signed up to run a roster and
 // may have no wish to work under anybody -- and was never asked.
 //
-// `open_to_hire` NULL means NOT ANSWERED, never "no". The effective default
-// comes from what kind of account owns the row: a subcontractor account is
-// open, every hiring kind is closed, and a company with a contractor seat but
-// no account of its own is open, because that is somebody on a roster and
-// being asked is the whole loop. So the column never needed a backfill guess,
-// and an account that has never seen the switch behaves the way its kind
-// implies.
+// `open_to_hire` NULL means NOT ANSWERED, never "no", and the effective
+// default is OPEN for everybody.
+//
+// The first version defaulted a general contractor to closed, on the reasoning
+// that somebody who signed up to run a roster is not offering to work under
+// anybody. That was the wrong way round. Since 031 every hireable account HAS
+// a company row precisely so it can be hired, the whole growth loop is a
+// contractor being found by somebody who already holds their address, and a
+// general contractor who takes overflow work from another general contractor
+// is the ordinary case rather than the odd one. Defaulting them out meant the
+// product quietly did not work for them until they found a switch nobody told
+// them about.
+//
+// So: open unless they say otherwise, which is what the column is for. Closing
+// it is one tap and it is theirs to make.
 async function openToHire(env, companyId) {
   let row;
   try {
@@ -2115,9 +2123,7 @@ async function openToHire(env, companyId) {
   }
   if (!row) return false;
   if (row.flag !== null && row.flag !== undefined) return !!row.flag;
-  // Not answered. No owning account means a seat on somebody's roster: open.
-  if (!row.kind) return true;
-  return row.kind === "subcontractor";
+  return true;
 }
 
 async function companyHasLogin(env, companyId) {
@@ -2513,6 +2519,19 @@ const myCompanyToJs = (co) => ({
   city: co.city || "",
   state: co.state || "",
   zip: co.zip || "",
+  // Where they are willing to work. Same column and same shape the roster
+  // uses for everybody else -- named cities, or travel radii from ZIPs -- so
+  // an account's own coverage and a contractor they typed in are one record
+  // type and not two.
+  //
+  // NORMALISED, not merely parsed. The column is `TEXT NOT NULL DEFAULT '{}'`,
+  // so a company nobody has answered for reads back as `{}` -- which is
+  // truthy, so every `coverage || <default>` downstream keeps it, and the
+  // panel then indexes into `.cities` on an object that has none. Sending the
+  // whole shape is the same rule `inheritedShape` follows for `assignments`:
+  // empty, never absent.
+  coverage: validCoverage(parseJson(co.coverage, null))
+    || { mode: "cities", cities: [], radii: [] },
 });
 
 app.get("/api/my-company", requireRole("admin", "pm"), async (c) => {
@@ -2592,6 +2611,15 @@ app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
   // The switch. Its own write, because it is the one field here that can be
   // sent alone -- flipping it must not require a whole profile, and must not
   // trip "nothing_to_change" or "name_required" on the way.
+  // Coverage, on its own like the switch: it is edited by its own panel and
+  // must not need a whole profile sent with it.
+  if (b.coverage !== undefined) {
+    const cov = validCoverage(b.coverage);
+    if (!cov) return c.json({ error: "invalid_coverage" }, 400);
+    await c.env.DB.prepare(`UPDATE companies SET coverage = ? WHERE id = ?`)
+      .bind(JSON.stringify(cov), companyId).run();
+  }
+
   if (b.openToHire !== undefined) {
     try {
       await c.env.DB.prepare(`UPDATE companies SET open_to_hire = ? WHERE id = ?`)
@@ -2607,7 +2635,7 @@ app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
   const set = Object.entries(fields).filter(([, v]) => v !== undefined);
   if (!set.length) {
     // Answering only the switch is a complete request, not an empty one.
-    if (b.openToHire !== undefined) return c.json({ ok: true });
+    if (b.openToHire !== undefined || b.coverage !== undefined) return c.json({ ok: true });
     return c.json({ error: "nothing_to_change" }, 400);
   }
   // A company row with no name is not a thing anybody can be shown.
@@ -3806,6 +3834,30 @@ const HIRING_KINDS = ["general_contractor", "property_manager", "building_owner"
 // renders from. Kept here too because the browser's copy is a convenience and
 // this is the one that decides what is storable: an id the app cannot render
 // is worse stored than rejected.
+// Where a company will work: named cities, or travel radii from ZIPs. One or
+// the other, never both -- that has been the shape since the roster's own
+// picker and it is what `coversJob` reads.
+//
+// Validated rather than trusted because this lands on a shared row: a string
+// where an array belongs breaks every screen that maps it, and a thousand
+// cities is somebody using a text box as storage.
+function validCoverage(v) {
+  if (!v || typeof v !== "object") return null;
+  const mode = v.mode === "radius" ? "radius" : "cities";
+  const cities = Array.isArray(v.cities)
+    ? v.cities.map((c) => String(c || "").trim().slice(0, 80)).filter(Boolean).slice(0, 60)
+    : [];
+  const radii = Array.isArray(v.radii)
+    ? v.radii.map((r) => ({
+        zip: String(r?.zip || "").trim().slice(0, 12),
+        miles: Math.max(1, Math.min(500, Number(r?.miles) || 0)),
+      })).filter((r) => r.zip && r.miles).slice(0, 20)
+    : [];
+  // Empty is a real answer -- "I have not said yet" -- and must not be a 400.
+  return mode === "radius" ? { mode, cities: [], radii } : { mode, cities, radii: [] };
+}
+
+
 const TRADE_IDS = new Set([
   "roofing", "siding", "windows_doors", "gutters", "soffit_fascia", "coping", "masonry", "solar",
   "framing", "concrete", "foundation", "excavation", "demolition",

@@ -171,13 +171,24 @@ console.log("\n-- and it actually works in a browser --");
     // fetches a logo file is a snippet with a dependency.
     const by = await page.evaluate(() => {
       const el = document.querySelector("#subsub-apply .ss-by");
-      return el ? { text: el.innerText.trim(), href: el.querySelector("a")?.getAttribute("href"),
+      return el ? { text: el.innerText.trim(), href: el.getAttribute("href"),
+        label: el.getAttribute("aria-label"),
+        svg: !!el.querySelector("svg"),
+        paths: el.querySelectorAll("svg path").length,
         img: !!el.querySelector("img") } : null;
     });
-    t.ck("it carries a Powered by SubSub line", /powered by subsub/i.test(by?.text || ""),
-      JSON.stringify(by));
+    t.ck("it carries a Powered by line", /powered by/i.test(by?.text || ""), JSON.stringify(by));
     t.ck("linking to subsub.work", /^https:\/\/subsub\.work/.test(by?.href || ""), String(by?.href));
-    t.ck("and fetching no image to do it", by?.img === false, JSON.stringify(by));
+    // The real mark, not the word. It is our logo on somebody else's website
+    // and a text substitute is not the thing that was asked for.
+    t.ck("and the actual mark beside it", by?.svg === true, JSON.stringify(by));
+    t.ck("drawn in full", (by?.paths || 0) >= 7, String(by?.paths));
+    // Inline, never fetched: a snippet that loads an image is a snippet with a
+    // dependency, and one that breaks leaves a broken-image icon on their page.
+    t.ck("fetching no image to do it", by?.img === false, JSON.stringify(by));
+    // The word is only in the artwork now, so the name has to reach a screen
+    // reader some other way.
+    t.ck("and named for a screen reader", /subsub/i.test(by?.label || ""), String(by?.label));
     t.ck("asking only what the server requires",
       shape.required.join(",") === "company,contact,email", JSON.stringify(shape.required));
     t.ck("with the trades as chips, like the hosted form",

@@ -194,6 +194,33 @@ refactor.
   still on amber rows. A colour set twice in one stylesheet is a colour decided
   by ordering, so nothing below the tone block may re-declare a dot background.
 
+  **And on the Compliance pack tab the date gets a column of its own.** It was
+  inside the status sentence, which is the one line nobody scans, and *when does
+  this run out* is the question the whole pack exists to answer. Three things
+  about it are decisions rather than layout. A blank expiry **says so in words**
+  — an empty cell reads as missing data rather than as a document with no shelf
+  life, which is the same mistake `docs.js` refuses in colour. It is **hidden
+  under 620px**, because a 136px column on a phone is a column of wrapped
+  fragments. And the status line beside it keeps only what the date cannot say:
+  *Expired — send a replacement*, *Renew it — 9 days left*.
+
+  **"Left-justify" is a claim about four rows, not about one.** `.mydoc` is
+  `justify-content:space-between` with three children, so the free space is
+  shared **between** the items: without `flex:1` on the label column every row
+  put its label — and its date — at a different x, which is what "centred" looked
+  like in the report. The label column is the one that grows; the date column and
+  the action button are both fixed.
+
+  The action button had to be fixed **width**, not just `flex:none`, because its
+  label alternates between *Upload* and *Replace* — and a six-pixel difference in
+  the **last** item of a `space-between` row moves the expiry column of that one
+  row. A column that is almost aligned reads as a mistake rather than as a table.
+
+  The test measures `getBoundingClientRect().left` across all four rows. Asserting
+  `text-align` instead would have passed either way, since the default already
+  computes to `start` — the rule is a guard, not the fix, and a test on it is a
+  test that cannot fail. Which is what the first version of it was.
+
 - **A signed subcontractor agreement is optional, because it is the hiring
   account's own paperwork.** Insurance, a bond and a W-9 are the subcontractor's
   own records and every client wants the same three. An agreement is the other
@@ -317,6 +344,14 @@ refactor.
   a screen that never rendered is an assertion that cannot fail, and the first
   version of it was exactly that.
 
+  **It is called what the menu calls it, and it says what scanning it does.**
+  The panel headed *Your code* over the entry headed *My QR code* is two names
+  for one object, which is how somebody concludes there are two of them. And the
+  note under it described the artifact rather than the reason to hold it up: it
+  now names the compliance pack, the schedule and the jobs — the whole
+  send-your-pack loop in one gesture, on somebody else's job site — because that
+  is the sentence that makes anybody get their phone out.
+
 - **The pasted form is the hosted form, or it is a different product.** The
   snippet was one flat box with a multi-select for trades; `/?apply=1` is two
   steps with chips, a city and a ZIP. Somebody who saw one and then followed a
@@ -335,9 +370,18 @@ refactor.
   and then telling them the first box was wrong is how a form gets abandoned.
 
   And it carries **Powered by SubSub**, last and small, for the reason the
-  hosted pages do: the name is not the customer's to remove. A text link, never
-  an image — a snippet that fetches a logo file is a snippet with a dependency,
-  and every rule in it exists to keep it from needing anything.
+  hosted pages do: the name is not the customer's to remove.
+
+  It is the **real mark, drawn inline**, not the word set in the customer's
+  font. Two words in whatever typeface their page happens to use is not a logo,
+  and this is the one place SubSub is seen by somebody who has never heard of
+  it. **Still never an `<img>`** — that rule has not moved and is the whole
+  reason the paths are pasted in: a snippet that fetches a logo file is a
+  snippet with a dependency, and every rule in it exists to keep it from needing
+  anything. `fill="currentColor"`, so it takes the colour of the page it lands
+  on rather than importing a palette, and `aria-hidden` on the `svg` with the
+  sentence on the link, because a decorative mark that also announces itself
+  reads the name twice.
 
 - **The greeting knows the hour, and the weather is decoration.** "Good to see
   you" was hand-typed into five dashboards and said the same thing at 6am and
@@ -387,6 +431,21 @@ refactor.
   The test scopes its selectors (`.embed-strip .embed-code-btn`,
   `.sf-head .embed-code-btn`). A bare `.embed-code-btn` found whichever existed
   and passed either way — which it did, silently, the first time this moved.
+
+  **It is titled *Hosted sign up form*, and the title is not the description.**
+  A heading says what the block **is** and nothing about why anybody would use
+  it, so the paragraph under it says where an entry lands — *directly into
+  SubSub, where you can vet them, read their compliance packs, see their
+  availability and schedule them for jobs* — and then answers the objection the
+  word "hosted" raises, which is *nothing here needs hosting or a plugin*.
+
+  **A selector that no longer selects anything is a gap that went back to the
+  browser's default.** The spacing was `.sf-head + .theme-preview`, and the
+  moment a paragraph came between the two the rule stopped matching — silently,
+  because a wrong margin looks like a design choice. It is `.sf-head + .sf-note`
+  and `.sf-note + .theme-preview` now, and the test reads the computed margins
+  rather than the rule, because only the computed value knows whether the
+  selector fired.
 
 - **Nobody reads pasted HTML on a page; they copy it.** Eighty lines of markup
   sat inline in the embed panel, which was most of why the tab scrolled forever,
@@ -451,22 +510,30 @@ refactor.
 
 - **Being findable is something you say, not a side effect of filling a form
   in.** An email, a mobile or a licence on the `companies` row was all it took:
-  any account typing one of those whole values could ask you to connect. That is
-  right for a subcontractor, who is here to be hired. It is wrong for a general
-  contractor who signed up to run a roster and may have no wish to work under
-  anybody — and nobody ever asked them.
+  any account typing one of those whole values could ask you to connect. Nobody
+  was ever asked whether they wanted that, which is what the column is for.
 
   Migration 047 adds `companies.open_to_hire`, and it is the same shape as
   `scope_kind = 'labor_only'` and `owner_declared_at`: something somebody says
   out loud rather than an absence nobody recorded. **NULL means not answered**,
-  never "no" — the effective default comes from the account kind, so the column
-  never needed a backfill guess and an account that has never seen the switch
-  behaves the way its kind implies. A subcontractor account is open; every
-  hiring kind is closed; a company with a contractor seat and no account of its
-  own is open, because that is somebody on a roster and being asked is the whole
-  loop. `openToHire` in the Worker is the one place that decides, and
-  `/api/my-company` returns the **effective** value so the browser renders one
-  answer instead of deriving a second.
+  never "no", and the effective default is **open, for every hireable kind** —
+  so the column never needed a backfill guess. `openToHire` in the Worker is
+  the one place that decides, and `/api/my-company` returns the **effective**
+  value so the browser renders one answer instead of deriving a second.
+
+  **The first version derived the default from the account kind and closed a
+  general contractor**, on the reasoning that somebody who signed up to run a
+  roster is not offering to work under anybody. That was the wrong way round,
+  and it is worth keeping the reasoning next to the correction. Since 031 every
+  hireable account **has** a company row precisely so it can be hired; the whole
+  growth loop is a contractor being found by somebody who already holds their
+  address; and a general contractor taking overflow from another general
+  contractor is the ordinary case rather than the odd one. Defaulting them out
+  meant the product quietly did not work for them until they found a switch
+  nobody had told them about — which is the never-told-about-it failure this
+  file catches in half a dozen other places, arrived at from the opposite
+  direction. **A default that has to be discovered to be corrected is not a
+  default, it is a trap.** Closing it is one tap and it is theirs to make.
 
   **It gates the lookup, not the code.** A QR code is somebody handing their
   details over, which is them asking; the switch is about strangers who hold
@@ -479,6 +546,39 @@ refactor.
   and is a fact about them a stranger typing addresses has no business
   collecting. Not findable is not findable, and the test compares the two
   replies rather than trusting the wording.
+
+- **Being findable and being matchable are two halves, and the account's own
+  company row only ever had the first.** A hiring account looks for somebody by
+  **trade and area**, and `coversJob` reads `companies.coverage` to decide. The
+  roster has asked that of every contractor on it since the start — the panel,
+  the column and the picker all exist. The one company row nobody was ever
+  asked about is the account's own, so a hireable account could be looked up,
+  connected to, and then matched to nothing.
+
+  `MyCoverage` on Account → Company, **the same component the roster uses**, not
+  a second one: an account's own coverage and a contractor they typed in are one
+  record type. It saves **on its own** — it is its own question, and requiring
+  the profile above it to be re-submitted to record where somebody works is the
+  shape this file already refused for the open-to-hire switch, so
+  `PATCH /api/my-company` takes `coverage` alone and must not trip
+  `nothing_to_change` on the way past the profile fields.
+
+  It is shown **only while the account is open to being hired**, because
+  coverage on a company nobody can look up is a form nobody reads.
+
+  Two traps, both of which the tests now pin. `validCoverage` runs on the way
+  **in**, because this lands on a shared row and the roster reads the raw
+  column: `{cities: "Seattle"}` stored as written makes `coverageLabel` call
+  `.join()` on a string, which is a white screen on somebody else's screen. So
+  the assertion has to read **the column**, not the route's own answer — the
+  read path normalises too, and checking `/my-company` would report a clean
+  shape over a stored one that is not.
+
+  And the read path normalises rather than merely parsing, because the column
+  is `TEXT NOT NULL DEFAULT '{}'`. `{}` is **truthy**, so every
+  `coverage || <default>` downstream keeps it and the panel then indexes into
+  `.cities` on an object that has none. Same rule as `inheritedShape`'s
+  `assignments`: **empty, never absent, and never half a shape**.
 
 - **A roster entry is two records, and only one of them is yours.** `companies`
   is shared — one name, one contact, one licence, one set of document booleans,

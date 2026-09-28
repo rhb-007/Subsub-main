@@ -262,6 +262,54 @@ const SITE = 5257;
       typeof myCompanyId === "string" && myCompanyId.startsWith("cmp_own_"),
       String(myCompanyId));
 
+    // 2b. Where they will work. A hiring account matches on trade AND area,
+    //     so a hireable company with no coverage can be found and never
+    //     matched -- and this row was the one the product never asked.
+    //
+    //     It comes back as an OBJECT even when nothing has been said, because
+    //     the panel indexes into `.cities` on first render and `undefined`
+    //     there is the white screen this file has produced twice.
+    t.ck("2b. coverage comes back even before anything is set",
+      mineBody.coverage && Array.isArray(mineBody.coverage.cities),
+      JSON.stringify(mineBody.coverage));
+
+    //     It saves ALONE. It is its own panel and its own question, so it must
+    //     not trip nothing_to_change on the way past the profile fields.
+    const cov = await call("/my-company", { method: "PATCH",
+      body: JSON.stringify({ coverage: { mode: "cities", cities: ["Seattle", "Kent"], radii: [] } }) });
+    t.ck("   and saves on its own", cov.status === 200, String(cov.status));
+    const back = await (await call("/my-company")).json().catch(() => ({}));
+    t.ck("   and reads back", (back.coverage?.cities || []).join(",") === "Seattle,Kent",
+      JSON.stringify(back.coverage));
+
+    //     One shape or the other, never both. `coversJob` reads whichever the
+    //     mode names, so a row carrying cities AND radii would be matched by
+    //     half of itself depending on who asked.
+    const rad = await call("/my-company", { method: "PATCH",
+      body: JSON.stringify({ coverage: { mode: "radius", cities: ["Seattle"],
+        radii: [{ zip: "98101", miles: "30" }] } }) });
+    const radBack = await (await call("/my-company")).json().catch(() => ({}));
+    t.ck("   switching to a radius drops the cities", rad.status === 200
+      && (radBack.coverage?.cities || []).length === 0, JSON.stringify(radBack.coverage));
+    t.ck("   and keeps the miles as a number",
+      radBack.coverage?.radii?.[0]?.miles === 30, JSON.stringify(radBack.coverage));
+
+    //     It lands on a shared row, so it is validated rather than trusted: a
+    //     string where an array belongs breaks every screen that maps it.
+    //     Checked in the COLUMN, not in this route's own answer. The read
+    //     path normalises too, so asking /my-company would report a clean
+    //     shape over a stored one that is not -- and the roster reads the raw
+    //     row, where `coverageLabel` calls .join() on whatever is in it.
+    const junk = await call("/my-company", { method: "PATCH",
+      body: JSON.stringify({ coverage: { mode: "cities", cities: "Seattle" } }) });
+    const stored = db.prepare("SELECT coverage FROM companies WHERE id = ?").get(myCompanyId).coverage;
+    t.ck("   and a string where a list belongs is never stored as one",
+      Array.isArray(JSON.parse(stored).cities),
+      `${junk.status} ${stored}`);
+    const nope = await call("/my-company", { method: "PATCH",
+      body: JSON.stringify({ coverage: "everywhere" }) });
+    t.ck("   and a bare string is refused outright", nope.status === 400, String(nope.status));
+
     // 3. Upload. THE ONE THAT WAS BROKEN. mayWriteCompanyDocs asked "do I hire
     //    this company", and for yourself the answer is always no -- so a
     //    hireable account nobody had hired yet got a 404 uploading its own
@@ -420,9 +468,15 @@ const SITE = 5257;
       /Good on flat roofs/.test(
         db.prepare("SELECT notes FROM engagements WHERE id='eng_own'").get().notes || ""));
 
-    // 9. Being findable is a thing you say, not a side effect of a filled-in
-    // profile. A general contractor who signed up to run a roster is not
-    // offering to work under anybody, and nobody ever asked them.
+    // 9. Being findable is a thing you say, and NULL means nobody has said
+    // it yet -- so the effective default is open, for every hireable kind.
+    //
+    // The first version derived the default from the account kind and closed
+    // a general contractor. That was backwards: since 031 a hireable account
+    // has a company row precisely so it can be hired, and a general
+    // contractor taking overflow from another one is the ordinary case. It
+    // meant the product quietly did not work for them until they found a
+    // switch nobody had told them about.
     //
     // The switch gates the LOOKUP -- somebody typing your whole email, mobile
     // or licence. It does not gate the QR code, because handing somebody that
@@ -443,29 +497,37 @@ const SITE = 5257;
       return { status: r.status, body: await r.json().catch(() => ({})) };
     };
 
-    // Unanswered column, so the default comes from the account kind.
+    // Unanswered column on both, so both are open.
     const gc = await look("gc@findme.test");
-    t.ck("9. a general contractor is not findable by default", gc.body.found === false,
+    t.ck("9. a general contractor is findable by default", gc.body.found === true,
       JSON.stringify(gc.body));
     const sub = await look("sub@findme.test");
-    t.ck("   a subcontractor is, because that is why they are here",
+    t.ck("   and so is a subcontractor, because that is why they are here",
       sub.body.found === true, JSON.stringify(sub.body));
+
+    // Answering the switch overrides the default, and either kind may close.
+    db.exec(`UPDATE companies SET open_to_hire = 0 WHERE id = 'cmp_gc'`);
+    const gcShut = await look("gc@findme.test");
+    t.ck("   a general contractor may switch it off",
+      gcShut.body.found === false, JSON.stringify(gcShut.body));
+    db.exec(`UPDATE companies SET open_to_hire = 0 WHERE id = 'cmp_sub'`);
+    t.ck("   and so may a subcontractor",
+      (await look("sub@findme.test")).body.found === false);
 
     // The refusal must look like every other miss. A separate reason would
     // say "this address is on SubSub but is not available", which is a fact
     // about them a stranger typing addresses has no business collecting.
     const nobody = await look("nobody@nowhere.test");
     t.ck("   and a closed account answers exactly as an unknown address does",
-      gc.body.reason === nobody.body.reason || (!gc.body.reason && !nobody.body.reason),
-      `${gc.body.reason} vs ${nobody.body.reason}`);
+      gcShut.body.reason === nobody.body.reason
+        || (!gcShut.body.reason && !nobody.body.reason),
+      `${gcShut.body.reason} vs ${nobody.body.reason}`);
 
-    // Answering the switch overrides the default, both ways.
+    // And switching back on restores them, so the column is a preference and
+    // not a one-way door.
     db.exec(`UPDATE companies SET open_to_hire = 1 WHERE id = 'cmp_gc'`);
-    t.ck("   switching it on makes them findable",
+    t.ck("   switching it back on makes them findable again",
       (await look("gc@findme.test")).body.found === true);
-    db.exec(`UPDATE companies SET open_to_hire = 0 WHERE id = 'cmp_sub'`);
-    t.ck("   and a subcontractor may switch it off",
-      (await look("sub@findme.test")).body.found === false);
   } finally {
     globalThis.fetch = realFetch;
   }

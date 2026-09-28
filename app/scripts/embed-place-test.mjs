@@ -136,9 +136,31 @@ try {
     t.ck("this panel carries no second code button",
       await page.evaluate(() => !document.querySelector(".embed-strip .embed-code-btn")));
     t.ck("the Sign up form block is titled",
-      await page.evaluate(() => /sign up form/i.test(
+      await page.evaluate(() => /hosted sign up form/i.test(
         document.querySelector(".sf-head h5")?.innerText || "")),
       await page.evaluate(() => document.querySelector(".sf-head h5")?.innerText || ""));
+    // A title on its own says what the block IS and nothing about why anybody
+    // would use it. The description is the only place that says an entry here
+    // lands on the roster rather than in an inbox -- and that nothing has to
+    // be hosted, which is the objection somebody reading "hosted" will have.
+    const sfNote = await page.evaluate(() =>
+      document.querySelector(".sf-note")?.innerText.replace(/\s+/g, " ").trim() || "");
+    t.ck("and it says where an entry lands", /directly into SubSub/i.test(sfNote), sfNote);
+    t.ck("and what they can do with one",
+      /compliance pack/i.test(sfNote) && /availability/i.test(sfNote) && /schedule/i.test(sfNote),
+      sfNote);
+    t.ck("and answers the hosting question", /nothing here needs hosting/i.test(sfNote), sfNote);
+    // The heading, the description and the picture are one block. The rule
+    // that spaced them was `.sf-head + .theme-preview`, which stopped matching
+    // the moment a paragraph came between them.
+    const sfGap = await page.evaluate(() => {
+      const n = document.querySelector(".sf-note");
+      const p = document.querySelector(".sf-note + .theme-preview");
+      return n && p ? { note: getComputedStyle(n).marginBottom, prev: getComputedStyle(p).marginTop } : null;
+    });
+    t.ck("the description sits above the preview", !!sfGap, String(sfGap));
+    t.ck("and nothing left a default gap behind it",
+      sfGap && sfGap.note === "0px" && sfGap.prev === "10px", JSON.stringify(sfGap));
     // The address on the preview is the address of the thing it previews.
     t.ck("and its address bar is the form's own URL",
       await page.evaluate(() => /\/\?apply=1$/.test(
