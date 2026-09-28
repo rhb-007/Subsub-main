@@ -76,6 +76,21 @@ refactor.
   placeholder names one: a pre-filled wrong answer is worse than an empty
   box.
 
+- **A UBI is Washington's, so it is asked for in Washington and nowhere else.**
+  The Unified Business Identifier does not exist in the other fifty
+  jurisdictions. It is on the subcontractor's set-up checklist and on the
+  compliance-pack card **only when `companies.state` is `WA`**, because a row
+  nobody outside Washington can ever complete is a permanent to-do on their home
+  screen — the same unanswerable question this file already refuses at signup,
+  made worse by being undismissable.
+
+  Confirmed as a decision rather than an oversight, so a later pass that notices
+  the inconsistency and "fixes" it by showing the row everywhere is undoing
+  something deliberate. The licence beside it takes the opposite treatment for
+  the same reason: it is asked for everywhere, but **named** by state — *Add your
+  Washington contractor license #* — because "contractor license" means a
+  different document in each of them and the reader has exactly one in mind.
+
 - **Signing up never requires a licence, a UBI or a document.** Several
   states have no state contractor licence at all, so it was a question a real
   general contractor could not answer, and it cost signups for nothing.
@@ -1413,7 +1428,8 @@ refactor.
   so the closing screen cannot tell somebody to "sign in with the password you
   just chose" when there is not one.
 
-- **A subcontractor's set-up checklist is a different list, not a shorter one.**
+- **A subcontractor's set-up checklist is a different list, not a shorter one,
+  and the UBI row on it is Washington-only.**
   Theirs said *Bring your subcontractors in — 0 of 3*, *Approve their documents*
   and *Create your first job*: three things a roofer is not here to do, one of
   them reading as a quota they are already failing on a screen they have just
