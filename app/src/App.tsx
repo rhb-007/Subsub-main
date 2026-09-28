@@ -19942,6 +19942,28 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
           </button>
         )}
 
+        {/* A sign-in box with no way past it for somebody who has never been
+            here. Every other route into SubSub hands people a link -- an
+            invite, a pack, a QR code -- so the one person this page was
+            offering nothing to is the one who typed the address in, which is
+            the general contractor the marketing site is written for. Under
+            "Forgot password?" there was a password box, a Google button and a
+            dead end.
+
+            Only on SubSub's own front door. A customer's branded page has its
+            own answer directly above -- apply to work with THEM -- and adding
+            "or start your own SubSub account" beside it competes with the thing
+            that page exists to do. Signing up lives on the marketing site, so
+            this leaves the app rather than opening a view that does not exist
+            here, and it goes to the plans rather than straight into setup
+            because choosing one is the first question the form asks. */}
+        {brand.isSubSub && (
+          <a className="login-signup" href="https://subsub.work/pricing">
+            <span>Don&rsquo;t have an account?</span>
+            <b>See plans and sign up &#8250;</b>
+          </a>
+        )}
+
         {/* There was a "For tenants" block here explaining that tenants sign
             in with the same form, above, using the address they were invited
             at. It described the page it was on -- the form is right there
@@ -24442,9 +24464,13 @@ p.fld-note{margin:6px 0 0}
 .wl-themed .login-card{background:var(--wl-surface) !important;color:var(--wl-text) !important}
 .wl-themed .login-card h1,.wl-themed .login-card h2{color:var(--wl-text) !important}
 .wl-themed .btn-solid,.wl-themed .login-btn{background:var(--wl-accent) !important;color:var(--wl-btn-text) !important}
+/* Rendered as a <button> for the subcontractor apply flow, which stays in the
+   app, and as an <a> for the sign-up link, which leaves it. Same box either
+   way, so the anchor needs the underline and the inherited colour taken off. */
 .login-signup{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;
   margin-top:16px;padding:14px 16px;border-radius:10px;border:1px solid var(--line);
-  background:var(--paper);font-family:inherit;cursor:pointer;text-align:left}
+  background:var(--paper);font-family:inherit;cursor:pointer;text-align:left;
+  text-decoration:none;color:inherit;box-sizing:border-box}
 .login-signup > span{font-size:12px;color:var(--ink-soft)}
 .login-signup b{font-size:14.5px;font-weight:700;color:var(--wl-accent,var(--brand))}
 .login-signup:hover{border-color:var(--wl-accent,var(--brand));background:var(--card)}

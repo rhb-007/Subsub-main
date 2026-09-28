@@ -405,6 +405,32 @@ refactor.
   The link lands on `AuthLanding`, which already takes a new password twice and
   handles an expired one. That half was right; only the asking was wrong.
 
+  **And the page had no way past it for somebody with no account.** Under
+  *Forgot password?* there was a password box, a Google button and a dead end.
+  Every other route into SubSub hands people a link — an invite, a pack, a QR
+  code, a scanned code — so the one person this screen offered nothing to is the
+  one who **typed the address in**, which is exactly the general contractor the
+  whole marketing site is written for.
+
+  *Don't have an account? See plans and sign up* → `subsub.work/pricing`. Two
+  things about it are decisions rather than details. It is **only on SubSub's own
+  front door** (`brand.isSubSub`): a customer's branded page has its own answer
+  directly above it — *apply to work with them* — and a second call to action
+  beside that competes with the one thing a branded sign-in page exists to do.
+  And it **leaves the app**, because there is no signup form in this bundle at
+  all; it goes to the plans rather than straight into setup because choosing one
+  is the first question `get-started.html` asks.
+
+  The general rule, which is what made this worth a test of its own: **a link
+  from the app to the marketing site is a link across two origins, and nothing
+  builds both.** It resolves or it 404s with nothing in between. `test:discover`
+  now walks every `subsub.work/...` URL in `App.tsx` and checks it against the
+  files in this repo and `_redirects`. `/pricing` gets an explicit redirect
+  rather than resting on Cloudflare Pages' extensionless-URL default, because a
+  platform behaviour that is not in this repo is not something the signup funnel
+  should depend on — and a silent 404 there looks exactly like nobody wanting to
+  sign up.
+
   **And the form behind it answers three different problems, not one.** The page
   called Supabase's `/auth/v1/recover` straight from the browser, which answers
   200 for an address it has never seen — deliberately, so it cannot be walked to

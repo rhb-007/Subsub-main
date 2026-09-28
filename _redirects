@@ -8,3 +8,16 @@
 /privacy.html               /privacy-policy.html             301
 /terms.html                 /terms-of-use.html               301
 /subsub-landing.html        /                                301
+
+# Extensionless. Cloudflare Pages serves /pricing from pricing.html on its own,
+# but the sign-in page's "Don't have an account?" link is the one route into
+# this product for somebody who typed the address in -- so it does not rest on
+# a platform default that is not in this repo. Same for the four audience pages
+# and get-started, which are the other URLs said out loud.
+/pricing                    /pricing.html                    301
+/get-started                /get-started.html                301
+/book-a-demo                /book-a-demo.html                301
+/for-general-contractors    /for-general-contractors.html    301
+/for-property-managers      /for-property-managers.html      301
+/for-building-owners        /for-building-owners.html        301
+/for-portfolio-managers     /for-portfolio-managers.html     301

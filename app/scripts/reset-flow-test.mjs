@@ -208,6 +208,66 @@ try {
   t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
   const seen = await page.evaluate(() => document.body.innerText);
   t.ck("no escape sequence on screen", !/\\u[0-9a-f]{4}/i.test(seen), "");
+
+  // ---- and the way past it for somebody with no account at all ----------
+  //
+  // Under "Forgot password?" there was a password box, a Google button and
+  // nothing else. Every other route into SubSub hands people a link -- an
+  // invite, a pack, a QR code -- so the one person this page offered nothing to
+  // is the one who typed the address in, which is the general contractor the
+  // whole marketing site is written for.
+  console.log("\n-- SubSub's own front door offers a way to sign up --");
+  {
+    // app.subsub.work: detectSubdomain() returns null for "app", so this is the
+    // generic brand rather than any customer's.
+    const r = await visitApp(browser, { host: "app", webPort: WEB,
+      viewport: { width: 900, height: 1200 } });
+    await wait(2600);
+    const link = await r.page.evaluate(() => {
+      const a = document.querySelector("a.login-signup");
+      return a ? { href: a.getAttribute("href"),
+        text: a.innerText.replace(/\s+/g, " ").trim() } : null;
+    });
+    t.ck("there is one", !!link, String(link));
+    t.ck("it says what it is for", /don.t have an account/i.test(link.text || ""), String(link.text));
+    t.ck("and where it goes", /sign up/i.test(link.text || ""), String(link.text));
+    // The plans, not straight into setup: picking one is the first question the
+    // form asks, and it is the marketing site's job because there is no signup
+    // form in this bundle at all.
+    t.ck("it goes to the plans on the marketing site",
+      link.href === "https://subsub.work/pricing", String(link.href));
+    t.ck("it is an anchor, so it leaves the app rather than opening a dead view",
+      await r.page.evaluate(() => document.querySelector(".login-signup")?.tagName === "A"));
+    // It is a card, not a bare underlined link dropped into the layout.
+    t.ck("and it is not drawn as raw link text",
+      await r.page.evaluate(() => {
+        const a = document.querySelector("a.login-signup");
+        const cs = a && getComputedStyle(a);
+        return !!cs && cs.textDecorationLine === "none" && cs.display === "flex";
+      }));
+    t.ck("nothing threw", r.crashes.length === 0, r.crashes.join(" | "));
+    await r.ctx?.close?.();
+  }
+
+  console.log("\n-- and a customer's own page does not offer it --");
+  {
+    // Their page has its own answer directly above: apply to work with THEM.
+    // "Or start your own SubSub account" beside that competes with the one
+    // thing a branded sign-in page exists to do.
+    const r = await visitApp(browser, { host: "cascade", webPort: WEB,
+      viewport: { width: 900, height: 1200 } });
+    await wait(2600);
+    const body = await r.page.evaluate(() => document.body.innerText);
+    t.ck("no sign-up card on a branded page",
+      await r.page.evaluate(() => !document.querySelector("a.login-signup")));
+    t.ck("and nothing points at the plans from it",
+      !/subsub\.work\/pricing/.test(await r.page.content()), "");
+    t.ck("it still says whose page it is", /Cascade Management/.test(body),
+      body.split("\n").slice(0, 3).join(" / "));
+    t.ck("nothing threw", r.crashes.length === 0, r.crashes.join(" | "));
+    await r.ctx?.close?.();
+  }
+
   await ctx?.close?.();
 } finally {
   await browser.close(); web.close(); api.close();

@@ -96,5 +96,46 @@ for (const name of [...FOOTER_PAGES]) {
 ck("every licensing link from the site resolves", dead.length === 0,
   JSON.stringify(dead.slice(0, 4)));
 
+// ---- and the URLs the app links out to ---------------------------------
+// The app is a separate bundle on a separate origin, so a link from it to the
+// marketing site resolves or 404s with nothing in between -- no build step
+// checks it and no test here would have noticed. The sign-in page's "Don't
+// have an account?" is the only route into this product for somebody who typed
+// the address in rather than being sent a link, so it is the worst one to get
+// wrong.
+console.log("\nand the app's links to this site land somewhere");
+{
+  const appSrc = readFileSync(join(root, "app/src/App.tsx"), "utf8");
+  const outbound = [...appSrc.matchAll(/https:\/\/subsub\.work\/([A-Za-z0-9._\/-]*)/g)]
+    .map((m) => m[1]).filter((x, i, a) => a.indexOf(x) === i);
+  ck("the app links out at all", outbound.length > 0, JSON.stringify(outbound));
+
+  // Every path either is a file in this repo, or is redirected to one.
+  const redirects = new Map();
+  for (const line of readFileSync(join(root, "_redirects"), "utf8").split("\n")) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length >= 2 && parts[0].startsWith("/")) redirects.set(parts[0], parts[1]);
+  }
+  const broken = [];
+  for (const path of outbound) {
+    const p = "/" + path.replace(/^\/+/, "");
+    const target = redirects.get(p) || p;
+    const file = join(root, target.replace(/^\//, "") || "index.html");
+    const ok = existsSync(file)
+      || existsSync(file.endsWith("/") ? join(file, "index.html") : file + "/index.html");
+    if (!ok) broken.push(`${p}${redirects.has(p) ? ` -> ${target}` : ""}`);
+  }
+  ck("every one of them resolves to a page or a redirect", broken.length === 0,
+    JSON.stringify(broken));
+
+  // Named outright, because this one is the signup funnel and a silent 404 on
+  // it looks exactly like nobody wanting to sign up.
+  ck("the sign-up link is one of them",
+    outbound.includes("pricing") || outbound.includes("pricing.html"),
+    JSON.stringify(outbound));
+  ck("and /pricing is redirected rather than left to a platform default",
+    redirects.get("/pricing") === "/pricing.html", String(redirects.get("/pricing")));
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
