@@ -23,6 +23,7 @@ import { sendSms, toE164 } from "./sms.js";
 import { severityOf } from "../shared/emergency.js";
 import { validateIngest, SOURCES } from "../shared/ingest.js";
 import { tradesFor, validRule } from "../shared/crmmap.js";
+import { SOURCE_PRESETS, isSource, unwrap, translate } from "../shared/crmsources.js";
 // The same fifty states the browser offers, so a client that sends
 // something else -- an old build, a script, a typo that got through --
 // cannot put it in the database.
@@ -10583,84 +10584,38 @@ app.delete("/api/api-tokens/:id", requireRole("admin"), async (c) => {
 // trades and the unrecognised words are counted in `crm_unmapped`, which is
 // a question somebody can answer in one tap.
 
-// JobNimbus dates are epoch seconds on the payloads that carry them, and
-// sometimes an ISO string. Both are read; anything else is treated as absent
-// rather than guessed at, because a job on the wrong day is worse than a job
-// with no day.
-function jnDate(v) {
-  if (v == null || v === "") return null;
-  if (typeof v === "number" || /^\d+$/.test(String(v))) {
-    const n = Number(v);
-    if (!Number.isFinite(n) || n <= 0) return null;
-    // Seconds, not milliseconds: JobNimbus sends seconds, and a value that
-    // large read as ms lands in 1970.
-    const d = new Date(n * 1000);
-    if (Number.isNaN(d.getTime())) return null;
-    return d.toISOString().slice(0, 10);
+app.post("/api/v1/hooks/:source/:token", async (c) => {
+  // The source is named in the URL and looked up in SOURCE_PRESETS, so a new
+  // CRM is an entry in that file with a fixture beside it -- not a route, an
+  // auth path and a test suite written from nothing. An unknown one is named
+  // rather than 404'd: the integrator pasted a URL and a typo in it should
+  // say so, with the list of what is available.
+  const source = String(c.req.param("source") || "").toLowerCase();
+  if (!isSource(source)) {
+    return apiError(c, 404, "unknown_source",
+      `SubSub has no receiver for "${source}".`,
+      { supported: Object.keys(SOURCE_PRESETS) });
   }
-  const s = String(v).trim();
-  const m = /^(\d{4}-\d{2}-\d{2})/.exec(s);
-  return m ? m[1] : null;
-}
+  const preset = SOURCE_PRESETS[source];
 
-const jnStr = (v) => (v == null ? "" : String(v).trim());
-
-// Their shape to ours. Named separately from the route so the mapping is
-// readable on its own and the test can drive it directly.
-export function fromJobNimbus(p) {
-  // line2 is an ADDITION to a street, never a street on its own: "Unit B"
-  // with no line1 is not somewhere a contractor can be sent, and letting it
-  // stand alone would pass the has-a-location check with nothing usable.
-  const line1 = jnStr(p?.address_line1);
-  const street = line1
-    ? [line1, jnStr(p?.address_line2)].filter(Boolean).join(", ")
-    : "";
-  // A job in JobNimbus is often named only by its customer, so the display
-  // name is the fallback rather than a generated string: "Job JN-1041" tells
-  // somebody less than the customer's name does.
-  const title = jnStr(p?.name) || jnStr(p?.display_name)
-    || [jnStr(p?.first_name), jnStr(p?.last_name)].filter(Boolean).join(" ")
-    || jnStr(p?.number) || "Job from JobNimbus";
-  return {
-    externalId: jnStr(p?.jnid) || jnStr(p?.number) || jnStr(p?.external_id),
-    title: title.slice(0, 200),
-    date: jnDate(p?.date_start) || jnDate(p?.date_created),
-    address: street || null,
-    area: jnStr(p?.city) || null,
-    zip: jnStr(p?.zip) || null,
-    client: jnStr(p?.display_name)
-      || [jnStr(p?.first_name), jnStr(p?.last_name)].filter(Boolean).join(" ") || null,
-    scope: jnStr(p?.description) || null,
-  };
-}
-
-app.post("/api/v1/hooks/jobnimbus/:token", async (c) => {
   const ctx = await apiCallerByPathToken(c);
   if (ctx.res) return ctx.res;
   const { token, accountId } = ctx;
-  const SOURCE = "jobnimbus";
 
   let body;
   try { body = await c.req.json(); }
   catch { return apiError(c, 400, "invalid_json", "The request body must be valid JSON."); }
 
-  // JobNimbus wraps the record on some events and sends it bare on others.
-  const p = (body && typeof body === "object" && !Array.isArray(body))
-    ? (body.data && typeof body.data === "object" ? body.data : body)
-    : null;
-  if (!p) return apiError(c, 400, "invalid_body", "The request body must be a JSON object.");
+  const record = unwrap(body, preset);
+  if (!record) return apiError(c, 400, "invalid_body", "The request body must be a JSON object.");
 
-  const j = fromJobNimbus(p);
-  // Only the things that cannot be recovered. Trades are deliberately NOT in
-  // here: an unmapped job arrives and is flagged, and refusing it would make
-  // the webhook retry forever with nobody told.
-  const missing = [];
-  if (!j.externalId) missing.push("jnid");
-  if (!j.date) missing.push("date_start");
-  if (!j.address && !j.area) missing.push("address_line1");
+  const { job: j, missing } = translate(record, preset);
+  // Named in THEIR vocabulary, because the person reading this error knows
+  // their own field names and has never heard of ours. Trades are
+  // deliberately not in here: an unmapped job still arrives.
   if (missing.length) {
     return apiError(c, 400, "invalid_request",
-      `This JobNimbus record is missing ${missing.join(", ")}, which SubSub needs to schedule work.`,
+      `This ${preset.label} record is missing ${missing.join(", ")}, which SubSub needs to schedule work.`,
       { errors: missing.map((f) => ({ field: f, code: "required" })) });
   }
 
@@ -10669,7 +10624,7 @@ app.post("/api/v1/hooks/jobnimbus/:token", async (c) => {
     const { results } = await c.env.DB.prepare(
       `SELECT match_kind, match_value, trades FROM crm_trade_rules
         WHERE account_id = ? AND source = ?`
-    ).bind(accountId, SOURCE).all();
+    ).bind(accountId, source).all();
     rules = (results || []).map((r) => ({
       match: r.match_kind, value: r.match_value, trades: parseJson(r.trades, []),
     }));
@@ -10680,12 +10635,11 @@ app.post("/api/v1/hooks/jobnimbus/:token", async (c) => {
       "This SubSub environment has not had migration 049 applied yet.", { migration });
   }
 
-  const mapped = tradesFor(p, rules, { tradeIds: TRADE_IDS });
+  const mapped = tradesFor(record, rules, { tradeIds: TRADE_IDS });
 
-  // Record the words we did not understand BEFORE creating the job, so a
-  // failure to write the job does not leave the queue claiming a gap that
-  // produced nothing. Never fails the request: a work queue that can break an
-  // integration is worse than one with a hole in it.
+  // Recorded BEFORE the job is created, so a failed insert cannot leave the
+  // queue claiming a gap that produced nothing. Never fails the request: a
+  // work queue that can break an integration is worse than one with a hole.
   if (!mapped.trades.length) {
     for (const u of mapped.unmatched) {
       try {
@@ -10694,15 +10648,15 @@ app.post("/api/v1/hooks/jobnimbus/:token", async (c) => {
            VALUES (?, ?, ?, ?, ?, 1, datetime('now'))
            ON CONFLICT (account_id, source, match_kind, match_value)
              DO UPDATE SET hits = hits + 1, last_seen = datetime('now')`
-        ).bind(uid(), accountId, SOURCE, u.kind, u.value.slice(0, 120)).run();
+        ).bind(uid(), accountId, source, u.kind, u.value.slice(0, 120)).run();
       } catch (err) {
-        console.warn("[jobnimbus] unmapped not recorded:", err?.message || err);
+        console.warn("[hooks] unmapped not recorded:", err?.message || err);
       }
     }
   }
 
   const res = await ingestJob(c, {
-    accountId, token, source: SOURCE,
+    accountId, token, source,
     job: {
       externalId: j.externalId, title: j.title, date: j.date,
       trades: mapped.trades,
@@ -10714,11 +10668,11 @@ app.post("/api/v1/hooks/jobnimbus/:token", async (c) => {
   });
   if (res.error) return apiError(c, res.status, res.error, res.message, res.extra || {});
 
-  // The reply says what happened to the trades, because the integrator
-  // setting this up needs to see the mapping work -- and needs to see it not
-  // working while they are still looking at it, rather than a week later.
+  // The reply says what happened to the trades, because whoever is wiring
+  // this up needs to see the mapping fail while they are still looking at it
+  // rather than a week later.
   return c.json({
-    ok: true, duplicate: res.duplicate, jobId: res.jobId,
+    ok: true, source, duplicate: res.duplicate, jobId: res.jobId,
     trades: mapped.trades,
     needsTrades: mapped.trades.length === 0,
     unmapped: mapped.unmatched.map((u) => `${u.kind}:${u.value}`),
@@ -10760,8 +10714,20 @@ app.post("/api/crm-rules", requireRole("admin", "pm"), async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const rule = validRule(b, { tradeIds: TRADE_IDS });
   if (!rule) return c.json({ error: "invalid_rule" }, 400);
-  const source = SOURCES.includes(String(b?.source || "").toLowerCase())
-    ? String(b.source).toLowerCase() : "jobnimbus";
+  // Validated against SOURCE_PRESETS, not the provenance list in ingest.js.
+  // A rule is only ever read by a RECEIVER, so the set of sources a rule can
+  // name is exactly the set of receivers.
+  //
+  // REFUSED rather than defaulted. Falling back to jobnimbus for an
+  // unrecognised name stores a rule somebody believes is for AccuLynx
+  // against JobNimbus, where it does not fire for them and DOES fire on
+  // somebody else's words -- the worst of both. Silence is only safe when
+  // nothing was asked; here something was, and it was not understood.
+  const asked = String(b?.source || "").toLowerCase();
+  if (asked && !isSource(asked)) {
+    return c.json({ error: "unknown_source", supported: Object.keys(SOURCE_PRESETS) }, 400);
+  }
+  const source = asked || "jobnimbus";
 
   try {
     await c.env.DB.prepare(

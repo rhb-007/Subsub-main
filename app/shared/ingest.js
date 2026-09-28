@@ -47,7 +47,16 @@ export const INGEST_VERSION = "v1";
 // can be added without the column meaning something different. `other` is
 // deliberate: somebody's in-house system is a real answer and refusing it
 // would push them to lie about which CRM they use.
-export const SOURCES = ["jobnimbus", "acculynx", "servicetitan", "housecall_pro", "roofsnap", "other"];
+// Two lists exist and they mean different things, which is worth stating
+// because they look interchangeable. This one is what a job's PROVENANCE may
+// be called -- a label on `job_sources.source`. `SOURCE_PRESETS` in
+// crmsources.js is what SubSub can TRANSLATE, which is a smaller set.
+//
+// The invariant between them: every preset name must be a valid provenance
+// label, or a receiver would create jobs tagged with something this list
+// refuses. `test:crmsources` pins it.
+export const SOURCES = ["jobnimbus", "acculynx", "servicetitan", "housecall_pro",
+  "roofsnap", "generic", "other"];
 
 export const REQUIRED_FIELDS = ["externalId", "title", "trades", "date"];
 

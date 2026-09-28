@@ -134,7 +134,8 @@
     "test:weather": "node --no-warnings scripts/weather-test.mjs",
     "test:apiingest": "node --no-warnings scripts/api-ingest-test.mjs",
     "test:jobnimbus": "node --no-warnings scripts/jobnimbus-test.mjs",
-    "test:crmmapui": "node scripts/crm-map-ui-test.mjs"
+    "test:crmmapui": "node scripts/crm-map-ui-test.mjs",
+    "test:crmsources": "node --no-warnings scripts/crm-sources-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

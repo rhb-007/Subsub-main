@@ -2092,6 +2092,56 @@ refactor.
   Chrome's `innerText` applies it. A case-sensitive assertion against a
   heading is testing the stylesheet.
 
+- **Adding a CRM is a row, not a release.** The JobNimbus receiver was written
+  by hand and had to be. Writing the next four that way costs four builds,
+  four test suites and four sets of quirks found by hitting them — and **two of
+  JobNimbus's three were only found because a test failed**, which is not a
+  process that scales by repetition.
+
+  So the translation is **data**. `app/shared/crmsources.js` holds a preset per
+  source: where the record sits in the payload, which of their fields is which
+  of ours, and how their dates are written. `/api/v1/hooks/:source/:token`
+  reads it. The whole hand-written JobNimbus translator is gone and its 47
+  assertions passed unchanged against the engine, which is the only evidence
+  that mattered.
+
+  **No preset for a CRM whose real payload nobody has seen.** Inventing
+  plausible field names for AccuLynx would produce an integration that looks
+  supported, fails on first contact, and fails in the way that is hardest to
+  debug — silently, against documentation saying it works. Same rule the
+  licensing dataset runs on, and `verified` records which presets it is true
+  of. Today that is JobNimbus and `generic`.
+
+  `generic` is our own field names over a path token, for anything that can
+  POST JSON but cannot set a header — most automation builders' webhook step,
+  and any in-house script.
+
+  **Dates are named per source, never sniffed.** `epoch_s` read as
+  milliseconds lands in 1970; `3/14/2026` and `14/03/2026` are the same shape
+  and nine months apart, and guessing wrong puts a crew on site early with
+  nothing looking wrong until they arrive. Two checks guard a date and they
+  are **not interchangeable**: the range check catches month 14, and only the
+  calendar round-trip catches 31 February. Asserting month 14 alone passed
+  with the round-trip deleted, so both cases are pinned.
+
+  **Errors name THEIR field, not ours.** An integrator reading
+  `jnid is missing` knows what to do; `externalId is missing` names something
+  they have never heard of.
+
+  **Two lists exist that look interchangeable and are not.** `SOURCES` in
+  `ingest.js` is what a job's *provenance* may be called; `SOURCE_PRESETS` is
+  what SubSub can *translate*, which is smaller. The rules route validated
+  against the wider one, which silently stored a `generic` rule as a JobNimbus
+  one — where it failed to fire for its owner and fired on somebody else's
+  words. Rules are only ever read by a receiver, so they validate against the
+  presets, and a test pins that every preset name is a valid provenance label
+  so the two cannot drift.
+
+  And an unrecognised source on a rule is **refused, not defaulted**. Falling
+  back to JobNimbus files a rule somebody believes is for AccuLynx against a
+  CRM it will fire on. Silence is only safe when nothing was asked; here
+  something was, and it was not understood.
+
 - **Overflow is broadcast, not browse.** When an account has nobody on its
   own roster for an urgent job, it may broadcast to opted-in companies —
   general contractors included, since 031 made every one of them hireable.
