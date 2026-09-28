@@ -14235,13 +14235,6 @@ function HireablePanel({ section = "profile", accountName, requests = [], focus 
           </>}
 
           {!isDocs && <>
-          <div className="form-sec">Your code</div>
-          <p className="panel-note">
-            Show this to a general contractor and have them scan it. They can ask to work with you
-            without anybody spelling out an email address — and you still decide, below.
-          </p>
-          <ConnectCode />
-
           <div className="form-sec">Asking to work with you{pending.length > 0 ? ` (${pending.length})` : ""}</div>
           <ConnectRequests requests={requests} onRespond={onRespond} onReload={onReload}
             emptyNote="Nobody has asked yet. When somebody does, it lands here and nothing happens until you answer." />
@@ -14558,6 +14551,29 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               </div>
             </div>
           )}
+
+          {/* Your code, on your profile.
+              It was the seventh panel down inside Company, under the account
+              kind, the trades grid and the hireable profile -- and it is not a
+              company setting, it is the thing you hold up on a job site. It
+              already sits beside "Send my documents" in the header menu for
+              exactly that reason: both are give-somebody-your-details-without-
+              a-conversation, and this is where somebody looks for their own.
+
+              Still gated on the account being hireable and on a seat that runs
+              it, because that has not changed -- a code for a company nobody
+              can hire is a code for nothing. */}
+          {canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
+            <div className="portal-panel settings-panel">
+              <h4>Your code</h4>
+              <p className="panel-note">
+                Show this to a general contractor and have them scan it. They can ask to work
+                with you without anybody spelling out an email address — and you still decide,
+                on <b>Company</b>.
+              </p>
+              <ConnectCode />
+            </div>
+          )}
         </>
       )}
 
@@ -14821,6 +14837,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {pane === "branding" && canManage && applySubdomain && applySubdomain !== "app" && (
         <EmbedApply subdomain={applySubdomain} accountName={brand.name}
           trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))}
+          theme={brand?.theme || null}
           liveHost={hostnameStatus === "active"} />
       )}
 
@@ -21107,13 +21124,19 @@ function EmbedCodeModal({ html, copied, onCopy, onClose }) {
   );
 }
 
-function EmbedApply({ subdomain, accountName, trades, liveHost = true }) {
+function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = true }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState("");
   const [preview, setPreview] = useState(false);
+  // Read off `brand`, not `account`, and that is the right way round here: the
+  // colours ARE branding and branding is Scale, so a Basic account gets the
+  // default green -- which is a real form in SubSub's colours, not a broken
+  // one. The panel itself stays unplan-gated, which is the rule; only what it
+  // paints follows the plan.
   const html = useMemo(
-    () => applyFormHtml({ subdomain, accountName, trades }),
-    [subdomain, accountName, trades]);
+    () => applyFormHtml({ subdomain, accountName, trades, theme }),
+    [subdomain, accountName, trades, theme]);
+  const themed = !!(theme && theme.accent);
   const link = applyLink(subdomain);
 
   const copy = async (what, text) => {
@@ -21188,6 +21211,19 @@ function EmbedApply({ subdomain, accountName, trades, liveHost = true }) {
           {preview && <EmbedCodeModal html={html} copied={copied === "html"}
             onCopy={() => copy("html", html)} onClose={() => setPreview(false)} />}
 
+          {/* A pasted snippet is a COPY, taken at the moment it was copied.
+              Change the colours above and the form already on somebody's
+              website keeps the old ones until they paste it again -- which
+              nobody would guess, and a panel that let them assume otherwise
+              would be lying by omission. */}
+          <p className="embed-note">
+            {themed
+              ? <>The button and the focus ring use <b>your branding colours</b>. This is a
+                  copy, so if you change them, paste the form again &mdash; what is already on
+                  your site keeps the colours it was copied with.</>
+              : <>The button uses SubSub&rsquo;s green. Your own colours come with Scale, and
+                  the form works exactly the same either way.</>}
+          </p>
           <p className="embed-note">
             Applications arrive under <b>Asked to connect</b> on the Contractors
             screen. Nobody is

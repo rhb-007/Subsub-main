@@ -24,6 +24,31 @@ export const API_ORIGIN = "https://api.subsub.work";
 export const applyLink = (subdomain) =>
   `https://${subdomain}.subsub.work/?apply=1`;
 
+// The snippet's own copy of the branding defaults. It cannot import the app's
+// DEFAULT_THEME -- this module is shared with the Worker and the app's lives in
+// App.tsx -- and it only needs the two colours a form on somebody else's page
+// should ever set.
+export const EMBED_DEFAULT_ACCENT = "#1f6b4a";
+export const EMBED_DEFAULT_BTN_TEXT = "#ffffff";
+
+// A colour out of the database landing in a <style> block on a customer's
+// website is an injection unless it is checked. Anything that is not six hex
+// digits is not a colour, and the default is used instead -- never the string.
+const HEX = /^#[0-9a-fA-F]{6}$/;
+const hex = (v, fallback) => (typeof v === "string" && HEX.test(v) ? v : fallback);
+
+// The pressed/hover shade, computed rather than stored: the branding editor
+// asks for one accent and a second colour to maintain is a second colour to get
+// wrong. Multiplied down in sRGB, which is crude and predictable -- it darkens
+// every hue by the same proportion, so a customer who picks a pale accent still
+// gets a visible change on hover.
+const darken = (h, by = 0.78) => {
+  const n = parseInt(h.slice(1), 16);
+  const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+    .map((v) => Math.max(0, Math.min(255, Math.round(v * by))));
+  return "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
+};
+
 const esc = (s) => String(s == null ? "" : s)
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;");
@@ -32,11 +57,25 @@ const esc = (s) => String(s == null ? "" : s)
 // this lands in somebody else's stylesheet. A bare `.field` or `input{...}`
 // would restyle their whole site, which is the fastest way to have a customer
 // rip the snippet back out.
-export function applyFormHtml({ subdomain, accountName, trades = [],
+export function applyFormHtml({ subdomain, accountName, trades = [], theme = null,
   apiOrigin = API_ORIGIN } = {}) {
   const sub = String(subdomain || "").trim().toLowerCase();
   if (!sub) return "";
   const name = accountName || sub;
+  // The account's own colours, so the form on their site is not a green box in
+  // the middle of a blue page. Two of them, and only two.
+  //
+  // The button and the focus ring take the accent; nothing else does. The page
+  // background, the card and the text colour are deliberately NOT applied: this
+  // form lands inside somebody's existing layout and inherits its font and its
+  // colour already, and a snippet that paints a background is the "restyles
+  // their whole website" failure every rule in this file is scoped to avoid.
+  // Inputs stay white on dark ink because that is legible on any page, which a
+  // customer's own surface/text pair is not once it is somewhere they did not
+  // choose it for.
+  const accent = hex(theme && theme.accent, EMBED_DEFAULT_ACCENT);
+  const btnText = hex(theme && theme.btnText, EMBED_DEFAULT_BTN_TEXT);
+  const accentDark = darken(accent);
   const options = trades
     .map((t) => `        <option value="${esc(t.id)}">${esc(t.label)}</option>`)
     .join("\n");
@@ -81,14 +120,14 @@ ${options}
 #subsub-apply .ss-f em{font-size:12px;opacity:.7;font-style:normal}
 #subsub-apply input,#subsub-apply select{font:inherit;font-size:15px;padding:9px 11px;
   border:1px solid #c9d2cc;border-radius:8px;background:#fff;color:#16241d;width:100%}
-#subsub-apply input:focus,#subsub-apply select:focus{outline:2px solid #1f6b4a;
-  outline-offset:1px;border-color:#1f6b4a}
+#subsub-apply input:focus,#subsub-apply select:focus{outline:2px solid ${accent};
+  outline-offset:1px;border-color:${accent}}
 #subsub-apply button{font:inherit;font-size:15px;font-weight:600;padding:11px 18px;
-  border:0;border-radius:8px;background:#1f6b4a;color:#fff;cursor:pointer}
-#subsub-apply button:hover:not(:disabled){background:#14523a}
+  border:0;border-radius:8px;background:${accent};color:${btnText};cursor:pointer}
+#subsub-apply button:hover:not(:disabled){background:${accentDark}}
 #subsub-apply button:disabled{opacity:.6;cursor:default}
 #subsub-apply .ss-msg{margin:0;font-size:14px;line-height:1.45}
-#subsub-apply .ss-msg.ok{color:#1f6b4a}
+#subsub-apply .ss-msg.ok{color:${accent}}
 #subsub-apply .ss-msg.bad{color:#b5442e}
 /* The hidden attribute is a UA rule at the weakest specificity, and .ss-form
    sets display:flex -- which beats it, so the form would stay on screen under
@@ -98,7 +137,7 @@ ${options}
 #subsub-apply .ss-done{max-width:460px;text-align:center;padding:30px 22px;
   border:1px solid #c9d2cc;border-radius:12px;background:#f5faf7}
 #subsub-apply .ss-tick{display:block;margin:0 auto 14px;width:44px;height:44px;padding:7px;
-  box-sizing:border-box;border-radius:50%;background:#1f6b4a;color:#fff}
+  box-sizing:border-box;border-radius:50%;background:${accent};color:${btnText}}
 #subsub-apply .ss-done h3{margin:0 0 10px;font:inherit;font-size:19px;font-weight:700;
   line-height:1.3;color:#16241d}
 #subsub-apply .ss-done p{margin:0;font-size:14.5px;line-height:1.55;color:#4a5a51}

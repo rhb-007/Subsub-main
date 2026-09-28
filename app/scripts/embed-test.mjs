@@ -40,6 +40,51 @@ console.log("\n-- when to tell them it exists --");
     applyLink("outerhome"));
 }
 
+console.log("\n-- it wears the account's own colours --");
+{
+  const theme = { bg: "#0B0F0D", surface: "#FFFFFF", text: "#12211C",
+    accent: "#B5442E", btnText: "#FFF8F2" };
+  const html = applyFormHtml({ subdomain: "outerhome", accountName: "Outerhome",
+    trades: TRADES, theme });
+  const css = /<style>([\s\S]*?)<\/style>/.exec(html)[1];
+
+  t.ck("the button takes the accent", /button\{[^}]*background:#B5442E/i.test(css),
+    (css.match(/button\{[^}]*\}/i) || [""])[0]);
+  t.ck("and the button text colour", /button\{[^}]*color:#FFF8F2/i.test(css),
+    (css.match(/button\{[^}]*\}/i) || [""])[0]);
+  t.ck("the focus ring matches", /outline:2px solid #B5442E/i.test(css));
+  t.ck("and so does the confirmation tick", /ss-tick\{[^}]*background:#B5442E/i.test(css));
+
+  // Hover is computed, not stored: the editor asks for one accent, and a
+  // second colour to maintain is a second colour to get wrong.
+  const hover = (css.match(/hover:not\(:disabled\)\{background:(#[0-9a-f]{6})/i) || [])[1];
+  t.ck("hover is a darker shade of it", !!hover && hover.toLowerCase() !== "#b5442e", String(hover));
+
+  // NOT applied, deliberately. This form lands inside somebody's existing
+  // layout: a snippet that paints a page background is the restyles-their-
+  // whole-website failure every rule in it is scoped to avoid.
+  t.ck("the page background is never painted", !css.includes("#0B0F0D"), "#0B0F0D");
+  t.ck("and the form sets no background of its own",
+    !/\.ss-form\{[^}]*background/i.test(css), (css.match(/\.ss-form\{[^}]*\}/i) || [""])[0]);
+
+  // No theme is SubSub's green, which is a real form rather than a broken one.
+  const plain = applyFormHtml({ subdomain: "outerhome", accountName: "Outerhome", trades: TRADES });
+  t.ck("with no theme it falls back to the default",
+    /button\{[^}]*background:#1f6b4a/i.test(plain));
+
+  // A colour out of the database landing in a <style> block on a customer's
+  // website is an injection unless it is checked.
+  const nasty = applyFormHtml({ subdomain: "outerhome", accountName: "Outerhome",
+    theme: { accent: "red;}body{display:none;}#x{a:b" } });
+  t.ck("a colour that is not a colour cannot escape the rule",
+    !nasty.includes("body{display:none"), "escaped");
+  t.ck("and the default is used instead",
+    /button\{[^}]*background:#1f6b4a/i.test(nasty));
+  t.ck("a three-digit hex is refused too",
+    /button\{[^}]*background:#1f6b4a/i.test(
+      applyFormHtml({ subdomain: "o", accountName: "O", theme: { accent: "#abc" } })));
+}
+
 console.log("\n-- the snippet is safe to paste into somebody else's page --");
 {
   const html = applyFormHtml({ subdomain: "outerhome", accountName: "Outerhome", trades: TRADES });

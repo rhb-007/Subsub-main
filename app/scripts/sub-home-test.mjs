@@ -522,11 +522,13 @@ try {
       embed: !!document.querySelector(".embed-strip"),
       licence: !!document.querySelector(".fld-nums"),
       kind: /Account type/i.test(document.body.innerText),
+      qr: !!document.querySelector(".cx-code"),
     }));
     t.ck("Company still says what the account is", co.kind === true, JSON.stringify(co));
     t.ck("and still holds the licence and UBI", co.licence === true, JSON.stringify(co));
     t.ck("but no longer the documents", co.docs === false, JSON.stringify(co));
     t.ck("nor the embed snippet", co.embed === false, JSON.stringify(co));
+    t.ck("nor the QR code", co.qr === false, JSON.stringify(co));
     // The branding studio is NOT asserted here on purpose: .brand-preview only
     // renders on Scale and this account is Basic, so a check for its absence
     // would pass whatever the tab said. test:embedplace covers the branding
@@ -545,6 +547,49 @@ try {
     t.ck("the documents are on their own tab", dp.docs === true, JSON.stringify(dp));
     t.ck("with the send panel beside them", dp.send === true, JSON.stringify(dp));
     t.ck("and there is exactly one of them", dp.copies === 1, String(dp.copies));
+
+    // The code is on Profile. It is not a company setting -- it is the thing
+    // you hold up on a job site -- and it already sits beside "Send my
+    // documents" in the header menu for exactly that reason.
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => b.innerText.trim() === "Profile")?.click());
+    for (let n = 0; n < 30; n++) {
+      await wait(200);
+      if (await page.$(".cx-code")) break;
+    }
+    const pr = await page.evaluate(() => {
+      const el = document.querySelector(".cx-code");
+      return { there: !!el,
+        heading: /Your code/i.test(document.body.innerText),
+        copies: document.querySelectorAll(".cx-code").length };
+    });
+    t.ck("the QR code is on Profile", pr.there === true, JSON.stringify(pr));
+    t.ck("under its own heading", pr.heading === true, JSON.stringify(pr));
+    t.ck("and only once", pr.copies === 1, String(pr.copies));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- and an account nobody can hire has no code to show --");
+  {
+    // A code for a company nobody can hire is a code for nothing, so the gate
+    // that was on it inside Company had to travel with it.
+    KIND = "property_manager";
+    const { ctx, page, crashes } = await open();
+    // Through the header's user menu, which is the route on a wide screen --
+    // the drawer's copy of "My account" is display:none at this width.
+    await page.evaluate(() => document.querySelector(".um-chip, .user-chip, header .avatar")?.click());
+    await wait(400);
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => /^My account$/i.test(b.innerText.trim()))?.click());
+    await wait(900);
+    // Prove the panel is actually open first. "No QR code" on a screen that
+    // never rendered is an assertion that cannot fail.
+    const opened = await page.evaluate(() =>
+      [...document.querySelectorAll("button")].some((b) => b.innerText.trim() === "Profile"));
+    t.ck("the account screen opened", opened === true, String(opened));
+    t.ck("no QR code for a property manager",
+      await page.evaluate(() => !document.querySelector(".cx-code")));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

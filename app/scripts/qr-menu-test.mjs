@@ -209,8 +209,12 @@ try {
   // itself easier to get at. So: the full panel is still reached the way it
   // always was, still has the things a settings page is for, and has gained
   // the same tap-to-scan.
-  console.log("\n-- the settings panel, where it always was --");
+  console.log("\n-- the settings panel, now on Profile --");
   {
+    // It moved off Company with the tab split: a code is not a company
+    // setting, it is the thing you hold up on a job site, and it belongs
+    // beside the other give-somebody-your-details-without-a-conversation
+    // things rather than under the account kind and the trades grid.
     const { ctx, page, crashes } = await open({ width: 1200, height: 1000 });
     await page.click(".user-btn");
     await wait(250);
@@ -218,10 +222,24 @@ try {
     await page.waitForSelector(".seg-tabs", { timeout: 5000 });
     const panes = await page.$$eval(".seg-tabs button", (b) => b.map((x) => x.innerText.trim()));
     t.ck("My account still has its Company pane", panes.some((x) => /company/i.test(x)), panes.join(" | "));
+    t.ck("and Profile, which is where the code is now",
+      panes.some((x) => /^profile$/i.test(x)), panes.join(" | "));
     await page.evaluate(() => {
-      [...document.querySelectorAll(".seg-tabs button")].find((b) => /company/i.test(b.innerText))?.click();
+      [...document.querySelectorAll(".seg-tabs button")].find((b) => /^profile$/i.test(b.innerText))?.click();
     });
     await page.waitForSelector(".cx-code", { timeout: 6000 });
+    t.ck("and it is not left behind on Company too", await (async () => {
+      await page.evaluate(() => {
+        [...document.querySelectorAll(".seg-tabs button")].find((b) => /company/i.test(b.innerText))?.click();
+      });
+      await wait(600);
+      const gone = await page.evaluate(() => !document.querySelector(".cx-code"));
+      await page.evaluate(() => {
+        [...document.querySelectorAll(".seg-tabs button")].find((b) => /^profile$/i.test(b.innerText))?.click();
+      });
+      await page.waitForSelector(".cx-code", { timeout: 6000 });
+      return gone;
+    })());
     const panel = await page.evaluate(() => ({
       acts: [...document.querySelectorAll(".cx-code-acts button")].map((b) => b.innerText.trim()),
       tappable: !!document.querySelector(".cx-code .qrp-tap"),

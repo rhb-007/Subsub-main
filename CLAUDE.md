@@ -269,6 +269,54 @@ refactor.
   single gesture that covered the whole pack is gone, and that was the price of
   the tab being readable.
 
+- **The pasted form wears the account's colours, and only two of them.** A
+  general contractor who has set their branding then pastes a green box into a
+  blue page, which is the one thing that makes a snippet look like somebody
+  else's software on your own website.
+
+  The button, its hover and the focus ring take `accent`; the button label takes
+  `btnText`; the confirmation tick takes both. **`bg`, `surface` and `text` are
+  deliberately not applied.** This form lands inside somebody's existing layout
+  and already inherits its font and colour, and a snippet that paints a
+  background is the restyles-their-whole-website failure every rule in it is
+  scoped under `#subsub-apply` to avoid. Inputs stay white on dark ink, because
+  that is legible on any page — a customer's own surface/text pair is not, once
+  it is somewhere they did not choose it for.
+
+  The hover shade is **computed, not stored**: the editor asks for one accent,
+  and a second colour to maintain is a second colour to get wrong.
+
+  **A colour out of the database landing in a `<style>` block on a customer's
+  website is an injection unless it is checked.** `hex()` takes six hex digits
+  or returns the default — never the string it was given, so
+  `accent: "red;}body{display:none"` paints nothing and changes nothing. Three
+  tests pin it, and dropping the guard fails all three.
+
+  It reads the theme off **`brand`, not `account`**, which looks like a
+  violation of the rule two entries down and is the opposite: the colours *are*
+  branding, and branding is Scale, so a Basic account gets SubSub's green — a
+  real form rather than a broken one. The panel itself stays unplan-gated, which
+  is the rule; only what it paints follows the plan.
+
+  And the panel **says it is a copy**. A snippet pasted onto a website is frozen
+  at the moment it was copied: change the colours afterwards and the form
+  already on their site keeps the old ones until they paste it again. Nobody
+  would guess that, and a panel that let them assume otherwise would be lying by
+  omission.
+
+- **The QR code is on Profile, because it is not a company setting.** It was the
+  seventh panel down inside Company, under the account kind, the trades grid and
+  the hireable profile. It is the thing you hold up on a job site — and it
+  already sits beside *Send my documents* in the header menu for exactly that
+  reason: both are give-somebody-your-details-without-a-conversation, and Profile
+  is where somebody looks for their own.
+
+  The gate travelled with it. Still `canManage` and still a **hireable** account,
+  because a code for a company nobody can hire is a code for nothing. The test
+  for that had to prove the account screen actually opened first: "no QR code" on
+  a screen that never rendered is an assertion that cannot fail, and the first
+  version of it was exactly that.
+
 - **Nobody reads pasted HTML on a page; they copy it.** Eighty lines of markup
   sat inline in the embed panel, which was most of why the tab scrolled forever,
   with a separate toggle below it to preview the form. Both answered the same
