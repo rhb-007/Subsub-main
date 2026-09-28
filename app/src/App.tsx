@@ -13619,6 +13619,185 @@ function Avatar({ user, className = "" }) {
 // are both on the route. This decides what is worth showing, not what is
 // allowed, which is why a Basic account gets the explanation rather than
 // nothing at all: a feature you cannot see is a feature you cannot buy.
+// What your CRM's words mean here.
+//
+// JobNimbus has no concept of a trade -- it has a job `type`, a `status` and
+// free-text tags, all of them the customer's own words. So the account says
+// once what each one means, and every job after that arrives with its trades
+// already on it.
+//
+// THE WORK QUEUE IS THE POINT OF THIS SCREEN, and it is why the unanswered
+// words come FIRST rather than the rules. A job whose words map to nothing
+// still arrives -- refusing it would make the webhook retry forever with
+// nobody told -- so it lands with no trades and the word is counted. This
+// panel is where that count becomes one tap. A screen that only listed rules
+// would leave somebody to work out for themselves which word was missing,
+// which is the knows-the-answer-and-offers-no-way-in shape this product
+// refuses everywhere else.
+//
+// Rendered for an admin OR a project manager, because that is what
+// `/api/crm-rules` allows. Gating it to admins would make the screen
+// stricter than the route, which is the same lie as being looser.
+function CrmMapping() {
+  const [data, setData] = useState(null);
+  const [open, setOpen] = useState(null);      // which row is being answered
+  const [picked, setPicked] = useState([]);
+  const [adding, setAdding] = useState(false);
+  const [kind, setKind] = useState("type");
+  const [value, setValue] = useState("");
+  const [err, setErr] = useState("");
+
+  const load = async () => {
+    try { setData(await api.crmRules()); }
+    catch { setData({ rules: [], unmapped: [] }); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const toggle = (id) =>
+    setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  const save = async (match, val) => {
+    if (!picked.length) return;
+    setErr("");
+    try {
+      await api.saveCrmRule({ match, value: val, trades: picked });
+      setOpen(null); setPicked([]); setAdding(false); setValue("");
+      await load();
+    } catch { setErr("Could not save that rule. Try again."); }
+  };
+
+  const remove = async (r) => {
+    if (!window.confirm(`Stop mapping "${r.value}" to ${r.trades.map((t) => TRADE_LABEL[t] || t).join(", ")}?`)) return;
+    try { await api.removeCrmRule(r.id); await load(); }
+    catch { setErr("Could not remove that rule."); }
+  };
+
+  const KINDS = [["type", "Job type"], ["status", "Status"], ["tag", "Tag"]];
+  const kindLabel = (k) => (KINDS.find(([id]) => id === k) || [null, k])[1];
+
+  // The chip grid, shared by the queue rows and the manual form -- two copies
+  // would be two places for the trade list to go stale.
+  const chips = (onSave, label) => (
+    <div className="crm-pick">
+      <div className="pick-grid">
+        {CATEGORIES.map((c) => (
+          <button key={c.id} type="button" className={`pick ${picked.includes(c.id) ? "on" : ""}`}
+            onClick={() => toggle(c.id)}>{c.label}</button>
+        ))}
+      </div>
+      <div className="crm-pick-acts">
+        <button type="button" className="btn-solid" disabled={!picked.length} onClick={onSave}>
+          <Check size={14} /> {label}
+        </button>
+        <button type="button" className="btn-quiet"
+          onClick={() => { setOpen(null); setAdding(false); setPicked([]); }}>Cancel</button>
+        {/* A rule with no trades does nothing, and the server refuses one --
+            so the button is dead until something is picked, and says why. */}
+        {!picked.length && <span className="cov-hint">Pick at least one trade.</span>}
+      </div>
+    </div>
+  );
+
+  const rules = data?.rules || [];
+  const gaps = data?.unmapped || [];
+
+  return (
+    <div className="portal-panel settings-panel">
+      <h4>What your CRM calls things</h4>
+      <p className="panel-note">
+        Jobs posted from JobNimbus arrive with your own words on them — a job type, a status, tags.
+        Say once what each one means here and every job after that lands with its trades ready to
+        assign.
+      </p>
+
+      {err && <p className="fld-err" role="alert">{err}</p>}
+
+      {/* First, because it is the only part with anything to do in it. */}
+      {gaps.length > 0 && (
+        <>
+          <div className="form-sec">Waiting on you ({gaps.length})</div>
+          <p className="cov-hint crm-gap-note">
+            These arrived and meant nothing to SubSub, so their jobs came in with no trades on them.
+            The jobs are safe — they are on your Jobs screen. Say what these mean and they can be
+            assigned.
+          </p>
+          <ul className="crm-list">
+            {gaps.map((g) => (
+              <li key={g.id} className="crm-row gap">
+                <div className="crm-main">
+                  <b>{g.value}</b>
+                  <span className="cx-sub">
+                    {kindLabel(g.match)} · {g.hits} job{g.hits === 1 ? "" : "s"} so far
+                  </span>
+                </div>
+                {open === g.id ? null : (
+                  <button type="button" className="cpr-do"
+                    onClick={() => { setOpen(g.id); setPicked([]); setAdding(false); }}>
+                    What is it?
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          {gaps.map((g) => (open === g.id
+            ? <div key={`p${g.id}`}>{chips(() => save(g.match, g.value), `"${g.value}" means this`)}</div>
+            : null))}
+        </>
+      )}
+
+      <div className="form-sec">Your rules{rules.length ? ` (${rules.length})` : ""}</div>
+      {rules.length === 0 ? (
+        <p className="cov-hint">
+          Nothing mapped yet. You can add a rule here, or wait until a job arrives and answer it
+          above — either way works.
+        </p>
+      ) : (
+        <ul className="crm-list">
+          {rules.map((r) => (
+            <li key={r.id} className="crm-row">
+              <div className="crm-main">
+                <b>{r.value}</b>
+                <span className="cx-sub">
+                  {kindLabel(r.match)} → {r.trades.map((t) => TRADE_LABEL[t] || t).join(", ")}
+                </span>
+              </div>
+              <button type="button" className="cpr-do quiet" onClick={() => remove(r)}>Remove</button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {adding ? (
+        <div className="crm-add">
+          <div className="fld-row">
+            <label className="fld">Match on
+              <select value={kind} onChange={(e) => setKind(e.target.value)}>
+                {KINDS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+              </select>
+            </label>
+            <label className="fld">Their word for it
+              <input value={value} maxLength={120} placeholder="Roof Replacement"
+                onChange={(e) => setValue(e.target.value)} />
+            </label>
+          </div>
+          {/* Whole values, not prefixes -- said here because somebody typing
+              "Roof" would otherwise expect it to catch "Roof Replacement". */}
+          <p className="cov-hint">
+            Matched whole, ignoring capitals. “Roof” will not match “Roof Replacement”.
+          </p>
+          {value.trim() ? chips(() => save(kind, value.trim()), "Save rule")
+            : <p className="cov-hint">Type their word for it first.</p>}
+        </div>
+      ) : (
+        <button type="button" className="add-line"
+          onClick={() => { setAdding(true); setOpen(null); setPicked([]); }}>
+          <Plus size={12} /> Add a rule
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ApiTokens({ isScale }) {
   const [rows, setRows] = useState(null);
   const [name, setName] = useState("");
@@ -14848,6 +15027,13 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               integration that is already running. */}
           {canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && (
             <ApiTokens isScale={plan === "scale"} />
+          )}
+          {/* Directly below the token, because setting a CRM up is one story
+              and making somebody find the second half on another tab is how
+              a half-configured integration happens. Admin OR pm: the route
+              allows both, and a screen must not be stricter than it. */}
+          {(role === "admin" || role === "pm") && ACCOUNT_KINDS[accountKind]?.hires !== false && (
+            <CrmMapping />
           )}
 
           {canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
@@ -23453,6 +23639,25 @@ body{background:var(--paper)}
 /* The same traffic light the dashboard card draws, on the tab where somebody
    actually acts on it. Green on file, amber inside WARN_DAYS, red expired or
    never added; hollow when nothing has been done to the row yet. */
+/* The CRM mapping panel. The unanswered words come first and are tinted,
+   because they are the only part of this screen with anything to do in it --
+   a list of rules somebody has already written is reference, not work. */
+.crm-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column}
+.crm-row{display:flex;gap:12px;align-items:center;justify-content:space-between;
+  padding:10px 0;border-top:1px solid var(--line)}
+.crm-main{min-width:0;display:flex;flex-direction:column;gap:2px;flex:1;text-align:left}
+.crm-main b{font-size:13.5px}
+/* Amber, the same tone the rest of the product uses for "needs you soon"
+   rather than "broken" -- the jobs did arrive, they just cannot be assigned
+   yet. Red would say something was lost. */
+.crm-row.gap{border-top-color:var(--amber)}
+.crm-row.gap .crm-main b{color:var(--amber-ink)}
+.crm-gap-note{margin:2px 0 0}
+.crm-pick{border:1px solid var(--line);border-radius:10px;padding:12px 13px;margin:10px 0 4px;
+  background:var(--paper)}
+.crm-pick-acts{display:flex;gap:10px;align-items:center;margin-top:11px;flex-wrap:wrap}
+.crm-add{border:1px solid var(--line);border-radius:10px;padding:12px 13px;margin:10px 0 4px}
+.crm-add select{font-family:inherit}
 /* The API token panel. The minted token gets a box of its own because it is
    on screen once and the copy button has to be the obvious thing in it. */
 .tok-new{border:1px solid var(--brand);background:var(--paper);border-radius:10px;

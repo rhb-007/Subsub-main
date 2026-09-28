@@ -365,6 +365,12 @@ export const api = {
   apiTokens: () => request("/api-tokens"),
   createApiToken: (name) => request("/api-tokens", { method: "POST", body: JSON.stringify({ name }) }),
   revokeApiToken: (id) => request(`/api-tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  // What a CRM's own words mean in SubSub trades, and the words that have
+  // arrived meaning nothing yet. One call, because the screen shows both and
+  // two fetches would let the queue and the rules disagree for a frame.
+  crmRules: () => request("/crm-rules"),
+  saveCrmRule: (rule) => request("/crm-rules", { method: "POST", body: JSON.stringify(rule) }),
+  removeCrmRule: (id) => request(`/crm-rules/${encodeURIComponent(id)}`, { method: "DELETE" }),
   // Milestones, verification and release. The plan call returns the parts,
   // the event log and the releases together: a screen that fetches three
   // renders three different moments.

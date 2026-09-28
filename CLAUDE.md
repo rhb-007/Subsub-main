@@ -2054,6 +2054,44 @@ refactor.
   their customers than a pull integration using their API key would — and we
   never hold somebody's CRM credential.
 
+- **The mapping screen leads with the queue, not the rules.** `crm_trade_rules`
+  shipped with routes, tests and no way in — the fourth time this file has
+  recorded correct pieces nobody could reach, and for the person who runs a
+  roofing company "create it by API" means not at all.
+
+  What decides the layout is that **only one half of this screen has work in
+  it**. A list of rules somebody already wrote is reference. The unanswered
+  words are jobs sitting on the Jobs screen that cannot be assigned, each one
+  explained by a single word nobody has translated yet. So the queue is
+  **above** the rules, counted (`3 jobs so far`, because one is a curiosity and
+  three is a pattern), and answered in place — press *What is it?*, pick the
+  trades, done. The test measures `getBoundingClientRect().top` on both rather
+  than trusting source order.
+
+  **It says the jobs are safe, and that sentence is load-bearing.** "These
+  arrived and meant nothing to SubSub" reads as *they were rejected*, and
+  somebody who believes that goes hunting in their CRM instead of looking at
+  their own Jobs screen. The copy names where the jobs actually are.
+
+  It renders for an **admin or a project manager**, because that is what
+  `requireRole("admin", "pm")` allows on the route. `canManage` is admin-only,
+  so using it here — the obvious thing, since the token panel above it does —
+  would have made the screen stricter than the route, which this file has
+  already called the same lie as looser. The mutation run catches it.
+
+  It sits directly below the API token panel so setting a CRM up is one story
+  on one tab. A half-configured integration is what you get when the second
+  half is somewhere else.
+
+  And the form **says matching is whole-value** where somebody is typing, not
+  in help text: a person entering `Roof` reasonably expects it to catch
+  `Roof Replacement`, and finding out otherwise costs a week of jobs arriving
+  unmapped.
+
+  One test trap worth keeping: `.form-sec` is `text-transform: uppercase`, and
+  Chrome's `innerText` applies it. A case-sensitive assertion against a
+  heading is testing the stylesheet.
+
 - **Overflow is broadcast, not browse.** When an account has nobody on its
   own roster for an urgent job, it may broadcast to opted-in companies —
   general contractors included, since 031 made every one of them hireable.
