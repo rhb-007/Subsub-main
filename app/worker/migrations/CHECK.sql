@@ -91,9 +91,18 @@ SELECT
      WHEN (SELECT sql FROM sqlite_master WHERE type='table' AND name='accounts')
             LIKE '%''subcontractor''%' THEN 2
      ELSE 1 END)                                                                            AS m046_kind_check,
-  -- And the index 046's rebuild has to put back, because CREATE TABLE AS SELECT
-  -- keeps the rows and drops everything else. Every branded page load looks an
-  -- account up by subdomain.
-  (SELECT COUNT(*) FROM sqlite_master
-    WHERE type='index' AND tbl_name='accounts'
-      AND (name='idx_accounts_subdomain' OR sql LIKE '%subdomain%'))                        AS m046_subdomain_unique;
+  -- And the uniqueness 046's rebuild has to put back, because
+  -- CREATE TABLE AS SELECT keeps the rows and drops everything else. Every
+  -- branded page load looks an account up by subdomain, and two accounts
+  -- holding one address is the worst row this table can carry.
+  --
+  -- Asked as "is subdomain unique, by any means" rather than "does an index
+  -- with this name exist". A database built from schema.sql gets its
+  -- uniqueness from the inline UNIQUE on the column, which SQLite implements
+  -- as sqlite_autoindex_accounts_N with a NULL sql -- invisible to a name or
+  -- LIKE test, so that version read 0 on a perfectly good database and would
+  -- have told somebody their rebuild had failed.
+  (SELECT COUNT(*) FROM pragma_index_list('accounts') il
+    WHERE il."unique" = 1
+      AND EXISTS (SELECT 1 FROM pragma_index_info(il.name) ii
+                   WHERE ii.name = 'subdomain'))                                            AS m046_subdomain_unique;

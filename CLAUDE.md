@@ -1358,6 +1358,38 @@ refactor.
   the contractor on the other end would never be told. That is a conversation
   with their clients, not a setting to flip, so the route returns 409
   `hired_by_others` with the count.
+- **`worker/schema.sql` and `worker/migrations/` are two records of one
+  database, and `npm run test:schemadrift` is what makes them agree.** This file
+  is what a FRESH database is built from — a new environment, a preview, and
+  every Worker test that calls `freshDb()`. The migrations are what the LIVE
+  database was built from, one hand-run paste at a time.
+
+  They stopped agreeing around 010 and nobody noticed for thirty-five
+  migrations, because nothing compared them. By 045 `schema.sql` was missing
+  twenty-six tables, eighty indexes and thirty columns. Two costs, one loud and
+  one quiet. **A fresh install was born broken** — CHECK.sql could not even be
+  *run* against it, so the one tool for spotting the drift was disabled by the
+  drift. And **the tests lied in both directions**: a Worker test got a database
+  no customer has, so a route reading a post-010 column threw "no such column",
+  which the Worker deliberately reports as `migration_needed` rather than a 500.
+  That is right in production and poison in a test — a real bug reads as a
+  database behind the code, and a route that quietly does nothing when a column
+  is missing (the signup company row is exactly this) passes while writing
+  nothing at all.
+
+  **Add the column here in the same change as the migration, not afterwards.**
+  `freshDb()` swallows "duplicate column" and "already exists" and nothing else,
+  so the migrations a test names as its dependencies stay in and become no-ops
+  as `schema.sql` catches up; otherwise fixing the drift would have broken every
+  test that had worked around it.
+
+  One thing the check **cannot** do, stated so nobody writes an assertion that
+  always passes: it cannot catch something in `schema.sql` that no migration
+  creates. The live shape is derived by applying the migrations *to*
+  `schema.sql` — there is no migration 001, this file is the base — so anything
+  added here is on both sides by construction. Catching that would need an
+  independent record of the original schema, and there is none.
+
 - D1 stops a multi-statement script at the first failing statement and does
   not undo what ran before it. `ALTER TABLE ... ADD COLUMN` is the statement
   that is not repeatable, so it goes in a paste of its own.

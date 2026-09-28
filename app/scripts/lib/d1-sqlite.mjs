@@ -79,7 +79,24 @@ export function freshDb({ migrations, base }) {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
   if (base) db.exec(base);
-  for (const sql of migrations) db.exec(sql);
+  // A migration that schema.sql has already caught up on is a no-op, not an
+  // error.
+  //
+  // Tests pass the migrations they depend on because schema.sql spent
+  // thirty-five of them behind -- a Worker test on a bare schema.sql got a
+  // database no customer had. Now that it is current, those same lines are
+  // ALTERs for columns that already exist, and without this every one of those
+  // tests would break the moment the drift was fixed. Which would punish
+  // exactly the right change.
+  //
+  // Only "it is already there" is swallowed. Anything else still throws, so a
+  // genuinely broken migration is still a failure rather than a silent skip.
+  for (const sql of migrations) {
+    try { db.exec(sql); }
+    catch (err) {
+      if (!/duplicate column name|already exists/i.test(String(err?.message || err))) throw err;
+    }
+  }
   return db;
 }
 

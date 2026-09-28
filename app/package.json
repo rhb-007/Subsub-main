@@ -127,7 +127,8 @@
     "test:stuck": "node scripts/stuck-subs-test.mjs",
     "test:portalinvite": "node scripts/portal-invite-test.mjs",
     "test:inviteshort": "node scripts/invite-short-test.mjs",
-    "test:subsignup": "node scripts/sub-signup-test.mjs"
+    "test:subsignup": "node scripts/sub-signup-test.mjs",
+    "test:schemadrift": "node --no-warnings scripts/schema-drift-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

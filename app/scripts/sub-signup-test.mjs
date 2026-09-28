@@ -129,12 +129,12 @@ const SITE = 5257;
   };
   try {
     const signup = async (kind, subdomain) => {
-      // schema.sql has drifted from the migrations: 031 added
-      // `accounts.company_id` and nothing put it in the base schema, so a
-      // freshDb built from schema.sql alone has no column to write the company
-      // into -- and the signup route treats a missing column as "a database
-      // without 031" and moves on quietly. Without this line the row is simply
-      // absent and the test reads as a bug in the route.
+      // Redundant now that schema.sql is current, and kept as a statement of
+      // what this needs. It was load-bearing when written: without
+      // `accounts.company_id` the signup route treats the missing column as "a
+      // database without 031" and moves on quietly, so the company row was
+      // simply absent and read as a bug in the route rather than a gap in the
+      // harness. That is the failure mode test:schemadrift now prevents.
       const db = freshDb({ base: SCHEMA, migrations: [
         "ALTER TABLE accounts ADD COLUMN hostname_status TEXT;",
         "ALTER TABLE accounts ADD COLUMN company_id TEXT REFERENCES companies(id);",
@@ -213,12 +213,11 @@ const SITE = 5257;
   };
 
   try {
-    // schema.sql has drifted a long way from the migrations -- it is missing
-    // accounts.company_id (031), companies.connect_code (030), and the
-    // company_docs and doc_shares tables (037, 041) -- so a database built from
-    // it alone is not the shape any live one has. The migration FILES are read
-    // rather than restated, which is the pattern doc-share-test already uses:
-    // a hand-copied CREATE goes stale the first time somebody adds a column.
+    // These are no-ops now that schema.sql carries everything the migrations
+    // add -- freshDb swallows "already there" and nothing else. They are left
+    // in because they say what this test depends on, and because the migration
+    // FILES are read rather than restated: a hand-copied CREATE goes stale the
+    // first time somebody adds a column.
     const mig = (f) => readFileSync(join(app, "worker", "migrations", f), "utf8");
     const db = fresh({ base: SCHEMA, migrations: [
       "ALTER TABLE accounts ADD COLUMN hostname_status TEXT;",
