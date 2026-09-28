@@ -323,6 +323,47 @@ const SITE = 5257;
       (await hack.json().catch(() => ({}))).error === "not_found");
     t.ck("   and nothing was written",
       db.prepare("SELECT insurance FROM companies WHERE id='cmp_own_acc_other'").get().insurance === 0);
+
+    // 7. The promise the pasted application form makes, kept by the server.
+    //
+    // Its confirmation says "we have sent a confirmation to <address>", which
+    // is only honest because createApplication mails EVERY applicant whose
+    // body carried one -- before any of the login branches run. That is easy
+    // to break by accident: applicantWayIn deliberately sends nothing to
+    // somebody who already has a login ("choose a password" to a person who
+    // has one is a phishing lesson in reverse), and if the confirmation ever
+    // moved behind that branch the screen would start lying to exactly the
+    // people it says the most to.
+    //
+    // So: both branches, same promise. And it must be the SAME promise, not a
+    // different one each way -- a form that words itself differently for a
+    // known address is a way to ask which of a list of addresses is on SubSub.
+    const applyAs = async (email) => {
+      mails.length = 0;
+      const res = await worker.fetch(new Request("https://api.subsub.work/api/apply/ridgeroofing", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ company: "Bay Roofing", contact: "Rae Bay", email,
+          categories: ["roofing"], notifyEmail: true }),
+      }), env, { waitUntil() {} });
+      return { status: res.status, mails: mails.slice() };
+    };
+
+    const fresh1 = await applyAs("rae@bayroofing.test");
+    t.ck("7. a public application is accepted", fresh1.status === 200, String(fresh1.status));
+    const conf1 = fresh1.mails.filter((m) => m.to.includes("rae@bayroofing.test"));
+    t.ck("   and a confirmation reaches the applicant", conf1.length >= 1,
+      JSON.stringify(fresh1.mails.map((m) => m.to)));
+    t.ck("   naming the account, because the form is on THEIR site",
+      conf1.some((m) => /Ridge Roofing/i.test(m.html)), "");
+
+    // Now the same address belongs to somebody who can already sign in.
+    db.exec(`UPDATE users SET auth_id = 'auth_rae' WHERE email = 'rae@bayroofing.test'`);
+    const again = await applyAs("rae@bayroofing.test");
+    t.ck("   an applicant who already has a login still applies", again.status === 200,
+      String(again.status));
+    t.ck("   and is still sent a confirmation",
+      again.mails.some((m) => m.to.includes("rae@bayroofing.test")),
+      JSON.stringify(again.mails.map((m) => m.to)));
   } finally {
     globalThis.fetch = realFetch;
   }

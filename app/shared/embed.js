@@ -104,11 +104,14 @@ ${options}
     <svg class="ss-tick" viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"
       fill="none" stroke="currentColor" stroke-width="2.5"
       stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-    <h3>That&rsquo;s with ${esc(name)}</h3>
-    <p>They read every application themselves. Nobody joins their roster until they
-      say so, and they will come back to you directly.</p>
-    <p class="ss-done-sub">If there is anything for you to do next, it arrives at
-      <b class="ss-done-em"></b>.</p>
+    <h3>Submitted</h3>
+    <p class="ss-done-lede">Thanks for asking to work with us.</p>
+    <p>We have sent a confirmation to <b class="ss-done-em"></b>. Follow the link in it to
+      finish setting up your account &mdash; including your certificate of insurance,
+      your surety bond and your W-9, which we need on file before we can schedule you
+      for work.</p>
+    <p class="ss-done-sub">We look forward to working with you.</p>
+    <p class="ss-done-sig">&mdash; The ${esc(name)} team</p>
   </div>
 </div>
 <style>
@@ -140,8 +143,11 @@ ${options}
   box-sizing:border-box;border-radius:50%;background:${accent};color:${btnText}}
 #subsub-apply .ss-done h3{margin:0 0 10px;font:inherit;font-size:19px;font-weight:700;
   line-height:1.3;color:#16241d}
-#subsub-apply .ss-done p{margin:0;font-size:14.5px;line-height:1.55;color:#4a5a51}
-#subsub-apply .ss-done-sub{margin-top:10px !important;font-size:13px !important}
+#subsub-apply .ss-done p{margin:0 0 10px;font-size:14.5px;line-height:1.55;color:#4a5a51}
+#subsub-apply .ss-done-lede{font-size:15.5px !important;color:#16241d !important;font-weight:600}
+#subsub-apply .ss-done-sub{margin-top:14px !important}
+#subsub-apply .ss-done-sig{margin:0 !important;font-size:13.5px !important;font-weight:600;
+  color:#16241d !important}
 #subsub-apply .ss-done b{color:#16241d}
 </style>
 <script>

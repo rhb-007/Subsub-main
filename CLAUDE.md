@@ -351,13 +351,32 @@ refactor.
   stayed on screen under the confirmation until `.ss-form[hidden]{display:none}`
   said otherwise.
 
-  What the copy must **not** say: that an email has been sent. `applicantWayIn`
-  invites a new applicant and deliberately does *not* mail somebody who already
-  has a login, so "check your email" is false for one of the two — and a form
-  that words itself differently for a known address is the enumeration oracle
-  refused everywhere else. *"If there is anything for you to do next, it arrives
-  at <address>"* is true either way, and a test pins that no wording claiming a
-  send creeps back in.
+  **It does promise a confirmation, and the reason that is safe is worth
+  writing down, because it was got wrong once here.** `applicantWayIn`
+  deliberately sends nothing to somebody who already has a login — "choose a
+  password" to a person who has one is a phishing lesson in reverse — and on
+  that basis the first version of this copy refused to mention email at all.
+  That was wrong: the send it was worried about is the **invite**, a second mail
+  only a new login earns. `createApplication` mails *every* applicant whose body
+  carried an address, before any of the login branches run. So the confirmation
+  always goes, the sentence is true for everybody, and it reads the same either
+  way — which is what stops it being an oracle for who is already on SubSub.
+
+  That makes the copy depend on a server behaviour nothing was guarding, so
+  `test:subsignup` now applies twice through `POST /api/apply/:subdomain` — once
+  as a stranger, once after setting `auth_id` on that address — and requires a
+  confirmation both times. Moving the send behind the login branch fails it.
+
+  The words themselves are the account's, not ours. It opens *Submitted*, thanks
+  them for asking, names the address, says to follow the link, and **names the
+  three documents** — certificate of insurance, surety bond, W-9 — rather than
+  saying "your documents", because somebody reading it is about to go and find
+  files and three names is the difference between doing it now and doing it when
+  asked again. Not the signed agreement, which is optional. And it signs off as
+  **the account's team**, because the form is on their website and the applicant
+  is writing to them; a confirmation in SubSub's voice would read as a third
+  party butting into somebody else's hiring. A test pins that the word SubSub
+  does not appear on it.
 
 - **A UBI is Washington's, so it is asked for in Washington and nowhere else.**
   The Unified Business Identifier does not exist in the other fifty

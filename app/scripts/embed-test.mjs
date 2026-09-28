@@ -227,20 +227,41 @@ console.log("\n-- and it actually works in a browser --");
     t.ck("and the confirmation is in its place", after.doneShown, String(after.doneShown));
     t.ck("with a tick", after.tick);
     t.ck("centred", after.centred === "center", after.centred);
-    t.ck("it names who has it", /that[\u2019']s with Outerhome/i.test(after.text), after.text);
-    // What actually happens next, which the old one never said: a human reads
-    // it, and nobody joins a roster until they say so.
-    t.ck("it says a person will read it",
-      /read every application/i.test(after.text), after.text);
-    t.ck("and that nothing happens until they do",
-      /nobody joins their roster until they say so/i.test(after.text), after.text);
-    t.ck("and where to watch", /rae@bayroofing\.test/.test(after.text), after.text);
-    // The reply is identical whether or not that address already has a login,
-    // because a form that says "we emailed you" for one and not the other is a
-    // way to ask which of a list of addresses is on SubSub.
-    t.ck("without claiming an email was sent",
-      !/we (have )?(e-?mailed|sent you)/i.test(after.text)
-        && !/check your (e-?mail|inbox)/i.test(after.text), after.text);
+    t.ck("it opens by saying it went", /submitted/i.test(after.text), after.text);
+    t.ck("and thanks them for asking",
+      /thanks for asking to work with us/i.test(after.text), after.text);
+
+    // It CAN promise a confirmation, and this is the fact that makes it safe
+    // to: createApplication sends applicationReceivedEmail to every applicant
+    // whose body carried an address, before any of the login branches run. The
+    // invite is a SECOND mail that only a new login earns; the confirmation is
+    // unconditional, so the sentence is true for everybody and reads the same
+    // either way -- which is what stops it being an oracle for who is already
+    // on SubSub.
+    t.ck("it says a confirmation was sent", /we have sent a confirmation/i.test(after.text),
+      after.text);
+    t.ck("naming the address they typed", /rae@bayroofing\.test/.test(after.text), after.text);
+    t.ck("and what to do with it", /follow the link in it/i.test(after.text), after.text);
+
+    // Named, not "your documents": somebody reading this is about to go and
+    // find files, and three names is the difference between doing it now and
+    // doing it when asked again.
+    t.ck("it names the insurance certificate",
+      /certificate of insurance/i.test(after.text), after.text);
+    t.ck("the bond", /surety bond/i.test(after.text), after.text);
+    t.ck("and the W-9", /W-9/i.test(after.text), after.text);
+    // NOT the signed agreement. It is the hiring account's own form and most
+    // never send one, so asking for it here is a to-do most people cannot do.
+    t.ck("but not the optional agreement",
+      !/subcontractor agreement/i.test(after.text), after.text);
+    t.ck("and says why they are wanted",
+      /before we can schedule you/i.test(after.text), after.text);
+
+    // Signed by the account, not by SubSub. The form is on THEIR website and
+    // the applicant is writing to them; a confirmation in our voice would read
+    // as a third party butting into somebody else's hiring.
+    t.ck("it signs off as the account", /The Outerhome team/i.test(after.text), after.text);
+    t.ck("and not as SubSub", !/SubSub/i.test(after.text), after.text);
     t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
   } finally {
     await browser.close(); host.close(); api.close();
