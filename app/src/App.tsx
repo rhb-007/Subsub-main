@@ -42,7 +42,7 @@ import { severityOf, severityRank } from "../shared/emergency.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 // One list of states, shared with the Worker, so the two cannot disagree
 // about what a state is.
-import { US_STATES } from "../shared/states.js";
+import { US_STATES, stateName } from "../shared/states.js";
 // The money arithmetic and the waiver roll-up, shared with the Worker so a
 // figure on screen and a figure written to the ledger cannot disagree.
 import { splitEven, releaseAmounts } from "../shared/money.js";
@@ -15031,40 +15031,62 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
   // unfinished until they do it.
   const sub = kind === "subcontractor";
   const myDocs = (myCompany && myCompany.docs) || {};
-  const onFile = DOC_KINDS.filter((k) => myDocs[k]);
+  // One row per thing, because "add your compliance pack -- 2 of 4" does not
+  // say which two, and the two it does not name are the whole task. A list
+  // somebody can work down beats a counter they have to open something to
+  // decode.
+  const doc = (id, title, note) => ({
+    id, done: !!myDocs[id], title, note,
+    actions: [{ label: myDocs[id] ? "Replace it" : "Add it",
+      onClick: onGoDocs || onGoCompany, solid: true }],
+  });
+  // The licence names the state, because "contractor license" means a
+  // different document in each of them and the reader has exactly one in mind.
+  const st = (myCompany && myCompany.state) || "";
+  const licenceTitle = st
+    ? `Add your ${stateName(st) || st} contractor license #`
+    : "Add your contractor license #";
+  // A UBI is Washington's Unified Business Identifier. It does not exist in the
+  // other fifty jurisdictions, so asking for one there is the unanswerable
+  // question this product already removed from signup -- a step nobody outside
+  // WA can ever tick, sitting on their home screen for ever.
+  const wantsUbi = st === "WA";
   const subSteps = [
     {
       id: "trades", done: Array.isArray(trades) && trades.length > 0,
-      title: "Tell us what you work in",
-      note: "Your trades are what a hiring contractor searches their own roster by.",
+      title: "Tell us the trades you want to be hired for",
+      note: "It is what a hiring contractor searches their own roster by, and what "
+        + "decides which work can reach you.",
       actions: [{ label: "Pick trades", onClick: onGoAccount, solid: true }],
     },
+    doc("insurance", "Add your certificate of insurance (COI)",
+      "Carrier, policy number, coverage and expiry. The expiry is the part an "
+      + "attached PDF can never keep right."),
+    doc("bond", "Add your surety bond",
+      "Asked for on most commercial work, and on residential in several states."),
     {
-      id: "pack", done: onFile.length === DOC_KINDS.length,
-      title: `Add your compliance pack — ${onFile.length} of ${DOC_KINDS.length}`,
-      // Named rather than counted, because "2 of 4" does not say which two are
-      // missing and that is the only thing worth knowing here.
-      note: onFile.length === DOC_KINDS.length
-        ? "Insurance, bond, signed agreement and W-9 are all on file."
-        : `Still to add: ${DOC_KINDS.filter((k) => !myDocs[k])
-            .map((k) => DOC_LABELS[k] || k).join(", ")}. `
-          + "They stay yours, and the expiry stays live for everybody you have sent them to.",
-      actions: [{ label: "Add a document", onClick: onGoDocs || onGoCompany, solid: true }],
+      id: "license", done: !!(myCompany && myCompany.license), title: licenceTitle,
+      note: "Checked against the state register, so a hiring contractor does not have to "
+        + "ask. No state license where you are? Leave it — your email and mobile still "
+        + "make you findable.",
+      actions: [{ label: "Add it", onClick: onGoCompany, solid: true }],
     },
+    ...(wantsUbi ? [{
+      id: "ubi", done: !!(myCompany && myCompany.ubi),
+      title: "Add your UBI",
+      note: "Washington's Unified Business Identifier, which is what a general "
+        + "contractor here checks alongside the license.",
+      actions: [{ label: "Add it", onClick: onGoCompany, solid: true }],
+    }] : []),
+    doc("w9", "Add your W-9",
+      "It carries your tax number, so it is never in a link — the page says it is on "
+      + "file and reading it needs an account."),
     {
       id: "send", done: (myCompany?.sharesSent || 0) > 0,
-      title: "Send it to a contractor who asked",
+      title: "Send your pack to a contractor who asked",
       note: "One field, one link. They need no account to open it, and when you renew, "
         + "what they are looking at renews with you.",
-      actions: [{ label: "Send my pack", onClick: onGoDocs || onGoCompany, solid: true }],
-    },
-    {
-      id: "license", done: !!(myCompany && myCompany.license),
-      title: "Add your license number",
-      note: "It is checked against your state's registry, so a hiring contractor does not "
-        + "have to ask. No state license where you are? Leave it — your email and mobile "
-        + "still make you findable.",
-      actions: [{ label: "Add it", onClick: onGoCompany, solid: true }],
+      actions: [{ label: "Send it", onClick: onGoDocs || onGoCompany, solid: true }],
     },
   ];
 
@@ -15932,6 +15954,21 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
           properties={properties} onAddProperty={onAddProperty}
           hireable={hireable} myCompany={myCompany} onGoCompany={onGoCompany}
           kind={kind} onGoDocs={onGoDocs} />}
+
+        {/* The pack, always. The set-up checklist is temporary by design -- it
+            disappears once finished, and can be dismissed before that -- and
+            what it was standing in front of is the thing this account is FOR.
+            A subcontractor asked for their insurance on a job site needs the
+            answer to be six seconds long, every day, not only in their first
+            week.
+
+            The send field is in the card rather than behind a menu for the
+            same reason. Gated on something being on file, matching the server,
+            which refuses an empty pack with nothing_on_file: a screen offering
+            a button the server will refuse is a screen that lies. */}
+        {hireable && myCompany && (
+          <CompliancePack company={myCompany} onGoDocs={onGoDocs || onGoCompany} />
+        )}
       </div>
 
       {/* An owner gets their own row. Reusing the account's -- unassigned
@@ -20500,8 +20537,77 @@ function QuoteAskCard({ q, onAnswer }) {
 // It sits beside My QR code because they are the same kind of thing: give
 // somebody your details without a conversation. The code is how they add you;
 // this is how they get your paperwork.
-function QuickSend() {
-  const [open, setOpen] = useState(false);
+// The compliance pack, on the dashboard, with the send in it.
+//
+// Every row is a thing a hiring contractor asks for, and the state of it is
+// the only question worth answering at a glance: on file, expiring, gone, or
+// never added. The licence and the UBI sit alongside the four documents
+// because they are asked for in the same breath, even though they are columns
+// rather than files.
+function CompliancePack({ company, onGoDocs }) {
+  const docs = company.docs || {};
+  const today = new Date().toISOString().slice(0, 10);
+  const st = company.state || "";
+  const rows = [
+    ...PACK_KINDS.map((k) => {
+      const d = docs[k];
+      const lapsed = d?.expiresOn && d.expiresOn < today;
+      return { key: k, label: DOC_LABELS_INLINE[k] || DOC_LABELS[k] || k,
+        on: !!d, bad: !!lapsed,
+        note: !d ? "Not added"
+          : lapsed ? `Expired ${formatDay(d.expiresOn)}`
+          : d.expiresOn ? `Through ${formatDay(d.expiresOn)}` : "On file" };
+    }),
+    { key: "license", label: st ? `${st} license` : "License",
+      on: !!company.license, bad: false,
+      note: company.license || "Not added" },
+    // Washington only. A UBI does not exist elsewhere, and a permanently
+    // un-tickable row is worse than no row.
+    ...(st === "WA" ? [{ key: "ubi", label: "UBI", on: !!company.ubi, bad: false,
+      note: company.ubi || "Not added" }] : []),
+  ];
+  const ready = rows.filter((r) => r.on && !r.bad).length;
+  const canSend = PACK_KINDS.some((k) => docs[k]);
+
+  return (
+    <section className="cpack">
+      <div className="cpack-head">
+        <h3><ShieldCheck size={16} /> Your compliance pack</h3>
+        <button className="sh-all" onClick={onGoDocs}>
+          Manage <ChevronRight size={14} />
+        </button>
+      </div>
+      <p className="cpack-sub">
+        {ready === rows.length
+          ? "All current. Send it to anybody who asks."
+          : `${ready} of ${rows.length} ready — a contractor who asks sees what is here.`}
+      </p>
+      <ul className="cpack-rows">
+        {rows.map((r) => (
+          <li key={r.key} className={r.bad ? "bad" : r.on ? "ok" : ""}>
+            <span className="cpr-dot" aria-hidden="true" />
+            <span className="cpr-lab">{r.label}</span>
+            <span className="cpr-note">{r.note}</span>
+          </li>
+        ))}
+      </ul>
+      {canSend ? (
+        <QuickSend inline />
+      ) : (
+        <p className="cpack-empty">
+          Add one document and you can send the pack — the link shows what your cover
+          actually says, and stays right when you renew.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function QuickSend({ inline = false }) {
+  // In the header menu it is a disclosure -- one line that opens. On the
+  // dashboard card it is already the point of the card, so there is nothing to
+  // disclose and the field is just there.
+  const [open, setOpen] = useState(inline);
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState("");
@@ -20526,13 +20632,15 @@ function QuickSend() {
 
   return (
     <>
-      <button className="um-qr" aria-expanded={open}
-        onClick={() => { setOpen((o) => !o); setSentTo(""); setErr(""); }}>
-        <Send size={14} /> Send my documents
-        <ChevronDown size={13} className={`um-caret ${open ? "up" : ""}`} />
-      </button>
+      {!inline && (
+        <button className="um-qr" aria-expanded={open}
+          onClick={() => { setOpen((o) => !o); setSentTo(""); setErr(""); }}>
+          <Send size={14} /> Send my documents
+          <ChevronDown size={13} className={`um-caret ${open ? "up" : ""}`} />
+        </button>
+      )}
       {open && (
-        <div className="qsend-peek">
+        <div className={`qsend-peek ${inline ? "inline" : ""}`}>
           {sentTo ? (
             <div className="qsend-done">
               <CheckCircle2 size={15} />
@@ -22423,6 +22531,34 @@ body{background:var(--paper)}
 .pack-cta span{font-size:12.5px;color:var(--ink-soft);line-height:1.55}
 .pack-cta a{margin-top:6px;text-decoration:none}
 .pack-foot{font-size:11.5px;color:var(--ink-soft)}
+/* ---- The compliance pack, on the dashboard ----------------------------- */
+.cpack{grid-column:span 1;background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:16px 18px;display:flex;flex-direction:column}
+.cpack-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.cpack-head h3{display:flex;align-items:center;gap:8px;margin:0;font-size:14px;font-weight:700;
+  letter-spacing:.02em;text-transform:uppercase}
+.cpack-head h3 svg{color:var(--brand)}
+.cpack-sub{margin:8px 0 12px;font-size:12.5px;color:var(--ink-soft);line-height:1.5}
+.cpack-rows{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:1px}
+.cpack-rows li{display:flex;align-items:center;gap:9px;padding:7px 0;font-size:13px;
+  border-bottom:1px solid var(--line)}
+.cpack-rows li:last-child{border-bottom:0}
+/* The dot carries the state, so it is not the only thing that does: the note
+   beside it says the same in words, for anybody who cannot tell the colours
+   apart. */
+.cpr-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--line);
+  border:1.5px solid var(--ink-soft)}
+.cpack-rows li.ok .cpr-dot{background:var(--brand);border-color:var(--brand)}
+.cpack-rows li.bad .cpr-dot{background:var(--red);border-color:var(--red)}
+.cpr-lab{font-weight:600;flex:1;min-width:0}
+.cpr-note{font-size:11.5px;color:var(--ink-soft);text-align:right;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:48%}
+.cpack-rows li.bad .cpr-note{color:var(--red);font-weight:600}
+.cpack-empty{margin:0;font-size:12px;color:var(--ink-soft);line-height:1.5}
+/* Already inside a card, so it drops the popover's own chrome. */
+.qsend-peek.inline{position:static;margin:0;box-shadow:none;border:0;padding:0;background:none;
+  width:auto;min-width:0}
+
 /* ---- The inbox -------------------------------------------------------- */
 .pack-wrap.wide .pack-card{max-width:760px}
 .inbox-ask{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:18px;

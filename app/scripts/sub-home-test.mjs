@@ -101,13 +101,14 @@ try {
     t.ck("and no create-your-first-job", !/first job/i.test(all), all);
 
     // THE TWO THAT MATTER.
-    t.ck("it asks for the compliance pack", /compliance pack/i.test(all), all);
-    t.ck("counting what is on file", /0 of 4/.test(all), all);
-    t.ck("and naming what is missing rather than only counting",
-      /Certificate of insurance/i.test(all) && /W-9/i.test(all), all);
-    t.ck("then asks them to send it", /send it to a contractor/i.test(all), all);
-    t.ck("the licence is still offered, because it makes them findable",
-      /license number/i.test(all), all);
+    // One row per thing, because a counter does not say which two are missing
+    // and the two it does not name are the whole task.
+    t.ck("the trades line is about being hired, not hiring",
+      /trades you want to be hired for/i.test(all), all);
+    t.ck("insurance is its own row", /certificate of insurance/i.test(all), all);
+    t.ck("so is the bond", /surety bond/i.test(all), all);
+    t.ck("so is the W-9", /add your w-9/i.test(all), all);
+    t.ck("and sending it is the last one", /send your pack/i.test(all), all);
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -118,11 +119,101 @@ try {
     MY_COMPANY = { ...MY_COMPANY, docs: { insurance: { fileName: "coi.pdf" }, w9: { fileName: "w9.pdf" } },
       sharesSent: 0, license: null };
     const { ctx, page, crashes } = await open();
+    // Only the CURRENT step carries its note and buttons; a finished one is
+    // its title and a tick. So the thing to assert is which row is which.
+    const marked = await page.evaluate(() =>
+      [...document.querySelectorAll(".gs-steps li")].map((li) => ({
+        title: li.querySelector("b")?.innerText.trim() || "",
+        state: li.className.replace("gs-step ", "").trim(),
+      })));
+    const stateOf = (re) => (marked.find((m) => re.test(m.title)) || {}).state;
+    t.ck("insurance is ticked off", stateOf(/certificate of insurance/i) === "done",
+      JSON.stringify(marked));
+    t.ck("the W-9 too", stateOf(/w-9/i) === "done", JSON.stringify(marked));
+    t.ck("and the bond is the one it is asking for now",
+      stateOf(/surety bond/i) === "now", JSON.stringify(marked));
+    t.ck("with the rest still to come",
+      stateOf(/license/i) === "later", JSON.stringify(marked));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- the pack is on the dashboard, permanently --");
+  {
+    // The set-up checklist is temporary by design -- it disappears when
+    // finished and can be dismissed before that -- and what it stands in front
+    // of is the thing the account is FOR. Somebody asked for their insurance on
+    // a job site needs that answer every day, not only in week one.
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "OR", license: "CCB-1234",
+      docs: { insurance: { fileName: "coi.pdf", expiresOn: "2027-06-30" },
+        bond: { fileName: "bond.pdf", expiresOn: "2024-01-01" } },
+      sharesSent: 0 };
+    const { ctx, page, crashes } = await open();
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".cpack")) break; }
+    const rows = await page.evaluate(() =>
+      [...document.querySelectorAll(".cpack-rows li")].map((li) => ({
+        label: li.querySelector(".cpr-lab")?.innerText.trim(),
+        note: li.querySelector(".cpr-note")?.innerText.trim(),
+        state: li.className.trim(),
+      })));
+    t.ck("the card is there", rows.length > 0, JSON.stringify(rows.length));
+    const row = (re) => rows.find((r) => re.test(r.label || "")) || {};
+    t.ck("a current document reads through its expiry",
+      /Through/i.test(row(/insurance/i).note || ""), JSON.stringify(row(/insurance/i)));
+    t.ck("a lapsed one says so and is marked",
+      /Expired/i.test(row(/bond/i).note || "") && row(/bond/i).state === "bad",
+      JSON.stringify(row(/bond/i)));
+    t.ck("one not added says that", /Not added/i.test(row(/w-9/i).note || ""),
+      JSON.stringify(row(/w-9/i)));
+    // The dot carries the state, so it must not be the only thing that does.
+    t.ck("every row says its state in words too",
+      rows.every((r) => (r.note || "").length > 0), JSON.stringify(rows));
+    t.ck("the licence row names the state it is from",
+      /OR/.test(row(/license/i).label || ""), JSON.stringify(row(/license/i)));
+
+    // THE ONE THAT MUST NOT BE HARDCODED. A UBI is Washington's Unified
+    // Business Identifier and does not exist in the other fifty, so a row for
+    // it in Oregon is a line nobody there can ever complete.
+    t.ck("no UBI row outside Washington",
+      !rows.some((r) => /UBI/i.test(r.label || "")), JSON.stringify(rows.map((r) => r.label)));
+
+    // And the send is in the card, not behind a menu.
+    t.ck("the send field is right there",
+      await page.evaluate(() => !!document.querySelector(".cpack .qsend-row input")));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- and a Washington company is asked for its UBI --");
+  {
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "WA", ubi: null, license: "ORCASR891QZ",
+      docs: { insurance: { fileName: "coi.pdf" } }, sharesSent: 0 };
+    const { ctx, page, crashes } = await open();
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".cpack")) break; }
+    const labels = await page.evaluate(() =>
+      [...document.querySelectorAll(".cpack-rows .cpr-lab")].map((x) => x.innerText.trim()));
+    t.ck("the UBI row appears in WA", labels.some((l) => /UBI/i.test(l)), labels.join(" | "));
     const all = (await steps(page)).join(" | ");
-    t.ck("the count follows what is on file", /2 of 4/.test(all), all);
-    t.ck("and it now names only the two still missing",
-      /Surety bond/i.test(all) && /agreement/i.test(all)
-      && !/Still to add:[^|]*Certificate of insurance/i.test(all), all);
+    t.ck("and it is a checklist step there too", /Add your UBI/i.test(all), all);
+    t.ck("with the licence naming Washington", /Washington contractor license/i.test(all), all);
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- with nothing on file there is nothing to send --");
+  {
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "OR", docs: {}, sharesSent: 0, ubi: null };
+    const { ctx, page, crashes } = await open();
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".cpack")) break; }
+    // The server refuses an empty pack with nothing_on_file, so a send field
+    // here would be a button the server will refuse.
+    t.ck("no send field with an empty pack",
+      await page.evaluate(() => !document.querySelector(".cpack .qsend-row input")));
+    t.ck("and it says what unlocks it",
+      await page.evaluate(() => !!document.querySelector(".cpack-empty")));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
