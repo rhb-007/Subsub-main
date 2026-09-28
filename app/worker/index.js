@@ -4071,6 +4071,29 @@ const SUB_ENGAGEMENT_COL = {
 };
 const SUB_ENGAGEMENT_JSON_FIELDS = new Set(["docReview", "categories", "caps"]);
 
+// Does anybody answer for this company?
+//
+// `companies` is a shared row: one name, one contact, one licence, one set of
+// document booleans, read by EVERY account that engages them. So "I have them
+// on my roster" is enough to edit a record I typed in myself, and is not
+// enough to rewrite a company that has its own people.
+//
+// Deliberately NOT the scoped seat count the roster and the auto-schedule
+// branch use. Those ask "is there somebody *I* can ask?", which is per-account
+// on purpose. This asks "does anybody answer for this company at all?", so a
+// roofer whose only seat is on another general contractor's account is still
+// protected from this one. Scoping it would have left exactly that hole.
+async function companyAnswersForItself(env, companyId) {
+  const r = await env.DB.prepare(
+    `SELECT (SELECT COUNT(*) FROM memberships WHERE company_id = ? AND role = 'contractor') AS seats,
+            (SELECT COUNT(*) FROM accounts WHERE company_id = ?) AS own_account`
+  ).bind(companyId, companyId).first();
+  return hasPortal({
+    hasSeat: (r?.seats || 0) > 0,
+    ownsAccount: (r?.own_account || 0) > 0,
+  });
+}
+
 async function applySubPatch(db, companyId, engagementId, patch) {
   const coPatch = {}, enPatch = {};
   for (const [k, v] of Object.entries(patch)) {
@@ -4132,6 +4155,31 @@ app.patch("/api/subs/:companyId", async (c) => {
     });
     if (!verdict.ok) {
       return c.json({ error: verdict.reason, detail: AUTO_DENY_TEXT[verdict.reason] }, 409);
+    }
+  }
+
+  // Their record, or yours?
+  //
+  // The engagement half -- the trades you use them for, your capabilities,
+  // your rating, your notes, which buildings you scope them to -- is yours and
+  // stays writable. The company half is theirs the moment anybody answers for
+  // it, and until now an engagement alone was enough to overwrite it: their
+  // name, their contact, their phone, their licence, their crews, their
+  // coverage, for every other account that hires them.
+  //
+  // It also closed a back door. `mayWriteCompanyDocs` guards
+  // POST/DELETE /api/subs/:id/documents/:kind because those booleans decide
+  // whether somebody can be assigned work -- and this route writes the same
+  // columns (`insurance`, `bond`, `contract`, `w9`, `docFiles`) from a plain
+  // PATCH, with no such check and no test for an ended engagement.
+  //
+  // Refused rather than quietly dropped: a save that reports success and
+  // writes nothing is how somebody re-types the same correction three times.
+  const editingSelf = auth.role === "contractor" && auth.companyId === companyId;
+  if (!editingSelf) {
+    const coKeys = Object.keys(patch).filter((k) => !ENGAGEMENT_FIELDS.has(k) && SUB_COMPANY_COL[k]);
+    if (coKeys.length && await companyAnswersForItself(c.env, companyId)) {
+      return c.json({ error: "company_not_yours", fields: coKeys }, 409);
     }
   }
 

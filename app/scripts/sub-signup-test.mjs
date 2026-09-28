@@ -364,6 +364,61 @@ const SITE = 5257;
     t.ck("   and is still sent a confirmation",
       again.mails.some((m) => m.to.includes("rae@bayroofing.test")),
       JSON.stringify(again.mails.map((m) => m.to)));
+
+    // 8. `companies` is a shared row, so a hiring account may correct a record
+    // it typed in and may NOT rewrite a company that answers for itself.
+    //
+    // Having them on your roster was the whole check: an engagement alone let
+    // any account overwrite the name, contact, email, phone, licence, crews
+    // and coverage that every OTHER account hiring them reads. It also wrote
+    // `insurance`, `bond`, `contract` and `docFiles` -- the same columns
+    // mayWriteCompanyDocs guards on the document routes -- straight past that
+    // check, and without its ended-engagement test.
+    db.exec(`INSERT INTO companies(id,company,contact,email) VALUES
+        ('cmp_typed','Typed In','Pat','pat@typed.test'),
+        ('cmp_own','Has A Login','Sam','sam@own.test');
+      INSERT INTO engagements(id,account_id,company_id,status) VALUES
+        ('eng_typed','${made.accountId}','cmp_typed','active'),
+        ('eng_own','${made.accountId}','cmp_own','active');
+      INSERT INTO users(id,name,email) VALUES ('u_sam','Sam','sam@own.test');
+      INSERT INTO accounts(id,name,subdomain,kind)
+        VALUES ('acc_elsewhere_x','Some Other GC','elsewherex','general_contractor');
+      INSERT INTO memberships(id,user_id,account_id,role,company_id)
+        VALUES ('m_sam','u_sam','acc_elsewhere_x','contractor','cmp_own');`);
+
+    const typed = await call("/subs/cmp_typed", { method: "PATCH",
+      body: JSON.stringify({ company: "Typed In Roofing", license: "ABC123" }) });
+    t.ck("8. a record you typed in is still yours to correct", typed.status === 200,
+      String(typed.status));
+    t.ck("   and it really changed",
+      db.prepare("SELECT company FROM companies WHERE id='cmp_typed'").get().company
+        === "Typed In Roofing");
+
+    const theirs = await call("/subs/cmp_own", { method: "PATCH",
+      body: JSON.stringify({ company: "Renamed By Somebody Else" }) });
+    t.ck("   a company with its own seat is refused", theirs.status === 409,
+      String(theirs.status));
+    t.ck("   naming why", (await theirs.json().catch(() => ({}))).error === "company_not_yours");
+    t.ck("   and nothing was written",
+      db.prepare("SELECT company FROM companies WHERE id='cmp_own'").get().company
+        === "Has A Login");
+
+    // The seat is on ANOTHER account, which is the case a per-account check
+    // would have missed: the question is "does anybody answer for this
+    // company", not "can I reach them from here".
+    const docs = await call("/subs/cmp_own", { method: "PATCH",
+      body: JSON.stringify({ insurance: false, docFiles: {} }) });
+    t.ck("   and the documents back door is shut too", docs.status === 409,
+      String(docs.status));
+
+    // What a hiring account still owns: its own engagement.
+    const ownHalf = await call("/subs/cmp_own", { method: "PATCH",
+      body: JSON.stringify({ categories: ["roofing"], notes: "Good on flat roofs" }) });
+    t.ck("   but your own engagement is still writable", ownHalf.status === 200,
+      String(ownHalf.status));
+    t.ck("   and it stuck",
+      /Good on flat roofs/.test(
+        db.prepare("SELECT notes FROM engagements WHERE id='eng_own'").get().notes || ""));
   } finally {
     globalThis.fetch = realFetch;
   }

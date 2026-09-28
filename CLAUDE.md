@@ -404,6 +404,48 @@ refactor.
   party butting into somebody else's hiring. A test pins that the word SubSub
   does not appear on it.
 
+- **A roster entry is two records, and only one of them is yours.** `companies`
+  is shared — one name, one contact, one licence, one set of document booleans,
+  read by *every* account that engages them. `engagements` is per-account: the
+  trades you use them for, your capabilities, your rating, your notes, the
+  buildings you scope them to.
+
+  `PATCH /api/subs/:companyId` checked only that an engagement existed, then
+  wrote both halves. So any account with somebody on its roster could rewrite
+  that company's name, contact, email, phone, licence, crews and coverage —
+  for everybody else who hires them. It also wrote `insurance`, `bond`,
+  `contract` and `docFiles`, which are the columns `mayWriteCompanyDocs` guards
+  on the document routes: **a plain PATCH was a back door round that check**,
+  and without even its ended-engagement test.
+
+  The rule: a hiring account may write the company row only when **nobody
+  answers for it** — a record they typed in, no seat anywhere, no account of its
+  own. `companyAnswersForItself` asks exactly that, and it is deliberately
+  **not** the per-account seat count the roster and the auto-schedule branch
+  use. Those ask "is there somebody *I* can ask?", which is scoped on purpose.
+  This asks "does anybody answer for this company at all?", so a roofer whose
+  only seat is on another general contractor's account is still protected from
+  this one. Scoping it leaves precisely that hole, and the test fixture puts the
+  seat on another account so a scoped check fails it.
+
+  It **refuses** rather than quietly dropping the company half: a save that
+  reports success and writes nothing is how somebody re-types the same
+  correction three times.
+
+  On the screen the form agrees rather than offering a save that would be
+  thrown away. For a contractor with their own login the three-step form becomes
+  one pane — *How you work with Acme Roofing* — carrying the engagement half and
+  a line saying their details are theirs. This is the same shape as
+  auto-schedule, which already said the hiring side cannot commit the other
+  side's calendar; it was applied to one column and not to the row it sits in.
+
+- **An empty modal is a child that threw.** There is no error boundary, so a
+  throw during render blanks the whole page — except inside a modal, where what
+  is left is a white box over an intact screen. I produced one in this very
+  change: `STEPS[step - 1].label` with `STEPS` emptied for the locked form. It
+  is worth knowing as a diagnosis, because it is what a "white modal" report
+  means, and the cause is always an unguarded read in the modal's own subtree.
+
 - **A disabled control with no reason beside it is indistinguishable from a
   broken one.** `SubForm`'s Save is gated on **all three** steps being complete;
   the hint under it was gated on **the current** step being incomplete. So

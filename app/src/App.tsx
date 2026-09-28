@@ -22183,6 +22183,21 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
     docFiles: { bond: null, insurance: null, contract: null },
   };
   const [f, setF] = useState(init);
+  // Their record, or yours?
+  //
+  // `companies` is a shared row. A contractor with their own login or their own
+  // account answers for theirs -- their name, contact, licence, crews,
+  // coverage and document booleans are read by every account that hires them,
+  // so this account editing them would be editing somebody else's business
+  // card on everybody's screen. The server refuses it now
+  // (`company_not_yours`); this is the screen agreeing rather than offering a
+  // form whose save would be thrown away.
+  //
+  // What stays yours is the ENGAGEMENT: the trades you use them for, the
+  // capabilities you need, which buildings you scope them to, your notes and
+  // your rating. That is the whole of what a hiring account has an opinion
+  // about, and it is what this form becomes.
+  const locked = !!existing?.hasPortal;
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const toggle = (k, v) => setF((s) => ({ ...s, [k]: s[k].includes(v) ? s[k].filter((x) => x !== v) : [...s[k], v] }));
 
@@ -22214,7 +22229,14 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
     .filter((c) => c.members.length);
   const valid = f.company && f.contact && f.categories.length && f.caps.length && coverageOk && cleanCrews.length
     && (f.notifyEmail || f.notifySms);
-  const build = () => onSubmit({
+  const build = () => onSubmit(locked ? {
+    id: existing.id,
+    // The engagement half, and nothing else. Sending a company field here
+    // would be refused, and a refusal on a save somebody pressed once is a
+    // save they press three more times.
+    categories: f.categories, caps: f.caps, propertyIds: f.propertyIds,
+    notes: f.notes, rating: Number(f.rating) || 0,
+  } : {
     ...(existing ? { id: existing.id } : {}),
     company: f.company, contact: f.contact, phone: f.phone, email: f.email,
     city: f.city, state: f.state, zip: f.zip2,
@@ -22230,8 +22252,8 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
   });
   // Three steps: who they are, what they do, who's on the crew + paperwork.
   // Editing an existing record opens on step 1 but can jump between steps.
-  const [step, setStep] = useState(1);
-  const STEPS = [
+  const [step, setStep] = useState(locked ? 2 : 1);
+  const STEPS = locked ? [] : [
     { n: 1, label: "Company" },
     { n: 2, label: "Trades & coverage" },
     { n: 3, label: "Crews & paperwork" },
@@ -22417,8 +22439,15 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
 
   return (
     <div className="form">
-      <h2>{existing ? "Edit subcontractor" : "Add subcontractor"}</h2>
-      <p className="form-sub">Step {step} of 3 · {STEPS[step - 1].label}</p>
+      <h2>{locked ? `How you work with ${existing.company}`
+        : existing ? "Edit subcontractor" : "Add subcontractor"}</h2>
+      {/* STEPS is empty when the form is locked to the engagement half, and
+          STEPS[step - 1].label on an empty array throws -- which renders the
+          modal's children as nothing and leaves an empty white box over the
+          page. An empty modal is always a child that threw. */}
+      {!locked && (
+        <p className="form-sub">Step {step} of 3 · {STEPS[step - 1]?.label}</p>
+      )}
 
       <div className="steps-bar sf-steps">
         {STEPS.map((st) => (
@@ -22432,7 +22461,7 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
         ))}
       </div>
 
-      {step === 1 && (<>
+      {step === 1 && !locked && (<>
       {/* Found. Everything below this is about to be typed for nothing:
           their trades, crews, coverage and documents are already on file
           and stay theirs. What is left to do is ask. */}
@@ -22559,7 +22588,7 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
       </>)}
       </>)}
 
-      {step === 3 && (<>
+      {step === 3 && !locked && (<>
       <div className="fld">Crews &amp; members
         <div className="crew-edit">
           {f.crews.map((cr, ci) => (
@@ -22584,6 +22613,16 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
       </>)}
 
       {step === 2 && (<>
+      {locked && (
+        <div className="doc-block">
+          <AlertTriangle size={15} />
+          <div><strong>{existing.company} keeps their own details.</strong> Their contact,
+            licence, crews, coverage and documents belong to their account and are the same
+            for everybody who hires them — so they are not yours to change here. What is
+            yours is below: the trades you use them for, the buildings you scope them to and
+            your own notes.</div>
+        </div>
+      )}
       {(properties || []).length > 0 && (
         <div className="fld">Properties they cover
           <p className="fine">Leave all unticked and they're available at every property on the
@@ -22626,7 +22665,7 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
             : <p className="cov-hint">{f.caps.length} chosen.</p>}
         </div>
       )}
-      <div className="fld">Coverage
+      {!locked && <div className="fld">Coverage
         <div className="cov-toggle">
           <button type="button" className={f.covMode === "cities" ? "on" : ""} onClick={() => set("covMode", "cities")}>Specific cities</button>
           <button type="button" className={f.covMode === "radius" ? "on" : ""} onClick={() => set("covMode", "radius")}>ZIP radius</button>
@@ -22661,9 +22700,11 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
             : "A radius needs both a ZIP and a distance."}</p>
         )}
         <p className="cov-hint">Coverage is either named cities or one-or-more ZIP radii — not both.</p>
-      </div>
+      </div>}
       <label className="fld">Notes<textarea rows={2} value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Anything worth remembering…" /></label>
-      <div className="fld">Documents
+      {/* Their paperwork, on their shared row -- and the same booleans the
+          documents routes guard with mayWriteCompanyDocs. */}
+      {!locked && <div className="fld">Documents
         <div className="doc-manage">
           {[["w9", "IRS Form W-9", Receipt],
             ["insurance", "Certificate of insurance", FileText],
@@ -22688,18 +22729,18 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
             </div>
           ))}
         </div>
-      </div>
+      </div>}
       </>)}
 
       <div className="form-actions">
-        {step === 1
+        {step === 1 || locked
           ? <button className="btn-ghost" onClick={onCancel}>Cancel</button>
           : <button className="btn-ghost" onClick={() => setStep(step - 1)}>Back</button>}
-        {step < 3
+        {step < 3 && !locked
           ? <button className="btn-solid" onClick={() => setStep(step + 1)} disabled={!stepOk}>
               Continue
             </button>
-          : <button className="btn-solid" onClick={build} disabled={!valid}>
+          : <button className="btn-solid" onClick={build} disabled={!locked && !valid}>
               {existing ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Add subcontractor</>}
             </button>}
       </div>

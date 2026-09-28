@@ -205,6 +205,66 @@ try {
       JSON.stringify(patches[0]?.docFiles));
     await ctx.close();
   }
+  console.log("\n-- a contractor with their own account keeps their own record --");
+  {
+    // `companies` is a shared row: one name, one contact, one licence, one set
+    // of document booleans, read by EVERY account that engages them. Having
+    // somebody on your roster is enough to edit a record you typed in; it is
+    // not enough to rewrite a company that has its own people.
+    SUB = { ...SUB, hasPortal: true };
+    patches.length = 0;
+    const { ctx, page, crashes } = await open();
+    await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
+      .find((b) => /^Contractors/i.test(b.innerText))?.click());
+    for (let n = 0; n < 30; n++) { await wait(250); if (await page.$(".grid .card")) break; }
+    await page.evaluate(() => [...document.querySelectorAll(".grid .card")]
+      .find((c) => /Roundhouse/i.test(c.innerText))?.click());
+    for (let n = 0; n < 30; n++) { await wait(250); if (await page.$(".modal")) break; }
+    await page.evaluate(() => [...document.querySelectorAll(".modal button")]
+      .find((b) => /^Edit$/i.test(b.innerText.trim()))?.click());
+    await wait(900);
+
+    const form = await page.evaluate(() => {
+      const m = document.querySelector(".modal");
+      const text = (m?.innerText || "").replace(/\s+/g, " ");
+      const vals = [...(m?.querySelectorAll("input") || [])].map((i) => i.value);
+      return { text, vals,
+        steps: [...(m?.querySelectorAll(".sf-steps button") || [])].length,
+        save: [...(m?.querySelectorAll("button") || [])]
+          .some((b) => /^save changes$/i.test(b.innerText.trim())) };
+    });
+    t.ck("it says whose details these are",
+      /keeps their own details/i.test(form.text), form.text.slice(0, 140));
+    t.ck("and what is still yours",
+      /trades you use them for/i.test(form.text), form.text.slice(0, 200));
+    // Their record. Not offered, because the server refuses it and a form
+    // whose save is thrown away is worse than no form.
+    t.ck("their company name is not an input here",
+      !form.vals.includes("Roundhouse Kick Consgruction"), JSON.stringify(form.vals));
+    t.ck("nor their email", !form.vals.includes("bsmurdq@gmail.com"), JSON.stringify(form.vals));
+    t.ck("no crews to edit", !/Crews & members/i.test(form.text), form.text.slice(0, 200));
+    t.ck("no coverage to edit", !/ZIP radius/i.test(form.text), form.text.slice(0, 200));
+    t.ck("and no documents to edit", !/Surety bond/i.test(form.text), form.text.slice(0, 200));
+    // Yours.
+    t.ck("the trades are still there", /Categories/i.test(form.text), form.text.slice(0, 200));
+    t.ck("and your notes", /Notes/i.test(form.text), form.text.slice(0, 200));
+    // One pane, so no walking three steps to reach a save.
+    t.ck("it saves in one step", form.steps === 0, String(form.steps));
+    t.ck("with a save button", form.save === true, String(form.save));
+
+    await page.evaluate(() => [...document.querySelectorAll(".modal button")]
+      .find((b) => /^save changes$/i.test(b.innerText.trim()))?.click());
+    await wait(1200);
+    t.ck("saving sends something", patches.length === 1, JSON.stringify(patches));
+    const sent = Object.keys(patches[0] || {});
+    t.ck("carrying the engagement half",
+      sent.includes("categories") && sent.includes("notes"), sent.join(","));
+    t.ck("and not one field of their company row",
+      !["company", "contact", "email", "phone", "license", "crews", "coverage", "docFiles"]
+        .some((k) => sent.includes(k)), sent.join(","));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
 } finally {
   await browser.close();
   web.close(); api.close();
