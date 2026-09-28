@@ -479,8 +479,14 @@ const ACCOUNT_KINDS = {
   // value rather than a label over the top because `kind` is what every screen
   // reads to say what an account IS, and nothing downstream could tell a
   // misfiled roofer from a real GC.
+  // `hires: false` is the one thing that really separates this from a general
+  // contractor. Sending your pack to somebody means you work FOR them; creating
+  // a job means somebody works for YOU, and that is the act that makes an
+  // account the hiring side. Everything they signed up for is untouched --
+  // documents, pack, work orders, crews -- and the switch costs nothing and
+  // keeps everything, because both kinds are hireable.
   subcontractor:      { label: "Subcontractor", properties: false, invites: [],
-                        hireable: true,
+                        hireable: true, hires: false,
                         roleLabels: { pm: "Project manager" } },
   property_manager:   { label: "Property manager", properties: true, invites: ["owner"] },
   // A building owner's account has no owners to invite -- they are the owner.
@@ -499,6 +505,11 @@ const kindOf = (account) =>
 const hasProperties = (account) => ACCOUNT_KINDS[kindOf(account)].properties;
 // Whether this account can itself be hired as a subcontractor.
 const isHireable = (account) => !!ACCOUNT_KINDS[kindOf(account)].hireable;
+// Whether this account may create jobs -- the hiring direction. Default true,
+// so a kind added later hires unless it says otherwise; `subcontractor` is the
+// exception and says so. Kept in step with HIRING_KINDS in worker/index.js,
+// which is the one that actually enforces it.
+const isHiring = (account) => ACCOUNT_KINDS[kindOf(account)].hires !== false;
 // The line under the name on a sign-in page. SubSub's own address describes
 // the product; a company's address describes what the company is -- the
 // people signing in there are its staff, its owners, its tenants, its
@@ -2063,6 +2074,9 @@ export default function SubSub() {
 
   const [uniformOrders, setUniformOrders] = useState([]);
   const [upgradePrompt, setUpgradePrompt] = useState(null); // { kind: "contractor" | "user" }
+  // Not a plan prompt. Becoming the hiring side costs nothing and keeps
+  // everything; it is a different question and it gets a different screen.
+  const [becomeHiring, setBecomeHiring] = useState(false);
   const [reviewing, setReviewing] = useState(null); // { sub, kind }
   // Callbacks and warranty claims raised against a completed job.
   const [serviceCalls, setServiceCalls] = useState([]);
@@ -2791,6 +2805,13 @@ export default function SubSub() {
       ? { ...e, propertyIds: e.propertyIds.filter((x) => x !== id) } : e));
   };
   const tryAddJob = (forSub, forProperty, forDate) => {
+    // A subcontractor account does not create jobs, because creating one is
+    // what it means to be the hiring side. Before the plan check, since this is
+    // about what the account IS rather than how much of it they have used --
+    // and it costs nothing to resolve, so leading with a price would be wrong.
+    if (!isHiring(account) && runsTheAccount(role, membership)) {
+      setAddMenu(false); setBecomeHiring(true); return;
+    }
     // The plan belongs to the account, not to a guest of it. Showing an owner
     // an upgrade prompt would be asking the wrong person for money.
     if (atJobLimit && runsTheAccount(role, membership)) { setAddMenu(false); setUpgradePrompt({ kind: "job" }); return; }
@@ -5962,6 +5983,21 @@ export default function SubSub() {
           busy={billingBusy} err={billingErr}
           onUpgrade={() => startCheckout(billing)}
           onDecline={() => setUpgradePrompt(null)} /></Modal>}
+      {becomeHiring && <Modal onClose={() => setBecomeHiring(false)}>
+        <BecomeHiring account={account} subs={subs}
+          onCancel={() => setBecomeHiring(false)}
+          onConfirm={async () => {
+            await api.patchAccount({ kind: "general_contractor" });
+            // Re-read rather than patch in place. The kind decides the
+            // checklist, the nav, the sign-in tagline and what the API will
+            // let them do, and a local edit that disagrees with the server on
+            // any one of those is the stale-state bug this file keeps
+            // growing. Awaited, so the form that opens next is the one a
+            // general contractor gets.
+            await hydrateAccount(account.id, currentUserId, { quiet: true });
+            await reloadAccounts();
+            setBecomeHiring(false);
+          }} /></Modal>}
       {userForm && <Modal onClose={() => setUserForm(false)}>
         <UserForm subs={subs} properties={accountProperties} accountKind={kindOf(account)} onSubmit={addUser}
           preset={userForm === true ? null : userForm}
@@ -12409,6 +12445,69 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
         <p className="wl-req-key"><Req /> Required</p>
       </div>
       <PoweredBy className="wl-foot" height={15} />
+    </div>
+  );
+}
+
+// ---- Becoming the hiring side ------------------------------------------
+//
+// A subcontractor pressed "New job", and creating a job is what it means to be
+// the one doing the hiring. Sending your pack to somebody is the opposite
+// direction: it says you work for them.
+//
+// This is NOT a plan prompt and must not read like one. It costs nothing, they
+// stay on Basic, and nothing they signed up for is lost -- both kinds are
+// hireable, so the company row, the documents, the licence, the QR code and
+// every pack already sent survive the change untouched. Leading with a price,
+// or with a warning, would be asking for money and worry over a setting.
+//
+// What it does change is said plainly, because it changes their home screen:
+// the set-up checklist becomes the hiring one and their sign-in page stops
+// calling them a subcontractor. Reversible in Account settings, which is worth
+// saying to somebody deciding whether to press a button that renames their
+// business.
+function BecomeHiring({ account, subs, onCancel, onConfirm }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const go = async () => {
+    setBusy(true); setErr("");
+    try { await onConfirm(); }
+    catch (e) {
+      console.error("[become-hiring] failed:", e);
+      setErr("That didn't save — nothing changed. Try again in a moment.");
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="form up-form">
+      <span className="up-badge"><Users size={13} /> Account type</span>
+      <h2>Creating a job means you are hiring</h2>
+      <p className="up-sub">
+        {account.name} is set up as a subcontractor — a company that gets hired. Sending your
+        compliance pack says you work for somebody; creating a job is the other direction, so
+        it needs a general contractor account.
+      </p>
+      <p className="up-gets">
+        <strong>It is free, and you keep everything.</strong> You stay on Basic. Your documents,
+        your licence, your QR code and every pack you have already sent are untouched — you can
+        still be hired, and the contractors who have your link keep seeing it stay current.
+      </p>
+      <ul className="bh-changes">
+        <li>Your set-up checklist becomes the hiring one — bring contractors in, approve their
+          documents, create a job.</li>
+        <li>Your sign-in page stops calling you a subcontractor.</li>
+        <li>{subs.length > 0
+          ? `Your ${subs.length} contractor${subs.length === 1 ? "" : "s"} stay exactly where they are.`
+          : "Basic covers three contractors, one user and five jobs a month, free."}</li>
+      </ul>
+      <p className="up-fine">You can change it back any time in Account → Company.</p>
+      {err && <p className="wl-err" role="alert">{err}</p>}
+      <div className="up-buy">
+        <button className="btn-solid" disabled={busy} onClick={go}>
+          {busy ? "Switching\u2026" : "Switch to general contractor"}
+        </button>
+        <button className="btn-ghost" disabled={busy} onClick={onCancel}>Not yet</button>
+      </div>
     </div>
   );
 }
@@ -22531,6 +22630,11 @@ body{background:var(--paper)}
 .pack-cta span{font-size:12.5px;color:var(--ink-soft);line-height:1.55}
 .pack-cta a{margin-top:6px;text-decoration:none}
 .pack-foot{font-size:11.5px;color:var(--ink-soft)}
+.bh-changes{list-style:none;margin:14px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.bh-changes li{position:relative;padding-left:18px;font-size:13.5px;line-height:1.55;color:var(--ink-soft)}
+.bh-changes li::before{content:"";position:absolute;left:0;top:8px;width:6px;height:6px;
+  border-radius:50%;background:var(--brand)}
+
 /* ---- The compliance pack, on the dashboard ----------------------------- */
 .cpack{grid-column:span 1;background:var(--card);border:1px solid var(--line);border-radius:14px;
   padding:16px 18px;display:flex;flex-direction:column}

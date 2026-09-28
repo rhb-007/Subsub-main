@@ -405,6 +405,72 @@ const SITE = 5257;
   t.ck("naming the reading that means run it", /m046_kind_check/.test(m046), "");
 }
 
+// ---- who may create a job ---------------------------------------------
+// Sending your compliance pack to somebody means you work FOR them. Creating a
+// job means somebody works for YOU, and that is the act that makes an account
+// the hiring side -- so it is the one thing a subcontractor account cannot do,
+// and the point at which it stops being one.
+{
+  console.log("\n-- a subcontractor account cannot create a job --");
+  const { default: worker } = await import("../worker/index.js");
+  const SCHEMA = readFileSync(join(app, "worker", "schema.sql"), "utf8");
+  const { makeD1: mk, freshDb: fresh } = await import("./lib/d1-sqlite.mjs");
+
+  const db = fresh({ base: SCHEMA, migrations: [] });
+  db.exec(`
+    INSERT INTO accounts(id,name,subdomain,kind) VALUES
+      ('acc_sub','Orcas Roofing','orcas','subcontractor'),
+      ('acc_gc','Outerhome','outerhome','general_contractor');
+    INSERT INTO users(id,name,email,auth_id) VALUES ('u_j','Jason','j@orcas.test','auth_j');
+    INSERT INTO memberships(id,user_id,account_id,role) VALUES
+      ('m_sub','u_j','acc_sub','admin'), ('m_gc','u_j','acc_gc','admin');
+  `);
+  const env = { DB: mk(db) };
+  const makeJob = (accountId) => worker.fetch(new Request("https://api.subsub.work/api/jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-User-Id": "u_j", "X-Account-Id": accountId },
+    body: JSON.stringify({ title: "Re-roof", date: "2026-11-02", trades: ["roofing"] }),
+  }), env);
+
+  const refused = await makeJob("acc_sub");
+  const rb = await refused.json().catch(() => ({}));
+  t.ck("it is refused", refused.status === 403, `${refused.status} ${JSON.stringify(rb)}`);
+  t.ck("and says why, so the screen can offer the way out",
+    rb.error === "not_a_hiring_account", String(rb.error));
+  t.ck("naming the kind it refused", rb.kind === "subcontractor", String(rb.kind));
+  t.ck("and nothing was written",
+    db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE account_id='acc_sub'").get().n === 0);
+
+  // The same seat, on a hiring account, is fine -- so this is about the
+  // ACCOUNT and not about the person.
+  const allowed = await makeJob("acc_gc");
+  t.ck("the same person can on a general contractor account", allowed.status < 300,
+    `${allowed.status} ${(await allowed.clone().text()).slice(0, 80)}`);
+
+  // Enforced on the server, not only by hiding a button. A gate that lives in
+  // the browser is a suggestion.
+  const src = readFileSync(join(app, "worker", "index.js"), "utf8");
+  t.ck("the refusal is in the Worker", /not_a_hiring_account/.test(src));
+  const hiring = src.match(/const HIRING_KINDS = \[([^\]]*)\]/);
+  t.ck("HIRING_KINDS excludes subcontractor",
+    !!hiring && !/subcontractor/.test(hiring[1]), hiring ? hiring[1] : "not found");
+  t.ck("and includes every other kind",
+    !!hiring && ["general_contractor", "property_manager", "building_owner", "portfolio_manager"]
+      .every((k) => hiring[1].includes(k)), hiring ? hiring[1] : "");
+
+  // And the browser's copy has to agree, or the button and the API disagree.
+  const ui = readFileSync(join(app, "src", "App.tsx"), "utf8");
+  const block = ui.slice(ui.indexOf("const ACCOUNT_KINDS = {"), ui.indexOf("const hasTenants"));
+  t.ck("the app marks the same kind as not hiring",
+    /subcontractor:[\s\S]*?hires: false/.test(block), "");
+  // Comments stripped first: the rule is explained in a comment directly above
+  // the property, so counting raw matches counts the prose as a declaration.
+  const code = block.replace(/^\s*\/\/.*$/gm, "");
+  t.ck("and nothing else is marked that way",
+    (code.match(/hires: false/g) || []).length === 1,
+    String((code.match(/hires: false/g) || []).length));
+}
+
 // ---- and the form -----------------------------------------------------
 const site = serveApp({ dir: root, port: SITE });
 const browser = await launch();

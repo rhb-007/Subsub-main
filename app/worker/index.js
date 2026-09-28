@@ -3656,6 +3656,19 @@ const ACCOUNT_KINDS_WITH_PROPERTIES = ["property_manager", "building_owner", "po
 // would give a subcontractor nothing to be hired AS.
 const HIREABLE_KINDS = ["general_contractor", "subcontractor"];
 
+// And the kinds that HIRE, which is the other direction and not the same list.
+//
+// Sending your compliance pack to somebody means you are working FOR them.
+// Creating a job means somebody is going to work for YOU -- it is the act that
+// makes an account the hiring side, and it is where a subcontractor account
+// stops being one. They are not blocked from anything they came for: their
+// documents, their pack, their work orders and their own crews are all
+// untouched. They are blocked from the one thing that means they have changed
+// what they are, and told how to change it -- which costs nothing and keeps
+// everything, because both kinds are hireable so the company row, the licence
+// and every pack already sent survive the switch.
+const HIRING_KINDS = ["general_contractor", "property_manager", "building_owner", "portfolio_manager"];
+
 // The trade categories an account can hire out -- the same thirty ids the app
 // renders from. Kept here too because the browser's copy is a convenience and
 // this is the one that decides what is storable: an id the app cannot render
@@ -5343,6 +5356,20 @@ function stripOtherTrades(auth, job) {
 app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) => {
   const auth = c.get("auth");
   const { accountId, userId } = auth;
+
+  // Creating a job is the hiring side's act, so a subcontractor account cannot.
+  // Enforced here and not only by hiding the button: a gate that lives in the
+  // browser is a suggestion.
+  //
+  // Read off the account rather than the seat. A tenant or an owner raising
+  // work at a building is a different path entirely and is never on a
+  // subcontractor account, which has no properties.
+  const acct = await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`)
+    .bind(accountId).first();
+  if (acct && !HIRING_KINDS.includes(acct.kind)) {
+    return c.json({ error: "not_a_hiring_account", kind: acct.kind }, 403);
+  }
+
   const b = await c.req.json();
   const id = uid();
 

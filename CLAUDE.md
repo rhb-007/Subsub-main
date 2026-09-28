@@ -76,6 +76,36 @@ refactor.
   placeholder names one: a pre-filled wrong answer is worse than an empty
   box.
 
+- **Creating a job is what makes an account the hiring side, and it is the one
+  thing a subcontractor account cannot do.** The two directions are not the same
+  act: sending your compliance pack to somebody says *you work for them*;
+  creating a job says *somebody works for you*. So that is the boundary, and it
+  is the only one — a subcontractor account is otherwise a general contractor's,
+  because `ROLES.admin` reaches Contractors, Jobs and Calendar whatever the
+  kind.
+
+  `HIRING_KINDS` in the Worker refuses `POST /api/jobs` with
+  `not_a_hiring_account`, and `ACCOUNT_KINDS[kind].hires !== false` is the
+  browser's copy. **Enforced on the server, not only by hiding the button**: a
+  gate that lives in the browser is a suggestion. The refusal names the kind so
+  the screen can offer the way out rather than just saying no.
+
+  **It is not a plan prompt and must not read like one.** Switching costs
+  nothing, they stay on Basic, and nothing is lost — both kinds are hireable, so
+  the company row, the documents, the licence, the QR code and every pack
+  already sent survive untouched (`PATCH /api/account` only clears `company_id`
+  when moving to a kind that *cannot* be hired, and then refuses with
+  `hired_by_others` if anybody already hires them). Leading with a price, or a
+  warning, would be asking for money and worry over a setting. What it *does*
+  change is said plainly, because it changes their home screen: the checklist
+  becomes the hiring one and their sign-in page stops calling them a
+  subcontractor. Reversible in Account → Company, which is worth saying to
+  somebody deciding whether to press a button that renames their business.
+
+  The plan is a separate axis and stays one. Basic is free for three
+  contractors, one user and five jobs a month; Scale is volume. Neither has
+  anything to do with which direction the account faces.
+
 - **A UBI is Washington's, so it is asked for in Washington and nowhere else.**
   The Unified Business Identifier does not exist in the other fifty
   jurisdictions. It is on the subcontractor's set-up checklist and on the

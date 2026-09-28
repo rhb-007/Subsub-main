@@ -49,6 +49,7 @@ const ACCOUNT = (kind) => ({
 });
 
 let KIND = "subcontractor";
+const patched = [];
 let MY_COMPANY = {
   companyId: "cmp_own_acc_orcas", company: "Orcas Roofing", contact: "Jason",
   email: "jason@orcas.test", license: null, docs: {}, sharesSent: 0,
@@ -56,7 +57,12 @@ let MY_COMPANY = {
 };
 
 const web = serveApp({ dir: OUT, port: WEB });
-const api = serveApi({ port: API, routes: (path) => {
+const api = serveApi({ port: API, routes: (path, method, body) => {
+  if (path === "/api/account" && method === "PATCH") {
+    patched.push(body);
+    if (body && body.kind) KIND = body.kind;   // the server would, so the stub does
+    return [200, ACCOUNT(KIND)];
+  }
   if (path.startsWith("/api/account-by-subdomain/")) return [200, ACCOUNT(KIND)];
   if (path === "/api/account") return [200, ACCOUNT(KIND)];
   if (path === "/api/my-company") return [200, MY_COMPANY];
@@ -238,6 +244,67 @@ try {
     }
     t.ck("pressing it lands on the documents themselves",
       await page.evaluate(() => !!document.querySelector(".mydocs")));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- pressing New job offers the switch, not a price --");
+  {
+    // Creating a job is the hiring side's act. Sending a pack is the other
+    // direction -- it says you work for somebody. So this is where a
+    // subcontractor account stops being one, and it costs nothing.
+    KIND = "subcontractor";
+    MY_COMPANY = { ...MY_COMPANY, state: "WA", docs: { insurance: { fileName: "c.pdf" } } };
+    patched.length = 0;
+    const { ctx, page, crashes } = await open();
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => /^\+?\s*New job$/i.test(b.innerText.trim()))?.click());
+    for (let n = 0; n < 25; n++) { await wait(200); if (await page.$(".up-form")) break; }
+    const said = await page.evaluate(() =>
+      document.querySelector(".up-form")?.innerText.replace(/\s+/g, " ").trim() || "");
+
+    t.ck("something opened", said.length > 0, said.slice(0, 60));
+    t.ck("it explains that a job means hiring",
+      /creating a job means you are hiring/i.test(said), said.slice(0, 120));
+    // NOT a plan prompt. It costs nothing and they keep everything.
+    t.ck("it says it is free", /it is free/i.test(said), said);
+    t.ck("and that nothing is lost",
+      /keep everything/i.test(said) && /untouched/i.test(said), said);
+    t.ck("no price and no upsell on it",
+      !/\$/.test(said) && !/\bScale\b/.test(said) && !/upgrade/i.test(said), said);
+    t.ck("it says what will change on their screen",
+      /checklist/i.test(said) && /sign-in/i.test(said), said);
+    t.ck("and that it is reversible", /change it back/i.test(said), said);
+    t.ck("no job form opened behind it",
+      await page.evaluate(() => !document.querySelector(".job-form")));
+
+    // And pressing it switches the account rather than only closing.
+    await page.evaluate(() => [...document.querySelectorAll(".up-form button")]
+      .find((b) => /switch to general contractor/i.test(b.innerText))?.click());
+    for (let n = 0; n < 30 && !patched.length; n++) await wait(200);
+    t.ck("confirming patches the account", patched.length === 1, JSON.stringify(patched));
+    t.ck("to the hiring kind", patched[0]?.kind === "general_contractor",
+      JSON.stringify(patched[0]));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- and afterwards the account reads as one --");
+  {
+    // The kind decides the checklist and the tagline, so the proof it took is
+    // that the home screen changed.
+    KIND = "general_contractor";
+    MY_COMPANY = { ...MY_COMPANY, docs: { insurance: { fileName: "c.pdf" } } };
+    const { ctx, page, crashes } = await open();
+    const all = (await steps(page)).join(" | ");
+    t.ck("the checklist is the hiring one now",
+      /bring your subcontractors/i.test(all) && /first job/i.test(all), all);
+    t.ck("and no longer asks for their own pack",
+      !/certificate of insurance \(COI\)/i.test(all), all);
+    // They are still hireable, so the pack itself has not gone anywhere.
+    t.ck("but the compliance pack card is still there",
+      await page.evaluate(() => !!document.querySelector(".cpack")));
+    t.ck("and so is My documents", (await navItems(page)).some((x) => /^My documents/i.test(x)));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
