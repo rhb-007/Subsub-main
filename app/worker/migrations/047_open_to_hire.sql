@@ -11,9 +11,18 @@
 -- `scope_kind = 'labor_only'` and `owner_declared_at`: a value with a person
 -- and a time against it, rather than an absence nobody recorded.
 --
--- NULL means NOT ANSWERED, and that is deliberate. The effective default is
--- worked out from the account kind -- a subcontractor account is open, every
--- hiring kind is closed -- so this column never has to be backfilled with a
--- guess, and an account that has never seen the switch behaves the way its
--- kind implies. Once somebody touches it, the column is the answer.
+-- NULL means NOT ANSWERED, and that is deliberate: the column never has to be
+-- backfilled with a guess. Once somebody touches it, the column is the answer.
+--
+-- The effective default for an unanswered row is OPEN, for every hireable
+-- kind. The first version of this derived it from the account kind and closed
+-- a general contractor, on the reasoning above. That was the wrong way round:
+-- since 031 a hireable account HAS a company row precisely so it can be hired,
+-- and a general contractor taking overflow work from another one is the
+-- ordinary case rather than the odd one. Defaulting them out meant the product
+-- quietly did not work for them until they found a switch nobody had told them
+-- about. `openToHire` in the Worker is the one place that decides.
+--
+-- Nothing changes about the column itself, so a database that already ran this
+-- needs nothing further -- the behaviour moved, not the schema.
 ALTER TABLE companies ADD COLUMN open_to_hire INTEGER;
