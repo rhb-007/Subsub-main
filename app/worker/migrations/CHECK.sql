@@ -1,9 +1,26 @@
 -- Which migrations has this database actually had?
 --
--- Paste this into the D1 console and read the row. Every column answers 1
--- for applied and 0 for not. There is no migrations table to consult -- they
--- are applied by hand -- so this asks the schema itself, which cannot be
--- wrong about it.
+-- Paste this into the D1 console and read the row. There is no migrations
+-- table to consult -- they are applied by hand -- so this asks the schema
+-- itself, which cannot be wrong about it.
+--
+-- MOST columns answer 1 for applied and 0 for not. FOUR do not, and reading
+-- them the same way turns a healthy database into four bug reports:
+--
+--   m031_hireable_without, m031_others_with, m039_unowned
+--       INVARIANTS. They count BROKEN ROWS, so 0 is the good answer and
+--       anything above 0 is the bug report. All three read 1 once, and each
+--       was a different route writing a row the migration had taught the
+--       schema to expect.
+--
+--   m046_kind_check
+--       TRI-STATE, and the only one where the middle value means "do not
+--       run the migration". 0 and 2 are both fine; only 1 needs 046.
+--
+-- This header used to say "every column answers 1 for applied and 0 for not",
+-- which is the screen-that-lies rule pointed at a comment: somebody reading
+-- their own healthy row would have found four zeros and gone looking for four
+-- migrations that were never missing.
 --
 -- It exists because "did I run that one?" came up after nearly every round,
 -- and the honest answer from a chat thread is a guess. Safe to run as often
