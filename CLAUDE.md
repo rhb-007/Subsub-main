@@ -1206,6 +1206,56 @@ refactor.
   record somebody started and abandoned would otherwise seed a screen saying
   "we already have your details" over two blanks.
 
+- **A general contractor hires subcontractors; a property manager hires
+  contractors.** The Add menu offered *Contractor* to a general contractor,
+  which is the wrong noun for the one kind of account the whole product is
+  written for. A GC holds the prime contract, so the people they engage work
+  **under** it. A property manager, a building owner and a portfolio manager
+  engage a plumber directly for their own building — nobody is sub to
+  anything, and "subcontractor" there describes a chain that does not exist.
+
+  `hiresLabel` on `ACCOUNT_KINDS`, read through `rosterWords(account)`. It
+  sits beside `roleLabels` and is the same kind of thing: it renames what
+  somebody is **called** without changing anything about what they are or
+  what they may do. A subcontractor account gets *subcontractor* too, because
+  passing work further down is still passing it down a chain — which is
+  exactly what the lien waiver roll-up already models, at every tier.
+
+  **Fixing only the reported screen would have been the bug.** The word is in
+  the nav, the Add menu, the page title, the dashboard tile, the set-up
+  checklist, the invite modal, the plan-limit gate and the embed panel's
+  pointer — and a nav reading *Subcontractors* over a checklist reading
+  *Bring your contractors in* is two names for one list, which is how
+  somebody concludes there are two lists. So it is one rule read in every one
+  of those places.
+
+  **It was wrong in BOTH directions and the second half is easy to miss.** The
+  plan-limit gate told a property manager they had reached *3 subcontractors*,
+  and the set-up checklist said *Bring your subcontractors in* three inches
+  under a nav saying Contractors.
+
+  **And the test for it made exactly the mistake it was written to catch.**
+  The first version checked the GC's nav and the PM's dashboard — so a
+  component left on the default word was right for one of them and the
+  assertions for the other were never written. `AdminDashboard` was duly left
+  unwired, the general contractor's checklist went back to *Bring your
+  contractors in*, and nothing failed. **When a rule has two branches, assert
+  both branches in the same places**, or the coverage is diagonal and the hole
+  is invisible.
+
+  Two smaller things. Test navigation was coupled to the label — a dozen
+  suites clicked `/^Contractors/` — and those now match either word, because
+  their subject is what the screen does and not what the roster is called;
+  `test:rosterword` is the one place the noun is pinned. And **JSX strips the
+  newline between an expression and the text after it**, so
+  `on the {words.Many}\n screen` rendered as *Subcontractorsscreen* — the
+  space has to be `{" "}`.
+
+  Deliberately unchanged: the `contractor` **seat role**, which is a person
+  signing in to the portal rather than a company on a roster; *Signed
+  subcontractor agreement*, which is the document's actual name; and the staff
+  console, which describes SubSub's own data model across every account.
+
 - **Completion is two-party and append-only.** The subcontractor marks work
   reached with evidence; an admin **or project manager** verifies it. Neither
   side can do both. Completion is an event log, not a status flag, because

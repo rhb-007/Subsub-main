@@ -143,7 +143,8 @@
     "test:zapier": "node --no-warnings scripts/zapier-test.mjs",
     "test:crmsources": "node --no-warnings scripts/crm-sources-test.mjs",
     "test:payouts": "node --no-warnings scripts/payout-onboard-test.mjs",
-    "test:payoutsui": "node scripts/payout-setup-ui-test.mjs"
+    "test:payoutsui": "node scripts/payout-setup-ui-test.mjs",
+    "test:rosterword": "node scripts/roster-word-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

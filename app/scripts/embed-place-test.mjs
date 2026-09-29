@@ -193,7 +193,7 @@ try {
     // The panel moved, so the sentence naming where applications land had to
     // stop saying "this screen".
     t.ck("it names the screen applications land on",
-      /on the Contractors screen/.test(body || ""), (body || "").slice(-200));
+      /on the (Sub)?contractors screen/i.test(body || ""), (body || "").slice(-200));
     t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
 
     // The standing guard, scoped past the code block. A \\uXXXX in JSX text is

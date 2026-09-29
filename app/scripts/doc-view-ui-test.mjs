@@ -108,7 +108,7 @@ const browser = await launch();
 
 const openReview = async (page, re) => {
   await page.evaluate(() => [...document.querySelectorAll("button")]
-    .find((b) => /^Contractors/.test(b.innerText.trim().split("\n")[0]))?.click());
+    .find((b) => /^(Sub)?contractors/i.test(b.innerText.trim().split("\n")[0]))?.click());
   await wait(800);
   await page.evaluate(() => {
     const c = [...document.querySelectorAll(".grid .card")]

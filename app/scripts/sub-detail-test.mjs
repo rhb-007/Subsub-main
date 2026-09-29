@@ -40,7 +40,7 @@ const overlaps = (a, b) =>
 
 async function openFirstContractor(page) {
   await page.evaluate(() => [...document.querySelectorAll("button")]
-    .find((b) => /^Contractors/.test(b.innerText.trim().split("\n")[0]))?.click());
+    .find((b) => /^(Sub)?contractors/i.test(b.innerText.trim().split("\n")[0]))?.click());
   await wait(1500);
   await page.evaluate(() => document.querySelector(".grid .card")?.click());
   await wait(1200);

@@ -103,7 +103,7 @@ const open = async () => {
 // Get to the roster and open one contractor's card by company name.
 const openSub = async (page, name) => {
   await page.evaluate(() => [...document.querySelectorAll("button")]
-    .find((b) => /^Contractors/.test(b.innerText.trim().split("\n")[0]))?.click());
+    .find((b) => /^(Sub)?contractors/i.test(b.innerText.trim().split("\n")[0]))?.click());
   await wait(900);
   const found = await page.evaluate((n) => {
     const card = [...document.querySelectorAll(".grid .card")]

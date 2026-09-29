@@ -573,7 +573,7 @@ try {
     await wait(3000);
     ck("asking closes it rather than leaving three steps in front of them",
       await gc.page.evaluate(() => !document.querySelector(".form")));
-    await click(gc.page, "^Contractors");
+    await click(gc.page, "^(Sub)?contractors");
     await wait(1800);
     const strip = await gc.page.evaluate(() =>
       [...document.querySelectorAll(".invited-card")].map((c) => c.innerText.replace(/\n/g, " ")).join(" ~ "));

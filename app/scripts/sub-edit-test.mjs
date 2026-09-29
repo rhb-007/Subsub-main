@@ -91,7 +91,7 @@ try {
   {
     const { ctx, page, crashes } = await open();
     await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
-      .find((b) => /^Contractors/i.test(b.innerText))?.click());
+      .find((b) => /^(Sub)?contractors/i.test(b.innerText))?.click());
     for (let n = 0; n < 30; n++) { await wait(250); if (await page.$(".grid .card")) break; }
 
     // Into the detail modal, the way somebody does: tap the card.
@@ -215,7 +215,7 @@ try {
     patches.length = 0;
     const { ctx, page, crashes } = await open();
     await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]
-      .find((b) => /^Contractors/i.test(b.innerText))?.click());
+      .find((b) => /^(Sub)?contractors/i.test(b.innerText))?.click());
     for (let n = 0; n < 30; n++) { await wait(250); if (await page.$(".grid .card")) break; }
     await page.evaluate(() => [...document.querySelectorAll(".grid .card")]
       .find((c) => /Roundhouse/i.test(c.innerText))?.click());

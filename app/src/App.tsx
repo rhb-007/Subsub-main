@@ -447,7 +447,7 @@ const ACCOUNT_KINDS = {
   // will never use -- one careless join from putting a building owner on
   // somebody's roster.
   general_contractor: { label: "General contractor", properties: false, invites: [],
-                        hireable: true,
+                        hireable: true, hiresLabel: "subcontractor",
                         roleLabels: { pm: "Project manager" } },
   // The company being hired, which every other kind here is not.
   //
@@ -471,7 +471,7 @@ const ACCOUNT_KINDS = {
   // documents, pack, work orders, crews -- and the switch costs nothing and
   // keeps everything, because both kinds are hireable.
   subcontractor:      { label: "Subcontractor", properties: false, invites: [],
-                        hireable: true, hires: false,
+                        hireable: true, hires: false, hiresLabel: "subcontractor",
                         roleLabels: { pm: "Project manager" } },
   property_manager:   { label: "Property manager", properties: true, invites: ["owner"] },
   // A building owner's account has no owners to invite -- they are the owner.
@@ -490,6 +490,31 @@ const kindOf = (account) =>
 const hasProperties = (account) => ACCOUNT_KINDS[kindOf(account)].properties;
 // Whether this account can itself be hired as a subcontractor.
 const isHireable = (account) => !!ACCOUNT_KINDS[kindOf(account)].hireable;
+// What this account calls the companies on its roster.
+//
+// A general contractor holds the prime contract, so the people they engage
+// work UNDER it: those are subcontractors, which is the word a GC uses all
+// day and the word every other screen in this product already uses. A
+// property manager, a building owner and a portfolio manager engage a plumber
+// directly for their own building -- nobody is sub to anything, and calling
+// them subcontractors would describe a chain that does not exist.
+//
+// A subcontractor account gets "subcontractor" too, because passing work
+// further down is still passing it down a chain -- which is exactly what the
+// lien waiver roll-up models, at every tier.
+//
+// `hiresLabel` sits beside `roleLabels` and is the same kind of thing: it
+// renames what somebody is CALLED without changing anything about what they
+// are or what they may do. One place, so the nav, the Add menu, the page
+// title and the dashboard tiles cannot end up holding four opinions -- which
+// is how somebody concludes there are two different lists.
+const rosterWord = (account) => ACCOUNT_KINDS[kindOf(account)].hiresLabel || "contractor";
+const cap1 = (w) => w.charAt(0).toUpperCase() + w.slice(1);
+const rosterWords = (account) => {
+  const one = rosterWord(account);
+  return { one, One: cap1(one), many: `${one}s`, Many: `${cap1(one)}s` };
+};
+
 // Whether this account may create jobs -- the hiring direction. Default true,
 // so a kind added later hires unless it says otherwise; `subcontractor` is the
 // exception and says so. Kept in step with HIRING_KINDS in worker/index.js,
@@ -4618,7 +4643,8 @@ export default function SubSub() {
                 actions.push(["work", "Request work", "Request work", Plus, () => tryAddJob()]);
               } else {
                 if (runsTheAccount(role, membership)) {
-                  actions.push(["contractor", "Contractor", "New contractor", Hammer, tryAddContractor]);
+                  actions.push(["contractor", rosterWords(account).One,
+                    `New ${rosterWord(account)}`, Hammer, tryAddContractor]);
                   actions.push(["invite", "Invite link", "Invite link", Link2, () => setInviteOpen(true)]);
                   // A general contractor works job to job and has no building
                   // list to add to.
@@ -4813,7 +4839,7 @@ export default function SubSub() {
           )}
           {can("contractors") && (
             <button className={tab === "network" ? "on" : ""} onClick={() => setTab("network")}>
-              Contractors <span className="count">{subs.length}</span>
+              {rosterWords(account).Many} <span className="count">{subs.length}</span>
             </button>
           )}
           {can("calendar") && (
@@ -4920,6 +4946,7 @@ export default function SubSub() {
 
       {tab === "dashboard" && can("dashboard") && (
         <AdminDashboard visits={visits} subs={subs} jobs={jobs} role={role} me={me} now={now}
+          words={rosterWords(account)}
           invites={invites} connectsOut={connectOut || []}
           connectsIn={connectIn || []}
           onRespondConnect={async (id, accept) => {
@@ -4974,7 +5001,7 @@ export default function SubSub() {
 
       {tab === "network" && can("contractors") && (
         <main className="ss-main">
-          <PageHead title="Contractors"
+          <PageHead title={rosterWords(account).Many}
             sub={subs.length === 0
               ? "Nobody on your list yet."
               : `${subs.length} on your list \u00b7 ${subs.filter(docsComplete).length} ready to schedule`}>
@@ -5812,7 +5839,7 @@ export default function SubSub() {
       )}
 
       {tab === "uniforms" && can("uniforms") && (
-        <UniformAdmin orders={uniformOrders} subs={subs}
+        <UniformAdmin orders={uniformOrders} subs={subs} words={rosterWords(account)}
           onDecide={(id, status) => {
             persist("decideUniformOrder", api.decideUniformOrder(id, status));
             setUniformOrders((os) => os.map((o) => o.id === id ? { ...o, status } : o));
@@ -5929,7 +5956,7 @@ export default function SubSub() {
           onSubmit={(job) => createJob(job, jobForm.forSub)}
           onCancel={() => setJobForm(null)} /></Modal>}
       {assigning && <Modal onClose={() => setAssigning(null)} wide>
-        <PickContractor allJobs={allJobs} accountId={account.id} job={assigning.job} trade={assigning.trade}
+        <PickContractor allJobs={allJobs} accountId={account.id} words={rosterWords(account)} job={assigning.job} trade={assigning.trade}
           replacing={assigning.replacing} subs={subs} jobs={jobs}
           onPick={(sub, details) => assignContractor(assigning.job.id, assigning.trade, sub, details)}
           onNotify={(sub) => requestDocs(sub, assigning.job, assigning.trade)}
@@ -6077,7 +6104,7 @@ export default function SubSub() {
           onSaveDraft={(kind, draft) => saveDocDraft(reviewing.sub.id, kind, draft)}
           onClose={() => setReviewing(null)} /></Modal>}
       {upgradePrompt && <Modal onClose={() => setUpgradePrompt(null)}>
-        <UpgradePrompt kind={upgradePrompt.kind} plan={plan} billing={billing} onSetBilling={setBilling}
+        <UpgradePrompt kind={upgradePrompt.kind} plan={plan} billing={billing} onSetBilling={setBilling} words={rosterWords(account)}
           count={upgradePrompt.kind === "contractor" ? subs.length
             : upgradePrompt.kind === "job" ? jobsThisMonth : seatCount}
           // No optimistic switch and no queued follow-up action: the browser
@@ -6124,7 +6151,7 @@ export default function SubSub() {
           onCancel={() => { setAdding(false); setResumeAssign(null); }} /></Modal>}
 
       {inviteOpen && <Modal onClose={() => setInviteOpen(false)}>
-        <InviteLinks onSent={refreshInvites} subs={subs} invites={openInvites}
+        <InviteLinks onSent={refreshInvites} subs={subs} invites={openInvites} words={rosterWords(account)}
           onOpenExisting={(m) => { setInviteOpen(false); openExistingContractor(m); }}
           onConnect={async (m) => {
             const made = await api.requestConnect({ companyId: m.companyId });
@@ -12777,7 +12804,8 @@ function BecomeHiring({ account, onCancel, onConfirm }) {
 }
 
 // ---- Upgrade gate (shown instead of the add form when a plan is maxed) ---
-function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, onDecline, busy, err }) {
+function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, onDecline, busy, err,
+  words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
   const cur = PLANS[plan];
   const next = PLANS.scale;
   const [cycle, setCycle] = useState(billing === "annual" ? "annual" : "monthly");
@@ -12786,14 +12814,14 @@ function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, on
   // Why they're seeing this, in their own numbers.
   const title = kind === "job" ? "You've used this month's jobs"
     : kind === "user" ? "You've used your only seat"
-    : `You've reached ${cur.limit} subcontractors`;
+    : `You've reached ${cur.limit} ${words.many}`;
   const why = kind === "job"
     ? `Basic covers ${cur.jobsPerMonth} jobs a month and you've created ${count}. The count resets on the 1st, or Scale removes the cap entirely.`
     : kind === "user"
-      ? `Basic includes ${cur.userLimit} user for your own team and you have ${count}. Contractor logins are free and don't use a seat, either way.`
-      : `You have ${count} on your account. Scale lifts the cap and keeps everything you've already set up — your subs, their documents and every job.`;
+      ? `Basic includes ${cur.userLimit} user for your own team and you have ${count}. ${words.One} logins are free and don't use a seat, either way.`
+      : `You have ${count} on your account. Scale lifts the cap and keeps everything you've already set up — your ${words.many}, their documents and every job.`;
   const keep = kind === "job" ? `my ${cur.jobsPerMonth} jobs a month`
-    : kind === "user" ? `${cur.userLimit} user` : `${cur.limit} subcontractors`;
+    : kind === "user" ? `${cur.userLimit} user` : `${cur.limit} ${words.many}`;
 
   return (
     <div className="form up-form">
@@ -13213,7 +13241,8 @@ const nameKey = (v) => String(v || "").toLowerCase()
   .replace(/\s+/g, " ")
   .trim();
 
-function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], invites = [] }) {
+function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], invites = [],
+  words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
   const [companyName, setCompanyName] = useState("");
   const [contact, setContact] = useState("");
   const [email, setEmail] = useState("");
@@ -13318,7 +13347,7 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], in
       // yet, is a message somebody waits on that never left.
       const went = [made.emailed && to, made.texted && mobile].filter(Boolean);
       if (went.length) {
-        setSentNote(`Invite sent to ${andList(went)}. They’re in your Contractors list as Invited until they finish signing up.`);
+        setSentNote(`Invite sent to ${andList(went)}. They’re in your ${words.Many} list as Invited until they finish signing up.`);
         setContact(""); setEmail(""); setPhone("");
       }
       const failed = [];
@@ -13354,7 +13383,7 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], in
 
   return (
     <div className="inv-panel">
-      <h2>Invite a subcontractor</h2>
+      <h2>Invite a {words.one}</h2>
       <p className="panel-note">
         We'll email and text them. They confirm either one, set a password, and
         finish their own profile — what you type here is already filled in for them.
@@ -15745,7 +15774,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           own settings: it is a thing OTHER people see, and its colours, its
           preview and its live address are all on this tab already. */}
       {pane === "branding" && canManage && applySubdomain && applySubdomain !== "app" && (
-        <EmbedApply subdomain={applySubdomain} accountName={brand.name}
+        <EmbedApply subdomain={applySubdomain} accountName={brand.name} words={rosterWords({ kind: accountKind })}
           trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))}
           theme={brand?.theme || null}
           liveHost={hostnameStatus === "active"} />
@@ -16012,7 +16041,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <div className="usage-rows">
                 <div className="wd-row"><span>Email notifications</span><strong>Included</strong></div>
                 <div className="wd-row"><span>SMS notifications</span><strong>$0.02 each</strong></div>
-                <div className="wd-row"><span>Contractors on account</span><strong>{subs.length}</strong></div>
+                <div className="wd-row"><span>{rosterWords({ kind: accountKind }).Many} on account</span><strong>{subs.length}</strong></div>
                 <div className="wd-row"><span>User seats</span><strong>{seatCount} · unlimited</strong></div>
               </div>
               {/* Was "$50 subscription", which is neither the monthly nor
@@ -16109,7 +16138,7 @@ function UniformOrder({ sub, orders, onOrder, brand }) {
 }
 
 // ---- Admin / PM: approve uniform orders --------------------------------
-function UniformAdmin({ orders, subs, onDecide }) {
+function UniformAdmin({ orders, subs, onDecide, words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
   const pending = orders.filter((o) => o.status === "pending");
   const decided = orders.filter((o) => o.status !== "pending");
   const Row = ({ o, showActions }) => (
@@ -16142,7 +16171,7 @@ function UniformAdmin({ orders, subs, onDecide }) {
         </div>
       </div>
       {orders.length === 0 ? (
-        <div className="dash-empty"><Shirt size={24} /><p>No uniform orders yet. Contractors order from their portal.</p></div>
+        <div className="dash-empty"><Shirt size={24} /><p>No uniform orders yet. {words.Many} order from their portal.</p></div>
       ) : (
         <>
           {pending.length > 0 && (
@@ -16173,7 +16202,8 @@ function UniformAdmin({ orders, subs, onDecide }) {
 // for, documents decide who can be assigned, so a job created before either
 // is a job with nobody to give it to.
 function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, onInvite, onAddSub, onNewJob, onGoContractors, properties, onAddProperty,
-  hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null }) {
+  hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null,
+  words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
   const key = `subsub.gs.${accountId}`;
   const [hidden, setHidden] = useState(() => {
     try { return localStorage.getItem(key) === "1"; } catch { return false; }
@@ -16259,18 +16289,18 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
     {
       id: "trades", done: Array.isArray(trades) && trades.length > 0,
       title: "Tell us what you hire out",
-      note: "Your trades decide what SubSub asks each subcontractor to prove.",
+      note: `Your trades decide what SubSub asks each ${words.one} to prove.`,
       actions: [{ label: "Pick trades", onClick: onGoAccount, solid: true }],
     },
     {
       id: "subs", done: subs.length > 0,
       title: subLimit === Infinity
-        ? "Bring your subcontractors in"
-        : `Bring your subcontractors in — ${subs.length} of ${subLimit}`,
+        ? `Bring your ${words.many} in`
+        : `Bring your ${words.many} in — ${subs.length} of ${subLimit}`,
       note: "Send them a link and they build their own profile and upload their own "
         + "documents. Faster than chasing paperwork, and it stays theirs to keep current.",
       actions: [
-        { label: "Invite a subcontractor", onClick: onInvite, solid: true },
+        { label: `Invite a ${words.one}`, onClick: onInvite, solid: true },
         { label: "Add one myself", onClick: onAddSub },
       ],
     },
@@ -16907,6 +16937,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
 }
 
 function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit",
+  words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" },
   invites = [], connectsOut = [], onOpenInvite, onOpenConnect,
   connectsIn = [], onRespondConnect, onReloadConnects,
   hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null,
@@ -17116,7 +17147,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
 
         {runsAccount && <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
           subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
-          onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors}
+          onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors} words={words}
           properties={properties} onAddProperty={onAddProperty}
           hireable={hireable} myCompany={myCompany} onGoCompany={onGoCompany}
           kind={kind} onGoDocs={onGoDocs} />}
@@ -17186,14 +17217,14 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </button>
         <button className={`dash-card ${nonCompliant.length ? "warn" : ""}`} onClick={onGoContractors}>
           <span className="dc-num">{nonCompliant.length}</span>
-          <span className="dc-lab">Contractors missing docs</span>
+          <span className="dc-lab">{words.Many} missing docs</span>
         </button>
         {/* What the account pays a subcontractor is not an owner's business,
             so the card is not rendered for them at all -- the API does not
             send them the figures either. */}
         <button className="dash-card" onClick={onGoJobs}>
           <span className="dc-num">{committed ? formatMoney(committed) : "—"}</span>
-          <span className="dc-lab">Committed sub spend</span>
+          <span className="dc-lab">Committed {words.one} spend</span>
         </button>
       </div>
       )}
@@ -17829,7 +17860,8 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
   );
 }
 // ---- Pick a contractor for one trade slot --------------------------------
-function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing, onPick, onNotify, onAddSub, onCancel }) {
+function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing, onPick, onNotify, onAddSub, onCancel,
+  words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
   // When re-matching after an expiry, the sub who didn't reply drops off the list.
   const pool = replacing ? subs.filter((x) => x.id !== replacing) : subs;
   const lapsed = replacing ? subs.find((x) => x.id === replacing) : null;
@@ -18095,7 +18127,7 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
       <p className="form-sub">{job.title}
         {job.date ? ` · ${formatWhen(job.date, job.time) || job.date}` : " · no date set"}
         {job.zip ? ` · from ${job.zip}` : ""}</p>
-      {job.date && <p className="pick-hint">Contractors free on this date are ranked first.</p>}
+      {job.date && <p className="pick-hint">{words.Many} free on this date are ranked first.</p>}
       {ranked.length === 0 ? (
         /* This was a dead end: it said nobody covered the trade and offered
            nothing to do about it. Then it grew a way out, but still only
@@ -22097,7 +22129,8 @@ function EmbedCodeModal({ html, copied, onCopy, onClose }) {
   );
 }
 
-function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = true }) {
+function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = true,
+  words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState("");
   const [preview, setPreview] = useState(false);
@@ -22198,7 +22231,7 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
                   the form works exactly the same either way.</>}
           </p>
           <p className="embed-note">
-            Applications arrive under <b>Asked to connect</b> on the Contractors
+            Applications arrive under <b>Asked to connect</b> on the {words.Many}{" "}
             screen. Nobody is
             added to your roster until you say so, and the form never asks for a
             password &mdash; whoever applies sets that themselves from the email.

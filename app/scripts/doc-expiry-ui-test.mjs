@@ -95,7 +95,7 @@ const open = async () => {
 
 const toContractors = async (page) => {
   await page.evaluate(() => [...document.querySelectorAll("button")]
-    .find((b) => /^Contractors/.test(b.innerText.trim().split("\n")[0]))?.click());
+    .find((b) => /^(Sub)?contractors/i.test(b.innerText.trim().split("\n")[0]))?.click());
   await wait(800);
 };
 const openCard = async (page) => {

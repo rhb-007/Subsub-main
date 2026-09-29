@@ -86,7 +86,10 @@ try {
     // deliberately not "Dashboard"; the rest say what they are.
     const want = [
       ["Dashboard", /good to see you/i],
-      ["Contractors", /^Contractors$/],
+      // The roster is "Subcontractors" to a general contractor and
+      // "Contractors" to a property manager -- roster-word-test.mjs is what
+      // pins WHICH. This screen only has to name itself.
+      ["(Sub)?contractors", /^(Sub)?contractors$/i],
       ["Availability", /^Availability$/],
       ["Jobs", /^Jobs$/],
       ["Properties", /^Properties$/],
@@ -104,9 +107,9 @@ try {
       ck(`${tab}: and set as a heading`, h.size >= 18, `${h.size}px`);
     }
     // The line under the title is arithmetic somebody can check, not filler.
-    await nav(page, "Contractors");
+    await nav(page, "(Sub)?contractors");
     const c = await head(page);
-    ck("Contractors says how many there are", /\d+ on your list/.test(c.sub || ""), c.sub);
+    ck("the roster says how many there are", /\d+ on your list/.test(c.sub || ""), c.sub);
     await nav(page, "Jobs");
     const j = await head(page);
     ck("Jobs says how many are open", /\d+ still open/.test(j.sub || ""), j.sub);

@@ -137,8 +137,11 @@ try {
     // whatever the account is called.
     const tabs = await s.page.evaluate(() => [...document.querySelectorAll(".drawer-nav button, nav button")]
       .map((b) => b.innerText.trim().split("\n")[0]).filter(Boolean));
-    for (const t of ["Dashboard", "Contractors", "Availability", "Jobs", "Uniforms"]) {
-      ck(`they still get ${t}`, tabs.some((x) => x.startsWith(t)), tabs.join(" | "));
+    // The roster tab is named after what this kind of account hires -- a
+    // general contractor's are subcontractors -- so it is matched by shape
+    // rather than by the noun, which roster-word-test.mjs pins instead.
+    for (const t of ["Dashboard", "(Sub)?contractors", "Availability", "Jobs", "Uniforms"]) {
+      ck(`they still get ${t}`, tabs.some((x) => new RegExp(`^${t}`, "i").test(x)), tabs.join(" | "));
     }
     // And a general contractor has no buildings, which is the reason the
     // word was wrong in the first place.

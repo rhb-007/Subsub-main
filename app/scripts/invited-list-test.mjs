@@ -74,7 +74,7 @@ async function onContractors(width = 1280, height = 1400) {
   await page.click(".login-btn");
   await wait(6000);
   await page.evaluate(() => [...document.querySelectorAll("button")]
-    .find((b) => /^Contractors/.test(b.textContent.trim()))?.click());
+    .find((b) => /^(Sub)?contractors/i.test(b.textContent.trim()))?.click());
   await wait(1500);
   return { ctx, page, crashes };
 }
@@ -170,7 +170,7 @@ try {
     await page.keyboard.press("Escape");
     await wait(800);
     await page.evaluate(() => [...document.querySelectorAll("button")]
-      .find((b) => /^Contractors/.test(b.textContent.trim()))?.click());
+      .find((b) => /^(Sub)?contractors/i.test(b.textContent.trim()))?.click());
     await wait(1500);
   }
 

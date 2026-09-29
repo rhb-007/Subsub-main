@@ -102,7 +102,7 @@ const ROW_LABEL = {
 
 const toCard = async (page) => {
   await page.evaluate(() => [...document.querySelectorAll("button")]
-    .find((b) => /^Contractors/.test(b.innerText.trim().split("\n")[0]))?.click());
+    .find((b) => /^(Sub)?contractors/i.test(b.innerText.trim().split("\n")[0]))?.click());
   await wait(800);
   await page.evaluate(() => {
     const c = [...document.querySelectorAll(".grid .card")]
@@ -130,7 +130,7 @@ try {
   console.log("\n-- the roster says a review was left unfinished --");
   {
     await page.evaluate(() => [...document.querySelectorAll("button")]
-      .find((b) => /^Contractors/.test(b.innerText.trim().split("\n")[0]))?.click());
+      .find((b) => /^(Sub)?contractors/i.test(b.innerText.trim().split("\n")[0]))?.click());
     await wait(800);
     await page.evaluate(() => {
       const c = [...document.querySelectorAll(".grid .card")]
