@@ -14787,7 +14787,20 @@ function payoutErrorText(e) {
   if (code === "migration_needed") return "SubSub needs a database update before this works. We've been told.";
   if (code === "billing_not_configured") return "Payments aren't switched on for SubSub yet.";
   if (code === "rejected") return "Stripe has declined this business. Their support can say why.";
-  if (code === "stripe_failed") return "Stripe couldn't be reached just now. Try again in a moment.";
+  // Stripe's own words, when it gave any.
+  //
+  // "Try again in a moment" over *Only Stripe Connect platforms can create
+  // accounts* tells somebody to wait for a thing that will never change on
+  // its own -- the screen-that-lies rule pointed at a refusal rather than at
+  // a button. And this panel is read by exactly one person, the admin
+  // setting payouts up, who is the only one who can act on what Stripe
+  // actually said. The route has always carried `detail`; the screen was
+  // throwing it away.
+  if (code === "stripe_failed") {
+    return e?.body?.detail
+      ? `Stripe refused that: ${e.body.detail}`
+      : "Stripe couldn't be reached just now. Try again in a moment.";
+  }
   return "That didn't work. Try again in a moment.";
 }
 

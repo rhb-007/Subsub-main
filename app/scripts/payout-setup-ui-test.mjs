@@ -48,13 +48,17 @@ const MY_COMPANY = {
 
 // What /payouts/status and /payouts/refresh answer. Swapped between cases.
 let payout = { status: "none", ready: false, requirements: [], configured: true };
+let refuseConnect = null;
 let seen = [];
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method) => {
   if (path.startsWith("/api/payouts/")) {
     seen.push(`${method} ${path}`);
-    if (path === "/api/payouts/connect") return [200, { url: "https://connect.stripe.com/setup/e/abc" }];
+    if (path === "/api/payouts/connect") {
+      if (refuseConnect) return [502, refuseConnect];
+      return [200, { url: "https://connect.stripe.com/setup/e/abc" }];
+    }
     return [200, payout];
   }
   if (path.startsWith("/api/account-by-subdomain/")) return [200, ACCOUNT];
@@ -216,6 +220,35 @@ try {
     // literal characters, and it has shipped twice.
     const leaked = await page.evaluate(() => /\\u[0-9a-fA-F]{4}/.test(document.body.innerText));
     t.ck("no escape sequence reached the screen", !leaked);
+    await ctx.close();
+  }
+
+  // ---- when Stripe refuses ------------------------------------------------
+  {
+    payout = { status: "none", ready: false, requirements: [], configured: true };
+    refuseConnect = { error: "stripe_failed",
+      detail: "Only Stripe Connect platforms can create accounts." };
+    const { ctx, page } = await visitApp(browser, { host: "bay", webPort: WEB,
+      seat: { userId: "usr_rae", accountId: "acc_bay" }, viewport: { width: 1340, height: 1800 } });
+    await wait(2200);
+    await goCompany(page);
+    await page.evaluate(() => {
+      const h = [...document.querySelectorAll(".portal-panel h4")]
+        .find((x) => /^getting paid$/i.test(x.innerText.trim()));
+      h?.closest(".portal-panel")?.querySelector("button")?.click();
+    });
+    await wait(900);
+
+    console.log("\n-- and when Stripe refuses --");
+    const p = await panel(page);
+    t.ck("it says what Stripe actually said",
+      !!p && /Only Stripe Connect platforms/.test(p.text),
+      p?.text?.slice(0, 160));
+    // The one that matters: a configuration Stripe will refuse every time
+    // must not be drawn as something that fixes itself.
+    t.ck("and does not tell them to wait for it to fix itself",
+      !!p && !/Try again in a moment/.test(p.text), p?.text?.slice(0, 160));
+    refuseConnect = null;
     await ctx.close();
   }
 
