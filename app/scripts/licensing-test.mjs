@@ -29,6 +29,10 @@ import { plan, earnsPage, stateEarnsPage, answerFor, isVerified, isStale,
   pagePath, pageUrl, STALE_AFTER_DAYS, isReviewed, reviewQueue } from "../shared/licensing.js";
 import { STATES } from "../../content/licensing/data.js";
 import { US_STATES } from "../shared/states.js";
+// The real trade list, the one the generator uses. Scraping it back out of
+// App.tsx was a second implementation of something shared/trades.js already
+// holds -- and it broke silently the moment that array stopped being a literal.
+import { TRADES as REAL_TRADES } from "../shared/trades.js";
 
 const root = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 const t = tally();
@@ -259,11 +263,8 @@ console.log("\n-- and the generated pages actually render --");
   // The sitemap must list what exists and nothing else.
   const map = readFileSync(join(out, "sitemap.xml"), "utf8");
   const urls = [...map.matchAll(/<loc>https:\/\/subsub\.work([^<]+)<\/loc>/g)].map((m) => m[1]);
-  const { pages } = plan(STATES, (() => {
-    const src = readFileSync(join(root, "app/src/App.tsx"), "utf8");
-    const b = src.match(/const CATEGORIES = \[([\s\S]*?)\n\];/)[1];
-    return [...b.matchAll(/id: "([a-z_]+)", label: "([^"]+)"/g)].map((m) => ({ id: m[1], label: m[2] }));
-  })(), { today: new Date().toISOString().slice(0, 10) });
+  const { pages } = plan(STATES, REAL_TRADES,
+    { today: new Date().toISOString().slice(0, 10) });
   t.ck("the sitemap lists every page", urls.length === pages.length + 1,
     `${urls.length} vs ${pages.length + 1}`);
   const sitemapFile = (u) => join(root, (u.endsWith("/") ? `${u}index.html` : u).replace(/^\//, ""));
