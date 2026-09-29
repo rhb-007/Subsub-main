@@ -389,6 +389,11 @@ export const api = {
   // `payoutRefresh` is what the return from Stripe calls, because coming
   // back proves nothing about whether they finished.
   payoutStatus: () => request("/payouts/status"),
+  // The embedded door. Mints the connected account on first call, so the
+  // panel asks for this on mount rather than offering a button that means
+  // "start using plumbing".
+  payoutSession: () => request("/payouts/session", { method: "POST" }),
+  // And the way through when the embedded component cannot load at all.
   payoutConnect: () => request("/payouts/connect", { method: "POST" }),
   payoutRefresh: () => request("/payouts/refresh", { method: "POST" }),
   // The keys an account's CRM authenticates with. `create` is the only call

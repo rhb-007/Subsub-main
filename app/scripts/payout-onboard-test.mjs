@@ -79,6 +79,10 @@ globalThis.fetch = async (url, init = {}) => {
     return json({ id: "acct_bay1", ...acctState });
   }
   if (/\/accounts\/acct_\w+$/.test(u)) return json({ id: "acct_bay1", ...acctState });
+  if (/\/account_sessions$/.test(u)) {
+    return json({ object: "account_session", account: "acct_bay1",
+      client_secret: "acct_sess_secret_abc" });
+  }
   if (/\/account_links$/.test(u)) {
     return json({ url: `https://connect.stripe.com/setup/e/${Math.random().toString(16).slice(2)}` });
   }
@@ -218,6 +222,98 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
     link?.body.return_url);
   ck("and a stale link lands somewhere that mints another",
     /\/\?payouts=refresh$/.test(link?.body.refresh_url || ""), link?.body.refresh_url);
+}
+
+// ---- the embedded door, which is the one people use ------------------------
+//
+// Nobody connects anything. The account is minted the first time the screen
+// is opened and what is left for the subcontractor is the part only they can
+// answer -- who they are and where the money goes -- asked inside SubSub.
+{
+  console.log("\n-- the embedded session --");
+  const db = seed(); const env = ENV(db);
+  acctState = { payouts_enabled: false, capabilities: { transfers: "pending" },
+    requirements: { currently_due: ["external_account"] } };
+  calls = [];
+
+  const first = await call(env, "/api/payouts/session", { method: "POST" });
+  t2(first);
+  function t2(r) {
+    ck("it hands back a client secret to render with",
+      r.status === 200 && typeof r.body.clientSecret === "string" && r.body.clientSecret.length > 0,
+      `${r.status} ${r.body.clientSecret || r.body.error}`);
+  }
+  ck("and the account was minted without anybody pressing connect",
+    calls.filter((x) => /\/accounts$/.test(x.url)).length === 1,
+    String(calls.filter((x) => /\/accounts$/.test(x.url)).length));
+
+  // The one that decides whether this feels like Stripe at all. `express`
+  // gives the subcontractor a Stripe-branded website to be sent to; `none`
+  // means SubSub is the only surface they ever see.
+  const made = calls.find((x) => /\/accounts$/.test(x.url));
+  ck("and they get no Stripe dashboard to be sent to",
+    made?.body["controller[stripe_dashboard][type]"] === "none",
+    made?.body["controller[stripe_dashboard][type]"]);
+  ck("with Stripe still collecting the identity data rather than us",
+    made?.body["controller[requirement_collection]"] === "stripe");
+
+  const sess = calls.find((x) => /\/account_sessions$/.test(x.url));
+  ck("the session is scoped to that one account",
+    sess?.body.account === "acct_bay1", sess?.body.account);
+  ck("and asks for onboarding",
+    sess?.body["components[account_onboarding][enabled]"] === "true");
+  // With no Stripe dashboard there is nowhere else these can be seen, so
+  // leaving them out would strand somebody with money owed and no screen.
+  ck("and for what Stripe still wants afterwards",
+    sess?.body["components[account_management][enabled]"] === "true"
+    && sess?.body["components[notification_banner][enabled]"] === "true");
+  ck("and for what has been paid out",
+    sess?.body["components[payouts][enabled]"] === "true");
+
+  ck("it carries the current status, so the panel draws one answer",
+    first.body.status === "pending" && first.body.ready === false,
+    `${first.body.status} ready=${first.body.ready}`);
+
+  // Two tabs on the same screen, or a reload.
+  calls = [];
+  const again = await call(env, "/api/payouts/session", { method: "POST" });
+  ck("opening it again does not mint a second account",
+    calls.filter((x) => /\/accounts$/.test(x.url)).length === 0);
+  ck("but does mint a fresh session", !!again.body.clientSecret);
+  ck("still one row", db.prepare(`SELECT COUNT(*) AS n FROM payout_accounts`).get().n === 1);
+
+  // The two doors must not mint accounts with different settings -- that
+  // would be two populations of subcontractor with different experiences,
+  // decided by which door happened to work.
+  const db2 = seed(); const env2 = ENV(db2);
+  calls = [];
+  await call(env2, "/api/payouts/connect", { method: "POST" });
+  const viaLink = calls.find((x) => /\/accounts$/.test(x.url));
+  ck("and the fallback door mints the same kind of account",
+    viaLink?.body["controller[stripe_dashboard][type]"] === "none"
+    && viaLink?.body["controller[requirement_collection]"] === "stripe",
+    viaLink?.body["controller[stripe_dashboard][type]"]);
+}
+
+{
+  console.log("\n-- and the session refuses where the link does --");
+  const db = seed(); const env = ENV(db);
+  acctState = { payouts_enabled: false, capabilities: { transfers: "inactive" },
+    requirements: { disabled_reason: "rejected.fraud" } };
+  await call(env, "/api/payouts/session", { method: "POST" });
+  await call(env, "/api/payouts/refresh", { method: "POST" });
+  const again = await call(env, "/api/payouts/session", { method: "POST" });
+  ck("a rejected account is not handed another form to fill in",
+    again.status === 409 && again.body.error === "rejected", `${again.status} ${again.body.error}`);
+
+  const mgr = await call(env, "/api/payouts/session",
+    { method: "POST", seat: { u: "u_pmadmin", a: "acc_pm" } });
+  ck("and an account nobody can hire is told why",
+    mgr.status === 409 && mgr.body.error === "not_hireable", `${mgr.status} ${mgr.body.error}`);
+
+  const pm = await call(env, "/api/payouts/session",
+    { method: "POST", seat: { u: "u_pm", a: "acc_sub" } });
+  ck("a project manager cannot open one", pm.status === 403, String(pm.status));
 }
 
 // ---- coming back ----------------------------------------------------------

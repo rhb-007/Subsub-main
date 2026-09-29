@@ -14690,25 +14690,87 @@ function companyErrorText(e) {
 // AND IT NAMES WHAT STRIPE IS WAITING FOR. "Not verified" is a state, not an
 // instruction -- the whole reason the server carries the requirement list
 // through in words is so this can say "a photo ID" instead.
-function PayoutSetup({ landed = false, onHandled }) {
+function PayoutSetup({ landed = false, onHandled, accentHex }) {
   const [st, setSt] = useState(null);
+  const [secret, setSecret] = useState("");
   const [err, setErr] = useState("");
+  const [fellBack, setFellBack] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [checking, setChecking] = useState(landed);
+  const [checking, setChecking] = useState(true);
+  const host = useRef(null);
 
+  // One call does everything: mints the connected account if this company has
+  // not got one, mints a session to render with, and hands back the current
+  // status so the panel draws one answer rather than deriving a second.
+  //
+  // On mount, not on a press. There is no decision here for anybody to make
+  // -- a company that can be hired needs a payee record to be paid -- so a
+  // button saying "Connect a Stripe account" would be asking somebody to opt
+  // in to plumbing.
+  const open = async () => {
+    setChecking(true); setErr("");
+    try {
+      // Coming back from anywhere asks the server what Stripe actually says,
+      // because a return proves nothing about whether they finished.
+      if (landed) await api.payoutRefresh().catch(() => {});
+      const r = await api.payoutSession();
+      setSt(r);
+      setSecret(r.clientSecret || "");
+    } catch (e) {
+      // A status read still works when a session cannot be minted, so the
+      // panel can say where they are even when it cannot draw the form.
+      try { setSt(await api.payoutStatus()); } catch { /* the error below says enough */ }
+      setErr(payoutErrorText(e));
+    } finally {
+      setChecking(false);
+      if (landed && onHandled) onHandled();
+    }
+  };
+
+  useEffect(() => { open(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [landed]);
+
+  // Mount Stripe's own component inside our page. `fetchClientSecret` is what
+  // Connect.js calls when a session expires, so it asks US again rather than
+  // sending anybody anywhere.
   useEffect(() => {
-    let alive = true;
-    // Coming back from Stripe goes straight to the server rather than
-    // reading our own row, which is one webhook behind at best.
-    const p = landed ? api.payoutRefresh().catch(() => api.payoutStatus()) : api.payoutStatus();
-    p.then((r) => { if (alive) { setSt(r); setChecking(false); } })
-      .catch((e) => { if (alive) { setErr(payoutErrorText(e)); setChecking(false); } })
-      .finally(() => { if (alive && landed && onHandled) onHandled(); });
-    return () => { alive = false; };
+    if (!secret || !host.current) return;
+    // No publishable key means Connect.js has nothing to initialise with, so
+    // the embedded form can never appear. Returning here would leave an empty
+    // box and no way forward -- the dead end this panel exists to remove --
+    // so it takes the other door instead.
+    if (!STRIPE_PK) { setFellBack(true); return; }
+    let dead = false;
+    let el = null;
+    (async () => {
+      try {
+        const StripeConnect = await loadConnectJs();
+        if (dead) return;
+        const instance = StripeConnect.initialize({
+          publishableKey: STRIPE_PK,
+          fetchClientSecret: async () => (await api.payoutSession()).clientSecret,
+          // It has to look like the page it is standing in, or it is a
+          // Stripe form in a SubSub window, which is the thing being avoided.
+          appearance: { variables: { colorPrimary: accentHex || "#1B4835" } },
+        });
+        if (dead) return;
+        el = instance.create("account-onboarding");
+        el.setOnExit(() => { open(); });
+        host.current.appendChild(el);
+      } catch (e) {
+        if (dead) return;
+        // The script is blocked, or Stripe changed something. Where the form
+        // is drawn is a preference; being able to get paid is not -- the same
+        // trade embedded checkout already makes when it falls back to hosted.
+        console.warn("[payouts] embedded onboarding unavailable:", e?.message || e);
+        setFellBack(true);
+      }
+    })();
+    return () => { dead = true; if (el && el.remove) el.remove(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [landed]);
+  }, [secret, accentHex]);
 
-  const go = async () => {
+  // Only reached when the embedded component could not load.
+  const goHosted = async () => {
     setBusy(true); setErr("");
     try {
       const { url } = await api.payoutConnect();
@@ -14721,59 +14783,57 @@ function PayoutSetup({ landed = false, onHandled }) {
   const status = st?.status || "none";
   const ready = !!st?.ready;
   const due = st?.requirements || [];
+  const configured = st ? st.configured !== false : true;
 
   return (
     <div className="portal-panel settings-panel">
       <h4>Getting paid</h4>
-      {checking && <p className="fine">Checking with Stripe…</p>}
-      {!checking && err && <p className="billing-err" role="alert">{err}</p>}
+      {checking && <p className="fine">One moment…</p>}
 
-      {!checking && !err && st && !st.configured && (
+      {!checking && !configured && (
         <p className="fine">Payments aren't switched on for SubSub yet. Nothing to do here.</p>
       )}
 
-      {!checking && !err && st && st.configured && <>
+      {!checking && configured && <>
         <p className="pay-state">
           <span className={`pay-dot pay-${ready ? "ok" : status === "rejected" ? "no" : status === "none" ? "off" : "wait"}`} />
           {ready ? "Ready to be paid"
-            : status === "rejected" ? "Stripe can't verify this business"
-            : status === "none" ? "Not set up yet"
-            : "Stripe is still checking"}
+            : status === "rejected" ? "We can't verify this business"
+            : "A few details before we can pay you"}
         </p>
 
-        {status === "none" && (
-          <p className="fine">Connect a Stripe account so general contractors can pay you
-            through SubSub. Stripe asks for your details and your bank account — it takes a
-            few minutes, and we never see your bank details.</p>
-        )}
-
-        {/* Two capabilities, and they fail separately. Somebody who can take a
-            transfer but cannot get it to their bank looks paid from the hiring
-            side and unpaid from theirs, which is the worst of the two to leave
-            unexplained. */}
-        {status === "pending" && (
-          <p className="fine">
-            {st.transfersActive && !st.payoutsEnabled
-              ? "Money can reach your Stripe account, but not your bank yet."
-              : "Stripe needs a bit more before money can move."}
-          </p>
-        )}
-
-        {due.length > 0 && <>
-          <div className="form-sec">Still needed</div>
-          <ul className="pay-due">
-            {due.map((d) => <li key={d.key}>{d.label}</li>)}
-          </ul>
-        </>}
+        {err && <p className="billing-err" role="alert">{err}</p>}
 
         {status === "rejected"
-          ? <p className="fine">Stripe has declined this business, so there's nothing to
-              finish here. Their support can say why.</p>
-          : <button className={ready ? "btn-ghost" : "btn-solid"} disabled={busy} onClick={go}>
-              {busy ? "Opening Stripe…"
-                : status === "none" ? "Connect a Stripe account"
-                : ready ? "Manage it on Stripe" : "Finish setting it up"}
-            </button>}
+          ? <p className="fine">We couldn't verify this business, so there's nothing to finish
+              here. Get in touch and we'll look into it.</p>
+          : <>
+              {!ready && !err && (
+                <p className="fine">We need to know who you are and where your money should
+                  go. It takes a few minutes, and your bank details are held by our payments
+                  provider — SubSub never sees them.</p>
+              )}
+
+              {due.length > 0 && <>
+                <div className="form-sec">Still needed</div>
+                <ul className="pay-due">
+                  {due.map((d) => <li key={d.key}>{d.label}</li>)}
+                </ul>
+              </>}
+
+              {/* Stripe's form, inside this page. Nobody leaves. */}
+              <div className="pay-embed" ref={host} />
+
+              {fellBack && (
+                <>
+                  <p className="fine">This form can't load here — your browser may be blocking
+                    it. You can finish it in a new window instead.</p>
+                  <button className="btn-solid" disabled={busy} onClick={goHosted}>
+                    {busy ? "Opening…" : "Finish in a new window"}
+                  </button>
+                </>
+              )}
+            </>}
       </>}
     </div>
   );
@@ -15503,7 +15563,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           project manager could open onto a 403 is the screen-that-lies rule
           pointed at a permission. */}
       {pane === "company" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
-        <PayoutSetup landed={payoutsLanded} onHandled={onPayoutsHandled} />
+        <PayoutSetup landed={payoutsLanded} onHandled={onPayoutsHandled}
+          accentHex={brand?.theme?.accent || null} />
       )}
 
       {pane === "company" && canManage && (
@@ -21014,6 +21075,24 @@ function loadStripeJs() {
   return stripeJsPromise;
 }
 
+// Stripe's Connect components, loaded the way Stripe.js already is: a script
+// tag rather than a build dependency, so nothing about the bundle changes.
+let connectJsPromise = null;
+function loadConnectJs() {
+  if (connectJsPromise) return connectJsPromise;
+  connectJsPromise = new Promise((resolve, reject) => {
+    if (window.StripeConnect) return resolve(window.StripeConnect);
+    const el = document.createElement("script");
+    el.src = "https://connect-js.stripe.com/v1.0/connect.js";
+    el.async = true;
+    el.onload = () => (window.StripeConnect
+      ? resolve(window.StripeConnect) : reject(new Error("connect_js_missing")));
+    el.onerror = () => reject(new Error("connect_js_blocked"));
+    document.head.appendChild(el);
+  });
+  return connectJsPromise;
+}
+
 function CheckoutPanel({ clientSecret, onClose }) {
   const host = useRef(null);
   const [err, setErr] = useState("");
@@ -25250,6 +25329,10 @@ p.fld-note{margin:6px 0 0}
 .pay-dot.pay-no{background:#b4361f}
 .pay-dot.pay-off{background:transparent;box-shadow:inset 0 0 0 2px #A9B8B0}
 .pay-due{margin:0 0 14px;padding-left:20px;font-size:13px;color:var(--ink-soft)}
+/* Stripe's own onboarding form, standing inside this panel. It sizes itself,
+   so this only reserves room and keeps it off the panel's edges. */
+.pay-embed{margin:10px 0 0}
+.pay-embed:empty{margin:0}
 .pay-due li{margin:3px 0}
 .billing-manage{display:flex;align-items:center;justify-content:space-between;gap:14px;
   flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:14px 16px;

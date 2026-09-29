@@ -1633,63 +1633,118 @@ app.get("/api/payouts/status", requireRole("admin"), async (c) => {
   }
 });
 
-// Start, or carry on. One button for both: somebody halfway through needs
-// the same thing as somebody who has not begun, and a screen offering
-// "continue" and "start" as separate actions is asking them to know which
-// they are.
+// The connected account for this company, minted if there is not one yet.
+//
+// NOBODY CONNECTS ANYTHING. A hireable company needs a payee record to be
+// paid, that record is not a decision they get to make differently, and a
+// button saying "Connect a Stripe account" asks somebody to opt in to
+// plumbing. So it is created the first time the screen is opened, and what
+// is left for them is the part only they can answer: who they are and where
+// the money goes.
+//
+// Returns { acctId } or { res } -- a refusal already shaped for the caller.
+async function connectedAccount(c, companyId) {
+  let row;
+  try { row = await payoutRow(c.env, companyId); }
+  catch (err) {
+    if (missingSchema(err)) return { res: c.json(payoutMigration(), 503) };
+    throw err;
+  }
+
+  if (row?.kyc_status === "rejected") {
+    return { res: c.json({ error: "rejected", disabledReason: row.disabled_reason || null }, 409) };
+  }
+  if (row?.processor_account_id) return { acctId: row.processor_account_id, row };
+
+  const co = await c.env.DB.prepare(`SELECT email FROM companies WHERE id = ?`)
+    .bind(companyId).first();
+  const acct = await stripeCall(c.env, "/accounts", {
+    params: {
+      country: PAYOUT_COUNTRY,
+      ...(co?.email ? { email: co.email } : {}),
+      // Only `transfers`. The subcontractor receives money and never charges
+      // anybody, so `card_payments` would be asking them to be verified for
+      // something this product will never do with them.
+      capabilities: { transfers: { requested: "true" } },
+      controller: {
+        fees: { payer: "application" },
+        losses: { payments: "application" },
+        requirement_collection: "stripe",
+        stripe_dashboard: { type: "none" },
+      },
+      metadata: { company_id: companyId, account_id: c.get("auth").accountId },
+    },
+    // Two connected accounts for one company is two places money could go
+    // with nothing saying which. The unique index is the half that holds when
+    // two requests race; this is the half that makes an ordinary double-press
+    // -- or two tabs open on the same screen -- cost nothing.
+    idempotencyKey: `payout-acct:${companyId}`,
+  });
+  await savePayoutRow(c.env, { companyId, acctId: acct.id, acct });
+  return { acctId: acct.id, row: await payoutRow(c.env, companyId) };
+}
+
+// The embedded onboarding, which is the whole point: an Account Session is a
+// short-lived key for ONE connected account and ONE set of components, and
+// the browser renders Stripe's form inside our own page with it. Nobody is
+// sent to stripe.com and nobody is asked to connect anything.
+//
+// It is a POST because it mints things -- the account on first call, a
+// session on every call. The panel calls it on mount rather than on a press,
+// so the form is simply there.
+app.post("/api/payouts/session", requireRole("admin"), async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const { companyId, res } = await payoutCompany(c);
+  if (res) return res;
+
+  try {
+    const { acctId, res: acctRes } = await connectedAccount(c, companyId);
+    if (acctRes) return acctRes;
+
+    const session = await stripeCall(c.env, "/account_sessions", {
+      params: {
+        account: acctId,
+        components: {
+          // Collecting who they are and where the money goes.
+          account_onboarding: { enabled: "true" },
+          // And afterwards: what Stripe still wants, and what it has paid
+          // out. With `stripe_dashboard: none` there is no other screen
+          // anywhere that can show them either, so withholding these would
+          // leave somebody with money owed and nowhere to look.
+          account_management: { enabled: "true" },
+          payouts: { enabled: "true" },
+          notification_banner: { enabled: "true" },
+        },
+      },
+    });
+    return c.json({ clientSecret: session.client_secret,
+      ...payoutSummary(await payoutRow(c.env, companyId)) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(payoutMigration(), 503);
+    console.error("[payouts] session failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// The way through when the embedded component cannot load at all.
+//
+// Kept for the reason embedded checkout keeps a hosted attempt behind it:
+// where the form is drawn is a preference, and being able to get paid is
+// not. A blocked script or a Stripe change must not be the reason somebody
+// cannot give us their bank details -- so this stays, and the panel reaches
+// for it only when the embedded one has failed.
 app.post("/api/payouts/connect", requireRole("admin"), async (c) => {
   if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
   const { companyId, res } = await payoutCompany(c);
   if (res) return res;
 
-  let row;
-  try { row = await payoutRow(c.env, companyId); }
-  catch (err) {
-    if (missingSchema(err)) return c.json(payoutMigration(), 503);
-    throw err;
-  }
-
-  // A rejected account cannot be onboarded again by sending them back round
-  // the form -- Stripe has decided -- so this says so rather than handing
-  // over a link that goes nowhere useful.
-  if (row?.kyc_status === "rejected") {
-    return c.json({ error: "rejected", disabledReason: row.disabled_reason || null }, 409);
-  }
-
-  let acctId = row?.processor_account_id || null;
-  const co = await c.env.DB.prepare(`SELECT email FROM companies WHERE id = ?`)
-    .bind(companyId).first();
-
   try {
-    if (!acctId) {
-      const acct = await stripeCall(c.env, "/accounts", {
-        params: {
-          country: PAYOUT_COUNTRY,
-          ...(co?.email ? { email: co.email } : {}),
-          // Only `transfers`. The subcontractor receives money and never
-          // charges anybody, so `card_payments` would be asking them to be
-          // verified for something this product will never do with them.
-          capabilities: { transfers: { requested: "true" } },
-          // Stripe collects the identity data, hosts the form and the
-          // dashboard, and carries the losses. That is the whole reason to
-          // use Connect rather than to be a money transmitter.
-          controller: {
-            fees: { payer: "application" },
-            losses: { payments: "application" },
-            requirement_collection: "stripe",
-            stripe_dashboard: { type: "express" },
-          },
-          metadata: { company_id: companyId, account_id: c.get("auth").accountId },
-        },
-        // Two connected accounts for one company is two places money could
-        // go with nothing saying which. The unique index is the half that
-        // holds when two requests race; this is the half that makes an
-        // ordinary double-press cost nothing.
-        idempotencyKey: `payout-acct:${companyId}`,
-      });
-      acctId = acct.id;
-      await savePayoutRow(c.env, { companyId, acctId, acct });
-    }
+    // Same helper the embedded route uses, so the two doors cannot mint
+    // accounts with different `controller` settings -- which would be two
+    // populations of subcontractor with different Stripe experiences,
+    // decided by which door happened to work that day.
+    const { acctId, res: acctRes } = await connectedAccount(c, companyId);
+    if (acctRes) return acctRes;
 
     // Fresh every time, and never stored. Single-use, and it expires in
     // minutes.

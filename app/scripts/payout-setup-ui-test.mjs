@@ -49,6 +49,7 @@ const MY_COMPANY = {
 // What /payouts/status and /payouts/refresh answer. Swapped between cases.
 let payout = { status: "none", ready: false, requirements: [], configured: true };
 let refuseConnect = null;
+let refuseSession = null;
 let seen = [];
 
 const web = serveApp({ dir: OUT, port: WEB });
@@ -58,6 +59,10 @@ const api = serveApi({ port: API, routes: (path, method) => {
     if (path === "/api/payouts/connect") {
       if (refuseConnect) return [502, refuseConnect];
       return [200, { url: "https://connect.stripe.com/setup/e/abc" }];
+    }
+    if (path === "/api/payouts/session") {
+      if (refuseSession) return [502, refuseSession];
+      return [200, { clientSecret: "acct_sess_secret_abc", ...payout }];
     }
     return [200, payout];
   }
@@ -108,43 +113,43 @@ const panel = (page) => page.evaluate(() => {
 });
 
 try {
-  // ---- nothing connected yet ---------------------------------------------
+  // ---- nothing is connected, because nobody connects anything -------------
   {
+    payout = { status: "none", ready: false, requirements: [], configured: true };
     const { ctx, page } = await visitApp(browser, { host: "bay", webPort: WEB,
       seat: { userId: "usr_rae", accountId: "acc_bay" }, viewport: { width: 1340, height: 1800 } });
     await wait(2200);
     seen = [];
     await goCompany(page);
+    await wait(900);
 
-    console.log("\n-- with nothing connected --");
+    console.log("\n-- opening the screen is the whole of the setup --");
     const p = await panel(page);
     t.ck("the panel is on Account -> Company", !!p, p ? p.state : "no panel");
-    t.ck("it says it is not set up", /Not set up yet/.test(p?.state || ""), p?.state);
-    t.ck("and the never-started dot is hollow rather than red",
-      p?.tone === "pay-off", String(p?.tone));
-    t.ck("the button offers to start", /Connect a Stripe account/.test(p?.button || ""), p?.button);
-    t.ck("it says Stripe asks for the bank details, not us",
-      /never see your bank details/i.test(p?.text || ""));
-    t.ck("it read the status rather than guessing",
-      seen.some((s) => s === "GET /api/payouts/status"), seen.join(", "));
-    t.ck("and it did NOT refresh, because nobody came back from anywhere",
-      seen.length > 0 && !seen.some((s) => s.includes("refresh")), seen.join(", "));
 
-    // Pressing it asks the server for a link. The link is minted per press
-    // and followed immediately, so nothing about it is held on screen.
-    seen = [];
-    await page.evaluate(() => {
-      const h = [...document.querySelectorAll(".portal-panel h4")]
-        .find((x) => /^getting paid$/i.test(x.innerText.trim()));
-      h?.closest(".portal-panel")?.querySelector("button")?.click();
-    });
-    await wait(900);
-    t.ck("pressing it mints a link on the server",
-      seen.some((s) => s === "POST /api/payouts/connect"), seen.join(", "));
+    // The point of the whole change: there is no decision here to make, so
+    // there is nothing to press to begin.
+    t.ck("nothing asks them to connect anything",
+      !!p && !/connect a stripe account/i.test(p.text), p?.button);
+    t.ck("it asks for details rather than announcing plumbing",
+      /details before we can pay you/i.test(p?.state || ""), p?.state);
+
+    // It fetched a session on mount. A GET of the status alone would mean
+    // the account had not been minted and something still had to be pressed.
+    t.ck("it opened a session on its own, without a press",
+      seen.some((s) => s === "POST /api/payouts/session"), seen.join(", "));
+
+    t.ck("and there is somewhere for the form to stand",
+      await page.evaluate(() => !!document.querySelector(".pay-embed")));
+
+    // Their bank details are the one thing worth promising about, and the
+    // sentence has to be true: they go to the processor, not to us.
+    t.ck("it says who holds the bank details",
+      /never sees them/i.test(p?.text || ""), p?.text?.slice(0, 140));
     await ctx.close();
   }
 
-  // ---- half way through ---------------------------------------------------
+  // ---- what is still wanted, in words -------------------------------------
   {
     payout = { status: "pending", ready: false, configured: true,
       transfersActive: false, payoutsEnabled: false,
@@ -154,25 +159,53 @@ try {
       seat: { userId: "usr_rae", accountId: "acc_bay" }, viewport: { width: 1340, height: 1800 } });
     await wait(2200);
     await goCompany(page);
+    await wait(900);
 
     console.log("\n-- half way through --");
     const p = await panel(page);
-    t.ck("it says Stripe is still checking", /still checking/i.test(p?.state || ""), p?.state);
     t.ck("amber, not red", p?.tone === "pay-wait", String(p?.tone));
-    t.ck("and it names what is wanted, in words rather than in Stripe's keys",
+    t.ck("it names what is wanted, in words rather than in Stripe's keys",
       (p?.due || []).join(" | ") === "A photo ID | Your bank account", (p?.due || []).join(" | "));
-    // Every negative below requires the panel to BE there. `!/x/.test(p?.text
-    // || "")` is satisfied by a missing panel, so it would report loudest
-    // exactly when the subject had disappeared -- the inverse of the
-    // read-through-`link?.` lesson, and just as quiet.
     t.ck("no Stripe requirement key is shown to a roofer",
       !!p && !/individual\.verification|external_account/.test(p.text));
-    t.ck("the button carries on rather than starting again",
-      /Finish setting it up/.test(p?.button || ""), p?.button);
     await ctx.close();
   }
 
-  // ---- the one that matters: coming back from Stripe ----------------------
+  // ---- the fallback, which is what a blocked script looks like ------------
+  //
+  // There is no publishable key in this build and no route to Stripe's CDN
+  // from here, so the embedded component cannot mount -- which is exactly
+  // the state a customer is in behind a blocking extension or a corporate
+  // proxy. The panel must offer the other door rather than an empty box.
+  {
+    payout = { status: "none", ready: false, requirements: [], configured: true };
+    seen = [];
+    const { ctx, page } = await visitApp(browser, { host: "bay", webPort: WEB,
+      seat: { userId: "usr_rae", accountId: "acc_bay" }, viewport: { width: 1340, height: 1800 } });
+    await wait(2200);
+    await goCompany(page);
+    await wait(1200);
+
+    console.log("\n-- when the embedded form cannot load --");
+    const p = await panel(page);
+    t.ck("it says so rather than showing an empty box",
+      !!p && /can't load here/i.test(p.text), p?.text?.slice(0, 160));
+    t.ck("and offers the other way through",
+      /Finish in a new window/i.test(p?.button || ""), p?.button);
+
+    await page.evaluate(() => {
+      const h = [...document.querySelectorAll(".portal-panel h4")]
+        .find((x) => /^getting paid$/i.test(x.innerText.trim()));
+      [...h.closest(".portal-panel").querySelectorAll("button")]
+        .find((b) => /Finish in a new window/i.test(b.innerText))?.click();
+    });
+    await wait(900);
+    t.ck("which asks the server for a link", seen.some((s) => s === "POST /api/payouts/connect"),
+      seen.join(", "));
+    await ctx.close();
+  }
+
+  // ---- coming back still asks rather than assumes -------------------------
   {
     payout = { status: "pending", ready: false, configured: true,
       transfersActive: true, payoutsEnabled: false,
@@ -183,16 +216,13 @@ try {
       path: "/?payouts=return", viewport: { width: 1340, height: 1800 } });
     await wait(2600);
 
-    console.log("\n-- coming back from Stripe having given up half way --");
+    console.log("\n-- and coming back from anywhere --");
     const p = await panel(page);
-    t.ck("it landed on the screen that can answer, not the dashboard",
-      !!p, p ? "panel is on screen" : "no panel -- landed elsewhere");
-    t.ck("and it ASKED rather than assuming the return meant success",
+    t.ck("it landed on the screen that can answer", !!p, p ? "panel is on screen" : "landed elsewhere");
+    t.ck("and ASKED rather than assuming the return meant success",
       seen.some((s) => s === "POST /api/payouts/refresh"), seen.join(", "));
     t.ck("so an abandoned setup is not drawn as finished",
       !!p && !/Ready to be paid/.test(p.text), p?.state);
-    t.ck("it tells them the half that is done and the half that is not",
-      /not your bank yet/i.test(p?.text || ""), p?.text?.slice(0, 120));
     t.ck("the marker is taken out of the address bar",
       !(await page.evaluate(() => window.location.search)).includes("payouts"),
       await page.evaluate(() => window.location.search));
@@ -207,48 +237,61 @@ try {
       seat: { userId: "usr_rae", accountId: "acc_bay" }, viewport: { width: 1340, height: 1800 } });
     await wait(2200);
     await goCompany(page);
+    await wait(900);
 
-    console.log("\n-- once Stripe has cleared them --");
+    console.log("\n-- once they are cleared --");
     const p = await panel(page);
     t.ck("it says they are ready", /Ready to be paid/.test(p?.state || ""), p?.state);
     t.ck("green", p?.tone === "pay-ok", String(p?.tone));
     t.ck("nothing is still wanted", !!p && p.due.length === 0);
-    t.ck("and the button is quiet rather than a call to action",
-      /Manage it on Stripe/.test(p?.button || ""), p?.button);
+    t.ck("and it does not still ask for details",
+      !!p && !/details before we can pay you/i.test(p.text));
 
-    // The class rather than the instance: a \uXXXX escape in JSX text is six
-    // literal characters, and it has shipped twice.
     const leaked = await page.evaluate(() => /\\u[0-9a-fA-F]{4}/.test(document.body.innerText));
     t.ck("no escape sequence reached the screen", !leaked);
     await ctx.close();
   }
 
-  // ---- when Stripe refuses ------------------------------------------------
+  // ---- refused ------------------------------------------------------------
+  {
+    payout = { status: "rejected", ready: false, configured: true, requirements: [],
+      disabledReason: "rejected.fraud" };
+    const { ctx, page } = await visitApp(browser, { host: "bay", webPort: WEB,
+      seat: { userId: "usr_rae", accountId: "acc_bay" }, viewport: { width: 1340, height: 1800 } });
+    await wait(2200);
+    await goCompany(page);
+    await wait(900);
+
+    console.log("\n-- and when the business cannot be verified --");
+    const p = await panel(page);
+    t.ck("red", p?.tone === "pay-no", String(p?.tone));
+    t.ck("it does not offer another form to fill in",
+      !!p && !/Finish in a new window/i.test(p.text), p?.button);
+    // Their problem is with us, because we are the only company they have
+    // heard of here.
+    t.ck("and it points them at us rather than at a payments company",
+      /get in touch/i.test(p?.text || ""), p?.text?.slice(0, 160));
+    await ctx.close();
+  }
+
+  // ---- when the session itself is refused ---------------------------------
   {
     payout = { status: "none", ready: false, requirements: [], configured: true };
-    refuseConnect = { error: "stripe_failed",
+    refuseSession = { error: "stripe_failed",
       detail: "Only Stripe Connect platforms can create accounts." };
     const { ctx, page } = await visitApp(browser, { host: "bay", webPort: WEB,
       seat: { userId: "usr_rae", accountId: "acc_bay" }, viewport: { width: 1340, height: 1800 } });
     await wait(2200);
     await goCompany(page);
-    await page.evaluate(() => {
-      const h = [...document.querySelectorAll(".portal-panel h4")]
-        .find((x) => /^getting paid$/i.test(x.innerText.trim()));
-      h?.closest(".portal-panel")?.querySelector("button")?.click();
-    });
-    await wait(900);
+    await wait(1000);
 
-    console.log("\n-- and when Stripe refuses --");
+    console.log("\n-- and when the processor refuses outright --");
     const p = await panel(page);
-    t.ck("it says what Stripe actually said",
-      !!p && /Only Stripe Connect platforms/.test(p.text),
-      p?.text?.slice(0, 160));
-    // The one that matters: a configuration Stripe will refuse every time
-    // must not be drawn as something that fixes itself.
+    t.ck("it says what was actually said",
+      !!p && /Only Stripe Connect platforms/.test(p.text), p?.text?.slice(0, 170));
     t.ck("and does not tell them to wait for it to fix itself",
-      !!p && !/Try again in a moment/.test(p.text), p?.text?.slice(0, 160));
-    refuseConnect = null;
+      !!p && !/Try again in a moment/.test(p.text), p?.text?.slice(0, 170));
+    refuseSession = null;
     await ctx.close();
   }
 
@@ -259,11 +302,13 @@ try {
       seat: { userId: "usr_rae", accountId: "acc_bay" }, viewport: { width: 1340, height: 1800 } });
     await wait(2200);
     await goCompany(page);
+    await wait(900);
 
-    console.log("\n-- and when SubSub has no Stripe key at all --");
+    console.log("\n-- and when SubSub has no processor at all --");
     const p = await panel(page);
     t.ck("it says there is nothing to do rather than offering a dead button",
-      /aren't switched on/i.test(p?.text || "") && !p?.button, `${p?.text?.slice(0, 60)} btn=${p?.button}`);
+      !!p && /aren't switched on/i.test(p.text) && !p.button,
+      `${p?.text?.slice(0, 60)} btn=${p?.button}`);
     await ctx.close();
   }
 } finally {
