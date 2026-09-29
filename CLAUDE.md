@@ -1728,6 +1728,79 @@ refactor.
   given, because a screen offering a link that will not load is the same lie
   QuickSend's W-9 line exists to avoid.
 
+- **A document nobody can read is a document nobody uploaded.** Uploading has
+  worked since the start and *nothing signed in could read one back*. The only
+  route that ever served a compliance document's bytes was
+  `GET /api/pack/:token/file/:docId` — the **public** one, keyed by an emailed
+  token. So a stranger holding a forwarded certificate could open it and the
+  account being asked to **approve** that certificate could not.
+
+  What the review screen offered instead was `openFile`, which built a
+  `text/plain` Blob out of the reviewer's own checklist and downloaded it as
+  `<name>-preview.txt`, carrying the line *Placeholder preview — wired to
+  object storage in production*. **Open and Download were the same function.**
+  So a reviewer attesting to a coverage limit, a carrier, a policy number and
+  an expiry was doing it from memory of a file the screen would not show them
+  — the screen-that-lies rule pointed at the one screen whose entire job is
+  reading a document. The contractor's own My documents panel was the same
+  dead end from the other side: a filename, Replace and Delete, and no way to
+  see what was on file. **Replace was the only way to find out what you had
+  uploaded.**
+
+  `GET /api/subs/:companyId/documents/:kind/file` is the missing door, pinned
+  the same three ways the pack route is: the caller has a relationship with
+  the company, the row belongs to that company, and it is the **current** row
+  of that kind. Serving a superseded one would draw last year's certificate
+  under a heading reading *Verified*.
+
+  **The W-9 is served here, and that is the point rather than an oversight.**
+  `inLink` keeps a taxpayer number out of an emailed link *because* this door
+  exists — the pack page says a W-9 is on file and that reading it needs an
+  account. Refusing it in both places would leave it readable by nobody at
+  all, which is not friction, it is a dead record.
+
+  It reuses **`mayWriteCompanyDocs`** rather than growing a read predicate
+  beside it. Somebody who may *replace* their certificate may certainly read
+  it, and the two populations are identical — so a second rule could only ever
+  be wrong in one direction or the other.
+
+  **`no_file` is its own answer and is not `not_found`.** An upload made
+  before 037 wrote the boolean and the filename and had **nowhere to put the
+  R2 key**, so the file is in the bucket and nothing records where. Those
+  cannot be served by anybody, ever, and the only honest instruction is to ask
+  for the document again — which a caller already holding the relationship can
+  be told without giving anything away. A stranger still gets `not_found`, so
+  the oracle stays shut.
+
+  On the screen it is **fetched on mount, never on the press**, and that is
+  not a preload-for-speed decision: the bytes need an `Authorization` header,
+  so neither an `<a href>`, an `<img src>` nor an `<iframe src>` can carry one
+  — same as `reportPhotoBlob`. A press that has to *await* a round trip has
+  lost its user gesture by the time it opens a tab, **which iOS Safari blocks
+  as a popup**, and this product is run from an iPad. Having the blob in hand
+  first is what makes Open and Download ordinary anchors that work.
+
+  And it is drawn as **what it actually is**: an `<img>` for an image, an
+  `<iframe>` for a PDF, a download offer for anything else. A certificate is
+  as often a **photograph** of one as a PDF — somebody holds their phone over
+  the page in a site office — and a photo in a PDF frame is a broken-plugin
+  box.
+
+  Two assertions in the first version of the test **could not fail**, both
+  caught by mutation and both the shapes this file already records. A bare
+  `/<DocFileView/` over the whole of `App.tsx` found whichever of the two
+  mounts existed, so deleting it from the review modal left `MyDocRow`'s copy
+  satisfying the check — the `.embed-code-btn` trap exactly. And *an unknown
+  kind is refused* asserted only the 404, which an unknown kind produces
+  anyway by matching no row; what the `DOC_KINDS` guard actually decides is
+  **which** 404, since without it `bogus` falls through and answers `no_file`,
+  claiming that is a real kind of document this company has not uploaded.
+
+  Still open, and it is the same shape one layer along: **a signed work order
+  is uploaded and equally unreadable.** `work_orders.signed_file_key` is
+  written by `PUT /api/work-orders/:id/signed`, the filename is shown on the
+  assignment row, and no route anywhere serves it back.
+
 - **The hero crew is six puppets now, and swapping it is four files, not one.**
   `hero-crew` is a `<picture>`: a WebP and a PNG, each at 1x and 2x, and every
   one of them has to carry a real alpha channel. `test:hero` already pinned

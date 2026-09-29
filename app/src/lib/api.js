@@ -208,6 +208,26 @@ export const api = {
     request(`/subs/${companyId}/documents/${kind}`, { method: "POST", body: JSON.stringify({ fileKey, fileName }) }),
   deleteDocument: (companyId, kind) =>
     request(`/subs/${companyId}/documents/${kind}`, { method: "DELETE" }),
+  // The document itself. Same shape as reportPhotoBlob and for the same
+  // reason: the route needs an Authorization header, and neither an <img
+  // src>, an <iframe src> nor an <a href> can carry one. So the bytes come
+  // back through the same client as every other call and go on the page as a
+  // blob URL, which a link, a frame and a download button can all use.
+  //
+  // The content type is handed back with it. A certificate is as often a
+  // photograph of one as it is a PDF, and the viewer has to know which it is
+  // holding before it can draw it.
+  documentBlob: async (companyId, kind) => {
+    const res = await fetch(`${API_BASE}/subs/${companyId}/documents/${kind}/file`,
+      { headers: await authHeaders() });
+    if (!res.ok) {
+      let code = `doc_${res.status}`;
+      try { code = (await res.json())?.error || code; } catch { /* not json */ }
+      throw new Error(code);
+    }
+    const blob = await res.blob();
+    return { url: URL.createObjectURL(blob), type: blob.type || "", size: blob.size };
+  },
 
   listJobs: () => request("/jobs"),
   listAllBookings: () => request("/jobs/all-bookings"),

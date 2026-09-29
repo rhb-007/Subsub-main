@@ -111,6 +111,8 @@
     "test:switchland": "node scripts/switch-land-test.mjs",
     "test:jobscope": "node scripts/job-scope-test.mjs",
     "test:docwrite": "node scripts/docwrite-test.mjs",
+    "test:docview": "node --no-warnings scripts/docview-test.mjs",
+    "test:docviewui": "node scripts/doc-view-ui-test.mjs",
     "test:quotes": "node scripts/quotes-test.mjs",
     "test:quotesui": "node scripts/quotes-ui-test.mjs",
     "test:quicksend": "node scripts/quicksend-ui-test.mjs",

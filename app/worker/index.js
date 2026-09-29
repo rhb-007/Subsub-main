@@ -6992,6 +6992,73 @@ async function mayWriteCompanyDocs(c, companyId) {
   return !!engaged;
 }
 
+// The document itself, to the people who have to read it.
+//
+// Uploading has worked since the start and nothing could ever read one back.
+// The only route that served a compliance document's bytes was the PUBLIC
+// pack link, keyed by an emailed token -- so a stranger holding a forwarded
+// certificate could see it and the account being asked to APPROVE it could
+// not. What the review screen offered instead was a generated .txt listing
+// the checks it wanted somebody to perform against a document it would not
+// show them, which is the screen-that-lies rule pointed at the one screen
+// whose entire job is reading a document.
+//
+// Pinned the same three ways the pack route is: the caller has a relationship
+// with this company, the row belongs to that company, and it is the CURRENT
+// row of that kind. No R2 key is ever accepted from the caller -- `fileKey`
+// travels out on the read shape and means nothing on the way back in.
+//
+// The W-9 IS served here, and that is the point rather than an oversight.
+// `inLink` keeps a taxpayer number out of an emailed link precisely BECAUSE
+// this door exists: the pack page says a W-9 is on file and that reading it
+// needs an account. This is the account.
+app.get("/api/subs/:companyId/documents/:kind/file", requireRole("admin", "pm", "contractor"), async (c) => {
+  const { companyId, kind } = c.req.param();
+  if (!DOC_KINDS.includes(kind)) return c.json({ error: "not_found" }, 404);
+  // The same predicate as writing, deliberately. Somebody who may REPLACE
+  // their certificate may certainly read it, so a second rule here could only
+  // be wrong in one direction or the other. It answers before the company is
+  // looked up, so a company that exists and one that does not give the same
+  // reply -- the oracle `mayWriteCompanyDocs` already refuses to be.
+  if (!(await mayWriteCompanyDocs(c, companyId))) return c.json({ error: "not_found" }, 404);
+
+  let doc;
+  try {
+    doc = await c.env.DB.prepare(
+      `SELECT file_key, file_name FROM company_docs
+        WHERE company_id = ? AND kind = ? AND superseded_at IS NULL
+        ORDER BY uploaded_at DESC LIMIT 1`
+    ).bind(companyId, kind).first();
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return c.json({ error: "no_file" }, 404);
+  }
+
+  // `no_file` is its own answer and is not the same as `not_found`. A caller
+  // who got this far has a relationship with the company and already knows it
+  // exists, so there is nothing to give away -- and the two need telling
+  // apart, because one of them is a document nobody can produce.
+  //
+  // It is reachable for a real reason rather than only in theory: an upload
+  // made before 037 wrote the boolean and the filename and had nowhere to put
+  // the R2 key, so the file is in the bucket and nothing records where. Those
+  // cannot be served by anybody and the screen has to say so rather than
+  // offering a button that fails.
+  if (!doc?.file_key) return c.json({ error: "no_file" }, 404);
+
+  const obj = await c.env.FILES.get(doc.file_key);
+  if (!obj) return c.json({ error: "no_file" }, 404);
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": obj.httpMetadata?.contentType || "application/octet-stream",
+      "Content-Disposition": `inline; filename="${(doc.file_name || "document").replace(/[^\w.\-]/g, "_")}"`,
+      // Never a shared cache: this is one company's certificate, and an
+      // intermediary holding a copy outlives the engagement that allowed it.
+      "Cache-Control": "private, no-store",
+    },
+  });
+});
+
 app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "contractor"), async (c) => {
   const auth = c.get("auth");
   const { companyId } = c.req.param();

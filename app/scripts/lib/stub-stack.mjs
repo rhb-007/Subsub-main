@@ -120,7 +120,18 @@ export function serveApi({ port, routes, delay = 0 }) {
     // Fourth argument, so every caller written against routes(path, method,
     // body) keeps working untouched.
     const hit = routes(path, req.method, sent, req.headers);
-    const [status, body] = hit === undefined ? [200, []] : hit;
+    const [status, body, extra] = hit === undefined ? [200, []] : hit;
+    // A third element lets a route answer with something that is not JSON.
+    // Every route here has been a JSON one until compliance documents needed
+    // testing, and those are PDFs and photographs -- a stub that can only say
+    // `application/json` cannot exercise the branch that decides whether to
+    // draw an <img> or an <iframe>, which is the whole of what that viewer
+    // does. Callers returning two elements are untouched.
+    if (extra && extra.raw !== undefined) {
+      res.writeHead(status, { ...cors, "Content-Type": extra.type || "application/octet-stream",
+        ...(extra.headers || {}) });
+      return res.end(extra.raw);
+    }
     res.writeHead(status, cors);
     res.end(JSON.stringify(body));
   }).listen(port);

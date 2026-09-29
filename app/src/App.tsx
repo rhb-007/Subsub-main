@@ -22,7 +22,7 @@ import { createPortal } from "react-dom";
 // flag only decides what ships to the browser.
 const BUILD = import.meta.env.VITE_BUILD === "platform" ? "platform" : "tenant";
 import {
-  Search, Phone, Mail, MapPin, FileText, Shield, ScrollText, Calendar,
+  Search, Phone, Mail, MapPin, FileText, FileWarning, Shield, ScrollText, Calendar,
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
   Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList,
   Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, UserX, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, ArrowRightLeft, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
@@ -6473,6 +6473,96 @@ function IssuerFields({ kind, issuer, setIssuer, policyNo, setPolicyNo, expires,
   );
 }
 
+// The uploaded document, on the screen of somebody who has to make a decision
+// about it.
+//
+// Three shapes, because a compliance document arrives as all three. A
+// certificate is as often a PHOTOGRAPH of one as it is a PDF -- somebody
+// holds their phone over the page in a site office -- so an image is drawn as
+// an image. A PDF goes in a frame. Anything else is offered as a download
+// rather than pretended at, because a frame full of a browser's "cannot
+// display" chrome is worse than a button that says what it is.
+//
+// It fetches on mount rather than on the press, and that is not a
+// preload-for-speed decision. The bytes need an Authorization header, so the
+// URL cannot exist until a round trip has finished -- and a press that has to
+// await one has already lost its user gesture by the time it opens a tab,
+// which iOS Safari blocks as a popup. Having the blob in hand first is what
+// makes Open and Download ordinary links that work on an iPad.
+//
+// Revoked on unmount, because a reviewer working down a roster would
+// otherwise hold every certificate they had opened.
+function DocFileView({ companyId, kind, fileName }) {
+  const [state, setState] = useState({ status: "loading" });
+  useEffect(() => {
+    let live = true, made = null;
+    setState({ status: "loading" });
+    api.documentBlob(companyId, kind)
+      .then((r) => {
+        if (!live) { URL.revokeObjectURL(r.url); return; }
+        made = r.url;
+        setState({ status: "ready", ...r });
+      })
+      .catch((e) => {
+        console.error("[doc] load failed:", e);
+        if (live) setState({ status: "failed", code: String(e?.message || e) });
+      });
+    return () => { live = false; if (made) URL.revokeObjectURL(made); };
+  }, [companyId, kind]);
+
+  if (state.status === "loading") {
+    return <div className="dv-frame is-loading" aria-label="Loading document" />;
+  }
+  if (state.status === "failed") {
+    // `no_file` is not a failure to be apologised for in the same words as a
+    // failure to load. A document uploaded before the row that records where
+    // it went does not exist as far as anything here can reach, and the only
+    // honest instruction is to upload it again.
+    const gone = state.code === "no_file";
+    return (
+      <div className="dv-frame is-gone">
+        <FileWarning size={18} />
+        <div>
+          <strong>{gone ? "This file can't be opened." : "Couldn't load the document."}</strong>
+          <p>{gone
+            ? "It was uploaded before SubSub recorded where files were stored, so there is nothing to open. Ask for it again and the new copy will open here."
+            : "Something went wrong fetching it. Try again in a moment."}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const isImage = state.type.startsWith("image/");
+  const isPdf = state.type === "application/pdf";
+  return (
+    <div className="dv-wrap">
+      {isImage ? (
+        <a className="dv-frame dv-img" href={state.url} target="_blank" rel="noopener noreferrer">
+          <img src={state.url} alt={fileName || "Uploaded document"} />
+        </a>
+      ) : isPdf ? (
+        <iframe className="dv-frame" src={state.url} title={fileName || "Uploaded document"} />
+      ) : (
+        <div className="dv-frame is-other">
+          <FileText size={18} />
+          <div>
+            <strong>{fileName || "Document"}</strong>
+            <p>This kind of file can't be shown here. Download it to read it.</p>
+          </div>
+        </div>
+      )}
+      <div className="dv-actions">
+        <a className="btn-ghost rv-btn" href={state.url} target="_blank" rel="noopener noreferrer">
+          <FileText size={13} /> Open
+        </a>
+        <a className="btn-ghost rv-btn" href={state.url} download={fileName || "document"}>
+          <Download size={13} /> Download
+        </a>
+      </div>
+    </div>
+  );
+}
+
 function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
   const r = docReview(sub, kind);
   const isIns = kind === "insurance";
@@ -6531,26 +6621,6 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
     ? attestOk && allLinesOk && requiredLinesFilled && expires
     : attestOk && bondOk && (!needsExpiry || !!expires);
 
-  const openFile = () => {
-    const lines = [
-      DOC_LABELS[kind].toUpperCase(),
-      `File: ${file}`,
-      `Contractor: ${sub.company}`,
-      "",
-      "Placeholder preview — wired to object storage in production.",
-      "",
-      isIns ? "REQUIRED COVERAGE" : "REVIEWER CHECKS",
-      ...(isIns
-        ? INSURANCE_LINES.map((l) => `  ${l.label}${l.sub ? ` (${l.sub})` : ""}: ${formatMoney(l.min)}${l.optional ? " — if applicable" : ""}`)
-            .concat(["", ...INSURANCE_ATTEST.map((a) => `  - ${a.label(brand.name)}`)])
-        : checks.map((c) => `  - ${c.label}`)),
-    ].join("\n");
-    const url = URL.createObjectURL(new Blob([lines], { type: "text/plain" }));
-    const a = document.createElement("a");
-    a.href = url; a.target = "_blank"; a.rel = "noopener";
-    a.download = file.replace(/\.\w+$/, "") + "-preview.txt";
-    a.click(); URL.revokeObjectURL(url);
-  };
 
   return (
     <div className="form">
@@ -6567,11 +6637,13 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
               : "Uploaded by contractor · not yet reviewed"}
           </span>
         </div>
-        <div className="rv-file-actions">
-          <button className="btn-ghost rv-btn" onClick={openFile}><FileText size={13} /> Open</button>
-          <button className="btn-ghost rv-btn" onClick={openFile}><Download size={13} /> Download</button>
-        </div>
       </div>
+
+      {/* The document, above the questions being asked about it. A reviewer
+          is being asked to attest to coverage limits and an expiry date, and
+          until now the only place those numbers existed on this screen was in
+          their memory of a file they had to leave to open. */}
+      <DocFileView companyId={sub.id} kind={kind} fileName={file} />
 
       {r?.status === "rejected" && r.note && (
         <div className="doc-block"><AlertTriangle size={15} />
@@ -19837,29 +19909,8 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
               ["insurance", "Certificate of insurance", FileText],
               ["bond", "Surety bond", Shield],
               ["contract", "Signed subcontractor agreement", ScrollText]].map(([k, l, Icon]) => (
-              <div key={k} className={`doc-manage-row st-doc-${docStatus(sub, k)}`}>
-                <Icon size={16} />
-                <div className="dm-info">
-                  <span className="dm-label">{l}</span>
-                  {sub[k] && <span className="dm-file">{sub.docFiles?.[k] || "document.pdf"}</span>}
-                  <span className={`doc-state s-${docStatus(sub, k)}`}>
-                    {docStatus(sub, k) === "verified" && <><CheckCircle2 size={11} /> Verified</>}
-                    {docStatus(sub, k) === "pending" && <><Clock size={11} /> {brand.name} is reviewing this</>}
-                    {docStatus(sub, k) === "rejected" && <><XCircle size={11} /> Needs a new copy — {docReview(sub, k)?.note}</>}
-                    {docStatus(sub, k) === "missing" && <><AlertTriangle size={11} /> Not uploaded</>}
-                  </span>
-                </div>
-                {sub[k] ? (
-                  <div className="dm-actions">
-                    <label className="dm-replace"><Upload size={12} /> Replace
-                      <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(k, e.target.files[0]); }} /></label>
-                    <button type="button" className="dm-delete" onClick={() => onDeleteDoc(k)}><Trash2 size={12} /> Delete</button>
-                  </div>
-                ) : (
-                  <label className="dm-upload"><Upload size={13} /> Upload
-                    <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(k, e.target.files[0]); }} /></label>
-                )}
-              </div>
+              <MyDocRow key={k} sub={sub} kind={k} label={l} Icon={Icon}
+                brandName={brand.name} onUploadDoc={onUploadDoc} onDeleteDoc={onDeleteDoc} />
             ))}
           </div>
         </div>
@@ -19867,6 +19918,57 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
       )}
 
     </main>
+  );
+}
+
+// One row of a hireable account's own paperwork, with the thing it is about.
+//
+// The panel listed a filename and offered Replace and Delete, so the one
+// person guaranteed to care what the file actually says -- the company whose
+// certificate it is, deciding whether the copy on file is still the current
+// one -- could not look at it either. Replace was the only way to find out,
+// which is the screen-that-knows-the-answer-and-offers-no-way-in shape.
+//
+// It holds its own open state rather than the parent holding one for four
+// rows, because the frame fetches on mount: a shared "which one is open"
+// would re-mount the viewer on every switch, and this way a row that is shut
+// has revoked its blob.
+function MyDocRow({ sub, kind, label, Icon, brandName, onUploadDoc, onDeleteDoc }) {
+  const [open, setOpen] = useState(false);
+  const st = docStatus(sub, kind);
+  const has = !!sub[kind];
+  return (
+    <div className={`doc-manage-row st-doc-${st}${open ? " is-open" : ""}`}>
+      <Icon size={16} />
+      <div className="dm-info">
+        <span className="dm-label">{label}</span>
+        {has && <span className="dm-file">{sub.docFiles?.[kind] || "document.pdf"}</span>}
+        <span className={`doc-state s-${st}`}>
+          {st === "verified" && <><CheckCircle2 size={11} /> Verified</>}
+          {st === "pending" && <><Clock size={11} /> {brandName} is reviewing this</>}
+          {st === "rejected" && <><XCircle size={11} /> Needs a new copy — {docReview(sub, kind)?.note}</>}
+          {st === "missing" && <><AlertTriangle size={11} /> Not uploaded</>}
+        </span>
+      </div>
+      {has ? (
+        <div className="dm-actions">
+          <button type="button" className="dm-view" onClick={() => setOpen((v) => !v)}>
+            <FileText size={12} /> {open ? "Hide" : "View"}
+          </button>
+          <label className="dm-replace"><Upload size={12} /> Replace
+            <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(kind, e.target.files[0]); }} /></label>
+          <button type="button" className="dm-delete" onClick={() => onDeleteDoc(kind)}><Trash2 size={12} /> Delete</button>
+        </div>
+      ) : (
+        <label className="dm-upload"><Upload size={13} /> Upload
+          <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(kind, e.target.files[0]); }} /></label>
+      )}
+      {open && has && (
+        <div className="dm-view-pane">
+          <DocFileView companyId={sub.id} kind={kind} fileName={sub.docFiles?.[kind]} />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -24181,6 +24283,13 @@ p.fld-note{margin:6px 0 0}
 .dm-replace{display:flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;background:var(--card);border:1px solid var(--line);padding:6px 9px;border-radius:7px}
 .dm-replace:hover{border-color:var(--brand);color:var(--brand)}
 .dm-delete{display:flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:var(--red);cursor:pointer;background:var(--card);border:1px solid #f0d1c8;padding:6px 9px;border-radius:7px}
+.dm-view{display:flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;background:var(--card);border:1px solid var(--line);padding:6px 9px;border-radius:7px}
+/* The row is a flex line; the viewer is a second line under it. A flex-basis
+   at 100% with wrap is what puts it there without the row becoming a grid. */
+.doc-manage-row{flex-wrap:wrap}
+.dm-view-pane{flex:0 0 100%;margin-top:10px}
+.dm-view-pane .dv-wrap{margin-bottom:0}
+
 .dm-delete:hover{background:#faece7}
 .doc-label-wrap{flex:1;min-width:0;display:flex;flex-direction:column}
 .doc-file{font-size:11px;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -25758,6 +25867,31 @@ p.fld-note{margin:6px 0 0}
 .rv-meta{font-size:11px;color:var(--ink-soft)}
 .rv-file-actions{display:flex;gap:7px;flex:none}
 .rv-btn{padding:8px 12px;font-size:12.5px;display:flex;align-items:center;gap:5px}
+/* The document viewer. The frame is a fixed height rather than a ratio
+   because a certificate, a photograph of one and a W-9 are three different
+   shapes and a panel that resizes per document makes the buttons under it
+   move. Tall enough to read the header block of an ACORD certificate, which
+   is where the carrier, the policy number and the dates all are. */
+.dv-wrap{margin-bottom:16px}
+.dv-frame{display:block;width:100%;height:420px;border:1px solid var(--line);border-radius:11px;
+  background:var(--paper);overflow:hidden}
+iframe.dv-frame{display:block}
+.dv-img{display:flex;align-items:center;justify-content:center;padding:8px;cursor:zoom-in}
+.dv-img img{max-width:100%;max-height:100%;object-fit:contain}
+.dv-frame.is-loading{background:var(--paper)}
+.dv-frame.is-gone,.dv-frame.is-other{height:auto;display:flex;align-items:flex-start;gap:12px;
+  padding:16px 18px}
+.dv-frame.is-gone>svg,.dv-frame.is-other>svg{color:var(--ink-soft);flex:none;margin-top:1px}
+.dv-frame.is-gone strong,.dv-frame.is-other strong{display:block;font-size:13.5px}
+.dv-frame.is-gone p,.dv-frame.is-other p{margin:3px 0 0;font-size:12px;color:var(--ink-soft);line-height:1.45}
+.dv-actions{display:flex;gap:7px;margin-top:10px}
+/* Open and Download are anchors rather than buttons, so that a press is a
+   press on a URL that already exists -- see DocFileView. the rv-btn rule sets the
+   padding; these two lines are what an <a> needs and a <button> does not. */
+.dv-actions .rv-btn{text-decoration:none;color:inherit}
+@media (max-width:620px){
+  .dv-frame{height:320px}
+}
 .rv-checks{display:flex;flex-direction:column;gap:8px}
 .rv-check{display:flex;align-items:flex-start;gap:10px;background:var(--card);border:1px solid var(--line);
   border-radius:10px;padding:12px 14px;cursor:pointer;font-size:13px;line-height:1.4}
