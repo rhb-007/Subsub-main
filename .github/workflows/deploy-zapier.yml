@@ -8,7 +8,14 @@
 #
 # ONE SECRET:
 #
-#   ZAPIER_DEPLOY_KEY   Zapier -> Platform -> your integration -> Deploy Keys.
+#   ZAPIER_DEPLOY_KEY   developer.zapier.com -> your profile -> Settings ->
+#                       Deploy Keys. It belongs to the ACCOUNT, not to an
+#                       integration, which is what makes the order below
+#                       possible: the key can be made before anything is
+#                       registered, so the first press of this workflow can be
+#                       the one that registers. A per-integration key would
+#                       need an integration to exist first, and the only way to
+#                       create one from here is this workflow.
 #                       It is a credential: it goes in
 #                       Settings -> Secrets and variables -> Actions,
 #                       never in a chat window and never in this file.
@@ -73,7 +80,7 @@ jobs:
           if [ -z "$KEY" ]; then
             echo "::error::ZAPIER_DEPLOY_KEY is not set."
             echo "Add it under Settings -> Secrets and variables -> Actions."
-            echo "Get it from Zapier: Platform -> your integration -> Deploy Keys."
+            echo "Get it from developer.zapier.com -> profile -> Settings -> Deploy Keys."
             exit 1
           fi
 
