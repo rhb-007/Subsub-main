@@ -14,7 +14,7 @@
 //
 //   node scripts/discover-test.mjs
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,12 +27,21 @@ const ck = (name, ok, detail = "") => {
   else { fail += 1; console.log(`  FAIL  ${name}${detail ? `  -- ${detail}` : ""}`); }
 };
 
-// Every page that carries the site footer. get-started.html is Disallow'd and
-// 404.html is not a page anybody links to, so neither carries one.
-const FOOTER_PAGES = ["index.html", "pricing.html", "book-a-demo.html",
-  "for-general-contractors.html", "for-property-managers.html",
-  "for-building-owners.html", "for-portfolio-managers.html",
-  "privacy-policy.html", "terms-of-use.html"];
+// Every page that carries the site footer, READ OFF DISK rather than listed.
+//
+// The list used to be hand-kept, with a comment saying get-started.html and
+// 404.html carry no footer. Both do. So the two pages the list left out were
+// exactly the two missing the Resources column, and the test said every page
+// had it -- a list that decides what to check, written by the person who added
+// the thing being checked, is the same record twice. The files are the record.
+//
+// A new page with a footer is now in scope the moment it exists, which is the
+// point: "on every page" has to mean every page, not every page somebody
+// remembered.
+const FOOTER_PAGES = readdirSync(root)
+  .filter((f) => f.endsWith(".html"))
+  .filter((f) => read(f).includes('<footer class="site">'))
+  .sort();
 
 // The four audience pages, which get a link in the body as well: a footer link
 // is how a crawler finds a section, a link with real anchor text next to
@@ -47,10 +56,51 @@ const footerOf = (html) => {
 };
 
 console.log("\nthe footer carries it, on every page that has a footer");
+ck("there are pages to check", FOOTER_PAGES.length >= 10, String(FOOTER_PAGES.length));
 for (const name of FOOTER_PAGES) {
   const html = read(name);
   const foot = footerOf(html);
   ck(name, /<h4>Resources<\/h4>/.test(foot) && /href="licensing\/"/.test(foot));
+}
+
+// The API documentation is the second thing in Resources, and it is the only
+// page on this site written for somebody who will go and build something
+// against it -- so it has to be findable from wherever they landed, not only
+// from the page that happens to mention it.
+console.log("\nand the developer docs are in it");
+for (const name of FOOTER_PAGES) {
+  const foot = footerOf(read(name));
+  ck(name, /<a href="developers\.html">Developer tools<\/a>/.test(foot),
+    (foot.match(/<h4>Resources<\/h4>[\s\S]{0,200}/) || [""])[0].replace(/\s+/g, " ").slice(0, 120));
+}
+
+// The generated pages take the footer from the chrome slice, so a change to
+// the site reaches all 71 of them -- but only after `npm run licensing` runs.
+// Forgetting that leaves two thirds of the site's pages on last month's footer,
+// which is silent: they render, and they are the pages a search engine sends
+// people to.
+console.log("\nincluding on the generated pages, which is a separate build");
+{
+  const walk = (dir) => readdirSync(join(root, dir), { withFileTypes: true })
+    .flatMap((e) => e.isDirectory() ? walk(join(dir, e.name))
+      : e.name.endsWith(".html") ? [join(dir, e.name)] : []);
+  const gen = walk("licensing");
+  ck("there are generated pages", gen.length > 50, String(gen.length));
+  // The link is relative and rewritten for depth, so what matters is whether it
+  // RESOLVES -- not how many ../ it has. The first version of this counted the
+  // path segments itself and got it wrong for every state hub, reporting 71
+  // correct pages as broken. A test that recomputes what the generator already
+  // computed is a second implementation to keep in step; resolving the href
+  // against the file it sits in asks the only question worth asking.
+  const bad = [];
+  for (const f of gen) {
+    const foot = footerOf(read(f));
+    const m = foot.match(/<a href="((?:\.\.\/)*developers\.html)">Developer tools<\/a>/);
+    if (!m) { bad.push(`${f}: no link`); continue; }
+    if (!existsSync(join(root, dirname(f), m[1]))) bad.push(`${f} -> ${m[1]}`);
+  }
+  ck("every one carries it, and it resolves from where that page sits",
+    bad.length === 0, JSON.stringify(bad.slice(0, 3)));
 }
 
 console.log("\nand the grid has a column to put it in");

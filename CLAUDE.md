@@ -1829,6 +1829,32 @@ refactor.
   written from the same `plan()` the pages are, so it cannot list a page that
   does not exist.
 
+  **And "on every page" has to mean every page.** The footer's Resources column
+  carries the licensing hub and the API documentation, and `test:discover`
+  checked it against a **hand-kept list of pages** — one that named nine and
+  carried a comment saying `get-started.html` and `404.html` have no footer.
+  Both do. So the two pages the list left out were exactly the two missing the
+  column, and the test reported every page as correct. A list that decides what
+  to check, written by whoever added the thing being checked, is the same record
+  twice. It reads the directory now: any root page containing
+  `<footer class="site">` is in scope the moment it exists.
+
+  Adding the column to those two then broke their layout, which the same run
+  caught: `.foot` was still `1.4fr 1fr 1fr` there, so a fourth `<div>` wrapped
+  under the brand blurb and read as an orphan. The column count and the number
+  of columns are a third pair of records, and the existing assertion on the grid
+  was already pinning it — for the nine pages the list knew about.
+
+  The generated pages take the footer from the chrome slice, so the site reaches
+  all seventy-one of them — but only after `npm run licensing`. Forgetting that
+  leaves two thirds of the site on last month's footer, silently, and those are
+  the pages search engines send people to. The link is relative and rewritten
+  for depth, and the first version of that check **recomputed the depth itself**
+  and got it wrong for every state hub, reporting seventy-one correct pages as
+  broken. It resolves the href against the file it sits in now: a test that
+  recomputes what the generator already computed is a second implementation to
+  keep in step.
+
   **Pages nobody links are pages nobody reads.** All thirteen shipped orphaned:
   absent from the root `sitemap.xml`, with `licensing/sitemap.xml` never declared
   in `robots.txt`, and nothing on subsub.work pointing at the directory. Every
