@@ -358,19 +358,36 @@ body.nav-open{overflow:hidden}
 }
 </style>
 <style>
-  .hero{background:var(--forest);color:#fff;padding:66px 0 86px}
-  .hero-grid{display:grid;grid-template-columns:1.02fr .98fr;gap:60px;align-items:center}
+  /* overflow-x because the crew is deliberately wider than its column and runs
+     past the wrap. Without it a narrow desktop gets a horizontal scrollbar for
+     the sake of a few pixels of puppet. The bottom overrun that used to need
+     protecting is gone, so there is nothing else for this to clip. */
+  .hero{background:var(--forest);color:#fff;padding:66px 0 86px;overflow-x:hidden}
+  .hero-grid{display:grid;grid-template-columns:1fr 1.2fr;gap:44px;align-items:start}
   .hero h1{color:#fff;max-width:16ch}
 
   /* The crew. A cutout on transparency, so it sits straight on the forest
      with no card around it. The mask feathers the bottom edge, where the
      photograph stops mid-torso -- without it the hero ends in a hard
-     horizontal line across five chests. */
-  /* Bottom-aligned and run down into the section's own padding, so the crew
-     stands in the hero rather than floating in the middle of it. The overrun
-     is smaller than that padding, so nothing needs clipping. */
-  .hero-crew{align-self:end;margin-bottom:-62px}
-  .hero-crew img{display:block;width:112%;max-width:none;margin-left:-8%;height:auto;
+     horizontal line across six chests. */
+  /* TOP-ALIGNED WITH THE COPY, which reverses the earlier decision and is
+     worth saying so. It used to be bottom-aligned with a -62px overrun into
+     the section's padding, so the crew "stood in" the hero. That was written
+     for a 1.75-aspect picture; the one here is 1.50, so at the same width it
+     is taller and the old alignment dropped it a long way down the hero --
+     starting 176px below the headline and finishing 114px above the last line
+     of copy, which reads as a separate thing floating beside the text rather
+     than the other half of the same block.
+     So the crew now starts level with the h1 and runs to within 40px of the
+     fine print: even with the copy, top and bottom.
+     The width is what makes that possible. A 1.50 picture as tall as a 500px
+     column of copy needs ~750px, which is more than the column holds -- hence
+     the wider grid share AND the overrun, and hence overflow-x above. The left
+     edge may sit a little inside the widest line of text because the cutout
+     carries ~6% transparent margin of its own, so the nearest puppet is still
+     clear of the words. */
+  .hero-crew{align-self:start}
+  .hero-crew img{display:block;width:125%;max-width:none;margin-left:-13%;height:auto;
     -webkit-mask-image:linear-gradient(to bottom,#000 84%,transparent 100%);
             mask-image:linear-gradient(to bottom,#000 84%,transparent 100%)}
 

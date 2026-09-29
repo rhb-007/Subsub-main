@@ -142,6 +142,68 @@ try {
     ck(`${name}: nothing spills off the page`, !!r && r.pageScrollsSideways === false);
   }
 
+  // ---- where it sits, which is the thing that was wrong ------------------
+  //
+  // The crew used to be bottom-aligned with an overrun into the hero's
+  // padding. That was written for a 1.75-aspect picture; at 1.50 the same
+  // rule dropped it 176px below the headline and finished it 114px above the
+  // last line of copy -- a separate thing floating beside the text rather
+  // than the other half of the same block. It is top-aligned now.
+  //
+  // Worth a test because nothing else would say a word: restoring
+  // `align-items:center` or `align-self:end` renders perfectly, loads
+  // perfectly, and is simply in the wrong place.
+  console.log("\n-- and it sits level with the copy --");
+  // 1024 is in here on purpose. The first version of this checked only the two
+  // widths that happened to pass, which is choosing the evidence: at 1024 the
+  // page margin is 30px and the overrun is wider than that, so there really is
+  // a clip. The bound is proportional for that reason -- the tip of a plank is
+  // fine, half a puppet is not.
+  for (const [w, h, name] of [[1440, 900, "desktop"], [1280, 800, "laptop"], [1024, 768, "narrow desktop"]]) {
+    const ctx = await browser.createBrowserContext();
+    const page = await ctx.newPage();
+    await page.setViewport({ width: w, height: h, deviceScaleFactor: 1 });
+    await page.goto(`http://127.0.0.1:${PORT}/index.html`, { waitUntil: "domcontentloaded" });
+    await wait(1500);
+    const o = await page.evaluate(() => {
+      const R = (s) => document.querySelector(s).getBoundingClientRect();
+      const img = R(".hero-crew img"), h1 = R(".hero h1"), fine = R(".hero .fine-d");
+      // The widest INK, not the widest box: the copy columns are wider than
+      // the words in them.
+      const range = document.createRange();
+      let ink = 0;
+      for (const el of document.querySelectorAll(".hero h1,.hero .lede-d,.hero .cta-row,.hero .fine-d")) {
+        range.selectNodeContents(el);
+        for (const r of range.getClientRects()) if (r.right > ink) ink = r.right;
+      }
+      return {
+        topVsH1: Math.round(img.top - h1.top),
+        bottomVsCopy: Math.round(img.bottom - fine.bottom),
+        imgH: Math.round(img.height), copyH: Math.round(fine.bottom - h1.top),
+        overRight: Math.round(img.right - window.innerWidth),
+        inkGap: Math.round(img.left - ink), imgW: Math.round(img.width),
+      };
+    });
+    await ctx.close();
+    ck(`${name}: the crew starts level with the headline`, Math.abs(o.topVsH1) <= 8, `${o.topVsH1}px`);
+    // The numbers hold across the whole desktop range rather than at the width
+    // that flatters them: at 1024 the copy reflows to more lines while the
+    // crew only scales, so the gap widens. They are still far from what they
+    // exist to catch -- bottom-aligned, the old rule put the crew 176px below
+    // the headline, 114px short of the copy and at 0.73 of its height.
+    ck(`${name}: and finishes near the end of the copy`, Math.abs(o.bottomVsCopy) <= 80, `${o.bottomVsCopy}px`);
+    ck(`${name}: so it is the same height as the copy, not a third of it`,
+      o.imgH / o.copyH > 0.8, `crew ${o.imgH}px vs copy ${o.copyH}px (${(o.imgH / o.copyH).toFixed(2)})`);
+    // It overruns its column on purpose and .hero clips the spill, so the
+    // no-sideways-scroll check above can no longer fail on this. This is what
+    // replaces it: a future width bump must not cut a puppet in half.
+    ck(`${name}: and no more than a sliver is clipped off the right`,
+      o.overRight <= o.imgW * 0.08, `${o.overRight}px past the viewport, image ${o.imgW}px`);
+    // The cutout carries ~6% transparent margin, so a small negative is the
+    // box overlapping, not a puppet sitting on the words.
+    ck(`${name}: the crew does not land on the words`, o.inkGap > -40, `${o.inkGap}px`);
+  }
+
   console.log("\n-- and it is drawn at a sensible size --");
   const d = await heroAt(1440, 900);
   ck("the crew takes a real share of the hero", d.w > 400 && d.w < 1100, `${d.w}px wide`);

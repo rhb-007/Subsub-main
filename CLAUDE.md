@@ -1761,6 +1761,32 @@ refactor.
   The alt text is part of the swap. It said *Five* sock-puppet subcontractors,
   and the new picture has six.
 
+  **And the alignment had to reverse with it.** The crew was bottom-aligned with
+  a -62px overrun into the hero's padding, so it "stood in" the hero — written
+  for a 1.75-aspect picture. At 1.50 the same rule dropped it **176px below the
+  headline** and finished it **114px above the last line of copy**, at 0.73 of
+  the copy's height: a separate thing floating beside the text rather than the
+  other half of the same block. It is top-aligned now, level with the h1 and
+  finishing within 43px of the fine print.
+
+  **The width is what makes that possible, and it is a real constraint.** A 1.50
+  picture as tall as a ~530px column of copy needs about 750px, which is more
+  than the column holds — hence the wider grid share (`1fr 1.2fr`), the overrun
+  past the wrap, and `overflow-x:hidden` on `.hero` so a narrow desktop gets a
+  clipped plank rather than a horizontal scrollbar. The left edge may sit
+  slightly inside the widest line of text, which is fine because the cutout
+  carries ~6% transparent margin of its own.
+
+  Two things about the test for it. The no-sideways-scroll assertion **can no
+  longer fail on this image** now that the hero clips, so a proportional
+  right-clip bound replaces it — the tip of a plank is fine, half a puppet is
+  not. And the first version of that bound was checked **only at the two widths
+  that passed**, which is choosing the evidence: 1024 has a 30px page margin and
+  really does clip. It is tested at 1024 too, and the height and bottom bounds
+  are set where they hold across the whole desktop range rather than at the
+  width that flatters them — still far from the bottom-aligned numbers they
+  exist to catch.
+
 - **The licensing reference publishes what it can stand behind, which is far
   fewer pages than the grid has cells.** Fifty-one jurisdictions times
   twenty-nine trades is 1,479 combinations, and the obvious move — generate all
