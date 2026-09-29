@@ -1228,6 +1228,25 @@ refactor.
   payment processing ships, which is the point of having the column from the
   first row.
 
+  **`EASY-PAY.md` is the map of what ships into that seam**, written against
+  this ledger rather than beside it: what already exists (most of it), the one
+  thing that does not (money — there is no funded side at all), and the legal
+  shape, which is the decision everything else hangs off. Its two load-bearing
+  conclusions, recorded here because they are the ones a later pass would get
+  wrong: **SubSub must never hold the funds itself** — a trust account of our
+  own is money transmission and fifty state licences, so a partner holds them
+  and we send instructions — and **an instant-payout fee is only honest when
+  it buys a genuinely faster rail.** If we are already holding the money
+  against a verified milestone and a clear waiver, any wait is one we
+  invented, and charging to remove it is a fee for nothing. Paying a sub
+  before the GC has funded is not a speed fee at all; it is lending, and it is
+  a different company.
+
+  Still open and listed there: **payment is not gated on cover.** `settle`
+  checks the waiver chain and nothing else, so *refusing to pay a
+  subcontractor whose insurance lapsed* — named above as a reason to route
+  payment through here — is a claim nothing enforces.
+
 - **Why a GC would route payment through SubSub**, for anything customer-
   facing: the transfer is not the product. Releasing and signing the lien
   waiver as one event, refusing to pay a subcontractor whose insurance
