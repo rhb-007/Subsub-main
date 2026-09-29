@@ -1764,13 +1764,45 @@ refactor.
   it, and the two populations are identical — so a second rule could only ever
   be wrong in one direction or the other.
 
-  **`no_file` is its own answer and is not `not_found`.** An upload made
-  before 037 wrote the boolean and the filename and had **nowhere to put the
-  R2 key**, so the file is in the bucket and nothing records where. Those
-  cannot be served by anybody, ever, and the only honest instruction is to ask
-  for the document again — which a caller already holding the relationship can
-  be told without giving anything away. A stranger still gets `not_found`, so
-  the oracle stays shut.
+  **A key nobody recorded does not mean a file nobody has.** The upload route
+  puts the file in R2 **first** and writes `company_docs` **second**, inside a
+  try/catch that swallows a missing table — so on a database that never ran
+  037 every document is in the bucket and not one row says where. Giving up
+  there reports a whole roster of real certificates as unopenable, which is
+  what the first version of this did.
+
+  `findUploadedObject` is the recovery, and it works because the key the
+  upload built is `<accountId>/<kind>/<uid>-<fileName>` while
+  `companies.doc_files[kind]` holds that same `fileName`: the random id in the
+  middle is not derivable but the object is findable by **suffix**. Three
+  things hold it. The prefix is the **caller's own account**, read off the
+  session and never the URL, so it cannot reach into another account's space
+  and at worst fails closed on a file somebody uploaded while seated
+  elsewhere. The **suffix must match the name recorded on the company row** —
+  one account's `insurance/` folder holds a certificate per company on its
+  roster, and without that check the newest of them is served as whichever one
+  was asked for. And the **newest match wins**, because a replaced document
+  keeps its old object under the same name and "any match" draws last year's
+  certificate as current cover.
+
+  Two of those three were only pinned properly on the second attempt: the
+  fixture gave the other account's object an older date and the same folder
+  held nothing but copies of one file, so deleting the prefix scoping or the
+  suffix match changed no outcome and **the two guards covered for each
+  other**. The dated, differently-named fixtures are the test.
+
+  **`no_file` is its own answer and is not `not_found`**, for a row where
+  nothing can be produced at all. A caller who got that far already knows the
+  company exists, so naming the difference gives nothing away, and only one of
+  the two means "upload it again". A stranger still gets `not_found`, so the
+  oracle stays shut.
+
+  **And the empty state must not name a cause it cannot check.** The first
+  version said the file was "uploaded before SubSub recorded where files were
+  stored" — a guess at one of several ways a row loses its file, printed as
+  fact, and reported on a certificate uploaded that month, where it read as
+  nonsense. It says what is true and what to do, which is the same instruction
+  whichever cause it was.
 
   On the screen it is **fetched on mount, never on the press**, and that is
   not a preload-for-speed decision: the bytes need an `Authorization` header,
@@ -1800,6 +1832,41 @@ refactor.
   is uploaded and equally unreadable.** `work_orders.signed_file_key` is
   written by `PUT /api/work-orders/:id/signed`, the filename is shown on the
   assignment row, and no route anywhere serves it back.
+
+- **Picking a file is not uploading one, and one form only did the first
+  half.** `SubForm` — the roster's three-step Edit — took
+  `e.target.files[0].name`, put it in local state, and `build()` then PATCHed
+  that filename and the boolean onto the shared company row. **No bytes were
+  ever sent.** So choosing a certificate recorded one that does not exist;
+  `missingDocs` and `docsComplete` read those booleans, so the contractor went
+  compliant and **assignable on the strength of a file nothing had stored**.
+  In a product whose whole claim is that an expired certificate is worse than
+  a missing one, this quietly manufactured the worst case of all: cover
+  asserted over nothing. The only symptom arrived later and somewhere else —
+  a document that would not open.
+
+  It also drove a PATCH at the four columns `mayWriteCompanyDocs` guards,
+  which is the back door that check exists to close, found again in a second
+  caller.
+
+  The rows upload through the **same two calls every other upload on this
+  screen makes**, immediately rather than on Save, because a document is not
+  part of the draft this form edits: it has its own routes, its own permission
+  check and its own supersede-rather-than-overwrite rule. `build()` no longer
+  sends `bond`, `insurance`, `contract` or `docFiles` at all.
+
+  **On the add path the control cannot work and is gone.** A document attaches
+  to a company row and there is not one yet, so four upload buttons with
+  nothing behind them were offered; it says where they go instead of taking a
+  file and dropping it.
+
+  And **the bytes land before anything claims they did.** `uploadSubDoc` used
+  to patch the row present and fire the two calls off unawaited, swallowing
+  whatever they said — so a failed upload left the screen reading *awaiting
+  review* over a file that never arrived. Every other optimistic patch here is
+  recoverable by reloading; this one asserts cover. It uploads, then patches,
+  then throws, and both callers show a busy state — which is what the optimism
+  was buying — and say so when it fails.
 
 - **The hero crew is six puppets now, and swapping it is four files, not one.**
   `hero-crew` is a `<picture>`: a WebP and a PNG, each at 1x and 2x, and every

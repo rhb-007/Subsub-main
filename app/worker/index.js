@@ -7012,7 +7012,46 @@ async function mayWriteCompanyDocs(c, companyId) {
 // `inLink` keeps a taxpayer number out of an emailed link precisely BECAUSE
 // this door exists: the pack page says a W-9 is on file and that reading it
 // needs an account. This is the account.
+// Find an uploaded object by the name the company row records, when nothing
+// recorded its key.
+//
+// `PUT /api/uploads/:kind/:fileName` builds the key as
+// `<accountId>/<kind>/<uid>-<fileName>`, and `companies.doc_files[kind]` holds
+// that same fileName -- so the object is findable by suffix even though the
+// random id in the middle is not derivable. Newest wins, because a replaced
+// document keeps its old object and the current one is what is being asked
+// for.
+//
+// Bounded rather than open-ended: an account that has replaced a certificate
+// every month for years should not turn one screen into an unbounded scan, so
+// it stops after MAX_PAGES and answers "not found" rather than paging on.
+async function findUploadedObject(env, accountId, kind, fileName) {
+  const prefix = `${accountId}/${kind}/`;
+  const suffix = `-${fileName}`;
+  const MAX_PAGES = 5;
+  let cursor;
+  let best = null, bestAt = 0;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    let res;
+    try {
+      res = await env.FILES.list({ prefix, cursor, limit: 1000 });
+    } catch (err) {
+      console.warn("[doc-file] bucket listing failed:", err?.message || err);
+      return null;
+    }
+    for (const o of res?.objects || []) {
+      if (!o.key.endsWith(suffix)) continue;
+      const at = o.uploaded ? new Date(o.uploaded).getTime() : 0;
+      if (!best || at >= bestAt) { best = o.key; bestAt = at; }
+    }
+    if (!res?.truncated) break;
+    cursor = res.cursor;
+  }
+  return best;
+}
+
 app.get("/api/subs/:companyId/documents/:kind/file", requireRole("admin", "pm", "contractor"), async (c) => {
+  const auth = c.get("auth");
   const { companyId, kind } = c.req.param();
   if (!DOC_KINDS.includes(kind)) return c.json({ error: "not_found" }, 404);
   // The same predicate as writing, deliberately. Somebody who may REPLACE
@@ -7022,7 +7061,10 @@ app.get("/api/subs/:companyId/documents/:kind/file", requireRole("admin", "pm", 
   // reply -- the oracle `mayWriteCompanyDocs` already refuses to be.
   if (!(await mayWriteCompanyDocs(c, companyId))) return c.json({ error: "not_found" }, 404);
 
-  let doc;
+  // Where the key IS recorded: the current row of that kind. Serving a
+  // superseded one would draw last year's certificate under a heading
+  // reading "Verified".
+  let doc = null;
   try {
     doc = await c.env.DB.prepare(
       `SELECT file_key, file_name FROM company_docs
@@ -7030,28 +7072,49 @@ app.get("/api/subs/:companyId/documents/:kind/file", requireRole("admin", "pm", 
         ORDER BY uploaded_at DESC LIMIT 1`
     ).bind(companyId, kind).first();
   } catch (err) {
+    // A database that has not run 037 has no such table at all, which is not
+    // an error here: it is the commonest reason the key is missing, and the
+    // bytes are still in the bucket. Fall through.
     if (!missingSchema(err)) throw err;
-    return c.json({ error: "no_file" }, 404);
+  }
+
+  let key = doc?.file_key || null;
+  let name = doc?.file_name || null;
+
+  // And where it is NOT recorded. The upload route puts the file in R2 first
+  // and writes company_docs second, inside a try/catch that swallows a
+  // missing table -- so on a database without 037 every document has a file
+  // and no row saying where. `doc_files` still names it, and the key the
+  // upload built ends with that exact name, so the object is findable.
+  //
+  // Scoped to the CALLER'S OWN account prefix, read off the session and never
+  // the URL, so this cannot reach into another account's space: at worst it
+  // fails to find a file somebody uploaded while seated somewhere else, which
+  // fails closed. And the name must be the one recorded on a company row this
+  // caller already has a relationship with.
+  if (!key) {
+    const company = await c.env.DB.prepare(
+      `SELECT doc_files FROM companies WHERE id = ?`
+    ).bind(companyId).first();
+    const wanted = parseJson(company?.doc_files, {})[kind];
+    if (wanted && auth.accountId) {
+      const found = await findUploadedObject(c.env, auth.accountId, kind, wanted);
+      if (found) { key = found; name = name || wanted; }
+    }
   }
 
   // `no_file` is its own answer and is not the same as `not_found`. A caller
   // who got this far has a relationship with the company and already knows it
   // exists, so there is nothing to give away -- and the two need telling
   // apart, because one of them is a document nobody can produce.
-  //
-  // It is reachable for a real reason rather than only in theory: an upload
-  // made before 037 wrote the boolean and the filename and had nowhere to put
-  // the R2 key, so the file is in the bucket and nothing records where. Those
-  // cannot be served by anybody and the screen has to say so rather than
-  // offering a button that fails.
-  if (!doc?.file_key) return c.json({ error: "no_file" }, 404);
+  if (!key) return c.json({ error: "no_file" }, 404);
 
-  const obj = await c.env.FILES.get(doc.file_key);
+  const obj = await c.env.FILES.get(key);
   if (!obj) return c.json({ error: "no_file" }, 404);
   return new Response(obj.body, {
     headers: {
       "Content-Type": obj.httpMetadata?.contentType || "application/octet-stream",
-      "Content-Disposition": `inline; filename="${(doc.file_name || "document").replace(/[^\w.\-]/g, "_")}"`,
+      "Content-Disposition": `inline; filename="${(name || "document").replace(/[^\w.\-]/g, "_")}"`,
       // Never a shared cache: this is one company's certificate, and an
       // intermediary holding a copy outlives the engagement that allowed it.
       "Cache-Control": "private, no-store",

@@ -50,6 +50,7 @@ const M031 = `ALTER TABLE accounts ADD COLUMN company_id TEXT REFERENCES compani
 
 const COI = "ACORD 25 -- Cascade Mutual -- CGL-99812 -- expires 2027-03-01";
 const W9 = "FORM W-9 -- TIN 12-3456789";
+const LEGACY = "LEGACY SIDING -- the copy whose key nobody wrote down";
 
 // Alder hires Bay Roofing. Sound PM's engagement with Bay is ended. Outerhome
 // is a hireable account with a company row of its own and no client at all.
@@ -95,11 +96,46 @@ const seed = () => {
     ["k/bay-coi-2025.pdf", "LAST YEAR -- expired 2026-03-01"],
     ["k/bay-w9.pdf", W9],
     ["k/outerhome-coi.pdf", "OUTERHOME OWN COI"],
+    // Legacy Siding's certificate, in the bucket under the key the upload
+    // route builds, with NOTHING in company_docs recording it. This is what a
+    // database that never ran 037 looks like for every document it holds.
+    ["acc_a/insurance/aaaa1111-legacy-coi.pdf", "LEGACY OLD COPY"],
+    ["acc_a/insurance/bbbb2222-legacy-coi.pdf", LEGACY],
+    // A same-named file under ANOTHER account's prefix, which must never be
+    // reachable from this one.
+    ["acc_s/insurance/cccc3333-legacy-coi.pdf", "SOMEBODY ELSE'S BUCKET"],
+    // And a DIFFERENT contractor's certificate under the SAME prefix, because
+    // one account's insurance/ folder holds one of these per company on its
+    // roster. Nothing but the trailing filename tells them apart, so this is
+    // what the suffix match is actually for.
+    ["acc_a/insurance/dddd4444-bay-coi-2026.pdf", "BAY ROOFING, NOT LEGACY"],
+  ]);
+  const uploadedAt = new Map([
+    ["acc_a/insurance/aaaa1111-legacy-coi.pdf", "2024-05-05T00:00:00Z"],
+    ["acc_a/insurance/bbbb2222-legacy-coi.pdf", "2026-04-04T00:00:00Z"],
+    // Deliberately the NEWEST of the three. The first version of this fixture
+    // left it undated, so newest-wins picked the right file anyway and the
+    // prefix scoping could be deleted with every assertion still passing --
+    // the two guards were covering for each other. Now only the prefix keeps
+    // this one out.
+    ["acc_s/insurance/cccc3333-legacy-coi.pdf", "2026-09-09T00:00:00Z"],
+    // Newer than Legacy's, so without the suffix match it wins and one
+    // contractor's certificate is served as another's.
+    ["acc_a/insurance/dddd4444-bay-coi-2026.pdf", "2026-08-08T00:00:00Z"],
   ]);
   return { db, env: {
     DB: makeD1(db),
-    FILES: { get: async (k) => files.has(k)
-      ? { body: files.get(k), httpMetadata: { contentType: "application/pdf" } } : null },
+    FILES: {
+      get: async (k) => files.has(k)
+        ? { body: files.get(k), httpMetadata: { contentType: "application/pdf" } } : null,
+      // The bucket can be listed by prefix, which is how a file whose key was
+      // never recorded is found again.
+      list: async ({ prefix }) => ({
+        objects: [...files.keys()].filter((k) => k.startsWith(prefix))
+          .map((k) => ({ key: k, uploaded: uploadedAt.get(k) || "2026-01-01T00:00:00Z" })),
+        truncated: false,
+      }),
+    },
   } };
 };
 
@@ -171,9 +207,52 @@ console.log("\n-- the contractor reads their own, and so does a hireable account
   ck("and gets those bytes", (await body(own)) === "OUTERHOME OWN COI");
 }
 
-console.log("\n-- a document with no recorded key says so, and is not a 'not yours' --");
+console.log("\n-- a key nobody recorded is still found in the bucket --");
+{
+  // The case that matters most in practice. The upload route puts the file in
+  // R2 FIRST and writes company_docs second, inside a try/catch that swallows
+  // a missing table -- so a database that never ran 037 has every document in
+  // the bucket and not one row saying where. Giving up here would report a
+  // whole roster of real certificates as unopenable.
+  const { env } = seed();
+  const r = await get(env, "u_alder", "acc_a", "/subs/cmp_old/documents/insurance/file");
+  ck("it is served", r.status === 200, String(r.status));
+  ck("and it is the real document", (await body(r)) === LEGACY);
+}
+
+console.log("\n-- the newest matching object wins --");
 {
   const { env } = seed();
+  const t = await body(await get(env, "u_alder", "acc_a", "/subs/cmp_old/documents/insurance/file"));
+  // A replaced document keeps its old object under the same prefix and the
+  // same trailing name, so "any match" would serve whichever the bucket
+  // listed first -- last year's certificate, drawn as current cover.
+  ck("not the older copy of the same name", t !== "LEGACY OLD COPY", t.slice(0, 40));
+  ck("the current one", t === LEGACY);
+}
+
+console.log("\n-- and the search never leaves the caller's own prefix --");
+{
+  const { env } = seed();
+  // Sound PM holds an object with the identical trailing filename. Alder must
+  // not reach it, and the prefix comes off the SESSION, never the URL.
+  const t = await body(await get(env, "u_alder", "acc_a", "/subs/cmp_old/documents/insurance/file"));
+  ck("another account's bucket is not searched", t !== "SOMEBODY ELSE'S BUCKET", t.slice(0, 40));
+  // And within our own prefix, the name is the only thing separating one
+  // contractor's certificate from the next one's.
+  ck("nor another contractor's certificate from our own folder",
+    t !== "BAY ROOFING, NOT LEGACY", t.slice(0, 40));
+  const stranger = await get(env, "u_sound", "acc_s", "/subs/cmp_old/documents/insurance/file");
+  ck("and a stranger still gets nothing at all", stranger.status === 404, String(stranger.status));
+  const sj = await stranger.json().catch(() => ({}));
+  ck("answered as not_found, before any lookup", sj.error === "not_found", JSON.stringify(sj));
+}
+
+console.log("\n-- a row with no file anywhere says no_file, and is not a 'not yours' --");
+{
+  const { db, env } = seed();
+  // Nothing in company_docs, nothing in doc_files, nothing in the bucket.
+  db.exec(`UPDATE companies SET doc_files = '{}' WHERE id = 'cmp_old';`);
   const r = await get(env, "u_alder", "acc_a", "/subs/cmp_old/documents/insurance/file");
   ck("it is a 404", r.status === 404, String(r.status));
   const j = await r.json().catch(() => ({}));
@@ -228,6 +307,24 @@ console.log("\n-- and the placeholder is gone from the bundle --");
   ck("the viewer fetches on mount rather than on the press",
     /useEffect\([^]{0,600}api\.documentBlob\(/.test(slice("DocFileView")));
   ck("and revokes what it made", /revokeObjectURL/.test(slice("DocFileView")));
+
+  // The bug that produced a row with no file. SubForm's document rows took
+  // `e.target.files[0].name` and put it in local state; `build()` then PATCHed
+  // the filename and the boolean onto the shared company row, so picking a
+  // file recorded a certificate that had never been uploaded -- and marked the
+  // contractor compliant and assignable on the strength of it.
+  ck("SubForm no longer records a filename in place of a file",
+    !/uploadDoc\(\s*k\s*,\s*e\.target\.files\[0\]\.name\s*\)/.test(app));
+  ck("and its build() no longer writes the document columns",
+    !/rating:\s*Number\(f\.rating\)\s*\|\|\s*0,\s*docFiles:\s*f\.docFiles/.test(app));
+  ck("the upload goes through the same route every other one does",
+    /onUploadDoc=\{\(k, file\) => uploadSubDoc\(editing\.id, k, file\)\}/.test(app));
+  // And the bytes land before anything claims they did.
+  const up = app.slice(app.indexOf("const uploadSubDoc"), app.indexOf("const deleteSubDoc"));
+  ck("uploadSubDoc uploads before it patches state",
+    up.indexOf("api.uploadDocument") < up.indexOf("patchCompany"),
+    `${up.indexOf("api.uploadDocument")} vs ${up.indexOf("patchCompany")}`);
+  ck("and no longer swallows the failure", !/uploadSubDoc failed/.test(up));
 
   const api = readFileSync(new URL("../src/lib/api.js", import.meta.url), "utf8");
   ck("and the client hits the file route",

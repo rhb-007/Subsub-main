@@ -3418,21 +3418,26 @@ export default function SubSub() {
       ...c, status: "resolved", resolvedAt: new Date().toISOString() }));
   };
 
-  const uploadSubDoc = (id, key, file) => {
+  // The bytes FIRST, the optimistic row second.
+  //
+  // This used to mark the document present immediately and fire the two calls
+  // off unawaited, swallowing whatever they said. So a failed upload left the
+  // screen reading "certificate of insurance -- awaiting review", the boolean
+  // set, and the contractor assignable, over a file that never arrived. For a
+  // compliance record that is the one thing optimism must not do: every other
+  // optimistic patch here is recoverable by reloading, and this one asserts
+  // cover that does not exist.
+  //
+  // It throws on failure so the caller can say so. Both callers show a busy
+  // state while it runs, which is what optimism was buying.
+  const uploadSubDoc = async (id, key, file) => {
     const filename = file.name;
+    const { key: fileKey } = await api.uploadFile(key, file);
+    await api.uploadDocument(id, key, fileKey, filename);
     const co = companies.find((c) => c.id === id);
     patchCompany(id, { [key]: true, docFiles: { ...((co && co.docFiles) || {}), [key]: filename } });
     setEngagements((es) => es.map((e) => e.companyId !== id ? e : {
       ...e, docReview: { ...(e.docReview || {}), [key]: { status: "pending" } } }));
-
-    (async () => {
-      try {
-        const { key: fileKey } = await api.uploadFile(key, file);
-        await api.uploadDocument(id, key, fileKey, filename);
-      } catch (err) {
-        console.error("[persist] uploadSubDoc failed:", err);
-      }
-    })();
   };
   const deleteSubDoc = (id, key) => {
     persist("deleteDoc", api.deleteDocument(id, key));
@@ -6118,7 +6123,10 @@ export default function SubSub() {
           }}
           onClose={() => setRequestedOpen(null)} /></Modal>}
       {editing && <Modal onClose={() => setEditing(null)} wide>
-        <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub} onCancel={() => setEditing(null)} /></Modal>}
+        <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub}
+          onUploadDoc={(k, file) => uploadSubDoc(editing.id, k, file)}
+          onDeleteDoc={(k) => deleteSubDoc(editing.id, k)}
+          onCancel={() => setEditing(null)} /></Modal>}
 
       {checkoutSecret && (
         <CheckoutPanel clientSecret={checkoutSecret} onClose={() => setCheckoutSecret(null)} />
@@ -6515,17 +6523,27 @@ function DocFileView({ companyId, kind, fileName }) {
   }
   if (state.status === "failed") {
     // `no_file` is not a failure to be apologised for in the same words as a
-    // failure to load. A document uploaded before the row that records where
-    // it went does not exist as far as anything here can reach, and the only
-    // honest instruction is to upload it again.
+    // failure to load: the row says there is a document and no file can be
+    // produced for it.
+    //
+    // The first version of this copy named a CAUSE -- "uploaded before SubSub
+    // recorded where files were stored" -- and that was wrong twice over. It
+    // was a guess about one of several ways a row can end up without a file,
+    // stated to the reader as fact; and it was reported on a certificate
+    // uploaded this month, where it read as nonsense. Naming a cause the
+    // screen cannot check is the same mistake as the placeholder it replaced,
+    // in the opposite direction.
+    //
+    // So it says what is true and what to do, which is the same instruction
+    // whichever cause it was.
     const gone = state.code === "no_file";
     return (
       <div className="dv-frame is-gone">
         <FileWarning size={18} />
         <div>
-          <strong>{gone ? "This file can't be opened." : "Couldn't load the document."}</strong>
+          <strong>{gone ? "There's no file to open." : "Couldn't load the document."}</strong>
           <p>{gone
-            ? "It was uploaded before SubSub recorded where files were stored, so there is nothing to open. Ask for it again and the new copy will open here."
+            ? "This is recorded as on file, but no document was stored against it. Upload it again and it will open here."
             : "Something went wrong fetching it. Try again in a moment."}</p>
         </div>
       </div>
@@ -19935,6 +19953,18 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
 // has revoked its blob.
 function MyDocRow({ sub, kind, label, Icon, brandName, onUploadDoc, onDeleteDoc }) {
   const [open, setOpen] = useState(false);
+  // The upload reports failure now rather than swallowing it, so this has to
+  // listen: an unhandled rejection is the old silence wearing a new hat.
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const run = async (fn) => {
+    setBusy(true); setErr("");
+    try { await fn(); }
+    catch (ex) {
+      console.error("[my-documents] failed:", ex);
+      setErr("That didn't go through. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
   const st = docStatus(sub, kind);
   const has = !!sub[kind];
   return (
@@ -19950,19 +19980,25 @@ function MyDocRow({ sub, kind, label, Icon, brandName, onUploadDoc, onDeleteDoc 
           {st === "missing" && <><AlertTriangle size={11} /> Not uploaded</>}
         </span>
       </div>
-      {has ? (
+      {busy ? (
+        <span className="dm-busy">Working{"\u2026"}</span>
+      ) : has ? (
         <div className="dm-actions">
           <button type="button" className="dm-view" onClick={() => setOpen((v) => !v)}>
             <FileText size={12} /> {open ? "Hide" : "View"}
           </button>
           <label className="dm-replace"><Upload size={12} /> Replace
-            <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(kind, e.target.files[0]); }} /></label>
-          <button type="button" className="dm-delete" onClick={() => onDeleteDoc(kind)}><Trash2 size={12} /> Delete</button>
+            <input type="file" hidden onChange={(e) => { const file = e.target.files?.[0]; e.target.value = "";
+              if (file) run(() => onUploadDoc(kind, file)); }} /></label>
+          <button type="button" className="dm-delete"
+            onClick={() => run(() => onDeleteDoc(kind))}><Trash2 size={12} /> Delete</button>
         </div>
       ) : (
         <label className="dm-upload"><Upload size={13} /> Upload
-          <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadDoc(kind, e.target.files[0]); }} /></label>
+          <input type="file" hidden onChange={(e) => { const file = e.target.files?.[0]; e.target.value = "";
+            if (file) run(() => onUploadDoc(kind, file)); }} /></label>
       )}
+      {err && <p className="dm-err" role="alert">{err}</p>}
       {open && has && (
         <div className="dm-view-pane">
           <DocFileView companyId={sub.id} kind={kind} fileName={sub.docFiles?.[kind]} />
@@ -22791,7 +22827,7 @@ function useConnectMatch(enabled, { email, phone, license }) {
   return { match, checking, searched };
 }
 
-function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenExisting }) {
+function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenExisting, onUploadDoc, onDeleteDoc }) {
   const init = existing ? {
     company: existing.company, contact: existing.contact, phone: existing.phone, email: existing.email,
     categories: existing.categories, caps: existing.caps,
@@ -22858,8 +22894,41 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
   const removeMember = (ci, mi) => setF((s) => ({ ...s, crews: s.crews.map((c, i) => i === ci ? { ...c, members: c.members.filter((_, j) => j !== mi) } : c) }));
   const setMember = (ci, mi, k, v) => setF((s) => ({ ...s, crews: s.crews.map((c, i) => i === ci ? { ...c, members: c.members.map((m, j) => j === mi ? { ...m, [k]: v } : m) } : c) }));
 
-  const uploadDoc = (key, filename) => setF((s) => ({ ...s, [key]: true, docFiles: { ...s.docFiles, [key]: filename } }));
-  const deleteDoc = (key) => setF((s) => ({ ...s, [key]: false, docFiles: { ...s.docFiles, [key]: null } }));
+  // These took `e.target.files[0].name` and put it in local state. The file
+  // itself was never uploaded and `build()` then PATCHed the filename and the
+  // boolean onto the company row -- so picking a file here recorded a
+  // certificate that does not exist, marked the contractor compliant on the
+  // strength of it, and made them assignable. The only symptom was later:
+  // nothing could open it, because there was nothing to open.
+  //
+  // They go through the same two calls every other upload on this screen
+  // makes, immediately rather than on Save, because a document is not part of
+  // the draft this form is editing -- it has its own routes, its own
+  // permission check, and its own supersede-rather-than-overwrite rule.
+  const [docBusy, setDocBusy] = useState("");
+  const [docErr, setDocErr] = useState("");
+  const uploadDoc = async (key, file) => {
+    if (!file || !onUploadDoc) return;
+    setDocBusy(key); setDocErr("");
+    try {
+      await onUploadDoc(key, file);
+      setF((s) => ({ ...s, [key]: true, docFiles: { ...s.docFiles, [key]: file.name } }));
+    } catch (err) {
+      console.error("[subform] document upload failed:", err);
+      setDocErr("That didn't upload. Try again in a moment.");
+    } finally { setDocBusy(""); }
+  };
+  const deleteDoc = async (key) => {
+    if (!onDeleteDoc) return;
+    setDocBusy(key); setDocErr("");
+    try {
+      await onDeleteDoc(key);
+      setF((s) => ({ ...s, [key]: false, docFiles: { ...s.docFiles, [key]: null } }));
+    } catch (err) {
+      console.error("[subform] document delete failed:", err);
+      setDocErr("That didn't delete. Try again in a moment.");
+    } finally { setDocBusy(""); }
+  };
 
   const toggleCategory = (id) => {
     setF((s) => {
@@ -22896,8 +22965,13 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
     coverage: f.covMode === "cities"
       ? { mode: "cities", cities: f.cities, radii: [] }
       : { mode: "radius", cities: [], radii: cleanRadii },
-    bond: f.bond, insurance: f.insurance, contract: f.contract, available: f.available, notes: f.notes,
-    rating: Number(f.rating) || 0, docFiles: f.docFiles,
+    available: f.available, notes: f.notes,
+    rating: Number(f.rating) || 0,
+    // `bond`, `insurance`, `contract` and `docFiles` are deliberately NOT
+    // here. They are what mayWriteCompanyDocs guards on the document routes,
+    // and sending them through a plain PATCH was the back door round that
+    // check -- as well as the way a filename got recorded for a file nothing
+    // had uploaded. The rows above do the real upload instead.
   });
   // Three steps: who they are, what they do, who's on the crew + paperwork.
   // Editing an existing record opens on step 1 but can jump between steps.
@@ -23354,6 +23428,15 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
       {/* Their paperwork, on their shared row -- and the same booleans the
           documents routes guard with mayWriteCompanyDocs. */}
       {!locked && <div className="fld">Documents
+        {/* A document is attached to a company row, and on the ADD path there
+            is not one yet -- so this offered four upload buttons with nothing
+            behind them. Say where they go instead of taking a file and
+            dropping it. */}
+        {!existing ? (
+          <p className="fld-note dm-later">Add {f.company ? f.company : "them"} first, then
+            open their card to upload the certificate of insurance, the surety bond,
+            the W-9 and any signed agreement.</p>
+        ) : (<>
         <div className="doc-manage">
           {[["w9", "IRS Form W-9", Receipt],
             ["insurance", "Certificate of insurance", FileText],
@@ -23365,19 +23448,29 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
                 <span className="dm-label">{l}</span>
                 {f[k] && <span className="dm-file">{f.docFiles[k] || "document.pdf"}</span>}
               </div>
-              {f[k] ? (
+              {docBusy === k ? (
+                <span className="dm-busy">Uploading{"\u2026"}</span>
+              ) : f[k] ? (
                 <div className="dm-actions">
                   <label className="dm-replace"><Upload size={12} /> Replace
-                    <input type="file" hidden onChange={(e) => { if (e.target.files.length) uploadDoc(k, e.target.files[0].name); }} /></label>
-                  <button type="button" className="dm-delete" onClick={() => deleteDoc(k)}><Trash2 size={12} /> Delete</button>
+                    <input type="file" hidden disabled={!!docBusy}
+                      onChange={(e) => { uploadDoc(k, e.target.files?.[0]); e.target.value = ""; }} /></label>
+                  <button type="button" className="dm-delete" disabled={!!docBusy}
+                    onClick={() => deleteDoc(k)}><Trash2 size={12} /> Delete</button>
                 </div>
               ) : (
                 <label className="dm-upload"><Upload size={13} /> Upload
-                  <input type="file" hidden onChange={(e) => { if (e.target.files.length) uploadDoc(k, e.target.files[0].name); }} /></label>
+                  <input type="file" hidden disabled={!!docBusy}
+                    onChange={(e) => { uploadDoc(k, e.target.files?.[0]); e.target.value = ""; }} /></label>
               )}
             </div>
           ))}
         </div>
+        {/* Uploaded now, not on Save -- so the form says so rather than
+            leaving somebody to press Save for a file that is already in. */}
+        <p className="fld-note dm-later">These upload as soon as you pick them.</p>
+        {docErr && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {docErr}</p>}
+        </>)}
       </div>}
       </>)}
 
@@ -24284,6 +24377,12 @@ p.fld-note{margin:6px 0 0}
 .dm-replace:hover{border-color:var(--brand);color:var(--brand)}
 .dm-delete{display:flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:var(--red);cursor:pointer;background:var(--card);border:1px solid #f0d1c8;padding:6px 9px;border-radius:7px}
 .dm-view{display:flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;background:var(--card);border:1px solid var(--line);padding:6px 9px;border-radius:7px}
+.dm-busy{flex:none;font-size:11.5px;font-weight:600;color:var(--ink-soft)}
+.dm-err{flex:0 0 100%;margin:8px 0 0;font-size:12px;color:var(--red)}
+/* Said where somebody is standing: the documents go up as soon as they are
+   picked, so Save is not what commits them. */
+.dm-later{margin:9px 0 0;font-size:12px;color:var(--ink-soft);line-height:1.5}
+
 /* The row is a flex line; the viewer is a second line under it. A flex-basis
    at 100% with wrap is what puts it there without the row becoming a grid. */
 .doc-manage-row{flex-wrap:wrap}

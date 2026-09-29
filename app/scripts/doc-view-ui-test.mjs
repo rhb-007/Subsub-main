@@ -196,9 +196,12 @@ try {
         offersDeadButtons: !!document.querySelector(".dv-actions") };
     });
     t.ck("the empty state renders", v.gone, JSON.stringify(v).slice(0, 160));
-    t.ck("it says it cannot be opened", /can't be opened/i.test(v.text), v.text.slice(0, 120));
+    t.ck("it says there is nothing to open", /no file to open/i.test(v.text), v.text.slice(0, 120));
     t.ck("and names the way out rather than only the problem",
-      /ask for it again/i.test(v.text), v.text.slice(0, 200));
+      /upload it again/i.test(v.text), v.text.slice(0, 200));
+    // It must NOT name a cause it cannot check. The first version blamed a
+    // migration, and said so over a certificate uploaded that month.
+    t.ck("without guessing at why", !/before SubSub recorded/i.test(v.text), v.text.slice(0, 200));
     // A button over a file that does not exist is the screen-that-lies rule.
     t.ck("no Open or Download is offered over nothing", !v.offersDeadButtons);
   }
