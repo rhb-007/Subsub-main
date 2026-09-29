@@ -1812,6 +1812,15 @@ refactor.
   as a popup**, and this product is run from an iPad. Having the blob in hand
   first is what makes Open and Download ordinary anchors that work.
 
+  **Download needs `target="_blank"` as much as Open does, and for a reason
+  that only shows up on the device this product is run from.** `download` is
+  honoured by a desktop browser — the file saves and no tab opens — but iOS
+  Safari **ignores it on a `blob:` URL**, so the anchor falls back to an
+  ordinary navigation and replaces the page with the PDF. The reviewer loses
+  the half-filled form they were standing in; on an iPad that is not a
+  download, it is a way out of the review. Reported as exactly that. The
+  attribute is free on desktop, where `download` still wins.
+
   And it is drawn as **what it actually is**: an `<img>` for an image, an
   `<iframe>` for a PDF, a download offer for anything else. A certificate is
   as often a **photograph** of one as a PDF — somebody holds their phone over

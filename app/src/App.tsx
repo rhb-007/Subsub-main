@@ -6591,11 +6591,21 @@ function DocFileView({ companyId, kind, fileName }) {
           </div>
         </div>
       )}
+      {/* BOTH links open a new tab, and Download needs it as much as Open.
+          `download` is honoured on a desktop browser -- the file saves and no
+          tab opens -- but iOS Safari ignores it on a `blob:` URL, so the
+          anchor falls back to being an ordinary navigation and REPLACES the
+          page with the PDF. The reviewer loses the half-filled form they were
+          standing in, which on the one screen this product is run from is not
+          a download, it is a way out of the review.
+
+          `rel="noopener"` because a new tab is a new tab whatever is in it. */}
       <div className="dv-actions">
         <a className="btn-ghost rv-btn" href={state.url} target="_blank" rel="noopener noreferrer">
           <FileText size={13} /> Open
         </a>
-        <a className="btn-ghost rv-btn" href={state.url} download={fileName || "document"}>
+        <a className="btn-ghost rv-btn" href={state.url} download={fileName || "document"}
+          target="_blank" rel="noopener noreferrer">
           <Download size={13} /> Download
         </a>
       </div>

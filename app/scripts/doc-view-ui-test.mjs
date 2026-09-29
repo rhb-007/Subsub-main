@@ -141,6 +141,7 @@ try {
       const links = [...w.querySelectorAll(".dv-actions a")].map((a) => ({
         text: a.innerText.trim(), href: a.getAttribute("href") || "",
         download: a.hasAttribute("download"), target: a.getAttribute("target") || "",
+        rel: a.getAttribute("rel") || "",
       }));
       return { hasFrame: !!frame, src: frame?.getAttribute("src") || "", links,
         height: frame ? Math.round(frame.getBoundingClientRect().height) : 0 };
@@ -158,6 +159,18 @@ try {
         v.links.every((l) => l.href.startsWith("blob:")), JSON.stringify(v.links.map((l) => l.href.slice(0, 12))));
       t.ck("Open goes to a new tab", v.links.some((l) => /open/i.test(l.text) && l.target === "_blank"));
       t.ck("Download asks to save it", v.links.some((l) => /download/i.test(l.text) && l.download));
+      // And Download needs the new tab as much as Open does. `download` is
+      // honoured on a desktop browser, but iOS Safari ignores it on a blob:
+      // URL -- so without a target the anchor is an ordinary navigation and
+      // REPLACES the page with the PDF, taking the half-filled review with
+      // it. On the one screen this product is run from that is not a
+      // download, it is a way out of the review.
+      t.ck("and neither link can replace the page",
+        v.links.every((l) => l.target === "_blank"),
+        JSON.stringify(v.links.map((l) => ({ t: l.text, target: l.target }))));
+      t.ck("with noopener on both",
+        v.links.every((l) => /noopener/.test(l.rel || "")),
+        JSON.stringify(v.links.map((l) => l.rel)));
     }
   }
 
