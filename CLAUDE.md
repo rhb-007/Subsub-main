@@ -2259,6 +2259,68 @@ refactor.
   CRM it will fire on. Silence is only safe when nothing was asked; here
   something was, and it was not understood.
 
+- **The Zapier app buys no capability, and that is the honest way to describe
+  it.** `/api/v1/hooks/generic/<token>` already worked from a *Webhooks by
+  Zapier* step. What the app adds is three things worth having anyway: the
+  token lives in a Zapier **connection** rather than in a URL somebody
+  screenshots; *Trades* is a **dropdown** instead of a text box where a typo is
+  a job arriving with a slot nobody can fill, discovered when the crew does not
+  turn up; and "SubSub" in Zapier's directory is a door, where a URL in our
+  documentation is not. The docs say exactly that, including the sentence that
+  a webhook step does the same job today.
+
+  It uses the **header** endpoint, not the path-token one, because Zapier can
+  set an `Authorization` header. The path token exists for systems that cannot,
+  and reaching for it here would put a secret in a field for no reason.
+
+  `zapier/` is Platform **CLI** source committed to this repo rather than an app
+  built in their Visual Builder, because a Visual Builder app is configuration
+  nobody outside that console can read, review or test. Pushing it needs a
+  Zapier account and a terminal; neither is a SubSub credential, and the API
+  token belongs to whoever connects it.
+
+  Three things in it are decisions. The auth test is a **read**
+  (`GET /api/v1/me`), because Zapier re-runs it whenever a call 401s and
+  testing a key by creating a job would put a test row on somebody's Jobs
+  screen every time. `duplicate: true` is a **success**, since a webhook that
+  does not get a 200 retries and treating a retry as a failure is how one job
+  becomes four. And `afterResponse` turns a refusal into a sentence: left
+  alone, Zapier shows "Got 400" and buries which field was wrong, so somebody
+  rebuilds a working Zap looking for a mistake that was reported and not shown
+  — and a 401 must throw `RefreshAuthError` or they are told their Zap is
+  broken rather than their connection needs reconnecting.
+
+- **Two endpoints exist because an integration builder needs them, and they are
+  not a lighter door.** `GET /api/v1/me` names the account a token belongs to,
+  which is the only way a Zapier connection can be labelled — with two SubSub
+  accounts connected, "SubSub" twice is picked by guessing. `GET /api/v1/trades`
+  fills the dropdown. Both go through `apiCaller`, so the Scale gate, the hash
+  lookup and revoked-reads-as-invalid are the ones the POST makes; a test drives
+  a downgraded account at a **read** to prove the plan gate is on every call
+  rather than only on minting.
+
+  `/me` answers the **account and never a person**, for the reason
+  `job_sources.created_by` is NULL: no person made the call, and naming the
+  token's owner would put a sentence in front of somebody saying they did a
+  thing they did not do.
+
+- **There was one trade list too many, and the Zapier dropdown is what forced
+  the merge.** `TRADE_IDS` in the Worker validated; `CATEGORIES` in `App.tsx`
+  carried ids, labels and a lucide icon each. They agreed by luck and by
+  whoever last edited both. A dropdown needs a **label**, and the only place one
+  existed was inside the browser bundle the Worker cannot import — so serving
+  one would have meant a third copy, in the place where being wrong is least
+  visible: a field somebody picks from once while setting an integration up.
+
+  `app/shared/trades.js` is the one list, ids and labels. The icons stay in
+  `App.tsx` and are attached by id, because a lucide component cannot cross into
+  a Worker and a trade with no icon is a cosmetic problem rather than a wrong
+  one — `test:zapier` pins that every trade has one, so adding a trade cannot
+  ship a blank square, and that the Worker has not grown its own copy back.
+
+  **Order is meaningful and it is not alphabetical**: it is the order the chip
+  grid reads in, grouped by the part of a building somebody is thinking about.
+
 - **Overflow is broadcast, not browse.** When an account has nobody on its
   own roster for an urgent job, it may broadcast to opted-in companies —
   general contractors included, since 031 made every one of them hireable.

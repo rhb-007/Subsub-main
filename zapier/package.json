@@ -1,0 +1,17 @@
+{
+  "name": "subsub-zapier",
+  "version": "1.0.0",
+  "description": "Post scheduled jobs from any CRM into SubSub.",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "zapier-platform-core": "^15.5.1"
+  },
+  "engines": {
+    "node": ">=18",
+    "npm": ">=8"
+  }
+}

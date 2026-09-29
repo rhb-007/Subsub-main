@@ -60,6 +60,7 @@ import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
 import { applyFormHtml, applyLink } from "../shared/embed.js";
 import { greetingFor, weatherLine } from "../shared/greeting.js";
+import { TRADES } from "../shared/trades.js";
 import { SOURCE_PRESETS } from "../shared/crmsources.js";
 import { ANY_SOURCE } from "../shared/crmmap.js";
 import { qrPath } from "./lib/qr.js";
@@ -99,43 +100,23 @@ const persist = (label, promise) => {
 };
 
 // ---- Domain constants ----------------------------------------------------
-const CATEGORIES = [
-  // Exterior
-  { id: "roofing", label: "Roofing", icon: Home },
-  { id: "siding", label: "Siding", icon: PanelTop },
-  { id: "windows_doors", label: "Windows / Doors", icon: Building2 },
-  { id: "gutters", label: "Gutters", icon: Wind },
-  { id: "soffit_fascia", label: "Soffit / Fascia", icon: Ruler },
-  { id: "coping", label: "Coping", icon: BrickWall },
-  { id: "masonry", label: "Masonry / Brick", icon: Blocks },
-  { id: "solar", label: "Solar", icon: Sun },
-  // Structure & site
-  { id: "framing", label: "Framing", icon: Frame },
-  { id: "concrete", label: "Concrete", icon: Square },
-  { id: "foundation", label: "Foundation", icon: Layers3 },
-  { id: "excavation", label: "Excavation / Grading", icon: Shovel },
-  { id: "demolition", label: "Demolition", icon: Hammer },
-  // Mechanical, electrical, plumbing
-  { id: "electrical", label: "Electrical", icon: Zap },
-  { id: "plumbing", label: "Plumbing", icon: Droplet },
-  { id: "hvac", label: "HVAC", icon: Thermometer },
-  { id: "insulation", label: "Insulation", icon: Snowflake },
-  // Interior finishes
-  { id: "drywall", label: "Drywall / Sheetrock", icon: SquareStack },
-  { id: "painting", label: "Painting", icon: PaintRoller },
-  { id: "flooring", label: "Flooring / Carpet", icon: LayoutGrid },
-  { id: "tile_stone", label: "Tile / Stone", icon: Grid3x3 },
-  { id: "cabinets_counters", label: "Cabinets / Countertops", icon: Boxes },
-  { id: "trim_carpentry", label: "Finish Carpentry", icon: Slice },
-  // Outdoor
-  { id: "deck_fence", label: "Deck / Fence", icon: Fence },
-  { id: "hardscaping", label: "Hardscaping", icon: Layers },
-  { id: "landscaping", label: "Landscaping", icon: Trees },
-  // Specialty
-  { id: "garage_doors", label: "Garage Doors", icon: DoorOpen },
-  { id: "restoration", label: "Water / Fire Restoration", icon: Droplets },
-  { id: "cleaning", label: "Final Clean", icon: SprayCan },
-];
+// Ids and labels come from shared/trades.js, which the Worker reads too. Only
+// the icon is the browser's, attached by id: a lucide component cannot cross
+// into a Worker, and a trade with no icon is a cosmetic problem rather than a
+// wrong one. `test:trades` pins that every trade has one, so adding a trade
+// cannot ship a blank square.
+const TRADE_ICON = {
+  roofing: Home, siding: PanelTop, windows_doors: Building2, gutters: Wind,
+  soffit_fascia: Ruler, coping: BrickWall, masonry: Blocks, solar: Sun,
+  framing: Frame, concrete: Square, foundation: Layers3, excavation: Shovel,
+  demolition: Hammer,
+  electrical: Zap, plumbing: Droplet, hvac: Thermometer, insulation: Snowflake,
+  drywall: SquareStack, painting: PaintRoller, flooring: LayoutGrid,
+  tile_stone: Grid3x3, cabinets_counters: Boxes, trim_carpentry: Slice,
+  deck_fence: Fence, hardscaping: Layers, landscaping: Trees,
+  garage_doors: DoorOpen, restoration: Droplets, cleaning: SprayCan,
+};
+const CATEGORIES = TRADES.map((t) => ({ ...t, icon: TRADE_ICON[t.id] || Wrench }));
 
 // The same six groups the signup page shows, in the same order. Ids only --
 // labels come from CATEGORIES, so a rename happens in one place.

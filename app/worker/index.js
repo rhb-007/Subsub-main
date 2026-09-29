@@ -22,6 +22,7 @@ import { sendSms, toE164 } from "./sms.js";
 // be labelled urgent and call somebody out at the account's expense.
 import { severityOf } from "../shared/emergency.js";
 import { validateIngest, SOURCES } from "../shared/ingest.js";
+import { TRADES, TRADE_IDS } from "../shared/trades.js";
 import { tradesFor, validRule, ANY_SOURCE } from "../shared/crmmap.js";
 import { SOURCE_PRESETS, isSource, unwrap, translate } from "../shared/crmsources.js";
 // The same fifty states the browser offers, so a client that sends
@@ -3923,14 +3924,7 @@ function validCoverage(v) {
 }
 
 
-const TRADE_IDS = new Set([
-  "roofing", "siding", "windows_doors", "gutters", "soffit_fascia", "coping", "masonry", "solar",
-  "framing", "concrete", "foundation", "excavation", "demolition",
-  "electrical", "plumbing", "hvac", "insulation",
-  "drywall", "painting", "flooring", "tile_stone", "cabinets_counters", "trim_carpentry",
-  "deck_fence", "hardscaping", "landscaping",
-  "garage_doors", "restoration", "cleaning",
-]);
+// Imported, not restated. See shared/trades.js for why this was two lists.
 
 // Returns the cleaned list, or null if anything in it is not a trade we know.
 // Order is not meaningful, but duplicates are dropped so the stored value is
@@ -10482,6 +10476,48 @@ app.post("/api/v1/jobs", async (c) => {
   return c.json({ ok: true, duplicate: res.duplicate, jobId: res.jobId,
     trades: check.job.trades,
     url: `https://app.subsub.work/?job=${res.jobId}` }, res.duplicate ? 200 : 201);
+});
+
+// ---- Two reads, because an integration builder needs them ----------------
+//
+// Zapier cannot offer "Create a job in SubSub" without them, and neither can
+// anybody writing code against this API. Both go through `apiCaller`, so the
+// Scale gate, the hash lookup and the revoked-reads-as-invalid rule are the
+// ones POST /api/v1/jobs makes -- a read endpoint that is a lighter door is a
+// lighter door.
+
+// What this token is for, which is the only way a connection can be labelled.
+//
+// Zapier's auth test needs an endpoint that fails on a bad key and succeeds on
+// a good one; without this, the first thing anybody learns about a wrong token
+// is a job that did not arrive. It answers the ACCOUNT, never the person: no
+// user created the call and `created_by` on an ingested job is NULL for the
+// same reason.
+app.get("/api/v1/me", async (c) => {
+  const ctx = await apiCaller(c);
+  if (ctx.res) return ctx.res;
+  const a = await c.env.DB.prepare(
+    `SELECT id, name, subdomain, kind, plan FROM accounts WHERE id = ?`
+  ).bind(ctx.accountId).first().catch(() => null);
+  if (!a) return apiError(c, 404, "not_found", "That token names an account that no longer exists.");
+  return c.json({ ok: true, account: { id: a.id, name: a.name,
+    subdomain: a.subdomain, kind: a.kind, plan: a.plan } });
+});
+
+// The trades, so a dropdown can be a dropdown.
+//
+// Without it an integration asks somebody to type `windows_doors` from memory,
+// and a typo is a job that arrives with a slot nobody can fill -- discovered
+// when the crew does not turn up. Read off shared/trades.js, which is also
+// what validates the POST, so the list somebody picks from and the list that
+// accepts their answer cannot disagree.
+//
+// Authenticated, not public. It is not a secret, but a token gate keeps the
+// public surface at what it has to be, and an integration holds one anyway.
+app.get("/api/v1/trades", async (c) => {
+  const ctx = await apiCaller(c);
+  if (ctx.res) return ctx.res;
+  return c.json({ ok: true, trades: TRADES });
 });
 
 // ---- The tokens themselves, from inside the account ----------------------

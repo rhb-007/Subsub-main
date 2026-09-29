@@ -524,6 +524,41 @@ Content-Type: application/json</code></pre>
   "url": "https://app.subsub.work/?job=5b0f…"
 }</code></pre>
 
+<h2>Two reads, for building an integration</h2>
+<p>
+  Both take the same <code>Authorization: Bearer</code> header, and both are checked the same way
+  a <code>POST</code> is — same plan gate, same token lookup. A read endpoint that is a lighter
+  door is a lighter door.
+</p>
+<table class="dev-tbl">
+  <tr><th>Endpoint</th><th>What it answers</th></tr>
+  <tr>
+    <td><code>GET /api/v1/me</code></td>
+    <td>Which account this token belongs to. Use it to check a key before anything depends on it —
+    otherwise the first thing anybody learns about a wrong token is a job that did not arrive. It
+    names the account, never a person: no person made the call.</td>
+  </tr>
+  <tr>
+    <td><code>GET /api/v1/trades</code></td>
+    <td>Every trade id with a label, so a form can offer a list instead of asking somebody to type
+    <code>windows_doors</code> from memory. It is the same list that validates
+    <code>trades</code> on a job, so what you pick from and what is accepted cannot disagree.</td>
+  </tr>
+</table>
+
+<h2>Zapier</h2>
+<p>
+  <strong>SubSub has a Zapier app</strong>, so a Zap can create a job without anybody pasting a URL:
+  the token is a Zapier connection, and <em>Trades</em> is a dropdown rather than a text box. It
+  uses this endpoint — Zapier can set a header, so it does not need the webhook address above.
+</p>
+<p>
+  It is a private app while it is new, which means you join it by invitation rather than finding it
+  in Zapier's directory. Ask us for the link. If you would rather not wait, a
+  <strong>Webhooks by Zapier</strong> step pointed at your <code>generic</code> webhook address does
+  the same job today — the app is convenience and findability, not capability.
+</p>
+
 <h2>Required fields</h2>
 <p>
   Five things, and only five. Everything a job <em>can</em> carry is accepted, but requiring a
