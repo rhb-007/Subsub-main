@@ -20930,7 +20930,15 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
         </div>
         )}
 
-        {onSignup && onSubdomain && (
+        {/* TWO SOURCES OF TRUTH FOR WHOSE PAGE THIS IS, and they can disagree.
+            `onSubdomain` is a fact about the HOSTNAME; `brand` is what the
+            account lookup came back with. On a customer's address where that
+            lookup fails, the hostname still says "somebody's page" while the
+            brand has fallen through to SubSub's own -- and this line then read
+            "Apply to work with SubSub", which invites a roofer to apply to the
+            software company. Whose page it is has to be answered by the side
+            that actually knows. */}
+        {onSignup && onSubdomain && !brand.isSubSub && (
           <button className="login-signup" onClick={onSignup}>
             <span>New subcontractor?</span>
             <b>Apply to work with {brand.name} &#8250;</b>
@@ -20952,7 +20960,14 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
             this leaves the app rather than opening a view that does not exist
             here, and it goes to the plans rather than straight into setup
             because choosing one is the first question the form asks. */}
-        {brand.isSubSub && (
+        {/* And `!onSubdomain` for the same reason, from the other end. SubSub's
+            own front door is a hostname that belongs to NOBODY. A company's
+            subdomain belongs to somebody whether or not the lookup for it
+            succeeded, so a failed lookup must not turn their sign-in page into
+            an advert for buying SubSub -- which is what it did: both this and
+            the apply link above rendered together on outerhome.subsub.work,
+            each one wrong, and the pair of them contradicting each other. */}
+        {brand.isSubSub && !onSubdomain && (
           <a className="login-signup" href="https://subsub.work/pricing">
             <span>Don&rsquo;t have an account?</span>
             <b>See plans and sign up &#8250;</b>

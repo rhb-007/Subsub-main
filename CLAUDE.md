@@ -2313,6 +2313,35 @@ refactor.
   The production branch today is `claude/hello-24aree`, which is also the
   repository's only branch, so a push to it is live.
 
+- **Whose page this is has two sources, and they can disagree.** `onSubdomain`
+  is a fact about the **hostname**; `brand` is what the account lookup came
+  back with. On a customer's address where that lookup does not land, the
+  hostname still says *somebody's page* while the brand falls through to
+  `GENERIC_BRAND` — and both cards then rendered at once on
+  `outerhome.subsub.work`: **Apply to work with SubSub**, which invites a
+  roofer to apply to the software company, above **Don't have an account? See
+  plans and sign up**, which is SubSub's front door advertised on somebody
+  else's. Each one wrong, and the pair contradicting each other.
+
+  The gates are `onSubdomain && !brand.isSubSub` for the apply card — you can
+  only apply to a company we could identify — and `brand.isSubSub &&
+  !onSubdomain` for the signup card, because **SubSub's own front door is a
+  hostname that belongs to nobody**, and a company's subdomain belongs to
+  somebody whether or not the lookup for it succeeded. The sign-in form itself
+  stays: signing in is by email, and a failed branding lookup says nothing
+  about whether this person has an account.
+
+  The lookup failing is not hypothetical and not rare — the cause here was a
+  deploy with no `VITE_API_BASE`, one entry down — so the screen has to hold
+  its line when it fails for any reason at all.
+
+  **And the test for the front-door card aborted on the case it exists to
+  catch.** It read `link.text` after asserting `link` was there, so the moment
+  the card went missing the next line threw and took the twenty assertions
+  after it with it: one failure reported, everything downstream hidden. Reading
+  through `link?.` turns that into six honest failures. A test that cannot
+  survive its own subject is a test that reports least when it matters most.
+
 - **`VITE_API_BASE` is the one build value the console does not need and the app
   cannot live without.** `api.js` falls back to a relative `/api` so a dev build
   can let Vite proxy it. The customer app in production is static files on Pages

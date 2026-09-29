@@ -54,7 +54,13 @@ const asks = [];
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
-  if (path.startsWith("/api/account-by-subdomain/")) return [200, ACCOUNT];
+  // `lost` stands for a subdomain whose lookup does not come back -- an
+  // account that does not exist, or, as happened in production, an API the
+  // bundle could not reach at all. The page still has to know whose address
+  // it is standing on.
+  if (path.startsWith("/api/account-by-subdomain/")) {
+    return path.endsWith("/lost") ? [404, { error: "not_found" }] : [200, ACCOUNT];
+  }
   if (path === "/api/password-help" && method === "POST") {
     asks.push(body);
     return [200, { ok: true }];
@@ -228,14 +234,19 @@ try {
       return a ? { href: a.getAttribute("href"),
         text: a.innerText.replace(/\s+/g, " ").trim() } : null;
     });
+    // Read through `link?.` rather than `link.`: when the card is missing --
+    // which is the whole failure this section exists to catch -- the next line
+    // threw and took the remaining twenty assertions in this file with it. A
+    // test that ABORTS on the thing it is testing reports one failure and
+    // hides everything after it.
     t.ck("there is one", !!link, String(link));
-    t.ck("it says what it is for", /don.t have an account/i.test(link.text || ""), String(link.text));
-    t.ck("and where it goes", /sign up/i.test(link.text || ""), String(link.text));
+    t.ck("it says what it is for", /don.t have an account/i.test(link?.text || ""), String(link?.text));
+    t.ck("and where it goes", /sign up/i.test(link?.text || ""), String(link?.text));
     // The plans, not straight into setup: picking one is the first question the
     // form asks, and it is the marketing site's job because there is no signup
     // form in this bundle at all.
     t.ck("it goes to the plans on the marketing site",
-      link.href === "https://subsub.work/pricing", String(link.href));
+      link?.href === "https://subsub.work/pricing", String(link?.href));
     t.ck("it is an anchor, so it leaves the app rather than opening a dead view",
       await r.page.evaluate(() => document.querySelector(".login-signup")?.tagName === "A"));
     // It is a card, not a bare underlined link dropped into the layout.
@@ -264,6 +275,41 @@ try {
       !/subsub\.work\/pricing/.test(await r.page.content()), "");
     t.ck("it still says whose page it is", /Cascade Management/.test(body),
       body.split("\n").slice(0, 3).join(" / "));
+    t.ck("nothing threw", r.crashes.length === 0, r.crashes.join(" | "));
+    await r.ctx?.close?.();
+  }
+
+  // WHOSE PAGE THIS IS HAS TWO SOURCES AND THEY CAN DISAGREE. `onSubdomain` is
+  // a fact about the hostname; `brand` is what the account lookup answered.
+  // When the lookup does not come back, the hostname still says "somebody's
+  // page" while the brand falls through to SubSub's own -- and BOTH cards
+  // rendered at once on a customer's address: "Apply to work with SubSub",
+  // which invites a roofer to apply to the software company, above "Don't have
+  // an account? See plans and sign up", which is SubSub's front door advertised
+  // on somebody else's.
+  //
+  // Seen in production, and the underlying cause was a deploy that shipped
+  // without VITE_API_BASE so no lookup could land. The deploy is fixed and
+  // guarded; this is the screen holding its own line when a lookup fails for
+  // any reason at all, which it will.
+  console.log("\n-- and a subdomain whose lookup fails is still not SubSub's front door --");
+  {
+    const r = await visitApp(browser, { host: "lost", webPort: WEB,
+      viewport: { width: 900, height: 1200 } });
+    await wait(2600);
+    const body = await r.page.evaluate(() => document.body.innerText);
+    t.ck("no sign-up card on somebody else's address",
+      await r.page.evaluate(() => !document.querySelector("a.login-signup")),
+      body.replace(/\s+/g, " ").slice(0, 200));
+    t.ck("and nothing points at the plans from it",
+      !/subsub\.work\/pricing/.test(await r.page.content()), "");
+    // The other half, and the one that reads as nonsense to a contractor.
+    t.ck("it does not offer to let anybody apply to work with SubSub",
+      !/apply to work with subsub/i.test(body), body.replace(/\s+/g, " ").slice(0, 200));
+    // The form itself still has to work: signing in is by email, and a failed
+    // branding lookup says nothing about whether this person has an account.
+    t.ck("the sign-in form is still there",
+      await r.page.evaluate(() => !!document.querySelector(".login-btn")));
     t.ck("nothing threw", r.crashes.length === 0, r.crashes.join(" | "));
     await r.ctx?.close?.();
   }
