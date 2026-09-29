@@ -6866,7 +6866,14 @@ app.post("/api/subs/:companyId/documents/:kind/review", requireRole("admin", "pm
   if (!engagement) return c.json({ error: "not_found" }, 404);
 
   const docReview = parseJson(engagement.doc_review, {});
+  // The whole entry is REPLACED, which is what drops any saved draft: a
+  // half-read certificate that outlived the decision would reopen over a
+  // finished review. Stated rather than left to the spread, because a later
+  // change that carried the old entry forward would resurrect it silently.
   docReview[kind] = { ...body, verifiedBy: userId, verifiedAt: new Date().toISOString().slice(0, 10) };
+  delete docReview[kind].draft;
+  delete docReview[kind].draftAt;
+  delete docReview[kind].draftBy;
   await c.env.DB.prepare(`UPDATE engagements SET doc_review = ? WHERE id = ?`)
     .bind(JSON.stringify(docReview), engagement.id).run();
 
@@ -7120,6 +7127,61 @@ app.get("/api/subs/:companyId/documents/:kind/file", requireRole("admin", "pm", 
       "Cache-Control": "private, no-store",
     },
   });
+});
+
+// A half-read certificate, kept so nobody reads it twice.
+//
+// Verifying is one press, but READING an ACORD 25 is not: six coverage lines,
+// a carrier, a policy number, two dates and five things to confirm on the
+// document. A reviewer who gets four lines in and finds the sixth missing has
+// to stop and ask the contractor -- and until now closing the modal threw
+// away everything they had typed, so the next attempt started from an empty
+// form over a document they had already read once.
+//
+// THREE PROPERTIES, and the first is the one that matters.
+//
+// A DRAFT IS NOT A VERDICT. It is stored BESIDE `status`, never as one, so
+// `docStatus` keeps answering "pending" and `missingDocs`, `docsComplete`,
+// the assignment gate and every badge are untouched. A half-finished review
+// that made somebody assignable would be the expired-certificate failure this
+// product exists to prevent, arrived at from a new direction -- and it would
+// be worse, because it would read as a decision somebody made.
+//
+// IT IS THE ACCOUNT'S, NOT THE PERSON'S. It lives on `engagements`, which is
+// already per-account and already where the verdict lives, so a reviewer who
+// runs out of day can be picked up by a colleague. `draftBy` names who left
+// it, because a shared form somebody else half-filled needs to say so.
+//
+// AND IT IS CLEARED BY A DECISION. The review route replaces the whole entry,
+// so a verdict drops the draft by construction -- a draft that outlived the
+// answer would reopen over a finished review, which is the same shape as a
+// queue row that survives being answered.
+app.put("/api/subs/:companyId/documents/:kind/draft", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const { companyId, kind } = c.req.param();
+  if (!DOC_KINDS.includes(kind)) return c.json({ error: "not_found" }, 404);
+
+  const engagement = await c.env.DB.prepare(
+    `SELECT * FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(accountId, companyId).first();
+  if (!engagement) return c.json({ error: "not_found" }, 404);
+
+  const body = await c.req.json().catch(() => ({}));
+  const docReview = parseJson(engagement.doc_review, {});
+  const prev = docReview[kind] || {};
+  docReview[kind] = {
+    ...prev,
+    // Never from the body. A draft that could set its own status is a verdict
+    // wearing a draft's name, and this route is reachable by every seat the
+    // review route is.
+    status: prev.status || "pending",
+    draft: body.draft ?? null,
+    draftAt: body.draft ? new Date().toISOString() : null,
+    draftBy: body.draft ? userId : null,
+  };
+  await c.env.DB.prepare(`UPDATE engagements SET doc_review = ? WHERE id = ?`)
+    .bind(JSON.stringify(docReview), engagement.id).run();
+  return c.json({ ok: true, draftAt: docReview[kind].draftAt });
 });
 
 app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "contractor"), async (c) => {

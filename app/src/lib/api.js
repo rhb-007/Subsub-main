@@ -204,6 +204,10 @@ export const api = {
   verifyLicense: (companyId) => request(`/subs/${companyId}/verify-license`, { method: "POST" }),
   reviewDocument: (companyId, kind, review) =>
     request(`/subs/${companyId}/documents/${kind}/review`, { method: "POST", body: JSON.stringify(review) }),
+  // A review somebody had to stop halfway through. `draft: null` discards it.
+  // It never carries a status -- see the route.
+  saveDocDraft: (companyId, kind, draft) =>
+    request(`/subs/${companyId}/documents/${kind}/draft`, { method: "PUT", body: JSON.stringify({ draft }) }),
   uploadDocument: (companyId, kind, fileKey, fileName) =>
     request(`/subs/${companyId}/documents/${kind}`, { method: "POST", body: JSON.stringify({ fileKey, fileName }) }),
   deleteDocument: (companyId, kind) =>

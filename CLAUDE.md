@@ -1833,6 +1833,59 @@ refactor.
   written by `PUT /api/work-orders/:id/signed`, the filename is shown on the
   assignment row, and no route anywhere serves it back.
 
+- **Verifying is one press; reading an ACORD 25 is not.** Six coverage lines,
+  a carrier, a policy number, two dates and five things to confirm on the
+  document — and a reviewer four lines in who finds the sixth missing has to
+  stop and ask the contractor. Closing the modal threw all of it away, so the
+  next attempt started from an **empty form over a certificate they had
+  already read once**. The work this product asks for is the reading, and the
+  only thing it saved was the verdict.
+
+  `PUT /api/subs/:companyId/documents/:kind/draft`, and the first property is
+  the one that matters:
+
+  **A draft is not a verdict.** It is stored *beside* `status`, never as one,
+  so `docStatus` keeps answering "pending" and `missingDocs`, `docsComplete`,
+  the assignment gate and every badge are untouched. A half-finished review
+  that granted compliance would be the expired-certificate failure arrived at
+  from a new direction, and **worse, because it would read as a decision
+  somebody made**. The route also refuses to take `status` from the body: it
+  is reachable by every seat the review route is, so a status there would be a
+  verdict wearing a draft's name.
+
+  **It belongs to the account, not the person.** It lives on `engagements`,
+  which is already where the verdict lives and already per-account, so a
+  reviewer who runs out of day is picked up by a colleague — and another
+  account reviewing the same shared certificate never sees it, because a
+  half-read pass is as much theirs alone as the verdict is. `draftBy` names
+  who left it, since a form somebody else half-filled has to say so.
+
+  **A decision clears it**, or a draft outlives the answer and reopens over a
+  finished review — the queue-row-that-survives-being-answered shape. The
+  review route replaces the whole entry, which does it by construction; the
+  deletes are written out anyway, because a later change that carried the old
+  entry forward would resurrect it silently.
+
+  Three things on the screen. The banner **says it is unfinished**, because a
+  form that quietly arrives pre-filled reads as a record of what the document
+  says, and somebody would carry on from figures they had not checked. Save is
+  **not gated on `canVerify`** — the whole reason to pause is that the form is
+  incomplete, so gating it would offer it only once it was no longer needed.
+  And the roster row carries a **Review started** chip beside the unchanged
+  status, because a draft invisible from the roster is unfinished work nobody
+  finds, which is the no-way-in failure this file has now recorded six times.
+
+  **The static assertion for the central promise could not fail, and a browser
+  test is what caught it.** Checking that `DocReview` *mentions* the draft
+  passed with the form ignoring it completely — the variable was declared and
+  never used to seed anything. Driving the modal and reading the input values
+  back is the only proof that a reviewer gets their figures returned, and it
+  immediately caught a second thing besides: the server suite had been storing
+  invented field ids (`addl_insured`, `prod_agg`) and passing, because the
+  server keeps the draft as an opaque blob and cannot know what a real one
+  holds. **A test that stores a shape the product never produces is a test of
+  its own fixture.**
+
 - **The record goes in before the flags, because the other order is how a
   database ends up asserting documents it holds nothing about.** The upload
   route wrote `insurance = 1` and the filename, and *then* wrote the

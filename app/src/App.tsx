@@ -3242,6 +3242,27 @@ export default function SubSub() {
   // happening as a result: the activity row the account reads, the event in the
   // log, and (once 037 shipped) writing down what the certificate actually
   // says. The expiry was being typed into a box and thrown away.
+  // Pausing a review, and picking one up.
+  //
+  // The draft sits BESIDE the verdict rather than replacing it, so a document
+  // already verified that somebody starts re-reading and then abandons is
+  // still verified. `docStatus` never sees it, which is the point: nothing
+  // about compliance, assignment or a badge may move because somebody typed
+  // four coverage lines and went to lunch.
+  const saveDocDraft = async (id, kind, draft) => {
+    await api.saveDocDraft(id, kind, draft);
+    const e = engagements.find((x) => x.companyId === id && x.accountId === account.id);
+    const prev = (e?.docReview || {})[kind] || {};
+    patchEngagement(id, {
+      docReview: { ...(e?.docReview || {}), [kind]: {
+        ...prev,
+        status: prev.status || "pending",
+        draft, draftAt: draft ? new Date().toISOString() : null,
+        draftBy: draft ? me.name : null,
+      } },
+    });
+  };
+
   const reviewSubDoc = (id, kind, verdict, data) => {
     const sb = subs.find((x) => x.id === id);
     if (sb) logEvent(verdict === "verified" ? "doc_verified" : "doc_rejected",
@@ -6035,6 +6056,7 @@ export default function SubSub() {
           kind={reviewing.kind} brand={brand}
           onVerify={(kind, data) => verifySubDoc(reviewing.sub.id, kind, data)}
           onReject={(kind, data) => rejectSubDoc(reviewing.sub.id, kind, data)}
+          onSaveDraft={(kind, draft) => saveDocDraft(reviewing.sub.id, kind, draft)}
           onClose={() => setReviewing(null)} /></Modal>}
       {upgradePrompt && <Modal onClose={() => setUpgradePrompt(null)}>
         <UpgradePrompt kind={upgradePrompt.kind} plan={plan} billing={billing} onSetBilling={setBilling}
@@ -6581,8 +6603,15 @@ function DocFileView({ companyId, kind, fileName }) {
   );
 }
 
-function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
-  const r = docReview(sub, kind);
+function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose }) {
+  const rv = docReview(sub, kind);
+  // A saved draft outranks the verdict for seeding the FORM, and nothing
+  // else. If somebody verified this and then started re-reading it, the
+  // half-typed pass is what they want back -- but the document is still
+  // verified, and the row, the badge and the assignment gate all still say so
+  // because they read `status`, which a draft never touches.
+  const draft = rv?.draft || null;
+  const r = draft ? { ...rv, ...draft } : rv;
   const isIns = kind === "insurance";
   const checks = isIns ? [] : DOC_CHECKS[kind](brand.name);
 
@@ -6639,6 +6668,34 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
     ? attestOk && allLinesOk && requiredLinesFilled && expires
     : attestOk && bondOk && (!needsExpiry || !!expires);
 
+  // What the reviewer has typed, built once. Verify sends it as a verdict and
+  // Save parks it as a draft -- two callers reading one shape, because a
+  // draft that captured a different set of fields from the verdict is a draft
+  // that silently loses one of them on the way back.
+  const collect = () => ({
+    checks: ticked, note, overrides,
+    ...(isIns ? { limits } : { amount }),
+    ...(needsExpiry ? { expires } : {}),
+    issuer: issuer.trim() || null,
+    policyNo: policyNo.trim() || null,
+    // One number for the record, so a dispute does not need the whole limits
+    // object parsed: the aggregate for a policy, the face value for a bond.
+    coverage: isIns ? (limits.cgl_agg || null) : (amount || null),
+  });
+
+  const [saving, setSaving] = useState("");
+  const [saveErr, setSaveErr] = useState("");
+  const park = async (payload, closeAfter) => {
+    setSaving(payload ? "save" : "discard"); setSaveErr("");
+    try {
+      await onSaveDraft(kind, payload);
+      if (closeAfter) onClose();
+    } catch (err) {
+      console.error("[review] draft failed:", err);
+      setSaveErr("That didn't save. Try again in a moment.");
+    } finally { setSaving(""); }
+  };
+
 
   return (
     <div className="form">
@@ -6662,6 +6719,30 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
           until now the only place those numbers existed on this screen was in
           their memory of a file they had to leave to open. */}
       <DocFileView companyId={sub.id} kind={kind} fileName={file} />
+
+      {/* Somebody stopped halfway. Said out loud, because a form that quietly
+          arrives pre-filled reads as a record of what the document says, and
+          a reviewer would carry on from figures they had not checked. It
+          names who and when, since the draft belongs to the account and the
+          person picking it up may not be the person who left it. */}
+      {draft && (
+        <div className="rv-draft">
+          <Clock size={15} />
+          <div className="rv-draft-main">
+            <strong>Picking up an unfinished review.</strong>
+            <span>
+              {rv?.draftBy ? `Saved by ${rv.draftBy}` : "Saved"}
+              {rv?.draftAt ? ` ${relTime(rv.draftAt)}` : ""}. Nothing here has been
+              approved{rv?.status === "verified" || rv?.status === "rejected"
+                ? " since, and the document is still " + rv.status + "." : " yet."}
+            </span>
+          </div>
+          <button type="button" className="btn-ghost rv-btn" disabled={!!saving}
+            onClick={() => park(null, true)}>
+            {saving === "discard" ? "Discarding\u2026" : "Start again"}
+          </button>
+        </div>
+      )}
 
       {r?.status === "rejected" && r.note && (
         <div className="doc-block"><AlertTriangle size={15} />
@@ -6794,23 +6875,21 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onClose }) {
                   + (kind === "bond" ? ", enter the bond amount and its expiry" : "") + " to verify."}
             </p>
           )}
-          <div className="form-actions">
+          <div className="form-actions rv-actions">
+            {/* Not disabled on `canVerify`. The whole reason to save is that
+                the form is NOT complete -- gating it on completeness would
+                offer it only when it is no longer needed. */}
+            <button className="btn-ghost rv-save" disabled={!!saving}
+              onClick={() => park(collect(), true)}>
+              <Clock size={14} /> {saving === "save" ? "Saving\u2026" : "Save and finish later"}
+            </button>
             <button className="btn-warn" onClick={() => setRejecting(true)}><XCircle size={15} /> Reject</button>
             <button className="btn-solid" disabled={!canVerify}
-              onClick={() => onVerify(kind, {
-                checks: ticked, note, overrides,
-                ...(isIns ? { limits } : { amount }),
-                ...(needsExpiry ? { expires } : {}),
-                issuer: issuer.trim() || null,
-                policyNo: policyNo.trim() || null,
-                // One number for the record, so a dispute does not need the
-                // whole limits object parsed: the aggregate for a policy, the
-                // face value for a bond.
-                coverage: isIns ? (limits.cgl_agg || null) : (amount || null),
-              })}>
+              onClick={() => onVerify(kind, collect())}>
               <CheckCircle2 size={15} /> Verify document
             </button>
           </div>
+          {saveErr && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {saveErr}</p>}
         </>
       ) : (
         <div className="form-actions">
@@ -22497,6 +22576,16 @@ function SubDetail({ sub, invite, onInviteSent, jobs, onSchedule, onSaveNotes, o
                     <Shield size={11} /> {activeOverrides(rv).length} accepted below requirement
                   </span>
                 )}
+                {/* A paused review is work somebody on this account still
+                    owes, and a draft nobody can see from the roster is
+                    unfinished work nobody finds. It sits BESIDE the status
+                    rather than replacing it, because the document is still
+                    exactly as reviewed as it was. */}
+                {rv?.draft && (
+                  <span className="doc-draft" title={rv.draftBy ? `Saved by ${rv.draftBy}` : "Saved"}>
+                    <Clock size={11} /> Review started
+                  </span>
+                )}
                 {st === "missing" ? (
                   <div className="doc-row-actions">
                     <button className="doc-add" onClick={onEdit}><Upload size={13} /> Upload</button>
@@ -22505,7 +22594,9 @@ function SubDetail({ sub, invite, onInviteSent, jobs, onSchedule, onSaveNotes, o
                 ) : (
                   <button className={`doc-review ${st === "pending" ? "urgent" : ""}`}
                     onClick={() => onReviewDoc(sub, d.key)}>
-                    {st === "verified" ? <><FileText size={13} /> View</> : <><Shield size={13} /> Review</>}
+                    {st === "verified" ? <><FileText size={13} /> View</>
+                      : rv?.draft ? <><Shield size={13} /> Finish review</>
+                      : <><Shield size={13} /> Review</>}
                   </button>
                 )}
               </div>
@@ -25990,6 +26081,25 @@ iframe.dv-frame{display:block}
 .dv-actions .rv-btn{text-decoration:none;color:inherit}
 @media (max-width:620px){
   .dv-frame{height:320px}
+}
+/* An unfinished review, picked up. Amber rather than green: it is work in
+   progress, not a state anybody has signed off, and the one thing this panel
+   must never look like is a decision. */
+.doc-draft{display:inline-flex;align-items:center;gap:4px;flex:none;font-size:11px;font-weight:700;
+  color:#b7791f;background:#fdf7ec;border:1px solid #f0dfc0;padding:3px 8px;border-radius:999px}
+.rv-draft{display:flex;align-items:flex-start;gap:12px;margin:0 0 16px;padding:13px 15px;
+  border:1px solid #f0dfc0;background:#fdf7ec;border-radius:11px}
+.rv-draft > svg{color:#b7791f;flex:none;margin-top:1px}
+.rv-draft-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.rv-draft-main strong{font-size:13.5px}
+.rv-draft-main span{font-size:12.5px;color:var(--ink-soft);line-height:1.5}
+.rv-draft .rv-btn{flex:none}
+/* Save sits first and quiet: it is the way out, not the outcome. */
+.rv-actions .rv-save{margin-right:auto}
+@media (max-width:620px){
+  .rv-draft{flex-wrap:wrap}
+  .rv-draft .rv-btn{width:100%;justify-content:center}
+  .rv-actions .rv-save{margin-right:0;width:100%;justify-content:center}
 }
 .rv-checks{display:flex;flex-direction:column;gap:8px}
 .rv-check{display:flex;align-items:flex-start;gap:10px;background:var(--card);border:1px solid var(--line);
