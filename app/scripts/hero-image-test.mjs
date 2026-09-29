@@ -53,6 +53,50 @@ for (const f of ["hero-crew.png", "hero-crew@2x.png", "hero-crew.webp", "hero-cr
   ck("and a real share of it is solid crew", solid / total > 0.4, pc(solid));
 }
 
+// ---- what the markup claims about the files ------------------------------
+//
+// Both of these were found by mutation and both ship SILENTLY, which is why
+// they are worth static checks rather than trusting the browser run below.
+//
+// A typo in a srcset filename passes every rendering assertion: the browser
+// picks another candidate out of the set and draws the crew perfectly. And
+// Chrome takes the <source type="image/webp"> branch, so the PNG srcset -- the
+// fallback an older browser gets -- is never exercised at all.
+//
+// Wrong width/height attributes pass too, because the drawn box follows the
+// CSS and the natural aspect whatever the attributes say. What they actually
+// buy is the space reserved BEFORE the image loads, so getting them wrong is
+// invisible here and a layout shift in front of a reader.
+{
+  const { readFileSync, existsSync } = await import("node:fs");
+  const html = readFileSync(`${ROOT}/index.html`, "utf8");
+  const hero = html.slice(html.indexOf('<div class="hero-crew">'), html.indexOf("</picture>"));
+
+  console.log("\n-- and the markup points at files that are really there --");
+  const named = [...hero.matchAll(/(hero-crew(?:@2x)?\.(?:png|webp))\s+(\d+)w/g)]
+    .map((m) => ({ file: m[1], claimed: Number(m[2]) }));
+  ck("the srcsets name some files", named.length >= 4, String(named.length));
+  for (const { file, claimed } of named) {
+    ck(`${file} exists`, existsSync(`${ROOT}/${file}`));
+    if (!existsSync(`${ROOT}/${file}`)) continue;
+    // A width descriptor that does not match the file is how the browser
+    // picks the wrong one: it trusts the number, not the file.
+    const m = await sharp(`${ROOT}/${file}`).metadata();
+    ck(`${file} really is ${claimed}w`, m.width === claimed, `${m.width}w`);
+  }
+  const src = (hero.match(/<img src="([^"]+)"/) || [])[1];
+  ck("and the img's own src is one of them", !!src && existsSync(`${ROOT}/${src}`), String(src));
+
+  // The attributes are a promise about shape, kept only if they match.
+  const w = Number((hero.match(/width="(\d+)"/) || [])[1]);
+  const h = Number((hero.match(/height="(\d+)"/) || [])[1]);
+  const meta = await sharp(`${ROOT}/${src}`).metadata();
+  ck("width and height are declared", w > 0 && h > 0, `${w}x${h}`);
+  ck("and they are the shape of the file, so nothing jumps as it loads",
+    Math.abs(w / h - meta.width / meta.height) < 0.02,
+    `declared ${w}x${h} (${(w / h).toFixed(3)}), file ${meta.width}x${meta.height} (${(meta.width / meta.height).toFixed(3)})`);
+}
+
 const browser = await puppeteer.launch({
   executablePath: process.env.CHROME_PATH || "/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell",
   headless: true,

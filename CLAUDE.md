@@ -1728,6 +1728,39 @@ refactor.
   given, because a screen offering a link that will not load is the same lie
   QuickSend's W-9 line exists to avoid.
 
+- **The hero crew is six puppets now, and swapping it is four files, not one.**
+  `hero-crew` is a `<picture>`: a WebP and a PNG, each at 1x and 2x, and every
+  one of them has to carry a real alpha channel. `test:hero` already pinned
+  that, because a supplied image once had **no alpha at all** — what looked
+  like transparency was a picture OF a checkerboard, baked in, which on the
+  dark forest hero would have rendered as a pale chequered rectangle with
+  nothing in the build saying a word.
+
+  **PNG: quantise, or ship 3.4MB.** Written with `palette:false` the 2x came out
+  at 3,466KB against the previous 609KB — and this is the `fetchpriority="high"`
+  LCP element on the front page. `palette:true` puts it back to 632KB with the
+  alpha intact (alpha lives in `tRNS`, and the corner and clear/solid checks
+  confirm it survives). Chrome takes the WebP, so the heavy PNG is only the
+  fallback — which is exactly why nobody would have noticed.
+
+  **Never upscale to keep the old descriptors.** The new file is 1535x1024, so
+  1x is 768 and 2x is 1535; the `srcset` widths and the `width`/`height`
+  attributes follow the files rather than the numbers that were there.
+
+  **Two ways to get this wrong that the rendering assertions cannot see**, both
+  found by mutation on this swap and both now pinned statically. A typo'd
+  `srcset` filename passes every drawing check, because the browser quietly
+  picks another candidate out of the set — and Chrome takes the
+  `<source type="image/webp">` branch, so the PNG srcset, which is what an older
+  browser gets, is never exercised at all. And wrong `width`/`height` attributes
+  pass too, because the drawn box follows the CSS and the natural aspect
+  whatever the attributes claim; what they actually buy is the space reserved
+  **before** the image loads, so getting them wrong is invisible in a test and a
+  layout shift in front of a reader.
+
+  The alt text is part of the swap. It said *Five* sock-puppet subcontractors,
+  and the new picture has six.
+
 - **The licensing reference publishes what it can stand behind, which is far
   fewer pages than the grid has cells.** Fifty-one jurisdictions times
   twenty-nine trades is 1,479 combinations, and the obvious move — generate all
