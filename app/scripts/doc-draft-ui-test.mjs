@@ -49,8 +49,8 @@ const SUB = {
   licenseCheck: { found: true, status: "ACTIVE", suspendDate: null, expirationDate: iso(500) },
   crews: [{ id: "c1", name: "Crew 1", available: true, unavailableDays: [], members: [] }],
   coverage: { mode: "cities", cities: ["Seattle"] }, available: true, unavailableDays: [],
-  warranty: null, insurance: 1, bond: 0, contract: 0, w9: 0,
-  docFiles: { insurance: "coi.pdf" },
+  warranty: null, insurance: 1, bond: 1, contract: 1, w9: 1,
+  docFiles: { insurance: "coi.pdf", bond: "bond.pdf", contract: "msa.pdf", w9: "w9.pdf" },
   notify: { email: true, sms: false },
   // Pending, with somebody's half-read pass parked on it.
   docReview: { insurance: {
@@ -59,7 +59,12 @@ const SUB = {
   } },
   categories: ["roofing"], caps: [], rating: 4.5, ratedJobs: 4, accepted: 4, declined: 0,
   notes: "", status: "active", propertyIds: [], hasPortal: true, autoSchedule: false,
-  docs: { insurance: { fileName: "coi.pdf", expiresOn: null } },
+  docs: {
+    insurance: { fileName: "coi.pdf", expiresOn: null },
+    bond: { fileName: "bond.pdf", expiresOn: null },
+    contract: { fileName: "msa.pdf", expiresOn: null },
+    w9: { fileName: "w9.pdf", expiresOn: null },
+  },
   docState: "pending", docAssignable: false, docSoonest: null,
 };
 
@@ -86,7 +91,16 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
 
 const browser = await launch();
 
-const openReview = async (page) => {
+// Which row on the card each document is. The labels are what a reviewer
+// reads, so the test finds them the same way.
+const ROW_LABEL = {
+  insurance: "certificate of insurance",
+  bond: "surety bond",
+  contract: "subcontractor agreement",
+  w9: "w-9",
+};
+
+const toCard = async (page) => {
   await page.evaluate(() => [...document.querySelectorAll("button")]
     .find((b) => /^Contractors/.test(b.innerText.trim().split("\n")[0]))?.click());
   await wait(800);
@@ -96,11 +110,15 @@ const openReview = async (page) => {
     c?.click();
   });
   await wait(800);
-  await page.evaluate(() => {
+};
+
+const openReview = async (page, kind = "insurance") => {
+  await toCard(page);
+  await page.evaluate((label) => {
     const row = [...document.querySelectorAll(".doc-row")]
-      .find((r) => /certificate of insurance/i.test(r.innerText));
+      .find((r) => new RegExp(label, "i").test(r.innerText));
     row?.querySelectorAll("button")[0]?.click();
-  });
+  }, ROW_LABEL[kind]);
   await wait(1400);
 };
 
@@ -213,6 +231,62 @@ try {
     // A draft that could carry a status would be a verdict wearing its name.
     t.ck("and no status of its own", sent.status === undefined, String(sent.status));
     t.ck("the modal closed", await page.evaluate(() => !document.querySelector(".rv-draft")));
+  }
+
+  console.log("\n-- and every document type can be paused, not just insurance --");
+  {
+    // The bond, the agreement and the W-9 have different forms -- no coverage
+    // grid, different confirmations, and two of them do not expire at all. The
+    // Save button lives in the one action row they all share, and the only
+    // way to know that is to press it on each.
+    for (const kind of ["bond", "contract", "w9"]) {
+      await page.keyboard.press("Escape");
+      await wait(400);
+      await openReview(page, kind);
+
+      const shape = await page.evaluate(() => {
+        const f = [...document.querySelectorAll(".form")].find((x) => /^Review /i.test(x.innerText));
+        if (!f) return null;
+        return {
+          heading: f.querySelector("h2")?.innerText.trim(),
+          save: [...f.querySelectorAll(".form-actions button")]
+            .map((b) => ({ text: b.innerText.trim(), disabled: b.disabled }))
+            .find((b) => /finish later/i.test(b.text)) || null,
+        };
+      });
+      t.ck(`${kind}: the review opened`, !!shape?.heading, JSON.stringify(shape));
+      t.ck(`${kind}: Save and finish later is there`, !!shape?.save, JSON.stringify(shape?.save));
+      t.ck(`${kind}: and is pressable on an untouched form`, shape?.save?.disabled === false,
+        JSON.stringify(shape?.save));
+
+      // Type something only this document's form has, then park it.
+      const before = saved.length;
+      await page.evaluate((who) => {
+        const f = [...document.querySelectorAll(".form")].find((x) => /^Review /i.test(x.innerText));
+        const el = f.querySelector(".rv-issuer input");
+        const d = Object.getOwnPropertyDescriptor(el.constructor.prototype, "value");
+        d.set.call(el, who); el.dispatchEvent(new Event("input", { bubbles: true }));
+        f.querySelector(".rv-check input")?.click();
+      }, `Who wrote the ${kind}`);
+      await wait(300);
+      await page.evaluate(() => {
+        const f = [...document.querySelectorAll(".form")].find((x) => /^Review /i.test(x.innerText));
+        [...f.querySelectorAll(".form-actions button")].find((b) => /finish later/i.test(b.innerText))?.click();
+      });
+      await wait(900);
+
+      const hit = saved[saved.length - 1];
+      t.ck(`${kind}: it saved`, saved.length === before + 1, `${before} -> ${saved.length}`);
+      t.ck(`${kind}: against the right document`, hit?.kind === kind, String(hit?.kind));
+      t.ck(`${kind}: carrying what was typed`,
+        hit?.body?.draft?.issuer === `Who wrote the ${kind}`, JSON.stringify(hit?.body?.draft?.issuer));
+      t.ck(`${kind}: and the confirmation that was ticked`,
+        Object.values(hit?.body?.draft?.checks || {}).some(Boolean),
+        JSON.stringify(hit?.body?.draft?.checks));
+      // A draft is never a verdict, whichever document it is.
+      t.ck(`${kind}: with no status of its own`, hit?.body?.draft?.status === undefined
+        && hit?.body?.status === undefined, JSON.stringify(hit?.body));
+    }
   }
 
   console.log("\n-- nothing threw --");

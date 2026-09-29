@@ -1875,6 +1875,12 @@ refactor.
   status, because a draft invisible from the roster is unfinished work nobody
   finds, which is the no-way-in failure this file has now recorded six times.
 
+  **It is every document, not the insurance one**, because the Save button
+  lives in the single action row all four forms share — and the bond, the
+  agreement and the W-9 have different confirmations, no coverage grid, and
+  two of them do not expire at all, so the only way to know is to press it on
+  each. Wrapping that button in `isIns` fails fifteen assertions.
+
   **The static assertion for the central promise could not fail, and a browser
   test is what caught it.** Checking that `DocReview` *mentions* the draft
   passed with the form ignoring it completely — the variable was declared and
