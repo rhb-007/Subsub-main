@@ -114,6 +114,7 @@ jobs:
         env:
           SUPA_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
           SUPA_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
+          API_BASE: ${{ vars.VITE_API_BASE || secrets.VITE_API_BASE || 'https://api.subsub.work/api' }}
         run: |
           missing=""
           [ -n "$SUPA_URL" ] || missing="$missing VITE_SUPABASE_URL"
@@ -125,6 +126,24 @@ jobs:
             echo "service_role key -- this bundle is public."
             exit 1
           fi
+          # A RELATIVE API BASE IS A DEAD APP, and it is the default.
+          #
+          # api.js falls back to "/api" so a dev build can let Vite proxy it.
+          # The customer app in production is static files on Pages with no
+          # proxy behind them, so "/api" hits the static site and 404s -- every
+          # call, including sign-in, which is why it presents as "Couldn't
+          # reach SubSub" rather than as anything to do with a build variable.
+          # The console next door gets away with the same default because its
+          # Worker forwards /api/* over a service binding; Pages has nothing to
+          # forward with.
+          case "$API_BASE" in
+            https://*) ;;
+            *)
+              echo "::error::VITE_API_BASE must be absolute, got: $API_BASE"
+              echo "A relative base makes every API call hit the static site."
+              exit 1 ;;
+          esac
+          echo "API base: $API_BASE"
 
       # VITE_BUILD is deliberately UNSET. App.tsx reads
       #   VITE_BUILD === "platform" ? "platform" : "tenant"
@@ -134,6 +153,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
+          VITE_API_BASE: ${{ vars.VITE_API_BASE || secrets.VITE_API_BASE || 'https://api.subsub.work/api' }}
         run: npm run build
 
       # The mirror of the console's check, and it matters in the same way.
@@ -146,6 +166,8 @@ jobs:
       # half-written bundle would satisfy "no console string" perfectly well.
       - name: Check it is the customer app we built
         working-directory: app
+        env:
+          API_BASE: ${{ vars.VITE_API_BASE || secrets.VITE_API_BASE || 'https://api.subsub.work/api' }}
         run: |
           if grep -rqF "SubSub internal console" dist/assets/*.js; then
             echo "::error::The built bundle is the CONSOLE, not the customer app."
@@ -159,7 +181,22 @@ jobs:
             echo "this is not a complete tenant build."
             exit 1
           fi
-          echo "customer app built"
+          # Proved from the ARTIFACT, not from the variable, for the reason the
+          # console check above gives: both builds write to dist/ and what is
+          # in there is the only thing that ships. A build variable that is set
+          # and does not reach the bundle looks identical to one that does.
+          #
+          # This is the check that was missing when a deploy from here went out
+          # with no VITE_API_BASE at all: green run, correct bundle, and every
+          # API call pointed at a path that does not exist.
+          if ! grep -rqF "$API_BASE" dist/assets/*.js; then
+            echo "::error::The API base did not reach the bundle."
+            echo "Expected to find $API_BASE in dist/assets. Without it every call"
+            echo "falls back to the relative /api, which on Pages is the static"
+            echo "site -- so the app builds, deploys, and cannot sign anybody in."
+            exit 1
+          fi
+          echo "customer app built, talking to $API_BASE"
 
       - name: Deploy
         working-directory: app
