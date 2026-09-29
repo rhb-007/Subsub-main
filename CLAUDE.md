@@ -2189,6 +2189,57 @@ refactor.
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
   `app/worker/index.js` (Hono on Cloudflare Workers + D1 + R2), and the
   marketing site is at the repo root.
+- **Three things deploy, and each one is a button in the Actions tab.**
+  `deploy-api.yml` is the `subsub-api` Worker, `deploy-admin.yml` is the
+  `subsub-admin` Worker, and `deploy-app.yml` is the Cloudflare Pages project
+  `subsub-app` — which is what serves `app.subsub.work` and every tenant
+  subdomain. All three run on push to the paths they depend on, and all three
+  can be pressed by hand from a phone.
+
+  The customer app had neither for most of this repo's life, and the cost was
+  the worst kind: a day of content changes went in, every deploy that existed
+  reported success, and none of it reached anybody. **A deploy nobody can press
+  is a deploy nobody can fix**, which is the whole reason the third file exists.
+
+  **And a deploy that reports success has to say whether anybody can see it.**
+  The first version of `deploy-app.yml` read that off the deploy output, and
+  `wrangler pages deploy` prints the immutable per-deployment
+  `https://<hash>.<project>.pages.dev` URL for a **production** deploy and a
+  preview alike, because that URL always exists alongside the custom domain. So
+  the one question the workflow was written to answer — did anybody see this —
+  was handed to a test that cannot tell the two apart, and it is answered
+  confidently either way. Same class as every assertion in here that mutation
+  caught: not wrong on some inputs, wrong on all of them, and silent about it.
+
+  Only the project knows, so `Where did it land` reads `production_branch` and
+  `latest_deployment.environment` off the Pages project with the token that just
+  deployed. It **reports rather than refuses** — a preview deploy is a real and
+  useful thing, it is how you look at a branch before it is live — and a failed
+  lookup warns and leaves the deploy standing, because a missing report is not
+  a failed deploy and a deploy must not fail for want of a permission it does
+  not need to deploy.
+
+  The production branch today is `claude/hello-24aree`, which is also the
+  repository's only branch, so a push to it is live.
+
+- **The customer app and the staff console are one bundle built twice, so their
+  two path lists have to agree.** Same `app/src`, same `app/shared`, same
+  `index.html`, same vite config; only `VITE_BUILD` decides which comes out, and
+  each workflow asserts what it built by grepping the bundle afterwards rather
+  than trusting the variable.
+
+  Which makes the push `paths:` two records of one fact, edited months apart by
+  somebody fixing one of them — the `schema.sql`-against-the-migrations shape,
+  and it had already drifted: `app/public/**` was on the app and not the
+  console, so a new favicon would have shipped to customers and not to staff.
+  `test:deploypaths` compares the shared entries, requires every pattern to
+  match something on disk (a glob for a renamed directory is a guard that cannot
+  fire and looks exactly like one that can), and pins that each workflow watches
+  its own file so a fix to a deploy ships through that deploy.
+
+  **A missing path entry is the same silence, one directory further in**: green
+  runs, an unchanged screen, and nothing anywhere saying a deploy did not
+  happen. So when the build starts reading something new, it goes in the list.
 - Migrations are applied **by hand** in the D1 console, in order. Every one
   that adds a column or table gets a line in
   `app/worker/migrations/CHECK.sql`, which answers "did I run that one?"

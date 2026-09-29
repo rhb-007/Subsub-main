@@ -40,6 +40,7 @@ on:
     paths:
       - "app/src/**"
       - "app/shared/**"
+      - "app/public/**"
       - "app/worker-admin.js"
       - "app/wrangler.admin.toml"
       - "app/index.html"

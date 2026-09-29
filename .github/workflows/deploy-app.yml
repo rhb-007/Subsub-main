@@ -28,25 +28,42 @@
 # ALWAYS THE ANON (publishable) KEY. Never service_role: this bundle is
 # downloaded by every customer and anything in it is public.
 #
-# Deliberately `workflow_dispatch` only, for now. A push trigger on a deploy
-# path that has never once been watched run would ship to every customer on
-# the strength of a guess about a project name.
+# It ships on push now, and it did not start that way. A push trigger on a
+# deploy path that has never once been watched run would ship to every customer
+# on the strength of a guess about a project name, so the first two runs were
+# pressed by hand.
 #
-# The first run went green and uploaded the bundle, so the project name and the
-# token are right. What it did NOT establish is whether the upload went live,
-# and the reason is worth keeping: it was read off the deploy output, and
-# `wrangler pages deploy` prints the per-deployment `<hash>.pages.dev` URL for
-# a production deploy and a preview alike. So the one question that matters --
-# did anybody see this -- was answered by a test that cannot tell the two
-# apart. `Where did it land` asks Cloudflare instead.
+# Run 1 went green, which established the project name and the token and not
+# one thing more. Whether the upload went LIVE was read off the deploy output,
+# and `wrangler pages deploy` prints the per-deployment `<hash>.pages.dev` URL
+# for a production deploy and a preview alike -- so the only question that
+# matters, did anybody see this, was handed to a test that cannot tell the two
+# apart and answers confidently either way. `Where did it land` asks Cloudflare
+# instead, and run 2 came back `production` on `claude/hello-24aree`, serving
+# app.subsub.work and the three tenant subdomains. That is the condition the
+# push trigger was waiting on: a trigger that ships previews is a button that
+# reports success and changes nothing, which is the exact failure this file was
+# written for.
 #
-# The push trigger goes in once a run has reported `production`, and not
-# before: a push trigger that ships previews is a button that reports success
-# and changes nothing, which is the exact failure this file was written for.
+# The paths are deploy-admin.yml's, because the two build from the same tree
+# and differ only in VITE_BUILD. A path list that misses a file is a change
+# that does not ship and says nothing about it -- the same silence, one
+# directory further in -- so when the build starts reading something new, it
+# goes here.
 name: Deploy customer app
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "app/src/**"
+      - "app/shared/**"
+      - "app/public/**"
+      - "app/index.html"
+      - "app/vite.config.js"
+      - "app/package.json"
+      - "app/package-lock.json"
+      - ".github/workflows/deploy-app.yml"
 
 concurrency:
   group: deploy-app
