@@ -1251,6 +1251,87 @@ refactor.
   subcontractor whose insurance lapsed* — named above as a reason to route
   payment through here — is a claim nothing enforces.
 
+- **Being paid starts with Stripe deciding who you are, and coming back from
+  them does not mean it worked.** Migration 050, `app/shared/pay.js` and
+  Account → Company's *Getting paid*. Onboarding only: a hireable company
+  connects a Stripe connected account, Stripe collects the identity documents
+  and the bank details, and `payout_accounts` remembers which account is
+  theirs. No funding, no transfers, no payouts yet.
+
+  It was far smaller than it looked, because `billing.js` has talked to Stripe
+  over plain `fetch` since 008 — the Node SDK wants Node's `crypto` and `http`
+  and a Worker has neither. `stripeCall` already took an idempotency key and
+  `verifyStripeWebhook` already did HMAC over the raw bytes with a replay
+  window. **Connect added paths and event types, not infrastructure**: one
+  `account` option setting `Stripe-Account`, and a second webhook route.
+
+  **`return_url` is reached by somebody who gave up on the second screen.**
+  Stripe sends everybody back, finished or not, so the return can never be
+  read as success — which is the one thing about this that no static assertion
+  can prove. The panel POSTs `/payouts/refresh` on landing and draws whatever
+  Stripe says; a check that the component merely *mentions* refresh passes
+  with the call never made, so it is driven in a browser instead. Removing the
+  call fails that test and nothing else.
+
+  **An account link is single-use and expires in minutes**, so one is minted on
+  every press and none is ever stored — a kept link is a dead button with
+  nothing on screen saying why. And **payable is not a latch**: Stripe asks for
+  more as volume grows, so every read re-derives and a row that said verified
+  goes back to pending when Stripe withdraws it.
+
+  **Payable needs two capabilities and they fail separately.** `transfers`
+  active is money reaching their Stripe balance; `payouts_enabled` is money
+  leaving it for their bank. Somebody with the first and not the second looks
+  paid from the hiring side and unpaid from theirs, so `payoutsReady` wants
+  both and the two are asserted separately — either alone passing would hide
+  exactly that state. The screen says which half is missing rather than
+  "not verified", and names Stripe's requirement keys in words: *a photo ID*,
+  not `individual.verification.document`.
+
+  **One connected account per company, held twice.** The idempotency key
+  (`payout-acct:<companyId>`) makes an ordinary double-press cost nothing; the
+  unique index is what is correct when two requests arrive at once, which a
+  pre-check cannot cover — the same pairing, for the same reason, as
+  `ux_job_sources_external`.
+
+  A rejected account is **refused rather than sent round the form again**, an
+  `account.updated` for a connected account we hold no row for is accepted
+  **quietly** (Stripe delivers for every account on the platform and a 4xx
+  would make it retry forever), and the webhook **removes its own
+  `stripe_events` row** before answering 500, or the retry it is asking for
+  would be deduped away.
+
+  The panel sits behind the same gate the route uses — `canManage` and a
+  hireable kind — because a panel a project manager can open onto a 403 is the
+  screen-that-lies rule pointed at a permission.
+
+  **Nothing here is a bank detail.** `processor_account_id` is the whole of
+  what is stored; account and routing numbers are Stripe's to hold.
+
+  **And `STRIPE_API_BASE` finally got spent.** It was put in `billing.js` so
+  Stripe's refusals could be tested "without making Stripe refuse something",
+  and nothing had ever used it — there was no test for the billing integration
+  at all. The payout suite stubs at `fetch`, which is the same boundary and
+  lets the request shape be asserted: which call carries `Stripe-Account`,
+  which carries the idempotency key, that `card_payments` is never requested.
+
+  **Three traps this file already documents, all hit again in one change.** A
+  backtick in a CSS comment closed the `CSS` template literal and the whole app
+  rendered nothing behind one `dot is not defined`. `.portal-panel h4` is
+  `text-transform:uppercase` and Chrome's `innerText` applies it, so a
+  case-sensitive heading match was testing the stylesheet. And the first
+  version's negative assertions (`!/x/.test(p?.text || "")`) were satisfied by
+  a **missing** panel, so they reported loudest exactly when the subject had
+  disappeared — the inverse of the read-through-`link?.` lesson.
+
+  One thing the build changed outside itself: **adding an invariant to
+  CHECK.sql used to mean remembering to edit a regex in
+  `schema-drift-test.mjs`**, which classified must-be-zero invariants by a
+  hand-kept list of name endings. The first new invariant since that test was
+  written duly reported itself as an unrun migration. An invariant now says so
+  in its own name (`_inv_`); the three older ones keep theirs because CLAUDE.md
+  names them and they are read by hand.
+
 - **Why a GC would route payment through SubSub**, for anything customer-
   facing: the transfer is not the product. Releasing and signing the lien
   waiver as one event, refusing to pay a subcontractor whose insurance

@@ -138,4 +138,30 @@ SELECT
     WHERE type='index' AND name='ux_job_sources_external')                                    AS m048_dedupe_index,
   -- 049. The account's CRM vocabulary, and the words that meant nothing.
   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='crm_trade_rules')           AS m049_trade_rules,
-  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='crm_unmapped')              AS m049_unmapped;
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='crm_unmapped')              AS m049_unmapped,
+  -- 050. Where a subcontractor's money goes. Both indexes are counted
+  -- separately from the table because each one is doing work the table alone
+  -- does not: the first stops a company growing a second connected account
+  -- (two places money could go, nothing saying which), and the second is the
+  -- column the Connect webhook looks a row up by, so a duplicate there is an
+  -- ambiguous answer at the moment money is involved.
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='payout_accounts')           AS m050_payout_accounts,
+  (SELECT COUNT(*) FROM sqlite_master
+    WHERE type='index' AND name='ux_payout_account_company')                                   AS m050_one_per_company,
+  (SELECT COUNT(*) FROM sqlite_master
+    WHERE type='index' AND name='ux_payout_account_processor')                                 AS m050_one_per_acct,
+  -- And an invariant, which must read ZERO: a row saying verified while
+  -- Stripe says money cannot move is a roster reading payable over an
+  -- account that is not.
+  --
+  -- `_inv_` in the name is what says so. Which column is a must-be-zero
+  -- invariant and which is a did-I-run-it count was a hand-kept regex in
+  -- schema-drift-test.mjs, so adding one here meant remembering to edit a
+  -- test somewhere else -- two records of one fact, and the first new
+  -- invariant since it was written duly reported itself as an unrun
+  -- migration. The three older invariants keep their names because CLAUDE.md
+  -- names them and they are run by hand; anything added from here marks
+  -- itself.
+  (SELECT COUNT(*) FROM payout_accounts
+    WHERE kyc_status = 'verified'
+      AND (payouts_enabled = 0 OR transfers_active = 0))                                       AS m050_inv_verified_but_stuck;

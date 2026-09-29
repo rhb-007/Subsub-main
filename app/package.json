@@ -141,7 +141,9 @@
     "test:crmmapui": "node scripts/crm-map-ui-test.mjs",
     "test:deploypaths": "node --no-warnings scripts/deploypaths-test.mjs",
     "test:zapier": "node --no-warnings scripts/zapier-test.mjs",
-    "test:crmsources": "node --no-warnings scripts/crm-sources-test.mjs"
+    "test:crmsources": "node --no-warnings scripts/crm-sources-test.mjs",
+    "test:payouts": "node --no-warnings scripts/payout-onboard-test.mjs",
+    "test:payoutsui": "node scripts/payout-setup-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

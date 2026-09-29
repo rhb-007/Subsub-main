@@ -383,6 +383,14 @@ export const api = {
   weather: () => request("/weather"),
   myCompany: () => request("/my-company"),
   saveMyCompany: (patch) => request("/my-company", { method: "PATCH", body: JSON.stringify(patch) }),
+
+  // Getting paid. `payoutConnect` returns a one-time Stripe URL to follow --
+  // single-use and short-lived, so it is never held in state; and
+  // `payoutRefresh` is what the return from Stripe calls, because coming
+  // back proves nothing about whether they finished.
+  payoutStatus: () => request("/payouts/status"),
+  payoutConnect: () => request("/payouts/connect", { method: "POST" }),
+  payoutRefresh: () => request("/payouts/refresh", { method: "POST" }),
   // The keys an account's CRM authenticates with. `create` is the only call
   // that ever returns a token, because nothing stored could answer a read --
   // what is in the database is a SHA-256 of it.

@@ -148,12 +148,15 @@ export const launch = () => puppeteer.launch({
 // A visit to the account's own address, with or without a seat already in
 // the browser. Storage has to exist before the bundle runs, so when there is
 // a seat it is written on a blank page of the same origin first.
-export async function visitApp(browser, { host, webPort, seat, viewport, onNewDocument }) {
-  return signedInPage(browser, { host, webPort, viewport, onNewDocument,
+export async function visitApp(browser, { host, webPort, seat, viewport, onNewDocument, path }) {
+  return signedInPage(browser, { host, webPort, viewport, onNewDocument, path,
     userId: seat?.userId, accountId: seat?.accountId });
 }
 
-export async function signedInPage(browser, { host, webPort, userId, accountId, viewport, onNewDocument }) {
+// `path` lands somewhere other than the root -- for the links that arrive
+// carrying a query string, where WHAT THE APP DOES ON ARRIVAL is the thing
+// under test and navigating afterwards would skip it.
+export async function signedInPage(browser, { host, webPort, userId, accountId, viewport, onNewDocument, path = "/" }) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   await page.setViewport(viewport || { width: 1100, height: 1000 });
@@ -161,7 +164,7 @@ export async function signedInPage(browser, { host, webPort, userId, accountId, 
   page.on("pageerror", (e) => crashes.push(e.message));
   if (onNewDocument) await page.evaluateOnNewDocument(onNewDocument);
   if (!userId) {
-    await page.goto(`http://${host}.subsub.work:${webPort}/`, { waitUntil: "domcontentloaded" });
+    await page.goto(`http://${host}.subsub.work:${webPort}${path}`, { waitUntil: "domcontentloaded" });
     return { ctx, page, crashes };
   }
   await page.goto(`http://${host}.subsub.work:${webPort}/seed.txt`, { waitUntil: "domcontentloaded" }).catch(() => {});
@@ -173,6 +176,6 @@ export async function signedInPage(browser, { host, webPort, userId, accountId, 
       user: { id: a.userId, email: "someone@example.test" },
     }));
   }, { userId, accountId });
-  await page.goto(`http://${host}.subsub.work:${webPort}/`, { waitUntil: "domcontentloaded" });
+  await page.goto(`http://${host}.subsub.work:${webPort}${path}`, { waitUntil: "domcontentloaded" });
   return { ctx, page, crashes };
 }

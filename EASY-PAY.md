@@ -228,12 +228,16 @@ company from this one**, and it should not be smuggled in behind the word
 
 ---
 
-## 6. What migration 050 adds
+## 6. What the migrations add
+
+**050 is built and is onboarding only** — `payout_accounts`, below. Funding
+and releases move to 051, because a table nothing reads yet is a table nobody
+can tell is wrong.
 
 Small, because the ledger is already right. Every statement `IF NOT EXISTS`,
 no `ALTER TABLE`, one paste — the 048 rule.
 
-**`wo_funding`** — money in. One row per funding event against a work order,
+**`wo_funding`** (051, not yet built) — money in. One row per funding event against a work order,
 never a mutable balance: a balance is a number two writes can disagree about,
 and "where did the money come from" has to be answerable later.
 
@@ -251,8 +255,8 @@ Funded-and-unspent is then `SUM(settled funding) − SUM(non-void releases)`,
 derived rather than stored, for the reason `net_cents` is derived: two numbers
 that should agree eventually will not.
 
-**`payout_accounts`** — the subcontractor's verified payout destination, per
-company. Holds the partner's account id and KYC state, **never a bank
+**`payout_accounts`** (050, **built**) — the subcontractor's verified payout
+destination, per company. Holds the partner's account id and KYC state, **never a bank
 number**: account and routing numbers live with the partner, and a table we
 hold is a table we have to protect.
 
@@ -262,8 +266,8 @@ kyc_status     'none' | 'pending' | 'verified' | 'rejected'
 instant_ready  whether a fast rail is available at all
 ```
 
-**On `wo_releases`** — no new table, and these are additive columns, so they
-go in a paste of their own:
+**On `wo_releases`** (051, not yet built) — additive columns, so they go in a
+paste of their own:
 
 ```
 payout_speed    'standard' | 'instant'
@@ -511,11 +515,11 @@ the first route, and the existing billing paths are owed the same.
 
 ## 11. Build order
 
-1. Partner chosen, counsel engaged, sandbox account.
-2. Migration 050 and `app/shared/pay.js` — the rules module, so the route,
-   the screen and the tests cannot hold three opinions. The house pattern.
-3. Sub onboarding to the partner (KYC), because it is the long pole and the
-   thing most likely to be abandoned half-built.
+1. Partner chosen (Stripe), counsel engaged, sandbox account. **Counsel is
+   still owed** — see §10.3, the escrow shape is the question.
+2. ~~Migration 050 and `app/shared/pay.js`~~ — **done.**
+3. ~~Sub onboarding to the partner (KYC)~~ — **done.** Account → Company,
+   *Getting paid*. `test:payouts` and `test:payoutsui`.
 4. Funding a work order, and showing the sub that it is funded. **This is the
    first thing with standalone value** — it is worth shipping even before
    payouts work.

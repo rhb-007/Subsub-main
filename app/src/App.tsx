@@ -4165,6 +4165,23 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Back from Stripe's onboarding. Landing on the dashboard after setting up
+  // payouts is the no-way-in failure in miniature: the one screen that can
+  // say whether it worked is two taps away, and nothing points at it. So this
+  // opens Account -> Company, where the panel is, and tells it to go and ASK
+  // rather than assume -- Stripe sends people here whether they finished or
+  // abandoned it, so the marker means "come back and check", never "done".
+  const [payoutsLanded, setPayoutsLanded] = useState(false);
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get("payouts");
+    if (!v) return;
+    window.history.replaceState(null, "", window.location.pathname);
+    setPayoutsLanded(true);
+    setTab("account");
+    setOpenPane({ pane: "company", n: Date.now() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // A code belongs to a company, and switching seats switches company. Held
   // over, the menu would show the last one -- which is somebody else's
   // standing offer to be asked, handed to the wrong person to show around.
@@ -5760,6 +5777,7 @@ export default function SubSub() {
           onAddUser={addUser} onRemoveUser={removeUser} onEditUser={setEditUser}
           onSetMyAvatar={setMyAvatar} added={addedUser} onDismissAdded={() => setAddedUser(null)}
           openPane={openPane}
+          payoutsLanded={payoutsLanded} onPayoutsHandled={() => setPayoutsLanded(false)}
           onResendInvite={resendInvite}
           onLoginAs={(id) => {
             const m = memberships.find((x) => x.userId === id && x.accountId === account.id);
@@ -14623,6 +14641,127 @@ function companyErrorText(e) {
 // lookup matches on an email, a mobile or a licence number and on nothing
 // else, which the panel says rather than leaving somebody to wonder why
 // they cannot be found.
+// Connecting a Stripe account, so a subcontractor can actually be paid.
+//
+// Onboarding only -- funding and releases come later. Three things here are
+// decisions rather than layout:
+//
+// IT ASKS THE SERVER WHEN IT LANDS BACK FROM STRIPE. Stripe returns somebody
+// to `?payouts=return` whether they finished the form or gave up on the
+// second screen, so reading the return as success would tell somebody they
+// are payable when Stripe says they are not. `refreshing` is that call, and
+// it is why the panel can say "checking" rather than flickering an answer it
+// is about to change.
+//
+// IT NEVER HOLDS THE LINK. An account link is single-use and expires in
+// minutes, so it is minted on the press and followed immediately. Keeping
+// one in state would give somebody a dead button on their second visit with
+// nothing on screen saying why.
+//
+// AND IT NAMES WHAT STRIPE IS WAITING FOR. "Not verified" is a state, not an
+// instruction -- the whole reason the server carries the requirement list
+// through in words is so this can say "a photo ID" instead.
+function PayoutSetup({ landed = false, onHandled }) {
+  const [st, setSt] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(landed);
+
+  useEffect(() => {
+    let alive = true;
+    // Coming back from Stripe goes straight to the server rather than
+    // reading our own row, which is one webhook behind at best.
+    const p = landed ? api.payoutRefresh().catch(() => api.payoutStatus()) : api.payoutStatus();
+    p.then((r) => { if (alive) { setSt(r); setChecking(false); } })
+      .catch((e) => { if (alive) { setErr(payoutErrorText(e)); setChecking(false); } })
+      .finally(() => { if (alive && landed && onHandled) onHandled(); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [landed]);
+
+  const go = async () => {
+    setBusy(true); setErr("");
+    try {
+      const { url } = await api.payoutConnect();
+      if (url) window.location.href = url;
+      else setErr("Stripe did not hand back a setup link. Try again in a moment.");
+    } catch (e) { setErr(payoutErrorText(e)); }
+    finally { setBusy(false); }
+  };
+
+  const status = st?.status || "none";
+  const ready = !!st?.ready;
+  const due = st?.requirements || [];
+
+  return (
+    <div className="portal-panel settings-panel">
+      <h4>Getting paid</h4>
+      {checking && <p className="fine">Checking with Stripe…</p>}
+      {!checking && err && <p className="billing-err" role="alert">{err}</p>}
+
+      {!checking && !err && st && !st.configured && (
+        <p className="fine">Payments aren't switched on for SubSub yet. Nothing to do here.</p>
+      )}
+
+      {!checking && !err && st && st.configured && <>
+        <p className="pay-state">
+          <span className={`pay-dot pay-${ready ? "ok" : status === "rejected" ? "no" : status === "none" ? "off" : "wait"}`} />
+          {ready ? "Ready to be paid"
+            : status === "rejected" ? "Stripe can't verify this business"
+            : status === "none" ? "Not set up yet"
+            : "Stripe is still checking"}
+        </p>
+
+        {status === "none" && (
+          <p className="fine">Connect a Stripe account so general contractors can pay you
+            through SubSub. Stripe asks for your details and your bank account — it takes a
+            few minutes, and we never see your bank details.</p>
+        )}
+
+        {/* Two capabilities, and they fail separately. Somebody who can take a
+            transfer but cannot get it to their bank looks paid from the hiring
+            side and unpaid from theirs, which is the worst of the two to leave
+            unexplained. */}
+        {status === "pending" && (
+          <p className="fine">
+            {st.transfersActive && !st.payoutsEnabled
+              ? "Money can reach your Stripe account, but not your bank yet."
+              : "Stripe needs a bit more before money can move."}
+          </p>
+        )}
+
+        {due.length > 0 && <>
+          <div className="form-sec">Still needed</div>
+          <ul className="pay-due">
+            {due.map((d) => <li key={d.key}>{d.label}</li>)}
+          </ul>
+        </>}
+
+        {status === "rejected"
+          ? <p className="fine">Stripe has declined this business, so there's nothing to
+              finish here. Their support can say why.</p>
+          : <button className={ready ? "btn-ghost" : "btn-solid"} disabled={busy} onClick={go}>
+              {busy ? "Opening Stripe…"
+                : status === "none" ? "Connect a Stripe account"
+                : ready ? "Manage it on Stripe" : "Finish setting it up"}
+            </button>}
+      </>}
+    </div>
+  );
+}
+
+// The refusals this panel can actually produce, said as sentences. A raw
+// `not_hireable` on screen is the shape this file refuses everywhere else.
+function payoutErrorText(e) {
+  const code = e?.body?.error;
+  if (code === "not_hireable") return "This kind of account isn't hired by anybody, so there's nothing to be paid for.";
+  if (code === "migration_needed") return "SubSub needs a database update before this works. We've been told.";
+  if (code === "billing_not_configured") return "Payments aren't switched on for SubSub yet.";
+  if (code === "rejected") return "Stripe has declined this business. Their support can say why.";
+  if (code === "stripe_failed") return "Stripe couldn't be reached just now. Try again in a moment.";
+  return "That didn't work. Try again in a moment.";
+}
+
 function HireablePanel({ section = "profile", accountName, requests = [], focus = null, focusN = 0, onRespond, onReload }) {
   const isDocs = section === "docs";
   const [f, setF] = useState(null);
@@ -14938,7 +15077,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   hostnameStatus, onRefreshHostname, properties = [], roleLabel,
   emergencyCompanyId = null, onSetEmergencyContractor,
   incomingConnects = [], onRespondConnect, onReloadConnects, onSetMyAvatar,
-  added = null, onDismissAdded, openPane = null }) {
+  added = null, onDismissAdded, openPane = null,
+  payoutsLanded = false, onPayoutsHandled }) {
   // accountKind is already a prop; the user form needs it to know which
   // scoped roles this account has anybody to hand out.
   const tenantSeats = users.filter((u) => u.role === "tenant");
@@ -15313,6 +15453,15 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
         <HireablePanel section="profile" accountName={brand?.name} requests={incomingConnects}
           focus={openPane?.focus} focusN={openPane?.n}
           onRespond={onRespondConnect} onReload={onReloadConnects} />
+      )}
+
+      {/* Being paid is a fact about being hireable, so it sits behind the same
+          gate the profile above it does -- and the same one the route uses,
+          which is admin plus a kind somebody can actually hire. A panel a
+          project manager could open onto a 403 is the screen-that-lies rule
+          pointed at a permission. */}
+      {pane === "company" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
+        <PayoutSetup landed={payoutsLanded} onHandled={onPayoutsHandled} />
       )}
 
       {pane === "company" && canManage && (
@@ -25038,6 +25187,24 @@ p.fld-note{margin:6px 0 0}
 
 .billing-err{margin:0 0 14px;padding:11px 13px;border-radius:10px;background:#fdf1ef;
   border:1px solid #e9c4bd;color:#8a2f1c;font-size:13px}
+/* Getting paid. The dot is the same traffic light the compliance pack uses --
+   green ready, amber waiting on Stripe, red declined -- and the never-started
+   one is HOLLOW for the same reason a never-added document is: a row nothing
+   has been done to is a to-do rather than a failure. Nothing below this block
+   may re-declare a pay-dot background, which is the ordering trap the
+   compliance pack's own dot already caught once. (No backticks in here: CSS
+   is one template literal and a backtick in a comment closes it. That is
+   written down in CLAUDE.md and it still caught this change -- the symptom
+   was the whole app rendering nothing and one pageerror reading
+   "dot is not defined".) */
+.pay-state{display:flex;align-items:center;gap:9px;margin:0 0 10px;font-size:14px;font-weight:600}
+.pay-dot{width:10px;height:10px;border-radius:50%;flex:none}
+.pay-dot.pay-ok{background:var(--brand)}
+.pay-dot.pay-wait{background:#E39B32}
+.pay-dot.pay-no{background:#b4361f}
+.pay-dot.pay-off{background:transparent;box-shadow:inset 0 0 0 2px #A9B8B0}
+.pay-due{margin:0 0 14px;padding-left:20px;font-size:13px;color:var(--ink-soft)}
+.pay-due li{margin:3px 0}
 .billing-manage{display:flex;align-items:center;justify-content:space-between;gap:14px;
   flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:14px 16px;
   margin-bottom:14px;background:var(--card)}

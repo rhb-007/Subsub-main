@@ -25,13 +25,20 @@ function encode(params, prefix = "", out = []) {
   return out;
 }
 
-export async function stripeCall(env, path, { method = "POST", params, idempotencyKey } = {}) {
+export async function stripeCall(env, path, { method = "POST", params, idempotencyKey, account } = {}) {
   if (!env.STRIPE_SECRET_KEY) throw new Error("stripe_not_configured");
 
   const headers = {
     Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
     "Content-Type": "application/x-www-form-urlencoded",
   };
+  // Connect: act AS a connected account rather than as the platform. The same
+  // key, the same paths -- `Stripe-Account` is the whole difference, which is
+  // why this is one option rather than a second client. Reading a connected
+  // account's own balance and paying it out are the calls that need it;
+  // creating the account and transferring to it are the platform's own and
+  // must not carry it.
+  if (account) headers["Stripe-Account"] = account;
   // Stripe deduplicates retries of the same key for 24 hours, which is what
   // stops a double-tapped upgrade button becoming two subscriptions.
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;

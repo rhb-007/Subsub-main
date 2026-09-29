@@ -53,6 +53,9 @@ import { canHandOver, awaitingFrom, canDecide as canDecideTransfer,
   canCancel as canCancelTransfer, inheritedShape, openWorkText,
   canAppoint, canDeclareOwnership } from "../shared/handover.js";
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
+// Whether somebody can actually be paid, decided once and read by the
+// routes, the webhook and the browser.
+import { payoutSummary, rowFromStripe } from "../shared/pay.js";
 import { verifyAccessJwt } from "./access.js";
 import {
   hostnameConfig, brandedHost, provisionHostname, deprovisionHostname, checkHostname, diagnose,
@@ -277,6 +280,9 @@ app.use("/api/*", async (c, next) => {
     || c.req.path.startsWith("/api/v1/")
     || c.req.path === "/api/password-help"
     || c.req.path === "/api/stripe/webhook"
+    // Connect events, same reasoning: Stripe holds no session and the
+    // signature over the raw body is the whole of the authentication.
+    || c.req.path === "/api/stripe/connect-webhook"
     || c.req.path === "/api/impersonation/end"
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
 
@@ -1534,6 +1540,257 @@ app.post("/api/stripe/webhook", async (c) => {
     return c.json({ error: "handler_failed" }, 500);
   }
 
+  return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Getting paid: connecting a Stripe account
+// ---------------------------------------------------------------------------
+// Onboarding only. A hireable company connects a Stripe connected account,
+// Stripe does the identity checking, and `payout_accounts` remembers which
+// account is theirs and whether money may move. Funding a work order and
+// releasing against a milestone come later; see EASY-PAY.md.
+//
+// Nothing here is a bank detail. Account and routing numbers are Stripe's to
+// hold and never reach this database -- `processor_account_id` is the whole
+// of what is stored, and that is deliberate.
+//
+// Three things about this are easy to get wrong and are the reason most of
+// the code below exists:
+//
+//   RETURNING FROM STRIPE DOES NOT MEAN FINISHED. Stripe sends somebody to
+//   `return_url` whether they completed onboarding or abandoned it halfway,
+//   so the return can never be read as success. The screen asks the server,
+//   the server asks Stripe, and the answer is whatever Stripe says.
+//
+//   AN ACCOUNT LINK IS SINGLE-USE AND EXPIRES IN MINUTES. Storing one and
+//   rendering it as a button hands somebody a dead link with nothing saying
+//   why, so a fresh one is minted on every press and none is ever kept.
+//
+//   PAYABLE IS NOT A LATCH. Stripe asks for more as volume grows, so an
+//   account that was payable last month can stop being. Every read re-derives
+//   from a fresh account object and nothing is remembered once it was true.
+
+// US only, for the same reason `shared/states.js` holds fifty states and DC:
+// everything in this product -- the licence question, the UBI, the W-9 -- is
+// written for one country, and an onboarding form offering others would be a
+// question the rest of the account cannot answer.
+const PAYOUT_COUNTRY = "US";
+
+const payoutMigration = () => ({ error: "migration_needed", migration: "050_payout_accounts" });
+
+async function payoutRow(env, companyId) {
+  return await env.DB.prepare(
+    `SELECT * FROM payout_accounts WHERE company_id = ? AND processor = 'stripe'`
+  ).bind(companyId).first();
+}
+
+// One write path for what Stripe just said, so the create, the refresh and
+// the webhook cannot record three different readings of the same account.
+// `rowFromStripe` in shared/pay.js does the deriving; this only stores it.
+async function savePayoutRow(env, { companyId, acctId, acct }) {
+  const r = rowFromStripe(acct);
+  await env.DB.prepare(
+    `INSERT INTO payout_accounts
+       (id, company_id, processor, processor_account_id, kyc_status,
+        transfers_active, payouts_enabled, requirements, disabled_reason, updated_at)
+     VALUES (?, ?, 'stripe', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(company_id, processor) DO UPDATE SET
+       processor_account_id = excluded.processor_account_id,
+       kyc_status      = excluded.kyc_status,
+       transfers_active = excluded.transfers_active,
+       payouts_enabled = excluded.payouts_enabled,
+       requirements    = excluded.requirements,
+       disabled_reason = excluded.disabled_reason,
+       updated_at      = CURRENT_TIMESTAMP`
+  ).bind(uid(), companyId, acctId, r.kycStatus, r.transfersActive,
+    r.payoutsEnabled, r.requirements, r.disabledReason).run();
+}
+
+// The caller's own company, or the reason they have not got one. Same shape
+// as /api/my-company, because it is the same question.
+async function payoutCompany(c) {
+  const companyId = await seatCompany(c);
+  if (companyId) return { companyId };
+  const why = await noCompanyReason(c);
+  return { res: why === "not_hireable"
+    ? c.json({ error: "not_hireable" }, 409)
+    : c.json({ error: "migration_needed", migration: "031_account_company" }, 503) };
+}
+
+// What the screen draws. Reads the row and nothing else -- deliberately no
+// Stripe call, because this runs on every page load and a dashboard must not
+// wait on a third party. `refresh` below is how a fresh reading is asked for.
+app.get("/api/payouts/status", requireRole("admin"), async (c) => {
+  const { companyId, res } = await payoutCompany(c);
+  if (res) return res;
+  try {
+    return c.json({ ...payoutSummary(await payoutRow(c.env, companyId)),
+      configured: !!c.env.STRIPE_SECRET_KEY });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(payoutMigration(), 503);
+    throw err;
+  }
+});
+
+// Start, or carry on. One button for both: somebody halfway through needs
+// the same thing as somebody who has not begun, and a screen offering
+// "continue" and "start" as separate actions is asking them to know which
+// they are.
+app.post("/api/payouts/connect", requireRole("admin"), async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const { companyId, res } = await payoutCompany(c);
+  if (res) return res;
+
+  let row;
+  try { row = await payoutRow(c.env, companyId); }
+  catch (err) {
+    if (missingSchema(err)) return c.json(payoutMigration(), 503);
+    throw err;
+  }
+
+  // A rejected account cannot be onboarded again by sending them back round
+  // the form -- Stripe has decided -- so this says so rather than handing
+  // over a link that goes nowhere useful.
+  if (row?.kyc_status === "rejected") {
+    return c.json({ error: "rejected", disabledReason: row.disabled_reason || null }, 409);
+  }
+
+  let acctId = row?.processor_account_id || null;
+  const co = await c.env.DB.prepare(`SELECT email FROM companies WHERE id = ?`)
+    .bind(companyId).first();
+
+  try {
+    if (!acctId) {
+      const acct = await stripeCall(c.env, "/accounts", {
+        params: {
+          country: PAYOUT_COUNTRY,
+          ...(co?.email ? { email: co.email } : {}),
+          // Only `transfers`. The subcontractor receives money and never
+          // charges anybody, so `card_payments` would be asking them to be
+          // verified for something this product will never do with them.
+          capabilities: { transfers: { requested: "true" } },
+          // Stripe collects the identity data, hosts the form and the
+          // dashboard, and carries the losses. That is the whole reason to
+          // use Connect rather than to be a money transmitter.
+          controller: {
+            fees: { payer: "application" },
+            losses: { payments: "application" },
+            requirement_collection: "stripe",
+            stripe_dashboard: { type: "express" },
+          },
+          metadata: { company_id: companyId, account_id: c.get("auth").accountId },
+        },
+        // Two connected accounts for one company is two places money could
+        // go with nothing saying which. The unique index is the half that
+        // holds when two requests race; this is the half that makes an
+        // ordinary double-press cost nothing.
+        idempotencyKey: `payout-acct:${companyId}`,
+      });
+      acctId = acct.id;
+      await savePayoutRow(c.env, { companyId, acctId, acct });
+    }
+
+    // Fresh every time, and never stored. Single-use, and it expires in
+    // minutes.
+    const link = await stripeCall(c.env, "/account_links", {
+      params: {
+        account: acctId,
+        type: "account_onboarding",
+        // Stripe sends them here when the link has gone stale mid-flow. It
+        // lands on the same screen, which mints another one.
+        refresh_url: `${APP_ORIGIN}/?payouts=refresh`,
+        // And here when they come back -- finished or not, which is why the
+        // screen asks the server rather than believing this.
+        return_url: `${APP_ORIGIN}/?payouts=return`,
+      },
+    });
+    return c.json({ url: link.url });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(payoutMigration(), 503);
+    console.error("[payouts] connect failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// Ask Stripe where they actually got to.
+//
+// This is what the return from onboarding calls, because the return itself
+// proves nothing: Stripe sends somebody back whether they finished or gave up
+// on the second screen. The webhook says the same thing a moment later, and
+// both write through `savePayoutRow` -- but waiting for a webhook to redraw
+// the screen somebody is standing on reads as the button not having worked.
+app.post("/api/payouts/refresh", requireRole("admin"), async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const { companyId, res } = await payoutCompany(c);
+  if (res) return res;
+
+  let row;
+  try { row = await payoutRow(c.env, companyId); }
+  catch (err) {
+    if (missingSchema(err)) return c.json(payoutMigration(), 503);
+    throw err;
+  }
+  if (!row) return c.json({ error: "not_started" }, 409);
+
+  try {
+    const acct = await stripeCall(c.env, `/accounts/${row.processor_account_id}`, { method: "GET" });
+    await savePayoutRow(c.env, { companyId, acctId: row.processor_account_id, acct });
+    return c.json({ ...payoutSummary(await payoutRow(c.env, companyId)), configured: true });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(payoutMigration(), 503);
+    console.error("[payouts] refresh failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// Connect events, which arrive at their own endpoint with their own signing
+// secret and carry an `account` naming whose they are.
+//
+// A separate route rather than a branch inside the billing webhook: mixing
+// them would make every handler in that switch ask "is this ours or a
+// connected account's", which is two records in one place. `stripe_events`
+// is shared, because event ids are unique across both endpoints and a
+// second dedupe table would be a second thing to get right.
+app.post("/api/stripe/connect-webhook", async (c) => {
+  const secret = c.env.STRIPE_CONNECT_WEBHOOK_SECRET;
+  if (!secret) return c.json({ error: "connect_not_configured" }, 501);
+
+  const raw = await c.req.text();
+  const event = await verifyStripeWebhook(raw, c.req.header("stripe-signature"), secret);
+  if (!event) {
+    console.error("[stripe/connect] rejected an unsigned or stale webhook");
+    return c.json({ error: "bad_signature" }, 400);
+  }
+
+  try {
+    await c.env.DB.prepare(`INSERT INTO stripe_events (id, type) VALUES (?, ?)`)
+      .bind(event.id, event.type).run();
+  } catch {
+    return c.json({ ok: true, duplicate: true });
+  }
+
+  try {
+    if (event.type === "account.updated") {
+      const acct = event.data?.object || {};
+      const row = acct.id ? await c.env.DB.prepare(
+        `SELECT company_id FROM payout_accounts WHERE processor = 'stripe' AND processor_account_id = ?`
+      ).bind(acct.id).first() : null;
+      // An account we hold no row for is not an error. Stripe delivers for
+      // every connected account on the platform, and answering 4xx would
+      // make it retry something that will never succeed.
+      if (row) await savePayoutRow(c.env, { companyId: row.company_id, acctId: acct.id, acct });
+    }
+  } catch (err) {
+    if (!missingSchema(err)) {
+      console.error("[stripe/connect] handler failed:", err?.message || err);
+      // Stripe retries on a 5xx, which is what we want for a transient
+      // failure -- and the event id has already been recorded, so the retry
+      // would be deduped away. Remove it so the retry can do its job.
+      try { await c.env.DB.prepare(`DELETE FROM stripe_events WHERE id = ?`).bind(event.id).run(); } catch { /* best effort */ }
+      return c.json({ error: "handler_failed" }, 500);
+    }
+  }
   return c.json({ ok: true });
 });
 

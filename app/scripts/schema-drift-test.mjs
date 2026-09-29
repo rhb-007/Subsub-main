@@ -177,8 +177,16 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
     // m046_kind_check is a SHAPE, where 0 is the ordinary answer ("no CHECK on
     // accounts.kind", which is what 003 deliberately left). Everything else
     // reading 0 means a migration has not run.
+    // An invariant says so in its own name (`_inv_`), so adding one to
+    // CHECK.sql cannot require remembering to edit this line -- which is
+    // what it used to, and the first invariant added after this test was
+    // written reported itself as an unrun migration. The three that predate
+    // the marker are named here because they are run by hand and CLAUDE.md
+    // names them; nothing new should join this list.
+    const LEGACY_INVARIANTS = /_(unowned|without|others_with)$/;
     const notRun = Object.entries(row)
-      .filter(([k, v]) => !/_(unowned|without|others_with|kind_check)$/.test(k) && v === 0)
+      .filter(([k, v]) => !k.includes("_inv_") && !LEGACY_INVARIANTS.test(k)
+        && !/_kind_check$/.test(k) && v === 0)
       .map(([k]) => k);
     ck("and no migration reads as not-run", notRun.length === 0,
       notRun.slice(0, 8).join(", "));
