@@ -7132,22 +7132,24 @@ app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "con
 
   const company = await c.env.DB.prepare(`SELECT doc_files FROM companies WHERE id = ?`).bind(companyId).first();
   if (!company) return c.json({ error: "not_found" }, 404);
-  const docFiles = { ...parseJson(company.doc_files, {}), [kind]: fileName };
 
-  const col = { insurance: "insurance", bond: "bond", contract: "contract", w9: "w9" }[kind];
-  await c.env.DB.prepare(
-    `UPDATE companies SET doc_files = ?${col ? `, ${col} = 1` : ""} WHERE id = ?`
-  ).bind(JSON.stringify(docFiles), companyId).run();
-
-  // And a row saying what this one is. A replacement supersedes rather than
-  // overwrites: the certificate that covered March has to still be findable
-  // in September (migration 037).
+  // THE ROW FIRST, THE BOOLEANS SECOND, and the order is the whole point.
   //
-  // The detail is accepted here but not required. Whoever is uploading may be
-  // the subcontractor on a phone, who has the document in front of them and
-  // no reason to be kept out of the app over a policy number; the expiry is
-  // captured for certain at approval, which is the moment somebody is
-  // actually reading the certificate.
+  // It used to be the other way round, with the row written inside a
+  // try/catch that swallowed anything `missingSchema` recognised. So a
+  // detail write that failed left the booleans already set: the roster read
+  // "certificate of insurance, awaiting review" with no record of what the
+  // certificate says, no expiry to chase, and nothing superseded -- which is
+  // 037's entire purpose, silently not happening. It is how a live database
+  // ended up with every document flagged on file and `company_docs`
+  // completely empty, and nothing anywhere could report it.
+  //
+  // Now a real failure refuses before anything is written, so the upload is
+  // retried rather than half-recorded. The ONE tolerated failure is the table
+  // not being there at all, which is a database that has not run 037 and is
+  // documented behaviour -- and even that is now SAID rather than assumed, in
+  // `detail` on the reply, so a caller can tell the two apart.
+  let detail = "recorded";
   try {
     await supersedeDoc(c.env.DB, companyId, kind);
     await c.env.DB.prepare(
@@ -7160,12 +7162,24 @@ app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "con
       centsOf(body.coverageCents ?? body.coverage),
       isoDay(body.effectiveOn), isoDay(body.expiresOn), auth.userId).run();
   } catch (err) {
-    // A database that has not run 037 must not lose the upload itself: the
-    // booleans above are already written and are what every existing screen
-    // reads.
-    if (!missingSchema(err)) throw err;
+    if (!missingSchema(err)) {
+      // Nothing has been written yet, so this is a clean refusal rather than
+      // a half-done upload. The bytes are already in R2 and the same call
+      // repeated lands the same row, so a retry is safe.
+      console.error("[company_docs] detail write failed:", err?.message || err);
+      return c.json({ error: "detail_not_stored", detail: String(err?.message || err).slice(0, 300) }, 500);
+    }
     console.warn("[company_docs] not available:", err?.message || err);
+    detail = "not_migrated";
   }
+
+  // What every existing screen and query reads. Written second, so it can
+  // never claim a document the record above does not describe.
+  const docFiles = { ...parseJson(company.doc_files, {}), [kind]: fileName };
+  const col = { insurance: "insurance", bond: "bond", contract: "contract", w9: "w9" }[kind];
+  await c.env.DB.prepare(
+    `UPDATE companies SET doc_files = ?${col ? `, ${col} = 1` : ""} WHERE id = ?`
+  ).bind(JSON.stringify(docFiles), companyId).run();
 
   const { results: engagements } = await c.env.DB.prepare(
     `SELECT id, doc_review FROM engagements WHERE company_id = ?`
@@ -7174,7 +7188,7 @@ app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "con
     const docReview = { ...parseJson(e.doc_review, {}), [kind]: { status: "pending" } };
     await c.env.DB.prepare(`UPDATE engagements SET doc_review = ? WHERE id = ?`).bind(JSON.stringify(docReview), e.id).run();
   }
-  return c.json({ ok: true });
+  return c.json({ ok: true, detail });
 });
 
 app.delete("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "contractor"), async (c) => {

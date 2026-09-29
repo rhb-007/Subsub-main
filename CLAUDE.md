@@ -1833,6 +1833,37 @@ refactor.
   written by `PUT /api/work-orders/:id/signed`, the filename is shown on the
   assignment row, and no route anywhere serves it back.
 
+- **The record goes in before the flags, because the other order is how a
+  database ends up asserting documents it holds nothing about.** The upload
+  route wrote `insurance = 1` and the filename, and *then* wrote the
+  `company_docs` row inside a try/catch that swallowed anything
+  `missingSchema` recognised. A detail write that failed therefore left the
+  booleans already set: a roster reading *certificate of insurance — awaiting
+  review*, with no record of what the certificate says, no expiry to chase,
+  and nothing superseded. Which is the whole of what 037 exists for, silently
+  not happening.
+
+  It is not hypothetical. A live database was found with **every document
+  flagged on file and `company_docs` completely empty** — the files in the
+  bucket, the flags set, and not one row describing any of them. Nothing on
+  any screen could report it, and the nightly expiry sweep had nothing to
+  sweep.
+
+  So the row is written first and a real failure **refuses before anything is
+  written**, leaving the upload to be retried rather than half-recorded: the
+  bytes are already in R2 and the same call repeated lands the same row, so a
+  retry is safe. The one tolerated failure stays tolerated — the table not
+  being there at all is a database behind the code, and documented — but it
+  is **said rather than assumed**, in `detail` on the reply, so `recorded`
+  and `not_migrated` can be told apart by the caller instead of both reading
+  as success.
+
+  The general form, and this file has now recorded it at four layers of the
+  same feature: **a catch wide enough to hide a real error is a catch that
+  will.** `missingSchema` is deliberately broad, which is right where it
+  decides what to *tell* somebody and wrong where it decides whether to carry
+  on writing.
+
 - **Picking a file is not uploading one, and one form only did the first
   half.** `SubForm` — the roster's three-step Edit — took
   `e.target.files[0].name`, put it in local state, and `build()` then PATCHed

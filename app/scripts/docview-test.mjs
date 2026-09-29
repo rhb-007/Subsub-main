@@ -64,7 +64,10 @@ const seed = () => {
     INSERT INTO companies(id,company,insurance,w9,doc_files) VALUES
       ('cmp_bay','Bay Roofing',1,1,'{"insurance":"bay-coi-2026.pdf","w9":"bay-w9.pdf"}'),
       ('cmp_old','Legacy Siding',1,0,'{"insurance":"legacy-coi.pdf"}'),
-      ('cmp_own_acc_out','Outerhome',1,0,'{"insurance":"outerhome-coi.pdf"}');
+      ('cmp_own_acc_out','Outerhome',1,0,'{"insurance":"outerhome-coi.pdf"}'),
+      -- A contractor Alder typed in, with nothing on file yet: the subject of
+      -- the upload-ordering assertions below.
+      ('cmp_typed','Typed In Plumbing',0,0,'{}');
     UPDATE accounts SET company_id = 'cmp_own_acc_out' WHERE id = 'acc_out';
     INSERT INTO users(id,name,email) VALUES
       ('u_alder','Pat Alder','pat@alder.test'),
@@ -79,6 +82,7 @@ const seed = () => {
     INSERT INTO engagements(id,account_id,company_id,status) VALUES
       ('en_bay','acc_a','cmp_bay','active'),
       ('en_old','acc_a','cmp_old','active'),
+      ('en_typed','acc_a','cmp_typed','active'),
       ('en_done','acc_s','cmp_bay','ended');
     INSERT INTO company_docs(id,company_id,kind,file_key,file_name,uploaded_at) VALUES
       -- Last year's, kept for the dispute. Must never be what gets served.
@@ -139,6 +143,7 @@ const seed = () => {
   } };
 };
 
+const one = (db, sql, ...b) => db.prepare(sql).get(...b);
 const get = (env, who, acct, path) => worker.fetch(
   new Request(`https://api.subsub.work/api${path}`, {
     headers: { "X-User-Id": who, "X-Account-Id": acct },
@@ -278,6 +283,81 @@ console.log("\n-- a kind that is not a kind is refused as one, not answered as o
   ck("an unknown kind is a 404", r.status === 404, String(r.status));
   const j = await r.json().catch(() => ({}));
   ck("and it is not_found, not no_file", j.error === "not_found", JSON.stringify(j));
+}
+
+console.log("\n-- the record is written before the flags, never after --");
+{
+  const { db, env } = seed();
+  const r = await worker.fetch(new Request(
+    "https://api.subsub.work/api/subs/cmp_typed/documents/insurance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-User-Id": "u_alder", "X-Account-Id": "acc_a" },
+      body: JSON.stringify({ fileKey: "acc_a/insurance/zzz-new.pdf", fileName: "new-coi.pdf" }),
+    }), env);
+  const j = await r.json().catch(() => ({}));
+  ck("an ordinary upload succeeds", r.status === 200, `${r.status} ${JSON.stringify(j)}`);
+  ck("and says the detail was recorded", j.detail === "recorded", JSON.stringify(j));
+  const row = one(db, `SELECT * FROM company_docs WHERE company_id='cmp_typed' AND superseded_at IS NULL`);
+  ck("the company_docs row exists", !!row);
+  ck("carrying the key, so nothing has to search for it later",
+    row?.file_key === "acc_a/insurance/zzz-new.pdf", String(row?.file_key));
+  ck("and the boolean agrees",
+    one(db, `SELECT insurance FROM companies WHERE id='cmp_typed'`).insurance === 1);
+}
+
+console.log("\n-- a detail write that fails refuses, rather than half-recording --");
+{
+  const { db, env } = seed();
+  // A write that fails for a reason that is NOT a missing table. This is the
+  // shape that produced a live database with every document flagged on file
+  // and company_docs completely empty: the booleans went first and the row
+  // threw into a catch that swallowed it.
+  const broken = {
+    ...env,
+    DB: { prepare: (sql) => /INSERT INTO company_docs/i.test(sql)
+      ? { bind: () => ({ run: async () => { throw new Error("FOREIGN KEY constraint failed"); } }) }
+      : env.DB.prepare(sql) },
+  };
+  const r = await worker.fetch(new Request(
+    "https://api.subsub.work/api/subs/cmp_typed/documents/insurance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-User-Id": "u_alder", "X-Account-Id": "acc_a" },
+      body: JSON.stringify({ fileKey: "k/x.pdf", fileName: "x.pdf" }),
+    }), broken);
+  ck("it refuses rather than reporting success", r.status === 500, String(r.status));
+  const j = await r.json().catch(() => ({}));
+  ck("and names what went wrong", j.error === "detail_not_stored", JSON.stringify(j).slice(0, 120));
+  // The half-written state is the actual bug: a certificate claimed on file
+  // with nothing describing it, no expiry to chase and nothing superseded.
+  ck("the boolean was NOT set",
+    one(db, `SELECT insurance FROM companies WHERE id='cmp_typed'`).insurance === 0);
+  ck("and no filename was recorded",
+    !one(db, `SELECT doc_files FROM companies WHERE id='cmp_typed'`).doc_files.includes("x.pdf"));
+}
+
+console.log("\n-- a database without 037 still takes the upload, and says so --");
+{
+  const { db, env } = seed();
+  const older = {
+    ...env,
+    DB: { prepare: (sql) => /company_docs/i.test(sql)
+      ? { bind: () => ({ run: async () => { throw new Error("no such table: company_docs"); },
+                         first: async () => null, all: async () => ({ results: [] }) }) }
+      : env.DB.prepare(sql) },
+  };
+  const r = await worker.fetch(new Request(
+    "https://api.subsub.work/api/subs/cmp_typed/documents/insurance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-User-Id": "u_alder", "X-Account-Id": "acc_a" },
+      body: JSON.stringify({ fileKey: "k/y.pdf", fileName: "y.pdf" }),
+    }), older);
+  const j = await r.json().catch(() => ({}));
+  // The one tolerated failure, because it is a database behind the code
+  // rather than something going wrong -- but it is SAID rather than assumed.
+  ck("the upload is accepted", r.status === 200, `${r.status} ${JSON.stringify(j)}`);
+  ck("and reports that no detail was stored", j.detail === "not_migrated", JSON.stringify(j));
+  ck("the boolean is still set, so the file is usable",
+    one(db, `SELECT insurance FROM companies WHERE id='cmp_typed'`).insurance === 1);
 }
 
 console.log("\n-- and the placeholder is gone from the bundle --");
