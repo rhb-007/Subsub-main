@@ -1,0 +1,200 @@
+# Deploy the SubSub Zapier integration.
+#
+# The fourth button, and the one that exists because the alternative is
+# impossible here rather than merely inconvenient. `zapier push` runs from a
+# terminal, and whoever runs this repository has a browser on an iPad. So the
+# terminal is this runner, the credential is a repository secret, and the
+# person presses Run workflow like they do for the other three.
+#
+# ONE SECRET:
+#
+#   ZAPIER_DEPLOY_KEY   Zapier -> Platform -> your integration -> Deploy Keys.
+#                       It is a credential: it goes in
+#                       Settings -> Secrets and variables -> Actions,
+#                       never in a chat window and never in this file.
+#
+# It is NOT a SubSub credential. It authorises publishing an integration to
+# Zapier's account; the API token a customer connects with is theirs and is
+# never seen here.
+#
+# WHY THERE IS A `register` INPUT AND WHY IT DEFAULTS TO FALSE.
+#
+# `zapier register` creates the integration and writes `.zapierapprc` with its
+# id. Run it twice and there are two integrations, and the second one is the
+# one this repository then pushes to -- while customers are connected to the
+# first. So registering is an explicit, deliberate press rather than something
+# a deploy does on its own when it notices a file is missing.
+#
+# It is safe to leave on, as it happens: `register -y` with an existing
+# `.zapierapprc` UPDATES the integration rather than creating another. The
+# default is still false, because "safe as it happens" is a property of the
+# current CLI and the guard is a property of this file.
+name: Deploy Zapier app
+
+on:
+  workflow_dispatch:
+    inputs:
+      register:
+        description: "First time only: create the integration in Zapier"
+        type: boolean
+        default: false
+      category:
+        description: "Only if register fails asking for one — Zapier's error names the valid values"
+        type: string
+        default: ""
+      role:
+        description: "Only if register fails asking for one — likewise"
+        type: string
+        default: ""
+
+concurrency:
+  group: deploy-zapier
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Only the register path uses this, to commit the new .zapierapprc back.
+      # Losing that file means the next press registers a second integration.
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Check the deploy key is set
+        env:
+          KEY: ${{ secrets.ZAPIER_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::ZAPIER_DEPLOY_KEY is not set."
+            echo "Add it under Settings -> Secrets and variables -> Actions."
+            echo "Get it from Zapier: Platform -> your integration -> Deploy Keys."
+            exit 1
+          fi
+
+      - name: Install the app's dependencies
+        working-directory: zapier
+        run: npm ci
+
+      # The app and the route it calls are two records of one field list, and
+      # this is the last moment anything compares them. A Zapier field naming
+      # something /api/v1/jobs does not accept fails at the worst possible
+      # moment -- somebody's first live Zap -- so it fails here instead.
+      - name: Install the test harness
+        working-directory: app
+        run: npm ci
+
+      - name: Check the app still agrees with the API
+        working-directory: app
+        run: npm run test:zapier
+
+      # Structural check before anything is uploaded. It is what caught
+      # `^15.5.1`: Zapier refuses a version RANGE for zapier-platform-core,
+      # because that version decides the Lambda runtime it will run on.
+      - name: Validate the integration
+        working-directory: zapier
+        env:
+          ZAPIER_DEPLOY_KEY: ${{ secrets.ZAPIER_DEPLOY_KEY }}
+        run: npx --yes zapier-platform-cli@19.1.0 validate
+
+      # First press only, and only when asked for by name.
+      - name: Register the integration
+        if: ${{ inputs.register }}
+        working-directory: zapier
+        env:
+          ZAPIER_DEPLOY_KEY: ${{ secrets.ZAPIER_DEPLOY_KEY }}
+          CATEGORY: ${{ inputs.category }}
+          ROLE: ${{ inputs.role }}
+        run: |
+          # Only the flags we can be sure of. `--category` and `--role` are
+          # choice lists Zapier serves from its own API -- `register --help`
+          # fetches them -- so a value guessed here is a first press that
+          # fails. Left off, Zapier either defaults them or says what it wants,
+          # and the error names the valid values for the inputs above.
+          set +e
+          npx --yes zapier-platform-cli@19.1.0 register "SubSub" \
+            --desc "Post scheduled jobs from your CRM into SubSub, ready to assign contractors." \
+            --url "https://subsub.work" \
+            --audience private \
+            ${CATEGORY:+--category "$CATEGORY"} \
+            ${ROLE:+--role "$ROLE"} \
+            -y
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ]; then
+            echo "::error::register failed. If it named a category or role it wanted,"
+            echo "re-run this workflow with that value typed into the matching box."
+            exit $rc
+          fi
+          if [ ! -f .zapierapprc ]; then
+            echo "::error::register did not write .zapierapprc, so the app id is lost."
+            exit 1
+          fi
+          # Printed as well as committed. If the commit below fails, this is
+          # the only remaining record of which integration was created -- and
+          # without it the next press makes a second one.
+          echo "APP_ID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.zapierapprc','utf8')).id)")" >> "$GITHUB_ENV"
+
+      - name: Keep the app id, so the next deploy updates rather than duplicates
+        if: ${{ inputs.register }}
+        run: |
+          if git diff --quiet -- zapier/.zapierapprc; then
+            echo "zapier/.zapierapprc is unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add zapier/.zapierapprc
+          git commit \
+            -m "Record the Zapier integration id" \
+            -m "zapier register wrote .zapierapprc. It is committed because without it the next deploy registers a SECOND integration rather than updating this one, and customers would be connected to the first."
+          git push
+
+      # Refuses rather than guessing. Pushing with no .zapierapprc is not a
+      # smaller version of pushing: it is pushing to nothing, and the CLI would
+      # go looking for an integration to make.
+      - name: Check there is an integration to push to
+        run: |
+          if [ ! -f zapier/.zapierapprc ]; then
+            echo "::error::There is no zapier/.zapierapprc, so no integration to push to."
+            echo "Run this workflow once with 'First time only: create the"
+            echo "integration in Zapier' ticked. That registers it and commits the id."
+            exit 1
+          fi
+          echo "Pushing to integration $(node -e "console.log(JSON.parse(require('fs').readFileSync('zapier/.zapierapprc','utf8')).id)")"
+
+      - name: Push
+        working-directory: zapier
+        env:
+          ZAPIER_DEPLOY_KEY: ${{ secrets.ZAPIER_DEPLOY_KEY }}
+        run: npx --yes zapier-platform-cli@19.1.0 push
+
+      # What was pushed is not what is live. `push` uploads a VERSION; a
+      # version serves real Zaps only once it is promoted, which is a separate
+      # decision with real consequences for people mid-Zap. So this says where
+      # it got to rather than implying more.
+      - name: Say what happened
+        if: success()
+        env:
+          ZAPIER_DEPLOY_KEY: ${{ secrets.ZAPIER_DEPLOY_KEY }}
+        run: |
+          ver="$(node -p "require('./zapier/package.json').version")"
+          {
+            echo "### SubSub pushed to Zapier as version \`$ver\`"
+            echo ""
+            echo "Integration id: \`$(node -e "console.log(JSON.parse(require('fs').readFileSync('zapier/.zapierapprc','utf8')).id)")\`"
+            echo ""
+            echo "**Uploaded, not live.** A pushed version serves nobody until it is"
+            echo "promoted, and promoting moves real Zaps onto it — so that stays a"
+            echo "decision somebody makes on purpose, in Zapier:"
+            echo ""
+            echo "- <https://developer.zapier.com/> → your integration → Versions"
+            echo ""
+            echo "While the integration is private, people reach it by invite:"
+            echo "Manage → Sharing. A link invite cannot be revoked once sent."
+          } >> "$GITHUB_STEP_SUMMARY"

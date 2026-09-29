@@ -8,7 +8,7 @@
     "test": "node --test test/"
   },
   "dependencies": {
-    "zapier-platform-core": "^15.5.1"
+    "zapier-platform-core": "19.1.0"
   },
   "engines": {
     "node": ">=18",

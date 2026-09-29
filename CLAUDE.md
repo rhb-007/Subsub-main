@@ -2349,6 +2349,56 @@ refactor.
   — and a 401 must throw `RefreshAuthError` or they are told their Zap is
   broken rather than their connection needs reconnecting.
 
+- **The Zapier app deploys from Actions, because the alternative is impossible
+  here rather than merely inconvenient.** `zapier push` runs from a terminal and
+  whoever runs this repository has a browser on an iPad, so the terminal is a
+  runner, the credential is `ZAPIER_DEPLOY_KEY` in repository secrets, and the
+  person presses Run workflow like they do for the other three. The deploy key
+  is **not a SubSub credential**: it authorises publishing to Zapier's account,
+  and the API token a customer connects with is theirs and never seen there.
+
+  **Registering is an explicit press, not something a deploy does when it
+  notices a file is missing.** `zapier register` creates the integration and
+  writes `.zapierapprc`; run it twice and there are two integrations, with this
+  repository pushing to the second while customers are connected to the first.
+  So it is a `workflow_dispatch` input defaulting to false, the workflow
+  **commits `.zapierapprc` back** on that path, and it prints the id as well —
+  if the commit fails, that print is the only remaining record of which
+  integration was created.
+
+  **`--category` and `--role` are deliberately not baked in.** They are choice
+  lists Zapier serves from its own API — `register --help` itself fetches them —
+  so a value guessed here is a first press that fails. They are empty inputs,
+  appended only when given, and the step says to re-run with whatever the error
+  named. Guessing would have been the confident-and-wrong answer this file
+  keeps recording.
+
+  And a push is **uploaded, not live**: a pushed version serves nobody until it
+  is promoted, and promoting moves real Zaps onto it. The summary says that
+  rather than implying more.
+
+- **Two things about the Zapier package were wrong, and `zapier validate` is
+  what found both — not reasoning about them.** Running it locally cost one
+  command and caught what would otherwise have been a failed first press.
+
+  **`zapier-platform-core` must be pinned EXACTLY.** `^15.5.1` is refused
+  outright, and the reason is better than the rule: that version decides which
+  Lambda runtime Zapier runs the app on, so a range means "whatever npm
+  resolved on the machine that pushed". Pinned at 19.1.0, with a test that the
+  lockfile agrees — `index.js` reports `platformVersion` off the installed core,
+  so a lockfile disagreeing with `package.json` publishes under a version nobody
+  declared.
+
+  **`.zapierapprc` is committed.** It was gitignored on the reasoning that the
+  app id belongs to Zapier's account rather than this repository. Wrong twice:
+  Zapier's own documentation says commit it, and without it nothing remembers
+  which integration to push to — which is the double-registration trap above.
+  It is an identifier; the secret is the deploy key, which lives in GitHub.
+
+  **And `require()` cannot read it.** `.zapierapprc` has no `.json` extension,
+  so `require` loads it as JavaScript and throws. Read it and `JSON.parse` it —
+  the workflow did the wrong one in three places before it was ever run.
+
 - **Two endpoints exist because an integration builder needs them, and they are
   not a lighter door.** `GET /api/v1/me` names the account a token belongs to,
   which is the only way a Zapier connection can be labelled — with two SubSub

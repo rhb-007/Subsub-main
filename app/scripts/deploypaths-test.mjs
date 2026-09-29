@@ -71,10 +71,23 @@ ck("the customer app and the console agree on the shared source paths",
   a.join("|") === b.join("|") ? `${a.length} shared` :
     `only in app: [${a.filter((p) => !b.includes(p))}] · only in admin: [${b.filter((p) => !a.includes(p))}]`);
 
-// Every workflow watches its own file, so an edit to a deploy ships through
-// that deploy rather than waiting for an unrelated change to carry it.
-for (const [f, list] of [["deploy-app.yml", app], ["deploy-admin.yml", admin], ["deploy-api.yml", api]]) {
-  ck(`${f} watches itself`, (list || []).includes(`.github/workflows/${f}`));
+// Every workflow that deploys on push watches its own file, so an edit to a
+// deploy ships through that deploy rather than waiting for an unrelated change
+// to carry it.
+//
+// Read off the directory rather than a list of three. The footer taught this
+// the hard way: a hand-kept list decides what gets checked, and the thing it
+// leaves out is the thing that is broken. A workflow added tomorrow is in
+// scope tomorrow.
+const WORKFLOWS = readdirSync(resolve(root, ".github/workflows"))
+  .filter((f) => f.endsWith(".yml")).sort();
+ck("there are workflows to check", WORKFLOWS.length >= 3, WORKFLOWS.join(" "));
+for (const f of WORKFLOWS) {
+  const list = pushPaths(read(f));
+  // A workflow with no push trigger is deliberate, not a failure -- deploying
+  // a Zapier integration on every push is not something anybody wants.
+  if (!list) { ck(`${f} is press-only, which is allowed`, true); continue; }
+  ck(`${f} watches itself`, list.includes(`.github/workflows/${f}`));
 }
 
 // A pattern matching nothing is a guard that cannot fire.

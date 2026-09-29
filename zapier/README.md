@@ -37,17 +37,30 @@ This is Zapier Platform CLI source. It is committed here rather than built in
 their Visual Builder so it can be reviewed, tested and changed in one place --
 a Visual Builder app is configuration nobody outside that console can read.
 
-```
-cd zapier
-npm install
-npx zapier login
-npx zapier register "SubSub"   # first time only
-npx zapier push
-```
+**It deploys from GitHub Actions**, not from anybody's laptop: the *Deploy
+Zapier app* workflow. Same reason the other three deploys are buttons -- a
+deploy that needs a terminal is a deploy that cannot be pressed by the person
+who needs to press it. `.github/workflows/deploy-zapier.yml` carries the
+detail.
 
-`zapier login` wants a Zapier account. Nothing here holds one, and no SubSub
-credential is involved: the API token belongs to whoever connects the app.
+Two things in this directory that the first version got wrong, both found by
+running `zapier validate` rather than by reasoning about it.
 
-Until it is pushed and reviewed by Zapier, the app is **private** — usable by
-invitation. That is the right state for it: a public listing wants screenshots
-and a support address, which is a decision about marketing rather than code.
+**`zapier-platform-core` is pinned EXACTLY**, not to a caret range. `zapier
+validate` refuses a range outright -- and its reason is the better argument:
+that version decides which Lambda runtime Zapier runs the app on, so a range
+means "whatever npm happened to resolve on the machine that pushed", which is
+not a thing to leave to chance. `^15.5.1` would have failed on the first push.
+
+**`.zapierapprc` is COMMITTED.** It was gitignored here on the reasoning that
+the app id belongs to Zapier's account rather than to this repository. Wrong
+twice over: Zapier's own documentation says to commit it, and without it in the
+repo nothing remembers which integration to push to -- so a second deploy would
+register a SECOND integration rather than updating the first. It is an
+identifier, not a secret. The secret is the deploy key, which lives in GitHub
+and never here.
+
+Until Zapier reviews it the app is **private**: shared by invite link or by
+email, up to 200 users, and a link cannot be revoked once sent. That is the
+right state for it -- a public listing wants screenshots and a support address,
+which is a decision about marketing rather than code.

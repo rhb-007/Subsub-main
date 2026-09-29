@@ -51,6 +51,36 @@ const tradeTrigger = require("../../zapier/src/triggers/trade.js");
 const auth = require("../../zapier/src/authentication.js");
 const { handleError } = require("../../zapier/src/middleware.js");
 
+// ---- what `zapier push` refuses ------------------------------------------
+//
+// Found by running `zapier validate` rather than by reasoning about it, which
+// is the only reason it was found before the first push rather than by it.
+console.log("\n-- the package is one Zapier will accept --");
+{
+  const pkg = JSON.parse(readFileSync(new URL("../../zapier/package.json", import.meta.url), "utf8"));
+  const core = pkg.dependencies?.["zapier-platform-core"];
+  ck("it depends on zapier-platform-core", !!core, String(core));
+  // EXACT, not a range. `zapier validate` refuses "^15.5.1" outright, and its
+  // reason is the better one: that version decides which Lambda runtime Zapier
+  // runs the app on, so a range means "whatever npm resolved on the machine
+  // that pushed".
+  ck("pinned to an exact version, because a range is refused",
+    /^\d+\.\d+\.\d+$/.test(core || ""), String(core));
+  // index.js reports platformVersion from the installed core, so a lockfile
+  // that disagrees with package.json would publish under a version nobody
+  // declared.
+  const lock = JSON.parse(readFileSync(new URL("../../zapier/package-lock.json", import.meta.url), "utf8"));
+  const locked = lock.packages?.["node_modules/zapier-platform-core"]?.version;
+  ck("and the lockfile agrees with it", locked === core, `${locked} vs ${core}`);
+
+  // Without this committed, `zapier push` has no integration to push to and
+  // the next deploy registers a SECOND one -- while customers stay connected
+  // to the first. It is an identifier, not a secret.
+  const ignore = readFileSync(new URL("../../zapier/.gitignore", import.meta.url), "utf8");
+  ck("and .zapierapprc is not gitignored", !/\.zapierapprc/.test(ignore),
+    ignore.split("\n").filter(Boolean).join(" "));
+}
+
 // ---- the two lists -------------------------------------------------------
 console.log("\n-- the app offers what the route takes, and nothing else --");
 {
