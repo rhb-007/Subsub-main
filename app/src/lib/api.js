@@ -388,6 +388,16 @@ export const api = {
   // single-use and short-lived, so it is never held in state; and
   // `payoutRefresh` is what the return from Stripe calls, because coming
   // back proves nothing about whether they finished.
+  // Managing the subscription without leaving. Stripe's billing portal is a
+  // hosted page with no embedded equivalent, so what it did -- the card, the
+  // invoices -- is done here instead. `billingPortal` remains only as the
+  // way through when these cannot be reached.
+  billingCard: () => request("/billing/card"),
+  billingCardSetup: () => request("/billing/card-setup", { method: "POST" }),
+  billingCardConfirm: (setupIntentId) =>
+    request("/billing/card-confirm", { method: "POST", body: JSON.stringify({ setupIntentId }) }),
+  billingInvoices: () => request("/billing/invoices"),
+
   payoutStatus: () => request("/payouts/status"),
   // The embedded door. Mints the connected account on first call, so the
   // panel asks for this on mount rather than offering a button that means

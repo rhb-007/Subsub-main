@@ -1382,6 +1382,74 @@ refactor.
   in its own name (`_inv_`); the three older ones keep theirs because CLAUDE.md
   names them and they are read by hand.
 
+- **Nobody connects anything, and nobody leaves SubSub.** Two decisions, and
+  the first one is about shape rather than code.
+
+  A screen offering *Connect a Stripe account* asks somebody to opt in to
+  plumbing. A company that can be hired needs a payee record to be paid, and
+  that is not a decision they get to make differently — so the connected
+  account is minted the first time the screen is opened, and what is left for
+  them is the only part they can answer: who they are and where the money
+  goes. `POST /api/payouts/session` does both, and the panel calls it on
+  mount.
+
+  And the onboarding is **embedded**. The account link sent somebody to
+  stripe.com, which is a second company appearing in the middle of getting
+  paid by the first. An Account Session plus Stripe's own onboarding
+  component renders that form inside our page; Connect.js loads by script tag
+  exactly as Stripe.js already does, so the bundle gains no dependency.
+
+  **`stripe_dashboard` is `none`, not `express`.** Express gives the
+  subcontractor a Stripe-branded website to be sent to, which is the whole
+  thing being avoided — and it follows that SubSub then owes them every
+  screen, so the session also enables `account_management`, `payouts` and
+  `notification_banner`. There is nowhere else those can be seen.
+
+  **What cannot be removed, and it shaped everything above: whoever moves the
+  money must verify the payee and hold their bank details.** That is KYC law
+  rather than a Stripe setting, and no configuration deletes it. What is
+  removable is every trace of it feeling like somebody else's product. The
+  alternative — `requirement_collection: "application"`, our own forms — moves
+  the compliance obligation onto SubSub along with disputes and negative
+  balances, and that is a different company, not a nicer form.
+
+  **The hosted link stays, and only as the fallback**, for the reason embedded
+  checkout keeps a hosted attempt behind it: where the form is drawn is a
+  preference, and being able to get paid is not. Both doors go through one
+  `connectedAccount`, so they cannot mint accounts with different controller
+  settings — two populations of subcontractor with different experiences,
+  decided by which door happened to work that day.
+
+  One real hole this uncovered: **with no publishable key the embedded
+  component can never mount**, and the effect returned early — an empty box
+  and no way forward, which is the dead end the panel exists to remove. It
+  falls back instead, and the browser suite runs in exactly that state, so the
+  fallback is the path that is actually exercised.
+
+- **Managing the subscription is not a reason to leave either.** Stripe's
+  billing portal is hosted-only — there is no embedded component for it — so
+  *Manage billing* handed somebody to another company's website in the middle
+  of their own account screen. What the portal does is three things: the card,
+  the invoices, and cancelling. Cancelling was already here, so the other two
+  are now as well.
+
+  **The card number still never comes near us.** A SetupIntent is confirmed in
+  the browser by Stripe's Payment Element, so it goes from the customer to
+  Stripe and what comes back is an id.
+
+  Two properties on `card-confirm`, which is the route that decides what an
+  account gets charged on. It **reads the SetupIntent back from Stripe**
+  rather than trusting a payment method id from the browser, which would
+  otherwise point this account's billing at any card whose id somebody could
+  name. And it sets **both** the customer's default and the subscription's:
+  they are two settings, and changing only the first leaves the next invoice
+  on the old card — one somebody believes they have replaced, failing a month
+  later with nothing on any screen having said so.
+
+  The invoice **PDF is still a Stripe link**, and that is deliberate: a
+  document is not a product surface, and proxying somebody's own invoice
+  through our origin buys nothing.
+
 - **Why a GC would route payment through SubSub**, for anything customer-
   facing: the transfer is not the product. Releasing and signing the lien
   waiver as one event, refusing to pay a subcontractor whose insurance

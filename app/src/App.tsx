@@ -14690,6 +14690,145 @@ function companyErrorText(e) {
 // AND IT NAMES WHAT STRIPE IS WAITING FOR. "Not verified" is a state, not an
 // instruction -- the whole reason the server carries the requirement list
 // through in words is so this can say "a photo ID" instead.
+// Managing the subscription, here rather than on stripe.com.
+//
+// Stripe's billing portal is hosted-only -- there is no embedded component
+// for it -- so "Manage billing" handed somebody to another company's website
+// in the middle of their own account screen. What the portal does is the
+// card, the invoices and cancelling; cancelling was already here, so this is
+// the other two.
+//
+// The card number still never comes near us: Stripe's Payment Element
+// collects it against a SetupIntent, so it goes from the customer to Stripe
+// and what comes back is an id.
+function BillingManage({ accentHex, onFellBack }) {
+  const [card, setCard] = useState(null);
+  const [invoices, setInvoices] = useState(null);
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState("");
+  const host = useRef(null);
+  const elements = useRef(null);
+
+  const load = async () => {
+    try {
+      const [c, inv] = await Promise.all([
+        api.billingCard().catch(() => ({ card: null })),
+        api.billingInvoices().catch(() => ({ invoices: [] })),
+      ]);
+      setCard(c.card || null);
+      setInvoices(inv.invoices || []);
+    } catch { /* the panel renders what it got */ }
+  };
+  useEffect(() => { load(); }, []);
+
+  const startCard = async () => {
+    setBusy(true); setErr(""); setDone("");
+    try {
+      const { clientSecret } = await api.billingCardSetup();
+      setSecret(clientSecret);
+    } catch (e) {
+      setErr(e?.body?.detail ? `The card couldn't be changed: ${e.body.detail}`
+        : "Couldn't start that just now. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+
+  // Mount Stripe's card form inside this panel.
+  useEffect(() => {
+    if (!secret || !host.current) return;
+    if (!STRIPE_PK) { onFellBack?.(); return; }
+    let dead = false;
+    (async () => {
+      try {
+        const Stripe = await loadStripeJs();
+        if (dead) return;
+        const stripe = Stripe(STRIPE_PK);
+        const els = stripe.elements({ clientSecret: secret,
+          appearance: { variables: { colorPrimary: accentHex || "#1B4835" } } });
+        els.create("payment").mount(host.current);
+        elements.current = { stripe, els };
+      } catch (e) {
+        if (!dead) { console.warn("[billing] card form unavailable:", e?.message || e); onFellBack?.(); }
+      }
+    })();
+    return () => { dead = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [secret, accentHex]);
+
+  const saveCard = async () => {
+    if (!elements.current) return;
+    setBusy(true); setErr("");
+    try {
+      const { stripe, els } = elements.current;
+      const res = await stripe.confirmSetup({ elements: els, redirect: "if_required" });
+      if (res.error) { setErr(res.error.message || "That card was refused."); return; }
+      // The server reads the SetupIntent back from Stripe rather than
+      // trusting an id from here, and points both the customer and the
+      // subscription at it.
+      await api.billingCardConfirm(res.setupIntent?.id);
+      setSecret(""); elements.current = null;
+      setDone("Card updated.");
+      await load();
+    } catch (e) {
+      setErr(e?.body?.detail ? `Stripe refused that: ${e.body.detail}`
+        : "That didn't save. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+
+  const money = (cents, cur) => typeof cents === "number"
+    ? `${cur === "usd" || !cur ? "$" : ""}${(cents / 100).toFixed(2)}` : "—";
+
+  return (
+    <>
+      <div className="form-sec">Card on file</div>
+      {done && <p className="rollup-note" role="status">{done}</p>}
+      {err && <p className="billing-err" role="alert">{err}</p>}
+
+      {!secret && (
+        <div className="bm-card">
+          <span>{card
+            ? `${card.brand ? card.brand[0].toUpperCase() + card.brand.slice(1) : "Card"} ending ${card.last4} · expires ${String(card.expMonth).padStart(2, "0")}/${String(card.expYear).slice(-2)}`
+            : "No card on file."}</span>
+          <button className="btn-ghost" disabled={busy} onClick={startCard}>
+            {busy ? "One moment…" : card ? "Change it" : "Add one"}
+          </button>
+        </div>
+      )}
+
+      {/* Stripe's card form, standing in this panel. Nobody leaves. */}
+      <div className="bm-embed" ref={host} />
+      {secret && (
+        <div className="form-actions">
+          <button className="btn-ghost" disabled={busy}
+            onClick={() => { setSecret(""); elements.current = null; }}>Cancel</button>
+          <button className="btn-solid" disabled={busy} onClick={saveCard}>
+            {busy ? "Saving…" : "Save card"}
+          </button>
+        </div>
+      )}
+
+      <div className="form-sec">Invoices</div>
+      {invoices === null && <p className="fine">Loading…</p>}
+      {invoices !== null && invoices.length === 0 && <p className="fine">Nothing billed yet.</p>}
+      {invoices !== null && invoices.length > 0 && (
+        <ul className="bm-invoices">
+          {invoices.map((i) => (
+            <li key={i.id}>
+              <span className="bmi-date">{i.created ? i.created.slice(0, 10) : "—"}</span>
+              <span className="bmi-amt">{money(i.total, i.currency)}</span>
+              <span className={`bmi-st bmi-${i.status || "unknown"}`}>{i.status || "—"}</span>
+              {i.pdf
+                ? <a className="bmi-pdf" href={i.pdf} target="_blank" rel="noopener noreferrer">PDF</a>
+                : <span className="bmi-pdf" />}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
 function PayoutSetup({ landed = false, onHandled, accentHex }) {
   const [st, setSt] = useState(null);
   const [secret, setSecret] = useState("");
@@ -15181,6 +15320,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   incomingConnects = [], onRespondConnect, onReloadConnects, onSetMyAvatar,
   added = null, onDismissAdded, openPane = null,
   payoutsLanded = false, onPayoutsHandled }) {
+  // Only set when the in-app card form could not be drawn at all.
+  const [billingFellBack, setBillingFellBack] = useState(false);
   // accountKind is already a prop; the user form needs it to know which
   // scoped roles this account has anybody to hand out.
   const tenantSeats = users.filter((u) => u.role === "tenant");
@@ -15946,18 +16087,28 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {pane === "billing" && canManage && (
         <>
           {billingErr && <p className="billing-err" role="alert">{billingErr}</p>}
-          {/* Cards, invoices and cancellation live in Stripe's portal. This
-              is the door to it, shown only once there is a customer there. */}
+          {/* The card and the invoices, here. Stripe's portal is a hosted
+              page with no embedded equivalent, so this used to be a door out
+              of SubSub in the middle of somebody's own account screen.
+              Cancelling was already in the app; these are the rest of it.
+              The door is kept below, and only for when this cannot load. */}
           {plan === "scale" && !comped && (
-            <div className="billing-manage">
-              <div>
-                <b>Payment and invoices</b>
-                <p>Change the card on file, download invoices, or cancel.</p>
-              </div>
-              <button className="btn-ghost" disabled={billingBusy} onClick={onManageBilling}>
-                {billingBusy ? "Opening…" : "Manage billing"}
-              </button>
-            </div>
+            <>
+              <BillingManage accentHex={brand?.theme?.accent || null}
+                onFellBack={() => setBillingFellBack(true)} />
+              {billingFellBack && (
+                <div className="billing-manage">
+                  <div>
+                    <b>Payment and invoices</b>
+                    <p>This can't load here — your browser may be blocking it.
+                      You can manage it in a new window instead.</p>
+                  </div>
+                  <button className="btn-ghost" disabled={billingBusy} onClick={onManageBilling}>
+                    {billingBusy ? "Opening…" : "Open in a new window"}
+                  </button>
+                </div>
+              )}
+            </>
           )}
           <div className="plan-current">
             <div>
@@ -25333,6 +25484,21 @@ p.fld-note{margin:6px 0 0}
    so this only reserves room and keeps it off the panel's edges. */
 .pay-embed{margin:10px 0 0}
 .pay-embed:empty{margin:0}
+/* Managing the subscription, in the app. */
+.bm-card{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:13px 15px;
+  margin:0 0 14px;font-size:14px}
+.bm-embed{margin:0}
+.bm-embed:empty{margin:0}
+.bm-invoices{list-style:none;margin:0;padding:0;font-size:13px}
+.bm-invoices li{display:flex;align-items:center;gap:12px;padding:9px 2px;
+  border-bottom:1px solid var(--line)}
+.bm-invoices li:last-child{border-bottom:0}
+.bmi-date{flex:1;color:var(--ink-soft)}
+.bmi-amt{font-weight:600;min-width:74px;text-align:right}
+.bmi-st{min-width:74px;text-transform:capitalize;color:var(--ink-soft)}
+.bmi-st.bmi-paid{color:var(--brand)}
+.bmi-pdf{min-width:34px;text-align:right}
 .pay-due li{margin:3px 0}
 .billing-manage{display:flex;align-items:center;justify-content:space-between;gap:14px;
   flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:14px 16px;

@@ -1544,6 +1544,141 @@ app.post("/api/stripe/webhook", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// Managing the subscription without leaving
+// ---------------------------------------------------------------------------
+// Stripe's billing portal is a hosted page: there is no embedded component
+// for it, so "manage payments" meant handing somebody to stripe.com in the
+// middle of their own account screen. What the portal actually does is three
+// things -- the card, the invoices, and cancelling -- and cancelling was
+// already here. So the other two are here now too.
+//
+// The card itself is still never touched. A SetupIntent is confirmed in the
+// browser by Stripe's own Payment Element, which means the number goes from
+// the customer to Stripe and never past us; what comes back is an id.
+
+const billingCustomer = async (c) => {
+  const { accountId } = c.get("auth");
+  const a = await c.env.DB.prepare(
+    `SELECT stripe_customer_id, stripe_subscription_id FROM accounts WHERE id = ?`
+  ).bind(accountId).first();
+  return a?.stripe_customer_id ? a : null;
+};
+
+// What is on file, so the panel can say "Visa ending 4242" rather than
+// offering to change something it cannot name.
+app.get("/api/billing/card", requireRole("admin"), async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const a = await billingCustomer(c);
+  if (!a) return c.json({ card: null });
+  try {
+    const cust = await stripeCall(c.env, `/customers/${a.stripe_customer_id}`,
+      { method: "GET" });
+    const pmId = cust?.invoice_settings?.default_payment_method;
+    if (!pmId) return c.json({ card: null });
+    const pm = await stripeCall(c.env, `/payment_methods/${pmId}`, { method: "GET" });
+    // Four digits and an expiry, which is all anybody needs to recognise
+    // their own card. Nothing else about it is ours to hold or to show.
+    return c.json({ card: pm?.card
+      ? { brand: pm.card.brand, last4: pm.card.last4,
+          expMonth: pm.card.exp_month, expYear: pm.card.exp_year }
+      : null });
+  } catch (err) {
+    console.error("[billing] card read failed:", err?.message || err);
+    return c.json({ card: null });
+  }
+});
+
+// Start changing it. The SetupIntent is confirmed in the browser, so this
+// hands over a client secret and nothing else.
+app.post("/api/billing/card-setup", requireRole("admin"), async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const a = await billingCustomer(c);
+  if (!a) return c.json({ error: "no_subscription" }, 409);
+  try {
+    const si = await stripeCall(c.env, "/setup_intents", {
+      params: {
+        customer: a.stripe_customer_id,
+        payment_method_types: ["card"],
+        // The card is kept to charge a subscription nobody will be present
+        // for, which is what this value means to Stripe.
+        usage: "off_session",
+      },
+    });
+    return c.json({ clientSecret: si.client_secret });
+  } catch (err) {
+    console.error("[billing] card setup failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// And finish. The browser has confirmed the SetupIntent; this reads which
+// payment method came out of it and makes it the one that gets charged.
+//
+// BOTH the customer and the subscription, because they are two different
+// settings and only changing the first leaves the next invoice on the old
+// card -- a card somebody believes they have replaced, failing silently a
+// month later.
+app.post("/api/billing/card-confirm", requireRole("admin"), async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const a = await billingCustomer(c);
+  if (!a) return c.json({ error: "no_subscription" }, 409);
+  const b = await c.req.json().catch(() => ({}));
+  const siId = String(b.setupIntentId || "").trim();
+  if (!/^seti_[A-Za-z0-9_]+$/.test(siId)) return c.json({ error: "bad_setup_intent" }, 400);
+
+  try {
+    // Read it back from Stripe rather than trusting a payment method id sent
+    // by the browser: this route would otherwise point the account's billing
+    // at any card whose id somebody could name.
+    const si = await stripeCall(c.env, `/setup_intents/${siId}`, { method: "GET" });
+    if (si?.customer !== a.stripe_customer_id) return c.json({ error: "not_found" }, 404);
+    if (si?.status !== "succeeded") return c.json({ error: "not_confirmed", status: si?.status }, 409);
+    const pm = si.payment_method;
+    if (!pm) return c.json({ error: "not_confirmed" }, 409);
+
+    await stripeCall(c.env, `/customers/${a.stripe_customer_id}`, {
+      params: { invoice_settings: { default_payment_method: pm } },
+    });
+    if (a.stripe_subscription_id) {
+      await stripeCall(c.env, `/subscriptions/${a.stripe_subscription_id}`, {
+        params: { default_payment_method: pm },
+      });
+    }
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error("[billing] card confirm failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// What they have been charged. A list somebody can read here, rather than a
+// reason to go and sign in somewhere else.
+app.get("/api/billing/invoices", requireRole("admin"), async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const a = await billingCustomer(c);
+  if (!a) return c.json({ invoices: [] });
+  try {
+    const list = await stripeCall(c.env,
+      `/invoices?customer=${encodeURIComponent(a.stripe_customer_id)}&limit=24`,
+      { method: "GET" });
+    return c.json({ invoices: (list?.data || []).map((i) => ({
+      id: i.id,
+      number: i.number || null,
+      created: i.created ? new Date(i.created * 1000).toISOString() : null,
+      total: typeof i.total === "number" ? i.total : null,
+      currency: i.currency || "usd",
+      status: i.status || null,
+      // The PDF is a document rather than a product surface, so a link to it
+      // is not the thing this whole change is removing.
+      pdf: i.invoice_pdf || null,
+    })) });
+  } catch (err) {
+    console.error("[billing] invoices failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Getting paid: connecting a Stripe account
 // ---------------------------------------------------------------------------
 // Onboarding only. A hireable company connects a Stripe connected account,
