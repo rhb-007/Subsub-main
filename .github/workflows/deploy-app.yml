@@ -21,15 +21,28 @@
 # and CLOUDFLARE_ACCOUNT_ID as repository secrets, plus VITE_SUPABASE_URL and
 # VITE_SUPABASE_ANON_KEY as secrets OR variables. The token additionally needs
 # "Account -> Cloudflare Pages -> Edit", which the Worker deploys do not use.
+# Edit carries the read this workflow's last step does; if it ever does not,
+# that step warns and the deploy still stands, because a missing report is not
+# a failed deploy.
 #
 # ALWAYS THE ANON (publishable) KEY. Never service_role: this bundle is
 # downloaded by every customer and anything in it is public.
 #
 # Deliberately `workflow_dispatch` only, for now. A push trigger on a deploy
 # path that has never once been watched run would ship to every customer on
-# the strength of a guess about a project name. One green run establishes the
-# wiring; the push trigger goes in after that, and then this matches the other
-# two.
+# the strength of a guess about a project name.
+#
+# The first run went green and uploaded the bundle, so the project name and the
+# token are right. What it did NOT establish is whether the upload went live,
+# and the reason is worth keeping: it was read off the deploy output, and
+# `wrangler pages deploy` prints the per-deployment `<hash>.pages.dev` URL for
+# a production deploy and a preview alike. So the one question that matters --
+# did anybody see this -- was answered by a test that cannot tell the two
+# apart. `Where did it land` asks Cloudflare instead.
+#
+# The push trigger goes in once a run has reported `production`, and not
+# before: a push trigger that ships previews is a button that reports success
+# and changes nothing, which is the exact failure this file was written for.
 name: Deploy customer app
 
 on:
@@ -140,7 +153,56 @@ jobs:
           npx wrangler pages deploy dist \
             --project-name=subsub-app \
             --branch="${{ github.ref_name }}" \
-            --commit-dirty=true
+            --commit-dirty=true 2>&1 | tee /tmp/deploy.log
+          url="$(grep -oE 'https://[a-z0-9.-]+\.pages\.dev' /tmp/deploy.log | tail -1)"
+          echo "DEPLOY_URL=$url" >> "$GITHUB_ENV"
+
+      # Ask Cloudflare, rather than reading the deploy output.
+      #
+      # `wrangler pages deploy` prints the immutable per-deployment URL --
+      # https://<hash>.<project>.pages.dev -- for EVERY deployment, production
+      # ones included, because that URL always exists. So "it printed a
+      # pages.dev address" proves nothing at all, and the first version of this
+      # workflow told whoever ran it to read exactly that and draw a conclusion
+      # from it. A test that cannot distinguish the two cases is worse than no
+      # test: it is answered confidently and wrongly.
+      #
+      # Only the project knows. `production_branch` is the one Pages serves the
+      # custom domains from, and `latest_deployment.environment` is what this
+      # deploy actually became. Both come off one authenticated read with the
+      # token that just deployed, so a run that got far enough to deploy is far
+      # enough to be told where it went.
+      #
+      # It does not FAIL on a preview. A preview deploy is a real, useful thing
+      # -- it is how you look at a branch before it is live -- so this reports
+      # rather than refuses, and names the one setting that changes it.
+      - name: Where did it land
+        if: success()
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          code=$(curl -sS -o /tmp/proj.json -w '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/subsub-app" \
+            || echo 000)
+          if [ "$code" != "200" ]; then
+            echo "PAGES_LOOKUP=failed" >> "$GITHUB_ENV"
+            echo "::warning::Could not read the Pages project (HTTP $code). The deploy"
+            echo "itself succeeded; only the production/preview answer is missing. The"
+            echo "token may have Pages Edit without Pages Read."
+            exit 0
+          fi
+          prod="$(jq -r '.result.production_branch // ""' /tmp/proj.json)"
+          envn="$(jq -r '.result.latest_deployment.environment // ""' /tmp/proj.json)"
+          doms="$(jq -r '(.result.domains // []) | join(", ")' /tmp/proj.json)"
+          {
+            echo "PAGES_LOOKUP=ok"
+            echo "PAGES_PROD_BRANCH=$prod"
+            echo "PAGES_ENV=$envn"
+            echo "PAGES_DOMAINS=$doms"
+          } >> "$GITHUB_ENV"
+
 
       # Which URL it landed on is the whole question, so say it rather than
       # claiming success. Pages only serves the custom domain from its own
@@ -148,15 +210,32 @@ jobs:
       # preview that reports "deployed" is how this went unnoticed in the
       # first place.
       - name: Say what happened
-        if: success()
+        if: always()
         run: |
           {
             echo "### subsub-app deployed from \`${{ github.sha }}\`"
             echo ""
             echo "Branch: \`${{ github.ref_name }}\`"
             echo ""
-            echo "Check the Deploy step's output for the URL it went to. If it names a"
-            echo "\`*.pages.dev\` preview rather than app.subsub.work, then this branch is"
-            echo "not the Pages project's production branch and the live site has not"
-            echo "changed."
+            echo "Deployment URL: ${DEPLOY_URL:-not captured}"
+            echo ""
+            if [ "$PAGES_LOOKUP" != "ok" ]; then
+              echo "Cloudflare would not say whether this is live. Open"
+              echo "app.subsub.work and check the screen you were expecting to change."
+            elif [ "$PAGES_ENV" = "production" ]; then
+              echo "**This is LIVE.** Pages serves its custom domains from"
+              echo "\`$PAGES_PROD_BRANCH\`, which is the branch this ran on."
+              echo ""
+              echo "Live at: ${PAGES_DOMAINS:-app.subsub.work}"
+            else
+              echo "**This is a PREVIEW, not live.** app.subsub.work has not changed."
+              echo ""
+              echo "Pages serves its custom domains only from \`$PAGES_PROD_BRANCH\`,"
+              echo "and this ran on \`${{ github.ref_name }}\`. Either set the project's"
+              echo "production branch to \`${{ github.ref_name }}\` in the Cloudflare"
+              echo "dashboard (Workers & Pages -> subsub-app -> Settings -> Build), or"
+              echo "get this code onto \`$PAGES_PROD_BRANCH\`."
+              echo ""
+              echo "The preview above is still worth opening: it is this exact bundle."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
