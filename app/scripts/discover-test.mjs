@@ -107,9 +107,37 @@ for (const name of FOOTER_PAGES) {
 // against it -- so it has to be findable from wherever they landed, not only
 // from the page that happens to mention it.
 console.log("\nand the developer docs are in it");
+
+// What the link SAYS is read off the destination, not written here twice.
+//
+// It used to be the literal "Developer tools", which was one of THREE names
+// the same page went by: that in the footer, "SubSub API - post scheduled
+// jobs from your CRM" in the tab, and "Post scheduled jobs into SubSub" as
+// its own heading. Three names for one page is how somebody concludes there
+// are three pages -- the same trap as a panel headed `Your code` under a menu
+// entry reading `My QR code`.
+//
+// "Developer tools" was also the one of the three that could not be kept. The
+// page says "no SDK" and names Zapier, Make and n8n in its first paragraph,
+// so it is for anybody connecting a CRM; filing it under Developer tools
+// tells a general contractor setting up a Zapier step that it is not for
+// them, which is the reading error this repository already records about
+// naming a screen after one CRM.
+//
+// Asserting the link against the page's own H1 means the two cannot drift,
+// and a rename only has to be made in one place.
+const DEV_NAME = (read("developers.html").match(/<h1>([^<]+)<\/h1>/) || [])[1];
+ck("the developer page has a heading to be named after", !!DEV_NAME, String(DEV_NAME));
+// A name is a name, not a sentence about what you can do with it.
+ck("which is a name rather than a description",
+  !!DEV_NAME && DEV_NAME.split(/\s+/).length <= 4, String(DEV_NAME));
+// And the tab has to lead with it, or a row of open tabs names it a fourth way.
+ck("and the title leads with the same name",
+  read("developers.html").includes(`<title>${DEV_NAME}`), String(DEV_NAME));
+
 for (const name of FOOTER_PAGES) {
   const foot = footerOf(read(name));
-  ck(name, /<a href="developers\.html">Developer tools<\/a>/.test(foot),
+  ck(name, foot.includes(`<a href="developers.html">${DEV_NAME}</a>`),
     (foot.match(/<h4>Resources<\/h4>[\s\S]{0,200}/) || [""])[0].replace(/\s+/g, " ").slice(0, 120));
 }
 
@@ -134,7 +162,8 @@ console.log("\nincluding on the generated pages, which is a separate build");
   const bad = [];
   for (const f of gen) {
     const foot = footerOf(read(f));
-    const m = foot.match(/<a href="((?:\.\.\/)*developers\.html)">Developer tools<\/a>/);
+    const m = foot.match(new RegExp(
+      `<a href="((?:\\.\\./)*developers\\.html)">${DEV_NAME}</a>`));
     if (!m) { bad.push(`${f}: no link`); continue; }
     if (!existsSync(join(root, dirname(f), m[1]))) bad.push(`${f} -> ${m[1]}`);
   }

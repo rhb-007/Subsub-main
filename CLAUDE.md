@@ -2482,6 +2482,47 @@ refactor.
   actually has. Renaming a panel silently turns a set of directions into a
   dead end on the reader's own screen.
 
+  **And the page itself went by three names.** *Developer tools* in the footer
+  of every page, *SubSub API — post scheduled jobs from your CRM* in the tab,
+  and *Post scheduled jobs into SubSub* as its own heading. Three names for
+  one page is how somebody concludes there are three pages — the same trap as
+  a panel headed *Your code* under a menu entry reading *My QR code*.
+
+  **And *Developer tools* was the one of the three that could not be kept.**
+  The page says *no SDK* in its first paragraph and names Zapier, Make and
+  n8n in the one after, so it is for anybody connecting a CRM; filing it under
+  Developer tools tells a general contractor setting up a Zapier step that it
+  is not for them — the same reading error as naming a screen after one CRM,
+  and it costs the integration nobody sets up. It is **Connect your CRM**
+  everywhere now, which is also what the panel in the app is called, so the
+  page and the thing it sends you to share a name.
+
+  The URL stays `/developers`: a URL is not a heading, the recorded decision
+  about it is about routing, and moving it would break every link to it for
+  nothing.
+
+  `test:discover` reads the name **off the destination's own H1** rather than
+  holding a fourth copy of it, so the footer and the page cannot drift and a
+  rename is made in one place. It also pins that the H1 is a **name rather
+  than a sentence** (four words or fewer) and that the tab leads with it, or a
+  row of open tabs names the page a fourth way.
+
+- **A regex over somebody else's file is a second copy of their shape, kept by
+  hand.** `build-licensing.mjs` read the trade list by matching
+  `const CATEGORIES = [...]` out of `App.tsx`, because at the time that array
+  was the only place ids and labels sat together and it carried a React icon
+  per entry that could not cross into a build script. Both halves stopped
+  being true the moment `shared/trades.js` became the one list and the icons
+  moved to being attached by id — and the regex then matched nothing, so the
+  generator **threw on startup** and the 71 generated pages could not be
+  rebuilt at all.
+
+  Silently, because nothing runs `npm run licensing` in CI. What caught it was
+  `test:discover` noticing those pages still carried the PREVIOUS footer: the
+  output going stale is observable where the generator refusing to start is
+  not. It imports now, which removes the failure mode rather than repairing
+  it.
+
 - **The mapping screen leads with the queue, not the rules.** `crm_trade_rules`
   shipped with routes, tests and no way in — the fourth time this file has
   recorded correct pieces nobody could reach, and for the person who runs a

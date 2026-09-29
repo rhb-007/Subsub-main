@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { readChrome, atDepth } from "../../content/licensing/chrome.mjs";
 import { STATES } from "../../content/licensing/data.js";
 import { plan, pagePath, pageUrl, baselineOf, reviewQueue } from "../shared/licensing.js";
+import { TRADES } from "../shared/trades.js";
 import { statePage, tradePage, tradeHubPage, indexPage } from "../../content/licensing/render.mjs";
 import { readFileSync } from "node:fs";
 
@@ -20,18 +21,22 @@ const root = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 const dry = process.argv.includes("--dry");
 const today = new Date().toISOString().slice(0, 10);
 
-// The trade list lives in App.tsx with a React icon attached to each entry, so
-// it cannot simply be imported here. Read the ids and labels out of it instead
-// of keeping a second copy that drifts.
-const TRADES = (() => {
-  const src = readFileSync(join(root, "app/src/App.tsx"), "utf8");
-  const block = src.match(/const CATEGORIES = \[([\s\S]*?)\n\];/);
-  if (!block) throw new Error("CATEGORIES not found in App.tsx");
-  const out = [...block[1].matchAll(/id: "([a-z_]+)", label: "([^"]+)"/g)]
-    .map((m) => ({ id: m[1], label: m[2] }));
-  if (!out.length) throw new Error("no trades parsed from App.tsx");
-  return out;
-})();
+// The trade list is IMPORTED, not scraped.
+//
+// It used to read `const CATEGORIES = [...]` out of App.tsx with a regex,
+// because at the time that array was the only place ids and labels sat
+// together and it carried a React icon per entry that could not cross into a
+// build script. Both halves of that stopped being true when `shared/trades.js`
+// became the one list and the icons moved to being attached by id.
+//
+// The regex then matched nothing and the generator threw on startup -- so the
+// 71 generated pages could not be rebuilt at all, silently, because nothing
+// runs this in CI. What caught it was `test:discover` noticing those pages
+// still carried the PREVIOUS footer: the output going stale is observable
+// where the generator refusing to start is not.
+//
+// Importing removes the failure mode rather than repairing it. A regex over
+// somebody else's file is a second copy of their shape, kept by hand.
 
 const chrome = { ...readChrome(join(root, "for-general-contractors.html")), atDepth };
 const { pages, skipped } = plan(STATES, TRADES, { today });
