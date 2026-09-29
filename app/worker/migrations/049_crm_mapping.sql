@@ -13,8 +13,18 @@
 CREATE TABLE IF NOT EXISTS crm_trade_rules (
   id          TEXT PRIMARY KEY,
   account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  -- Which CRM. Rules are per source, because the same word means different
-  -- things in two systems and a customer may eventually run both.
+  -- Which CRM, or '*' for every one of them, which is the default and the
+  -- common case. The words a rule matches are the ACCOUNT'S OWN -- typed into
+  -- their own system -- so "Roof Replacement" means roofing whichever system
+  -- sends it, and a per-source dictionary would be the same dictionary retyped
+  -- per CRM. A named source still narrows, for an account running two systems
+  -- that disagree about a word.
+  --
+  -- It was NOT NULL with no default and the screen sent nothing, so the route
+  -- defaulted to 'jobnimbus' and every rule saved from the screen was filed
+  -- against a CRM the account might not use -- firing for nobody. No schema
+  -- change was needed to fix that, only the route; the column is left as it is
+  -- so this file stays a record of what was run.
   source      TEXT NOT NULL,
   -- 'type', 'status' or 'tag' -- a rule matches ONE named field, never a
   -- free-text sweep of the payload, so somebody can read their own rules

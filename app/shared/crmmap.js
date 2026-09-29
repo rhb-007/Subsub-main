@@ -1,10 +1,10 @@
 // Turning somebody else's CRM vocabulary into SubSub trades.
 //
-// JobNimbus has no concept of a trade. What it has is a job `type`, a
-// `record_type_name`, a `status_name` and free-text tags -- all of them the
-// customer's own words, different at every company: "Roof Replacement",
-// "Full Reroof", "RR-Insurance", "Gutter Only". Nothing in that payload maps
-// to `roofing` without somebody saying so.
+// No CRM has a concept of a trade. What they have is a job `type`, a record
+// type, a `status` and free-text tags -- all of them the customer's own words,
+// different at every company: "Roof Replacement", "Full Reroof",
+// "RR-Insurance", "Gutter Only". Nothing in that payload maps to `roofing`
+// without somebody saying so.
 //
 // So the account says so, once, and every job after that lands with its
 // trades already on it.
@@ -21,6 +21,27 @@
 // as needing them, and the VALUES THAT DID NOT MATCH ARE KEPT -- because
 // "three jobs arrived with type Roof Replacement" is a question somebody can
 // answer in one tap, where "some jobs had no trades" is a mystery.
+
+// A rule applies to EVERY CRM unless it is narrowed to one.
+//
+// The first version required a source and the screen sent none, so every rule
+// an account saved was filed against JobNimbus -- which meant a customer
+// posting through anything else answered a queue row, saw it accepted, and got
+// a rule that could never fire. The queue row was not even cleared, because
+// that DELETE was scoped to the same source, so they could press it again
+// forever. Both halves silent.
+//
+// Requiring the screen to ask "which CRM is this rule for" would have fixed
+// the mechanism and kept the mistake, because the premise was wrong: the words
+// are the ACCOUNT'S OWN. "Roof Replacement" is what somebody typed into their
+// own system, and it means roofing whichever system sends it. A per-source
+// dictionary is the same dictionary retyped per CRM, with a silent
+// non-firing rule as the cost of forgetting.
+//
+// So `'*'` is the default and the common case. A named source still narrows,
+// for the account that really does run two systems that disagree about a word;
+// nobody has to know that exists to set the ordinary rule up.
+export const ANY_SOURCE = "*";
 
 // What a rule can match on. Deliberately not a free-text search across the
 // whole payload: a rule matches ONE named field, so a customer can read their
@@ -44,10 +65,10 @@ export function matchableValues(payload) {
       out.push({ kind, value });
     }
   };
-  // JobNimbus sends `type` on a job and `record_type_name` on everything;
-  // both are read because which one carries the useful word differs by
-  // account, and an account that has only ever filled one in should not have
-  // to know which.
+  // Two fields are read for the same question, because CRMs disagree about
+  // which one carries the useful word -- JobNimbus sends `type` on a job and
+  // `record_type_name` on everything -- and an account that has only ever
+  // filled one in should not have to know which.
   add("type", payload?.type);
   add("type", payload?.record_type_name);
   add("status", payload?.status_name);

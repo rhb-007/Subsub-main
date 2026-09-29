@@ -2054,6 +2054,97 @@ refactor.
   their customers than a pull integration using their API key would — and we
   never hold somebody's CRM credential.
 
+- **One CRM is the first one, not the subject.** Every user-facing string this
+  feature shipped with named JobNimbus — the token panel's note, the mapping
+  screen's note, the token-name placeholder — because it was the only receiver
+  when they were written. Many systems will post here, and a screen naming one
+  of them tells everybody else the feature is not for them: the same reading
+  error as *you need a general contractor account*, arrived at from a different
+  direction, and it costs the integration nobody sets up.
+
+  The panel is **Connect your CRM**, and the general answer is **named rather
+  than gestured at** — Zapier, Make, n8n, your own script — because "works with
+  any CRM" is true and useless: somebody has to know their tool's step is called
+  a webhook before they can go and look for it. One CRM's name still belongs in
+  exactly one place, the list of systems SubSub translates for, where it is a
+  fact rather than a claim about who the feature is for. So the test asserts on
+  the **headings and the notes** and deliberately not on the picker.
+
+  **And the screen now hands over the thing somebody actually pastes.** The
+  panel minted a secret and stopped, leaving them to assemble
+  `/api/v1/hooks/<source>/<token>` out of the developer docs — which
+  documented the header endpoint and **not the hook route at all**, so the half
+  that answers "does this work with my CRM" was the undocumented half. Fifth
+  time this file has recorded correct pieces with no way in. The address is in
+  the minted box, with a picker that rewrites it, because it **cannot be added
+  later for that token**: the token is hashed the moment the box closes.
+
+  Three strings per preset, because they go three places with different jobs and
+  one field doing all three produced *This Your own system record is missing
+  externalId* in a refusal. `label` is a noun inside a sentence, `short` is a
+  name inside a row, `pick` is the option somebody chooses and has to teach.
+  `short` falls back to `label` and `pick` to `short`, so a named CRM needs only
+  `label`.
+
+- **A rule belongs to the account, not to a CRM, and getting that backwards was
+  a rule that fired for nobody.** `crm_trade_rules.source` was required, the
+  screen sent none, and the route defaulted to `jobnimbus` — so every rule an
+  account saved was filed against a CRM they might not use. It was accepted,
+  listed back to them, and matched nothing. The queue row was not cleared
+  either, because that `DELETE` was scoped the same way, so the same button
+  could be pressed forever. Both halves silent, which is the only kind of bug
+  this screen can have: nothing on it can tell you a rule did not fire.
+
+  Adding a *which CRM is this for* selector would have fixed the mechanism and
+  kept the mistake. The premise was wrong: the words are the **account's own**,
+  typed into their own system, and "Roof Replacement" means roofing whichever
+  system sends it. A per-source dictionary is the same dictionary retyped per
+  CRM with a silently dead rule as the price of forgetting.
+
+  So `ANY_SOURCE` (`'*'`) is the default and the common case, the receiver reads
+  `source = ? OR source = '*'`, and a named source still narrows for the account
+  that really does run two systems disagreeing about a word. **No migration**:
+  the column was always `TEXT NOT NULL` and `'*'` is a value, so 049 is
+  unchanged apart from a comment that no longer lies about what it means.
+
+  Three things the screen does with it. An any-CRM rule carries **no qualifier**,
+  because "every CRM" on every row is noise on the common case to label the rare
+  one; a narrowed rule says **JobNimbus only**, because that is the reason it
+  does not fire elsewhere; and the queue row keeps **where the word arrived
+  from**, because that is a fact about the job rather than about the rule — the
+  difference between *our CRM is mis-set-up* and *that Zapier run is*.
+
+  Answering a word clears it **wherever it arrived from** when the answer applies
+  everywhere, and only its own copy when narrowed. A queue row that survives
+  being answered is a button somebody presses again, and again.
+
+- **`shared/ingest.js` exists so three records agree, and only two were ever
+  checked.** The route, the tests and the **published page** all describe the
+  same fields, written by different hands at different times — a field required
+  by the route and optional on the page is an integration that fails at 2am
+  against documentation saying it should work. Nothing read the page.
+
+  It found the real gap on its first run: `developers.html` documented the
+  header endpoint and **not the hook route at all**, so the half that answers
+  *does this work with my CRM* — the path-token address every automation
+  builder and every CRM webhook step actually uses — was undocumented while the
+  panel sent people there to read about it. Also two optional fields the route
+  accepts and the page never named.
+
+  Two things about the assertions themselves. **A field is documented when it
+  has a row somebody can read, not when the string appears on the page**:
+  deleting the `generic` row from the receivers table left the word in two
+  paragraphs of prose below it and the check passed, which is the class of
+  assertion mutation keeps catching here. It reads the `<td>` cells now. And the
+  **first attempt at that was wrong in the other direction** — it matched three
+  shapes a row can take and missed `address` *or* `propertyId`, reporting a
+  documented field as missing, which would send somebody to add a row that is
+  already there.
+
+  It also pins that the panel the docs name by heading is a heading the app
+  actually has. Renaming a panel silently turns a set of directions into a
+  dead end on the reader's own screen.
+
 - **The mapping screen leads with the queue, not the rules.** `crm_trade_rules`
   shipped with routes, tests and no way in — the fourth time this file has
   recorded correct pieces nobody could reach, and for the person who runs a

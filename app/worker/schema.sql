@@ -1590,6 +1590,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_job_sources_external
 CREATE TABLE IF NOT EXISTS crm_trade_rules (
   id          TEXT PRIMARY KEY,
   account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  -- Which CRM, or '*' for every one of them, which is the default. See 049.
   source      TEXT NOT NULL,
   match_kind  TEXT NOT NULL,
   match_value TEXT NOT NULL,

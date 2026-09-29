@@ -60,6 +60,8 @@ import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
 import { applyFormHtml, applyLink } from "../shared/embed.js";
 import { greetingFor, weatherLine } from "../shared/greeting.js";
+import { SOURCE_PRESETS } from "../shared/crmsources.js";
+import { ANY_SOURCE } from "../shared/crmmap.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -13621,10 +13623,18 @@ function Avatar({ user, className = "" }) {
 // nothing at all: a feature you cannot see is a feature you cannot buy.
 // What your CRM's words mean here.
 //
-// JobNimbus has no concept of a trade -- it has a job `type`, a `status` and
+// No CRM has a concept of a trade. They have a job `type`, a `status` and
 // free-text tags, all of them the customer's own words. So the account says
 // once what each one means, and every job after that arrives with its trades
 // already on it.
+//
+// ONE LIST, NOT ONE PER CRM, and that is a fix rather than a simplification.
+// `crm_trade_rules.source` was required, the screen sent none, and the route
+// defaulted to `jobnimbus` -- so an account posting through anything else
+// answered a queue row, was told it saved, and got a rule that could never
+// fire. Adding a "which CRM is this for" selector would have fixed the
+// mechanism and kept the mistake: the words are the ACCOUNT'S OWN, and
+// "Roof Replacement" means roofing whichever system sends it.
 //
 // THE WORK QUEUE IS THE POINT OF THIS SCREEN, and it is why the unanswered
 // words come FIRST rather than the rules. A job whose words map to nothing
@@ -13674,6 +13684,11 @@ function CrmMapping() {
 
   const KINDS = [["type", "Job type"], ["status", "Status"], ["tag", "Tag"]];
   const kindLabel = (k) => (KINDS.find(([id]) => id === k) || [null, k])[1];
+  // A source SubSub has a preset for is named; anything else falls back to the
+  // stored string rather than being hidden, because a row that will not say
+  // where it came from is a row nobody can act on.
+  const sourceName = (id) =>
+    !id || id === ANY_SOURCE ? "" : (SOURCE_PRESETS[id]?.short || SOURCE_PRESETS[id]?.label || id);
 
   // The chip grid, shared by the queue rows and the manual form -- two copies
   // would be two places for the trade list to go stale.
@@ -13705,9 +13720,10 @@ function CrmMapping() {
     <div className="portal-panel settings-panel">
       <h4>What your CRM calls things</h4>
       <p className="panel-note">
-        Jobs posted from JobNimbus arrive with your own words on them — a job type, a status, tags.
-        Say once what each one means here and every job after that lands with its trades ready to
-        assign.
+        Jobs posted into SubSub from your CRM arrive with your own words on them — a job type, a status,
+        tags. Say once what each one means here and every job after that lands with its trades
+        ready to assign. Rules apply to every system you post from, so this is one list however
+        many you connect.
       </p>
 
       {err && <p className="fld-err" role="alert">{err}</p>}
@@ -13728,6 +13744,11 @@ function CrmMapping() {
                   <b>{g.value}</b>
                   <span className="cx-sub">
                     {kindLabel(g.match)} · {g.hits} job{g.hits === 1 ? "" : "s"} so far
+                    {/* Where it arrived from is a fact about the job, not about
+                        the rule, so the queue keeps it even though the answer
+                        applies everywhere. It is the difference between "our
+                        CRM is mis-set-up" and "that Zapier run is". */}
+                    {sourceName(g.source) ? ` · from ${sourceName(g.source)}` : ""}
                   </span>
                 </div>
                 {open === g.id ? null : (
@@ -13759,6 +13780,10 @@ function CrmMapping() {
                 <b>{r.value}</b>
                 <span className="cx-sub">
                   {kindLabel(r.match)} → {r.trades.map((t) => TRADE_LABEL[t] || t).join(", ")}
+                  {/* Silent for the ordinary rule, which is every rule this
+                      screen makes. Said only when one is narrowed, because
+                      then it is the reason it does not fire elsewhere. */}
+                  {r.source && r.source !== ANY_SOURCE ? ` · ${sourceName(r.source)} only` : ""}
                 </span>
               </div>
               <button type="button" className="cpr-do quiet" onClick={() => remove(r)}>Remove</button>
@@ -13805,6 +13830,28 @@ function ApiTokens({ isScale }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
+  // Which system is sending. `generic` first and default, because that is the
+  // answer for every tool that is not one of the named ones -- and there is
+  // exactly one named one today.
+  const [src, setSrc] = useState("generic");
+  const [copiedUrl, setCopiedUrl] = useState(false);
+
+  // The webhook address, absolute, because it is going into a box on somebody
+  // else's website and a relative path is useless there. API_BASE already
+  // ends in /api and may be relative in a dev build.
+  const hookUrl = (source, token) => {
+    const base = /^https?:/.test(API_BASE)
+      ? API_BASE
+      : `${window.location.origin}${API_BASE}`;
+    return `${base}/v1/hooks/${source}/${token}`;
+  };
+
+  // `pick` is the picker's wording, which has to teach; `short` is the name in
+  // a row; `label` is the noun in a sentence. See SOURCE_PRESETS for why that
+  // is three fields and not one.
+  const SOURCE_PICKS = Object.entries(SOURCE_PRESETS)
+    .map(([id, p]) => [id, p.pick || p.short || p.label])
+    .sort((a, b) => (a[0] === "generic" ? -1 : b[0] === "generic" ? 1 : 0));
 
   const load = async () => {
     try { setRows(await api.apiTokens()); }
@@ -13819,6 +13866,7 @@ function ApiTokens({ isScale }) {
     try {
       const made = await api.createApiToken(n);
       setMinted(made);
+      setCopied(false); setCopiedUrl(false);
       setName("");
       await load();
     } catch (e) {
@@ -13837,10 +13885,11 @@ function ApiTokens({ isScale }) {
 
   return (
     <div className="portal-panel settings-panel">
-      <h4>API tokens</h4>
+      <h4>Connect your CRM</h4>
       <p className="panel-note">
-        Post scheduled jobs straight into SubSub from JobNimbus or whatever you schedule in.
-        They arrive with their trades unassigned, ready for you to pick contractors.{" "}
+        Post scheduled jobs straight into SubSub from whatever you schedule in. They arrive with
+        their trades unassigned, ready for you to pick contractors — and it works with anything
+        that can send a web request, which includes Zapier, Make and n8n.{" "}
         <a href="https://subsub.work/developers" target="_blank" rel="noopener">Read the API docs</a>.
       </p>
 
@@ -13873,11 +13922,45 @@ function ApiTokens({ isScale }) {
                 SubSub stores only a fingerprint of this, so nobody here can read it back to you —
                 including us. Lost it? Revoke it and make another.
               </p>
+
+              {/* THE ADDRESS, on the screen, while the token still exists.
+                  Without this the panel handed somebody a secret and left them
+                  to assemble a URL out of the developer docs -- which is the
+                  correct-pieces-and-no-way-in shape this product keeps
+                  producing, and it cannot be fixed later for this token,
+                  because the token is hashed the moment this box closes. */}
+              <div className="form-sec">Paste this into your CRM</div>
+              <label className="fld tok-src">Which system is sending?
+                <select value={src} onChange={(e) => { setSrc(e.target.value); setCopiedUrl(false); }}>
+                  {SOURCE_PICKS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                </select>
+              </label>
+              <code className="tok-val">{hookUrl(src, minted.token)}</code>
+              <div className="tok-new-acts">
+                <button type="button" className="btn-solid" onClick={() => {
+                  navigator.clipboard?.writeText(hookUrl(src, minted.token));
+                  setCopiedUrl(true);
+                }}>
+                  <Copy size={14} /> {copiedUrl ? "Copied" : "Copy the address"}
+                </button>
+              </div>
+              <p className="cov-hint">
+                {src === "generic"
+                  /* Named, because "any CRM" is true and unhelpful: somebody
+                     has to know their tool's step is called a webhook before
+                     they can look for it. */
+                  ? "Use this for anything not listed: a Zapier or Make webhook step, n8n, or your own code. It expects SubSub's own field names — the docs list them."
+                  : `Use this wherever ${SOURCE_PRESETS[src]?.short || SOURCE_PRESETS[src]?.label || src} asks for a webhook URL. SubSub translates their field names, so there is nothing to map.`}
+              </p>
+              <p className="cov-hint">
+                The token is in that address, so treat it like a password. Anyone holding it can
+                create jobs on this account.
+              </p>
             </div>
           )}
 
           <div className="add-city-row">
-            <input value={name} maxLength={60} placeholder="What is it for? e.g. JobNimbus"
+            <input value={name} maxLength={60} placeholder="What is it for? e.g. our CRM"
               onChange={(e) => { setName(e.target.value); setErr(""); }}
               onKeyDown={(e) => e.key === "Enter" && create()} />
             <button type="button" className="btn-solid" disabled={!name.trim() || busy} onClick={create}>
@@ -23669,6 +23752,14 @@ body{background:var(--paper)}
 .tok-val{display:block;font-size:12px;line-height:1.5;word-break:break-all;
   background:var(--card);border:1px solid var(--line);border-radius:7px;padding:9px 10px}
 .tok-new-acts{display:flex;gap:8px;align-items:center;margin:10px 0 8px}
+/* The source picker sits above the address it rewrites, full width rather than
+   in a .fld-row: it is one question and a half-width select beside empty space
+   reads as a field missing its partner. */
+.tok-src{display:block;margin:2px 0 8px}
+.tok-src select{font-family:inherit;width:100%}
+/* The section heading inside the minted box, which is on a tinted surface --
+   the default .form-sec rule assumes the card. */
+.tok-new .form-sec{margin:14px 0 6px}
 .btn-quiet{font-family:inherit;font-size:12.5px;font-weight:600;color:var(--ink-soft);
   background:transparent;border:0;cursor:pointer;padding:6px 4px}
 .btn-quiet:hover{color:var(--ink)}

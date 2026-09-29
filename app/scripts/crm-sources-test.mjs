@@ -195,10 +195,12 @@ console.log("\n-- through the route --");
   ck("recorded against that source",
     db.prepare("SELECT source FROM job_sources WHERE external_id='OWN-1'").get().source === "generic");
 
-  // Rules are per source, so the same word on two CRMs is two questions.
+  // A rule that NAMES a source is narrowed to it, so the same word arriving
+  // from another CRM is still an open question. That is the whole point of
+  // being able to name one -- and it is the opposite of the default, below.
   const j = await hook("jobnimbus", { jnid: "JN-1", name: "Reroof", type: "Reroof",
     date_start: 1791936000, address_line1: "9 Pine" });
-  ck("the same word on another source does not borrow its rule",
+  ck("a rule narrowed to one CRM is not borrowed by another",
     j.body.trades.length === 0, JSON.stringify(j.body.trades));
   ck("and is queued as its own question",
     db.prepare("SELECT COUNT(*) AS n FROM crm_unmapped WHERE source='jobnimbus'").get().n > 0);
@@ -217,8 +219,51 @@ console.log("\n-- through the route --");
     { method: "POST", headers: seat,
       body: JSON.stringify({ match: "type", value: "Defaulted", trades: ["roofing"] }) }), env);
   ck("but omitting it still defaults", noSrc.status === 200, String(noSrc.status));
-  ck("to jobnimbus",
-    db.prepare("SELECT source FROM crm_trade_rules WHERE match_value='Defaulted'").get().source === "jobnimbus");
+  // '*', NOT jobnimbus. The screen sends no source, so a jobnimbus default
+  // meant every rule an account saved was filed against a CRM they might not
+  // use -- accepted, shown in their list, and firing for nobody.
+  ck("to every CRM rather than to one of them",
+    db.prepare("SELECT source FROM crm_trade_rules WHERE match_value='Defaulted'").get().source === "*");
+  ck("and '*' is accepted when asked for by name",
+    (await worker.fetch(new Request("https://api.subsub.work/api/crm-rules",
+      { method: "POST", headers: seat,
+        body: JSON.stringify({ source: "*", match: "tag", value: "Gutters only", trades: ["gutters"] }) }), env)).status === 200);
+
+  // The default has to FIRE on both, which is the half a stored-value
+  // assertion cannot see. `Defaulted` is a type rule with no source.
+  const dg = await hook("generic", { externalId: "ANY-1", title: "x", type: "Defaulted",
+    date: "2026-10-14", address: "1 A St" });
+  const dj = await hook("jobnimbus", { jnid: "ANY-2", name: "x", type: "Defaulted",
+    date_start: 1791936000, address_line1: "2 B St" });
+  ck("an any-CRM rule fires on the generic receiver",
+    dg.body.trades.join(",") === "roofing", JSON.stringify(dg.body.trades));
+  ck("and on a named one, from the same single rule",
+    dj.body.trades.join(",") === "roofing", JSON.stringify(dj.body.trades));
+
+  // Answering a word clears it wherever it arrived from, or the queue row
+  // survives being answered and somebody presses it again, and again.
+  for (const src of ["generic", "jobnimbus"]) {
+    db.prepare(`INSERT INTO crm_unmapped (id, account_id, source, match_kind, match_value, hits, last_seen)
+                VALUES (?, 'acc_gc', ?, 'type', 'Two Places', 2, datetime('now'))`).run(`u_${src}`, src);
+  }
+  await worker.fetch(new Request("https://api.subsub.work/api/crm-rules",
+    { method: "POST", headers: seat,
+      body: JSON.stringify({ match: "type", value: "Two Places", trades: ["roofing"] }) }), env);
+  ck("answering an unmapped word clears it for every CRM",
+    db.prepare("SELECT COUNT(*) AS n FROM crm_unmapped WHERE match_value='Two Places'").get().n === 0,
+    String(db.prepare("SELECT COUNT(*) AS n FROM crm_unmapped WHERE match_value='Two Places'").get().n));
+
+  // And a narrowed answer clears only its own, because it only fixes its own.
+  for (const src of ["generic", "jobnimbus"]) {
+    db.prepare(`INSERT INTO crm_unmapped (id, account_id, source, match_kind, match_value, hits, last_seen)
+                VALUES (?, 'acc_gc', ?, 'type', 'One Place', 2, datetime('now'))`).run(`v_${src}`, src);
+  }
+  await worker.fetch(new Request("https://api.subsub.work/api/crm-rules",
+    { method: "POST", headers: seat,
+      body: JSON.stringify({ source: "jobnimbus", match: "type", value: "One Place", trades: ["roofing"] }) }), env);
+  ck("a narrowed answer leaves the other CRM's copy open",
+    db.prepare("SELECT source FROM crm_unmapped WHERE match_value='One Place'").all()
+      .map((r) => r.source).join(",") === "generic");
 
   // A typo in a pasted URL should say so, not 404 into silence.
   const bad = await hook("acculynx", { id: "1" });

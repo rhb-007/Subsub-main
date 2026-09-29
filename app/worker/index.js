@@ -22,7 +22,7 @@ import { sendSms, toE164 } from "./sms.js";
 // be labelled urgent and call somebody out at the account's expense.
 import { severityOf } from "../shared/emergency.js";
 import { validateIngest, SOURCES } from "../shared/ingest.js";
-import { tradesFor, validRule } from "../shared/crmmap.js";
+import { tradesFor, validRule, ANY_SOURCE } from "../shared/crmmap.js";
 import { SOURCE_PRESETS, isSource, unwrap, translate } from "../shared/crmsources.js";
 // The same fifty states the browser offers, so a client that sends
 // something else -- an old build, a script, a typo that got through --
@@ -10622,9 +10622,12 @@ app.post("/api/v1/hooks/:source/:token", async (c) => {
   let rules = [];
   try {
     const { results } = await c.env.DB.prepare(
+      // A rule is for every CRM unless it names one, so this reads both.
+      // Reading only `source = ?` is what made a rule saved from the screen
+      // -- which names no CRM -- fire for nobody.
       `SELECT match_kind, match_value, trades FROM crm_trade_rules
-        WHERE account_id = ? AND source = ?`
-    ).bind(accountId, source).all();
+        WHERE account_id = ? AND (source = ? OR source = ?)`
+    ).bind(accountId, source, ANY_SOURCE).all();
     rules = (results || []).map((r) => ({
       match: r.match_kind, value: r.match_value, trades: parseJson(r.trades, []),
     }));
@@ -10724,10 +10727,16 @@ app.post("/api/crm-rules", requireRole("admin", "pm"), async (c) => {
   // somebody else's words -- the worst of both. Silence is only safe when
   // nothing was asked; here something was, and it was not understood.
   const asked = String(b?.source || "").toLowerCase();
-  if (asked && !isSource(asked)) {
+  if (asked && asked !== ANY_SOURCE && !isSource(asked)) {
     return c.json({ error: "unknown_source", supported: Object.keys(SOURCE_PRESETS) }, 400);
   }
-  const source = asked || "jobnimbus";
+  // Every CRM unless one was named. The old default was `jobnimbus`, and
+  // since the screen names no source that made every rule an account saved a
+  // JobNimbus rule -- firing for nobody who posts through anything else, and
+  // not even clearing the queue row, because the DELETE below is scoped the
+  // same way. A default that has to be discovered to be corrected is not a
+  // default, it is a trap, and this one could not be discovered at all.
+  const source = asked || ANY_SOURCE;
 
   try {
     await c.env.DB.prepare(
@@ -10740,10 +10749,20 @@ app.post("/api/crm-rules", requireRole("admin", "pm"), async (c) => {
     // Answering the question clears it from the queue. Leaving it would make
     // the list read as work still to do, which is how a queue stops meaning
     // anything.
-    await c.env.DB.prepare(
-      `DELETE FROM crm_unmapped
-        WHERE account_id = ? AND source = ? AND match_kind = ? AND lower(match_value) = lower(?)`
-    ).bind(accountId, source, rule.match, rule.value).run();
+    //
+    // An any-CRM rule answers the word wherever it arrived from, so it clears
+    // every source's copy of it; a narrowed rule clears only its own. Getting
+    // this wrong is not cosmetic: a row that survives being answered is a
+    // button somebody presses again, and again.
+    await (source === ANY_SOURCE
+      ? c.env.DB.prepare(
+        `DELETE FROM crm_unmapped
+          WHERE account_id = ? AND match_kind = ? AND lower(match_value) = lower(?)`
+      ).bind(accountId, rule.match, rule.value)
+      : c.env.DB.prepare(
+        `DELETE FROM crm_unmapped
+          WHERE account_id = ? AND source = ? AND match_kind = ? AND lower(match_value) = lower(?)`
+      ).bind(accountId, source, rule.match, rule.value)).run();
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;

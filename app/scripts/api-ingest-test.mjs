@@ -331,5 +331,74 @@ console.log("\n-- a token reaches its own account and no other --");
   ck("and another account's token cannot be revoked", cross.status === 404, String(cross.status));
 }
 
+// ---- the published page is the third record -------------------------------
+//
+// `shared/ingest.js` exists because three things have to agree about the
+// fields and they get written by different hands at different times: the
+// route, the tests, and the DOCUMENTATION. Two of those were checked. A field
+// required by the route and optional on the page is an integration that fails
+// at 2am against a page saying it should work -- and nothing was reading the
+// page.
+//
+// It found one immediately: the page documented the header endpoint and not
+// the webhook address at all, which is the half every CRM and every automation
+// builder actually uses.
+{
+  console.log("\n-- and the docs say what the route does --");
+  const { readFileSync } = await import("node:fs");
+  const { SOURCE_PRESETS } = await import("../shared/crmsources.js");
+  const { REQUIRED_FIELDS, OPTIONAL_FIELDS } = await import("../shared/ingest.js");
+  const docs = readFileSync(new URL("../../developers.html", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+  // `docs.includes(f)` is not this assertion, and proving that took a
+  // mutation: deleting the whole `generic` ROW from the receivers table left
+  // the word in two paragraphs of prose below it, and the check passed. A
+  // field or a source is documented when it has an entry SOMEBODY CAN READ
+  // OFF A TABLE, not when the string appears on the page -- and "date" appears
+  // on this page a dozen times.
+  //
+  // Read off the CELLS rather than pattern-matching the shapes a row can take.
+  // The first version matched three of them and missed
+  // `<code>address</code> <em>or</em> <code>propertyId</code>` -- documented
+  // perfectly well, reported as missing. A test that is wrong about where a
+  // thing is documented sends somebody to add a row that is already there.
+  const cells = (docs.match(/<td>[\s\S]*?<\/td>/g) || []);
+  const inTable = (field) => cells.some((td) => td.includes(`<code>${field}</code>`));
+  for (const f of REQUIRED_FIELDS) {
+    ck(`the docs give the required field ${f} a row`, inTable(f));
+  }
+  for (const f of OPTIONAL_FIELDS) {
+    ck(`and the optional field ${f}`, inTable(f));
+  }
+
+  // A source SubSub can translate for and does not document is a CRM whose
+  // customers are told to use `generic` and map fields by hand for nothing.
+  // Scoped to the receivers table: prose mentioning a source is not a row
+  // saying what it is for.
+  const sec = docs.slice(docs.indexOf("<h2>No header?"));
+  const recvTable = sec.slice(0, sec.indexOf("</table>") + 8);
+  for (const src of Object.keys(SOURCE_PRESETS)) {
+    ck(`every receiver has a row of its own: ${src}`,
+      new RegExp(`<td><code>${src}</code></td>`).test(recvTable));
+  }
+
+  // The route a CRM's webhook step can actually reach, with the token in the
+  // path because there is no field for a header.
+  ck("the webhook address is documented",
+    /\/api\/v1\/hooks\/generic\//.test(docs));
+  ck("and it says why it exists rather than just showing it",
+    /Authorization/.test(docs) && /header/i.test(docs));
+  // Its reply is the only place somebody setting up sees the mapping fail
+  // while they are still looking at it.
+  ck("needsTrades is documented", docs.includes("needsTrades"));
+
+  // The docs send somebody to a panel by name. A heading that has been
+  // renamed since is a set of directions that dead-ends on their own screen.
+  const named = (docs.match(/My account → Profile → ([^<]+)</) || [])[1];
+  ck("the docs name the panel to make a token on", !!named, String(named));
+  ck("and that heading exists in the app", !!named && app.includes(`<h4>${named.trim()}</h4>`), String(named));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

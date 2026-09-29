@@ -187,7 +187,20 @@ export const SOURCE_PRESETS = {
   // but cannot set an Authorization header -- which is most automation
   // builders' webhook step, and any in-house script.
   generic: {
-    label: "Your own system",
+    // Three strings, because they go in three places with different jobs, and
+    // one field doing all three produced "This Your own system record is
+    // missing externalId" in a refusal.
+    //
+    //   label -- a noun inside a sentence: "This job record is missing ...".
+    //   short -- a name inside a row: "... from your own system".
+    //   pick  -- the option somebody chooses on screen, which has to TEACH,
+    //            because "generic" and "any CRM" are both true and useless.
+    //
+    // `short` falls back to `label` and `pick` to `short`, so a preset for a
+    // named CRM -- where all three are just its name -- needs only `label`.
+    label: "job",
+    short: "your own system",
+    pick: "Anything else — Zapier, Make, n8n, your own script",
     verified: true,
     wrap: ["data", "job", "payload"],
     dateFormat: "iso",

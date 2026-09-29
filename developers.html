@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SubSub API — post scheduled jobs from your CRM</title>
-<meta name="description" content="Post scheduled jobs straight into SubSub from JobNimbus or any CRM. One endpoint, a token you create in your account, and the job arrives ready to assign contractors to.">
+<meta name="description" content="Post scheduled jobs straight into SubSub from any CRM, or from Zapier, Make or your own code. A token you create in your account, and the job arrives ready to assign contractors to.">
 <link rel="canonical" href="https://subsub.work/developers">
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
@@ -405,12 +405,13 @@ body.nav-open{overflow:hidden}
 <p class="dev-lede">
   When a job gets scheduled in your CRM, send it here. It arrives in SubSub as a job with its
   trades unassigned — which is the queue you open SubSub to clear — and you pick who does the work.
-  One endpoint, one token, no SDK.
+  One token, no SDK — and two ways in, because most of the systems that would send you a job
+  cannot set an HTTP header.
 </p>
 
 <div class="dev-note">
   <p><strong>The API is part of the Scale plan.</strong> Create your token in SubSub under
-  <strong>My account → Profile → API tokens</strong>. It is shown once, when you create it:
+  <strong>My account → Profile → Connect your CRM</strong>. It is shown once, when you create it:
   SubSub stores only a fingerprint of it, so nobody here can read it back to you.</p>
 </div>
 
@@ -419,13 +420,87 @@ body.nav-open{overflow:hidden}
 Authorization: Bearer ssk_your_token_here
 Content-Type: application/json</code></pre>
 
+<h2>No header? Use the webhook address</h2>
+<p>
+  Most CRMs and automation builders have a step that takes <em>a URL and nothing else</em>. There is
+  no field for an <code>Authorization</code> header, so a token that can only arrive in a header
+  cannot arrive at all. For those, the token travels in the path:
+</p>
+<pre class="dev-pre"><code>POST https://api.subsub.work/api/v1/hooks/generic/&lt;your-webhook-token&gt;
+Content-Type: application/json</code></pre>
+<p>
+  SubSub builds that address for you — it is on the same panel as the token, beside it, at the
+  moment you create it. It is not a weaker door: every check the header endpoint makes, this one
+  makes. But the token is <em>in</em> the address, so treat the whole URL like a password.
+</p>
+<p>
+  The segment before the token names <strong>which system is sending</strong>, and that is the only
+  thing it changes: SubSub reads that system's field names instead of its own.
+</p>
+<table class="dev-tbl">
+  <thead><tr><th>Use</th><th>For</th><th>Field names it expects</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>generic</code></td>
+      <td>Zapier, Make, n8n, your own script — and any CRM not listed below</td>
+      <td>SubSub's own, the ones in the tables on this page</td>
+    </tr>
+    <tr>
+      <td><code>jobnimbus</code></td>
+      <td>JobNimbus automations</td>
+      <td>Theirs. <code>jnid</code>, <code>date_start</code>, <code>address_line1</code> and the
+      rest — nothing to map.</td>
+    </tr>
+  </tbody>
+</table>
+<p>
+  <strong>A system with no entry of its own is not unsupported.</strong> It uses
+  <code>generic</code>, and whatever sends the request maps its fields onto SubSub's on the way out
+  — in Zapier or Make that is the webhook step's own field mapping, and it takes a minute. An entry
+  is added above when somebody has a real payload from that system in front of them: inventing
+  plausible field names would produce an integration that looks supported and fails silently on
+  first contact, which is worse for everybody than saying <code>generic</code>.
+</p>
+
+<h3>Trades arrive as your own words</h3>
+<p>
+  No CRM has a concept of a trade. What yours sends is a job type, a status and tags — your own
+  words, and nothing in them means <code>roofing</code> until somebody says so. So the webhook
+  address does not ask for <code>trades</code>. It reads those words and looks them up against the
+  rules on your account, under <strong>My account → Profile → What your CRM calls things</strong>.
+  Rules apply to every system you post from, so it is one list however many you connect.
+</p>
+<p>
+  <strong>A job whose words match nothing still arrives.</strong> It lands with no trades, the reply
+  says so, and the word goes on a list on that same screen where one tap answers it. Refusing the
+  job would be worse in the way that is hardest to notice: your CRM would not get a
+  <code>200</code>, so it would retry, so it would keep not getting one — and nobody would be told
+  the work never reached SubSub.
+</p>
+<pre class="dev-pre"><code>HTTP/1.1 201 Created
+
+{
+  "ok": true,
+  "source": "generic",
+  "duplicate": false,
+  "jobId": "5b0f…",
+  "trades": [],
+  "needsTrades": true,
+  "unmapped": ["type:Roof Replacement"],
+  "url": "https://app.subsub.work/?job=5b0f…"
+}</code></pre>
+<p>
+  Watch <code>needsTrades</code> while you are still setting up. It is the difference between a job
+  that landed ready to assign and one waiting on a word nobody has translated yet.
+</p>
+
 <h2>A complete example</h2>
 <pre class="dev-pre"><code>curl -X POST https://api.subsub.work/api/v1/jobs \
   -H "Authorization: Bearer $SUBSUB_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "externalId": "JN-1041",
-    "source": "jobnimbus",
+    "externalId": "CRM-1041",
+    "source": "generic",
     "title": "Reroof — 14 Alder Way",
     "trades": ["roofing", "gutters"],
     "date": "2026-10-14",
@@ -504,6 +579,9 @@ Content-Type: application/json</code></pre>
     <td>Size of the building.</td></tr>
   <tr><td><code>materialSource</code>, <code>materialsPaidBy</code> <span class="dev-opt">optional</span></td>
     <td>string</td><td>Where materials come from and who pays for them.</td></tr>
+  <tr><td><code>materialSupplier</code>, <code>materialBranch</code> <span class="dev-opt">optional</span></td>
+    <td>string</td><td>The supply house and which branch of it. Accepted and stored; a job with
+    neither is the ordinary case.</td></tr>
   <tr><td><code>notes</code> <span class="dev-opt">optional</span></td><td>string</td>
     <td>Anything else worth carrying across.</td></tr>
 </table>
