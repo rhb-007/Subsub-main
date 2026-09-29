@@ -2109,6 +2109,19 @@ refactor.
   The four documents are the **compliance pack**, which is what a general
   contractor calls them when they ask.
 
+  **And "Get started" lands on the PLANS, wherever it is said.** It is the
+  site's one call to action, in the header of every page and the body of
+  several, and choosing a plan is the first question `get-started.html` asks —
+  so a button that skips it drops somebody into a form whose first field is
+  the thing the page they just left was helping them decide. Same reasoning
+  the app's own sign-in card already follows. `developers.html` was the one
+  that got it wrong, sending a reader who had just finished an API reference
+  straight into setup. The one exception is **pricing.html itself**, where the
+  reader has already chosen and the button is the way onward; a Get started
+  there pointing back at the page it sits on is a button that does nothing.
+  `test:discover` reads it off disk rather than from a list, so a page that
+  grows a Get started tomorrow is in scope the moment it exists.
+
   **Two doors, because two people land on the same facts with opposite
   problems.** A subcontractor checking what they need, and a hiring contractor
   checking what to ask for. `ASKED_ANYWAY` is the bridge between them: the four

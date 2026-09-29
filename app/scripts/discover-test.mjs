@@ -55,6 +55,45 @@ const footerOf = (html) => {
   return a < 0 || b < 0 ? "" : html.slice(a, b);
 };
 
+// Where "Get started" goes, on every page that says it.
+//
+// It is the site's one call to action, repeated in the header of every page
+// and in the body of several, and it has to land in the same place every
+// time: the PLANS. Choosing one is the first question `get-started.html`
+// asks, so a button that skips it drops somebody into a form whose first
+// field is the thing the page they just left was there to help them decide.
+// It is the same reasoning the app's own sign-in card already follows, where
+// "Don't have an account? See plans and sign up" goes to /pricing rather
+// than into setup.
+//
+// The exception is pricing.html itself, where the reader has ALREADY chosen
+// and the button is the way onward -- a "Get started" there pointing back at
+// the page it is on would be a button that does nothing.
+//
+// Read off disk, not from a list: a page that grows a Get started tomorrow is
+// in scope the moment it exists. `developers.html` was the one that got this
+// wrong, sending somebody who had just read an API reference straight into
+// setup.
+console.log("\nGet started goes to the plans, wherever it is said");
+{
+  const CTA = /<a\b[^>]*href="([^"]+)"[^>]*>\s*Get started[^<]*<\/a>/gi;
+  const pages = readdirSync(root).filter((f) => f.endsWith(".html")).sort();
+  const wrong = [];
+  let found = 0;
+  for (const name of pages) {
+    const html = read(name);
+    for (const m of html.matchAll(CTA)) {
+      found++;
+      const href = m[1];
+      // On the plans page itself the button goes forward, not in a circle.
+      const want = name === "pricing.html" ? "get-started.html" : "pricing.html";
+      if (!href.startsWith(want)) wrong.push(`${name} -> ${href}`);
+    }
+  }
+  ck("the site says it in several places", found >= 10, String(found));
+  ck("and every one of them lands on the plans", wrong.length === 0, wrong.join(" | "));
+}
+
 console.log("\nthe footer carries it, on every page that has a footer");
 ck("there are pages to check", FOOTER_PAGES.length >= 10, String(FOOTER_PAGES.length));
 for (const name of FOOTER_PAGES) {
