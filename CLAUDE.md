@@ -2313,6 +2313,37 @@ refactor.
   The production branch today is `claude/hello-24aree`, which is also the
   repository's only branch, so a push to it is live.
 
+- **`VITE_API_BASE` is the one build value the console does not need and the app
+  cannot live without.** `api.js` falls back to a relative `/api` so a dev build
+  can let Vite proxy it. The customer app in production is static files on Pages
+  with nothing behind them to proxy that, so `/api` hits the static site and
+  every call 404s.
+
+  Which does not look like a build problem from the outside. It presents as
+  **"Couldn't reach SubSub. Check your connection"** on sign-in, and as **every
+  tenant subdomain wearing SubSub's own branding** — because `subdomainBrand`
+  comes from `/api/account-by-subdomain/:sub`, and a lookup that cannot land
+  falls through to `GENERIC_BRAND`, which is exactly what that fallback is
+  written to do when a hostname belongs to nobody. One missing variable, two
+  symptoms, neither of them naming it.
+
+  **The console gets away with the same default, and that is what hid it.** It
+  is a Worker, and `worker-admin.js` forwards `/api/*` to the API over a service
+  binding; Pages has nothing to forward with. `deploy-app.yml` was written by
+  reading `deploy-admin.yml`'s env block, which does not set it and does not
+  need to, so the gap was inherited from a file that was correct.
+
+  Two guards, and **the second is the one that matters**. The value must be
+  absolute, because relative is the failure and relative is also the default —
+  a default that produces a dead app is not a default. And the **built bundle
+  must contain it**, grepped out of `dist/assets` the way the is-this-the-console
+  check beside it works, because a variable that is set and does not reach the
+  bundle looks identical to one that does. That is what was missing: a green
+  run, the correct bundle, and every call in it pointed at a path that does not
+  exist. **Prove it from the artifact, never from the variable** — which is a
+  rule this file already had, applied to one thing and not to the thing beside
+  it.
+
 - **The customer app and the staff console are one bundle built twice, so their
   two path lists have to agree.** Same `app/src`, same `app/shared`, same
   `index.html`, same vite config; only `VITE_BUILD` decides which comes out, and

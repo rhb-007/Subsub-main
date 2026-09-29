@@ -93,6 +93,22 @@ for (const list of [app, admin, api]) {
 
 // The consequence of getting this one wrong is the whole product's front door.
 const appSrc = read("deploy-app.yml");
+
+// THE OUTAGE THIS PINS. api.js falls back to a relative "/api" so a dev build
+// can let Vite proxy it. The customer app in production is static files on
+// Pages with nothing behind them to proxy that, so "/api" hits the static site
+// and every call 404s -- sign-in included, which presents as "Couldn't reach
+// SubSub" and as every tenant subdomain wearing SubSub's own branding, because
+// the branding lookup is one of the calls that cannot land.
+//
+// The console next door does NOT need this and that is exactly what hid it:
+// worker-admin.js forwards /api/* over a service binding, so the same default
+// is correct there. A workflow written by reading that one inherits the gap.
+ck("the customer deploy sets VITE_API_BASE", /VITE_API_BASE/.test(appSrc));
+ck("and proves it reached the bundle rather than trusting the variable",
+  /grep -rqF "\$API_BASE" dist\/assets/.test(appSrc));
+ck("and refuses a relative one, which is the default and the failure",
+  /must be absolute/.test(appSrc));
 ck("the customer deploy never sets VITE_BUILD",
   !/^\s+VITE_BUILD\s*:/m.test(appSrc));
 ck("and it still proves what it built from the bundle",
