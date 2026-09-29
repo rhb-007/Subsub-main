@@ -400,5 +400,63 @@ console.log("\n-- a token reaches its own account and no other --");
   ck("and that heading exists in the app", !!named && app.includes(`<h4>${named.trim()}</h4>`), String(named));
 }
 
+// ---- and the PRICING page is the fourth record ----------------------------
+//
+// The route answers `scale_required`, so the API is a Scale feature. A pricing
+// page that does not say so sells Scale without its reason to exist; one that
+// promises it on Basic sells a plan the server refuses, which is the
+// screen-that-lies rule pointed at the page somebody buys from. The same
+// three-records argument the block above makes about the fields applies to
+// the plan, and nothing was reading this page either.
+{
+  console.log("\n-- and the pricing page agrees about the plan --");
+  const { readFileSync } = await import("node:fs");
+  const pricing = readFileSync(new URL("../../pricing.html", import.meta.url), "utf8");
+  const app2 = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+  // One name across the marketing page, the docs page and the panel in the
+  // app. `Developer tools` was dropped precisely because it tells a general
+  // contractor setting up a Zapier step that the feature is not for them, and
+  // a fourth name here would put that reading straight back.
+  const NAME = "Connect your CRM";
+  ck("the app's panel is still called that", app2.includes(`<h4>${NAME}</h4>`), NAME);
+  ck("and so is the docs page", docsName() === NAME, String(docsName()));
+  function docsName() {
+    return (readFileSync(new URL("../../developers.html", import.meta.url), "utf8")
+      .match(/<h1>([^<]+)<\/h1>/) || [])[1];
+  }
+
+  // Read the ROW, not the page. The words appear in the plan card and in the
+  // FAQ below, so `pricing.includes(NAME)` passes with the comparison grid
+  // untouched -- the same mutation that caught the `generic` row above.
+  const rows = pricing.match(/<tr>[\s\S]*?<\/tr>/g) || [];
+  const row = rows.find((r) => /<th>[^<]*Connect your CRM/.test(r));
+  ck("the comparison grid gives it a row", !!row, row ? row.trim().slice(0, 70) : "no row");
+  const tds = row ? (row.match(/<td[^>]*>[\s\S]*?<\/td>/g) || []) : [];
+  ck("Basic is marked as not having it", tds.length === 2 && /class="no"/.test(tds[0]),
+    tds[0] || "no Basic cell");
+  ck("and Scale as having it", tds.length === 2 && /class="yes"/.test(tds[1]),
+    tds[1] || "no Scale cell");
+
+  // The cards are what people read; the grid is what they check afterwards.
+  // Sliced, because an assertion over the whole page cannot tell the two
+  // cards apart and would pass with the benefit on the wrong one.
+  const lead = pricing.indexOf('<div class="plan lead">');
+  ck("the plans are on the page to be told apart", lead > 0, String(lead));
+  const basicCard = pricing.slice(pricing.indexOf('<div class="plan">'), lead);
+  const scaleCard = pricing.slice(lead, pricing.indexOf("</div>\n      </div>", lead) + 1);
+  ck("the Scale card lists it", scaleCard.includes(NAME));
+  ck("and the Basic card does not", !basicCard.includes(NAME));
+
+  // Easy Pay pays SUBCONTRACTORS. On a page whose every other line says
+  // subcontractor, "Easy Pay contractors" reads as paying the hiring side --
+  // the opposite of what it does. It was in three places, so it is pinned in
+  // the two that ship copy.
+  ck("Easy Pay names the side that gets paid, on the pricing page",
+    !/Easy Pay contractors/.test(pricing) && /Easy Pay/.test(pricing));
+  ck("and in the app's own plan list",
+    !/Easy Pay contractors/.test(app2) && /Easy Pay/.test(app2));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
