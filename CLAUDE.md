@@ -1233,9 +1233,13 @@ refactor.
   thing that does not (money — there is no funded side at all), and the legal
   shape, which is the decision everything else hangs off. Its two load-bearing
   conclusions, recorded here because they are the ones a later pass would get
-  wrong: **SubSub must never hold the funds itself** — a trust account of our
-  own is money transmission and fifty state licences, so a partner holds them
-  and we send instructions — and **an instant-payout fee is only honest when
+  wrong: **a trust account of our own is money transmission and fifty state
+  licences**, so the funds sit with a licensed partner and we send
+  instructions — though "we never hold them" does not survive the escrow
+  requirement intact, and §10.3 says why: the only Stripe shape that holds
+  money between funding and release leaves it in a Stripe balance attributed
+  to the platform, with SubSub as merchant of record. That tension is the
+  legal question rather than a detail under it. And **an instant-payout fee is only honest when
   it buys a genuinely faster rail.** If we are already holding the money
   against a verified milestone and a clear waiver, any wait is one we
   invented, and charging to remove it is a fee for nothing. Paying a sub

@@ -75,7 +75,8 @@ the one that requires the licences. Do not build this.
 ### (b) A licensed partner holds the funds — yes
 
 Use a payments platform whose own licences cover the flow, so **SubSub never
-takes possession of customer money**. The GC pays into an account the partner
+takes possession of customer money** — a claim §10.3 qualifies once escrow is
+actually required, and the qualification is the thing to take to counsel. The GC pays into an account the partner
 holds in the GC's or the subcontractor's name; SubSub sends instructions; the
 partner moves the money and is the party regulated for doing so.
 
@@ -343,7 +344,172 @@ These are yours, not engineering's:
    is useful on its own and making it conditional on money moving would take
    away what already works.
 
-## 10. Build order
+## 10. Stripe Connect, concretely
+
+**This is not a new integration.** `app/worker/billing.js` already talks to
+Stripe over plain `fetch`, because the Node SDK wants Node's `crypto` and
+`http` and a Worker has neither. The two primitives Connect needs are both
+already written and already in production for subscription billing:
+
+- **`stripeCall(env, path, { method, params, idempotencyKey })`** — form
+  encoding including nested params, bearer auth, an `Idempotency-Key` header,
+  and errors that carry Stripe's own code.
+- **`verifyStripeWebhook(raw, sigHeader, secret)`** — HMAC over the exact
+  bytes via SubtleCrypto, a 300-second replay window, constant-time compare.
+
+`POST /api/stripe/webhook` exists, is already on the public-route exemption
+list, and already dedupes by event id against `stripe_events` — insert the id,
+and a failed insert *is* the duplicate check.
+
+So Connect adds **paths and event types**, not infrastructure. What genuinely
+has to be built is below.
+
+### 10.1 The three changes to what exists
+
+**`stripeCall` needs to be able to act as a connected account.** Calls made on
+behalf of one carry `Stripe-Account: acct_...`. Today the headers are fixed.
+One option — `account` — sets that header, and it is the only change to
+`billing.js`.
+
+**A second webhook route and a second secret.** Connect events are delivered
+to their own endpoint with its own signing secret, and they carry an `account`
+field naming whose they are. Keep them apart: `/api/stripe/connect-webhook`
+with `STRIPE_CONNECT_WEBHOOK_SECRET`, added to the exemption list beside the
+first. One endpoint for both would make every handler ask *is this ours or a
+connected account's* — two records in one switch, which is the shape this
+repository keeps recording.
+
+**`stripe_events` is reused as-is.** Event ids are unique across both
+endpoints, so the same dedupe table covers both with no migration.
+
+### 10.2 Onboarding a subcontractor, which is the long pole
+
+1. `POST /v1/accounts` with `controller` properties — the current form of what
+   used to be `type: "express"`: Stripe collects the identity data, hosts the
+   onboarding UI, and takes the losses. Store the returned `acct_...` on
+   `payout_accounts.processor_account_id`.
+2. `POST /v1/account_links` with `type: "account_onboarding"` and a
+   `refresh_url` / `return_url` pointing back into the app. Send the sub to
+   the URL it returns. Stripe collects legal name, date of birth, SSN last
+   four, business details and a bank account.
+3. `account.updated` arrives on the Connect webhook. Read `charges_enabled`,
+   `payouts_enabled` and `requirements` and write `kyc_status`.
+
+**The trap: an account link is single-use and expires in minutes.** Storing
+one and rendering it as a button gives somebody a dead link with nothing
+saying why. *Resume setup* must mint a fresh link on every press.
+
+**The second trap: `payouts_enabled` can go false again.** Stripe asks for more
+documents as volume grows, so a sub who was payable last month may not be
+today. `requirements.currently_due` is the list, and the screen has to be able
+to say what is being asked for rather than just refusing.
+
+### 10.3 Funding, and the shape that actually does escrow
+
+**Separate charges and transfers.** The GC pays into the *platform* account:
+`POST /v1/payment_intents` with `transfer_group` set to the work order id and
+`payment_method_types: ["us_bank_account"]` for ACH. The money sits in the
+platform's Stripe balance. When a milestone is verified, a transfer moves the
+net to the sub's connected account.
+
+This is the only one of Stripe's three shapes that does escrow, and it is
+worth saying why the other two do not. A **destination charge** pays the sub at
+the moment the GC pays, so there is nothing held. **Destination with manual
+payouts** puts the money in the *sub's* balance immediately — so the GC cannot
+get it back if the job goes wrong, and the sub holds money for work nobody has
+verified.
+
+**This partly revises §3, and the correction matters.** Saying SubSub "never
+holds the funds" is true of its bank account and not of this arrangement: in
+separate charges and transfers, the funds sit in a Stripe-held balance
+attributed to the platform, and SubSub is merchant of record. Stripe and its
+bank partners remain the regulated movers of money, which is most of the
+benefit — but the clean claim does not survive contact with the escrow
+requirement. **The tension between "hold the money" and "never hold the money"
+is the legal question**, not a detail underneath it, and it is the first thing
+to put to counsel.
+
+**The ACH trap, which is the expensive one.** `payment_intent.succeeded` on an
+ACH debit does **not** mean the money is irreversibly ours. A debit can be
+returned days later — insufficient funds, a closed account, a disputed
+authorisation — and the return arrives as `charge.failed` or a dispute long
+after the intent read as succeeded. Pay a sub out of funds that later reverse
+and the loss is real and ours.
+
+So `wo_funding.status` must go to `settled` off the right signal and not the
+optimistic one, and the product has a decision to make: hold releases until
+funds are genuinely settled (slower, safe), or release on succeeded and carry
+the risk (faster, and a real cost line). Card funding settles far faster and
+costs about 2.9%, which at these ticket sizes is a way to lose money at scale.
+
+### 10.4 Releasing, which the ledger already computes
+
+On `POST /api/milestones/:id/verify`, after the `wo_releases` row is written:
+
+```
+POST /v1/transfers
+  amount       = net_cents        ← already computed by releaseAmounts()
+  currency     = usd
+  destination  = acct_...
+  transfer_group = <work order id>
+  Idempotency-Key: rel_<releaseId>
+```
+
+Two things fall out for free. **There is no `application_fee_amount`** — that
+belongs to destination charges. With separate charges and transfers the fee is
+simply what does not leave: the GC paid `gross`, the sub receives `net`, and
+`retainage + fee` stays in the platform balance. `releaseAmounts()` already
+returns exactly those four numbers.
+
+And **the idempotency key is already modelled**. `wo_releases.idem_key` exists
+with a unique index, and the verify route already writes `rel:<milestoneId>`
+into it. Passing the same value to Stripe means a double-tapped verify cannot
+produce two transfers, on both sides of the wire, by construction.
+
+### 10.5 Payouts, and the honest instant fee
+
+Money in the sub's connected balance still has to reach their bank.
+
+- **Standard** — leave `payouts.schedule` on automatic. Stripe sweeps to their
+  bank on its own, one to two business days, **no fee**.
+- **Instant** — `POST /v1/payouts` with `method: "instant"` and
+  `Stripe-Account: acct_...`. Minutes, to an eligible debit card or bank.
+  Stripe charges about 1% with a minimum.
+
+**This is the §5 design falling straight out of the rails rather than being
+invented on top of them.** The free option is genuinely free and genuinely
+prompt because Stripe sweeps automatically; the fast option costs about what
+we would charge for it. Nobody is being charged to remove a wait we imposed.
+
+One gate: instant is only available against `instant_available` balance and an
+eligible destination. Read the balance and offer the button only when Stripe
+would honour it — a screen offering what the server will refuse is the lie
+QuickSend's W-9 line already exists to avoid.
+
+### 10.6 The events that matter
+
+On the Connect endpoint: `account.updated` (KYC state), `transfer.created`,
+`transfer.reversed`, `payout.paid`, `payout.failed`.
+
+On the existing endpoint: `payment_intent.succeeded`,
+`payment_intent.payment_failed`, and the ACH reversal events above.
+
+`payout.failed` is the one worth naming: it means the money went out and came
+back, the sub has not been paid, and **nobody finds out unless something
+says so.** Same class as the two-party handshake whose second side had no
+screen.
+
+### 10.7 It can be tested, and the seam is already there and unused
+
+`billing.js` reads `STRIPE_API_BASE`, overridable "for the same reason
+`RESEND_API_BASE` is: without it the only way to find out how this behaves
+when Stripe refuses something is to make Stripe refuse something."
+
+**Nothing uses it.** There is no test suite for the Stripe integration at all —
+the seam was built and never spent. Connect should be stubbed through it from
+the first route, and the existing billing paths are owed the same.
+
+## 11. Build order
 
 1. Partner chosen, counsel engaged, sandbox account.
 2. Migration 050 and `app/shared/pay.js` — the rules module, so the route,
