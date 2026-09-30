@@ -34,6 +34,9 @@ const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok 
 
 const { default: worker } = await import("../worker/index.js");
 const pay = await import("../shared/pay.js");
+const { PAYOUT_CONTROLLER, payoutAccountKey } = pay;
+// `ownCompanyId` in the Worker: the subcontractor account's own company row.
+const BAY_COMPANY = "cmp_own_acc_sub";
 const SCHEMA = readFileSync(new URL("../worker/schema.sql", import.meta.url), "utf8");
 const M050 = readFileSync(new URL("../worker/migrations/050_payout_accounts.sql", import.meta.url), "utf8");
 
@@ -219,9 +222,40 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
       !(noDash && stripeKyc) || stripeLoss,
       JSON.stringify({ noDash, stripeKyc, stripeLoss }));
   }
-  ck("and an idempotency key keyed on the company, so a double press cannot mint two",
-    /^payout-acct:/.test(made[0]?.headers["Idempotency-Key"] || ""),
-    made[0]?.headers["Idempotency-Key"]);
+  // THE KEY CARRIES THE CONTROLLER'S SHAPE, and that is not decoration.
+  //
+  // Stripe saves the status and body of the first request made under a key
+  // and replays them for 24 hours -- a refusal as faithfully as a success.
+  // The controller above shipped wrong once; it was corrected and deployed,
+  // and the panel then drew the identical refusal, because Stripe was
+  // answering the superseded request. A key that is only the company id
+  // cannot be got past, and on screen a replay and a live refusal are the
+  // same sentence.
+  //
+  // `/^payout-acct:/` was the assertion here and it passed either way, which
+  // is why the property below is asserted against `payoutAccountKey` itself
+  // rather than against a prefix.
+  {
+    const key = made[0]?.headers["Idempotency-Key"] || "";
+    ck("the idempotency key is the one shared/pay.js derives, not a second opinion",
+      key === payoutAccountKey(BAY_COMPANY), key);
+    ck("it is keyed on the company, so a double press cannot mint two",
+      key === payoutAccountKey(BAY_COMPANY) && key.includes(BAY_COMPANY), key);
+    ck("and on the controller, so a corrected controller is not answered by the old refusal",
+      key !== payoutAccountKey(BAY_COMPANY, { ...PAYOUT_CONTROLLER, losses: { payments: "application" } }),
+      key);
+    // Stripe's limit. A company id is not short and neither is the shape.
+    ck("and it fits in an idempotency key", key.length > 0 && key.length <= 255, key.length);
+  }
+  // Two properties of the derivation itself, because the integration check
+  // above holds for a key that is constant per company however it was built.
+  ck("the same company and the same controller give the same key",
+    payoutAccountKey("cmp_x") === payoutAccountKey("cmp_x"));
+  ck("two companies never share one",
+    payoutAccountKey("cmp_x") !== payoutAccountKey("cmp_y"));
+  ck("and reordering the controller is not a change",
+    payoutAccountKey("cmp_x", PAYOUT_CONTROLLER)
+      === payoutAccountKey("cmp_x", Object.fromEntries(Object.entries(PAYOUT_CONTROLLER).reverse())));
   ck("creating the account is the platform's own call, not one made AS them",
     !("Stripe-Account" in (made[0]?.headers || {})));
 

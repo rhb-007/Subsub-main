@@ -55,7 +55,7 @@ import { canHandOver, awaitingFrom, canDecide as canDecideTransfer,
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 // Whether somebody can actually be paid, decided once and read by the
 // routes, the webhook and the browser.
-import { payoutSummary, rowFromStripe } from "../shared/pay.js";
+import { payoutSummary, rowFromStripe, PAYOUT_CONTROLLER, payoutAccountKey } from "../shared/pay.js";
 import { coverState, coverProblemText, PAY_GATE_KINDS } from "../shared/paygate.js";
 import { problemsIn, checksFrom, findingsFor, allConfirmed,
   FINDING_STATES, CHECK_KINDS } from "../shared/doccheck.js";
@@ -1892,37 +1892,23 @@ async function connectedAccount(c, companyId) {
       // anybody, so `card_payments` would be asking them to be verified for
       // something this product will never do with them.
       capabilities: { transfers: { requested: "true" } },
-      // WHO CARRIES THE LOSSES IS NOT FREE TO CHOOSE HERE, and the first
-      // version of this got it wrong in the only way Stripe refuses outright:
-      //
-      //   "When stripe_dashboard[type]=none and requirement_collection=stripe,
-      //    Stripe must be liable for negative balances or refunds and
-      //    chargebacks."
-      //
-      // Three ways to satisfy that, and two are already refused in this
-      // product's own words. `requirement_collection: "application"` moves the
-      // compliance obligation onto SubSub along with disputes and negative
-      // balances, which is a different company rather than a nicer form.
-      // `stripe_dashboard: "express"` hands the subcontractor a Stripe-branded
-      // website to be sent to, which is the whole thing being avoided.
-      //
-      // So it is this one, and it is the better trade anyway: Stripe carries
-      // the negative balances, the refunds and the chargebacks rather than
-      // SubSub. `fees.payer` stays `application` -- who pays Stripe's fee and
-      // who eats a chargeback are separate questions.
-      controller: {
-        fees: { payer: "application" },
-        losses: { payments: "stripe" },
-        requirement_collection: "stripe",
-        stripe_dashboard: { type: "none" },
-      },
+      // Who carries the losses is not free to choose here, and this shipped
+      // wrong in the only way Stripe refuses outright. The controller and the
+      // reasoning now live in `shared/pay.js` beside the key it is hashed
+      // into, because they are one fact -- see PAYOUT_CONTROLLER there.
+      controller: PAYOUT_CONTROLLER,
       metadata: { company_id: companyId, account_id: c.get("auth").accountId },
     },
     // Two connected accounts for one company is two places money could go
     // with nothing saying which. The unique index is the half that holds when
     // two requests race; this is the half that makes an ordinary double-press
     // -- or two tabs open on the same screen -- cost nothing.
-    idempotencyKey: `payout-acct:${companyId}`,
+    //
+    // It carries the controller's shape, because Stripe replays a saved
+    // REFUSAL as faithfully as a saved success and a key that is only the
+    // company id would answer for terms we no longer send. `payoutAccountKey`
+    // says why at length.
+    idempotencyKey: payoutAccountKey(companyId),
   });
   await savePayoutRow(c.env, { companyId, acctId: acct.id, acct });
   return { acctId: acct.id, row: await payoutRow(c.env, companyId) };
@@ -1965,8 +1951,8 @@ app.post("/api/payouts/session", requireRole("admin"), async (c) => {
       ...payoutSummary(await payoutRow(c.env, companyId)) });
   } catch (err) {
     if (missingSchema(err)) return c.json(payoutMigration(), 503);
-    console.error("[payouts] session failed:", err?.message || err);
-    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+    console.error("[payouts] session failed:", err?.message || err, err?.replayed ? "(idempotent replay)" : "");
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err), replayed: !!err?.replayed }, 502);
   }
 });
 
@@ -2007,8 +1993,8 @@ app.post("/api/payouts/connect", requireRole("admin"), async (c) => {
     return c.json({ url: link.url });
   } catch (err) {
     if (missingSchema(err)) return c.json(payoutMigration(), 503);
-    console.error("[payouts] connect failed:", err?.message || err);
-    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+    console.error("[payouts] connect failed:", err?.message || err, err?.replayed ? "(idempotent replay)" : "");
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err), replayed: !!err?.replayed }, 502);
   }
 });
 

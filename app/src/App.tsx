@@ -15451,9 +15451,17 @@ function payoutErrorText(e) {
   // actually said. The route has always carried `detail`; the screen was
   // throwing it away.
   if (code === "stripe_failed") {
-    return e?.body?.detail
-      ? `Stripe refused that: ${e.body.detail}`
-      : "Stripe couldn't be reached just now. Try again in a moment.";
+    if (!e?.body?.detail) return "Stripe couldn't be reached just now. Try again in a moment.";
+    // A REPLAY IS NOT A FRESH ANSWER, and saying so is the whole point of
+    // carrying the flag this far. Stripe replays a saved refusal under the
+    // same idempotency key for 24 hours, so the identical sentence appears
+    // before and after the thing it complains about was fixed -- which reads
+    // as the fix not having worked. Naming it is the difference between
+    // waiting and going back round the same change again.
+    if (e?.body?.replayed) {
+      return `Stripe is repeating an earlier refusal rather than answering this attempt: ${e.body.detail}`;
+    }
+    return `Stripe refused that: ${e.body.detail}`;
   }
   return "That didn't work. Try again in a moment.";
 }

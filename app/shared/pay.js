@@ -143,3 +143,62 @@ export function rowFromStripe(acct) {
     disabledReason: acct?.requirements?.disabled_reason || null,
   };
 }
+
+// THE CONTROLLER EVERY CONNECTED ACCOUNT IS MINTED WITH, and the key that
+// request goes out under. They are one value because they are one fact, and
+// keeping them apart cost a day.
+//
+// `losses.payments` is `stripe` because Stripe validates the COMBINATION:
+// with `stripe_dashboard: none` and `requirement_collection: stripe` it
+// refuses anything else outright. The two alternatives are both refused in
+// this product's own words -- `requirement_collection: "application"` moves
+// the compliance obligation, the disputes and the negative balances onto
+// SubSub, which is a different company; an Express dashboard hands the
+// subcontractor a Stripe-branded website to be sent to, which is the whole
+// thing the embedded onboarding exists to avoid.
+export const PAYOUT_CONTROLLER = {
+  fees: { payer: "application" },
+  losses: { payments: "stripe" },
+  requirement_collection: "stripe",
+  stripe_dashboard: { type: "none" },
+};
+
+// Sorted, so reordering the literal above is not a change. Nested, so a
+// property added inside `losses` counts as one.
+const flatten = (o, prefix = "") =>
+  Object.entries(o || {})
+    .flatMap(([k, v]) => {
+      const key = prefix ? `${prefix}.${k}` : k;
+      return v && typeof v === "object" ? flatten(v, key) : [`${key}=${v}`];
+    })
+    .sort();
+
+// The idempotency key a connected account is minted under.
+//
+// STRIPE SAVES THE STATUS AND BODY OF THE FIRST REQUEST MADE UNDER A KEY AND
+// REPLAYS THEM FOR 24 HOURS -- a refusal as faithfully as a success. So a
+// key that is only the company id outlives the fix for whatever it refused:
+// the controller above was wrong once, it was corrected and deployed, and
+// the panel drew the identical sentence afterwards because Stripe was
+// answering the old request rather than the new one. Indistinguishable on
+// screen, and it cost two rounds.
+//
+// So the SHAPE is in the key. Both halves survive:
+//
+//   Same company, same controller -> same key, so an ordinary double press
+//   or two tabs on one screen still cannot mint two accounts, which is the
+//   whole reason the key exists.
+//
+//   Controller changed -> different key, which is exactly the case where the
+//   saved answer was given about terms we no longer offer.
+//
+// DERIVED RATHER THAN A VERSION SOMEBODY BUMPS, because a `v2` constant
+// beside the controller is two records of one fact: the next person to
+// change the controller gets a cached answer about the old one, silently,
+// which is the failure this is fixing. Only the controller goes in -- never
+// the company's email, which changes for its own reasons and would mint a
+// second connected account when it did.
+export function payoutAccountKey(companyId, controller = PAYOUT_CONTROLLER) {
+  const shape = flatten(controller).join(";").replace(/[^a-zA-Z0-9]+/g, "-");
+  return `payout-acct:${companyId}:${shape}`;
+}

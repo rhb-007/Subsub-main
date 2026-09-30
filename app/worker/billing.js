@@ -40,7 +40,8 @@ export async function stripeCall(env, path, { method = "POST", params, idempoten
   // must not carry it.
   if (account) headers["Stripe-Account"] = account;
   // Stripe deduplicates retries of the same key for 24 hours, which is what
-  // stops a double-tapped upgrade button becoming two subscriptions.
+  // stops a double-tapped upgrade button becoming two subscriptions -- and
+  // which also replays a saved refusal, see the `replayed` flag below.
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
 
   const body = params ? encode(params).join("&") : undefined;
@@ -54,6 +55,14 @@ export async function stripeCall(env, path, { method = "POST", params, idempoten
     const err = new Error(json?.error?.message || `stripe_${res.status}`);
     err.stripeCode = json?.error?.code;
     err.status = res.status;
+    // A REFUSAL CAN OUTLIVE THE FIX FOR IT. Stripe saves the status and body
+    // of the first request made under an idempotency key and replays them for
+    // 24 hours -- an error as faithfully as a success -- so a screen drawing
+    // Stripe's words says exactly the same sentence before and after the code
+    // that caused them changed. That is indistinguishable from the fix not
+    // having worked, and this header is the only thing that tells them apart,
+    // so it travels with the error rather than being dropped here.
+    err.replayed = res.headers.get("Idempotent-Replayed") === "true";
     throw err;
   }
   return json;
