@@ -221,6 +221,113 @@ refactor.
   computes to `start` — the rule is a guard, not the fix, and a test on it is a
   test that cannot fail. Which is what the first version of it was.
 
+- **An agreement is between TWO PARTIES, which is why it is no longer a column
+  on `companies`.** Insurance, a bond and a W-9 are the subcontractor's own
+  records: one certificate answers every client, so a boolean on the shared
+  company row is the right shape. `companies.contract` said "this company has
+  signed an agreement" with **nobody named** — so a roofer who signed with
+  Outerhome read as having a signed agreement on Cascade Management's roster
+  too, for a document Cascade had never sent and could not produce. Quietly
+  wrong since the start, and unmissable the moment SubSub offers a form with
+  both parties' names printed in it.
+
+  Migration 052, `agreements` keyed on the pair, `app/shared/agreement.js`.
+  `companies.contract` stays for the uploads that predate this and stops being
+  what decides anything.
+
+  **Two parties means two signatures.** A form signed by one side is not a
+  contract, and the side that wrote the terms is the side with the most reason
+  to be bound by them. The subcontractor signs where they already are —
+  submitting their documents — and the hiring account countersigns from the
+  roster. `inForce` is `countersigned` alone: a form the sub signed and nobody
+  countersigned is an offer that was never accepted, and it must not read as a
+  document on file. Same two-party shape as handover, completion and connect,
+  and `waitingOn` is one function so the two sides cannot both draw "waiting on
+  them" and stall forever.
+
+  **Requiring one is a choice that has to be made out loud, and issuing IS the
+  choice.** `DOC_KINDS` counted an agreement against every subcontractor on
+  every roster, so a sub whose client never sent one sat permanently short of
+  complete over a document only the hiring account could produce — the exact
+  permanently-amber failure `docs.js` exists to prevent, which is why
+  `OPTIONAL_KINDS` already excused it on the sub's own screens and *could not*
+  excuse it on the hiring side. `kindsFor` adds `contract` only when a live
+  agreement exists. There is deliberately **no separate `required` flag**: a
+  flag beside an agreement row is two records of one fact and they would
+  disagree. This does change what existing rosters read — some subs go from
+  amber to green — which was the accepted cost.
+
+  **The hash is of what they were shown.** Recomputed at signature from the
+  **stored** parties and terms, which are the same inputs the screen was
+  rendered from. Never carried over from issue, and never taken from the
+  request: a caller who could name the hash could sign one document and record
+  another — the same rule `/fund/confirm` follows about an amount.
+
+  **Everything is stamped, nothing is read live.** Template id *and version*,
+  the merged terms, and both parties as they read at issue. A company gets
+  renamed and an account changes its standard terms; a re-render that picked
+  either up afterwards would no longer match its own hash. Same rule as
+  `lien_waivers.governing_state`.
+
+  **`TEMPLATES` is keyed by id AND version, and a miss throws.** Keyed by id
+  alone, a version bump would silently re-render every agreement signed under
+  the old text using the new one: a different document, under a heading saying
+  it was signed. **The wrong contract still reads like a contract**, so nobody
+  would catch it by looking. The price is that superseded versions are never
+  deleted from `agreement-standard.js`.
+
+  **`canonicalText` is its own function, not "whatever the screen drew."** The
+  screen will grow a heading one day, and a hash that followed the layout would
+  stop matching every agreement signed before it.
+
+  **SubSub authors this one, and `waivers.js` still authors nothing.** The
+  reasons differ and both are load-bearing. A lien waiver has statutorily
+  prescribed wording in roughly a dozen states and a form that deviates can be
+  void. A subcontract has the opposite problem: no form is mandated, and
+  several of its most important clauses are **void by statute** in particular
+  states — anti-indemnity rules vary enormously, pay-if-paid is unenforceable
+  in many. So a clause that is ordinary in Washington can be unenforceable in
+  California, silently, and the document still looks right.
+
+  Two things follow. The **indemnity is deliberately narrow** — the sub's own
+  negligence, expressly not the hiring party's — because broad-form indemnity
+  is precisely what anti-indemnity statutes strike, so the widest version is
+  the one most likely to be thrown out. And there is **no pay-if-paid clause**,
+  which would also contradict the product's own stated reason for existing.
+
+  **`reviewed` is not something anybody gets for free**, the same rule the
+  licensing dataset runs on: an entry naming a real firm and a real date,
+  written by somebody who did not read the statute, reads exactly like one that
+  was read line by line. It is `null`, and the screen says so at the moment
+  somebody decides whether to rely on it — because an unreviewed form reads
+  exactly like a reviewed one.
+
+  **Uploading a signed agreement IS signing it**, and without that the "I'll
+  use my own paper" route was a dead end: the hiring account issued an
+  `uploaded` agreement, the screen told the subcontractor to upload their
+  signed copy, and nothing anywhere moved when they did. It sat at `sent` for
+  ever. The `contract` upload route advances it to `signed` and records which
+  file — **not** to in force, because the hiring account still has to say the
+  paper they got back is the form they sent, which is the same second
+  signature SubSub's own form takes.
+
+  **Still open: a lawyer has not read the text.** That is the one part of this
+  a build cannot supply.
+
+  **The panel renders for an admin or a project manager**, because that is what
+  `requireRole("admin","pm")` allows on every one of its routes. Using the
+  admin-only `canManage` — the obvious thing, since the panel beside it does —
+  would make the screen stricter than the route, which this file has already
+  called the same lie as looser.
+
+  **`ux_agreement_live` is PARTIAL**, on `('sent','signed','countersigned')`,
+  for the reason `ux_wo_transfer_live` is: a plain unique index would leave a
+  relationship whose first agreement was declined unable to have another, and
+  no index at all would let two arrive at once. The route's own pre-check
+  covers the sequential case and answers `already_issued` rather than
+  superseding a document the other party may be reading right now, so the index
+  is asserted **directly**.
+
 - **A signed subcontractor agreement is optional, because it is the hiring
   account's own paperwork.** Insurance, a bond and a W-9 are the subcontractor's
   own records and every client wants the same three. An agreement is the other

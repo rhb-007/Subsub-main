@@ -55,6 +55,7 @@ import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/a
 import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
   isOptionalDoc, docStatus as docStatusOf,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso } from "../shared/docs.js";
+import { agreementStateText, typedNameMatches } from "../shared/agreement.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -5921,6 +5922,8 @@ export default function SubSub() {
                 || null;
             })()}
             onInviteSent={refreshInvites}
+            canManage={can("contractors")} myName={me?.name || ""}
+            onAgreementChanged={() => hydrateAccount(account.id, currentUserId, { quiet: true })}
             jobs={jobs} onSaveNotes={saveNotes} onRequestDocs={requestDocs}
             onSetAuto={(on) => setAutoSchedule(selected.id, on)}
             onAskAuto={() => { setAskingAuto(selected); setSelected(null); }}
@@ -15470,7 +15473,7 @@ function payoutErrorText(e) {
   return "That didn't work. Try again in a moment.";
 }
 
-function HireablePanel({ section = "profile", accountName, requests = [], focus = null, focusN = 0, onRespond, onReload }) {
+function HireablePanel({ section = "profile", accountName, myName = "", requests = [], focus = null, focusN = 0, onRespond, onReload }) {
   const isDocs = section === "docs";
   const [f, setF] = useState(null);
   const [loaded, setLoaded] = useState(null);
@@ -15741,6 +15744,13 @@ function HireablePanel({ section = "profile", accountName, requests = [], focus 
               );
             })}
           </div>
+
+          {/* AND THE AGREEMENTS THEIR CLIENTS HAVE SENT, signed here.
+              An agreement is the one document in the pack that is not theirs
+              -- it is the hiring contractor's own form -- so it is not a row
+              in the grid above. It is here rather than on its own screen
+              because submitting documents is the moment it gets answered. */}
+          <MyAgreements myName={myName} />
 
           {/* And sending them, which is the thing they are actually asked to
               do several times a month. */}
@@ -16212,10 +16222,15 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           never do. */}
 
       {pane === "docs" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
-        <HireablePanel section="docs" accountName={brand?.name} requests={incomingConnects}
+        <HireablePanel section="docs" accountName={brand?.name} myName={me?.name || ""}
+          requests={incomingConnects}
           focus={openPane?.focus} focusN={openPane?.n}
           onRespond={onRespondConnect} onReload={onReloadConnects} />
       )}
+
+      {/* The terms SubSub's agreement carries. An account that cannot hire
+          issues none, so this is not their question. */}
+      {pane === "company" && canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && <StandardTermsPanel myName={me?.name || ""} />}
 
       {pane === "branding" && canManage && !canBrand && (
         <div className="portal-panel settings-panel">
@@ -20915,6 +20930,468 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
 // rows, because the frame fetches on mount: a shared "which one is open"
 // would re-mount the viewer on every switch, and this way a row that is shut
 // has revoked its blob.
+// The document itself, read-only, as it will be signed.
+//
+// Rendered from the sections the server sent rather than from a local copy of
+// the template: the browser and the Worker rendering the same contract
+// separately would be two documents that agree until one of them is edited,
+// and the one that is hashed is the Worker's.
+function AgreementDoc({ document: doc }) {
+  if (!doc) return null;
+  if (doc.unavailable) {
+    // Loud rather than blank. A missing template version means this build
+    // cannot reproduce what was signed, and drawing nothing would read as an
+    // empty contract.
+    return (
+      <div className="agr-doc agr-doc-gone">
+        <b>This agreement cannot be displayed.</b>
+        <span className="cx-sub">
+          It was signed under a version of the form this app no longer carries.
+          The signature and what it covered are still on record.
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="agr-doc">
+      <h4 className="agr-doc-title">{doc.title}</h4>
+      {doc.sections.map((s) => (
+        <section key={s.id} className="agr-sec">
+          <h5>{s.heading}</h5>
+          {s.paragraphs.map((p, i) => <p key={i}>{p}</p>)}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+// Signing it. A typed name, matched against the signer's own, because that is
+// what makes it their act rather than a name in a box.
+function SignAgreement({ agreement, myName, onClose, onDone }) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [declining, setDeclining] = useState(false);
+  const [note, setNote] = useState("");
+  const matches = typedNameMatches(typed, myName);
+
+  const go = async (decline) => {
+    setBusy(true); setErr("");
+    try {
+      if (decline) await api.declineAgreement(agreement.id, note);
+      else await api.signAgreement(agreement.id, typed);
+      onDone?.();
+      onClose?.();
+    } catch (e) {
+      console.error("[agreement] sign failed:", e);
+      setErr(e?.body?.error === "name_mismatch"
+        ? `Type your name exactly as it appears on your account: ${e.body.expected || myName}`
+        : e?.body?.error === "already_answered" ? "That one has already been answered."
+        : "That didn't go through. Try again in a moment.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal onClose={onClose} wide>
+      <div className="form">
+        <h2>{agreement.accountName}</h2>
+        <p className="form-sub">
+          Read it, then sign at the bottom. Signing binds you to these terms for
+          work you take from them.
+        </p>
+        <AgreementDoc document={agreement.document} />
+
+        {!declining && <>
+          <div className="agr-sign">
+            <label>
+              Type your full name to sign
+              <input value={typed} onChange={(e) => setTyped(e.target.value)}
+                placeholder={myName || "Your name"} autoComplete="off" />
+            </label>
+            {/* A disabled control with no reason beside it is
+                indistinguishable from a broken one. */}
+            {!matches && typed.trim() !== "" && (
+              <span className="cx-sub">That does not match {myName}, the name on your account.</span>
+            )}
+          </div>
+          {err && <div className="form-err">{err}</div>}
+          <div className="form-actions">
+            <button className="btn-ghost" type="button" onClick={() => setDeclining(true)}>
+              I can't sign this
+            </button>
+            <button className="btn-solid" type="button" disabled={!matches || busy}
+              onClick={() => go(false)}>
+              {busy ? "Signing…" : "Sign agreement"}
+            </button>
+          </div>
+        </>}
+
+        {declining && <>
+          <label className="agr-decline">
+            Tell them why, so they can send a version you can sign
+            <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="Our insurer will not agree to the additional insured wording in clause 5." />
+          </label>
+          {err && <div className="form-err">{err}</div>}
+          <div className="form-actions">
+            <button className="btn-ghost" type="button" onClick={() => setDeclining(false)}>Back</button>
+            <button className="btn-solid" type="button" disabled={busy} onClick={() => go(true)}>
+              {busy ? "Sending…" : "Send this back"}
+            </button>
+          </div>
+        </>}
+      </div>
+    </Modal>
+  );
+}
+
+// EVERY CLIENT'S AGREEMENT, IN ONE PLACE, and on the screen where somebody is
+// already dealing with their paperwork. That is the whole point of putting it
+// here: an agreement is one of the things a general contractor asks for, and
+// the moment to answer it is the moment you are submitting the rest.
+// The hiring side of an agreement: send one, see where it is, countersign it.
+//
+// It sits on the contractor's own card, which is where somebody is standing
+// when they notice there is no agreement -- the same reason PortalInvite is
+// there rather than behind a blank form somewhere else.
+function AgreementPanel({ sub, canManage, myName, onChanged }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [terms, setTerms] = useState(null);
+
+  const load = async () => {
+    try {
+      const d = await api.subAgreement(sub.id);
+      setData(d);
+      setTerms(d.previewTerms);
+    } catch (e) {
+      if (e?.body?.error === "migration_needed") { setData({ migration: e.body.migration }); return; }
+      console.error("[agreement] load failed:", e);
+      setErr("Couldn't load the agreement.");
+    }
+  };
+  useEffect(() => { load(); }, [sub.id]);
+
+  if (!data) return null;
+  if (data.migration) {
+    return (
+      <div className="portal-panel agr-panel">
+        <h4>Subcontractor agreement</h4>
+        <p className="cx-sub">SubSub needs a database update before this works. We've been told.</p>
+      </div>
+    );
+  }
+
+  const ag = data.agreement;
+  const act = async (fn, label) => {
+    setBusy(true); setErr("");
+    try { await fn(); await load(); onChanged?.(); }
+    catch (e) {
+      console.error(`[agreement] ${label} failed:`, e);
+      setErr(e?.body?.error === "name_mismatch"
+        ? `Type your name exactly as it appears on your account: ${e.body.expected || myName}`
+        : e?.body?.error === "already_issued" ? "There is already an agreement with them."
+        : "That didn't work. Try again in a moment.");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="portal-panel agr-panel">
+      <h4>Subcontractor agreement</h4>
+
+      {!ag && <>
+        <p className="cx-sub">
+          {/* Said plainly, because the recorded decision is that an agreement
+              counts against a subcontractor only once somebody asks for one --
+              and somebody deciding whether to ask needs to know that. */}
+          You haven't asked {sub.company} for one. Until you do, it isn't counted
+          against their compliance.
+        </p>
+        {canManage && <div className="agr-actions">
+          <button className="btn-ghost sm" type="button" onClick={() => setPreview(true)}>
+            Read the SubSub agreement
+          </button>
+          <button className="btn-solid sm" type="button" disabled={busy}
+            onClick={() => act(() => api.issueAgreement(sub.id, { terms }), "issue")}>
+            Send SubSub's agreement
+          </button>
+          <button className="btn-ghost sm" type="button" disabled={busy}
+            onClick={() => act(() => api.issueAgreement(sub.id, { source: "uploaded" }), "issue")}>
+            I'll use my own
+          </button>
+        </div>}
+      </>}
+
+      {ag && <>
+        <p className="cx-sub">
+          {agreementStateText(ag, { subName: sub.company, hiringName: "you" })}
+          {ag.signedAt && ` Signed by ${ag.signedByName} on ${formatExpiry(ag.signedAt)}.`}
+        </p>
+        <div className="agr-actions">
+          {ag.document && (
+            <button className="btn-ghost sm" type="button" onClick={() => setPreview(true)}>
+              Read it
+            </button>
+          )}
+          {canManage && ag.waitingOn === "hiring_countersign" && (
+            // An uploaded agreement has no SubSub document to open, so this is
+            // one press rather than a modal: what is being confirmed is that
+            // the paper they sent back is the form you sent out.
+            ag.source === "uploaded" ? (
+              <button className="btn-solid sm" type="button" disabled={busy}
+                onClick={() => act(() => api.countersignAgreement(ag.id, myName), "countersign")}>
+                Confirm it's the one you sent
+              </button>
+            ) : (
+              <button className="btn-solid sm" type="button" onClick={() => setPreview(true)}>
+                Countersign
+              </button>
+            )
+          )}
+          {canManage && !ag.inForce && (
+            <button className="btn-ghost sm" type="button" disabled={busy}
+              onClick={() => act(() => api.voidAgreement(ag.id), "void")}>
+              Withdraw
+            </button>
+          )}
+        </div>
+      </>}
+
+      {err && <div className="form-err">{err}</div>}
+
+      {preview && (
+        <Modal onClose={() => setPreview(false)} wide>
+          <div className="form">
+            <h2>{ag ? "Subcontractor agreement" : "Before you send it"}</h2>
+            <p className="form-sub">
+              {ag ? agreementStateText(ag, { subName: sub.company, hiringName: "you" })
+                : `This is what ${sub.company} will be asked to sign.`}
+            </p>
+            {/* NOT REVIEWED IS SAID, NOT IMPLIED. An unreviewed form reads
+                exactly like a reviewed one, so the screen has to say which it
+                is -- and this is the moment somebody decides whether to rely
+                on it. */}
+            {!data.preview?.reviewed && (
+              <div className="agr-warn">
+                <b>A starting point, not legal advice.</b>
+                <span>
+                  SubSub wrote this form and no lawyer has reviewed it. Some
+                  clauses in a subcontract are limited or void by statute, and
+                  which ones depends on the state. Have your own lawyer read it
+                  before you rely on it.
+                </span>
+              </div>
+            )}
+            <AgreementDoc document={ag?.document || data.preview} />
+            {canManage && ag?.waitingOn === "hiring_countersign" && <>
+              <div className="agr-sign">
+                <label>
+                  Type your full name to countersign
+                  <input value={typed} onChange={(e) => setTyped(e.target.value)}
+                    placeholder={myName || "Your name"} autoComplete="off" />
+                </label>
+                {!typedNameMatches(typed, myName) && typed.trim() !== "" && (
+                  <span className="cx-sub">That does not match {myName}, the name on your account.</span>
+                )}
+              </div>
+              <div className="form-actions">
+                <button className="btn-solid" type="button"
+                  disabled={busy || !typedNameMatches(typed, myName)}
+                  onClick={async () => {
+                    await act(() => api.countersignAgreement(ag.id, typed), "countersign");
+                    setPreview(false);
+                  }}>
+                  {busy ? "Signing…" : "Countersign"}
+                </button>
+              </div>
+            </>}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// The account's own standard terms, set once.
+//
+// Most hiring accounts use one set for everybody, which is why this is an
+// account setting with a per-subcontractor override rather than a form filled
+// in every time.
+function StandardTermsPanel({ myName }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.agreementTerms().then(setD).catch((e) => {
+      if (e?.body?.error === "migration_needed") { setD({ migration: true }); return; }
+      console.error("[agreement-terms] load failed:", e);
+      setErr("Couldn't load your standard terms.");
+    });
+  }, []);
+
+  if (!d) return null;
+  if (d.migration) return null;
+
+  const set = (id, v) => { setD((x) => ({ ...x, terms: { ...x.terms, [id]: v } })); setSaved(false); };
+  const setParty = (k, v) => {
+    setD((x) => ({ ...x, hiringParty: { ...x.hiringParty, [k]: v } })); setSaved(false);
+  };
+
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      await api.saveAgreementTerms({ terms: d.terms, hiringParty: d.hiringParty });
+      setSaved(true);
+    } catch (e) {
+      console.error("[agreement-terms] save failed:", e);
+      setErr("That didn't save. Try again in a moment.");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="portal-panel agr-terms">
+      <h4>Your subcontractor agreement</h4>
+      <p className="cx-sub">
+        The terms SubSub's agreement carries when you send one. You can change
+        them for a particular contractor before sending.
+      </p>
+
+      <div className="agr-party">
+        <label>Your legal name
+          <input value={d.hiringParty?.name || ""} onChange={(e) => setParty("name", e.target.value)}
+            placeholder="As it should appear in a contract" /></label>
+        <label>Street
+          <input value={d.hiringParty?.street || ""} onChange={(e) => setParty("street", e.target.value)} /></label>
+        <label>City
+          <input value={d.hiringParty?.city || ""} onChange={(e) => setParty("city", e.target.value)} /></label>
+        <label>State
+          <select value={d.hiringParty?.state || ""} onChange={(e) => setParty("state", e.target.value)}>
+            <option value="">Select…</option>
+            {US_STATES.map(([c, n]) => <option key={c} value={c}>{n}</option>)}
+          </select></label>
+      </div>
+
+      <div className="agr-fields">
+        {(d.fields || []).filter((f) => f.kind !== "state").map((f) => (
+          <label key={f.id} className={`agr-field agr-${f.kind}`}>
+            <span>{f.label}</span>
+            {f.kind === "bool" ? (
+              <input type="checkbox" checked={!!d.terms[f.id]}
+                onChange={(e) => set(f.id, e.target.checked)} />
+            ) : f.kind === "money" ? (
+              <input type="number" min="0" step="1000"
+                value={Math.round((d.terms[f.id] || 0) / 100)}
+                onChange={(e) => set(f.id, Math.round(Number(e.target.value || 0) * 100))} />
+            ) : f.kind === "bps" ? (
+              <input type="number" min="0" max="20" step="0.5"
+                value={(d.terms[f.id] || 0) / 100}
+                onChange={(e) => set(f.id, Math.round(Number(e.target.value || 0) * 100))} />
+            ) : (
+              <input type="number" min={f.min ?? 0} max={f.max}
+                value={d.terms[f.id] ?? ""} onChange={(e) => set(f.id, e.target.value)} />
+            )}
+            {f.note && <em className="cx-sub">{f.note}</em>}
+          </label>
+        ))}
+      </div>
+
+      {err && <div className="form-err">{err}</div>}
+      <div className="form-actions">
+        {saved && <span className="cx-sub">Saved.</span>}
+        <button className="btn-solid sm" type="button" disabled={busy} onClick={save}>
+          {busy ? "Saving…" : "Save terms"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MyAgreements({ myName }) {
+  const [rows, setRows] = useState(null);
+  const [open, setOpen] = useState(null);
+  const [err, setErr] = useState("");
+
+  const load = async () => {
+    try { setRows(await api.myAgreements()); }
+    catch (e) {
+      // An account that cannot be hired has nothing to be a party to, and a
+      // database without 052 is not this panel's problem to announce.
+      if (e?.body?.error === "not_hireable" || e?.body?.error === "migration_needed") { setRows([]); return; }
+      console.error("[my-agreements] load failed:", e);
+      setErr("Couldn't load your agreements.");
+      setRows([]);
+    }
+  };
+  useEffect(() => { load(); }, []);
+
+  if (!rows || (rows.length === 0 && !err)) return null;
+
+  const waiting = rows.filter((r) => r.waitingOn === "sub_sign" || r.waitingOn === "sub_upload");
+
+  return (
+    <div className="portal-panel agr-panel">
+      <h4>Agreements{waiting.length > 0 && <span className="agr-badge">{waiting.length}</span>}</h4>
+      <p className="cx-sub">
+        A subcontractor agreement is the hiring contractor's own paperwork, on
+        their terms. Only the ones who have sent you one appear here.
+      </p>
+      {err && <div className="form-err">{err}</div>}
+      <ul className="agr-rows">
+        {rows.map((r) => (
+          <li key={r.id} className={`agr-row ${r.waitingOn === "sub_sign" ? "agr-todo" : ""}`}>
+            <div className="agr-row-main">
+              {/* WHO IS THIS FOR is the whole question when the answer is a
+                  different company every row. */}
+              <b>{r.accountName}</b>
+              <span className="cx-sub">
+                {agreementStateText(r, { subName: "You", hiringName: r.accountName })}
+              </span>
+            </div>
+            {r.waitingOn === "sub_sign" && (
+              <button className="btn-solid sm" type="button" onClick={() => setOpen(r)}>
+                Read and sign
+              </button>
+            )}
+            {r.waitingOn === "sub_upload" && (
+              // Points at the row that actually does something. Uploading the
+              // signed copy IS signing it, and the grid above is where that
+              // upload lives -- there is no document here to sign, because
+              // this one is theirs rather than SubSub's.
+              <span className="cx-sub agr-row-note">
+                Sign their paper copy, then upload it as the signed agreement above
+              </span>
+            )}
+            {r.waitingOn === null && r.document && (
+              <button className="btn-ghost sm" type="button" onClick={() => setOpen(r)}>View</button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {open && (open.waitingOn === "sub_sign"
+        ? <SignAgreement agreement={open} myName={myName}
+            onClose={() => setOpen(null)} onDone={load} />
+        : <Modal onClose={() => setOpen(null)} wide>
+            <div className="form">
+              <h2>{open.accountName}</h2>
+              <p className="form-sub">
+                {agreementStateText(open, { subName: "You", hiringName: open.accountName })}
+                {open.signedAt ? ` Signed by ${open.signedByName} on ${formatExpiry(open.signedAt)}.` : ""}
+              </p>
+              <AgreementDoc document={open.document} />
+            </div>
+          </Modal>)}
+    </div>
+  );
+}
+
 function MyDocRow({ sub, kind, label, Icon, brandName, onUploadDoc, onDeleteDoc }) {
   const [open, setOpen] = useState(false);
   // The upload reports failure now rather than swallowing it, so this has to
@@ -23268,7 +23745,7 @@ function PortalInvite({ sub, invite, onSent }) {
   );
 }
 
-function SubDetail({ sub, invite, onInviteSent, jobs, brand, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto }) {
+function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, onAgreementChanged, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto }) {
   const ready = sub.bond && sub.insurance && sub.contract;
   const [notes, setNotes] = useState(sub.notes || "");
   const [dirty, setDirty] = useState(false);
@@ -23310,6 +23787,11 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, onSchedule, onSaveN
         {/* On the record, because that is where somebody is standing when they
             notice nobody can sign in as this contractor. */}
         <PortalInvite sub={sub} invite={invite} onSent={onInviteSent} />
+        {/* And the agreement, for the same reason. An agreement is between
+            this account and this contractor, so it belongs on their card and
+            nowhere else. */}
+        <AgreementPanel sub={sub} canManage={canManage} myName={myName}
+          onChanged={onAgreementChanged} />
         <div className="di-chips">
           {(sub.propertyIds || []).length > 0 && (
             <span className="notify-chip" title="Properties this vendor is scoped to">
@@ -27929,6 +28411,50 @@ iframe.dv-frame{display:block}
 /* 051. Money in against a work order. A tinted strip rather than a card,
    because it sits inside a panel that is already a card -- a second border
    around it reads as a separate screen. */
+/* Subcontractor agreements. No backtick anywhere in this block: the whole
+   stylesheet is one template literal, and a backtick in a CSS comment has
+   taken the entire app down behind one unrelated error. */
+.agr-panel .agr-badge{display:inline-flex;align-items:center;justify-content:center;
+  min-width:18px;height:18px;padding:0 5px;margin-left:8px;border-radius:9px;
+  background:var(--warn,#b45309);color:#fff;font-size:11px;font-weight:700;line-height:1}
+.agr-rows{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:8px}
+.agr-row{display:flex;align-items:center;gap:12px;padding:10px 12px;
+  border:1px solid var(--line);border-radius:9px;background:var(--paper)}
+.agr-row.agr-todo{border-color:var(--warn,#b45309)}
+.agr-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.agr-row-note{flex:none}
+.agr-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+/* The document. Read on a phone as often as on a desk, so it is measured in
+   ch rather than px and the sections carry their own rhythm. */
+.agr-doc{margin:14px 0;padding:16px 18px;max-height:52vh;overflow-y:auto;
+  border:1px solid var(--line);border-radius:10px;background:var(--paper);
+  font-size:13.5px;line-height:1.65}
+.agr-doc-title{margin:0 0 14px;font-size:16px;font-weight:700}
+.agr-sec{margin:0 0 14px}
+.agr-sec h5{margin:0 0 6px;font-size:13px;font-weight:700;letter-spacing:.01em}
+.agr-sec p{margin:0 0 7px;max-width:72ch}
+.agr-doc-gone{display:flex;flex-direction:column;gap:6px;max-height:none}
+/* Not reviewed is SAID, not implied: an unreviewed form reads exactly like a
+   reviewed one, and this is the moment somebody decides whether to rely on
+   it. Amber rather than red, because it is a caveat and not a failure. */
+.agr-warn{display:flex;flex-direction:column;gap:4px;margin:12px 0;padding:11px 13px;
+  border:1px solid var(--warn,#b45309);border-radius:9px;
+  background:color-mix(in srgb,var(--warn,#b45309) 8%,transparent);font-size:12.5px}
+.agr-sign{margin:12px 0 4px;display:flex;flex-direction:column;gap:5px}
+.agr-sign label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600}
+.agr-sign input{font-size:16px;padding:9px 11px}
+.agr-decline{display:flex;flex-direction:column;gap:5px;margin:12px 0;font-size:12.5px;font-weight:600}
+.agr-party{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:12px 0}
+.agr-party label{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600}
+.agr-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:12px 0}
+.agr-field{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600}
+.agr-field em{font-weight:400;font-style:normal}
+.agr-field.agr-bool{flex-direction:row;align-items:center;gap:8px}
+.agr-field.agr-bool span{order:2}
+@media (max-width:620px){
+  .agr-row{flex-direction:column;align-items:stretch}
+  .agr-doc{max-height:60vh;padding:13px 14px}
+}
 .wof{background:var(--paper);border:1px solid var(--line);border-radius:10px;
   padding:11px 12px;margin:0 0 14px;display:flex;flex-direction:column;gap:8px}
 .wof-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}

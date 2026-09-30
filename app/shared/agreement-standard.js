@@ -1,0 +1,264 @@
+// The SubSub standard subcontractor agreement, as data.
+//
+// WHY THIS IS DATA AND NOT PROSE IN A COMPONENT. Three things read it: the
+// screen a subcontractor signs on, the Worker that hashes exactly what was
+// signed, and the re-render that has to reproduce a document from years ago
+// byte for byte. A template one of them held privately would be three
+// documents that happen to agree today.
+//
+// WHAT THIS IS NOT. It is not legal advice and it is not reviewed. A
+// subcontract has no prescribed form -- which is why SubSub can offer one at
+// all, where `waivers.js` deliberately authors nothing, since roughly a dozen
+// states prescribe lien-waiver wording exactly and a form that deviates can
+// be void. But a subcontract has the opposite problem: no form is mandated
+// and several of its most important clauses are VOID BY STATUTE in particular
+// states. Anti-indemnity statutes differ enormously; "pay-if-paid" is
+// unenforceable in many states; some states void an advance waiver of lien
+// rights. So a clause that is ordinary in Washington can be unenforceable in
+// California, silently, and the document still looks right.
+//
+// Two things follow, and they are the whole design of this file.
+//
+// THE INDEMNITY IS DELIBERATELY NARROW. It reaches only harm caused by the
+// subcontractor's own negligence, and expressly not the hiring party's. A
+// broad-form indemnity -- the sub covering the GC for the GC's own fault --
+// is the clause anti-indemnity statutes exist to strike, so the widest
+// version would be the one most likely to be thrown out. Narrow is both
+// safer and more likely to survive.
+//
+// THERE IS NO PAY-IF-PAID CLAUSE. Making the sub's payment conditional on the
+// owner paying the GC is unenforceable in many states and, in a product whose
+// stated reason for existing is paying against verified work, would contradict
+// the thing being sold.
+//
+// `reviewed` IS NOT SOMETHING ANYBODY GETS FOR FREE, the same rule the
+// licensing dataset runs on: an entry naming a real firm and a real date,
+// written by somebody who did not read the statute, reads exactly like one
+// that was read line by line -- so it is null until a lawyer has actually
+// read this, and the screen says so while it is.
+
+import { US_STATES } from "./states.js";
+
+const money = (cents) => {
+  const n = Math.round(Number(cents) || 0) / 100;
+  return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+};
+const stateName = (code) =>
+  (US_STATES.find(([c]) => c === String(code || "").toUpperCase()) || [])[1] || null;
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+// A party, written the way it should read in a contract: the name, then the
+// address on one line, then the licence if there is one. Missing pieces are
+// omitted rather than printed as blanks -- a contract with an empty bracket in
+// it looks unfinished, which is the one thing a document being signed must not.
+const partyLine = (p) => {
+  const bits = [p?.name || "", [p?.street, p?.city, p?.state, p?.zip].filter(Boolean).join(", ")]
+    .filter(Boolean);
+  if (p?.license) bits.push(`licence no. ${p.license}`);
+  return bits.join(" of ");
+};
+
+export const STANDARD_AGREEMENT = {
+  id: "subsub-standard-subcontract",
+  // Bumped whenever a word changes. A stored agreement names the version it
+  // was rendered from, so editing this file can never change what somebody
+  // already signed.
+  version: "1.0.0",
+  title: "Subcontractor Agreement",
+  // { by, firm, on, states: [] } once somebody qualified has actually read it.
+  reviewed: null,
+
+  sections: [
+    {
+      id: "parties",
+      heading: "1. The parties and this agreement",
+      body: (x) => [
+        `This agreement is made on ${x.issuedOn} between ${partyLine(x.hiring)} (the "Contractor") and ${partyLine(x.sub)} (the "Subcontractor").`,
+        `It is a master agreement. It does not by itself commit either party to any particular work. It sets the terms that apply whenever the Contractor issues, and the Subcontractor accepts, a work order under it.`,
+        `Where a work order and this agreement disagree, the work order governs for that work only, and only as to scope, schedule and price.`,
+      ],
+    },
+    {
+      id: "status",
+      heading: "2. The Subcontractor is an independent contractor",
+      body: () => [
+        `The Subcontractor is an independent contractor and not an employee, agent, partner or joint venturer of the Contractor. Nothing here creates an employment relationship.`,
+        `The Subcontractor controls the manner and means of its own work, supplies its own tools, equipment and materials unless a work order says otherwise, and sets its own hours consistent with the schedule it has accepted.`,
+        `The Subcontractor is responsible for its own personnel, including their wages, taxes, benefits, workers' compensation and any withholding, and for anyone it engages to perform any part of the work.`,
+      ],
+    },
+    {
+      id: "work",
+      heading: "3. The work",
+      body: () => [
+        `The Subcontractor will perform each accepted work order in a good and workmanlike manner, in accordance with the drawings, specifications and scope stated in it, and in compliance with all applicable laws, codes and permit conditions.`,
+        `The Subcontractor will keep the site reasonably clean, and will remove its own debris and surplus material on completing the work.`,
+        `The Subcontractor will not perform work outside an accepted work order and expect payment for it. Additional or changed work must be authorised in writing, with its price and any schedule effect agreed, before it is carried out.`,
+      ],
+    },
+    {
+      id: "licensing",
+      heading: "4. Licensing and compliance",
+      body: (x) => {
+        const st = stateName(x.terms.governingState);
+        return [
+          `The Subcontractor represents that it holds, and will maintain throughout this agreement, every licence, registration, bond and permit required for the work it performs${st ? ` in ${st}` : ""}, and that it is in good standing under each.`,
+          `The Subcontractor will tell the Contractor promptly if any of those lapses, is suspended or is revoked.`,
+          `The Subcontractor will keep its records in SubSub current, and authorises the Contractor to verify its licence status with the issuing authority.`,
+        ];
+      },
+    },
+    {
+      id: "insurance",
+      heading: "5. Insurance",
+      body: (x) => {
+        const t = x.terms;
+        const lines = [
+          `The Subcontractor will carry, at its own expense and throughout this agreement, at least the following:`,
+        ];
+        const items = [
+          `commercial general liability of at least ${money(t.cglPerOccurrenceCents)} for each occurrence and ${money(t.cglAggregateCents)} in the aggregate;`,
+        ];
+        if (t.autoLiabilityCents > 0) {
+          items.push(`business automobile liability of at least ${money(t.autoLiabilityCents)} combined single limit, covering owned, hired and non-owned vehicles;`);
+        }
+        if (t.umbrellaCents > 0) {
+          items.push(`umbrella or excess liability of at least ${money(t.umbrellaCents)};`);
+        }
+        if (t.workersComp) {
+          items.push(`workers' compensation at statutory limits, and employer's liability, for every person it employs.`);
+        }
+        lines.push(...items.map((s, i) => `(${"abcdefgh"[i]}) ${s}`));
+
+        const endorse = [];
+        if (t.additionalInsured) endorse.push(`name the Contractor as an additional insured on the general liability and automobile policies, for both ongoing and completed operations`);
+        if (t.primaryNonContributory) endorse.push(`be primary and non-contributory with respect to any insurance the Contractor carries`);
+        if (t.waiverOfSubrogation) endorse.push(`include a waiver of subrogation in favour of the Contractor`);
+        if (endorse.length) {
+          lines.push(`The Subcontractor's policies will ${endorse.join("; ")}.`);
+        }
+        lines.push(`The Subcontractor will keep a current certificate of insurance on file with the Contractor, and will give the Contractor notice of cancellation, non-renewal or material reduction as its policies require.`);
+        lines.push(`The Contractor may withhold payment for, and may decline to schedule, any work for which current evidence of the cover required here is not on file.`);
+        return lines;
+      },
+    },
+    {
+      id: "payment",
+      heading: "6. Payment",
+      body: (x) => {
+        const t = x.terms;
+        const lines = [
+          `The Contractor will pay the Subcontractor the amount stated in each work order, on the terms stated in it.`,
+          `The Subcontractor will invoice for work it has completed. The Contractor will pay each approved invoice within ${plural(t.paymentDays, "day", "days")} of approval.`,
+        ];
+        if (t.retainageBps > 0) {
+          lines.push(`The Contractor may retain ${(t.retainageBps / 100).toFixed(t.retainageBps % 100 ? 2 : 0)}% of each payment until the work under that work order is complete and accepted, at which point the retained amount becomes due.`);
+        }
+        lines.push(`The Contractor may withhold a reasonable amount on account of work that is defective, incomplete or not yet corrected, of claims by others arising from the Subcontractor's work, or of documents required by this agreement that are not on file. The Contractor will say in writing what is being withheld and why.`);
+        lines.push(`Payment is not acceptance of defective work.`);
+        return lines;
+      },
+    },
+    {
+      id: "safety",
+      heading: "7. Safety",
+      body: () => [
+        `The Subcontractor is responsible for the safety of its own personnel and for its own compliance with occupational safety law and with the site rules it has been given.`,
+        `The Subcontractor will report to the Contractor, promptly, any injury, near miss or dangerous condition arising out of or affecting its work.`,
+      ],
+    },
+    {
+      id: "indemnity",
+      heading: "8. Indemnity",
+      body: () => [
+        `The Subcontractor will indemnify and hold the Contractor harmless from claims, damages, losses and reasonable expenses, including reasonable legal fees, to the extent they are caused by the negligent act or omission of the Subcontractor, anyone it employs, or anyone it engages to perform any part of the work.`,
+        `This obligation does not extend to any part of a claim caused by the negligence or wilful misconduct of the Contractor or of anyone else the Contractor is responsible for, and it is limited in every case to the extent permitted by the law of the state that governs this agreement.`,
+        `This obligation is not limited by the amount or type of insurance either party carries.`,
+      ],
+    },
+    {
+      id: "warranty",
+      heading: "9. Warranty",
+      body: (x) => [
+        `The Subcontractor warrants that its work will be free from defects in workmanship and, unless a work order says the Contractor supplies them, in materials.`,
+        `This warranty runs for ${plural(x.terms.warrantyMonths, "month", "months")} from the date the work under a work order is completed, and is in addition to any manufacturer's warranty, which the Subcontractor will pass through to the Contractor.`,
+        `On notice of a defect within that period, the Subcontractor will correct it at its own expense within a reasonable time. If it does not, the Contractor may have it corrected and recover the reasonable cost.`,
+      ],
+    },
+    {
+      id: "liens",
+      heading: "10. Liens and waivers",
+      body: () => [
+        `The Subcontractor will pay, when due, everyone it employs or engages and every supplier of material for the work.`,
+        `As a condition of payment, the Subcontractor will provide lien waivers, in the form required by the law of the state where the property is, from itself and from anyone below it whose claim could attach to the property.`,
+        `Nothing here waives any lien right in advance of payment, and nothing here waives a right that the law of that state does not permit to be waived.`,
+      ],
+    },
+    {
+      id: "term",
+      heading: "11. Term, suspension and termination",
+      body: (x) => [
+        `This agreement runs until either party ends it. Either party may end it for convenience on ${plural(x.terms.noticeDays, "day", "days")} written notice.`,
+        `Ending this agreement does not affect a work order already accepted, which continues under these terms until it is completed or separately ended.`,
+        `The Contractor may suspend or end a particular work order on written notice if the Subcontractor fails to perform it and does not cure the failure within ${plural(x.terms.cureDays, "day", "days")} of being told of it in writing. In that case the Subcontractor is paid for work properly performed up to that point, less the reasonable cost of completing or correcting it.`,
+        `The Contractor may suspend scheduling, without ending this agreement, while the Subcontractor's licence or required insurance is not current.`,
+      ],
+    },
+    {
+      id: "flowdown",
+      heading: "12. Assignment and lower tiers",
+      body: () => [
+        `The Subcontractor will not assign this agreement or any work order without the Contractor's written consent.`,
+        `The Subcontractor may engage others to perform part of the work, and remains fully responsible for their work and their conduct as if it were its own. It will bind each of them to terms no less protective of the Contractor than these.`,
+      ],
+    },
+    {
+      id: "records",
+      heading: "13. Records and confidentiality",
+      body: (x) => [
+        `Each party will keep the other's pricing, customer information and business records confidential, and will use them only for the purpose of this agreement. This does not apply to anything already public, or to a disclosure required by law.`,
+        `The Subcontractor will keep records relating to its work under this agreement for ${plural(x.terms.recordsYears, "year", "years")} after the work is completed, and will make them available to the Contractor on reasonable request in connection with a claim about that work.`,
+      ],
+    },
+    {
+      id: "law",
+      heading: "14. Governing law and disputes",
+      body: (x) => {
+        const st = stateName(x.terms.governingState);
+        return [
+          st
+            ? `This agreement is governed by the law of ${st}, without regard to its conflict of laws rules.`
+            : `This agreement is governed by the law of the state in which the work is performed, without regard to its conflict of laws rules.`,
+          `The parties will attempt in good faith to resolve any dispute by discussion before starting proceedings.`,
+          `Where the law of the state in which the property is located governs a particular question -- including lien rights and the enforceability of any indemnity -- that law applies to that question.`,
+        ];
+      },
+    },
+    {
+      id: "whole",
+      heading: "15. The whole agreement",
+      body: () => [
+        `This agreement, together with each accepted work order, is the entire agreement between the parties about its subject, and replaces any earlier understanding about it.`,
+        `A change to this agreement is effective only if it is in writing and agreed by both parties. A party's failure to insist on a term on one occasion does not waive it.`,
+        `If any provision is held unenforceable, the rest continues in force, and that provision applies to the greatest extent the law allows.`,
+      ],
+    },
+  ],
+};
+
+// KEYED BY ID AND VERSION, AND EVERY VERSION EVER SIGNED STAYS HERE FOREVER.
+//
+// Keyed by id alone, a version bump would silently re-render every agreement
+// signed under the old text using the new one: a different document, drawn
+// under a heading saying it was signed, and no longer matching its own hash.
+// The hash would catch it only if somebody checked, and nobody checks a
+// document that looks right.
+//
+// So the lookup is exact, a miss throws rather than falling back, and the
+// price of being able to reproduce a signed contract is that superseded
+// versions are never deleted from this file.
+export const templateKey = (id, version) => `${id}@${version}`;
+
+export const TEMPLATES = {
+  [templateKey(STANDARD_AGREEMENT.id, STANDARD_AGREEMENT.version)]: STANDARD_AGREEMENT,
+};

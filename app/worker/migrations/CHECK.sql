@@ -193,4 +193,28 @@ SELECT
   -- nothing says was paid. That is a transfer nobody can reconcile.
   (SELECT COUNT(*) FROM wo_transfers t
     JOIN wo_releases r ON r.id = t.release_id
-    WHERE t.status = 'paid' AND r.status <> 'paid')                                             AS m051_inv_transfer_without_paid;
+    WHERE t.status = 'paid' AND r.status <> 'paid')                                             AS m051_inv_transfer_without_paid,
+  -- 052. An agreement is between TWO PARTIES, so it hangs off the pair rather
+  -- than sitting as one boolean on the shared company row. The live index is
+  -- counted separately because it is the half that holds when two people
+  -- issue one at once, and it is PARTIAL ('sent','signed','countersigned') so
+  -- a relationship whose first agreement was declined can have another.
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agreements')                 AS m052_agreements,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agreement_terms')            AS m052_agreement_terms,
+  (SELECT COUNT(*) FROM sqlite_master
+    WHERE type='index' AND name='ux_agreement_live')                                            AS m052_one_live_agreement,
+  -- Invariants, both of which must read ZERO.
+  --
+  -- In force means BOTH signed. A row saying countersigned with either
+  -- signature missing is a contract the product would enforce -- gating
+  -- compliance, and soon payment -- on a document nobody can show was agreed.
+  (SELECT COUNT(*) FROM agreements
+    WHERE status = 'countersigned'
+      AND (signed_at IS NULL OR countersigned_at IS NULL))                                      AS m052_inv_countersigned_unsigned,
+  -- And a signature with no record of WHAT was signed. The hash is the whole
+  -- difference between proving somebody signed something and proving what;
+  -- an uploaded agreement is excused only until it has been uploaded, so this
+  -- counts the ones that carry neither a hash nor a file.
+  (SELECT COUNT(*) FROM agreements
+    WHERE signed_at IS NOT NULL
+      AND COALESCE(doc_sha256, '') = '' AND COALESCE(file_name, '') = '')                       AS m052_inv_signed_without_doc;

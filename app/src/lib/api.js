@@ -212,6 +212,26 @@ export const api = {
     request(`/subs/${companyId}/documents/${kind}`, { method: "POST", body: JSON.stringify({ fileKey, fileName }) }),
   deleteDocument: (companyId, kind) =>
     request(`/subs/${companyId}/documents/${kind}`, { method: "DELETE" }),
+
+  // Subcontractor agreements. An agreement is between TWO PARTIES, so it is
+  // keyed on the pair and not on the company -- see shared/agreement.js.
+  agreementTerms: () => request("/agreement-terms"),
+  saveAgreementTerms: (patch) =>
+    request("/agreement-terms", { method: "PATCH", body: JSON.stringify(patch) }),
+  subAgreement: (companyId) => request(`/subs/${companyId}/agreement`),
+  issueAgreement: (companyId, body = {}) =>
+    request(`/subs/${companyId}/agreement`, { method: "POST", body: JSON.stringify(body) }),
+  countersignAgreement: (id, typedName) =>
+    request(`/agreements/${id}/countersign`, { method: "POST", body: JSON.stringify({ typedName }) }),
+  voidAgreement: (id) => request(`/agreements/${id}/void`, { method: "POST" }),
+  // The subcontractor's own, across every client -- the /api/my-work shape,
+  // for the same reason: one waiting to be signed on one roster of twenty-five
+  // is not something anybody finds by switching account twenty-five times.
+  myAgreements: () => request("/my-agreements"),
+  signAgreement: (id, typedName) =>
+    request(`/my-agreements/${id}/sign`, { method: "POST", body: JSON.stringify({ typedName }) }),
+  declineAgreement: (id, note) =>
+    request(`/my-agreements/${id}/decline`, { method: "POST", body: JSON.stringify({ note }) }),
   // The document itself. Same shape as reportPhotoBlob and for the same
   // reason: the route needs an Authorization header, and neither an <img
   // src>, an <iframe src> nor an <a href> can carry one. So the bytes come

@@ -56,6 +56,11 @@ import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from 
 // Whether somebody can actually be paid, decided once and read by the
 // routes, the webhook and the browser.
 import { payoutSummary, rowFromStripe, PAYOUT_CONTROLLER, payoutAccountKey } from "../shared/pay.js";
+import {
+  AGREEMENT_SOURCES, TERM_FIELDS, STANDARD_AGREEMENT, validTerms, mergeTerms,
+  renderAgreement, canonicalText, kindsFor, agreementDocShape, waitingOn,
+  inForce, isLive, canSign, typedNameMatches,
+} from "../shared/agreement.js";
 import { coverState, coverProblemText, PAY_GATE_KINDS } from "../shared/paygate.js";
 import { problemsIn, checksFrom, findingsFor, allConfirmed,
   FINDING_STATES, CHECK_KINDS } from "../shared/doccheck.js";
@@ -4756,12 +4761,41 @@ app.get("/api/subs", async (c) => {
         if (!per[r.kind]) per[r.kind] = r;
       }
       const today = new Date().toISOString().slice(0, 10);
+      // AN AGREEMENT COUNTS ONLY ONCE THIS ACCOUNT HAS ASKED FOR ONE.
+      //
+      // `DOC_KINDS` counted it against every subcontractor on every roster,
+      // so a sub whose client never sent an agreement -- which is most of
+      // them -- sat permanently short of complete over a document only the
+      // hiring account could produce. `docs.js` already excused that on the
+      // sub's own screens and could not excuse it here, because whether an
+      // agreement is wanted is this account's call. Issuing one IS that call.
+      //
+      // One read for the whole roster: asking per row would be a query per
+      // contractor on every page load.
+      let agreements = {};
+      try { agreements = await liveAgreementsFor(c.env, auth.accountId); }
+      catch (err) {
+        // A database without 052 keeps the roster it always had, which is
+        // every kind counting -- the behaviour before this shipped.
+        if (!missingSchema(err)) throw err;
+      }
       subs.forEach((sub, i) => {
         sub.docs = docShapeWithLegacy(byCompany[sub.id] || {}, results[i]);
+        const ag = agreements[sub.id] || null;
+        sub.agreement = ag ? {
+          id: ag.id, status: ag.status, source: ag.source,
+          waitingOn: waitingOn(ag), inForce: inForce(ag),
+          signedAt: ag.signed_at || null, countersignedAt: ag.countersigned_at || null,
+        } : null;
+        // Drawn as the document `docs.js` understands, so the roster does not
+        // need a second code path for one of the four rows. A SubSub
+        // agreement is not a file in `company_docs` and never will be.
+        const shape = agreementDocShape(ag);
+        if (shape) sub.docs = { ...sub.docs, contract: shape };
         // Today's verdict, for the roster. Assignment recomputes against the
         // job's date, which is the only number that decides whether a
         // certificate actually covers the work.
-        const st = companyDocStatus(sub.docs, today);
+        const st = companyDocStatus(sub.docs, today, kindsFor(ag));
         sub.docState = st.state;
         sub.docAssignable = st.assignable;
         sub.docSoonest = st.soonest;
@@ -5463,6 +5497,14 @@ export function missingSchema(err) {
   // The recent ones first, because several of them mention words an older
   // rule would claim. "overflow_posts has no column named severity" is 038,
   // not 023, and the severity rule below would have taken it.
+  //
+  // `countersigned_at` rather than anything shorter: `agreements` and
+  // `agreement_terms` both start with a word the older `\bcontract\b` rules
+  // would not claim, but a column named `terms` is exactly the sort of thing
+  // a later rule could, so the distinctive ones are named.
+  if (/\bagreements?\b|\bagreement_terms\b|countersigned_(at|by)/i.test(m)) return "052_agreements";
+  if (/\bwo_(funding|transfers)\b/i.test(m)) return "051_escrow";
+  if (/\bpayout_accounts\b/i.test(m)) return "050_payout_accounts";
   if (/\bdoc_shares\b/i.test(m)) return "041_doc_shares";
   if (/owner_declared_(at|by)/i.test(m)) return "040_owner_declared";
   if (/\bproperty_transfers\b|owner_account_id|requested_by_account_id/i.test(m)) return "039_building_handover";
@@ -7856,6 +7898,30 @@ app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "con
     const docReview = { ...parseJson(e.doc_review, {}), [kind]: { status: "pending" } };
     await c.env.DB.prepare(`UPDATE engagements SET doc_review = ? WHERE id = ?`).bind(JSON.stringify(docReview), e.id).run();
   }
+
+  // UPLOADING A SIGNED AGREEMENT IS SIGNING IT, and without this the
+  // "I'll use my own paper" route was a dead end: the hiring account issued
+  // an `uploaded` agreement, the screen told the subcontractor to upload
+  // their signed copy, and nothing anywhere moved when they did. It sat at
+  // `sent` for ever -- the correct-pieces-with-no-way-in failure this file
+  // has now recorded half a dozen times, arrived at from a new direction.
+  //
+  // It advances to `signed`, not to in force: the hiring account still has to
+  // say the paper they got back is the one they sent, which is the same
+  // second signature SubSub's own form takes.
+  if (kind === "contract" && fileName) {
+    try {
+      await c.env.DB.prepare(
+        `UPDATE agreements SET status = 'signed', signed_at = CURRENT_TIMESTAMP,
+           signed_by = ?, file_name = ?
+         WHERE company_id = ? AND source = 'uploaded' AND status = 'sent'`
+      ).bind(auth.userId, fileName, companyId).run();
+    } catch (err) {
+      // A database without 052 has no agreements to advance, and an upload
+      // must not fail for want of a table this route never needed before.
+      if (!missingSchema(err)) throw err;
+    }
+  }
   return c.json({ ok: true, detail });
 });
 
@@ -7912,6 +7978,511 @@ function randomSecret() {
   crypto.getRandomValues(b);
   return "Ss1!" + btoa(String.fromCharCode(...b)).replace(/[^A-Za-z0-9]/g, "");
 }
+
+// ===========================================================================
+// Subcontractor agreements
+//
+// An agreement is between TWO PARTIES, which is why none of this touches
+// `companies`. See shared/agreement.js for the whole of the reasoning; the
+// short version is that one boolean on a shared company row said a roofer had
+// "a signed agreement" with nobody named, so signing with one general
+// contractor read as signed with all of them.
+// ===========================================================================
+
+const agreementMigration = () => ({ error: "migration_needed", migration: "052_agreements" });
+
+// What was signed, as forty hex characters. The whole difference between
+// proving somebody signed something and proving WHAT.
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// The live agreement for a pair, or null. `LIVE_STATES` is the same list the
+// partial unique index uses, so the row this finds is the row the index
+// guarantees is the only one.
+async function liveAgreement(env, accountId, companyId) {
+  return await env.DB.prepare(
+    `SELECT * FROM agreements
+      WHERE account_id = ? AND company_id = ? AND status IN ('sent','signed','countersigned')
+      ORDER BY issued_at DESC LIMIT 1`
+  ).bind(accountId, companyId).first();
+}
+
+// Every live agreement addressed to the companies on this account's roster,
+// in one read. The roster draws a row per subcontractor and asking per row
+// would be a query per contractor on every page load.
+async function liveAgreementsFor(env, accountId) {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM agreements
+      WHERE account_id = ? AND status IN ('sent','signed','countersigned')`
+  ).bind(accountId).all();
+  const by = {};
+  for (const r of results || []) by[r.company_id] = r;
+  return by;
+}
+
+// The hiring account's standing terms, and their own details as they should
+// read in a contract.
+//
+// An account with no row has never answered, and the effective answer to that
+// is the defaults with nothing required -- which is the recorded decision:
+// an agreement counts against a subcontractor only once somebody has actually
+// asked for one.
+async function accountAgreementTerms(env, accountId) {
+  const row = await env.DB.prepare(`SELECT * FROM agreement_terms WHERE account_id = ?`)
+    .bind(accountId).first();
+  return {
+    terms: validTerms(parseJson(row?.terms, {})),
+    hiringParty: parseJson(row?.hiring_party, {}) || {},
+    requireByDefault: !!row?.require_by_default,
+    updatedAt: row?.updated_at || null,
+  };
+}
+
+// Both parties, as they read at the moment of issue.
+//
+// STAMPED, NEVER READ LIVE. A company can be renamed and an account can
+// change its standard terms; a re-render that picked either up afterwards
+// would produce a document that no longer matches its own hash, which is the
+// one thing the hash exists to prevent.
+async function agreementParties(env, accountId, companyId) {
+  const acct = await env.DB.prepare(`SELECT name, company_id FROM accounts WHERE id = ?`)
+    .bind(accountId).first();
+  const stored = await accountAgreementTerms(env, accountId);
+  // Their own company row when they have one -- every hireable kind does
+  // since 031 -- and what they typed in Account otherwise, because a property
+  // manager has no company row by design and `accounts` carries no address.
+  // The MAILING address, falling back to the physical one. `companies` has no
+  // street for the latter -- it is city/state/zip -- and a contract wants the
+  // address notices go to.
+  const ADDR = `SELECT company, mail_street, mail_city, mail_state, mail_zip,
+                       city, state, zip, license FROM companies WHERE id = ?`;
+  let own = null;
+  if (acct?.company_id) own = await env.DB.prepare(ADDR).bind(acct.company_id).first();
+  const hp = stored.hiringParty || {};
+  const sub = await env.DB.prepare(ADDR).bind(companyId).first();
+  const addr = (r) => !r ? {} : ({
+    street: r.mail_street || null,
+    city: r.mail_city || r.city || null,
+    state: r.mail_state || r.state || null,
+    zip: r.mail_zip || r.zip || null,
+  });
+  const ownAddr = addr(own), subAddr = addr(sub);
+  return {
+    hiring: {
+      name: hp.name || own?.company || acct?.name || "",
+      street: hp.street || ownAddr.street || null,
+      city: hp.city || ownAddr.city || null,
+      state: hp.state || ownAddr.state || null,
+      zip: hp.zip || ownAddr.zip || null,
+      license: hp.license || own?.license || null,
+    },
+    sub: {
+      name: sub?.company || "",
+      street: subAddr.street || null,
+      city: subAddr.city || null,
+      state: subAddr.state || null,
+      zip: subAddr.zip || null,
+      license: sub?.license || null,
+    },
+  };
+}
+
+// The row, as the browser reads it. Never the raw row: `signed_ip` is kept
+// for the record and is nobody's to display.
+const agreementToJs = (r, extra = {}) => !r ? null : ({
+  id: r.id,
+  accountId: r.account_id,
+  companyId: r.company_id,
+  source: r.source,
+  status: r.status,
+  templateId: r.template_id || null,
+  templateVersion: r.template_version || null,
+  terms: parseJson(r.terms, {}),
+  parties: parseJson(r.parties, {}),
+  governingState: r.governing_state || null,
+  fileName: r.file_name || null,
+  docSha256: r.doc_sha256 || null,
+  issuedAt: r.issued_at || null,
+  signedAt: r.signed_at || null,
+  signedByName: r.signed_by_name || null,
+  countersignedAt: r.countersigned_at || null,
+  countersignedByName: r.countersigned_by_name || null,
+  declinedAt: r.declined_at || null,
+  declinedNote: r.declined_note || null,
+  waitingOn: waitingOn(r),
+  inForce: inForce(r),
+  ...extra,
+});
+
+// Rendering a stored agreement, refused loudly when the template version it
+// names is not in this build.
+//
+// `renderAgreement` throws rather than falling back, because a fallback would
+// draw a DIFFERENT contract under a heading saying it was signed -- and the
+// wrong contract still reads like a contract, so nobody would catch it by
+// looking. Every version ever signed stays in agreement-standard.js; this is
+// what says so out loud if one ever does not.
+function renderStored(r) {
+  if (!r || r.source !== "subsub_standard") return null;
+  try {
+    return renderAgreement({
+      templateId: r.template_id,
+      templateVersion: r.template_version,
+      parties: parseJson(r.parties, {}),
+      terms: parseJson(r.terms, {}),
+      issuedOn: String(r.issued_at || "").slice(0, 10),
+    });
+  } catch (err) {
+    if (err?.code === "unknown_template") return { unavailable: String(err.message) };
+    throw err;
+  }
+}
+
+// ---- the hiring account's standing terms ----------------------------------
+
+app.get("/api/agreement-terms", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  try {
+    const stored = await accountAgreementTerms(c.env, accountId);
+    return c.json({
+      ...stored,
+      fields: TERM_FIELDS,
+      template: {
+        id: STANDARD_AGREEMENT.id,
+        version: STANDARD_AGREEMENT.version,
+        title: STANDARD_AGREEMENT.title,
+        // Null until somebody qualified has actually read it, and the screen
+        // says which it is. An unreviewed template naming a real firm and a
+        // real date would read exactly like a reviewed one.
+        reviewed: STANDARD_AGREEMENT.reviewed || null,
+      },
+    });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(agreementMigration(), 503);
+    throw err;
+  }
+});
+
+app.patch("/api/agreement-terms", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const cur = await accountAgreementTerms(c.env, accountId);
+    // Normalised on the way IN, never only on the way out. This lands in a
+    // column the renderer reads directly, and a string where a number belongs
+    // prints "$NaN" into a document somebody is about to sign.
+    const terms = body.terms === undefined ? cur.terms : validTerms(body.terms);
+    const hiringParty = body.hiringParty === undefined ? cur.hiringParty : {
+      name: String(body.hiringParty?.name || "").trim().slice(0, 200) || null,
+      street: String(body.hiringParty?.street || "").trim().slice(0, 200) || null,
+      city: String(body.hiringParty?.city || "").trim().slice(0, 100) || null,
+      state: /^[A-Za-z]{2}$/.test(String(body.hiringParty?.state || "").trim())
+        ? String(body.hiringParty.state).trim().toUpperCase() : null,
+      zip: String(body.hiringParty?.zip || "").trim().slice(0, 12) || null,
+      license: String(body.hiringParty?.license || "").trim().slice(0, 60) || null,
+    };
+    const requireByDefault = body.requireByDefault === undefined
+      ? cur.requireByDefault : !!body.requireByDefault;
+    await c.env.DB.prepare(
+      `INSERT INTO agreement_terms (account_id, terms, hiring_party, require_by_default, updated_by)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(account_id) DO UPDATE SET
+         terms = excluded.terms, hiring_party = excluded.hiring_party,
+         require_by_default = excluded.require_by_default,
+         updated_at = CURRENT_TIMESTAMP, updated_by = excluded.updated_by`
+    ).bind(accountId, JSON.stringify(terms), JSON.stringify(hiringParty),
+      requireByDefault ? 1 : 0, userId).run();
+    return c.json({ ok: true, terms, hiringParty, requireByDefault });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(agreementMigration(), 503);
+    throw err;
+  }
+});
+
+// ---- the hiring side ------------------------------------------------------
+
+// What this account's agreement with this subcontractor is, and the document
+// itself so the screen can show what it is about to send or has sent.
+app.get("/api/subs/:companyId/agreement", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const { companyId } = c.req.param();
+  // A company this account does not engage answers not_found, before the
+  // company is looked up, so a real id and an invented one give the same
+  // reply -- the oracle every id-keyed route here refuses to be.
+  const engaged = await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM engagements WHERE account_id = ? AND company_id = ? LIMIT 1`
+  ).bind(accountId, companyId).first();
+  if (!engaged) return c.json({ error: "not_found" }, 404);
+
+  try {
+    const row = await liveAgreement(c.env, accountId, companyId);
+    const stored = await accountAgreementTerms(c.env, accountId);
+    // A preview of what WOULD be sent, so the screen is never asking somebody
+    // to issue a document they have not been shown.
+    const parties = await agreementParties(c.env, accountId, companyId);
+    const previewTerms = validTerms({
+      ...stored.terms,
+      governingState: stored.terms.governingState || parties.hiring.state || null,
+    });
+    return c.json({
+      agreement: agreementToJs(row, { document: renderStored(row) }),
+      preview: renderAgreement({
+        templateId: STANDARD_AGREEMENT.id,
+        templateVersion: STANDARD_AGREEMENT.version,
+        parties, terms: previewTerms,
+        issuedOn: new Date().toISOString().slice(0, 10),
+      }),
+      previewTerms,
+      parties,
+      requireByDefault: stored.requireByDefault,
+      fields: TERM_FIELDS,
+    });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(agreementMigration(), 503);
+    throw err;
+  }
+});
+
+// Issue one. This IS the requirement: there is no separate "required" flag,
+// because a flag beside an agreement row would be two records of one fact and
+// they would eventually disagree.
+app.post("/api/subs/:companyId/agreement", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const { companyId } = c.req.param();
+  const body = await c.req.json().catch(() => ({}));
+
+  const engaged = await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM engagements WHERE account_id = ? AND company_id = ? AND status != 'ended' LIMIT 1`
+  ).bind(accountId, companyId).first();
+  if (!engaged) return c.json({ error: "not_found" }, 404);
+
+  const source = AGREEMENT_SOURCES.includes(body.source) ? body.source : "subsub_standard";
+
+  try {
+    const existing = await liveAgreement(c.env, accountId, companyId);
+    // Refused rather than quietly replaced. A live agreement is a document the
+    // other party may have signed, or may be reading right now; superseding it
+    // from under them is a change to terms nobody was told about.
+    if (existing) return c.json({ error: "already_issued", status: existing.status }, 409);
+
+    const stored = await accountAgreementTerms(c.env, accountId);
+    const parties = await agreementParties(c.env, accountId, companyId);
+    const terms = mergeTerms(stored.terms, body.terms);
+    // The hiring account's state unless somebody said otherwise. Stamped, so
+    // editing an address later cannot change what a signed document meant --
+    // the rule lien_waivers.governing_state already follows.
+    const governingState = terms.governingState || parties.hiring.state || null;
+    const full = validTerms({ ...terms, governingState });
+
+    const id = uid();
+    const issuedOn = new Date().toISOString().slice(0, 10);
+    let templateId = null, templateVersion = null, docSha256 = null;
+    if (source === "subsub_standard") {
+      templateId = STANDARD_AGREEMENT.id;
+      templateVersion = STANDARD_AGREEMENT.version;
+      // Hashed at ISSUE as well as at signature, so "the terms changed between
+      // being sent and being signed" is answerable rather than a matter of
+      // trust. The signature stores its own hash of what was on screen then.
+      docSha256 = await sha256Hex(canonicalText(renderAgreement({
+        templateId, templateVersion, parties, terms: full, issuedOn,
+      })));
+    }
+
+    await c.env.DB.prepare(
+      `INSERT INTO agreements
+         (id, account_id, company_id, source, template_id, template_version,
+          terms, parties, governing_state, status, doc_sha256, issued_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?)`
+    ).bind(id, accountId, companyId, source, templateId, templateVersion,
+      JSON.stringify(full), JSON.stringify(parties), governingState, docSha256, userId).run();
+
+    await logEvent(c.env, accountId, userId, "agreement_issued", id,
+      { companyId, source, templateVersion });
+
+    const row = await c.env.DB.prepare(`SELECT * FROM agreements WHERE id = ?`).bind(id).first();
+    return c.json({ ok: true, agreement: agreementToJs(row, { document: renderStored(row) }) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(agreementMigration(), 503);
+    throw err;
+  }
+});
+
+// The hiring account's own signature. A form signed by one side is not a
+// contract, and the side that wrote the terms is the side with the most
+// reason to be bound by them.
+app.post("/api/agreements/:id/countersign", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const { id } = c.req.param();
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT * FROM agreements WHERE id = ? AND account_id = ?`
+    ).bind(id, accountId).first();
+    if (!row) return c.json({ error: "not_found" }, 404);
+
+    const gate = canSign(row, { asSub: false });
+    if (!gate.ok) return c.json({ error: gate.reason }, 409);
+
+    const me = await c.env.DB.prepare(`SELECT name, email FROM users WHERE id = ?`)
+      .bind(userId).first();
+    // A typed name is a signature when it is the signer's own act and the
+    // record says who, when and from where. What makes it weak is a name typed
+    // into a box with nothing tying it to a person, so it has to match theirs.
+    if (!typedNameMatches(body.typedName, me?.name)) {
+      return c.json({ error: "name_mismatch", expected: me?.name || null }, 400);
+    }
+
+    await c.env.DB.prepare(
+      `UPDATE agreements SET status = 'countersigned', countersigned_at = CURRENT_TIMESTAMP,
+         countersigned_by = ?, countersigned_by_name = ?, countersigned_by_email = ?,
+         countersigned_ip = ?
+       WHERE id = ? AND status = 'signed'`
+    ).bind(userId, me?.name || null, me?.email || null,
+      c.req.header("CF-Connecting-IP") || null, id).run();
+
+    await logEvent(c.env, accountId, userId, "agreement_countersigned", id,
+      { companyId: row.company_id });
+    const after = await c.env.DB.prepare(`SELECT * FROM agreements WHERE id = ?`).bind(id).first();
+    return c.json({ ok: true, agreement: agreementToJs(after, { document: renderStored(after) }) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(agreementMigration(), 503);
+    throw err;
+  }
+});
+
+// Withdraw it. Not a delete: an agreement somebody signed is a record of what
+// they agreed to, and it stays readable after it stops being in force.
+app.post("/api/agreements/:id/void", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const { id } = c.req.param();
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT * FROM agreements WHERE id = ? AND account_id = ?`
+    ).bind(id, accountId).first();
+    if (!row) return c.json({ error: "not_found" }, 404);
+    if (!isLive(row)) return c.json({ error: "already_answered" }, 409);
+    await c.env.DB.prepare(
+      `UPDATE agreements SET status = 'void', voided_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).bind(id).run();
+    await logEvent(c.env, accountId, userId, "agreement_voided", id, { companyId: row.company_id });
+    return c.json({ ok: true });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(agreementMigration(), 503);
+    throw err;
+  }
+});
+
+// ---- the subcontractor's side ---------------------------------------------
+
+// EVERY CLIENT'S AGREEMENT, IN ONE LIST, for the reason /api/my-work exists:
+// a subcontractor is on many rosters, and an agreement waiting to be signed on
+// one of twenty-five of them is not something anybody finds by switching
+// account twenty-five times.
+//
+// Scoped by `company_id = mine`, read off the seat and never the URL, so it
+// cannot be widened into anybody else's.
+app.get("/api/my-agreements", async (c) => {
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ error: await noCompanyReason(c) }, 403);
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT a.*, acc.name AS account_name
+         FROM agreements a
+         JOIN accounts acc ON acc.id = a.account_id
+        WHERE a.company_id = ? AND a.status IN ('sent','signed','countersigned')
+        ORDER BY a.issued_at DESC`
+    ).bind(companyId).all();
+    return c.json((results || []).map((r) => agreementToJs(r, {
+      // WHO IS THIS FOR is the whole question when the answer is a different
+      // company every row.
+      accountName: r.account_name,
+      document: renderStored(r),
+    })));
+  } catch (err) {
+    if (missingSchema(err)) return c.json(agreementMigration(), 503);
+    throw err;
+  }
+});
+
+app.post("/api/my-agreements/:id/sign", async (c) => {
+  const { userId } = c.get("auth");
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ error: await noCompanyReason(c) }, 403);
+  const { id } = c.req.param();
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT * FROM agreements WHERE id = ? AND company_id = ?`
+    ).bind(id, companyId).first();
+    if (!row) return c.json({ error: "not_found" }, 404);
+
+    const gate = canSign(row, { asSub: true });
+    if (!gate.ok) return c.json({ error: gate.reason }, 409);
+
+    const me = await c.env.DB.prepare(`SELECT name, email FROM users WHERE id = ?`)
+      .bind(userId).first();
+    if (!typedNameMatches(body.typedName, me?.name)) {
+      return c.json({ error: "name_mismatch", expected: me?.name || null }, 400);
+    }
+
+    // THE HASH IS TAKEN HERE, OF WHAT IS ON SCREEN NOW.
+    //
+    // Not carried over from issue, and never taken from the request: a caller
+    // who could name the hash could sign one document and record another. It
+    // is recomputed from the STORED parties and terms, which are the same
+    // inputs the screen was rendered from, so what is hashed is what they
+    // were shown.
+    const rendered = renderAgreement({
+      templateId: row.template_id,
+      templateVersion: row.template_version,
+      parties: parseJson(row.parties, {}),
+      terms: parseJson(row.terms, {}),
+      issuedOn: String(row.issued_at || "").slice(0, 10),
+    });
+    const hash = await sha256Hex(canonicalText(rendered));
+
+    await c.env.DB.prepare(
+      `UPDATE agreements SET status = 'signed', signed_at = CURRENT_TIMESTAMP,
+         signed_by = ?, signed_by_name = ?, signed_by_email = ?, signed_ip = ?,
+         doc_sha256 = ?
+       WHERE id = ? AND status = 'sent'`
+    ).bind(userId, me?.name || null, me?.email || null,
+      c.req.header("CF-Connecting-IP") || null, hash, id).run();
+
+    await logEvent(c.env, row.account_id, userId, "agreement_signed", id, { companyId });
+    const after = await c.env.DB.prepare(`SELECT * FROM agreements WHERE id = ?`).bind(id).first();
+    return c.json({ ok: true, agreement: agreementToJs(after, { document: renderStored(after) }) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(agreementMigration(), 503);
+    throw err;
+  }
+});
+
+app.post("/api/my-agreements/:id/decline", async (c) => {
+  const { userId } = c.get("auth");
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ error: await noCompanyReason(c) }, 403);
+  const { id } = c.req.param();
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT * FROM agreements WHERE id = ? AND company_id = ?`
+    ).bind(id, companyId).first();
+    if (!row) return c.json({ error: "not_found" }, 404);
+    if (row.status !== "sent") return c.json({ error: "already_answered" }, 409);
+    await c.env.DB.prepare(
+      `UPDATE agreements SET status = 'declined', declined_at = CURRENT_TIMESTAMP,
+         declined_note = ? WHERE id = ? AND status = 'sent'`
+    ).bind(String(body.note || "").trim().slice(0, 1000) || null, id).run();
+    await logEvent(c.env, row.account_id, userId, "agreement_declined", id, { companyId });
+    return c.json({ ok: true });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(agreementMigration(), 503);
+    throw err;
+  }
+});
 
 function shareToken() {
   const b = new Uint8Array(32);
