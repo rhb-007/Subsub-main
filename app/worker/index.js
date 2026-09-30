@@ -1884,7 +1884,9 @@ async function connectedAccount(c, companyId) {
 
   const co = await c.env.DB.prepare(`SELECT email FROM companies WHERE id = ?`)
     .bind(companyId).first();
-  const acct = await stripeCall(c.env, "/accounts", {
+
+  // One request, built once, so the retry below cannot send a different one.
+  const mint = (keySuffix = "") => stripeCall(c.env, "/accounts", {
     params: {
       country: PAYOUT_COUNTRY,
       ...(co?.email ? { email: co.email } : {}),
@@ -1894,7 +1896,7 @@ async function connectedAccount(c, companyId) {
       capabilities: { transfers: { requested: "true" } },
       // Who carries the losses is not free to choose here, and this shipped
       // wrong in the only way Stripe refuses outright. The controller and the
-      // reasoning now live in `shared/pay.js` beside the key it is hashed
+      // reasoning now live in `shared/pay.js` beside the key it is built
       // into, because they are one fact -- see PAYOUT_CONTROLLER there.
       controller: PAYOUT_CONTROLLER,
       metadata: { company_id: companyId, account_id: c.get("auth").accountId },
@@ -1908,8 +1910,37 @@ async function connectedAccount(c, companyId) {
     // REFUSAL as faithfully as a saved success and a key that is only the
     // company id would answer for terms we no longer send. `payoutAccountKey`
     // says why at length.
-    idempotencyKey: payoutAccountKey(companyId),
+    idempotencyKey: payoutAccountKey(companyId) + keySuffix,
   });
+
+  let acct;
+  try {
+    acct = await mint();
+  } catch (err) {
+    // A REFUSAL CREATED NOTHING, SO REPLAYING IT PROTECTS NOTHING.
+    //
+    // Stripe replays the saved status and body for 24 hours, and the shape in
+    // the key only moves when OUR request changes. Half of what can refuse
+    // this call is not ours at all -- a Stripe account setting, an API policy,
+    // a capability being enabled -- and after fixing one of those the next
+    // press is still answered by the refusal from before the fix. That is a
+    // guaranteed day-long dead end on the one screen a subcontractor cannot
+    // get paid without, and it has now happened twice in two days.
+    //
+    // The retry is safe precisely because the saved answer was a refusal: a
+    // 4xx means Stripe created no account under that key, so a fresh key
+    // cannot duplicate one. A replayed SUCCESS never reaches here -- it is a
+    // 200, which is the double-press this whole mechanism exists to absorb.
+    //
+    // Re-read the row first: the press that got the refusal replayed to it
+    // may have been racing one that succeeded.
+    if (!err?.replayed || !(err?.status >= 400 && err?.status < 500)) throw err;
+    const raced = await payoutRow(c.env, companyId);
+    if (raced?.processor_account_id) return { acctId: raced.processor_account_id, row: raced };
+    console.error("[payouts] Stripe replayed a refusal; asking again under a fresh key:", err?.message || err);
+    acct = await mint(`:r${Date.now()}`);
+  }
+
   await savePayoutRow(c.env, { companyId, acctId: acct.id, acct });
   return { acctId: acct.id, row: await payoutRow(c.env, companyId) };
 }

@@ -73,7 +73,10 @@ globalThis.fetch = async (url, init = {}) => {
   const body = Object.fromEntries(new URLSearchParams(init.body || ""));
   calls.push({ url: u, method: init.method || "POST", headers: init.headers || {}, body });
 
-  if (failNext) { const f = failNext; failNext = null; return f; }
+  // A Response, or a function returning one -- the latter so a test can make
+  // something happen at the moment Stripe refuses, which is the only way to
+  // stage a race against a concurrent press.
+  if (failNext) { const f = failNext; failNext = null; return typeof f === "function" ? await f() : f; }
 
   const json = (o, status = 200) =>
     new Response(JSON.stringify(o), { status, headers: { "Content-Type": "application/json" } });
@@ -479,6 +482,92 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
   const noHook = { DB: makeD1(seed()), STRIPE_SECRET_KEY: "sk_test_x" };
   const h = await hook(noHook, { id: "evt_x", type: "account.updated", data: { object: {} } });
   ck("and no Connect signing secret is 501", h.status === 501, String(h.status));
+
+  // ---- a replayed refusal is never the final answer ----------------------
+  //
+  // Stripe saves the status and body of the first request under an idempotency
+  // key and replays them for 24 hours -- a refusal as faithfully as a success.
+  // Half of what can refuse this call is not ours: an account setting, an API
+  // policy, a capability. After fixing one of those, the next press is still
+  // answered by the refusal from before the fix, which is a day-long dead end
+  // on the one screen a subcontractor cannot get paid without. It happened
+  // twice in two days.
+  //
+  // The retry is safe BECAUSE the replayed answer was a refusal: a 4xx means
+  // Stripe created nothing under that key, so a fresh key cannot duplicate an
+  // account. A replayed SUCCESS is a 200 and never reaches the retry at all --
+  // which is the double press the key exists to absorb, asserted separately
+  // below so the retry cannot quietly start firing on it.
+  console.log("\n-- a replayed refusal is asked again under a fresh key --");
+  {
+    const db = seed();
+    const env = ENV(db);
+    calls = []; acctState = {};
+    // What Stripe answers a key it has already refused once.
+    failNext = new Response(
+      JSON.stringify({ error: { message: "Accounts v1 is not available for new integrations." } }),
+      { status: 400, headers: { "Content-Type": "application/json", "Idempotent-Replayed": "true" } });
+
+    const r = await call(env, "/api/payouts/session", { method: "POST" });
+    const mints = calls.filter((x) => /\/accounts$/.test(x.url) && x.method === "POST");
+    ck("a replayed refusal does not end the press", r.status === 200, String(r.status));
+    ck("it asks Stripe again", mints.length === 2, String(mints.length));
+    ck("under a DIFFERENT key, or Stripe replays the same refusal forever",
+      mints[0]?.headers["Idempotency-Key"] !== mints[1]?.headers["Idempotency-Key"],
+      mints[1]?.headers["Idempotency-Key"]);
+    ck("and the retry still carries the same controller, not a relaxed one",
+      mints[1]?.body["controller[losses][payments]"] === "stripe"
+        && mints[1]?.body["controller[stripe_dashboard][type]"] === "none",
+      JSON.stringify({ l: mints[1]?.body["controller[losses][payments]"] }));
+    ck("the account it did mint is the one recorded",
+      db.prepare(`SELECT processor_account_id FROM payout_accounts`).all()
+        .map((x) => x.processor_account_id).join(",") === "acct_bay1");
+  }
+  {
+    // A refusal Stripe is answering FRESH created nothing either, but it is
+    // this attempt's own answer -- asking again would be two live creates for
+    // one press, which is the duplication the key exists to prevent.
+    const db = seed();
+    calls = []; acctState = {};
+    failNext = new Response(
+      JSON.stringify({ error: { message: "Something Stripe just decided." } }),
+      { status: 400, headers: { "Content-Type": "application/json" } });
+    const r = await call(ENV(db), "/api/payouts/session", { method: "POST" });
+    const mints = calls.filter((x) => /\/accounts$/.test(x.url) && x.method === "POST");
+    ck("a FRESH refusal is not retried -- only a replayed one is",
+      mints.length === 1, String(mints.length));
+    ck("and it is reported rather than swallowed",
+      r.status === 502 && /Something Stripe just decided/.test(r.body.detail || ""),
+      `${r.status} ${r.body.detail || r.body.error}`);
+    ck("and says it was not a replay, so the screen does not blame a cache",
+      r.body.replayed === false, JSON.stringify(r.body.replayed));
+  }
+  {
+    // The race the retry has to survive: the press that got the refusal
+    // replayed to it was racing one that SUCCEEDED, so a row lands while this
+    // one is in flight. Asking Stripe again would mint a second connected
+    // account for one company, which is two places the money could go.
+    //
+    // Staged where it actually happens -- the row appears as the refusal is
+    // answered, so the retry's re-read is the only thing that can catch it.
+    const db = seed();
+    db.exec(`INSERT INTO companies(id,company) VALUES ('cmp_own_acc_sub','Bay Roofing')`);
+    calls = []; acctState = {};
+    failNext = () => {
+      db.exec(`INSERT INTO payout_accounts(id,company_id,processor,processor_account_id,kyc_status)
+               VALUES ('po_raced','cmp_own_acc_sub','stripe','acct_raced','pending')`);
+      return new Response(JSON.stringify({ error: { message: "Replayed." } }),
+        { status: 400, headers: { "Content-Type": "application/json", "Idempotent-Replayed": "true" } });
+    };
+    const r = await call(ENV(db), "/api/payouts/session", { method: "POST" });
+    const mints = calls.filter((x) => /\/accounts$/.test(x.url) && x.method === "POST");
+    ck("a row that appeared meanwhile is used rather than a second account minted",
+      mints.length === 1 && r.status === 200, `${mints.length} mints, ${r.status}`);
+    ck("and the company still has exactly one",
+      db.prepare(`SELECT COUNT(*) n FROM payout_accounts WHERE company_id='cmp_own_acc_sub'`).get().n === 1);
+    ck("the one the race won, not a second",
+      db.prepare(`SELECT processor_account_id p FROM payout_accounts`).get().p === "acct_raced");
+  }
 
   // A database that has not had 050 pasted in.
   const old = freshDb({ base: SCHEMA, migrations: [] });

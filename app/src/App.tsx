@@ -15452,14 +15452,18 @@ function payoutErrorText(e) {
   // throwing it away.
   if (code === "stripe_failed") {
     if (!e?.body?.detail) return "Stripe couldn't be reached just now. Try again in a moment.";
-    // A REPLAY IS NOT A FRESH ANSWER, and saying so is the whole point of
-    // carrying the flag this far. Stripe replays a saved refusal under the
-    // same idempotency key for 24 hours, so the identical sentence appears
-    // before and after the thing it complains about was fixed -- which reads
-    // as the fix not having worked. Naming it is the difference between
-    // waiting and going back round the same change again.
+    // STRIPE'S WORDS LEAD, because they are the only actionable thing here
+    // and the first version of this buried them behind the caveat.
+    //
+    // The caveat is still worth saying: Stripe replays a saved refusal under
+    // the same idempotency key for 24 hours, so the identical sentence can
+    // appear before and after the thing it complains about was fixed, which
+    // reads as the fix not having worked. The route asks again under a fresh
+    // key when it sees one, so this should now be rare -- and when it is not,
+    // knowing the answer may predate a change is the difference between
+    // waiting and going round the same change again.
     if (e?.body?.replayed) {
-      return `Stripe is repeating an earlier refusal rather than answering this attempt: ${e.body.detail}`;
+      return `Stripe refused that: ${e.body.detail} (Stripe repeated an answer it had already given, so it may not account for a change made since.)`;
     }
     return `Stripe refused that: ${e.body.detail}`;
   }

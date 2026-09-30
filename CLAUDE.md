@@ -1364,11 +1364,27 @@ refactor.
   `shared/pay.js` beside the key for the same reason — the request and the key
   are one fact, and holding them apart is what let this happen.
 
-  **And a replay says so on the screen.** `Idempotent-Replayed` is the only
-  thing that distinguishes them, so it travels with the thrown error, into the
-  route's body, onto the panel — *Stripe is repeating an earlier refusal rather
-  than answering this attempt*. That sentence is the difference between waiting
-  a day and going back round the same change again.
+  **And the shape in the key is only half of it, because half of what refuses
+  this call is not ours.** A Stripe account setting, an API policy, a
+  capability — fix one of those and the request is byte-identical, so the key
+  does not move and the next press is still answered by the refusal from
+  before the fix. A guaranteed day-long dead end on the one screen a
+  subcontractor cannot get paid without, and it happened twice in two days:
+  the controller, then Stripe closing Accounts v1 to new integrations.
+
+  So **a replayed refusal is asked again under a fresh key**, and the reason
+  that is safe is the whole of why it is allowed: *a refusal created nothing*.
+  A 4xx means Stripe minted no account under that key, so a second key cannot
+  duplicate one. A replayed **success** never reaches it — that is a 200, and
+  it is exactly the double-press the key exists to absorb. A **fresh** refusal
+  is not retried either: it is this attempt's own answer, and asking again
+  would be two live creates for one press. The row is re-read first, because
+  the press that got the refusal replayed to it may have been racing one that
+  succeeded.
+
+  **And a replay says so on the screen**, with Stripe's own words leading:
+  they are the only actionable thing, and the first version buried them behind
+  the caveat.
 
   The old assertion was `/^payout-acct:/`, which passes for either key: the
   could-not-fail shape this file keeps catching, on the one field that mattered.
