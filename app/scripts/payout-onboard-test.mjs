@@ -192,6 +192,33 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
     && !Object.keys(made[0]?.body || {}).some((k) => k.startsWith("capabilities[card_payments]")));
   ck("with Stripe collecting the identity data",
     made[0]?.body["controller[requirement_collection]"] === "stripe");
+
+  // THE COMBINATION IS WHAT STRIPE VALIDATES, NOT THE FIELDS ONE AT A TIME.
+  //
+  // `requirement_collection` and `stripe_dashboard` were each pinned here and
+  // `losses.payments` was not -- so the one field Stripe refuses was the one
+  // field nothing asserted, and the panel shipped dead behind a green suite:
+  //
+  //   "When stripe_dashboard[type]=none and requirement_collection=stripe,
+  //    Stripe must be liable for negative balances or refunds and chargebacks."
+  //
+  // Asserted as the RULE rather than as three separate values, because that is
+  // the shape of the thing that can be wrong.
+  ck("Stripe carries the negative balances, refunds and chargebacks",
+    made[0]?.body["controller[losses][payments]"] === "stripe",
+    made[0]?.body["controller[losses][payments]"]);
+  ck("and SubSub still pays Stripe's fee -- the two are separate questions",
+    made[0]?.body["controller[fees][payer]"] === "application",
+    made[0]?.body["controller[fees][payer]"]);
+  {
+    const c0 = made[0]?.body || {};
+    const noDash = c0["controller[stripe_dashboard][type]"] === "none";
+    const stripeKyc = c0["controller[requirement_collection]"] === "stripe";
+    const stripeLoss = c0["controller[losses][payments]"] === "stripe";
+    ck("the combination is one Stripe actually accepts",
+      !(noDash && stripeKyc) || stripeLoss,
+      JSON.stringify({ noDash, stripeKyc, stripeLoss }));
+  }
   ck("and an idempotency key keyed on the company, so a double press cannot mint two",
     /^payout-acct:/.test(made[0]?.headers["Idempotency-Key"] || ""),
     made[0]?.headers["Idempotency-Key"]);

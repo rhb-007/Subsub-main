@@ -1403,6 +1403,32 @@ refactor.
   screen, so the session also enables `account_management`, `payouts` and
   `notification_banner`. There is nowhere else those can be seen.
 
+  **And that choice decides who carries the losses — it is not a free field.**
+  This entry recorded `losses.payments: "application"` beside it, and Stripe
+  refuses that combination outright: *"When `stripe_dashboard[type]=none` and
+  `requirement_collection=stripe`, Stripe must be liable for negative balances
+  or refunds and chargebacks."* So the panel was dead on arrival — the first
+  press answered a refusal rather than an onboarding form.
+
+  Three ways to satisfy it and two are refused in this file's own words:
+  `requirement_collection: "application"` moves the compliance obligation onto
+  SubSub with the disputes and negative balances, which is a different company;
+  `stripe_dashboard: "express"` is the Stripe-branded website above. So
+  **`losses.payments` is `stripe`**, which is the better trade anyway — Stripe
+  carries the negative balances, the refunds and the chargebacks. `fees.payer`
+  stays `application`: who pays Stripe's fee and who eats a chargeback are
+  separate questions.
+
+  **What let it ship is the shape worth remembering: the COMBINATION is what
+  Stripe validates, and the test asserted the fields one at a time.**
+  `requirement_collection` was pinned and `stripe_dashboard` was pinned, so the
+  one field Stripe refuses was the one field nothing looked at — a green suite
+  over a panel that could not work. The assertion is now the rule (no dashboard
+  and Stripe collecting implies Stripe carries the loss) as well as the three
+  values, because the rule is the shape of the thing that can be wrong. And no
+  static assertion could have caught it: only Stripe knows which combinations
+  it accepts, so the first real press was always going to be the test.
+
   **What cannot be removed, and it shaped everything above: whoever moves the
   money must verify the payee and hold their bank details.** That is KYC law
   rather than a Stripe setting, and no configuration deletes it. What is

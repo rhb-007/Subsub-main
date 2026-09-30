@@ -1892,9 +1892,27 @@ async function connectedAccount(c, companyId) {
       // anybody, so `card_payments` would be asking them to be verified for
       // something this product will never do with them.
       capabilities: { transfers: { requested: "true" } },
+      // WHO CARRIES THE LOSSES IS NOT FREE TO CHOOSE HERE, and the first
+      // version of this got it wrong in the only way Stripe refuses outright:
+      //
+      //   "When stripe_dashboard[type]=none and requirement_collection=stripe,
+      //    Stripe must be liable for negative balances or refunds and
+      //    chargebacks."
+      //
+      // Three ways to satisfy that, and two are already refused in this
+      // product's own words. `requirement_collection: "application"` moves the
+      // compliance obligation onto SubSub along with disputes and negative
+      // balances, which is a different company rather than a nicer form.
+      // `stripe_dashboard: "express"` hands the subcontractor a Stripe-branded
+      // website to be sent to, which is the whole thing being avoided.
+      //
+      // So it is this one, and it is the better trade anyway: Stripe carries
+      // the negative balances, the refunds and the chargebacks rather than
+      // SubSub. `fees.payer` stays `application` -- who pays Stripe's fee and
+      // who eats a chargeback are separate questions.
       controller: {
         fees: { payer: "application" },
-        losses: { payments: "application" },
+        losses: { payments: "stripe" },
         requirement_collection: "stripe",
         stripe_dashboard: { type: "none" },
       },
