@@ -4171,6 +4171,36 @@ refactor.
   added here is on both sides by construction. Catching that would need an
   independent record of the original schema, and there is none.
 
+- **`npm run paste <n>` prints a migration as paste-ready SQL, and the reason
+  it is generated rather than a second file is a mistake that reached a live
+  database.** The migration files are heavily commented on purpose — those
+  comments are the record of why each column exists — but a hundred lines of
+  prose is a hundred lines to scroll past on an iPad, so the SQL for 052 was
+  once **typed from memory instead of read from the file**. The table it
+  created was missing fourteen columns and carried five that do not exist, and
+  the check that was supposed to catch it asked only whether the table
+  existed, so it answered `1, 1, 1, 0, 0` over a table nothing could write to.
+
+  **A did-I-run-it check must read the columns, not the table name.** That is
+  the whole lesson: `sqlite_master` tells you a table is there, and
+  `pragma_table_info` tells you it is the right one.
+
+  Writing the stripped SQL out as files beside the migrations was the obvious
+  alternative and it is refused for the reason this file gives everywhere
+  else: two records of one fact, where the stale one is the copy that gets
+  pasted into production.
+
+  **It deliberately has no `check` sub-command**, and the attempt is worth
+  keeping. Pulling one migration's entries out of CHECK.sql means splitting on
+  top-level commas, which means counting paren depth — and `m046_kind_check`
+  compares against the literal `'%CHECK (kind IN%'`, whose unmatched bracket
+  throws the count off for the rest of the file. It printed every migration's
+  check as one entry and reported "nothing found" for the one asked for. **A
+  check query that is subtly wrong is worse than none**, being the exact shape
+  that let the broken 052 through, so the answer is to run the whole of
+  CHECK.sql — which verifies every migration rather than one, and is the
+  single record of what to look for.
+
 - D1 stops a multi-statement script at the first failing statement and does
   not undo what ran before it. `ALTER TABLE ... ADD COLUMN` is the statement
   that is not repeatable, so it goes in a paste of its own.
