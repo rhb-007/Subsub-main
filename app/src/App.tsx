@@ -5934,7 +5934,8 @@ export default function SubSub() {
         </Modal>
       )}
       {jobForm && <Modal onClose={() => setJobForm(null)} wide>
-        <JobForm allJobs={allJobs} accountId={account.id} properties={accountProperties} forProperty={jobForm.forProperty} forSub={jobForm.forSub} forDate={jobForm.forDate} jobs={jobs} asOwner={role === "owner"}
+        <JobForm allJobs={allJobs} accountId={account.id} accountName={account.name}
+          rosterWord={rosterWords(account).One} properties={accountProperties} forProperty={jobForm.forProperty} forSub={jobForm.forSub} forDate={jobForm.forDate} jobs={jobs} asOwner={role === "owner"}
           onSubmit={(job) => createJob(job, jobForm.forSub)}
           onCancel={() => setJobForm(null)} /></Modal>}
       {assigning && <Modal onClose={() => setAssigning(null)} wide>
@@ -16267,7 +16268,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             <div className="bp-foot"><PoweredBy height={12} /></div>
           </div>
 
-          <label className="fld">Company name<input value={b.name} onChange={(e) => setBrandField("name", e.target.value)} placeholder="Outerhome" /></label>
+          <label className="fld">Company name<input value={b.name} onChange={(e) => setBrandField("name", e.target.value)} placeholder="Your company name" /></label>
           <label className="fld">Subdomain <span className="fld-note">where your team and contractors sign in</span>
             <div className="subdomain-row">
               <input value={b.subdomain} onChange={(e) => setBrandField("subdomain", e.target.value)}
@@ -18380,7 +18381,7 @@ function MaterialSource({ value, onChange }) {
 
 // ---- Create job ----------------------------------------------------------
 // The job holds every project fact. Work orders are derived from it on assign.
-function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, properties, forProperty, forDate, asOwner = false }) {
+function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, accountName, rosterWord = "Subcontractor", properties, forProperty, forDate, asOwner = false }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
   // An owner with one building never has a choice to make, so it is made for
@@ -18403,7 +18404,11 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
     // three below it are what gets sent; the Worker composes the line back
     // from them, so the browser never decides what the work order says.
     materialSource: "", materialSupplier: "", materialBranch: "", materialOther: "",
-    materialsPaidBy: "Outerhome",
+    // THE ACCOUNT'S OWN NAME, not a customer's baked into the product.
+    // This read "Outerhome" for every account in SubSub -- the first
+    // customer's name, shipped as the default answer to who pays for
+    // materials and as one of the two options in the picker below.
+    materialsPaidBy: accountName || "",
     measurementDocs: [],
   });
   // Picking a property fills the address, so it isn't retyped per job.
@@ -18531,7 +18536,12 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, propert
           materialBranch: pick.branch, materialOther: pick.other }))} />
       <label className="fld">Materials paid by
         <select value={f.materialsPaidBy} onChange={(e) => set("materialsPaidBy", e.target.value)}>
-          <option>Outerhome</option><option>Subcontractor (reimbursed)</option>
+          {/* And the other option is whatever this account calls the people it
+              hires -- a property manager hires contractors, not
+              subcontractors, which `rosterWords` already decides everywhere
+              else on this screen. */}
+          <option value={accountName || ""}>{accountName || "Us"}</option>
+          <option value={`${rosterWord} (reimbursed)`}>{rosterWord} (reimbursed)</option>
         </select>
       </label>
 
@@ -20995,10 +21005,12 @@ function SignAgreement({ agreement, myName, onClose, onDone }) {
   return (
     <Modal onClose={onClose} wide>
       <div className="form">
-        <h2>{agreement.accountName}</h2>
+        <h2>{agreement.document?.title || "Subcontractor agreement"}</h2>
         <p className="form-sub">
-          Read it, then sign at the bottom. Signing binds you to these terms for
-          work you take from them.
+          SubSub's standard form, with {agreement.accountName} filled in as the
+          hiring party. Read it, then sign at the bottom. Signing binds you to
+          these terms for work you take from {agreement.accountName} — and from
+          them only: every company that hires you asks separately.
         </p>
         <AgreementDoc document={agreement.document} />
 
@@ -21167,10 +21179,10 @@ function AgreementPanel({ sub, canManage, myName, onChanged }) {
       {preview && (
         <Modal onClose={() => setPreview(false)} wide>
           <div className="form">
-            <h2>{ag ? "Subcontractor agreement" : "Before you send it"}</h2>
+            <h2>{(ag?.document || data.preview)?.title || "Subcontractor agreement"}</h2>
             <p className="form-sub">
               {ag ? agreementStateText(ag, { subName: sub.company, hiringName: "you" })
-                : `This is what ${sub.company} will be asked to sign.`}
+                : `SubSub's standard form, with your company filled in. This is what ${sub.company} will be asked to sign.`}
             </p>
             {/* NOT REVIEWED IS SAID, NOT IMPLIED. An unreviewed form reads
                 exactly like a reviewed one, so the screen has to say which it
@@ -21340,8 +21352,9 @@ function MyAgreements({ myName }) {
     <div className="portal-panel agr-panel">
       <h4>Agreements{waiting.length > 0 && <span className="agr-badge">{waiting.length}</span>}</h4>
       <p className="cx-sub">
-        A subcontractor agreement is the hiring contractor's own paperwork, on
-        their terms. Only the ones who have sent you one appear here.
+        An agreement is between you and one company, so each of them asks
+        separately — and plenty never ask at all. Only the ones who have sent
+        you one appear here.
       </p>
       {err && <div className="form-err">{err}</div>}
       <ul className="agr-rows">
@@ -21380,9 +21393,9 @@ function MyAgreements({ myName }) {
             onClose={() => setOpen(null)} onDone={load} />
         : <Modal onClose={() => setOpen(null)} wide>
             <div className="form">
-              <h2>{open.accountName}</h2>
+              <h2>{open.document?.title || "Subcontractor agreement"}</h2>
               <p className="form-sub">
-                {agreementStateText(open, { subName: "You", hiringName: open.accountName })}
+                With {open.accountName}. {agreementStateText(open, { subName: "You", hiringName: open.accountName })}
                 {open.signedAt ? ` Signed by ${open.signedByName} on ${formatExpiry(open.signedAt)}.` : ""}
               </p>
               <AgreementDoc document={open.document} />

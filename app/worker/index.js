@@ -8047,7 +8047,7 @@ async function accountAgreementTerms(env, accountId) {
 // would produce a document that no longer matches its own hash, which is the
 // one thing the hash exists to prevent.
 async function agreementParties(env, accountId, companyId) {
-  const acct = await env.DB.prepare(`SELECT name, company_id FROM accounts WHERE id = ?`)
+  const acct = await env.DB.prepare(`SELECT name, kind, company_id FROM accounts WHERE id = ?`)
     .bind(accountId).first();
   const stored = await accountAgreementTerms(env, accountId);
   // Their own company row when they have one -- every hireable kind does
@@ -8070,6 +8070,14 @@ async function agreementParties(env, accountId, companyId) {
   });
   const ownAddr = addr(own), subAddr = addr(sub);
   return {
+    // WHAT THE TWO PARTIES ARE CALLED FOLLOWS THE KIND, and the kind is
+    // stamped here rather than read at render. A general contractor engages a
+    // SUBcontractor under a prime contract; a property manager engages a
+    // plumber directly and nobody is sub to anything. The same distinction
+    // `hiresLabel` already draws on the roster, in the one place it matters
+    // most -- a contract's defined terms. Stamped, because an account may
+    // change kind afterwards and a signed document must not change with it.
+    kind: acct?.kind || null,
     hiring: {
       name: hp.name || own?.company || acct?.name || "",
       street: hp.street || ownAddr.street || null,

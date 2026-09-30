@@ -314,6 +314,54 @@ refactor.
   **Still open: a lawyer has not read the text.** That is the one part of this
   a build cannot supply.
 
+  **It is SubSub's form and it says so, and the hiring company is a variable
+  in it.** Whose document this is, is the first thing either party needs to
+  know: a form headed with the hiring company's name reads as their own bespoke
+  paper, which is the opposite of what it is. The title is *SubSub Standard
+  Subcontractor Agreement*; the company appears as a party filled into clause
+  1, and every screen leads with the document's title rather than the account's
+  name.
+
+  **And what the two parties are CALLED follows the account kind**, which is the
+  same rule `hiresLabel` already draws on the roster, applied to the one place
+  it matters most — a contract's defined terms. A general contractor holds the
+  prime contract, so the people they engage work *under* it and *Subcontractor*
+  is right. A property manager, a portfolio manager and a building owner engage
+  a plumber directly: **nobody is sub to anything**, and a document calling them
+  a subcontractor describes a chain that does not exist. So
+  Contractor/Subcontractor for a GC (and for a subcontractor passing work
+  further down, which is still a chain), Manager/Contractor for the two
+  management kinds, Owner/Contractor for an owner, and a neutral *Hiring Party*
+  for anything unrecognised — because a contract rendering with a blank where a
+  party name belongs is worse than one using a slightly formal word.
+
+  `PARTY_TERMS` lives **inside** the versioned template, not beside it: these
+  words are part of the document, so changing one has to move the version with
+  it. The account's `kind` is **stamped into `parties` at issue** like
+  everything else, because an account may change kind afterwards and a signed
+  document must not change with it.
+
+  **A `${}` inside a plain string is five literal characters, not an
+  interpolation** — the same class as a `\uXXXX` escape in JSX text. One
+  heading here was a plain string when the defined terms became variables, so
+  it rendered as *2. ${x.T.hired} status* on a document somebody was about to
+  sign. Invisible in the source, obvious to the reader, and caught by nothing
+  that only checks the document renders. The test asserts no rendered heading,
+  paragraph or title contains `${`, for **every** kind, because only one of
+  them was ever wrong.
+
+  **And a customer's name was baked into the product elsewhere.** *Materials
+  paid by* on the job form offered two options and one of them was the literal
+  string `Outerhome` — the first customer's name, shipped as the default answer
+  and as a picker option for every account in SubSub — while the other read
+  *Subcontractor (reimbursed)*, which is the wrong noun for three of the five
+  kinds, in the same control. Both now come off the account. `test:rosterword`
+  pins it statically, and **strips comments before checking**, because a comment
+  explaining what the literal used to be reads to a substring check exactly like
+  the literal still being there: the first version of that assertion failed on
+  its own explanation, which is the lesson `embed-test` already records about
+  CSS selectors.
+
   **The panel renders for an admin or a project manager**, because that is what
   `requireRole("admin","pm")` allows on every one of its routes. Using the
   admin-only `canManage` — the obvious thing, since the panel beside it does —

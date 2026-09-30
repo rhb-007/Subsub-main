@@ -118,6 +118,60 @@ console.log("-- the document is deterministic, which is what makes the hash mean
     threw === "unknown_template", String(threw));
 }
 
+console.log("\n-- it is SUBSUB'S form, with the company filled into it --");
+{
+  const mk = (kind) => A.renderAgreement({
+    parties: { kind, hiring: { name: "Acme Management" }, sub: { name: "Bay Roofing Inc" } },
+    terms: A.validTerms({ governingState: "WA" }), issuedOn: "2026-09-30" });
+
+  const gc = mk("general_contractor");
+  ck("the title says whose form it is, not whose company sent it",
+    gc.title === "SubSub Standard Subcontractor Agreement", gc.title);
+  ck("and the hiring company appears as a PARTY rather than in the title",
+    !gc.title.includes("Acme") && gc.sections[0].paragraphs[0].includes("Acme Management"),
+    gc.title);
+
+  // A general contractor holds the prime contract, so the people they engage
+  // work UNDER it. A property manager engages a plumber directly: nobody is
+  // sub to anything, and a document calling them a subcontractor describes a
+  // chain that does not exist. Same rule `hiresLabel` draws on the roster.
+  const pm = mk("property_manager");
+  ck("a property manager hires a Contractor, not a Subcontractor",
+    pm.title === "SubSub Standard Contractor Agreement"
+      && pm.partyTerms.hired === "Contractor" && pm.partyTerms.hiring === "Manager",
+    `${pm.title} / ${JSON.stringify(pm.partyTerms)}`);
+  ck("a building owner is the Owner", mk("building_owner").partyTerms.hiring === "Owner");
+  ck("and a subcontractor passing work down is still a Contractor over a Subcontractor",
+    mk("subcontractor").partyTerms.hired === "Subcontractor");
+  // A contract rendering with a blank where a party name belongs is worse
+  // than one using a slightly formal word.
+  ck("an unknown kind gets a neutral pair rather than nothing",
+    mk(null).partyTerms.hiring === "Hiring Party" && mk(null).partyTerms.hired === "Contractor");
+
+  // The words are part of the document, so they change the bytes -- which is
+  // what makes stamping the kind load-bearing rather than cosmetic.
+  ck("the defined terms change the document, so the hash follows them",
+    A.canonicalText(gc) !== A.canonicalText(pm));
+
+  // A ${} inside a plain string is five literal characters, not an
+  // interpolation. That shipped once in a heading here, and it is the same
+  // class as a \\uXXXX escape in JSX text -- invisible in the source, obvious
+  // to the reader, and caught by nothing that only checks the document
+  // renders. Every kind, because only one heading was ever wrong.
+  for (const kind of ["general_contractor", "property_manager", "building_owner",
+                      "portfolio_manager", "subcontractor", null]) {
+    const r = mk(kind);
+    const stray = [r.title, ...r.sections.flatMap((x) => [x.heading, ...x.paragraphs])]
+      .filter((t) => String(t).includes("${"));
+    ck(`no unrendered interpolation anywhere for ${kind}`, stray.length === 0,
+      stray[0] || "");
+  }
+  // And nothing may render an empty heading or paragraph, which is what a
+  // body reading a field that moved would produce.
+  const empties = gc.sections.filter((x) => !x.heading.trim() || x.paragraphs.some((p) => !p.trim()));
+  ck("and no empty heading or paragraph", empties.length === 0, empties.map((x) => x.id).join(","));
+}
+
 console.log("\n-- terms are normalised on the way IN, never only on the way out --");
 {
   const t = A.validTerms({ paymentDays: "45", retainageBps: 99999, warrantyMonths: -3,
@@ -197,6 +251,18 @@ console.log("\n-- issuing --");
   ck("the terms are stamped alongside them", !!JSON.parse(row.terms).paymentDays);
   ck("and the governing state comes off the hiring party rather than being guessed",
     row.governing_state === "WA", String(row.governing_state));
+  ck("the account KIND is stamped with them, because the defined terms follow it",
+    JSON.parse(row.parties).kind === "general_contractor",
+    JSON.parse(row.parties).kind);
+  ck("so the document calls them a Subcontractor",
+    made.body.agreement?.document?.title === "SubSub Standard Subcontractor Agreement",
+    made.body.agreement?.document?.title);
+  // Changing kind afterwards must not change a document already issued.
+  db.exec(`UPDATE accounts SET kind = 'property_manager' WHERE id = '${GC}'`);
+  const after = await call(env, `/api/subs/${SUB_CO}/agreement`);
+  ck("and re-kinding the account afterwards does not rewrite it",
+    after.body.agreement?.document?.title === "SubSub Standard Subcontractor Agreement",
+    after.body.agreement?.document?.title);
 
   // Refused rather than quietly replaced: a live agreement is a document the
   // other party may be reading right now.

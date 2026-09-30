@@ -17,6 +17,7 @@
 //
 //   node scripts/roster-word-test.mjs
 
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
@@ -25,6 +26,38 @@ const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-rosterword-test");
 const WEB = 5281, API = 8981;
 const t = tally();
+// ---- no customer's name is baked into the product -------------------------
+//
+// "Materials paid by" offered two options and one of them was the literal
+// string "Outerhome" -- the first customer's name, shipped as the default
+// answer and as a picker option for every account in SubSub. The other option
+// said "Subcontractor (reimbursed)", which is the wrong noun for three of the
+// five kinds, in the same control.
+//
+// Static, because what is checked is that two literals are gone and that the
+// values come from the account instead. Driving the form would need a job, a
+// property and a roster to reach one select.
+{
+  const src = readFileSync(join(app, "src/App.tsx"), "utf8");
+  const i = src.indexOf("function JobForm(");
+  const whole = src.slice(i, src.indexOf("\nfunction ", i + 10));
+  // COMMENTS ARE STRIPPED FIRST, the same lesson `embed-test` already records
+  // about reading CSS selectors: a comment explaining what the literal USED to
+  // be reads, to a plain substring check, exactly like the literal still being
+  // there. The first version of this failed on its own explanation.
+  const body = whole.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+  // The demo seed legitimately names the demo account; JobForm may not.
+  for (const name of ["Outerhome", "Harbor Point", "Alder Construction"]) {
+    t.ck(`the job form does not hardcode ${name}`, !body.includes(name), name);
+  }
+  t.ck("materials paid by defaults to the account's own name",
+    /materialsPaidBy:\s*accountName/.test(body));
+  t.ck("and the other option is whatever this account calls who it hires",
+    /\$\{rosterWord\}\s*\(reimbursed\)/.test(body));
+  t.ck("which JobForm is actually given",
+    /<JobForm[\s\S]{0,400}?accountName=\{account\.name\}/.test(src)
+      && /<JobForm[\s\S]{0,400}?rosterWord=\{rosterWords\(account\)\.One\}/.test(src));
+}
 
 console.log("\n-- building --");
 buildApp({ outDir: OUT, apiPort: API });

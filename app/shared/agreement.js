@@ -161,20 +161,31 @@ export function renderAgreement({ templateId, templateVersion, parties = {}, ter
     err.code = "unknown_template";
     throw err;
   }
+  // The defined terms the document uses for the two parties, off the KIND
+  // stamped into `parties` at issue -- never read live, because an account may
+  // change kind and a signed document must not change with it. They live
+  // inside the template, so changing a word moves the version with it.
+  const kind = parties.kind || null;
   const ctx = {
     hiring: parties.hiring || {},
     sub: parties.sub || {},
+    T: (template.partyTerms || {})[kind] || template.neutralTerms
+       || { hiring: "Hiring Party", hired: "Contractor", doc: "Contractor Agreement" },
     terms: validTerms(terms),
     issuedOn: String(issuedOn || "").slice(0, 10),
   };
   return {
     templateId: template.id,
     templateVersion: template.version,
-    title: template.title,
+    // SubSub's form, said in the title. A document headed with the hiring
+    // company's name reads as their own bespoke paper, which is the opposite
+    // of what it is; the company is a party filled into it.
+    title: template.titleFor ? template.titleFor(kind) : template.title,
+    partyTerms: ctx.T,
     reviewed: template.reviewed || null,
     sections: template.sections.map((s) => ({
       id: s.id,
-      heading: s.heading,
+      heading: typeof s.heading === "function" ? s.heading(ctx) : s.heading,
       paragraphs: s.body(ctx),
     })),
   };
