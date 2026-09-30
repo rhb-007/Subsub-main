@@ -486,6 +486,68 @@ refactor.
   would guess that, and a panel that let them assume otherwise would be lying by
   omission.
 
+- **And the hiring account has a code of its own, which is the mirror of that
+  one.** The subcontractor's code hands over a compliance pack; this one hands
+  over a place to apply. Both are the same kind of thing — give somebody your
+  details without a conversation — and both exist because spelling out an email
+  address on a roof is how a contact gets lost.
+
+  It encodes the hosted application form, which already existed and which
+  nobody could find. **The reason it needs `applyUrl` rather than building a URL
+  on the panel is the whole design:** a custom hostname is Scale, so on Basic
+  `<sub>.subsub.work` does not resolve — and **a QR code that fails while
+  somebody is standing there holding a phone is worse than no code at all.**
+  `liveHost` is the same flag the embed panel already withholds its hosted link
+  behind, for the same reason.
+
+  So the fallback names the account in the **query string** instead of the
+  hostname: `app.subsub.work/?apply=<sub>`. That address belongs to nobody,
+  which is exactly why the URL has to say whose form it is. **Withholding the
+  code on Basic was the alternative and it is refused**, because
+  `POST /api/apply/:subdomain` checks no plan and making the cheapest growth
+  lever a paid feature is the mistake the embed panel records against itself.
+
+  Which needed two things to follow. `openingApplication` required a real
+  subdomain, so the fallback address would have loaded the **sign-in page** — a
+  code that scans, loads, and shows the wrong screen, which is the worst of the
+  three failures because it looks like it worked. And the brand lookup had to
+  follow too, or the form wears SubSub's colours under the account's name.
+
+  **Scoped to `?apply` deliberately.** A hostname that belongs to nobody
+  wearing a company's colours because of a query parameter is the white-label
+  failure this file already refuses, from a new direction. No new exposure:
+  `GET /api/account-by-subdomain/:s` is already public and is what brands every
+  login page.
+
+  **The address is shown beside the code**, because a QR code is the one
+  control on a screen whose destination cannot be read, and somebody about to
+  point a stranger's camera at it is entitled to know where it goes. The panel
+  also **says which address it carries** — on Basic it names SubSub and says it
+  switches to their own once the hostname is live — because somebody deciding
+  whether to put this on a van needs to know that.
+
+  **Two ways in, one component.** The panel is on Branding, beside the form it
+  is a code for; the add-a-contractor gate opens the same one, because *typing a
+  company name off a business card while somebody waits* is exactly the moment
+  it is for, and Branding is two taps and a tab away from where that question
+  comes up. Two copies would be two components to keep in step — the rule the
+  embed panel already records.
+
+  **`applyLink` is defined in terms of `applyUrl`**, not beside it. Two
+  functions building one URL is two records of one fact. `applyLink` always
+  wants the account's own hostname, because it goes on their website where a
+  link to `app.subsub.work` would read as sending their visitors elsewhere; and
+  the test counts how many places in `embed.js` build that URL — **stripping
+  whole comment lines first**, because a naive `//` stripper eats `https://`
+  and the first version duly reported zero.
+
+  **And one assertion could not fail, caught by mutation.** *A bare query
+  parameter does not brand the sign-in page* looked for the apply form's
+  heading, which is absent either way — `openingApplication` still requires
+  `?apply`, so the form never renders for `?brand=`. What a widened lookup
+  actually does is put another account's name and colours on SubSub's own front
+  door, so the check has to read the branding rather than the form.
+
 - **The QR code is on Profile, because it is not a company setting.** It was the
   seventh panel down inside Company, under the account kind, the trades grid and
   the hireable profile. It is the thing you hold up on a job site — and it

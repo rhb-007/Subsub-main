@@ -21,8 +21,14 @@ export const API_ORIGIN = "https://api.subsub.work";
 
 // Where the hosted version lives, for the no-JavaScript fallback and for
 // anybody who would rather link than embed.
-export const applyLink = (subdomain) =>
-  `https://${subdomain}.subsub.work/?apply=1`;
+//
+// Defined in terms of `applyUrl` at the bottom of this file rather than
+// alongside it, because two functions building the same URL is two records of
+// one fact -- and they would drift the first time either address changed. This
+// one always wants the account's OWN hostname: it goes on their website, where
+// a link to app.subsub.work would read as sending their visitors somewhere
+// else. `applyUrl` is what decides when that address is safe to hand out.
+export const applyLink = (subdomain) => applyUrl(subdomain, { liveHost: true });
 
 // The snippet's own copy of the branding defaults. It cannot import the app's
 // DEFAULT_THEME -- this module is shared with the Worker and the app's lives in
@@ -314,3 +320,38 @@ ${chips}
 export const EMBED_NUDGE_AT = 3;
 export const shouldNudgeEmbed = (subCount, alreadyNudged) =>
   !alreadyNudged && Number(subCount) >= EMBED_NUDGE_AT;
+
+// SubSub's own address, which belongs to nobody.
+export const APP_HOST = "app.subsub.work";
+
+// Is this a subdomain somebody could actually be applying to? Cheap shape
+// check only -- the account lookup is what decides whether it exists.
+export const applyTargetOk = (s) =>
+  /^[a-z0-9][a-z0-9-]{0,62}$/.test(String(s || "").trim().toLowerCase())
+  && !["app", "www", "admin", "api", "platform"].includes(String(s).trim().toLowerCase());
+
+// THE ADDRESS A SCANNED CODE OR A PASTED LINK OPENS, decided in one place.
+//
+// `<sub>.subsub.work/?apply=1` is the one to hand out when it resolves: it is
+// their own name, and it is what the preview on the Branding tab shows. But a
+// custom hostname is Scale, and a QR CODE THAT ENCODES AN ADDRESS WHICH DOES
+// NOT RESOLVE FAILS IN FRONT OF SOMEBODY, on a job site, holding a phone --
+// which is worse than having no code at all. `liveHost` is the same flag the
+// embed panel already withholds its hosted link behind, for the same reason.
+//
+// So the fallback names the account in the QUERY STRING instead of in the
+// hostname. `app.subsub.work` belongs to nobody, which is exactly why
+// `?apply=<sub>` is needed there: the form applies to a specific account, and
+// without the subdomain the URL is the only thing that can say which.
+//
+// Recruiting is deliberately NOT plan-gated -- `POST /api/apply/:subdomain`
+// looks an account up by subdomain and checks no plan -- so the code has to
+// work on Basic. Withholding it there would make the cheapest growth lever a
+// paid feature, which is the mistake the embed panel already records against
+// itself.
+export function applyUrl(subdomain, { liveHost = false, origin = null } = {}) {
+  const sub = String(subdomain || "").trim().toLowerCase();
+  if (!applyTargetOk(sub)) return null;
+  if (liveHost) return `https://${sub}.subsub.work/?apply=1`;
+  return `${origin || `https://${APP_HOST}`}/?apply=${encodeURIComponent(sub)}`;
+}

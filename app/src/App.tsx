@@ -63,7 +63,7 @@ import { STAGES, STAGE_LABEL, STAGE_NOTE, isOurs } from "../shared/stuck.js";
 import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
-import { applyFormHtml, applyLink } from "../shared/embed.js";
+import { applyFormHtml, applyLink, applyUrl, applyTargetOk } from "../shared/embed.js";
 import { greetingFor, weatherLine } from "../shared/greeting.js";
 import { TRADES } from "../shared/trades.js";
 import { SOURCE_PRESETS } from "../shared/crmsources.js";
@@ -1346,6 +1346,31 @@ function detectSubdomain() {
 // back while they type rather than after a save that looked like it worked;
 // the API is still the one that decides, and it is the one that knows whether
 // somebody else already holds the name.
+// WHICH ACCOUNT THE APPLICATION FORM IS FOR.
+//
+// The hostname when there is one, and otherwise the name in `?apply=<sub>`.
+// That second form exists because a QR code has to encode an address that
+// resolves: a custom hostname is Scale, so on Basic `<sub>.subsub.work` is
+// dead, and a code that fails while somebody is holding a phone on a job site
+// is worse than no code at all. `applyUrl` in shared/embed.js is the one place
+// that decides which of the two to hand out.
+//
+// Scoped to `?apply` deliberately. It must never brand the SIGN-IN page: a
+// hostname that belongs to nobody wearing a company's colours because of a
+// query string is the white-label failure this file already refuses, from a
+// new direction. Nothing here is a new exposure either --
+// `GET /api/account-by-subdomain/:s` is already public and is what brands
+// every login page.
+function applyTargetSub() {
+  if (typeof window === "undefined") return null;
+  const host = detectSubdomain();
+  if (host) return host;
+  const q = new URLSearchParams(window.location.search);
+  if (!q.has("apply")) return null;
+  const named = String(q.get("apply") || "").trim().toLowerCase();
+  return applyTargetOk(named) ? named : null;
+}
+
 const RESERVED_SUBDOMAINS = new Set([
   "app", "www", "admin", "api", "platform", "dashboard", "portal", "status",
   "mail", "smtp", "ftp", "cdn", "assets", "static", "help", "support",
@@ -1782,10 +1807,14 @@ export default function SubSub() {
   // screen, however briefly, which is the one thing a white-labelled login
   // page must not do.
   const [brandPending, setBrandPending] = useState(
-    () => supabaseEnabled && !!detectSubdomain());
+    () => supabaseEnabled && !!applyTargetSub());
   useEffect(() => {
     if (!supabaseEnabled) return;
-    const sub = detectSubdomain();
+    // The apply target rather than the hostname, so the form reached through
+    // `?apply=<sub>` wears the account's colours too. An applicant filling in
+    // a form headed with one company's name and another company's branding has
+    // been given every reason to think they are in the wrong place.
+    const sub = applyTargetSub();
     if (!sub) return;
     api.getAccountBySubdomain(sub).then((a) => {
       setSubdomainBrand({ id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: a.billing,
@@ -1808,7 +1837,7 @@ export default function SubSub() {
   // and app.subsub.work is nobody's, so there is nothing to apply to there.
   const openingApplication = typeof window !== "undefined"
     && new URLSearchParams(window.location.search).has("apply")
-    && !!detectSubdomain();
+    && !!applyTargetSub();
   const [publicView, setPublicView] = useState(
     BUILD === "platform" ? "superadmin" : openingApplication ? "signup" : "login"); // login | signup | superadmin | pack
 
@@ -2132,6 +2161,9 @@ export default function SubSub() {
   const [overflowOffers, setOverflowOffers] = useState([]);
   const [overflowStanding, setOverflowStanding] = useState(null);
   const [adding, setAdding] = useState(false);
+  // The recruiting code, opened from the add-a-contractor form as well as
+  // from Branding. One component, two ways in.
+  const [recruitQr, setRecruitQr] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   // Contractors who have been invited and have not joined. They are not
   // subs -- there is no company, no engagement, nothing to rate or assign --
@@ -6127,8 +6159,14 @@ export default function SubSub() {
           canChangeRole={can("users") && editUser.id !== currentUserId}
           onSetAvatar={can("users") || editUser.id === currentUserId ? setUserAvatar : null}
           onSubmit={updateUser} onCancel={() => setEditUser(null)} /></Modal>}
+      {recruitQr && (
+        <RecruitQr asModal subdomain={account.subdomain} accountName={account.name}
+          words={rosterWords(account)} liveHost={account.hostnameStatus === "active"}
+          onClose={() => setRecruitQr(false)} />
+      )}
       {adding && <Modal onClose={() => { setAdding(false); setResumeAssign(null); }} wide>
         <SubForm properties={accountProperties} onSubmit={addSub}
+          onRecruitQr={isHiring(account) ? () => { setAdding(false); setRecruitQr(true); } : null}
           onOpenExisting={(match) => openExistingContractor(match)}
           onConnect={async (match) => {
             const made = await api.requestConnect({ companyId: match.companyId });
@@ -16471,6 +16509,18 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {/* The application form belongs with branding, not with the account's
           own settings: it is a thing OTHER people see, and its colours, its
           preview and its live address are all on this tab already. */}
+      {/* The code, above the snippet, because the two are the same offer at
+          different distances: this one is for somebody standing in front of
+          you, that one is for somebody on your website. Outside the canBrand
+          branch, like EmbedApply and for the same reason -- recruiting is the
+          cheapest growth lever here and must not be a paid feature. */}
+      {pane === "branding" && canManage && applySubdomain && applySubdomain !== "app"
+        && ACCOUNT_KINDS[accountKind]?.hires !== false && (
+        <RecruitQr subdomain={applySubdomain} accountName={brand.name}
+          words={rosterWords({ kind: accountKind })}
+          liveHost={hostnameStatus === "active"} />
+      )}
+
       {pane === "branding" && canManage && applySubdomain && applySubdomain !== "app" && (
         <EmbedApply subdomain={applySubdomain} accountName={brand.name} words={rosterWords({ kind: accountKind })}
           trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))}
@@ -23295,6 +23345,90 @@ function QuickSend({ inline = false }) {
 
 // "Put this on your website", with the thing to put.
 //
+// THE CODE YOU HOLD UP ON A JOB SITE TO RECRUIT SOMEBODY.
+//
+// The exact mirror of the subcontractor's own QR code, which has always sat on
+// their Profile: theirs hands over a compliance pack, this one hands over a
+// place to apply. Both are the same kind of thing -- give somebody your details
+// without a conversation -- and both exist because spelling out an email
+// address on a roof is how a contact gets lost.
+//
+// It encodes the hosted application form, which already existed and which
+// nobody could find. `applyUrl` decides the address, and the reason it is not
+// simply `<sub>.subsub.work` is the whole point of this panel: a custom
+// hostname is Scale, so on Basic that address does not resolve, and a code
+// that fails while somebody is standing there holding a phone is worse than no
+// code at all. Recruiting is not plan-gated, so the code cannot be either.
+function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = false, onClose }) {
+  const url = applyUrl(subdomain, { liveHost });
+  const [copied, setCopied] = useState(false);
+
+  // Nothing to encode is nothing to draw. A panel with an empty square in it
+  // reads as broken rather than as not yet available.
+  if (!url) return null;
+
+  const body = (
+    <>
+      <p className="panel-note">
+        Hold this up and have them scan it. It opens your own sign up form, so
+        what they fill in lands straight on your {words?.many || "subcontractors"} list
+        — no email address spelled out on site, and nothing for you to type in
+        afterwards.
+      </p>
+      <div className="rq-wrap">
+        <QrCode value={url} size={210} label={`Sign up form for ${accountName || "this account"}`} />
+        <div className="rq-side">
+          {/* THE ADDRESS IS SHOWN, because a QR code is the one control on a
+              screen whose destination cannot be read. Somebody about to point
+              a stranger's camera at it is entitled to know where it goes. */}
+          <span className="rq-url">{url.replace(/^https:\/\//, "")}</span>
+          <div className="rq-acts">
+            <button type="button" className="btn-ghost sm"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(url);
+                  setCopied(true); setTimeout(() => setCopied(false), 2000);
+                } catch { /* a clipboard that refuses is not worth an error */ }
+              }}>
+              {copied ? "Copied" : "Copy the link"}
+            </button>
+            <a className="btn-ghost sm" href={url} target="_blank" rel="noreferrer">
+              Open it <ExternalLink size={12} />
+            </a>
+          </div>
+          {/* Said rather than hidden. On Basic the code works and points at
+              app.subsub.work; on Scale it carries their own name. Somebody
+              deciding whether to put this on a van needs to know which. */}
+          {!liveHost && (
+            <span className="cx-sub rq-note">
+              This points at SubSub with your company named in the link, which
+              works today. Once {subdomain}.subsub.work is live the code
+              switches to your own address on its own.
+            </span>
+          )}
+        </div>
+      </div>
+    </>
+  );
+
+  if (!asModal) {
+    return (
+      <div className="portal-panel rq-panel">
+        <h4><QrCodeIcon size={14} /> Recruiting code</h4>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <Modal onClose={onClose} wide>
+      <div className="form rq-modal">
+        <h2>Recruiting code</h2>
+        {body}
+      </div>
+    </Modal>
+  );
+}
+
 // The hosted form at <sub>.subsub.work/?apply=1 has existed since the start and
 // nobody knows it is there. Telling somebody a URL is a thing they mean to do
 // and never do; giving them twelve lines to paste is done in a minute and then
@@ -24381,7 +24515,7 @@ function useConnectMatch(enabled, { email, phone, license }) {
   return { match, checking, searched };
 }
 
-function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenExisting, onUploadDoc, onDeleteDoc }) {
+function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenExisting, onRecruitQr, onUploadDoc, onDeleteDoc }) {
   const init = existing ? {
     company: existing.company, contact: existing.contact, phone: existing.phone, email: existing.email,
     categories: existing.categories, caps: existing.caps,
@@ -24612,6 +24746,23 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
           insurance and licence come with them, kept current by them. An email,
           a mobile or a licence number finds them.
         </p>
+
+        {/* THE THIRD ANSWER, which this screen did not have: they are standing
+            in front of you. Typing a company name, an email and a mobile off a
+            business card while somebody waits is the moment a contact gets
+            lost, and it is the moment the code exists for -- they scan it and
+            fill their own details in. Offered here rather than only on
+            Branding, which is two taps and a tab away from where the question
+            comes up. Same component, not a second copy. */}
+        {onRecruitQr && (
+          <button type="button" className="cx-gate-qr" onClick={onRecruitQr}>
+            <QrCodeIcon size={14} />
+            <span>
+              <b>They're here with you?</b>
+              Show them a code to scan and they fill it in themselves
+            </span>
+          </button>
+        )}
 
         <div className="cx-gate-flds">
           {/* Not a way of finding them -- two roofers in one county share a
@@ -28427,6 +28578,27 @@ iframe.dv-frame{display:block}
 /* Subcontractor agreements. No backtick anywhere in this block: the whole
    stylesheet is one template literal, and a backtick in a CSS comment has
    taken the entire app down behind one unrelated error. */
+/* The recruiting code. No backtick anywhere in this block. */
+.rq-wrap{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-top:12px}
+.rq-wrap .qr{flex:none;border:1px solid var(--line);border-radius:10px;background:#fff}
+.rq-side{flex:1;min-width:190px;display:flex;flex-direction:column;gap:9px}
+.rq-url{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  word-break:break-all;color:var(--ink-soft)}
+.rq-acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.rq-acts .btn-ghost{display:inline-flex;align-items:center;gap:5px}
+.rq-note{line-height:1.5}
+.rq-modal .rq-wrap{justify-content:center}
+/* The third answer on the add-a-contractor gate: they are standing here. A
+   button rather than a note, because the note version of this is a sentence
+   nobody acts on. */
+.cx-gate-qr{display:flex;align-items:center;gap:10px;width:100%;margin:2px 0 4px;
+  padding:11px 13px;text-align:left;cursor:pointer;
+  border:1px dashed var(--line);border-radius:10px;background:transparent;
+  color:inherit;font:inherit}
+.cx-gate-qr:hover{border-color:var(--brand);border-style:solid}
+.cx-gate-qr span{display:flex;flex-direction:column;gap:1px;font-size:12.5px}
+.cx-gate-qr b{font-size:13px}
+@media (max-width:620px){ .rq-wrap{justify-content:center} }
 .agr-panel .agr-badge{display:inline-flex;align-items:center;justify-content:center;
   min-width:18px;height:18px;padding:0 5px;margin-left:8px;border-radius:9px;
   background:var(--warn,#b45309);color:#fff;font-size:11px;font-weight:700;line-height:1}
