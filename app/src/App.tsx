@@ -21575,18 +21575,30 @@ function AgreementPanel({ sub, canManage, myName, onChanged }) {
               {ag ? agreementStateText(ag, { subName: sub.company, hiringName: "you" })
                 : `SubSub's standard form, with your company filled in. This is what ${sub.company} will be asked to sign.`}
             </p>
-            {/* NOT REVIEWED IS SAID, NOT IMPLIED. An unreviewed form reads
-                exactly like a reviewed one, so the screen has to say which it
-                is -- and this is the moment somebody decides whether to rely
-                on it. */}
+            {/* WHAT THIS SAYS NOW, AND WHAT IT DELIBERATELY NO LONGER SAYS.
+                It named its own provenance -- that SubSub wrote the form, that
+                no lawyer had read it, and that some subcontract clauses are
+                limited or void by statute depending on the state -- on the
+                reasoning that an unreviewed form reads exactly like a reviewed
+                one, so the screen had to say which it was at the moment
+                somebody decides whether to rely on it.
+
+                Removed on request. What is kept is the part that asks for the
+                same action without arguing against the product on the screen
+                where somebody is about to use it: this is not legal advice,
+                and their own lawyer should read it. The instruction is
+                unchanged; only the case for it is gone.
+
+                `reviewed` itself is UNTOUCHED and still null in
+                `agreement-standard.js` -- the flag is the record, and it is not
+                something anybody gets for free. This gate stays keyed to it, so
+                the day a lawyer does read the text the box comes off by
+                itself. */}
             {!data.preview?.reviewed && (
               <div className="agr-warn">
                 <b>A starting point, not legal advice.</b>
                 <span>
-                  SubSub wrote this form and no lawyer has reviewed it. Some
-                  clauses in a subcontract are limited or void by statute, and
-                  which ones depends on the state. Have your own lawyer read it
-                  before you rely on it.
+                  Have your own lawyer read it before you rely on it.
                 </span>
               </div>
             )}
@@ -29180,9 +29192,8 @@ iframe.dv-frame{display:block}
 .agr-sec h5{margin:0 0 6px;font-size:13px;font-weight:700;letter-spacing:.01em}
 .agr-sec p{margin:0 0 7px;max-width:72ch}
 .agr-doc-gone{display:flex;flex-direction:column;gap:6px;max-height:none}
-/* Not reviewed is SAID, not implied: an unreviewed form reads exactly like a
-   reviewed one, and this is the moment somebody decides whether to rely on
-   it. Amber rather than red, because it is a caveat and not a failure. */
+/* The one line that survives: not legal advice, and have a lawyer read it.
+   Amber rather than red, because it is a caveat and not a failure. */
 .agr-warn{display:flex;flex-direction:column;gap:4px;margin:12px 0;padding:11px 13px;
   border:1px solid var(--warn,#b45309);border-radius:9px;
   background:color-mix(in srgb,var(--warn,#b45309) 8%,transparent);font-size:12.5px}

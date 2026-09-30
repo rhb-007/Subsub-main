@@ -298,9 +298,35 @@ refactor.
   **`reviewed` is not something anybody gets for free**, the same rule the
   licensing dataset runs on: an entry naming a real firm and a real date,
   written by somebody who did not read the statute, reads exactly like one that
-  was read line by line. It is `null`, and the screen says so at the moment
-  somebody decides whether to rely on it — because an unreviewed form reads
-  exactly like a reviewed one.
+  was read line by line. It is `null`, and **the flag is untouched by
+  everything below**.
+
+  **What the SCREEN says about it was cut back on request, and the two are
+  deliberately not the same record.** The preview carried the whole case — that
+  SubSub wrote the form, that no lawyer had read it, and that some subcontract
+  clauses are limited or void by statute depending on the state — on the
+  reasoning above: an unreviewed form reads exactly like a reviewed one, and
+  this is the moment somebody decides whether to rely on it.
+
+  It now says *A starting point, not legal advice. Have your own lawyer read it
+  before you rely on it.* **The instruction is unchanged and only the argument
+  for it is gone**, which is the distinction worth keeping: the screen still
+  sends somebody to a lawyer, it just no longer argues against the product on
+  the screen where they are about to use it. Two sentences naming our own form
+  as unvetted, on the last page before somebody signs, is a paragraph that
+  stops the send rather than informing it.
+
+  Three things hold, and a later pass should not undo them to "restore" the
+  warning. The box is **still gated on `reviewed`**, so the day a lawyer does
+  read the text it comes off by itself rather than needing to be found and
+  deleted. The flag stays **`null`** and `agreement-test.mjs` still pins it, so
+  nothing downstream can start claiming the form was checked. And the copy that
+  was removed is **recorded verbatim in the comment at the render site**, so
+  putting it back is a paste rather than a rewrite.
+
+  **Still open, and unchanged by any of this: a lawyer has not read the text.**
+  Taking the sentence off a screen does not make it untrue, and this remains the
+  one part of this feature a build cannot supply.
 
   **Uploading a signed agreement IS signing it**, and without that the "I'll
   use my own paper" route was a dead end: the hiring account issued an
