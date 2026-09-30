@@ -2442,7 +2442,10 @@ export default function SubSub() {
   };
 
   // Flatten company + engagement into the "sub" shape the UI consumes.
-  const subs = useMemo(() => engagements
+  // EVERY engagement on this account, removed and paused ones included. Almost
+  // nothing wants this -- see `subs` directly below, which is what every screen
+  // reads -- so it is named for what it is rather than being the plain word.
+  const allSubs = useMemo(() => engagements
     .filter((e) => e.accountId === account.id)
     .map((e) => {
       const co = companies.find((c) => c.id === e.companyId);
@@ -2459,6 +2462,22 @@ export default function SubSub() {
       return sub;
     })
     .filter(Boolean), [engagements, companies, account.id, memberships]);
+
+  // THE ROSTER, which is what `subs` means everywhere it is read.
+  //
+  // Filtering at the source rather than per screen, because the first attempt
+  // did it per screen -- the roster list, the nav count, the page head -- and
+  // a removed contractor duly went on appearing in Registration problems,
+  // Documents to verify and Awaiting documents on the dashboard, which is the
+  // fix-only-the-reported-screen failure this file already records about the
+  // roster noun. `subs` reaches about twenty components; one predicate in one
+  // place is the only shape that cannot grow a twenty-first that forgot.
+  //
+  // What it therefore also does, correctly: a removed contractor stops
+  // counting against the plan limit, stops being offered in the assign and
+  // quote pickers, stops being nominated as the emergency contractor, and
+  // drops off the availability calendar and every property's vendor list.
+  const subs = useMemo(() => allSubs.filter((s) => onRoster(s.status)), [allSubs]);
 
   // Properties belong to the account you're viewing.
   // Buildings this account operates, PLUS buildings it owns and has appointed
@@ -2501,7 +2520,7 @@ export default function SubSub() {
     .filter(Boolean), [memberships, users, account.id]);
 
   const mySub = role === "contractor"
-    ? subs.find((s) => s.id === membership.companyId)
+    ? allSubs.find((s) => s.id === membership.companyId)
     : null;
   // REMOVED CONTRACTORS COME OFF THE LIST, and are kept where they can be
   // put back. `engagements.status` has had `ended` since the schema was
@@ -2512,17 +2531,9 @@ export default function SubSub() {
   // They are NOT hidden altogether: a status is reversible where a delete is
   // not, and a removed contractor nobody can find is a removal nobody can
   // undo -- which is the no-way-in failure this file keeps recording.
-  const offRoster = useMemo(() => subs.filter((s) => !onRoster(s.status)), [subs]);
-  // Everyone still on the roster, for every count that says how many there
-  // are. The nav badge and the page head read this rather than `subs`, or the
-  // tab says thirty over a list of twenty-nine.
-  const liveSubs = useMemo(() => subs.filter((s) => onRoster(s.status)), [subs]);
+  const offRoster = useMemo(() => allSubs.filter((s) => !onRoster(s.status)), [allSubs]);
   const filtered = useMemo(() => {
     const list = subs.filter((s) => {
-      // Off the roster, off the picker, off every count -- and the server
-      // agrees: POST /api/jobs/:jobId/assign answers `not_engaged` for the
-      // same two states, so this is not a gate that lives in the browser.
-      if (!onRoster(s.status)) return false;
       // Scoped to a building. A vendor with no buildings listed works them
       // all, so they belong in every building's list rather than in none --
       // which is what "every vendor on the account can work it" means on
@@ -3208,7 +3219,7 @@ export default function SubSub() {
   // optimistic patch would take somebody off the screen and log the refusal
   // to the console. The modal is what shows the failure, so this throws.
   const endEngagement = async (companyId, status) => {
-    const sb = subs.find((x) => x.id === companyId);
+    const sb = allSubs.find((x) => x.id === companyId);
     const res = await api.endEngagement(companyId, status);
     patchEngagement(companyId, { status: res.status });
     logEvent(`engagement_${res.status}`,
@@ -4893,7 +4904,7 @@ export default function SubSub() {
           )}
           {can("contractors") && (
             <button className={tab === "network" ? "on" : ""} onClick={() => setTab("network")}>
-              {rosterWords(account).Many} <span className="count">{liveSubs.length}</span>
+              {rosterWords(account).Many} <span className="count">{subs.length}</span>
             </button>
           )}
           {can("calendar") && (
@@ -5056,9 +5067,9 @@ export default function SubSub() {
       {tab === "network" && can("contractors") && (
         <main className="ss-main">
           <PageHead title={rosterWords(account).Many}
-            sub={liveSubs.length === 0
+            sub={subs.length === 0
               ? "Nobody on your list yet."
-              : `${liveSubs.length} on your list \u00b7 ${liveSubs.filter(docsComplete).length} ready to schedule`}>
+              : `${subs.length} on your list \u00b7 ${subs.filter(docsComplete).length} ready to schedule`}>
             {can("contractors") && runsTheAccount(role, membership) && (
               <>
                 <button className="btn-solid" onClick={() => setInviteOpen(true)}>
@@ -5997,14 +6008,14 @@ export default function SubSub() {
               that can be -- used to leave the card drawing the old value
               until it was closed and reopened. Looking it up by id each
               render costs nothing and makes every field here current. */}
-          <SubDetail sub={subs.find((s) => s.id === selected.id) || selected} brand={brand}
+          <SubDetail sub={allSubs.find((s) => s.id === selected.id) || selected} brand={brand}
             /* The invite already out to them, so the card can say so rather
                than offering to send one as if none existed. Matched on the
                company first and the address second, because an invite raised
                from the blank form carries no company id until it is redeemed
                or this account adopts it. */
             invite={(() => {
-              const me = subs.find((x) => x.id === selected.id) || selected;
+              const me = allSubs.find((x) => x.id === selected.id) || selected;
               const mail = (me.email || "").toLowerCase();
               return openInvites.find((i) => i.companyId === me.id)
                 || (mail ? openInvites.find((i) => (i.email || "").toLowerCase() === mail) : null)
@@ -24268,6 +24279,7 @@ function EndEngagement({ sub, word, onEnd }) {
           consequence={endConsequence({
             status: asking, word,
             liveWork: check?.liveWork || [], seats: check?.seats || 0,
+            isEmergency: !!check?.isEmergency, invites: check?.invites || 0,
           })}
           onCancel={() => setAsking(null)}
           onConfirm={async () => { await onEnd(asking); setAsking(null); }} />

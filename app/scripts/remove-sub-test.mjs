@@ -88,6 +88,13 @@ const seed = () => {
     INSERT INTO memberships(id,user_id,account_id,role,company_id) VALUES
       ('m_s1','u_sub','${GC}','contractor','${SUB_CO}'),
       ('m_s2','u_sub2','${GC}','contractor','${SUB_CO}');
+    -- They are the named emergency contractor and have a live invite out.
+    -- Both go on pointing at somebody after they leave the roster, and
+    -- neither is visible from the card.
+    UPDATE accounts SET emergency_company_id = '${SUB_CO}' WHERE id = '${GC}';
+    INSERT INTO sub_invites(id,account_id,token,company_id,email,expires_at) VALUES
+      ('inv1','${GC}','tok_live_1','${SUB_CO}','rae@bay.test','2099-01-01'),
+      ('inv_other','acc_other','tok_other','${OTHER_CO}','kit@else.test','2099-01-01');
   `);
   return db;
 };
@@ -259,6 +266,60 @@ console.log("\n-- live work is NAMED and never blocks --");
       .get(SUB_CO).n === 2);
 }
 
+console.log("\n-- what else was pointing at them stops pointing at them --");
+{
+  const db = seed(); const env = ENV(db);
+  const chk = await call(env, `/api/subs/${SUB_CO}/end-check`);
+  ck("the check says they are the emergency contractor, before anybody presses",
+    chk.body.isEmergency === true, JSON.stringify(chk.body));
+  ck("and that an invite is still out to them", chk.body.invites === 1, String(chk.body.invites));
+
+  const r = await call(env, `/api/subs/${SUB_CO}/end`, { method: "POST", body: { status: "ended" } });
+  // THE NOMINATION REFUSES AT DISPATCH, WHICH IS TOO LATE. dispatchEmergency
+  // would answer `not_engaged` at the moment a tenant is reporting a flood,
+  // and the account finds out then or not at all -- so it is cleared here.
+  ck("the emergency nomination is cleared", r.body.wasEmergency === true
+    && db.prepare(`SELECT emergency_company_id AS e FROM accounts WHERE id = ?`).get(GC).e === null);
+  // A LIVE TOKEN IS A WAY IN. Redeeming one writes a contractor seat on this
+  // account -- the seat the removal just deleted.
+  ck("the invite still out to them is revoked", r.body.invitesRevoked === 1
+    && !!db.prepare(`SELECT revoked_at AS r FROM sub_invites WHERE id='inv1'`).get().r);
+  ck("and nobody else's invite is touched",
+    db.prepare(`SELECT revoked_at AS r FROM sub_invites WHERE id='inv_other'`).get().r === null);
+  // Revoked rather than deleted: "we invited them and then removed them" is a
+  // thing that happened, and the invite list already draws that state.
+  ck("the invite row survives, it is not deleted",
+    db.prepare(`SELECT COUNT(*) n FROM sub_invites`).get().n === 2);
+}
+
+console.log("\n-- pausing clears the nomination and KEEPS the invite --");
+{
+  const db = seed(); const env = ENV(db);
+  const r = await call(env, `/api/subs/${SUB_CO}/end`, { method: "POST", body: { status: "paused" } });
+  ck("a paused contractor stops being the emergency contractor",
+    r.body.wasEmergency === true
+      && db.prepare(`SELECT emergency_company_id AS e FROM accounts WHERE id = ?`).get(GC).e === null);
+  // They keep their login, so the link that would give them one is still the
+  // right link to be holding.
+  ck("but the invite out to them still works, because pausing leaves their login alone",
+    r.body.invitesRevoked === 0
+      && db.prepare(`SELECT revoked_at AS r FROM sub_invites WHERE id='inv1'`).get().r === null);
+}
+
+console.log("\n-- and nobody off the roster can be NAMED emergency contractor --");
+{
+  const db = seed(); const env = ENV(db);
+  await call(env, `/api/subs/${SUB_CO}/end`, { method: "POST", body: { status: "paused" } });
+  const no = await call(env, "/api/account", { method: "PATCH", body: { emergencyCompanyId: SUB_CO } });
+  ck("a paused contractor is refused, by the same gate the assign route uses",
+    no.status === 400 && no.body.error === "not_engaged", `${no.status} ${JSON.stringify(no.body)}`);
+  // The control: on the roster it is accepted, so the refusal above is about
+  // the status rather than about the route refusing everything.
+  await call(env, `/api/subs/${SUB_CO}/end`, { method: "POST", body: { status: "active" } });
+  const ok = await call(env, "/api/account", { method: "PATCH", body: { emergencyCompanyId: SUB_CO } });
+  ck("and accepted once they are back on it", ok.status < 300, `${ok.status} ${JSON.stringify(ok.body)}`);
+}
+
 console.log("\n-- it is reversible, which is the whole reason it is a status --");
 {
   const db = seed(); const env = ENV(db);
@@ -346,12 +407,37 @@ console.log("\n-- the browser half: off the list, off every count, with a way ba
   // The roster filter, the counts and the picker all have to read the same
   // predicate -- three opinions about who is on a roster is how a tab says
   // thirty over a list of twenty-nine.
-  ck("the roster list drops anybody off the roster", /if \(!onRoster\(s\.status\)\) return false;/.test(APP));
-  ck("and the two memos beside it read the same rule rather than a second opinion",
-    /const offRoster = useMemo\(\(\) => subs\.filter\(\(s\) => !onRoster\(s\.status\)\)/.test(APP)
-      && /const liveSubs = useMemo\(\(\) => subs\.filter\(\(s\) => onRoster\(s\.status\)\)/.test(APP));
-  ck("the nav count and the page head read the live list, not every row",
-    /\{liveSubs\.length\}/.test(APP) && /liveSubs\.filter\(/.test(APP));
+  // FILTERED AT THE SOURCE, not per screen. The first attempt filtered the
+  // roster list, the nav count and the page head -- and a removed contractor
+  // went on appearing in Registration problems, Documents to verify and
+  // Awaiting documents on the dashboard, because those read `subs` directly.
+  // `subs` reaches about twenty components; a per-screen filter is twenty
+  // places to forget one.
+  ck("`subs` IS the roster -- the filter is on the list every screen reads",
+    /const subs = useMemo\(\(\) => allSubs\.filter\(\(s\) => onRoster\(s\.status\)\), \[allSubs\]\);/.test(APP));
+  ck("and the unfiltered list is named for what it is",
+    /const allSubs = useMemo\(\(\) => engagements/.test(APP));
+  // Which is only safe if the screens that genuinely need every row say so.
+  ck("the roster screen no longer filters again on its own",
+    !/if \(!onRoster\(s\.status\)\) return false;/.test(APP));
+  ck("and `liveSubs` is gone -- two names for one list is how a later change picks the wrong one",
+    !/liveSubs/.test(APP));
+  // A PAUSED CONTRACTOR KEEPS THEIR LOGIN, so their own portal still has to
+  // find their record. Reading the filtered list here is the exact "this
+  // contractor login isn't linked to a contractor record yet" empty state.
+  ck("the contractor's own record is looked up in the unfiltered list",
+    /\? allSubs\.find\(\(s\) => s\.id === membership\.companyId\)/.test(APP));
+  ck("and so is the card opened from the removed list",
+    /<SubDetail sub=\{allSubs\.find\(\(s\) => s\.id === selected\.id\)/.test(APP));
+  ck("and the removed list reads the same rule rather than a second opinion",
+    /const offRoster = useMemo\(\(\) => allSubs\.filter\(\(s\) => !onRoster\(s\.status\)\)/.test(APP));
+  // Every count, picker and panel now reads the filtered list by construction,
+  // which is the whole point of filtering at the source. Spot-checked on the
+  // dashboard, because that is the screen the per-screen fix missed.
+  ck("the dashboard is handed the roster rather than every row",
+    /<AdminDashboard visits=\{visits\} subs=\{subs\}/.test(APP));
+  ck("and so is the plan-limit count, so a removed contractor stops costing a seat",
+    /const atContractorLimit = subs\.length >= PLANS\[plan\]\.limit;/.test(APP));
 
   // A reversible act with nowhere to reverse it from is a delete wearing a
   // softer word. This is the door.
@@ -390,6 +476,14 @@ console.log("\n-- what the modal SAYS, since that is the whole of the confirmati
   const none = R.endConsequence({ status: "ended", word: "contractor" });
   ck("with nobody to lose access and nothing booked it does not invent either",
     !/sign in/.test(none) && !/booked/.test(none), none);
+
+  const emg = R.endConsequence({ status: "ended", word: "contractor", isEmergency: true, invites: 1 });
+  ck("it names the emergency nomination, which nothing on the card shows",
+    /emergency contractor/.test(emg) && /automatic dispatch is off/.test(emg), emg);
+  ck("and the invite it is about to revoke", /invite still out to them stops working/.test(emg), emg);
+  const quiet = R.endConsequence({ status: "ended", word: "contractor" });
+  ck("and says neither when neither applies",
+    !/emergency/.test(quiet) && !/invite/.test(quiet), quiet);
 
   const paused = R.endConsequence({ status: "paused", word: "contractor", seats: 1 });
   ck("pausing says a DIFFERENT thing -- they stay, and nothing booked changes",

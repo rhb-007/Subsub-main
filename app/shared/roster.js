@@ -52,7 +52,8 @@ export function offRosterText(status) {
 // being removed, and refusing until it is finished hands the party you are
 // leaving a hostage. Same call the building handover makes, for the same
 // reason.
-export function endConsequence({ status = "ended", word = "contractor", liveWork = [], seats = 0 } = {}) {
+export function endConsequence({ status = "ended", word = "contractor", liveWork = [],
+  seats = 0, isEmergency = false, invites = 0 } = {}) {
   const bits = [];
   bits.push(status === "paused"
     ? `They stay on your roster, keep their paperwork and keep their login, and they stop being offered work. Nothing already booked changes, and un-pausing puts them straight back.`
@@ -65,6 +66,20 @@ export function endConsequence({ status = "ended", word = "contractor", liveWork
     bits.push(seats === 1
       ? `The one person who can sign in to your account as this ${word} loses that access.`
       : `The ${seats} people who can sign in to your account as this ${word} lose that access.`);
+  }
+  // THE TWO THINGS THAT GO ON POINTING AT SOMEBODY AFTER THEY ARE OFF THE
+  // ROSTER, both said here because both are invisible from the card. The
+  // nomination refuses at dispatch, which is the moment a tenant is reporting
+  // a flood; the invite is a live way back on to a roster they were taken off.
+  if (isEmergency) {
+    bits.push(status === "paused"
+      ? `They are your emergency contractor, so automatic dispatch turns off — an urgent report will wait for somebody to assign it.`
+      : `They are your emergency contractor. That comes off with them, so automatic dispatch is off until you name somebody else.`);
+  }
+  if (invites > 0 && status !== "paused") {
+    bits.push(invites === 1
+      ? `The invite still out to them stops working, so it cannot be used to join your account.`
+      : `The ${invites} invites still out to them stop working, so they cannot be used to join your account.`);
   }
   if (liveWork.length) {
     bits.push(liveWork.length === 1

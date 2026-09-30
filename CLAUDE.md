@@ -974,6 +974,54 @@ refactor.
   word. Folded like every other secondary panel here, with the count on the
   toggle, which is what makes closing it safe.
 
+  **AND FILTERING PER SCREEN WAS THE BUG, WHICH IS THIS FILE'S OLDEST LESSON
+  ARRIVED AT AGAIN.** The first version filtered the roster list, the nav count
+  and the page head — the three screens the report was about. A removed
+  contractor then went on appearing in **Registration problems**, **Documents
+  to verify** and **Awaiting documents** on the dashboard, because those read
+  `subs` directly, and so did the plan-limit count, the assign picker, the
+  quote picker, the availability calendar, every property's vendor list and the
+  emergency-contractor panel. `subs` reaches about twenty components; a
+  per-screen filter is twenty places to forget one, and *fixing only the
+  reported screen would have been the bug* is already written here about the
+  roster noun.
+
+  So `allSubs` is every engagement and **`subs` is the roster**, filtered once
+  where it is derived. Three places read `allSubs` and each says why: the
+  removed list, the card opened from it, and — the one that matters —
+  **`mySub`, because a paused contractor keeps their login** and reading the
+  filtered list there is exactly the *"this contractor login isn't linked to a
+  contractor record yet"* empty state this file already records. `liveSubs`
+  is gone: two names for one list is how a later change picks the wrong one.
+
+  **TWO THINGS GO ON POINTING AT SOMEBODY AFTER THEY LEAVE THE ROSTER, and
+  neither is visible from the card.** Both are the standing-permission rule
+  that already took auto-schedule off, found one layer out.
+
+  `accounts.emergency_company_id` kept naming them. `dispatchEmergency` does
+  check, so nothing wrong would have been *done* — but it refuses at the moment
+  **a tenant is reporting a flood**, and the account finds out then or not at
+  all. Worse, the panel draws nothing selected once they are off the roster, so
+  the column pointed at a contractor the screen could not name. It is cleared
+  on the way out, which turns automatic dispatch off — the honest default — and
+  the feed says so, because that is a change to what happens at 2am. Both the
+  setter and the dispatch also moved from `!== 'ended'` to `onRoster`: a paused
+  contractor cannot be given work, so naming one as the tenant's-tap contractor
+  is the screen-that-lies rule pointed at the most expensive switch in the
+  product.
+
+  And a **live invite is a way back in**. Redeeming one writes a `users` row and
+  a contractor seat on this account — the seat the removal had just deleted —
+  so somebody taken off a roster could let themselves back on by opening an
+  email. Revoked on `ended` only, because a paused contractor keeps their login
+  and that link is still the right one to be holding; and revoked rather than
+  deleted, which is what the invite list already does, since *we invited them
+  and then removed them* is a thing that happened.
+
+  Both are **counted by `/end-check` and named in the modal**, because the
+  whole reason that check runs before the modal opens is to say what pressing
+  costs, and these are the two costs nothing else on the screen shows.
+
   Three assertions could not fail and mutation caught each one. A bare
   `/Add back/` found the card's own control and passed with the button deleted
   from the list — the `.embed-code-btn` trap again. `className="offroster"`

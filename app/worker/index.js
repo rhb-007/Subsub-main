@@ -42,7 +42,7 @@ import { canRequestQuotes, quotableSubs, validInvitees, canQuote, validQuote,
   quoteJobShape, rankQuotes, canAward, requestState, MAX_INVITES } from "../shared/quotes.js";
 import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { hasPortal, canSet as canSetAuto, AUTO_DENY_TEXT } from "../shared/autoschedule.js";
-import { onRosterSql, OFF_ROSTER } from "../shared/roster.js";
+import { onRoster, onRosterSql, OFF_ROSTER } from "../shared/roster.js";
 import { WEATHER_TTL_MIN, weatherLabel } from "../shared/greeting.js";
 import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
@@ -4654,7 +4654,11 @@ app.patch("/api/account", requireRole("admin"), async (c) => {
       const eng = await c.env.DB.prepare(
         `SELECT id, status FROM engagements WHERE account_id = ? AND company_id = ?`)
         .bind(accountId, want).first();
-      if (!eng || eng.status === "ended") return c.json({ error: "not_engaged" }, 400);
+      // `onRoster`, not `!== 'ended'`: this is the one setting that lets a
+      // tenant's tap commit the account to a contractor, so it has to name
+      // somebody who could actually be given the work -- which a paused
+      // contractor cannot be, by the same gate the assign route uses.
+      if (!eng || !onRoster(eng.status)) return c.json({ error: "not_engaged" }, 400);
     }
     sets.push("emergency_company_id = ?"); vals.push(want);
   }
@@ -5309,10 +5313,25 @@ app.get("/api/subs/:companyId/end-check", requireRole("admin", "pm"), async (c) 
     `SELECT COUNT(*) AS n FROM memberships
       WHERE account_id = ? AND company_id = ? AND role = 'contractor'`
   ).bind(accountId, companyId).first();
+  // What else points at them, so the consequence can say so rather than
+  // somebody discovering it when a tenant reports a flood.
+  const acct = await c.env.DB.prepare(
+    `SELECT emergency_company_id FROM accounts WHERE id = ?`).bind(accountId).first();
+  let invites = 0;
+  try {
+    const r = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM sub_invites
+        WHERE account_id = ? AND company_id = ? AND used_at IS NULL AND revoked_at IS NULL`
+    ).bind(accountId, companyId).first();
+    invites = r?.n || 0;
+  } catch (err) { if (!missingSchema(err)) throw err; }
+
   return c.json({
     status: eng.status,
     liveWork: await engagementLiveWork(c.env, accountId, companyId),
     seats: seats?.n || 0,
+    isEmergency: acct?.emergency_company_id === companyId,
+    invites,
   });
 });
 
@@ -5346,12 +5365,27 @@ app.post("/api/subs/:companyId/end", requireRole("admin", "pm"), async (c) => {
   await c.env.DB.prepare(`UPDATE engagements SET status = ? WHERE id = ?`).bind(to, eng.id).run();
 
   let seatsRemoved = 0;
+  let wasEmergency = false;
+  let invitesRevoked = 0;
   if (OFF_ROSTER.includes(to)) {
     // AUTO-SCHEDULE OFF for both, because it writes to their calendar as
     // accepted. A flag left on against somebody who is not being offered work
     // is a standing permission nobody is watching.
     await c.env.DB.prepare(`UPDATE engagements SET auto_schedule = 0 WHERE id = ?`)
       .bind(eng.id).run();
+    // AND THE EMERGENCY NOMINATION GOES WITH THEM, which is the same rule and
+    // the more expensive one. `dispatchEmergency` refuses somebody off the
+    // roster -- but it refuses at the moment a tenant reports a flood, and the
+    // account finds out then or not at all. Worse, the panel draws nothing
+    // selected once they are off the roster, so the column would point at a
+    // contractor the screen could not name. Cleared here turns automatic
+    // dispatch off, which is the honest default, and the feed says so.
+    try {
+      const cleared = await c.env.DB.prepare(
+        `UPDATE accounts SET emergency_company_id = NULL
+          WHERE id = ? AND emergency_company_id = ?`).bind(accountId, companyId).run();
+      wasEmergency = (cleared?.meta?.changes || 0) > 0;
+    } catch (err) { if (!missingSchema(err)) throw err; }
   }
   if (to === "ended") {
     // THE SEAT GOES ONLY WHEN IT ENDS, and that is what separates the two.
@@ -5370,6 +5404,25 @@ app.post("/api/subs/:companyId/end", requireRole("admin", "pm"), async (c) => {
         WHERE account_id = ? AND company_id = ? AND role = 'contractor'`
     ).bind(accountId, companyId).run();
     seatsRemoved = gone?.meta?.changes || 0;
+
+    // AND AN INVITE STILL OUT IS REVOKED, for the same reason and with the
+    // sharper consequence: a live token is a way IN. Redeeming one writes a
+    // `users` row and a contractor seat on this account -- the seat that was
+    // just deleted two lines up -- so leaving it live means somebody can let
+    // themselves back on to a roster they were taken off, by opening an email.
+    // Revoked rather than deleted, which is what the invite list already does:
+    // "we invited them and then removed them" is a thing that happened.
+    //
+    // Only on `ended`. A paused contractor keeps their login, so the invite
+    // that would give them one is still the right link to be holding.
+    try {
+      const killed = await c.env.DB.prepare(
+        `UPDATE sub_invites SET revoked_at = CURRENT_TIMESTAMP
+          WHERE account_id = ? AND company_id = ?
+            AND used_at IS NULL AND revoked_at IS NULL`
+      ).bind(accountId, companyId).run();
+      invitesRevoked = killed?.meta?.changes || 0;
+    } catch (err) { if (!missingSchema(err)) throw err; }
   }
 
   const who = await c.env.DB.prepare(`SELECT company FROM companies WHERE id = ?`)
@@ -5378,9 +5431,13 @@ app.post("/api/subs/:companyId/end", requireRole("admin", "pm"), async (c) => {
   await logActivity(c.env, accountId, userId, `engagement_${to}`,
     `${verb} ${who?.company || "a contractor"}`);
   await logEvent(c.env, accountId, userId, `engagement.${to}`, companyId,
-    { from: eng.status, liveWork: live.length, seatsRemoved });
+    { from: eng.status, liveWork: live.length, seatsRemoved, wasEmergency, invitesRevoked });
+  if (wasEmergency) {
+    await logActivity(c.env, accountId, userId, "emergency_cleared",
+      `${who?.company || "They"} were your emergency contractor \u2014 automatic dispatch is now off`);
+  }
 
-  return c.json({ ok: true, status: to, liveWork: live, seatsRemoved });
+  return c.json({ ok: true, status: to, liveWork: live, seatsRemoved, wasEmergency, invitesRevoked });
 });
 
 app.post("/api/subs/:companyId/verify-license", requireRole("admin", "pm"), async (c) => {
@@ -7437,7 +7494,7 @@ async function dispatchEmergency(c, jobId, accountId) {
 
     const engagement = await c.env.DB.prepare(
       `SELECT * FROM engagements WHERE account_id = ? AND company_id = ?`).bind(accountId, companyId).first();
-    if (!engagement || engagement.status === "ended") return say("not_engaged");
+    if (!engagement || !onRoster(engagement.status)) return say("not_engaged");
 
     const docReview = parseJson(engagement.doc_review, {});
     const verified = (k) => docReview[k]?.status === "verified";
