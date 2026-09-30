@@ -36,6 +36,14 @@
 # `.zapierapprc` UPDATES the integration rather than creating another. The
 # default is still false, because "safe as it happens" is a property of the
 # current CLI and the guard is a property of this file.
+#
+# AND `-y` DOES NOT MEAN "ANSWER EVERYTHING". It answers the update-or-register
+# question and the mailing-list one. `role` and `category` are still PROMPTED
+# when their flags are absent, and a prompt on a runner with no terminal is a
+# dead run rather than a question -- which is how the first press of this
+# workflow ended. Both are now required alongside `register`, with a step above
+# it printing the values Zapier accepts, because the values live behind
+# Zapier's own API and a guessed one is a second failed press.
 name: Deploy Zapier app
 
 on:
@@ -46,11 +54,11 @@ on:
         type: boolean
         default: false
       category:
-        description: "Only if register fails asking for one — Zapier's error names the valid values"
+        description: "Required with register. Run once to have the accepted values printed in the Summary"
         type: string
         default: ""
       role:
-        description: "Only if register fails asking for one — likewise"
+        description: "Required with register. Likewise — copy the left-hand word, not the sentence"
         type: string
         default: ""
 
@@ -109,6 +117,57 @@ jobs:
           ZAPIER_DEPLOY_KEY: ${{ secrets.ZAPIER_DEPLOY_KEY }}
         run: npx --yes zapier-platform-cli@19.1.0 validate
 
+      # WHAT ZAPIER WILL ACCEPT, PRINTED BEFORE ANYTHING NEEDS IT.
+      #
+      # The register step below assumed that leaving `--role` and `--category`
+      # off would make Zapier either default them or refuse with the valid
+      # values named. Neither happens: the CLI PROMPTS for both, `-y` does not
+      # cover them (it covers the update-or-register question and the mailing
+      # list, and that is all), and a prompt on a runner with no terminal dies
+      # where it stands. The first press got as far as
+      #
+      #   ? What is your relationship with the app you're integrating...
+      #
+      # and stopped. So the failure named nothing actionable in the error, only
+      # in the middle of a log nobody reads on a phone.
+      #
+      # The choices come from a PUBLIC endpoint -- the CLI fetches it with
+      # `skipDeployKey: true` -- so this step can just ask for them and print
+      # them, which turns a dead prompt into one correction. It never fails the
+      # run: on a press that already carries both values there is nothing to
+      # look up, and a fetch that does not land must not stop a register that
+      # would otherwise work.
+      - name: Print the values Zapier accepts for role and category
+        if: ${{ inputs.register }}
+        continue-on-error: true
+        run: |
+          j="$(curl -fsS --max-time 20 https://zapier.com/api/platform/cli/apps/fields-choices || echo '')"
+          if [ -z "$j" ]; then
+            echo "Could not reach the choices endpoint; skipping."
+            exit 0
+          fi
+          list() {
+            node -e "
+              const d = JSON.parse(process.argv[1]);
+              for (const o of d[process.argv[2]] || []) console.log('  ' + o.value + '   -- ' + o.name);
+            " "$j" "$1"
+          }
+          {
+            echo "### Values for the role and category boxes"
+            echo ""
+            echo "Copy the left-hand word, not the sentence."
+            echo ""
+            echo '```'
+            echo "role:"
+            list role
+            echo ""
+            echo "category:"
+            list app_category
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "role:";     list role
+          echo "category:"; list app_category
+
       # First press only, and only when asked for by name.
       - name: Register the integration
         if: ${{ inputs.register }}
@@ -118,24 +177,34 @@ jobs:
           CATEGORY: ${{ inputs.category }}
           ROLE: ${{ inputs.role }}
         run: |
-          # Only the flags we can be sure of. `--category` and `--role` are
-          # choice lists Zapier serves from its own API -- `register --help`
-          # fetches them -- so a value guessed here is a first press that
-          # fails. Left off, Zapier either defaults them or says what it wants,
-          # and the error names the valid values for the inputs above.
+          # BOTH ARE REQUIRED, because the CLI prompts for whichever is absent
+          # and a prompt here is a hang, not a question. Refusing up front with
+          # the step above's list already printed is the whole difference
+          # between one correction and a log dive. `--audience private` needs
+          # no such treatment: it is validated against the same fetched list
+          # and the first press proved it passes.
+          if [ -z "$ROLE" ] || [ -z "$CATEGORY" ]; then
+            echo "::error::Registering needs both the role and the category boxes filled in."
+            echo "The step above printed the values Zapier accepts -- see this run's Summary."
+            echo "Re-run the workflow with 'First time only' still ticked and both typed in."
+            exit 1
+          fi
           set +e
           npx --yes zapier-platform-cli@19.1.0 register "SubSub" \
             --desc "Post scheduled jobs from your CRM into SubSub, ready to assign contractors." \
             --url "https://subsub.work" \
             --audience private \
-            ${CATEGORY:+--category "$CATEGORY"} \
-            ${ROLE:+--role "$ROLE"} \
+            --category "$CATEGORY" \
+            --role "$ROLE" \
             -y
           rc=$?
           set -e
           if [ $rc -ne 0 ]; then
-            echo "::error::register failed. If it named a category or role it wanted,"
-            echo "re-run this workflow with that value typed into the matching box."
+            # A wrong value is refused by name: the CLI validates both against
+            # the same list the step above printed, and says which values it
+            # would have taken.
+            echo "::error::register failed. If it named the values it would accept,"
+            echo "re-run this workflow with one of those typed into the matching box."
             exit $rc
           fi
           if [ ! -f .zapierapprc ]; then
