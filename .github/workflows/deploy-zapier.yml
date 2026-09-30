@@ -53,12 +53,19 @@ on:
         description: "First time only: create the integration in Zapier"
         type: boolean
         default: false
+      # EACH BOX NAMES ITS OWN VALUES, because the boxes were filled in the
+      # wrong order once and nothing here could tell. The two lists are
+      # disjoint, so a swap is unambiguous -- and the CLI reports only the
+      # FIRST wrong one, which costs a press to find the role is wrong and
+      # another to find the category is too. A description that reads
+      # "required with register" is the same sentence on both boxes and says
+      # nothing about which word belongs in it.
       category:
-        description: "Required with register. Run once to have the accepted values printed in the Summary"
+        description: "With register: what SubSub is, e.g. project-management (see a run's Summary for the list)"
         type: string
         default: ""
       role:
-        description: "Required with register. Likewise — copy the left-hand word, not the sentence"
+        description: "With register: your relation to SubSub — employee, contractor or user"
         type: string
         default: ""
 
@@ -152,6 +159,14 @@ jobs:
               for (const o of d[process.argv[2]] || []) console.log('  ' + o.value + '   -- ' + o.name);
             " "$j" "$1"
           }
+          # Forward the role values so the register step can NAME a swap rather
+          # than leaving Zapier to report half of it. Three short words; the
+          # category list is 85 entries and is not worth carrying, because
+          # checking one side is enough -- no category id is `employee`.
+          node -e "
+            const d = JSON.parse(process.argv[1]);
+            console.log('ROLE_VALUES=' + (d.role || []).map((o) => o.value).join(' '));
+          " "$j" >> "$GITHUB_ENV"
           {
             echo "### Values for the role and category boxes"
             echo ""
@@ -189,6 +204,20 @@ jobs:
             echo "Re-run the workflow with 'First time only' still ticked and both typed in."
             exit 1
           fi
+          # THE BOXES SWAPPED, NAMED AS THAT. A role value in the category box
+          # can only be a swap: the two lists share nothing, and the form shows
+          # category above role while every instruction about them reads
+          # role-then-category, which is exactly how it happened. Left to the
+          # CLI this costs two more presses, because it reports the first wrong
+          # value and stops.
+          for v in $ROLE_VALUES; do
+            if [ "$CATEGORY" = "$v" ]; then
+              echo "::error::Those two are the wrong way round: '$CATEGORY' is a ROLE, not a category."
+              echo "The form shows category FIRST and role SECOND."
+              echo "Re-run with category='$ROLE' and role='$CATEGORY'."
+              exit 1
+            fi
+          done
           set +e
           npx --yes zapier-platform-cli@19.1.0 register "SubSub" \
             --desc "Post scheduled jobs from your CRM into SubSub, ready to assign contractors." \
