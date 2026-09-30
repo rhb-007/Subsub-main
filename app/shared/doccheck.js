@@ -34,14 +34,43 @@ export const FINDING_STATES = ["unanswered", "ok", "wrong"];
 // ---- The schedule a hiring account holds subcontractors to -----------------
 // Basis: whole dollars, not cents -- these are the figures printed on an ACORD
 // 25 and a reviewer compares them by eye.
+//
+// `optional` MEANS THE LINE MAY BE BLANK, NOT THAT ANY NUMBER WILL DO. A figure
+// typed below the minimum is still short and still needs a reason recorded --
+// what optional buys is that a certificate which legitimately carries no such
+// coverage part can still be verified, instead of sitting unverifiable forever.
+// That is the permanently-amber failure `docs.js` exists to prevent, arrived at
+// from the coverage grid: a reviewer facing a line their subcontractor can
+// never have either invents a number or gives up on the screen.
+//
+// Three of the six are optional, each for its own real reason:
+//
+//   AUTO LIABILITY -- a sub who brings tools in their own car and hires
+//   nothing has no commercial auto policy to name.
+//
+//   EMPLOYER'S LIABILITY -- Washington's workers' comp is a state monopoly
+//   fund, so there is no private employer's liability coverage part on a
+//   standard certificate here, and a sole proprietor with no employees has
+//   nothing to show on it in any state.
+//
+//   UMBRELLA / EXCESS -- only larger crews and higher-risk trades carry one.
+//
+// The three CGL lines are not optional, because they are the cover the work
+// itself runs on and every subcontractor doing it has them.
 export const INSURANCE_LINES = [
   { id: "cgl_occ",   label: "Commercial General Liability", sub: "per occurrence",             min: 1000000 },
   { id: "cgl_agg",   label: "General aggregate",            sub: "",                           min: 2000000 },
   { id: "prod_comp", label: "Products & completed operations", sub: "",                        min: 2000000 },
-  { id: "auto",      label: "Auto liability",               sub: "combined single limit",      min: 1000000 },
-  { id: "empl",      label: "Employer's liability",         sub: "",                           min: 1000000 },
+  { id: "auto",      label: "Auto liability",               sub: "combined single limit",      min: 1000000, optional: true },
+  { id: "empl",      label: "Employer's liability",         sub: "",                           min: 1000000, optional: true },
   { id: "umbrella",  label: "Umbrella / excess",            sub: "higher-risk or larger subs", min: 1000000, optional: true },
 ];
+// Read rather than restated: the footnote under the requirements table and the
+// line in the document-request email both name these, and a hand-kept sentence
+// beside the list is the two-records-of-one-fact shape this repo keeps paying
+// for.
+export const OPTIONAL_LINES = INSURANCE_LINES.filter((l) => l.optional);
+export const REQUIRED_LINES = INSURANCE_LINES.filter((l) => !l.optional);
 export const BOND_MIN = 30000;
 export const INSURANCE_MIN = 1000000;    // the headline CGL figure copy quotes
 

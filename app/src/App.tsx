@@ -49,7 +49,7 @@ import { splitEven, releaseAmounts } from "../shared/money.js";
 import { chainReasonText } from "../shared/waivers.js";
 import { coverProblemText, fixableByUpload } from "../shared/paygate.js";
 import { MIN_FUND_CENTS, canPay, payRefusalText, fundSuggestion } from "../shared/escrow.js";
-import { INSURANCE_LINES, BOND_MIN, INSURANCE_MIN, checkItems, findingsFor,
+import { INSURANCE_LINES, OPTIONAL_LINES, BOND_MIN, INSURANCE_MIN, checkItems, findingsFor,
   problemsIn, allConfirmed, reviewProgress, outcomeWords } from "../shared/doccheck.js";
 import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/autoschedule.js";
 import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
@@ -2154,6 +2154,9 @@ export default function SubSub() {
   // collapsed -- which is the thing that makes closing it safe.
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [offRosterOpen, setOffRosterOpen] = useState(false);
+  // Set by DocReview while it has unsaved answers in it; read by the Modal's
+  // own close so the X and the backdrop ask rather than discard.
+  const reviewGuard = useRef(null);
   const [jobZip, setJobZip] = useState("");
   const [inRangeOnly, setInRangeOnly] = useState(false);
   const [selected, setSelected] = useState(null);
@@ -6173,13 +6176,18 @@ export default function SubSub() {
           sub={subs.find((x) => x.id === raising.a.subId)} now={now}
           onSubmit={(data) => raiseServiceCall(raising.job, raising.trade, raising.a, data)}
           onCancel={() => setRaising(null)} /></Modal>}
-      {reviewing && <Modal onClose={() => setReviewing(null)} wide>
+      {/* The X and the backdrop are Modal's, and Modal knows nothing about
+          whatever form is inside it. `reviewGuard` is how the review says "I
+          have a half-finished form in here, let me ask first": it returns true
+          when it has taken the question, and false -- which is every other
+          modal and an untouched review -- when the close should just happen. */}
+      {reviewing && <Modal onClose={() => { if (reviewGuard.current?.()) return; setReviewing(null); }} wide>
         <DocReview sub={subs.find((x) => x.id === reviewing.sub.id) || reviewing.sub}
-          kind={reviewing.kind} brand={brand}
+          kind={reviewing.kind} brand={brand} guard={reviewGuard}
           onVerify={(kind, data) => verifySubDoc(reviewing.sub.id, kind, data)}
           onReject={(kind, data) => rejectSubDoc(reviewing.sub.id, kind, data)}
           onSaveDraft={(kind, draft) => saveDocDraft(reviewing.sub.id, kind, draft)}
-          onClose={() => setReviewing(null)} /></Modal>}
+          onClose={() => { reviewGuard.current = null; setReviewing(null); }} /></Modal>}
       {upgradePrompt && <Modal onClose={() => setUpgradePrompt(null)}>
         <UpgradePrompt kind={upgradePrompt.kind} plan={plan} billing={billing} onSetBilling={setBilling} words={rosterWords(account)}
           count={upgradePrompt.kind === "contractor" ? subs.length
@@ -6789,7 +6797,7 @@ function FindingList({ items, found, onState, onFix }) {
   );
 }
 
-function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose }) {
+function DocReview({ sub, kind, brand, guard, onVerify, onReject, onSaveDraft, onClose }) {
   const rv = docReview(sub, kind);
   // A saved draft outranks the verdict for seeding the FORM, and nothing
   // else. If somebody verified this and then started re-reading it, the
@@ -6890,6 +6898,41 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose 
     // object parsed: the aggregate for a policy, the face value for a bond.
     coverage: isIns ? (limits.cgl_agg || null) : (amount || null),
   });
+
+  // WHAT HAS BEEN TYPED SINCE THIS OPENED.
+  //
+  // Reading an ACORD 25 is the work this product asks for -- six coverage
+  // lines, a carrier, a policy number, two dates and five confirmations -- and
+  // until now every way out of this modal threw all of it away without a word:
+  // the X, the backdrop, and a link literally reading "Close without deciding".
+  // Save and finish later was sitting right there and had to be chosen in
+  // advance, which is not how anybody closes a window.
+  //
+  // Derived by comparing what `collect()` builds now against what it built on
+  // mount, rather than a `touched` flag set by two dozen onChange handlers: a
+  // flag is a second record of the same fact and one field always gets missed.
+  // It also means typing a figure and typing it back is correctly NOT dirty.
+  const opened = useRef(null);
+  const snapshot = JSON.stringify(collect());
+  if (opened.current === null) opened.current = snapshot;
+  const dirty = snapshot !== opened.current;
+  const [leaving, setLeaving] = useState(false);
+
+  // The X and the backdrop belong to `Modal`, which knows nothing about this
+  // form, so the guard is handed up through a ref the parent checks before it
+  // closes. Returning true means "I have taken the question"; false lets the
+  // close go through, which is what an untouched form should do -- asking
+  // somebody to confirm leaving a screen they changed nothing on is the
+  // question-nobody-needed that makes people stop reading dialogs.
+  useEffect(() => {
+    if (!guard) return undefined;
+    guard.current = () => {
+      if (!dirty || leaving) return false;
+      setLeaving(true);
+      return true;
+    };
+    return () => { guard.current = null; };
+  }, [guard, dirty, leaving]);
 
   const [saving, setSaving] = useState("");
   const [saveErr, setSaveErr] = useState("");
@@ -7080,7 +7123,20 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose 
               onClick={() => park(collect(), true)}>
               <Clock size={14} /> {saving === "save" ? "Saving\u2026" : "Save and finish later"}
             </button>
-            <button className="btn-warn" onClick={() => setRejecting(true)}><XCircle size={15} /> Reject</button>
+            {/* THE WORD FOLLOWS WHAT IT DOES. This opens the send-back pane --
+                which names each fault, carries an instruction per fault, and
+                mails "everything else is fine, you do not need to start
+                again". With faults marked that is the CTA and it says so;
+                with none marked it really is a plain refusal, so it keeps the
+                red and keeps the word. Same button, same pane: the state of
+                the form decides which of the two it is, because that is what
+                is actually true of it. */}
+            <button className={wrongItems.length ? "btn-fix" : "btn-warn"}
+              onClick={() => setRejecting(true)}>
+              {wrongItems.length
+                ? <><Send size={15} /> Send back {wrongItems.length} to fix</>
+                : <><XCircle size={15} /> Reject</>}
+            </button>
             <button className="btn-solid" disabled={!canVerify}
               onClick={() => onVerify(kind, collect())}>
               <CheckCircle2 size={15} /> Verify document
@@ -7097,8 +7153,9 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose 
             <div className="rv-summary">
               <AlertTriangle size={14} />
               <div>
-                <strong>{outcomeWords({ findings: found }, kind, brand.name).headline}.</strong>{" "}
-                They are told which, and what to do about each one.
+                <strong>Almost there — {outcomeWords({ findings: found }, kind, brand.name).headline}.</strong>{" "}
+                They are told which, what to do about each one, and that everything
+                else on it is fine so they do not start again.
                 <ul className="rv-summary-list">
                   {wrongItems.map((c) => <li key={c.id}>{c.label}</li>)}
                 </ul>
@@ -7122,7 +7179,38 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose 
           </div>
         </>
       )}
-      <button className="rv-close" onClick={onClose}>Close without deciding</button>
+      {/* Says what leaving costs BEFORE it is pressed rather than after, and
+          still asks, because the label is read once and the press is the
+          thing that happens. */}
+      <button className="rv-close" onClick={() => (dirty ? setLeaving(true) : onClose())}>
+        {dirty ? "Close without deciding\u2026" : "Close without deciding"}
+      </button>
+
+      {leaving && (
+        <div className="rv-leave" role="dialog" aria-modal="true">
+          <div className="rv-leave-card">
+            <h3><AlertTriangle size={17} /> Keep your review?</h3>
+            <p>
+              You have read this {DOC_LABELS_INLINE[kind]} and answered part of the form.
+              Closing without saving loses those answers, and the next person to open it
+              starts from an empty form over a document somebody has already read.
+            </p>
+            {saveErr && <div className="form-err">{saveErr}</div>}
+            <div className="rv-leave-acts">
+              <button className="btn-solid" disabled={!!saving}
+                onClick={() => park(collect(), true)}>
+                <Clock size={14} /> {saving === "save" ? "Saving\u2026" : "Save and close"}
+              </button>
+              <button className="btn-ghost" disabled={!!saving} onClick={onClose}>
+                Close and lose them
+              </button>
+              <button className="btn-ghost" disabled={!!saving} onClick={() => setLeaving(false)}>
+                Keep reviewing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -21127,7 +21215,12 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
               <div className="req-sec">IRS Form W-9</div>
               <p className="req-note">Needed before we can pay you. Your TIN or EIN, tax
                 classification, and a signature in Part II. Current revision of the form.</p>
-              <p className="req-note">* Umbrella / excess applies to higher-risk or larger crews.</p>
+              <p className="req-note">
+                * {OPTIONAL_LINES.map((l) => l.label).join(", ")} are asked for only
+                where they apply — a sub with no commercial vehicles, no employees or no
+                umbrella policy can leave them blank. Anything you do enter still has to
+                meet the minimum beside it.
+              </p>
             </div>
           </details>
 
@@ -28135,6 +28228,25 @@ iframe.dv-frame{display:block}
 .rv-close{display:block;width:100%;border:0;background:none;color:var(--ink-soft);font-size:12px;
   font-weight:600;padding:12px 0 0;cursor:pointer;text-align:center}
 .rv-close:hover{color:var(--ink)}
+/* Send it back to be fixed. Amber-bordered rather than amber-filled: it is a
+   real action with a consequence, and it sits beside a solid green Verify --
+   two filled buttons of equal weight make somebody stop and read both. */
+.btn-fix{background:var(--card);color:var(--amber-ink);border:1.5px solid var(--amber);
+  font-weight:700;font-size:13px;padding:8px 13px;border-radius:9px;cursor:pointer;
+  display:flex;align-items:center;gap:6px;flex:none}
+.btn-fix:hover{background:color-mix(in srgb, var(--amber) 10%, var(--card))}
+/* Leaving a half-finished review. Fixed rather than absolute inside the form,
+   because the modal scrolls and a panel pinned to the top of a 2,000px form is
+   a question asked off-screen. Above .modal-backdrop's z-index:50. */
+.rv-leave{position:fixed;inset:0;background:rgba(26,43,35,.5);display:grid;place-items:center;
+  padding:20px;z-index:60;backdrop-filter:blur(2px)}
+.rv-leave-card{background:var(--card);border-radius:14px;padding:20px 22px;max-width:430px;
+  box-shadow:0 12px 40px rgba(26,43,35,.28)}
+.rv-leave-card h3{margin:0 0 9px;font-size:16px;display:flex;align-items:center;gap:8px;color:var(--ink)}
+.rv-leave-card h3 svg{color:var(--amber-ink);flex:none}
+.rv-leave-card p{margin:0 0 15px;font-size:13px;line-height:1.6;color:var(--ink-soft)}
+.rv-leave-acts{display:flex;flex-direction:column;gap:8px}
+.rv-leave-acts button{width:100%;justify-content:center}
 
 /* document status chips */
 .doc-state{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;margin-top:3px;line-height:1.35}

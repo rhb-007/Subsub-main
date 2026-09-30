@@ -15,6 +15,7 @@
     "test:escrow": "node --no-warnings scripts/escrow-test.mjs",
     "test:agreement": "node --no-warnings scripts/agreement-test.mjs",
     "test:removesub": "node --no-warnings scripts/remove-sub-test.mjs",
+    "test:reviewguard": "node --no-warnings scripts/review-guard-test.mjs",
     "test:docfindings": "node --no-warnings scripts/doc-findings-test.mjs",
     "test:hostnames": "node scripts/hostnames-test.mjs",
     "test:setup": "node scripts/setup-check-test.mjs",

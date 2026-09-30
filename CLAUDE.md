@@ -2879,6 +2879,75 @@ refactor.
   holds. **A test that stores a shape the product never produces is a test of
   its own fixture.**
 
+- **Closing a half-read review asks, and three coverage lines are optional.**
+  Three things about the review modal, all of them the same shape: the screen
+  was stricter, or quieter, than what it was actually doing.
+
+  **EVERY WAY OUT THREW THE WORK AWAY.** Reading an ACORD 25 is the labour this
+  product asks for — six coverage lines, a carrier, a policy number, two dates
+  and five confirmations — and the X, the backdrop and a link literally reading
+  *Close without deciding* all discarded it without a word. *Save and finish
+  later* was sitting right there in the action row and had to be **chosen in
+  advance**, which is not how anybody closes a window. The draft feature was
+  built precisely so a reviewer who runs out of day is picked up by a
+  colleague, and the commonest way to run out of day is to close the tab.
+
+  It asks now: **Save and close**, **Close and lose them**, **Keep reviewing**.
+  Dirtiness is derived by comparing what `collect()` builds against what it
+  built on mount, **not a `touched` flag set by two dozen onChange handlers** —
+  a flag is a second record of one fact and one field always gets missed. It
+  also makes typing a figure and typing it back correctly *not* dirty.
+
+  **An untouched review closes with no question at all**, which is half the
+  design: a confirmation on a screen somebody changed nothing on is the dialog
+  that teaches people to dismiss dialogs unread, and then they dismiss this one.
+
+  The X and the backdrop belong to `Modal`, which knows nothing about whatever
+  form is inside it, so the review hands a guard **up** through a ref the parent
+  checks: true means *I have taken the question*, false — every other modal, and
+  this one when clean — lets the close happen. A failure **leaves the panel up
+  with the reason on it**, the same rule `ConfirmRemove` follows and for a
+  sharper reason: closing on a failed save reads as success and loses exactly
+  what it promised to keep.
+
+  **AUTO LIABILITY AND EMPLOYER'S LIABILITY JOIN UMBRELLA AS OPTIONAL**, each
+  for a real reason rather than as a relaxation. A sub who brings tools in their
+  own car and hires nothing has no commercial auto policy to name. Washington's
+  workers' comp is a **state monopoly fund**, so there is no private employer's
+  liability coverage part on a certificate here, and a sole proprietor with no
+  employees has nothing to show on it anywhere. Umbrella is larger crews only.
+  A line nobody can ever fill in makes a certificate nobody can ever verify —
+  the permanently-amber failure `docs.js` exists to prevent, reached through the
+  coverage grid — and a reviewer facing one either invents a number or gives up
+  on the screen. The three CGL lines stay required: they are the cover the work
+  runs on and every subcontractor doing it has them.
+
+  **`optional` means the line may be BLANK, never that any figure will do.** A
+  number typed below the minimum is still short and still needs a reason
+  recorded against it. Both directions are asserted, because pinning only the
+  blank case passes with the short-line check deleted.
+
+  The footnote under the requirements table **named one line while three carry
+  an asterisk**, so it explained a third of the marks above it. It reads
+  `OPTIONAL_LINES` now. The document-request email already drove off the flag
+  per line, so it carried the change with nothing to edit — which is what the
+  flag is for, and why the footnote was the thing that was wrong.
+
+  **AND SENDING IT BACK WAS BEHIND THE WORD MOST LIKELY TO STOP SOMEBODY.** The
+  send-back pane — each fault named, an instruction per fault, a mail saying
+  *everything else on it is fine, you do not need to start again* — was
+  reachable only by pressing a red button reading **Reject**. A reviewer who has
+  just marked three lines wrong is looking for *send this back*; Reject reads as
+  ending the relationship, so the one action the whole findings pass was built
+  for sat behind the one word that refuses it. Same button, same pane: with
+  faults marked it says **Send back 3 to fix** and is amber-outlined; with none
+  marked it really is a plain refusal and keeps the red and the word. **The
+  state of the form decides which of the two it is, because that is what is
+  actually true of it** — two buttons would be two doors into one screen to keep
+  in step. Outlined rather than filled because it sits beside a solid green
+  Verify, and two filled buttons of equal weight make somebody stop and read
+  both.
+
 - **The record goes in before the flags, because the other order is how a
   database ends up asserting documents it holds nothing about.** The upload
   route wrote `insurance = 1` and the filename, and *then* wrote the
