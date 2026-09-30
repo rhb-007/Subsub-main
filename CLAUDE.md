@@ -4076,6 +4076,38 @@ refactor.
   is promoted, and promoting moves real Zaps onto it. The summary says that
   rather than implying more.
 
+  **AND THE STEP THAT KEEPS THE APP ID COMMITTED NOTHING, GREENLY.** The press
+  that registered created integration **247047**, pushed version 1.0.0, and
+  every step reported success — while `.zapierapprc` never reached the
+  repository. `git diff --quiet` compares **tracked** files, the file had never
+  been in the repo, so a brand-new untracked file has nothing to compare and
+  exits 0. The step printed *"unchanged; nothing to commit"*, which reads like
+  an ordinary no-op on a re-run, and the one record that stops the next press
+  creating a **second** integration went with the runner.
+
+  So `git add -f` runs **first** and the question is asked of the **index**,
+  which is the only thing that knows about a new file — and then the step
+  **proves it from the repository**: `git ls-files --error-unmatch` after the
+  push, because every command above it can succeed and leave the file
+  untracked, which is exactly what happened. Same rule `deploy-app.yml` already
+  followed about its own bundle — *prove it from the artifact, never from the
+  variable* — applied to the thing beside it, for the second time.
+
+  **Only `id` is written by hand, and only because the log carried it.** The
+  CLI writes `{ id, key }` and reads **`id` alone** — `key` is never read back
+  — so recovering the row needed one value that the run had printed, not a
+  remembered one. A `key` invented to complete the shape would be the broken-052
+  mistake in a smaller place; the next `register` merges its own in.
+
+  **The registration values are two boxes and the form orders them the other
+  way round.** Category is above role on the dispatch form, and every
+  instruction about them reads role-then-category, so filling top to bottom
+  puts each word in the other box. Both descriptions said *"Required with
+  register"* — the same sentence twice, saying nothing about which word belongs
+  in which. Each box names its own values now, and the register step refuses a
+  swap **by name**, because the two lists share nothing: left to the CLI it
+  costs two presses, since it reports the first wrong value and stops.
+
 - **Two things about the Zapier package were wrong, and `zapier validate` is
   what found both — not reasoning about them.** Running it locally cost one
   command and caught what would otherwise have been a failed first press.

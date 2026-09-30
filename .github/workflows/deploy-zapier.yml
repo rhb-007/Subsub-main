@@ -245,20 +245,45 @@ jobs:
           # without it the next press makes a second one.
           echo "APP_ID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.zapierapprc','utf8')).id)")" >> "$GITHUB_ENV"
 
+      # `git diff` DOES NOT SEE AN UNTRACKED FILE, which is how this step
+      # reported success while committing nothing.
+      #
+      # The first press that actually registered created integration 247047,
+      # pushed version 1.0.0, and went green -- and `.zapierapprc` had never
+      # been in the repository, so it was new and untracked. `git diff --quiet`
+      # compares TRACKED files, found nothing to compare, and exited 0. The
+      # step printed "unchanged; nothing to commit", which reads like an
+      # ordinary no-op on a re-run, and the one record that stops the next
+      # press creating a SECOND integration was thrown away with the runner.
+      #
+      # So: `git add` FIRST and ask the index, which is the only thing that
+      # knows about a new file. `-f` because a later gitignore covering it
+      # would otherwise bring the silence back from a different direction.
       - name: Keep the app id, so the next deploy updates rather than duplicates
         if: ${{ inputs.register }}
         run: |
-          if git diff --quiet -- zapier/.zapierapprc; then
-            echo "zapier/.zapierapprc is unchanged; nothing to commit."
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add zapier/.zapierapprc
-          git commit \
-            -m "Record the Zapier integration id" \
-            -m "zapier register wrote .zapierapprc. It is committed because without it the next deploy registers a SECOND integration rather than updating this one, and customers would be connected to the first."
-          git push
+          git add -f zapier/.zapierapprc
+          if git diff --cached --quiet -- zapier/.zapierapprc; then
+            echo "zapier/.zapierapprc already committed and unchanged."
+          else
+            git commit \
+              -m "Record the Zapier integration id" \
+              -m "zapier register wrote .zapierapprc. It is committed because without it the next deploy registers a SECOND integration rather than updating this one, and customers would be connected to the first."
+            git push
+          fi
+          # PROVED FROM THE REPOSITORY, NOT FROM THE COMMANDS HAVING RUN. That
+          # is the rule `deploy-app.yml` already follows about its own bundle,
+          # and it is the half that was missing here: every command above can
+          # succeed and leave the file untracked, which is precisely what
+          # happened.
+          if ! git ls-files --error-unmatch zapier/.zapierapprc >/dev/null 2>&1; then
+            echo "::error::zapier/.zapierapprc is still not tracked, so the integration id is not in the repository."
+            echo "Integration id, for the record: ${APP_ID:-unknown}"
+            exit 1
+          fi
+          echo "Tracked at $(git rev-parse --short HEAD): $(cat zapier/.zapierapprc | tr -d '\n')"
 
       # Refuses rather than guessing. Pushing with no .zapierapprc is not a
       # smaller version of pushing: it is pushing to nothing, and the CLI would
