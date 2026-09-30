@@ -891,6 +891,79 @@ refactor.
   auto-schedule, which already said the hiring side cannot commit the other
   side's calendar; it was applied to one column and not to the row it sits in.
 
+- **Seat scoping existed and did nothing for a general contractor.**
+  `membership_properties` narrows a property manager to named buildings, and
+  `ROLES.pm` already records why that is one role rather than two: a large
+  managing agent assigns each manager to named buildings and a small one does
+  not, which is the same job with or without a list. A general contractor has
+  `properties: false` — **no buildings at all** — so the one account kind whose
+  pm seat is actually called a *Project* manager had nothing to be scoped by,
+  and a firm with six of them gave every one the whole book. The unit of work
+  there is the **job**. Migration 053, `app/shared/jobscope.js`.
+
+  **The asymmetry is copied deliberately, and it is what makes this safe to
+  ship against a live database.** No rows means nobody narrowed them, so they
+  see everything — which is what every pm seat is today, untouched by this
+  existing. `null`, never `[]`: an empty array means *narrowed to nothing*,
+  which is a different answer and the wrong one.
+
+  **Owners and tenants are deliberately not job-scoped.** Their jobs already
+  follow their buildings, and a second, empty list would narrow them to
+  nothing — so `jobScopeFrom` answers null for every role but pm.
+
+  **FILTERING THE LIST IS NOT ENFORCEMENT: the id is in the URL.** The guard
+  goes in the middleware that already resolves a job, a work order or a
+  service call for the property scope, because that is the one place all three
+  arrive — twenty-odd routes load a job by id and eleven of them wrote
+  `FROM jobs WHERE id = ? AND account_id = ?` by hand. A scope added to twenty
+  places is a scope missing from the twenty-first, which is exactly how the
+  work-order response route ended up answering *no, let them through* for a
+  role that did not exist when it was written. That middleware now returns
+  early only when a seat carries **neither** scope: checking `propertyIds`
+  alone would have left the job scope enforced by the list endpoints, which is
+  not enforcement.
+
+  **It answers `not_found`, not `forbidden`, and the test is what caught
+  that.** The first version returned 403 for a real job the seat was not on
+  and 404 for one that does not exist — so a narrowed manager could tell
+  which ids are real and walk the account's whole job list one guess at a
+  time. The property branch beside it has answered 403 since it was written
+  and has the same leak; changing that one is a separate decision about owner
+  and tenant seats, with its own tests, and is **still open**.
+
+  **A creator keeps what they made.** Without it a scoped manager creates a
+  job and it vanishes on the next render: the screen worked, the job exists,
+  and the person who made it cannot find or act on it. Creating something is
+  the clearest possible statement that it is yours to run, and `POST
+  /api/jobs` is the only place that statement is made. An *unnarrowed* pm is
+  deliberately not given a list by creating one — that would narrow them to
+  the single job they just made.
+
+  **A job id in the body is a claim.** `INSERT ... SELECT ... WHERE id = ? AND
+  account_id = ?` is the only thing that makes it true, and CHECK.sql counts
+  both ways it can be wrong: a scope row against a role that is not job-scoped
+  (which narrows nobody today and would start narrowing them the day that role
+  joined `JOB_SCOPED_ROLES`, silently), and one pointing at another account's
+  job.
+
+  **And the test for that passed for the wrong reason.** *A job id that is not
+  this account's is dropped* was answered by the **foreign key** rejecting an
+  id that exists nowhere — so it tested SQLite rather than the scoping, and
+  deleting the account check changed no outcome. The fixture gained a **real
+  job on another account**, which is the only case either guard could be
+  checked against. The two guards covering for each other, for the second time
+  in this file.
+
+  The picker is offered only where the buildings one is not, because two scope
+  pickers on one form is two lists narrowing the same person by different axes
+  and nothing downstream would say which had hidden a job. And `updateUser`
+  had to name `jobIds` explicitly — the same drop-a-field-you-did-not-list
+  shape that deleted a W-9 through `SubForm`.
+
+  Fourth time a comment has read to a substring check exactly like the code it
+  describes: 053's own comment says *there is no ALTER TABLE*, and the
+  assertion checking for one duly failed on it.
+
 - **The screen asked the scoped question where the server enforces the
   unscoped one.** `companyAnswersForItself` was written *deliberately*
   unscoped — "does anybody answer for this company at all", never "is there

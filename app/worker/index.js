@@ -43,6 +43,7 @@ import { canRequestQuotes, quotableSubs, validInvitees, canQuote, validQuote,
 import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { hasPortal, canSet as canSetAuto, AUTO_DENY_TEXT } from "../shared/autoschedule.js";
 import { onRoster, onRosterSql, OFF_ROSTER } from "../shared/roster.js";
+import { JOB_SCOPED_ROLES, jobScopeFrom, maySeeJob as maySeeJobIds } from "../shared/jobscope.js";
 import { WEATHER_TTL_MIN, weatherLabel } from "../shared/greeting.js";
 import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
@@ -324,6 +325,7 @@ app.use("/api/*", async (c, next) => {
       // Staff sitting in an owner's seat see the owner's buildings and no
       // others. Support is not a reason to widen somebody's access.
       propertyIds: await propertyScope(c.env.DB, seat),
+      jobIds: await jobScope(c.env.DB, seat),
       // Who is really here. Nothing reads it yet; it is set because a
       // session whose real actor is unrecoverable is the one thing this
       // table exists to prevent.
@@ -354,6 +356,7 @@ app.use("/api/*", async (c, next) => {
     userId, accountId, role: membership.role, companyId: membership.company_id,
     membershipId: membership.id,
     propertyIds: await propertyScope(c.env.DB, membership),
+    jobIds: await jobScope(c.env.DB, membership),
   });
   await next();
 });
@@ -399,13 +402,72 @@ async function propertyScope(db, membership) {
   return ids;
 }
 
+// The same thing one axis over: a PROJECT manager narrowed to named jobs.
+//
+// A general contractor has no buildings, so `propertyScope` above gives their
+// pm seat nothing to be scoped by -- see shared/jobscope.js. Same asymmetry,
+// for the same reason: no rows means nobody narrowed them, so an existing seat
+// is untouched by this shipping.
+//
+// Owners and tenants are deliberately NOT job-scoped. Their jobs already
+// follow their buildings, and a second, emptier list would narrow them to
+// nothing -- which is why `jobScopeFrom` answers null for every role but pm.
+async function jobScope(db, membership) {
+  if (!JOB_SCOPED_ROLES.includes(membership.role)) return null;
+  try {
+    const { results } = await db.prepare(
+      `SELECT job_id FROM membership_jobs WHERE membership_id = ?`
+    ).bind(membership.id).all();
+    return jobScopeFrom(membership.role, (results || []).map((r) => r.job_id));
+  } catch (err) {
+    // A database without 053 has no such table, and a seat nobody has
+    // narrowed is exactly what "unrestricted" means -- so this fails in the
+    // direction that leaves the product working as it did.
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+
 // Guards a single property id against the seat's scope.
 const maySeeProperty = (auth, propertyId) =>
   !auth.propertyIds || (propertyId != null && auth.propertyIds.includes(propertyId));
 
+// Guards a single job id. `auth.jobIds` null means unrestricted.
+const maySeeJob = (auth, jobId) => maySeeJobIds(auth.jobIds, jobId);
+
+// THE ONE DOOR ONTO A JOB, and the reason it exists rather than a check
+// pasted into each route: there are twenty-odd routes that load a job by id
+// and eleven of them wrote `FROM jobs WHERE id = ? AND account_id = ?` by
+// hand. A scope added to twenty places is a scope missing from the
+// twenty-first, which is how the work-order response route ended up answering
+// "no, let them through" for a role that did not exist when it was written.
+//
+// It answers NOT FOUND rather than forbidden, which is the rule every other
+// id-keyed route here follows: a job on this account that this seat is not
+// assigned to, and a job id that does not exist, give the same reply, so the
+// list cannot be walked to find out what else the account is running.
+async function jobInScope(env, auth, jobId, cols = "*") {
+  const job = await env.DB.prepare(
+    `SELECT ${cols} FROM jobs WHERE id = ? AND account_id = ?`
+  ).bind(jobId, auth.accountId).first();
+  if (!job) return null;
+  if (!maySeeJob(auth, jobId)) return null;
+  return job;
+}
+
 // A `WHERE` fragment plus its bindings, for the scoped list endpoints. Written
 // as `IN ()` with no members when the scope is empty, which SQLite reads as
 // false -- the safe direction.
+// The job equivalent, for the list endpoints.
+function jobScopeClause(auth, column) {
+  if (!auth.jobIds) return { sql: "", vals: [] };
+  if (!auth.jobIds.length) return { sql: ` AND 0 `, vals: [] };
+  return {
+    sql: ` AND ${column} IN (${auth.jobIds.map(() => "?").join(",")}) `,
+    vals: auth.jobIds,
+  };
+}
+
 function scopeClause(auth, column) {
   if (!auth.propertyIds) return { sql: "", vals: [] };
   if (!auth.propertyIds.length) return { sql: ` AND 0 `, vals: [] };
@@ -520,7 +582,13 @@ app.use("/api/*", async (c, next) => {
 // route added later, so it happens here, before any of them run.
 app.use("/api/*", async (c, next) => {
   const auth = c.get("auth");
-  if (!auth?.propertyIds) return next();          // an unrestricted seat
+  // Two scopes ride through here, and a seat may carry either, both or
+  // neither. `propertyIds` narrows an owner, a tenant or a property manager to
+  // named buildings; `jobIds` narrows a PROJECT manager to named jobs, which
+  // is what a general contractor has instead of buildings. Returning early on
+  // the first one alone is what would leave the second enforced only by the
+  // list endpoints -- which is not enforcement, because the id is in the URL.
+  if (!auth?.propertyIds && !auth?.jobIds) return next();   // an unrestricted seat
   const path = new URL(c.req.url).pathname;
 
   // A building named directly: editing or removing one that is not theirs.
@@ -529,6 +597,10 @@ app.use("/api/*", async (c, next) => {
     if (!maySeeProperty(auth, prop[1])) return c.json({ error: "forbidden" }, 403);
     return next();
   }
+  // A job-scoped seat is not a building-scoped one: a general contractor has
+  // no buildings, so the property branches below have nothing to say about
+  // them and must not start answering.
+  if (!auth.propertyIds && path.startsWith("/api/properties")) return next();
   // Adding one is not narrowing work at a building, it is changing the
   // portfolio, and somebody given five buildings to run is not the person who
   // decides there is a sixth. They would not be able to see it afterwards
@@ -547,14 +619,14 @@ app.use("/api/*", async (c, next) => {
   if (!jobId && !wo && !sc) return next();
 
   const row = jobId
-    ? await c.env.DB.prepare(`SELECT property_id FROM jobs WHERE id = ? AND account_id = ?`)
+    ? await c.env.DB.prepare(`SELECT id AS job_id, property_id FROM jobs WHERE id = ? AND account_id = ?`)
         .bind(jobId, auth.accountId).first()
     : wo
     ? await c.env.DB.prepare(
-        `SELECT j.property_id FROM work_orders w JOIN jobs j ON j.id = w.job_id
+        `SELECT j.id AS job_id, j.property_id FROM work_orders w JOIN jobs j ON j.id = w.job_id
           WHERE w.id = ? AND j.account_id = ?`).bind(wo[1], auth.accountId).first()
     : await c.env.DB.prepare(
-        `SELECT j.property_id FROM service_calls s JOIN jobs j ON j.id = s.job_id
+        `SELECT j.id AS job_id, j.property_id FROM service_calls s JOIN jobs j ON j.id = s.job_id
           WHERE s.id = ? AND j.account_id = ?`).bind(sc[1], auth.accountId).first();
 
   // A missing row is reported as missing rather than forbidden: it is one or
@@ -562,6 +634,18 @@ app.use("/api/*", async (c, next) => {
   // what it actually is.
   if (!row) return c.json({ error: "not_found" }, 404);
   if (!maySeeProperty(auth, row.property_id)) return c.json({ error: "forbidden" }, 403);
+  // And the job scope, on the same row. A work order and a service call are
+  // reached through the job they belong to, so a narrowed project manager
+  // cannot act on one by naming it directly either.
+  //
+  // NOT FOUND, never forbidden, and the difference is an oracle: `forbidden`
+  // on a real job beside `not_found` on a made-up one tells a narrowed seat
+  // which ids exist, so the account's whole job list can be walked one guess
+  // at a time. Same rule every id-keyed route here follows. The property
+  // branch directly above answers 403 and has since it was written -- it has
+  // the same shape and the same leak, and changing it is a separate decision
+  // about owner and tenant seats with its own tests.
+  if (!maySeeJob(auth, row.job_id)) return c.json({ error: "not_found" }, 404);
   await next();
 });
 
@@ -3533,6 +3617,17 @@ app.get("/api/account-users", async (c) => {
   ).bind(accountId).all();
   const byUser = {};
   for (const r of scopes || []) (byUser[r.user_id] ||= []).push(r.property_id);
+  // And the job lists, so the form can draw what is set rather than opening
+  // empty over a seat that is narrowed -- which would read as unrestricted
+  // and quietly widen somebody the next time it was saved.
+  const jobsByUser = {};
+  try {
+    const { results: jscopes } = await c.env.DB.prepare(
+      `SELECT mj.job_id, m.user_id FROM membership_jobs mj
+         JOIN memberships m ON m.id = mj.membership_id WHERE m.account_id = ?`
+    ).bind(accountId).all();
+    for (const r of jscopes || []) (jobsByUser[r.user_id] ||= []).push(r.job_id);
+  } catch (err) { if (!missingSchema(err)) throw err; }
 
   // The most recent live invite per person, if there is one. Missing table
   // means 028 is not applied, which is a roster without the extra column
@@ -3552,7 +3647,7 @@ app.get("/api/account-users", async (c) => {
     // so the row has a unique key, and it is nobody's address: handing it to
     // the browser gets it printed next to a mailto: link that goes nowhere.
     id: r.id, name: r.name, email: realEmail(r.email), phone: r.phone, role: r.role, subId: r.company_id,
-    propertyIds: byUser[r.id] || [], unit: r.unit || null,
+    propertyIds: byUser[r.id] || [], jobIds: jobsByUser[r.id] || [], unit: r.unit || null,
     // Whether this person can actually get in, and whether anybody has told
     // them they can. Both were invisible: an admin added somebody and the
     // roster looked identical whether they had signed in once or had never
@@ -3589,6 +3684,37 @@ async function setMembershipProperties(db, membershipId, accountId, role, proper
     }
   }
   await db.batch(stmts);
+}
+
+// The same, one axis over. A general contractor has no buildings, so their
+// PROJECT manager is narrowed by job instead -- see shared/jobscope.js.
+//
+// The INSERT ... SELECT is what makes the id safe: a job id in the body is a
+// claim, and joining it back to this account is the only thing that makes it
+// true. A row naming another account's job would narrow this seat to a job it
+// can never see, or -- depending which JOIN read it -- across accounts.
+// CHECK.sql counts both shapes and both must read zero.
+async function setMembershipJobs(db, membershipId, accountId, role, jobIds) {
+  if (jobIds === undefined) return;
+  try {
+    const stmts = [db.prepare(`DELETE FROM membership_jobs WHERE membership_id = ?`).bind(membershipId)];
+    // Only a pm is job-scoped, so changing somebody to any other role clears
+    // the list rather than leaving one that narrows nobody and would start
+    // narrowing them the day that role joined JOB_SCOPED_ROLES.
+    if (JOB_SCOPED_ROLES.includes(role)) {
+      for (const jid of [...new Set(jobIds || [])]) {
+        stmts.push(db.prepare(
+          `INSERT OR IGNORE INTO membership_jobs (membership_id, job_id)
+           SELECT ?, id FROM jobs WHERE id = ? AND account_id = ?`
+        ).bind(membershipId, jid, accountId));
+      }
+    }
+    await db.batch(stmts);
+  } catch (err) {
+    // A database without 053. The seat stays unrestricted, which is what it
+    // was before this shipped.
+    if (!missingSchema(err)) throw err;
+  }
 }
 
 const userInviteUrl = (account, token) => `${accountOrigin(account)}/?user=${token}`;
@@ -3765,6 +3891,7 @@ app.post("/api/account-users", requireRole("admin"), async (c) => {
       .bind(membershipId, userId, accountId, b.role, b.subId ?? null).run();
   }
   await setMembershipProperties(c.env.DB, membershipId, accountId, b.role, b.propertyIds);
+  await setMembershipJobs(c.env.DB, membershipId, accountId, b.role, b.jobIds);
 
   // Tell them. This is the whole point: adding somebody used to write two
   // rows and send nothing, so the person added had no way to find out they
@@ -3832,11 +3959,22 @@ app.patch("/api/account-users/:userId", requireRole("admin"), async (c) => {
   // The list travels with the role. Demoting somebody to owner without one
   // would leave them seeing nothing; promoting an owner to admin has to drop
   // theirs, or a stale list sits there looking like it means something.
-  if (b.role != null || b.propertyIds !== undefined) {
+  if (b.role != null || b.propertyIds !== undefined || b.jobIds !== undefined) {
     const m = await c.env.DB.prepare(
       `SELECT id, role FROM memberships WHERE user_id = ? AND account_id = ?`
     ).bind(userId, accountId).first();
-    if (m) await setMembershipProperties(c.env.DB, m.id, accountId, m.role, b.propertyIds);
+    if (m) {
+      if (b.role != null || b.propertyIds !== undefined) {
+        await setMembershipProperties(c.env.DB, m.id, accountId, m.role, b.propertyIds);
+      }
+      // A role change clears the job list for the same reason it clears the
+      // property one: a stale list sits there looking like it means something.
+      if (b.role != null && b.jobIds === undefined) {
+        await setMembershipJobs(c.env.DB, m.id, accountId, m.role, []);
+      } else {
+        await setMembershipJobs(c.env.DB, m.id, accountId, m.role, b.jobIds);
+      }
+    }
   }
   return c.json({ ok: true });
 });
@@ -6158,6 +6296,11 @@ app.get("/api/jobs", async (c) => {
   // A tenant is narrower still: their own reports, not the building's work.
   // Sharing a building with somebody is not a reason to see their repairs.
   const scope = scopeClause(auth, "property_id");
+  // And a PROJECT manager narrowed to named jobs, which is what a general
+  // contractor has instead of buildings -- see shared/jobscope.js. It stacks
+  // with the property scope rather than replacing it: both are empty for an
+  // unnarrowed seat, so nothing that worked before changes.
+  const jscope = jobScopeClause(auth, "id");
   const mine = auth.role === "tenant" ? ` AND requested_by = ? ` : "";
   // A CONTRACTOR seat sees the jobs their company was actually issued, and no
   // others. scopeClause narrows owners and tenants by property and contributes
@@ -6178,7 +6321,8 @@ app.get("/api/jobs", async (c) => {
     ? ` AND EXISTS (SELECT 1 FROM work_orders w
                      WHERE w.job_id = j.id AND w.company_id = ? AND w.voided_at IS NULL) `
     : "";
-  const binds = [accountId, ...scope.vals, ...(auth.role === "tenant" ? [auth.userId] : []),
+  const binds = [accountId, ...scope.vals, ...jscope.vals,
+    ...(auth.role === "tenant" ? [auth.userId] : []),
     ...(asContractor ? [auth.companyId] : [])];
   // `order` is interpolated rather than bound because ORDER BY cannot be a
   // bound parameter. Both callers below pass a literal written here; nothing
@@ -6191,6 +6335,7 @@ app.get("/api/jobs", async (c) => {
     `SELECT j.*, ru.name AS requested_by_name FROM jobs j
        LEFT JOIN users ru ON ru.id = j.requested_by
       WHERE j.account_id = ? ${scope.sql.replace(/\bproperty_id\b/g, "j.property_id")}
+        ${jscope.sql.replace(/ id IN/g, " j.id IN")}
         ${mine.replace(/\brequested_by\b/g, "j.requested_by")}
         ${woScope} ORDER BY ${order.replace(/\b(updated_at|created_at)\b/g, "j.$1")}`
   ).bind(...binds).all();
@@ -6618,6 +6763,20 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
     return c.json({ error: "migration_needed", migration }, 503);
   }
 
+  // A NARROWED SEAT KEEPS WHAT IT JUST MADE. Without this, a project manager
+  // scoped to four jobs creates a fifth and it vanishes on the next render --
+  // the screen worked, the job exists, and the person who made it cannot find
+  // it or act on it. Creating something is the clearest possible statement
+  // that it is yours to run, and this is the only place that statement is
+  // made, so it is the only place that can record it.
+  if (auth.jobIds && !crossAccount) {
+    try {
+      await c.env.DB.prepare(
+        `INSERT OR IGNORE INTO membership_jobs (membership_id, job_id) VALUES (?, ?)`
+      ).bind(auth.membershipId, id).run();
+    } catch (err) { if (!missingSchema(err)) throw err; }
+  }
+
   if (crossAccount) {
     // Both feeds. The manager has a request to answer; the owner has a record
     // of having asked, on the account they actually run.
@@ -6713,7 +6872,7 @@ app.post("/api/jobs/:id/approve", requireRole("admin", "pm"), async (c) => {
   const job = await c.env.DB.prepare(
     `SELECT id, title, requested_by, approved_at, withdrawn_at FROM jobs WHERE id = ? AND account_id = ?`
   ).bind(id, accountId).first();
-  if (!job) return c.json({ error: "job_not_found" }, 404);
+  if (!job || !maySeeJob(c.get("auth"), id)) return c.json({ error: "job_not_found" }, 404);
   if (!job.requested_by) return c.json({ error: "not_a_request" }, 400);
   if (job.withdrawn_at) return c.json({ error: "withdrawn" }, 409);
   if (job.approved_at) return c.json({ ok: true, alreadyApproved: true });
@@ -6745,7 +6904,7 @@ app.post("/api/jobs/:id/decline", requireRole("admin", "pm"), async (c) => {
   const job = await c.env.DB.prepare(
     `SELECT id, title, requested_by, approved_at, withdrawn_at, declined_at, status
        FROM jobs WHERE id = ? AND account_id = ?`).bind(id, accountId).first();
-  if (!job) return c.json({ error: "job_not_found" }, 404);
+  if (!job || !maySeeJob(c.get("auth"), id)) return c.json({ error: "job_not_found" }, 404);
   if (!job.requested_by) return c.json({ error: "not_a_request" }, 400);
   if (job.withdrawn_at) return c.json({ error: "withdrawn" }, 409);
   if (job.status === "completed") return c.json({ error: "already_completed" }, 409);
@@ -6828,7 +6987,7 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
   const job = await c.env.DB.prepare(
     `SELECT id, title, requested_by, approved_at FROM jobs WHERE id = ? AND account_id = ?`
   ).bind(jobId, auth.accountId).first();
-  if (!job) return c.json({ error: "job_not_found" }, 404);
+  if (!job || !maySeeJob(c.get("auth"), jobId)) return c.json({ error: "job_not_found" }, 404);
   if (job.requested_by && !job.approved_at) return c.json({ error: "not_approved" }, 409);
   if (auth.role === "contractor") {
     const wo = await c.env.DB.prepare(
@@ -7314,7 +7473,7 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   const job = await c.env.DB.prepare(
     `SELECT id, requested_by, approved_at, date FROM jobs WHERE id = ? AND account_id = ?`
   ).bind(jobId, accountId).first();
-  if (!job) return c.json({ error: "job_not_found" }, 404);
+  if (!job || !maySeeJob(c.get("auth"), jobId)) return c.json({ error: "job_not_found" }, 404);
   // A request an owner raised is not work anybody has agreed to yet. Issuing a
   // work order against one would commit the account to a price it never set.
   if (job.requested_by && !job.approved_at) return c.json({ error: "not_approved" }, 409);
@@ -11650,7 +11809,7 @@ app.get("/api/jobs/:jobId/overflow/eligibility", requireRole("admin", "pm"), asy
   const trade = c.req.query("trade") || "";
   const job = await c.env.DB.prepare(
     `SELECT id, date, title FROM jobs WHERE id = ? AND account_id = ?`).bind(jobId, accountId).first();
-  if (!job) return c.json({ error: "job_not_found" }, 404);
+  if (!job || !maySeeJob(c.get("auth"), jobId)) return c.json({ error: "job_not_found" }, 404);
 
   const roster = await ownRosterFor(c.env.DB, accountId, job.date);
   const verdict = canBroadcast({ ownRoster: roster, trade });
@@ -11719,7 +11878,7 @@ app.post("/api/jobs/:jobId/overflow", requireRole("admin", "pm"), async (c) => {
   const job = await c.env.DB.prepare(
     `SELECT id, title, date, address, area, zip, severity FROM jobs WHERE id = ? AND account_id = ?`
   ).bind(jobId, accountId).first();
-  if (!job) return c.json({ error: "job_not_found" }, 404);
+  if (!job || !maySeeJob(c.get("auth"), jobId)) return c.json({ error: "job_not_found" }, 404);
 
   // Overflow means overflow. An account with somebody of their own who could
   // take this is not overflowing, and without this check the feature is a

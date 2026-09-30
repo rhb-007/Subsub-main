@@ -17,6 +17,7 @@
     "test:removesub": "node --no-warnings scripts/remove-sub-test.mjs",
     "test:reviewguard": "node --no-warnings scripts/review-guard-test.mjs",
     "test:subeditguard": "node --no-warnings scripts/sub-edit-guard-test.mjs",
+    "test:jobscope": "node --no-warnings scripts/job-scope-test.mjs",
     "test:docfindings": "node --no-warnings scripts/doc-findings-test.mjs",
     "test:hostnames": "node scripts/hostnames-test.mjs",
     "test:setup": "node scripts/setup-check-test.mjs",

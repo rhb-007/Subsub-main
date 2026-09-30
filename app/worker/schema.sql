@@ -380,6 +380,18 @@ CREATE TABLE membership_properties (
 CREATE INDEX idx_mp_membership ON membership_properties(membership_id);
 CREATE INDEX idx_mp_property ON membership_properties(property_id);
 
+-- 053. The same thing one axis over: a PROJECT manager narrowed to named jobs.
+-- A general contractor has no buildings, so membership_properties gives their
+-- pm seat nothing to be scoped by. No rows means no restriction, which is what
+-- leaves every seat that existed before this untouched.
+CREATE TABLE membership_jobs (
+  membership_id TEXT NOT NULL REFERENCES memberships(id) ON DELETE CASCADE,
+  job_id        TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  PRIMARY KEY (membership_id, job_id)
+);
+CREATE INDEX idx_mj_membership ON membership_jobs(membership_id);
+CREATE INDEX idx_mj_job ON membership_jobs(job_id);
+
 CREATE TABLE engagement_properties (
   engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
   property_id   TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,

@@ -3183,6 +3183,7 @@ export default function SubSub() {
     persist("updateAccountUser", api.updateAccountUser(u.id, {
       name: u.name, email: u.email, phone: u.phone, role: u.role, subId: u.subId,
       propertyIds: u.propertyIds || [],
+      jobIds: u.jobIds || [],
     }));
     // name/email/phone are the person; role is the membership.
     setMemberships((ms) => ms.map((m) =>
@@ -6241,11 +6242,11 @@ export default function SubSub() {
             setBecomeHiring(false);
           }} /></Modal>}
       {userForm && <Modal onClose={() => setUserForm(false)}>
-        <UserForm subs={subs} properties={accountProperties} accountKind={kindOf(account)} onSubmit={addUser}
+        <UserForm subs={subs} properties={accountProperties} jobs={jobs} accountKind={kindOf(account)} onSubmit={addUser}
           preset={userForm === true ? null : userForm}
           onCancel={() => setUserForm(false)} /></Modal>}
       {editUser && <Modal onClose={() => setEditUser(null)}>
-        <UserForm subs={subs} properties={accountProperties} accountKind={kindOf(account)}
+        <UserForm subs={subs} properties={accountProperties} jobs={jobs} accountKind={kindOf(account)}
           existing={editUser} isSelf={editUser.id === currentUserId}
           canChangeRole={can("users") && editUser.id !== currentUserId}
           onSetAvatar={can("users") || editUser.id === currentUserId ? setUserAvatar : null}
@@ -16825,7 +16826,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           )}
           {adding && (
             <div className="portal-panel" style={{ marginBottom: 12 }}>
-              <UserForm subs={subs} properties={properties} accountKind={accountKind}
+              <UserForm subs={subs} properties={properties} jobs={jobs} accountKind={accountKind}
                 onSubmit={async (u) => {
                   // The notice is set by whoever owns the call, one level up.
                   // Said out loud at all because the whole confusion was an
@@ -22258,15 +22259,16 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable }) {
 }
 
 // ---- Create / edit user -------------------------------------------------
-function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = true, properties = [], accountKind = DEFAULT_ACCOUNT_KIND, onSetAvatar, preset = null }) {
+function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = true, properties = [], jobs = [], accountKind = DEFAULT_ACCOUNT_KIND, onSetAvatar, preset = null }) {
   // `preset` is how "Add an owner" on a building arrives here: the role and
   // that one building, already chosen, so the form opens on the person's name
   // rather than on two answers they have already given by pressing the button.
   const [f, setF] = useState(existing
     ? { id: existing.id, name: existing.name, email: existing.email, role: existing.role,
-        subId: existing.subId || "", propertyIds: existing.propertyIds || [] }
+        subId: existing.subId || "", propertyIds: existing.propertyIds || [],
+        jobIds: existing.jobIds || [] }
     : { name: "", email: "", role: preset?.role || "pm", subId: "",
-        propertyIds: preset?.propertyIds || [] });
+        propertyIds: preset?.propertyIds || [], jobIds: [] });
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   // Building owner is only offered by an account that has owners on the other
   // side of the table, and never without buildings to attach them to. A role
@@ -22283,6 +22285,16 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
   // case and the one that must stay effortless. An owner with none ticked
   // would sign in to an empty account, so for them it is required.
   const canNarrow = f.role === "pm" && properties.length > 0;
+  // A GENERAL CONTRACTOR HAS NO BUILDINGS, so the picker above offers their
+  // project manager nothing and they have always run the whole book. The unit
+  // of work there is the job -- see shared/jobscope.js. Same role, same
+  // asymmetry: none ticked means the whole account, which is what every
+  // existing seat is.
+  //
+  // Offered only where buildings are not, because two scope pickers on one
+  // form is two lists narrowing the same person by different axes, and
+  // nothing downstream would say which one had hidden a job from them.
+  const scopeByJob = f.role === "pm" && !ACCOUNT_KINDS[accountKind]?.properties && jobs.length > 0;
   const mustScope = ALWAYS_SCOPED_ROLES.includes(f.role);
   const showBuildings = (canNarrow || mustScope) && f.role !== "tenant";
   const valid = f.name && f.email
@@ -22354,6 +22366,24 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
           </p>
         </div>
       )}
+      {scopeByJob && !roleLocked && (
+        <div className="fld">Jobs
+          <div className="pick-grid">
+            {jobs.map((j) => (
+              <button key={j.id} type="button"
+                className={`pick ${f.jobIds.includes(j.id) ? "on" : ""}`}
+                onClick={() => setF((s2) => ({ ...s2, jobIds: s2.jobIds.includes(j.id)
+                  ? s2.jobIds.filter((x) => x !== j.id)
+                  : [...s2.jobIds, j.id] }))}>{j.title}</button>
+            ))}
+          </div>
+          <p className="fld-note">
+            {!f.jobIds.length
+              ? "Leave them all unticked and they run every job on the account \u2014 which is what most project managers should do. Tick some to assign them to just those."
+              : `Assigned to ${f.jobIds.length} of your ${jobs.length} job${jobs.length === 1 ? "" : "s"} \u2014 they run ${f.jobIds.length === 1 ? "it" : "them"} and see nothing on the others. A job they create is added to their list, so they do not lose what they just made.`}
+          </p>
+        </div>
+      )}
       {f.role === "contractor" && !roleLocked && (
         <label className="fld">Link to contractor record
           <select value={f.subId} onChange={(e) => set("subId", Number(e.target.value))}>
@@ -22367,6 +22397,7 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
         <button className="btn-solid" onClick={() => onSubmit({
           ...f, subId: f.subId || undefined,
           propertyIds: showBuildings ? f.propertyIds : [],
+          jobIds: scopeByJob ? f.jobIds : [],
         })} disabled={!valid}>
           {existing ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Create user</>}
         </button>

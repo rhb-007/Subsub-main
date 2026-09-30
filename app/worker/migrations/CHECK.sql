@@ -217,4 +217,25 @@ SELECT
   -- counts the ones that carry neither a hash nor a file.
   (SELECT COUNT(*) FROM agreements
     WHERE signed_at IS NOT NULL
-      AND COALESCE(doc_sha256, '') = '' AND COALESCE(file_name, '') = '')                       AS m052_inv_signed_without_doc;
+      AND COALESCE(doc_sha256, '') = '' AND COALESCE(file_name, '') = '')                       AS m052_inv_signed_without_doc,
+
+  -- 053. A project manager scoped to named jobs, which is what a general
+  -- contractor has instead of buildings. No rows means no restriction, so
+  -- there is nothing here that must be non-zero -- the table existing is the
+  -- whole of what the migration did.
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='membership_jobs')            AS m053_membership_jobs,
+  -- Invariant, must read ZERO: a scope row against a seat that is not scoped
+  -- by job at all. `jobScopeFrom` ignores those, so such a row is a list
+  -- somebody built that narrows nobody -- and it would start narrowing them
+  -- the day that role joined JOB_SCOPED_ROLES, silently.
+  (SELECT COUNT(*) FROM membership_jobs mj
+     JOIN memberships m ON m.id = mj.membership_id
+    WHERE m.role <> 'pm')                                                                       AS m053_inv_scoped_wrong_role,
+  -- And a scope row pointing at a job on a different account from the seat.
+  -- The cascade cannot catch this one: both rows are real, and the pair is
+  -- what is wrong. A seat narrowed to somebody else's job either sees nothing
+  -- or sees across accounts, and which one it is depends on a JOIN elsewhere.
+  (SELECT COUNT(*) FROM membership_jobs mj
+     JOIN memberships m ON m.id = mj.membership_id
+     JOIN jobs j ON j.id = mj.job_id
+    WHERE j.account_id <> m.account_id)                                                         AS m053_inv_scope_crosses_account;
