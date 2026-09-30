@@ -30,6 +30,8 @@
 // Who is asking. An owner wanting their building back and a manager resigning
 // an instruction end in the same place, and the audit should not have to guess
 // which happened.
+import { hiredLabelFor } from "./hires.js";
+
 export const DIRECTIONS = ["owner_requested", "manager_offered"];
 // A handover gives the building to its owner. An appointment gives operation of
 // it to a manager the owner chose. Same table, same two-party rule, opposite
@@ -207,8 +209,13 @@ export function openWorkText(n, side) {
 // Phrased as the relationship rather than the role name, because "contractor"
 // is what the database calls it and "you are their subcontractor" is what the
 // person reading the menu needs to know.
-export function seatDescription(role, roleLabel) {
-  if (role === "contractor") return "you are their subcontractor";
+export function seatDescription(role, roleLabel, hirerKind = null) {
+  // THE WORD FOLLOWS WHO IS HIRING, not what we are. A subcontract implies a
+  // prime contract; a plumber engaged directly by a building's manager is
+  // under no such thing, so calling them a subcontractor there describes a
+  // chain that does not exist. Same rule the roster label and the agreement's
+  // defined terms follow -- see shared/hires.js.
+  if (role === "contractor") return `you are their ${hiredLabelFor(hirerKind)}`;
   if (role === "owner") return "you own a building they run";
   if (role === "tenant") return "you rent from them";
   return `you are ${String(roleLabel || role || "a member").toLowerCase()} there`;

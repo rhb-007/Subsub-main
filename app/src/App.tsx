@@ -64,6 +64,7 @@ import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
 import { applyFormHtml, applyLink, applyUrl, applyTargetOk } from "../shared/embed.js";
+import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
 import { greetingFor, weatherLine } from "../shared/greeting.js";
 import { TRADES } from "../shared/trades.js";
 import { SOURCE_PRESETS } from "../shared/crmsources.js";
@@ -452,7 +453,7 @@ const ACCOUNT_KINDS = {
   // will never use -- one careless join from putting a building owner on
   // somebody's roster.
   general_contractor: { label: "General contractor", properties: false, invites: [],
-                        hireable: true, hiresLabel: "subcontractor",
+                        hireable: true, hiresLabel: null,
                         roleLabels: { pm: "Project manager" } },
   // The company being hired, which every other kind here is not.
   //
@@ -476,7 +477,7 @@ const ACCOUNT_KINDS = {
   // documents, pack, work orders, crews -- and the switch costs nothing and
   // keeps everything, because both kinds are hireable.
   subcontractor:      { label: "Subcontractor", properties: false, invites: [],
-                        hireable: true, hires: false, hiresLabel: "subcontractor",
+                        hireable: true, hires: false, hiresLabel: null,
                         roleLabels: { pm: "Project manager" } },
   property_manager:   { label: "Property manager", properties: true, invites: ["owner"] },
   // A building owner's account has no owners to invite -- they are the owner.
@@ -513,7 +514,12 @@ const isHireable = (account) => !!ACCOUNT_KINDS[kindOf(account)].hireable;
 // are or what they may do. One place, so the nav, the Add menu, the page
 // title and the dashboard tiles cannot end up holding four opinions -- which
 // is how somebody concludes there are two different lists.
-const rosterWord = (account) => ACCOUNT_KINDS[kindOf(account)].hiresLabel || "contractor";
+// ONE RULE, in shared/hires.js. It was decided here and again in the
+// agreement template and again in the switcher's own sentence, which is three
+// records of one fact -- and the two that were not this one were both wrong
+// for three of the five kinds.
+const rosterWord = (account) =>
+  ACCOUNT_KINDS[kindOf(account)].hiresLabel || hiresLabelFor(kindOf(account));
 const cap1 = (w) => w.charAt(0).toUpperCase() + w.slice(1);
 const rosterWords = (account) => {
   const one = rosterWord(account);
@@ -2185,7 +2191,6 @@ export default function SubSub() {
   // The other end of every connection: accounts that hire US. Every engagement
   // query in the Worker is "contractors I hire"; this is the other direction,
   // and without it saying yes to somebody showed up nowhere on this account.
-  const [clients, setClients] = useState([]);
   // Our own work at every client, not just the account we are standing in.
   const [myWork, setMyWork] = useState([]);
   // Quotes. The account's outstanding questions, and the ones put to us.
@@ -2990,7 +2995,7 @@ export default function SubSub() {
       if (!a) return null;
       return {
         accountId: m.accountId, name: a.name, subdomain: a.subdomain, role: m.role,
-        what: seatDescription(m.role, roleLabelIn(kindOf(a), m.role)),
+        what: seatDescription(m.role, roleLabelIn(kindOf(a), m.role), kindOf(a)),
         waiting: seatWaiting[m.accountId] || 0,
       };
     })
@@ -3624,12 +3629,6 @@ export default function SubSub() {
     }
   }, [loggedIn, currentAccountId, role]);
 
-  const refreshClients = useCallback(async () => {
-    if (!loggedIn) return;
-    try { setClients(await api.clients()); }
-    catch (err) { console.warn("[clients] load failed:", err); setClients([]); }
-  }, [loggedIn, currentAccountId]);
-
   // Every slot assigned to us, at every account that engaged us. Reloaded on
   // an account switch like everything else, because the work does not change
   // but a row's `here` does -- and `here` is what decides which rows can be
@@ -3658,7 +3657,7 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loggedIn, currentAccountId, role, jobs]);
 
-  useEffect(() => { if (loggedIn) { refreshClients(); refreshMyWork(); } else { setClients([]); setMyWork([]); } },
+  useEffect(() => { if (loggedIn) refreshMyWork(); else setMyWork([]); },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [loggedIn, currentAccountId]);
   useEffect(() => { if (loggedIn) refreshQuotes(); else { setQuoteReqs([]); setMyQuotes([]); } },
@@ -5154,43 +5153,13 @@ export default function SubSub() {
               alike on purpose and are two different lists answering two
               different questions, and nothing in the markup said which was
               which. */}
-          {/* The other end of the connection. On this screen because this is
-              already "the people we work with" -- the list below is who works
-              for us and this is who we work for, and having only one of the
-              two was how accepting a request could look like nothing
-              happened. */}
-          {clients.length > 0 && (
-            <section className="invited-strip is-client">
-              <h4 className="invited-h">
-                <ArrowRightLeft size={13} /> You work for
-                <span className="count">{clients.length}</span>
-                <span className="invited-sub">
-                  {clients.length === 1 ? "an account that hires you" : "accounts that hire you"}
-                </span>
-              </h4>
-              <div className="invited-row">
-                {clients.map((cl) => (
-                  <div key={cl.id} className="invited-card as-client">
-                    <span className="invited-chip ok">
-                      {ACCOUNT_KINDS[cl.kind]?.label || "On SubSub"}
-                    </span>
-                    <b>{cl.name}</b>
-                    <span className="invited-to">
-                      {cl.trades.length
-                        ? cl.trades.map((t) => catMeta(t).label).join(" · ")
-                        : "No trades set yet"}
-                    </span>
-                    <span className="invited-when">
-                      {cl.workOrders > 0
-                        ? `${cl.workOrders} work order${cl.workOrders === 1 ? "" : "s"}`
-                        : "No work yet"}
-                      {cl.since ? ` · since ${relTime(cl.since)}` : ""}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
+          {/* REMOVED: "You work for". It was a read-only strip with nothing
+              on any row to do, and the account switcher already names every
+              account that hires you AND says what you are to each one, which
+              is strictly more than this said. Two places answering one
+              question is how somebody concludes there are two lists.
+              `GET /api/clients` stays -- it is the other half of the
+              connection and the route is correct -- but nothing reads it. */}
 
           {/* The roster filling itself. The panel that does it lives in
               Account -> Company, beside the branded form it is a copy of; this
@@ -20711,6 +20680,13 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   // they are at three different companies and each one needs going to.
   const clientCount = new Set(elsewhere.map((m) => m.elsewhere.accountId)).size
     + (mine.length ? 1 : 0);
+  // Every hiring account's KIND, because the verb beside the count follows
+  // them rather than us. The account we are standing in counts too when it
+  // has work of ours on it.
+  const clientKinds = [
+    ...elsewhere.map((m) => m.elsewhere.accountKind).filter(Boolean),
+    ...(mine.length ? [kindOf(account)] : []),
+  ];
 
   // Still being asked. An answered one drops out of the list rather than
   // sitting there looking like it still needs something.
@@ -20786,10 +20762,16 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                     moment a second account hired us. Naming only the account
                     we happen to be standing in, on a list that spans all of
                     them, is the thing that made the whole screen misleading. */}
+                {/* AND THE VERB FOLLOWS WHO IS HIRING, not what we are.
+                    "Subcontracting for Cascade Management" is wrong when
+                    Cascade is a managing agent -- a subcontract implies a
+                    prime contract, and a plumber engaged directly by a
+                    building's manager is under no such thing. A mixed list
+                    says the neutral thing rather than the flattering one. */}
                 <span className="who-for">
                   {clientCount > 1
-                    ? `Subcontracting for ${clientCount} companies`
-                    : `Subcontracting for ${brand.name}`}
+                    ? `${workingForVerb(clientKinds)} ${clientCount} companies`
+                    : `${workingForVerb(clientKinds)} ${brand.name}`}
                 </span>
               </div>
             </div>
@@ -23466,6 +23448,17 @@ function QuickSend({ inline = false }) {
 // that fails while somebody is standing there holding a phone is worse than no
 // code at all. Recruiting is not plan-gated, so the code cannot be either.
 function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = false, onClose }) {
+  // THE BRANDED ADDRESS, which is the point of the code rather than a detail
+  // on it. Somebody scanning it should land on `<sub>.subsub.work` with this
+  // account's name in the bar, its colours and its mark -- the same page the
+  // Branding tab previews. `app.subsub.work/?apply=<sub>` renders the same
+  // branded form, but the address bar says SubSub, which on a code you hold
+  // up to a stranger is the one thing it must not say.
+  //
+  // The code is Scale-only, so the custom hostname is either live or being
+  // provisioned. While it is not live that address resolves to nothing, and a
+  // code that fails in front of somebody is worse than no code -- so the
+  // fallback is still drawn THEN, and only then, and says so.
   const url = applyUrl(subdomain, { liveHost });
   const [copied, setCopied] = useState(false);
 
@@ -23507,9 +23500,11 @@ function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = 
               deciding whether to put this on a van needs to know which. */}
           {!liveHost && (
             <span className="cx-sub rq-note">
-              This points at SubSub with your company named in the link, which
-              works today. Once {subdomain}.subsub.work is live the code
-              switches to your own address on its own.
+              <b>{subdomain}.subsub.work isn't live yet.</b> Until it is, this
+              code goes to your sign up form at a SubSub address — the form is
+              still yours, with your name, colours and mark on it, but the
+              address bar says SubSub. It switches to your own address on its
+              own once the hostname is ready.
             </span>
           )}
         </div>

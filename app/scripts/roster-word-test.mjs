@@ -59,6 +59,69 @@ const t = tally();
       && /<JobForm[\s\S]{0,400}?rosterWord=\{rosterWords\(account\)\.One\}/.test(src));
 }
 
+// ---- one rule, and the switcher used to hold a second copy of it ---------
+//
+// `seatDescription` said "you are their subcontractor" whatever kind of account
+// was hiring -- and a subcontract implies a prime contract, so a plumber
+// engaged directly by a building's manager is under no such thing. Same
+// mistake the agreement's defined terms had, in a third place.
+{
+  const H = await import("../shared/hires.js");
+  const HO = await import("../shared/handover.js");
+  t.ck("a general contractor hires subcontractors",
+    H.hiresLabelFor("general_contractor") === "subcontractor");
+  t.ck("and a subcontractor passing work down does too",
+    H.hiresLabelFor("subcontractor") === "subcontractor");
+  for (const k of ["property_manager", "portfolio_manager", "building_owner"]) {
+    t.ck(`a ${k} hires contractors`, H.hiresLabelFor(k) === "contractor", H.hiresLabelFor(k));
+  }
+  // The neutral word is right more often than the specific one, and a word
+  // describing a chain that does not exist is the failure this prevents.
+  t.ck("an unknown kind gets the neutral word", H.hiresLabelFor(null) === "contractor");
+
+  t.ck("the switcher reads the HIRER's kind",
+    HO.seatDescription("contractor", "Contractor", "general_contractor")
+      === "you are their subcontractor"
+    && HO.seatDescription("contractor", "Contractor", "property_manager")
+      === "you are their contractor",
+    HO.seatDescription("contractor", "Contractor", "property_manager"));
+  t.ck("and with no kind it says the neutral thing rather than the wrong one",
+    HO.seatDescription("contractor", "Contractor") === "you are their contractor");
+  t.ck("the other seat kinds are untouched",
+    HO.seatDescription("owner", "Owner", "property_manager") === "you own a building they run"
+      && HO.seatDescription("tenant", "Tenant", "property_manager") === "you rent from them");
+
+  // And the verb on the contractor's own dashboard. There is no verb that is
+  // right for a mixed list, so a mixed list says the neutral thing.
+  t.ck("all-GC clients earn the specific verb",
+    H.workingForVerb(["general_contractor", "subcontractor"]) === "Subcontracting for");
+  t.ck("a mixed list does not",
+    H.workingForVerb(["general_contractor", "property_manager"]) === "Working for");
+  t.ck("nor does an all-manager list",
+    H.workingForVerb(["property_manager"]) === "Working for");
+  t.ck("and neither does an empty one", H.workingForVerb([]) === "Working for");
+
+  // ONE rule: the browser's ACCOUNT_KINDS must not hold its own answer.
+  // Comments stripped, INCLUDING JSX ones. The note recording that the strip
+  // was removed names the thing it removed, which to a substring check reads
+  // exactly like the strip still being there -- third time this file has paid
+  // for that, after the hardcoded company name and the applyUrl count. JSX
+  // comments are `{/* ... */}` and do not start with `//`, so a line filter
+  // alone is not enough.
+  const src = readFileSync(join(app, "src/App.tsx"), "utf8")
+    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  const own = (src.match(/hiresLabel:\s*"[a-z]+"/g) || []).length;
+  t.ck("and ACCOUNT_KINDS no longer carries a second copy of it",
+    own === 0, String(own));
+  t.ck("it reads shared/hires.js instead", /hiresLabelFor\(kindOf\(account\)\)/.test(src));
+
+  // The strip that answered this question twice is gone.
+  t.ck("the \"You work for\" strip is off the roster screen",
+    !/You work for/.test(src) && !/invited-strip is-client/.test(src));
+}
+
 console.log("\n-- building --");
 buildApp({ outDir: OUT, apiPort: API });
 

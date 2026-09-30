@@ -479,7 +479,10 @@ export const api = {
   myConnectRequests: () => request("/my-connect-requests"),
   // Sending your own paperwork to somebody who asked for it.
   // The other end of a connection: accounts that hire us.
-  clients: () => request("/clients"),
+  // `GET /api/clients` is still the correct other half of a connection and the
+  // route stays; nothing in the app reads it since the "You work for" strip
+  // came off, because the account switcher already names every account that
+  // hires you and says what you are to each.
   // Every slot assigned to us, at every client. The portal's job list and its
   // badge both used to read /api/jobs, which is one account at a time.
   myWork: () => request("/my-work"),

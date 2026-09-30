@@ -8972,6 +8972,11 @@ app.get("/api/my-work", async (c) => {
               j.date, j.time, j.severity, j.status AS job_status, j.completed_at,
               j.scope, j.updated_at, j.created_at,
               a.name AS account_name, a.subdomain AS account_subdomain,
+              -- The HIRER's kind, because what this company is to them follows
+              -- it: a subcontract implies a prime contract, and a plumber
+              -- engaged directly by a building's manager is under no such
+              -- thing. See shared/hires.js.
+              a.kind AS account_kind,
               p.name AS property_name
          FROM work_orders w
          JOIN jobs j ON j.id = w.job_id
@@ -8995,7 +9000,8 @@ app.get("/api/my-work", async (c) => {
       // list spans accounts and responding is an account-scoped write, so a
       // row belonging elsewhere is read-only and says where to go instead.
       accountId: r.account_id, accountName: r.account_name,
-      accountSubdomain: r.account_subdomain, here: r.account_id === accountId,
+      accountSubdomain: r.account_subdomain, accountKind: r.account_kind || null,
+      here: r.account_id === accountId,
       status: r.status, auto: !!r.auto_scheduled,
       responseWindow: r.response_window || null, respondBy: r.respond_by || null,
       respondedAt: r.responded_at || null,

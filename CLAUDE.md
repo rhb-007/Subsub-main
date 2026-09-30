@@ -519,12 +519,18 @@ refactor.
   `GET /api/account-by-subdomain/:s` is already public and is what brands every
   login page.
 
+  **The branded address is the point of the code, not a detail on it.** Now
+  that it is Scale-only, the code encodes `<sub>.subsub.work/?apply=1` — the
+  same address the Branding tab previews — so somebody scanning it lands with
+  this account's name in the bar, its colours and its mark.
+  `app.subsub.work/?apply=<sub>` renders the identical branded form, but the
+  address bar says SubSub, and **on a code you hold up to a stranger that is
+  the one thing it must not say.** The fallback is drawn only while the custom
+  hostname is still being provisioned, and says exactly that.
+
   **The address is shown beside the code**, because a QR code is the one
   control on a screen whose destination cannot be read, and somebody about to
-  point a stranger's camera at it is entitled to know where it goes. The panel
-  also **says which address it carries** — on Basic it names SubSub and says it
-  switches to their own once the hostname is live — because somebody deciding
-  whether to put this on a van needs to know that.
+  point a stranger's camera at it is entitled to know where it goes.
 
   **It is Scale, and the snippet beside it is not.** That pair is gated
   differently on purpose and a later pass will want to harmonise them: the
@@ -1496,6 +1502,45 @@ refactor.
   `knownEnough` wants a company, a contact **and** an address, not just a row: a
   record somebody started and abandoned would otherwise seed a screen saying
   "we already have your details" over two blanks.
+
+- **The noun was decided in three places, and the two that were not the roster
+  were both wrong.** `hiresLabel` on `ACCOUNT_KINDS` had it right. But
+  `seatDescription` — the line under every name in the account switcher — said
+  *you are their subcontractor* whatever kind of account was hiring, and the
+  contractor's own dashboard said *Subcontracting for Cascade Management* when
+  Cascade is a managing agent. **A subcontract implies a prime contract**, and a
+  plumber engaged directly by a building's manager is under no such thing.
+
+  `app/shared/hires.js` is the one rule now. `ACCOUNT_KINDS.hiresLabel` reads
+  it, `seatDescription` takes the **hirer's** kind, and an unknown kind gets
+  *contractor*: the neutral word is right more often than the specific one, and
+  a word describing a chain that does not exist is the whole failure.
+
+  **`workingForVerb` refuses to flatter a mixed list.** There is no verb that is
+  right for *three companies* when one is a general contractor and two are
+  managing agents, so a list that is not all one kind says *Working for* rather
+  than *Subcontracting for*. `/api/my-work` carries `accountKind` for that, and
+  for nothing else.
+
+  **The agreement's `PARTY_TERMS` deliberately stays its own copy**, and a later
+  pass will want to merge it into this. It must not: those words are a
+  contract's **defined terms**, frozen inside the versioned template so that
+  changing one moves the version and cannot rewrite what somebody already
+  signed. This one is a UI label and is always current. Same fact, two
+  lifetimes.
+
+  **And "You work for" came off the roster screen.** It was a read-only strip —
+  a name, a trade list and a work-order count, with nothing on any row to do —
+  and the account switcher already names every account that hires you *and*
+  says what you are to each one, which is strictly more than the strip said.
+  Two places answering one question is how somebody concludes there are two
+  lists. `GET /api/clients` stays, because it is the correct other half of a
+  connection, and nothing reads it.
+
+  The guard for all of this strips **JSX comments as well as `//` ones**, because
+  the note recording that the strip was removed names the thing it removed —
+  third time this file has paid for a comment reading, to a substring check,
+  exactly like the code it describes.
 
 - **A general contractor hires subcontractors; a property manager hires
   contractors.** The Add menu offered *Contractor* to a general contractor,
