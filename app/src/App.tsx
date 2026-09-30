@@ -2234,6 +2234,28 @@ export default function SubSub() {
   };
   const canRate = role === "admin" || role === "pm";
   const canComplete = role === "admin" || role === "pm";
+  // WHO MAY CHANGE SOMEBODY ELSE'S SEAT, and it is a role rather than a
+  // capability because `can()` has no entry for it. The two call sites below
+  // asked `can("users")`, which is not in any role's list at all -- and an
+  // unknown view falls through the `includes` check and answers false. So it
+  // answered false for an admin, for a project manager and for everybody
+  // else: every Edit user form opened with the role badge locked, which also
+  // hides the buildings picker, the jobs picker and the contractor link. A
+  // general contractor could not scope a project manager to jobs and a
+  // managing agent could not scope one to buildings -- the two controls this
+  // gate exists to protect, unreachable by the one person allowed to use
+  // them, on every account.
+  //
+  // "users" is a PANE name in AccountView, gated there on `canManage`, and
+  // reading a pane name as a capability is the two-records-of-one-fact shape
+  // with the records in different vocabularies. `PATCH /api/account-users/:id`
+  // is `requireRole("admin")`, so that is what the screen asks.
+  //
+  // The mechanism is worth more than the fix: a typo'd capability is
+  // indistinguishable from a refused one, silently, and it fails closed so
+  // nothing breaks loudly enough to notice. `test:usercaps` pins every
+  // `can("...")` string in this file against a capability some role has.
+  const canManageUsers = role === "admin";
 
   // "Home" is not one screen. An admin's is the dashboard; a contractor has
   // no dashboard at all -- the role cannot see one -- and theirs is the job
@@ -2514,8 +2536,15 @@ export default function SubSub() {
     .filter((m) => m.accountId === account.id)
     .map((m) => {
       const u = users.find((x) => x.id === m.userId);
+      // jobIds as well as propertyIds: a general contractor has no buildings,
+      // so the job list is the ONLY scope their project manager has -- and a
+      // field dropped here opens the picker with nothing ticked, which reads
+      // as "runs every job" and writes exactly that on the next save. Same
+      // drop-a-field-you-did-not-list shape that deleted a W-9 through
+      // SubForm, on the field that decides what somebody can see.
       return u ? { ...u, role: m.role, subId: m.companyId ?? null,
-        propertyIds: m.propertyIds || [], unit: m.unit || null } : null;
+        propertyIds: m.propertyIds || [], jobIds: m.jobIds || [],
+        unit: m.unit || null } : null;
     })
     .filter(Boolean), [memberships, users, account.id]);
 
@@ -3188,8 +3217,19 @@ export default function SubSub() {
     // name/email/phone are the person; role is the membership.
     setMemberships((ms) => ms.map((m) =>
       (m.userId === u.id && m.accountId === account.id)
+        // WHICH ROLES CARRY WHICH LIST IS THE SERVER'S ANSWER, and this patch
+        // has to give the same one or the screen disagrees with the row until
+        // somebody reloads. `setMembershipProperties` keeps a list for a pm as
+        // well as an owner and a tenant -- this line read `"owner"` alone, so
+        // saving any edit to a scoped property manager blanked their buildings
+        // on screen while the server kept them. `setMembershipJobs` keeps one
+        // for a pm only. A role change clears both, which is what the route
+        // does with them: a stale list sits there looking like it means
+        // something.
         ? { ...m, role: u.role, companyId: u.subId ?? m.companyId,
-            propertyIds: u.role === "owner" ? (u.propertyIds || []) : [] } : m));
+            propertyIds: (u.role === "pm" || ALWAYS_SCOPED_ROLES.includes(u.role))
+              ? (u.propertyIds || []) : [],
+            jobIds: u.role === "pm" ? (u.jobIds || []) : [] } : m));
     setUsers((us) => us.map((x) => (x.id === u.id ? { ...x, ...u } : x)));
     setEditUser(null);
   };
@@ -3899,7 +3939,7 @@ export default function SubSub() {
         const byKey = Object.fromEntries(prev.map((m) => [key(m), m]));
         members.forEach((m) => {
           byKey[`${m.id}:${accountId}`] = { userId: m.id, accountId, role: m.role, companyId: m.subId,
-            propertyIds: m.propertyIds || [], unit: m.unit || null };
+            propertyIds: m.propertyIds || [], jobIds: m.jobIds || [], unit: m.unit || null };
         });
         return Object.values(byKey);
       });
@@ -6248,8 +6288,8 @@ export default function SubSub() {
       {editUser && <Modal onClose={() => setEditUser(null)}>
         <UserForm subs={subs} properties={accountProperties} jobs={jobs} accountKind={kindOf(account)}
           existing={editUser} isSelf={editUser.id === currentUserId}
-          canChangeRole={can("users") && editUser.id !== currentUserId}
-          onSetAvatar={can("users") || editUser.id === currentUserId ? setUserAvatar : null}
+          canChangeRole={canManageUsers && editUser.id !== currentUserId}
+          onSetAvatar={canManageUsers || editUser.id === currentUserId ? setUserAvatar : null}
           onSubmit={updateUser} onCancel={() => setEditUser(null)} /></Modal>}
       {recruitQr && (
         <RecruitQr asModal subdomain={account.subdomain} accountName={account.name}
@@ -14217,9 +14257,11 @@ function Avatar({ user, className = "" }) {
 // which is the knows-the-answer-and-offers-no-way-in shape this product
 // refuses everywhere else.
 //
-// Rendered for an admin OR a project manager, because that is what
-// `/api/crm-rules` allows. Gating it to admins would make the screen
-// stricter than the route, which is the same lie as being looser.
+// Rendered for an admin and nobody else, because that is what
+// `/api/crm-rules` allows -- narrowed there and here in one change, since a
+// screen must be neither stricter nor looser than the route behind it. A
+// trade rule decides what every arriving job is read as, which is the same
+// account-level decision as the token panel above it.
 function CrmMapping() {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState(null);      // which row is being answered
@@ -16430,9 +16472,16 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           )}
           {/* Directly below the token, because setting a CRM up is one story
               and making somebody find the second half on another tab is how
-              a half-configured integration happens. Admin OR pm: the route
-              allows both, and a screen must not be stricter than it. */}
-          {(role === "admin" || role === "pm") && ACCOUNT_KINDS[accountKind]?.hires !== false && (
+              a half-configured integration happens.
+
+              `canManage`, the same gate as the token above it, and the same
+              one `/api/crm-rules` now asks. It was admin OR pm, matching the
+              route as it was written -- so a project manager reached half of
+              the CRM integration and not the other half. Wiring the company's
+              scheduling system to SubSub is one account-level decision, and a
+              trade rule is the dictionary every arriving job is read
+              through. */}
+          {canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && (
             <CrmMapping />
           )}
 

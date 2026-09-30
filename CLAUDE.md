@@ -964,6 +964,65 @@ refactor.
   describes: 053's own comment says *there is no ALTER TABLE*, and the
   assertion checking for one duly failed on it.
 
+- **AND NEITHER PICKER COULD BE OPENED, BECAUSE THE FORM ASKED FOR A
+  CAPABILITY THAT DOES NOT EXIST.** The scoping above shipped complete —
+  route, middleware, migration, invariants, picker, note — and the picker was
+  unreachable. So was the buildings one beside it, which has existed since
+  `membership_properties` did. Reported as *"I can't attach jobs to a project
+  manager — when I edit them it only allows to edit name and email"*, which is
+  exactly what the screen did.
+
+  `UserForm`'s gate was `can("users")`. **There is no `"users"` capability.**
+  `"users"` is a **pane** name in `AccountView`, gated there on `canManage`,
+  and `can()` is `ROLES[role].can.includes(view)` — so an unknown view falls
+  through and answers **false**. It answered false for an admin, for a project
+  manager and for everybody else, on every account kind, since the pane was
+  named. Two records of one fact with the records in different vocabularies,
+  which is why neither looked wrong beside the other.
+
+  What that cost is the whole form below the email box, because `roleLocked`
+  hides four things: the role picker, the buildings picker, the jobs picker and
+  the contractor link. **A general contractor could not scope a project manager
+  to jobs and a managing agent could not scope one to buildings** — the two
+  controls the gate exists to protect, unreachable by the one person allowed to
+  use them. `PATCH /api/account-users/:userId` is `requireRole("admin")`
+  throughout, so the screen was **stricter** than the route: the same lie as
+  looser, now paid for in both directions.
+
+  **The mechanism is worth more than the fix, and it is a new one for this
+  file: a misspelt capability is indistinguishable from a refused one, it fails
+  closed, and nothing anywhere reports it.** Every other assertion shape here
+  is caught by mutation; this one cannot be, because the source reads exactly
+  as intended. `test:seatgate` therefore pins the **class** — every `can("…")`
+  string in `App.tsx` against a capability some role actually has, with the
+  vocabulary read out of `ROLES` rather than listed in the test.
+
+  **And the static assertions for both pickers passed the entire time.**
+  `{scopeByJob && !roleLocked && (` is exactly what it should be; the bug was
+  in what fed `roleLocked`. So `test:scopeedit` drives the modal in a browser
+  and reads the pickers back — **on both account kinds in the same place**,
+  because a fix checked on one branch is the diagonal coverage that left
+  `hiresLabel` half-wired. Mutating `canManageUsers` back fails eleven
+  assertions across the two.
+
+  **Three more places dropped the list on the way to that form**, none of which
+  any static check on the route could see: `hydrateAccount`'s membership write,
+  `accountUsers`, and `updateUser`'s optimistic patch. Dropped anywhere on that
+  trip the picker opens with nothing ticked — and **empty does not read as a
+  lost field, it reads as *runs everything*, and the next save writes exactly
+  that.** So the assertion is on the **ticked** state and on the body of the
+  PATCH, never on the picker being present.
+
+  The optimistic patch was wrong about the other list too. It kept
+  `propertyIds` for `"owner"` alone; `setMembershipProperties` keeps one for a
+  **pm** as well, so saving any edit to a scoped property manager blanked their
+  buildings on screen while the server kept them, until a reload. **Which roles
+  carry which list is the server's answer, and a patch that gives a different
+  one is a save that looks like it lost something** — the shape this file
+  records about `updateSub`, one field along. Re-opening the form and reading
+  the ticks is what catches it; the PATCH body cannot, because that comes from
+  the form rather than from state.
+
 - **The screen asked the scoped question where the server enforces the
   unscoped one.** `companyAnswersForItself` was written *deliberately*
   unscoped — "does anybody answer for this company at all", never "is there
@@ -3753,11 +3812,22 @@ refactor.
   somebody who believes that goes hunting in their CRM instead of looking at
   their own Jobs screen. The copy names where the jobs actually are.
 
-  It renders for an **admin or a project manager**, because that is what
-  `requireRole("admin", "pm")` allows on the route. `canManage` is admin-only,
-  so using it here — the obvious thing, since the token panel above it does —
-  would have made the screen stricter than the route, which this file has
-  already called the same lie as looser. The mutation run catches it.
+  It rendered for an **admin or a project manager**, because that is what
+  `requireRole("admin", "pm")` allowed on the route — and `canManage` is
+  admin-only, so using it here would have made the screen stricter than the
+  route, which this file has already called the same lie as looser.
+  **Both halves are admin now, and the narrowing was the route's rather than
+  the screen's.** The old reasoning was not silly and is kept because it is the
+  reasoning a later pass would arrive at again: answering *Roof Replacement
+  means roofing* is trade knowledge, which a project manager has more of than
+  an admin. What it missed is what a rule **is** — the dictionary the receiver
+  reads to decide what arrives on the account, from then on, for every job from
+  every CRM. That is the same account-level decision as the key that creates
+  those jobs, and the token panel directly above it has been admin-only since
+  it shipped. So a project manager held **half of one integration**, which is
+  the worst of the three available answers. The queue an admin now owns is
+  still work either way, and the jobs it is about are on the Jobs screen —
+  which is the sentence that panel leads with.
 
   It sits directly below the API token panel so setting a CRM up is one story
   on one tab. A half-configured integration is what you get when the second

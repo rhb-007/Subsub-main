@@ -240,16 +240,36 @@ try {
     await ctx.close();
   }
 
-  console.log("\n-- a project manager gets the same screen --");
+  console.log("\n-- a project manager has no API access, on either half --");
   {
-    // /api/crm-rules is requireRole("admin","pm"). Hiding this from a pm
-    // would make the screen stricter than the route.
+    // REVERSED DELIBERATELY, and the old reasoning is kept because it was not
+    // silly: `/api/crm-rules` was `requireRole("admin","pm")`, and hiding a
+    // route's screen from somebody the route allows is the same lie as showing
+    // it to somebody it refuses. Answering "Roof Replacement means roofing" is
+    // trade knowledge, which a pm has more of than an admin.
+    //
+    // What that missed is what a rule IS. It is the dictionary the receiver
+    // reads to decide what arrives on the account, from then on, for every job
+    // from every CRM -- the same account-level decision as the token that
+    // creates those jobs, and that panel has been admin-only since it shipped.
+    // So a pm reached half of one integration and not the other half. Both
+    // halves are admin now, route and screen in the same change.
     ROLE = "pm";
     RULES = { rules: [], unmapped: [{ id: "g1", source: "jobnimbus", match: "tag", value: "steep", hits: 1 }] };
     const { ctx, page, crashes } = await openPanel();
     const p = await panelOf(page);
-    t.ck("a project manager sees the panel", !!p, String(p));
-    t.ck("and the queue on it", (p?.gaps || []).length === 1, JSON.stringify(p?.gaps));
+    t.ck("a project manager does not see the mapping panel", !p, String(p));
+    // THE SCREEN HAS TO HAVE OPENED FOR THAT TO MEAN ANYTHING. "no panel" on a
+    // page that never rendered is an assertion that cannot fail -- the same
+    // trap the QR code's own gate test fell into first time round.
+    // Case-insensitive because `.form-sec` and `.portal-panel h4` are
+    // text-transform:uppercase and Chrome's innerText applies it, so a
+    // case-sensitive heading match is a test of the stylesheet.
+    t.ck("on the Profile pane, which did open",
+      await page.evaluate(() => /your details/i.test(document.body.innerText)),
+      JSON.stringify((await page.evaluate(() => document.body.innerText)).replace(/\s+/g," ").slice(0, 200)));
+    t.ck("nor the token panel beside it",
+      await page.evaluate(() => !/PASTE THIS INTO YOUR CRM|Create a token/i.test(document.body.innerText)));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
     ROLE = "admin";

@@ -13048,7 +13048,23 @@ app.post("/api/v1/hooks/:source/:token", async (c) => {
 });
 
 // ---- The rules, from inside the account ----------------------------------
-app.get("/api/crm-rules", requireRole("admin", "pm"), async (c) => {
+//
+// ADMIN ONLY, ON ALL THREE, and that is a narrowing rather than the original
+// reading. These started as `requireRole("admin", "pm")` on the argument that
+// answering "Roof Replacement means roofing" is trade knowledge, which a
+// project manager has more of than an admin. What that missed is what a rule
+// IS: the dictionary the receiver reads to decide what arrives on the account,
+// applied to every job from every CRM from then on, for everybody. It is the
+// other half of the token panel beside it -- and that has been admin-only
+// since it shipped, because a token is a key to create jobs on the account.
+// Two halves of one integration behind two different gates is how a project
+// manager ends up holding half of an account-level decision.
+//
+// So both halves are admin, the screen follows in the same change, and the
+// queue a pm can no longer answer is still work an admin can: the jobs it is
+// about are on the Jobs screen either way, which is the sentence that panel
+// leads with.
+app.get("/api/crm-rules", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
   try {
     const rules = await c.env.DB.prepare(
@@ -13076,7 +13092,7 @@ app.get("/api/crm-rules", requireRole("admin", "pm"), async (c) => {
   }
 });
 
-app.post("/api/crm-rules", requireRole("admin", "pm"), async (c) => {
+app.post("/api/crm-rules", requireRole("admin"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
   const rule = validRule(b, { tradeIds: TRADE_IDS });
@@ -13138,7 +13154,7 @@ app.post("/api/crm-rules", requireRole("admin", "pm"), async (c) => {
   return c.json({ ok: true });
 });
 
-app.delete("/api/crm-rules/:id", requireRole("admin", "pm"), async (c) => {
+app.delete("/api/crm-rules/:id", requireRole("admin"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const id = c.req.param("id");
   const row = await c.env.DB.prepare(
