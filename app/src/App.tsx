@@ -47,6 +47,10 @@ import { US_STATES, stateName } from "../shared/states.js";
 // figure on screen and a figure written to the ledger cannot disagree.
 import { splitEven, releaseAmounts } from "../shared/money.js";
 import { chainReasonText } from "../shared/waivers.js";
+import { coverProblemText, fixableByUpload } from "../shared/paygate.js";
+import { MIN_FUND_CENTS, canPay, payRefusalText, fundSuggestion } from "../shared/escrow.js";
+import { INSURANCE_LINES, BOND_MIN, INSURANCE_MIN, checkItems, findingsFor,
+  problemsIn, allConfirmed, reviewProgress, outcomeWords } from "../shared/doccheck.js";
 import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/autoschedule.js";
 import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
   isOptionalDoc, docStatus as docStatusOf,
@@ -1120,22 +1124,8 @@ const DOC_LABELS_INLINE = {
 // ---- Washington State insurance & bond requirements ----------------------
 // The schedule Outerhome holds subcontractors to. Reviewers check each line
 // against the certificate of insurance.
-const INSURANCE_LINES = [
-  { id: "cgl_occ",   label: "Commercial General Liability", sub: "per occurrence",              min: 1000000 },
-  { id: "cgl_agg",   label: "General aggregate",            sub: "",                            min: 2000000 },
-  { id: "prod_comp", label: "Products & completed operations", sub: "",                          min: 2000000 },
-  { id: "auto",      label: "Auto liability",               sub: "combined single limit",        min: 1000000 },
-  { id: "empl",      label: "Employer's liability",         sub: "",                            min: 1000000 },
-  { id: "umbrella",  label: "Umbrella / excess",            sub: "higher-risk or larger subs",  min: 1000000, optional: true },
-];
-const INSURANCE_ATTEST = [
-  { id: "named",   label: (b) => `${b} named as additional insured on CGL` },
-  { id: "primary", label: () => "Primary & non-contributory wording present" },
-  { id: "wc",      label: () => "WA L&I workers' comp account active (or exempt)" },
-  { id: "current", label: () => "Policy period covers the work dates" },
-  { id: "carrier", label: () => "Carrier and policy number legible" },
-];
-const BOND_MIN = 30000;
+// The schedule and the minimums come from shared/doccheck.js for the same
+// reason the checklist does. Both were also copied into worker/mail.js.
 
 // ---- Change orders --------------------------------------------------------
 // A work order is immutable once accepted: it records what was agreed. Any
@@ -1298,35 +1288,18 @@ function licenseTone(check) {
   return (check.status === "CHECK_FAILED" || check.status === "UNSUPPORTED_STATE") ? "s-unknown" : "s-bad";
 }
 
-// What an admin/PM must confirm for bond and agreement. Insurance uses the
-// coverage schedule above instead of a flat checklist.
-const DOC_CHECKS = {
-  bond: (b) => [
-    { id: "active", label: "Bond is active, not cancelled" },
-    { id: "amount", label: `Bond amount at least ${formatMoney(BOND_MIN)}` },
-    { id: "principal", label: "Principal matches the company name on file" },
-    { id: "surety", label: "Surety is licensed in Washington" },
-  ],
-  w9: (b) => [
-    { id: "tin", label: "TIN or EIN filled in and legible" },
-    { id: "name", label: "Name and business name match the company on file" },
-    { id: "entity", label: "Tax classification selected (LLC, S-corp, sole prop…)" },
-    { id: "signed", label: "Signed and dated in Part II" },
-    { id: "current", label: "Current form revision (Rev. March 2024 or later)" },
-  ],
-  contract: (b) => [
-    { id: "signed", label: "Signed and dated by the contractor" },
-    { id: "counter", label: `Countersigned by ${b}` },
-    { id: "version", label: "Current version of the agreement" },
-  ],
-};
+// What an admin/PM must confirm, per document. From shared/doccheck.js, which
+// is the one list -- it was here and copied again in worker/mail.js, agreeing by
+// luck, and the copy stopped being survivable the moment the email had to name
+// the specific line a reviewer marked wrong.
+const DOC_CHECKS = (kind, who) => checkItems(kind, who);
 
 const lineLabel = (id) => id === "bond" ? "Bond amount"
   : (INSURANCE_LINES.find((l) => l.id === id)?.label || id);
 const activeOverrides = (rv) => Object.entries(rv?.overrides || {})
   .filter(([, reason]) => reason && reason.trim())
   .map(([id, reason]) => ({ id, label: lineLabel(id), reason }));
-const INSURANCE_MIN = 1000000; // headline CGL figure used in copy
+
 
 // A document is only usable once a human has reviewed it.
 const docReview = (s, kind) => (s.docReview || {})[kind] || null;
@@ -2918,9 +2891,9 @@ export default function SubSub() {
   // One place for the "you've been matched but we need paperwork" email.
   // Available from every surface where a non-compliant contractor appears.
   // One-way compliance notification. Email always, SMS optional.
-  const requestDocs = (sub, job = null, trade = null) => {
+  const requestDocs = (sub, job = null, trade = null, kind = null) => {
     setSelected(null); setAssigning(null); setAssignSub(null);
-    setNotifying({ sub, job, trade });
+    setNotifying({ sub, job, trade, kind });
   };
 
   const saveNotes = (id, notes) =>
@@ -3315,8 +3288,14 @@ export default function SubSub() {
     reviewSubDoc(id, kind, "rejected", data);
     const target = subs.find((x) => x.id === id);
     if (target) {
+      // The KIND travels, because the server picks between "upload your
+      // documents" and "here is what is wrong with the one you sent" from the
+      // findings on that kind -- and without it, a reviewer who had just named
+      // four faults sent the generic notice about a document already on file,
+      // which is what this whole change exists to stop.
       requestDocs({ ...target,
-        docReview: { ...(target.docReview || {}), [kind]: { status: "rejected", ...data } } });
+        docReview: { ...(target.docReview || {}), [kind]: { status: "rejected", ...data } } },
+        null, null, kind);
     }
   };
 
@@ -5928,7 +5907,7 @@ export default function SubSub() {
               that can be -- used to leave the card drawing the old value
               until it was closed and reopened. Looking it up by id each
               render costs nothing and makes every field here current. */}
-          <SubDetail sub={subs.find((s) => s.id === selected.id) || selected}
+          <SubDetail sub={subs.find((s) => s.id === selected.id) || selected} brand={brand}
             /* The invite already out to them, so the card can say so rather
                than offering to send one as if none existed. Matched on the
                company first and the address second, because an invite raised
@@ -6072,6 +6051,12 @@ export default function SubSub() {
           const a = (jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a;
           if (!a?.id) return null;
           return <WorkOrderProgress woId={a.id} canManage={canComplete}
+            /* Verifying a milestone is admin or PM; SPENDING is admin, which is
+               the line the routes draw and the same one the subscription's card
+               sits behind. A PM sees the figures and none of the buttons --
+               the read route allows them, so hiding it outright would make the
+               screen stricter than the route. */
+            canPayOut={role === "admin"}
             isMine={role === "contractor" && a.subId === membership.companyId}
             onChanged={() => hydrateAccount(account.id, currentUserId, { quiet: true })} />;
         })()}
@@ -6658,6 +6643,53 @@ function DocFileView({ companyId, kind, fileName }) {
   );
 }
 
+// One line of a document, and what the reviewer found.
+//
+// Three states rather than a tick box. The middle one is the point: an unticked
+// box said "not looked at" and "not there" with one mark, so the commonest
+// correctable fault on a certificate of insurance -- the hiring account missing
+// from the additional insured schedule -- had no way to be recorded as a
+// finding, only as a rejection with a paragraph attached.
+//
+// The instruction is PREFILLED and editable. A reviewer who has to compose
+// "ask your agent to add us as an additional insured" will leave it blank, and a
+// finding with no instruction is the disabled-control-with-no-reason failure
+// pointed at somebody else's inbox.
+function FindingList({ items, found, onState, onFix }) {
+  return (
+    <div className="rv-finds">
+      {items.map((it) => {
+        const f = found[it.id] || { state: "unanswered", note: "" };
+        return (
+          <div key={it.id} className={`rv-find is-${f.state}`}>
+            <div className="rv-find-top">
+              <span className="rv-find-label">{it.label}</span>
+              <div className="rv-find-btns" role="group" aria-label={it.label}>
+                <button type="button" className={`rv-fbtn ok ${f.state === "ok" ? "on" : ""}`}
+                  aria-pressed={f.state === "ok"} onClick={() => onState(it.id, "ok")}>
+                  <Check size={13} /> Fine
+                </button>
+                <button type="button" className={`rv-fbtn bad ${f.state === "wrong" ? "on" : ""}`}
+                  aria-pressed={f.state === "wrong"} onClick={() => onState(it.id, "wrong")}>
+                  <XCircle size={13} /> Needs fixing
+                </button>
+              </div>
+            </div>
+            {f.state === "wrong" && (
+              <label className="rv-find-fix">
+                <span className="fld-note">What they need to do — this goes to them</span>
+                <textarea rows={2} maxLength={600}
+                  value={f.note || ""} placeholder={it.fix}
+                  onChange={(e) => onFix(it.id, e.target.value)} />
+              </label>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose }) {
   const rv = docReview(sub, kind);
   // A saved draft outranks the verdict for seeding the FORM, and nothing
@@ -6668,13 +6700,32 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose 
   const draft = rv?.draft || null;
   const r = draft ? { ...rv, ...draft } : rv;
   const isIns = kind === "insurance";
-  const checks = isIns ? [] : DOC_CHECKS[kind](brand.name);
+  // One list for every kind now, insurance included. It used to be two code
+  // paths -- a flat checklist for three kinds and a separate `INSURANCE_ATTEST`
+  // -- which is how the insurance list ended up as the only one the email could
+  // not name a finding from.
+  const checks = checkItems(kind, brand.name);
 
-  const [ticked, setTicked] = useState(() => {
-    const init = {};
-    (isIns ? INSURANCE_ATTEST : checks).forEach((c) => { init[c.id] = !!r?.checks?.[c.id]; });
-    return init;
-  });
+  // THREE STATES, NOT A TICK BOX, and this is the whole of the change.
+  //
+  // An unticked box meant "not got to it yet" and "checked, and it is not
+  // there" at once, so a reviewer who found the hiring account missing from the
+  // additional insured schedule -- the commonest correctable fault on a
+  // certificate -- could only reject the document and type a paragraph. Marking
+  // a line wrong is now a fact the subcontractor is told, with its own
+  // instruction beside it.
+  const [found, setFound] = useState(() => findingsFor(r, kind, brand.name));
+  const setState = (id, state) => setFound((f) => ({
+    ...f,
+    // Pressing the state it is already on clears it back to unanswered, so a
+    // mis-tap is one tap to undo rather than a finding somebody has to argue
+    // their way out of.
+    [id]: { state: f[id]?.state === state ? "unanswered" : state, note: f[id]?.note || "" },
+  }));
+  const setFix = (id, note) => setFound((f) => ({ ...f, [id]: { ...f[id], note } }));
+  const wrongItems = checks.filter((c) => found[c.id]?.state === "wrong");
+  // Derived, so the two cannot disagree about what "confirmed" means.
+  const ticked = Object.fromEntries(Object.entries(found).map(([k, v]) => [k, v.state === "ok"]));
   const [limits, setLimits] = useState(() => {
     const init = {};
     INSURANCE_LINES.forEach((l) => { init[l.id] = r?.limits?.[l.id] || ""; });
@@ -6709,7 +6760,7 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose 
   };
   const allLinesOk = INSURANCE_LINES.every(lineOk);
   const requiredLinesFilled = INSURANCE_LINES.filter((l) => !l.optional).every((l) => limits[l.id]);
-  const attestOk = (isIns ? INSURANCE_ATTEST : checks).every((c) => ticked[c.id]);
+  const attestOk = allConfirmed({ findings: found }, kind, brand.name);
   const bondAmt = Number(moneyRaw(amount) || 0);
   const bondShort = kind === "bond" && !!amount && bondAmt < BOND_MIN;
   const bondOk = kind !== "bond" || (!!amount && (!bondShort
@@ -6728,7 +6779,10 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose 
   // draft that captured a different set of fields from the verdict is a draft
   // that silently loses one of them on the way back.
   const collect = () => ({
-    checks: ticked, note, overrides,
+    // `findings` is the record; `checks` rides along because older stored
+    // reviews and anything still reading that shape expect it, and the server
+    // derives it from the findings so the two cannot drift.
+    findings: found, checks: ticked, note, overrides,
     ...(isIns ? { limits } : { amount }),
     ...(needsExpiry ? { expires } : {}),
     issuer: issuer.trim() || null,
@@ -6856,16 +6910,8 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose 
             </p>
           )}
 
-          <div className="form-sec">Confirm on the certificate</div>
-          <div className="rv-checks">
-            {INSURANCE_ATTEST.map((c) => (
-              <label key={c.id} className={`rv-check ${ticked[c.id] ? "on" : ""}`}>
-                <input type="checkbox" checked={!!ticked[c.id]}
-                  onChange={(e) => setTicked((t) => ({ ...t, [c.id]: e.target.checked }))} />
-                <span>{c.label(brand.name)}</span>
-              </label>
-            ))}
-          </div>
+          <div className="form-sec">Check the certificate <span className="fld-note">say what is wrong, not just what is right</span></div>
+          <FindingList items={checks} found={found} onState={setState} onFix={setFix} />
           <IssuerFields kind={kind} issuer={issuer} setIssuer={setIssuer}
             policyNo={policyNo} setPolicyNo={setPolicyNo}
             expires={expires} setExpires={setExpires} needsExpiry={needsExpiry} />
@@ -6875,16 +6921,8 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose 
           <IssuerFields kind={kind} issuer={issuer} setIssuer={setIssuer}
             policyNo={policyNo} setPolicyNo={setPolicyNo}
             expires={expires} setExpires={setExpires} needsExpiry={needsExpiry} />
-          <div className="form-sec">Confirm on the document</div>
-          <div className="rv-checks">
-            {checks.map((c) => (
-              <label key={c.id} className={`rv-check ${ticked[c.id] ? "on" : ""}`}>
-                <input type="checkbox" checked={!!ticked[c.id]}
-                  onChange={(e) => setTicked((t) => ({ ...t, [c.id]: e.target.checked }))} />
-                <span>{c.label}</span>
-              </label>
-            ))}
-          </div>
+          <div className="form-sec">Check the document <span className="fld-note">say what is wrong, not just what is right</span></div>
+          <FindingList items={checks} found={found} onState={setState} onFix={setFix} />
           {kind === "bond" && (
             <>
               <label className="fld" style={{ marginTop: 14 }}>Bond amount{" "}
@@ -6915,9 +6953,14 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose 
         </>
       )}
 
-      <label className="fld">Reviewer note {rejecting && <span className="fld-note">required when rejecting</span>}
+      <label className="fld">Reviewer note{" "}
+        {rejecting && <span className="fld-note">
+          {wrongItems.length ? "optional — the findings above carry the detail" : "required when nothing is marked above"}
+        </span>}
         <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
-          placeholder={rejecting ? "What needs fixing? This goes to the contractor." : "Optional — anything worth recording"} />
+          placeholder={rejecting
+            ? wrongItems.length ? "Anything to add — this goes to them too" : "What needs fixing? This goes to the contractor."
+            : "Optional — anything worth recording"} />
       </label>
 
       {!rejecting ? (
@@ -6947,13 +6990,38 @@ function DocReview({ sub, kind, brand, onVerify, onReject, onSaveDraft, onClose 
           {saveErr && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {saveErr}</p>}
         </>
       ) : (
-        <div className="form-actions">
-          <button className="btn-ghost" onClick={() => setRejecting(false)}>Back</button>
-          <button className="btn-warn" disabled={!note.trim()}
-            onClick={() => onReject(kind, { note: note.trim() })}>
-            <XCircle size={15} /> Reject &amp; notify contractor
-          </button>
-        </div>
+        <>
+          {/* The findings ARE the reason, so a note is only required when there
+              are none. Demanding one anyway would have a reviewer who has
+              already named four specific faults retype them as a paragraph. */}
+          {wrongItems.length > 0 && (
+            <div className="rv-summary">
+              <AlertTriangle size={14} />
+              <div>
+                <strong>{outcomeWords({ findings: found }, kind, brand.name).headline}.</strong>{" "}
+                They are told which, and what to do about each one.
+                <ul className="rv-summary-list">
+                  {wrongItems.map((c) => <li key={c.id}>{c.label}</li>)}
+                </ul>
+              </div>
+            </div>
+          )}
+          {!wrongItems.length && (
+            <p className="cov-hint">
+              Nothing is marked as needing fixing. Either mark the lines that are wrong above —
+              they travel to the contractor with an instruction each — or say why in the note.
+            </p>
+          )}
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => setRejecting(false)}>Back</button>
+            <button className="btn-warn" disabled={!wrongItems.length && !note.trim()}
+              onClick={() => onReject(kind, { findings: found, checks: ticked, note: note.trim() })}>
+              <XCircle size={15} /> {wrongItems.length
+                ? `Send back ${wrongItems.length} thing${wrongItems.length === 1 ? "" : "s"} to fix`
+                : "Reject & notify contractor"}
+            </button>
+          </div>
+        </>
       )}
       <button className="rv-close" onClick={onClose}>Close without deciding</button>
     </div>
@@ -14265,8 +14333,13 @@ function AvatarPicker({ user, onSave }) {
 // that is also a subcontractor, ordinary since 031 -- is refused by the
 // server, and this says so rather than pretending the button was never
 // there.
-function WorkOrderProgress({ woId, canManage, isMine, onChanged }) {
+function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
   const [plan, setPlan] = useState(null);
+  // ONE fetch for the money, held here and passed down. Both the strip and the
+  // pay modal read it, and two fetches would be two answers about the same
+  // balance -- the duplicate-state trap this file refuses for the documents
+  // panel, pointed at a figure that decides whether money moves.
+  const [money, setMoney] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
   const [editing, setEditing] = useState(false);
@@ -14274,6 +14347,11 @@ function WorkOrderProgress({ woId, canManage, isMine, onChanged }) {
   const [reaching, setReaching] = useState(null);   // milestone id
   const [note, setNote] = useState("");
   const [settling, setSettling] = useState(null);   // release
+  // 051. The same modal, two modes: "record" writes down a payment made
+  // elsewhere, "pay" moves the money. One component, because both wear the
+  // same two paperwork gates and two copies of those is two places for one of
+  // them to rot.
+  const [settleMode, setSettleMode] = useState("record");
 
   const load = useCallback(async () => {
     setErr("");
@@ -14284,7 +14362,18 @@ function WorkOrderProgress({ woId, canManage, isMine, onChanged }) {
         ? `The database isn't migrated yet — run ${e.body.migration || "033_job_ledger"}.sql and reload.`
         : "Could not load the progress on this work order.");
     }
-  }, [woId]);
+    // The money is a separate question and a separate failure. A database
+    // without 051 must not take the progress panel with it, so this lands in
+    // its own state and a failure leaves it null -- which every reader below
+    // treats as "no rail", not as an error.
+    if (canManage) {
+      try { setMoney(await api.woFunding(woId)); }
+      catch (e) {
+        if (e?.body?.error !== "migration_needed") console.error("[escrow] funding read failed:", e);
+        setMoney(null);
+      }
+    }
+  }, [woId, canManage]);
   useEffect(() => { load(); }, [load]);
 
   const after = async (fn, what) => {
@@ -14383,6 +14472,28 @@ function WorkOrderProgress({ woId, canManage, isMine, onChanged }) {
         </div>
       ) : (
         <>
+          {/* Money in, above the draws it pays for. Only the hiring side:
+              funding is the paying party's act and the subcontractor's panel
+              has nothing to do here. */}
+          {canManage && (
+            <WoFunding woId={woId} money={money} canPayOut={canPayOut}
+              /* What to top up to, from shared/escrow.js rather than summed
+                 here. It is the GROSS of the work not yet released -- the
+                 retainage has to be on hand too, or the final draw has nothing
+                 behind it -- and it is the whole remaining job rather than only
+                 what is already owed, because the point of funding is that the
+                 money is there before the milestone is met. */
+              suggestCents={fundSuggestion({
+                milestones: plan.milestones.map((m) => ({
+                  amountCents: m.amountCents, released: !!relFor(m.id),
+                })),
+                priorGross: plan.releases.reduce(
+                  (n, r) => n + (r.status === "void" ? 0 : r.grossCents), 0),
+                retainageBps: plan.retainageBps || 0,
+                alreadyAvailable: money?.availableCents || 0,
+              }).topUpCents}
+              onChanged={() => { load(); onChanged?.(); }} />
+          )}
           {plan.milestones.map((m) => {
             const rel = relFor(m.id);
             return (
@@ -14442,7 +14553,25 @@ function WorkOrderProgress({ woId, canManage, isMine, onChanged }) {
                     </>
                   )}
                   {canManage && rel && rel.status === "due" && (
-                    <button className="pick" onClick={() => setSettling(rel)}>Record payment</button>
+                    <>
+                      {/* Paying is the primary of the two, because it is the
+                          one the money is already behind. Recording stays
+                          offered rather than hidden: a cheque is a real way
+                          to pay somebody and always was. */}
+                      {/* Only where there is a rail behind it. With no Stripe
+                          key `Pay` leads to a 501, which is the screen-that-lies
+                          rule pointed at a payment -- and Record payment is the
+                          honest fallback, because a cheque is a real way to pay
+                          somebody and always was. */}
+                      {canPayOut && money?.configured && (
+                        <button className="btn-solid sm"
+                          onClick={() => { setSettleMode("pay"); setSettling(rel); }}>
+                          Pay {formatMoney(rel.netCents)}
+                        </button>
+                      )}
+                      <button className="pick"
+                        onClick={() => { setSettleMode("record"); setSettling(rel); }}>Record payment</button>
+                    </>
                   )}
                 </div>
               </div>
@@ -14462,7 +14591,8 @@ function WorkOrderProgress({ woId, canManage, isMine, onChanged }) {
       )}
 
       {settling && (
-        <SettleRelease release={settling} onClose={() => setSettling(null)}
+        <SettleRelease release={settling} mode={settleMode} money={money}
+          onClose={() => setSettling(null)}
           onDone={() => { setSettling(null); load(); onChanged?.(); }} />
       )}
       {err && <p className="fld-err" role="alert">{err}</p>}
@@ -14486,11 +14616,21 @@ function planErrorText(e) {
 }
 
 // Recording that money went out, and the waiver standing in the way.
-function SettleRelease({ release, onClose, onDone }) {
+function SettleRelease({ release, mode = "record", money, onClose, onDone }) {
+  // "pay" moves the money through Stripe; "record" writes down a payment made
+  // somewhere else. Two routes on the server for the reason it states, and one
+  // component here because both wear the same two paperwork gates -- a second
+  // copy of those is a second place for one of them to rot.
+  const paying = mode === "pay";
   const [chain, setChain] = useState(null);
+  // The paperwork gate, fetched beside the waiver rather than derived from the
+  // roster's own colours: the question here is about the DAY OF THE WORK, and
+  // the roster is coloured for today. See shared/paygate.js.
+  const [cover, setCover] = useState(null);
   const [method, setMethod] = useState("check");
   const [reference, setReference] = useState("");
   const [why, setWhy] = useState("");
+  const [coverWhy, setCoverWhy] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -14499,22 +14639,54 @@ function SettleRelease({ release, onClose, onDone }) {
     api.releaseWaiverState(release.id)
       .then((r) => { if (live) setChain(r); })
       .catch((e) => { console.error("[waiver] state failed:", e); if (live) setChain({ clear: false, reasons: [] }); });
+    // A failed lookup must not read as "cover is fine". It is the only one of
+    // the two whose optimistic default would let money out over an unanswered
+    // question, so it fails closed and says the lookup failed.
+    api.releaseCoverState(release.id)
+      .then((r) => { if (live) setCover(r); })
+      .catch((e) => {
+        console.error("[cover] state failed:", e);
+        if (live) setCover({ clear: false, problems: [{ kind: "insurance", reason: "unknown" }], advisories: [] });
+      });
     return () => { live = false; };
   }, [release.id]);
 
   const blocked = chain && !chain.clear;
+  const coverBlocked = cover && !cover.clear;
+  // The facts, from the same module the route uses. Not overridable by
+  // anybody: no reason makes an unverified payee reachable or makes money that
+  // was never funded exist.
+  const verdict = paying && money
+    ? canPay({ release: { status: release.status || "due", netCents: release.netCents },
+        funding: money, payable: money.payeeReady === true })
+    : null;
+  const payBlocked = paying && (!money || (verdict && !verdict.ok));
   const settle = async () => {
     setBusy(true); setErr("");
+    const gates = {
+      override: blocked || undefined, overrideReason: blocked ? why.trim() : undefined,
+      coverOverride: coverBlocked || undefined,
+      coverOverrideReason: coverBlocked ? coverWhy.trim() : undefined,
+    };
     try {
-      await api.settleRelease(release.id, {
-        method, reference: reference.trim() || undefined,
-        override: blocked || undefined, overrideReason: blocked ? why.trim() : undefined,
-      });
+      if (paying) await api.payRelease(release.id, gates);
+      else await api.settleRelease(release.id,
+        { method, reference: reference.trim() || undefined, ...gates });
       onDone();
     } catch (e) {
-      console.error("[release] settle failed:", e);
-      setErr(e?.body?.error === "waiver_outstanding" ? "The waiver is still outstanding."
-        : e?.body?.error === "already_paid" ? "That one is already recorded as paid."
+      console.error(`[release] ${paying ? "pay" : "settle"} failed:`, e);
+      const code = e?.body?.error;
+      setErr(code === "waiver_outstanding" ? "The waiver is still outstanding."
+        : code === "cover_outstanding" ? "Their paperwork does not cover this work."
+        : code === "cover_reason_required" ? "Say why you are paying anyway."
+        : code === "already_paid" ? "That one is already recorded as paid."
+        : code === "already_paying" ? "A payment for this one is already on its way."
+        : code === "not_funded" || code === "payee_not_ready" || code === "below_minimum"
+          ? payRefusalText({ ...e.body, ok: false })
+        // Stripe's own words. "Something went wrong" over a permanent refusal
+        // is how somebody presses a button for a week.
+        : e?.body?.detail ? `Stripe refused that: ${e.body.detail}`
+        : paying ? "The payment did not go through. Try again in a moment."
         : "Could not record that. Try again.");
       setBusy(false);
     }
@@ -14523,11 +14695,59 @@ function SettleRelease({ release, onClose, onDone }) {
   return (
     <Modal onClose={onClose}>
       <div className="form">
-        <h2>Record payment</h2>
+        <h2>{paying ? "Pay this release" : "Record payment"}</h2>
         <p className="form-sub">
           {formatMoney(release.netCents)} to go out
           {release.retainageCents ? <> · {formatMoney(release.retainageCents)} held back</> : null}.
+          {paying ? " Straight to their bank through Stripe." : " Money you have already sent."}
         </p>
+
+        {/* The facts before the judgements. Asking somebody to justify paying
+            without cover, and only then telling them the money is not there,
+            is two decisions in the wrong order. */}
+        {paying && !money && <p className="cov-hint">Checking the money…</p>}
+        {paying && verdict && !verdict.ok && (
+          <div className="cx-found" role="status">
+            <span className="cx-found-chip"><AlertTriangle size={12} /> Cannot pay this one yet</span>
+            <p className="cx-found-note">{payRefusalText(verdict)}</p>
+          </div>
+        )}
+        {paying && verdict?.ok && (
+          <p className="cov-hint">
+            <Check size={12} /> {formatMoney(money.availableCents)} funded and ready.
+          </p>
+        )}
+
+        {/* Cover first, and above the waiver, because it is the more serious
+            of the two and because that is the order the route asks them in.
+            A lapse on the day of the work is NOT fixable by a renewal, so the
+            copy does not offer one -- see shared/paygate.js. */}
+        {!cover ? <p className="cov-hint">Checking their paperwork…</p> : cover.clear ? (
+          <p className="cov-hint"><Check size={12} /> Paperwork covered the work
+            {cover.asOfJob ? <> on {niceDay(cover.asOfJob)}</> : null}
+            {(cover.advisories || []).length
+              ? <> · {coverProblemText(cover.advisories[0], cover.asOfJob)}</>
+              : null}
+          </p>
+        ) : (
+          <div className="cx-found" role="status">
+            <span className="cx-found-chip"><AlertTriangle size={12} /> Not covered for this work</span>
+            <ul className="wop-reasons">
+              {(cover.problems || []).map((p) => (
+                <li key={p.kind + p.reason}>{coverProblemText(p, cover.asOfJob)}</li>
+              ))}
+            </ul>
+            <p className="cx-found-note">
+              {(cover.problems || []).every(fixableByUpload)
+                ? "Ask them for it, or pay anyway — say why, and it is recorded against this release."
+                : "A new certificate cannot cover a day that has already passed. You can pay anyway — say why, and it is recorded against this release."}
+            </p>
+            <label className="fld">Why you are paying without cover
+              <input value={coverWhy} maxLength={500} onChange={(e) => setCoverWhy(e.target.value)}
+                placeholder="Owner accepts the exposure on this one" />
+            </label>
+          </div>
+        )}
 
         {!chain ? <p className="cov-hint">Checking the waiver…</p> : chain.clear ? (
           <p className="cov-hint"><Check size={12} /> Waiver clear
@@ -14552,7 +14772,9 @@ function SettleRelease({ release, onClose, onDone }) {
           </div>
         )}
 
-        <div className="fld-row">
+        {/* Only on the record path. A "How" dropdown over a Stripe transfer
+            would be asking somebody to name the rail they are standing on. */}
+        {!paying && <div className="fld-row">
           <label className="fld">How
             <select className="fld-state" value={method} onChange={(e) => setMethod(e.target.value)}>
               <option value="check">Check</option>
@@ -14564,15 +14786,248 @@ function SettleRelease({ release, onClose, onDone }) {
           <label className="fld">Reference <span className="fld-note">check number, transfer id</span>
             <input value={reference} maxLength={120} onChange={(e) => setReference(e.target.value)} />
           </label>
-        </div>
+        </div>}
 
         {err && <p className="fld-err" role="alert">{err}</p>}
+        {(coverBlocked && !coverWhy.trim()) || (blocked && !why.trim()) ? (
+          <p className="cov-hint">
+            {coverBlocked && !coverWhy.trim()
+              ? "Say why you are paying without cover to carry on."
+              : "Say why you are paying with the waiver outstanding to carry on."}
+          </p>
+        ) : null}
         <div className="form-actions">
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-solid" disabled={busy || (blocked && !why.trim())} onClick={settle}>
-            <Check size={15} /> {busy ? "Recording…" : blocked ? "Pay anyway" : "Record it"}
+          {/* Disabled while EITHER reason is owed, and the hint below names
+              which -- a dead button with a message about the other half is the
+              wider-condition-than-message failure this file already records. */}
+          <button className="btn-solid"
+            disabled={busy || !cover || payBlocked
+              || (blocked && !why.trim()) || (coverBlocked && !coverWhy.trim())}
+            onClick={settle}>
+            <Check size={15} /> {busy ? (paying ? "Paying…" : "Recording…")
+              : (blocked || coverBlocked) ? "Pay anyway"
+              : paying ? `Send ${formatMoney(release.netCents)}` : "Record it"}
           </button>
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---- The funded side, on the work order it belongs to ---------------------
+//
+// Money in against a work order and money out per release. `settle` records a
+// payment that happened somewhere else; this is the rail. Two things about the
+// shape of this panel are decisions rather than layout.
+//
+// IT IS ABSENT, NOT DISABLED, WHEN THERE IS NO RAIL. With no Stripe key there
+// is nothing behind Add funds, and a button that answers 501 is the
+// screen-that-lies rule pointed at a payment. `Record payment` is still there,
+// which is the honest fallback: they already have a way to pay somebody.
+//
+// AND IT SAYS WHAT IS SHORT RATHER THAN THAT SOMETHING IS. "Insufficient
+// funds" is not a sentence anybody can act on; "$1,500 funded, $4,000 owed,
+// add $2,500" is.
+function WoFunding({ woId, money: m, canPayOut, suggestCents, onChanged }) {
+  const [funding, setFunding] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [said, setSaid] = useState("");
+
+  // Null covers both "still loading" and "this database has no 051", and both
+  // mean the same thing to this panel: there is nothing to say about money yet.
+  if (!m) return null;
+  // No rail configured: the panel is not here at all, rather than offering an
+  // Add funds that answers 501.
+  if (!m.configured) return null;
+
+  const refund = async () => {
+    setBusy("refund"); setErr(""); setSaid("");
+    try {
+      const r = await api.woRefund(woId);
+      // The route can refund across several charges, so what went back is the
+      // sum of the parts rather than one figure.
+      const sent = (r.refunded || []).reduce((n, x) => n + (x.amountCents || 0), 0);
+      setSaid(`${formatMoney(sent)} sent back — it takes a few days to land.`);
+      await onChanged?.();
+    } catch (e) {
+      console.error("[escrow] refund failed:", e);
+      setErr(e?.body?.detail ? `Stripe refused that: ${e.body.detail}`
+        : e?.body?.error === "nothing_refundable" ? "There is nothing unspent to send back."
+        : "Couldn't do that just now.");
+    } finally { setBusy(""); }
+  };
+
+  return (
+    <div className="wof">
+      <div className="wof-head">
+        <span className="wof-title">Money</span>
+        <span className="wof-figs">
+          {formatMoney(m.availableCents)} ready
+          {m.dueCents ? <> · {formatMoney(m.dueCents)} owed</> : null}
+          {m.transferredCents ? <> · {formatMoney(m.transferredCents)} paid out</> : null}
+        </span>
+      </div>
+
+      {/* The one number that says what to do. */}
+      {m.shortfallCents > 0 && (
+        <p className="wof-short">
+          <AlertTriangle size={12} /> {formatMoney(m.shortfallCents)} short of what is owed.
+        </p>
+      )}
+      {/* Their end of it, and only whether money can reach them. Which
+          identity documents Stripe is still asking a subcontractor for is
+          between Stripe and the subcontractor. */}
+      {!m.payeeReady && (m.dueCents > 0 || m.availableCents > 0) && (
+        <p className="wof-short">
+          <AlertTriangle size={12} /> They have not finished setting up where their money goes,
+          so nothing can be sent yet. Ask them to open My account → Company → Getting paid.
+        </p>
+      )}
+      {said && <p className="cov-hint" role="status"><Check size={12} /> {said}</p>}
+
+      {/* Spending is admin's. A project manager reads the figures -- which the
+          route allows, so hiding them would make this screen stricter than the
+          route -- and is offered neither button. */}
+      {canPayOut && (
+        <div className="wof-acts">
+          <button className="btn-solid sm" onClick={() => setFunding(true)}>
+            <Plus size={13} /> Add funds
+          </button>
+          {m.refundableCents > 0 && (
+            <button className="pick" disabled={!!busy} onClick={refund}>
+              {busy === "refund" ? "Sending back…" : `Send back ${formatMoney(m.refundableCents)}`}
+            </button>
+          )}
+        </div>
+      )}
+      {err && <p className="fld-err" role="alert">{err}</p>}
+
+      {funding && (
+        <FundWorkOrder woId={woId}
+          /* Already net of what is on hand -- `fundSuggestion` took
+             `alreadyAvailable`, so subtracting it again here would suggest
+             half of what is needed. */
+          suggestCents={suggestCents || 0}
+          onClose={() => setFunding(false)}
+          onDone={() => { setFunding(false); onChanged?.(); }} />
+      )}
+    </div>
+  );
+}
+
+// Putting money in. Two steps, because they are two different questions: how
+// much, then the card.
+//
+// The card number never comes near us -- Stripe's Payment Element takes it in
+// the browser, exactly as the subscription's card change does. And coming back
+// from it is NOT success: the server reads the PaymentIntent back from Stripe,
+// because a route that believed "it worked" from here would let anybody mark a
+// work order funded without paying, and every gate downstream reads that
+// figure.
+function FundWorkOrder({ woId, suggestCents, onClose, onDone }) {
+  const [amount, setAmount] = useState(suggestCents ? String(Math.round(suggestCents) / 100) : "");
+  const [fundingId, setFundingId] = useState("");
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const host = useRef(null);
+  const els = useRef(null);
+  const cents = Math.round(Number(moneyRaw(amount) || 0));
+
+  const start = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = await api.woFund(woId, cents);
+      setFundingId(r.fundingId); setSecret(r.clientSecret);
+    } catch (e) {
+      console.error("[escrow] fund start failed:", e);
+      setErr(e?.body?.detail ? `Stripe refused that: ${e.body.detail}`
+        : e?.body?.error === "bad_amount" ? "That amount is outside what a single payment can carry."
+        : e?.body?.error === "billing_not_configured" ? "Payments are not switched on for this environment."
+        : "Couldn't start that just now.");
+    } finally { setBusy(false); }
+  };
+
+  useEffect(() => {
+    if (!secret || !host.current) return;
+    // With no publishable key the element can never mount, and returning here
+    // would leave an empty box and no way forward -- the dead end this whole
+    // panel exists to remove. Said out loud instead.
+    if (!STRIPE_PK) { setErr("This build has no Stripe key, so the card form cannot load."); return; }
+    let dead = false;
+    (async () => {
+      try {
+        const Stripe = await loadStripeJs();
+        if (dead) return;
+        const stripe = Stripe(STRIPE_PK);
+        const e = stripe.elements({ clientSecret: secret });
+        e.create("payment").mount(host.current);
+        els.current = { stripe, els: e };
+      } catch (e2) {
+        if (!dead) setErr("The card form couldn't load. Try again in a moment.");
+      }
+    })();
+    return () => { dead = true; };
+  }, [secret]);
+
+  const confirm = async () => {
+    if (!els.current) return;
+    setBusy(true); setErr("");
+    try {
+      const { stripe, els: e } = els.current;
+      const res = await stripe.confirmPayment({ elements: e, redirect: "if_required" });
+      if (res.error) { setErr(res.error.message || "That payment was refused."); return; }
+      // Never read as success on its own -- the server asks Stripe.
+      const r = await api.woFundConfirm(woId, fundingId);
+      if (!r.ok) { setErr(r.detail || "Stripe has not confirmed that payment yet."); return; }
+      onDone();
+    } catch (e) {
+      console.error("[escrow] fund confirm failed:", e);
+      setErr(e?.body?.detail ? `Stripe refused that: ${e.body.detail}`
+        : "That didn't go through. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="form">
+        <h2>Add funds</h2>
+        <p className="form-sub">
+          The money is held against this work order and goes to the subcontractor
+          when you release a verified milestone. Anything unspent comes back.
+        </p>
+
+        {!secret ? (
+          <>
+            <label className="fld">How much
+              <MoneyInput value={amount} onChange={setAmount} />
+            </label>
+            {err && <p className="fld-err" role="alert">{err}</p>}
+            <div className="form-actions">
+              <button className="btn-ghost" onClick={onClose}>Cancel</button>
+              <button className="btn-solid" disabled={busy || cents < MIN_FUND_CENTS} onClick={start}>
+                {busy ? "One moment…" : "Continue"}
+              </button>
+            </div>
+            {cents > 0 && cents < MIN_FUND_CENTS && (
+              <p className="cov-hint">The smallest payment a card can carry is {formatMoney(MIN_FUND_CENTS)}.</p>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="cov-hint">{formatMoney(cents)} to add.</p>
+            <div className="bm-embed" ref={host} />
+            {err && <p className="fld-err" role="alert">{err}</p>}
+            <div className="form-actions">
+              <button className="btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+              <button className="btn-solid" disabled={busy} onClick={confirm}>
+                {busy ? "Paying…" : `Pay ${formatMoney(cents)}`}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </Modal>
   );
@@ -20405,7 +20860,8 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                 </tbody>
               </table>
               <ul className="req-list">
-                {INSURANCE_ATTEST.map((a) => <li key={a.id}><Check size={12} /> {a.label(brand.name)}</li>)}
+                {checkItems("insurance", brand.name).map((a) =>
+                  <li key={a.id}><Check size={12} /> {a.label}</li>)}
               </ul>
               <div className="req-sec">Surety bond</div>
               <p className="req-note">{formatMoney(BOND_MIN)} minimum, active, surety licensed in Washington.</p>
@@ -20472,7 +20928,14 @@ function MyDocRow({ sub, kind, label, Icon, brandName, onUploadDoc, onDeleteDoc 
         <span className={`doc-state s-${st}`}>
           {st === "verified" && <><CheckCircle2 size={11} /> Verified</>}
           {st === "pending" && <><Clock size={11} /> {brandName} is reviewing this</>}
-          {st === "rejected" && <><XCircle size={11} /> Needs a new copy — {docReview(sub, kind)?.note}</>}
+          {st === "rejected" && (() => {
+            const rv = docReview(sub, kind);
+            const probs = problemsIn(rv, kind, brandName);
+            if (!probs.length) {
+              return <><XCircle size={11} /> Needs a new copy{rv?.note ? <> — {rv.note}</> : null}</>;
+            }
+            return <><XCircle size={11} /> {probs.length} thing{probs.length === 1 ? "" : "s"} to fix</>;
+          })()}
           {st === "missing" && <><AlertTriangle size={11} /> Not uploaded</>}
         </span>
       </div>
@@ -20495,6 +20958,30 @@ function MyDocRow({ sub, kind, label, Icon, brandName, onUploadDoc, onDeleteDoc 
             if (file) run(() => onUploadDoc(kind, file)); }} /></label>
       )}
       {err && <p className="dm-err" role="alert">{err}</p>}
+      {/* What to fix, in full, on the screen they act on. A count with no list
+          is a count nobody can act on, and the email they have just read is not
+          somewhere they can work from while finding the file. Each line carries
+          the instruction the reviewer left, which is usually the standing one --
+          "ask your agent to add them as an additional insured" is something you
+          forward to a broker; "your certificate was rejected" is not. */}
+      {(() => {
+        if (st !== "rejected") return null;
+        const rv = docReview(sub, kind);
+        const probs = problemsIn(rv, kind, brandName);
+        if (!probs.length) return null;
+        return (
+          <div className="dm-fixes">
+            <strong>{brandName} needs these corrected:</strong>
+            <ul>
+              {probs.map((p) => (
+                <li key={p.id}><b>{p.label}</b>{p.fix ? <> — {p.fix}</> : null}</li>
+              ))}
+            </ul>
+            {rv?.note ? <p className="dm-fix-note">Their note: {rv.note}</p> : null}
+            <span className="fld-note">Upload the corrected copy here — it replaces the one on file.</span>
+          </div>
+        );
+      })()}
       {open && has && (
         <div className="dm-view-pane">
           <DocFileView companyId={sub.id} kind={kind} fileName={sub.docFiles?.[kind]} />
@@ -22769,7 +23256,7 @@ function PortalInvite({ sub, invite, onSent }) {
   );
 }
 
-function SubDetail({ sub, invite, onInviteSent, jobs, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto }) {
+function SubDetail({ sub, invite, onInviteSent, jobs, brand, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto }) {
   const ready = sub.bond && sub.insurance && sub.contract;
   const [notes, setNotes] = useState(sub.notes || "");
   const [dirty, setDirty] = useState(false);
@@ -23003,7 +23490,16 @@ function SubDetail({ sub, invite, onInviteSent, jobs, onSchedule, onSaveNotes, o
                           : ` · expires ${until}`) : ""}
                         {sub.docs?.[d.key]?.issuer ? ` · ${sub.docs[d.key].issuer}` : ""}</>)}
                     {st === "pending" && <><Clock size={11} /> Awaiting review</>}
-                    {st === "rejected" && <><XCircle size={11} /> Rejected — {rv?.note}</>}
+                    {/* A rejection with named faults says how many and which,
+                        because "Rejected" plus a free-text note is the state
+                        this whole pass exists to get out of -- and the roster is
+                        where somebody chasing it is standing. */}
+                    {st === "rejected" && (() => {
+                      const probs = problemsIn(rv, d.key, brand?.name || "this account");
+                      return probs.length
+                        ? <><XCircle size={11} /> Sent back — {probs.length} thing{probs.length === 1 ? "" : "s"} to fix: {probs.map((x) => x.label).join("; ")}</>
+                        : <><XCircle size={11} /> Rejected{rv?.note ? <> — {rv.note}</> : null}</>;
+                    })()}
                     {st === "missing" && <><AlertTriangle size={11} /> Not uploaded</>}
                   </span>
                 </div>
@@ -23158,7 +23654,7 @@ function AutoScheduleAsk({ sub, onClose }) {
 }
 
 function NotifyForm({ data, brand, onClose }) {
-  const { sub, job, trade } = data;
+  const { sub, job, trade, kind } = data;
   const prefs = notifyPrefs(sub);
   const hasEmail = !!sub.email;
   const hasPhone = !!sub.phone;
@@ -23175,22 +23671,24 @@ function NotifyForm({ data, brand, onClose }) {
   const [previewErr, setPreviewErr] = useState("");
   useEffect(() => {
     let live = true;
-    api.previewDocRequest({ companyId: sub.id, jobId: job?.id, trade })
+    api.previewDocRequest({ companyId: sub.id, jobId: job?.id, trade, kind })
       .then((p) => { if (live) { setPreview(p); setPreviewErr(""); } })
       .catch((e) => { if (live) setPreviewErr(e?.body?.error || e?.message || "preview_failed"); });
     return () => { live = false; };
-  }, [sub.id, job?.id, trade]);
+  }, [sub.id, job?.id, trade, kind]);
 
   const smsBody = buildDocSms(sub, job, brand);
   const subject = preview?.subject || "";
   const emailBody = preview?.text || "";
   const mailConfigured = preview ? preview.configured : true;
   const canSend = !busy && preview && mailConfigured && sendEmail && hasEmail;
+  const findingsMail = preview?.template === "findings" && (preview.problems || []).length > 0;
 
   const send = async () => {
     setErr(""); setBusy(true);
     try {
-      await api.sendDocRequest({ companyId: sub.id, jobId: job?.id || null, trade: trade || null });
+      await api.sendDocRequest({ companyId: sub.id, jobId: job?.id || null,
+        trade: trade || null, kind: kind || null });
       setBusy(false); setSent(true);
     } catch (e) {
       setBusy(false);
@@ -23216,11 +23714,33 @@ function NotifyForm({ data, brand, onClose }) {
 
   return (
     <div className="form">
-      <h2>Request documents</h2>
+      {/* The heading follows what the SERVER decided to send, not what the
+          caller thought it was asking for -- a panel headed "Request documents"
+          over a mail listing four faults on a certificate already on file is two
+          descriptions of one thing. */}
+      <h2>{findingsMail ? "Tell them what to fix" : "Request documents"}</h2>
       <p className="form-sub">
-        {sub.company} · outstanding: {complianceGaps(sub).join(", ")}
+        {findingsMail
+          ? <>{sub.company} · {preview.problems.length} thing{preview.problems.length === 1 ? "" : "s"} to fix on their {DOC_LABELS_INLINE[preview.kind] || "document"}</>
+          : <>{sub.company} · outstanding: {complianceGaps(sub).join(", ")}</>}
       </p>
 
+      {/* The consequence of closing this, said at the moment of closing.
+          Rejecting the document is already recorded -- it happened before this
+          modal opened -- so walking away leaves a contractor waiting on a job
+          that will never be issued, over a fault nobody told them about. That is
+          the silent failure the whole findings change exists to remove, and it
+          would have grown straight back one screen further along. */}
+      {findingsMail && (
+        <div className="doc-block">
+          <AlertTriangle size={15} />
+          <div>
+            <strong>The review is recorded; they have not been told yet.</strong>{" "}
+            Close this and the {DOC_LABELS_INLINE[preview.kind] || "document"} stays
+            sent back with nothing in their inbox saying why.
+          </div>
+        </div>
+      )}
       <div className="notify-note">
         <Bell size={13} />
         Email &amp; SMS is for automated notifications only. This points them to their portal to upload — there's no reply address.
@@ -26580,6 +27100,52 @@ iframe.dv-frame{display:block}
 .rv-check:hover{border-color:var(--brand)}
 .rv-check.on{border-color:var(--brand);background:#f2f8f4}
 .rv-check input{accent-color:var(--brand);width:17px;height:17px;flex:none;margin-top:1px}
+/* One line of a document, with three answers rather than two.
+   The UNANSWERED row is deliberately plain -- no tint, no border colour --
+   because "I have not looked at this yet" is not a state worth drawing
+   attention to, and tinting it would make a half-read form look like a form
+   full of problems. */
+/* What the subcontractor has to fix, on their own documents screen. Full width
+   under the row rather than inside the status line, because the status line is
+   one line and this is a list of instructions somebody works from. */
+.dm-fixes{flex:1 1 100%;margin:9px 0 0;background:#fdf4f2;border:1px solid var(--red);
+  border-radius:9px;padding:10px 12px;font-size:12.5px;line-height:1.5}
+.dm-fixes strong{display:block;margin-bottom:5px}
+.dm-fixes ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
+.dm-fixes b{font-weight:700}
+.dm-fix-note{margin:7px 0 0}
+.dm-fixes .fld-note{display:block;margin-top:7px}
+
+.rv-finds{display:flex;flex-direction:column;gap:8px}
+.rv-find{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+.rv-find.is-ok{border-color:var(--brand);background:#f2f8f4}
+.rv-find.is-wrong{border-color:var(--red);background:#fdf4f2}
+.rv-find-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.rv-find-label{font-size:13px;line-height:1.4;flex:1 1 200px;min-width:0}
+.rv-find-btns{display:flex;gap:6px;flex:none}
+/* Fixed width per button so the pair does not resize as the labels change
+   state -- a row whose buttons move when you press them reads as a mis-tap. */
+.rv-fbtn{display:inline-flex;align-items:center;gap:5px;justify-content:center;
+  font:inherit;font-size:11.5px;font-weight:700;padding:7px 10px;border-radius:8px;
+  border:1px solid var(--line);background:var(--card);color:var(--ink-soft);cursor:pointer;
+  white-space:nowrap;transition:background .12s,border-color .12s,color .12s}
+.rv-fbtn.ok{min-width:74px}
+.rv-fbtn.bad{min-width:118px}
+.rv-fbtn:hover{border-color:var(--ink-soft);color:var(--ink)}
+.rv-fbtn.ok.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.rv-fbtn.bad.on{background:var(--red);border-color:var(--red);color:#fff}
+.rv-fbtn:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+.rv-find-fix{display:flex;flex-direction:column;gap:5px;margin-top:9px}
+.rv-find-fix textarea{font:inherit;font-size:13px;padding:9px 10px;border-radius:8px;
+  border:1px solid var(--line);resize:vertical;width:100%}
+.rv-find-fix textarea:focus{outline:2px solid var(--brand);outline-offset:-1px;border-color:var(--brand)}
+/* What is about to be sent, before it is sent. */
+.rv-summary{display:flex;align-items:flex-start;gap:9px;background:#fdf4f2;
+  border:1px solid var(--red);border-radius:10px;padding:11px 13px;margin:14px 0 0;
+  font-size:12.5px;line-height:1.5}
+.rv-summary svg{flex:none;margin-top:2px;color:var(--red)}
+.rv-summary-list{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+
 .rv-close{display:block;width:100%;border:0;background:none;color:var(--ink-soft);font-size:12px;
   font-weight:600;padding:12px 0 0;cursor:pointer;text-align:center}
 .rv-close:hover{color:var(--ink)}
@@ -27348,6 +27914,19 @@ iframe.dv-frame{display:block}
 .wop-quick-note{font:inherit;font-size:13px;padding:7px 9px;border-radius:8px;
   border:1px solid var(--line);min-width:160px}
 .wop-acts{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:12px}
+/* 051. Money in against a work order. A tinted strip rather than a card,
+   because it sits inside a panel that is already a card -- a second border
+   around it reads as a separate screen. */
+.wof{background:var(--paper);border:1px solid var(--line);border-radius:10px;
+  padding:11px 12px;margin:0 0 14px;display:flex;flex-direction:column;gap:8px}
+.wof-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.wof-title{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-soft)}
+.wof-figs{font-size:12.5px;font-weight:600;color:var(--ink)}
+.wof-short{margin:0;font-size:12.5px;line-height:1.45;color:var(--amber-ink);
+  display:flex;align-items:flex-start;gap:6px}
+.wof-short svg{flex:none;margin-top:2px}
+.wof-acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .wop-edit{margin-top:10px;display:flex;flex-direction:column;gap:8px}
 .wop-row-edit{display:flex;gap:8px;align-items:center}
 .wop-row-edit input{flex:1 1 auto;min-width:0;font:inherit;font-size:13.5px;padding:9px 10px;

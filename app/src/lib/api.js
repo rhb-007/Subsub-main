@@ -435,8 +435,24 @@ export const api = {
   rejectMilestone: (id, reason) =>
     request(`/milestones/${needId(id, "milestone")}/reject`, { method: "POST", body: JSON.stringify({ reason }) }),
   releaseWaiverState: (id) => request(`/releases/${needId(id, "release")}/waiver-state`),
+  releaseCoverState: (id) => request(`/releases/${needId(id, "release")}/cover-state`),
   settleRelease: (id, body) =>
     request(`/releases/${needId(id, "release")}/settle`, { method: "POST", body: JSON.stringify(body || {}) }),
+
+  // 051. The funded side. `settle` records money that moved elsewhere; `pay`
+  // moves it, and they are two routes for the reason the Worker gives.
+  woFunding: (id) => request(`/work-orders/${needId(id, "work order")}/funding`),
+  woFund: (id, amountCents) =>
+    request(`/work-orders/${needId(id, "work order")}/fund`,
+      { method: "POST", body: JSON.stringify({ amountCents }) }),
+  woFundConfirm: (id, fundingId) =>
+    request(`/work-orders/${needId(id, "work order")}/fund/confirm`,
+      { method: "POST", body: JSON.stringify({ fundingId }) }),
+  woRefund: (id, amountCents) =>
+    request(`/work-orders/${needId(id, "work order")}/refund`,
+      { method: "POST", body: JSON.stringify(amountCents ? { amountCents } : {}) }),
+  payRelease: (id, body) =>
+    request(`/releases/${needId(id, "release")}/pay`, { method: "POST", body: JSON.stringify(body || {}) }),
 
   myConnectCode: () => request("/connect/code"),
   rotateConnectCode: () => request("/connect/code/rotate", { method: "POST" }),
@@ -511,10 +527,14 @@ export const api = {
 
   // Email. The body is composed by the server, so the preview and the send are
   // the same text; the client never supplies message content.
-  previewDocRequest: ({ companyId, jobId, trade }) => request(
+  previewDocRequest: ({ companyId, jobId, trade, kind }) => request(
     `/notify/documents/preview?companyId=${encodeURIComponent(companyId)}`
     + (jobId ? `&jobId=${encodeURIComponent(jobId)}` : "")
-    + (trade ? `&trade=${encodeURIComponent(trade)}` : "")),
+    + (trade ? `&trade=${encodeURIComponent(trade)}` : "")
+    // Which document is being talked about. The server picks between the two
+    // mails from the findings on this kind, so leaving it off sends the generic
+    // "upload your documents" notice about one already on file.
+    + (kind ? `&kind=${encodeURIComponent(kind)}` : "")),
   sendDocRequest: (payload) => request("/notify/documents",
     { method: "POST", body: JSON.stringify(payload) }),
 

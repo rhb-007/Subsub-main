@@ -4,8 +4,12 @@ How a general contractor pays a subcontractor through SubSub, what has to
 exist before that can happen, and which parts are product decisions rather
 than engineering.
 
-Nothing here is built. This is the map, written against the code that is
-already in the repository so the plan and the ledger agree from the start.
+This began as the map, written against the code already in the repository so
+the plan and the ledger would agree from the start. Most of it is now built:
+**onboarding (050), funding and transfers (051), and the insurance gate.** What
+is *not* built is the instant-payout option (§5), and what is not **settled** is
+the legal shape in §10.3 — which is the thing that has to be answered before
+any of this leaves sandbox, not after.
 
 ---
 
@@ -39,16 +43,28 @@ back, the shape is already right:
 So the question "what do we need to implement Easy Pay" is much smaller than
 it looks. **The accounting is done. What does not exist is money.**
 
-## 2. The one thing missing: there is no funded side
+## 2. The one thing missing was the funded side — migration 051 is it
 
-Every number above describes what is *owed*. Nothing anywhere describes what
-has been *paid in*. There is no balance, no funded pot, no record of the
-general contractor putting money anywhere, and no payout rail.
+Every number above describes what is *owed*. When this was written, nothing
+anywhere described what had been *paid in*: no balance, no funded pot, no record
+of the general contractor putting money anywhere, and no payout rail.
+`status = 'paid'` meant *a person pressed a button saying they sent a cheque*,
+which is a useful record and is not a payment.
 
-`status = 'paid'` today means *a person pressed a button saying they sent a
-cheque*. That is a useful record and it is not a payment.
+**That gap is closed.** `wo_funding` is money in against a work order;
+`wo_transfers` is one row per attempt to pay a release; `app/shared/escrow.js`
+holds the arithmetic and the refusals. `POST /api/releases/:id/pay` moves the
+money and writes `method = 'stripe'` with the transfer id in `reference` —
+through the same seam 033 left for it, with nothing else about `wo_releases`
+changing shape.
 
-Everything below is about closing that gap.
+**`settle` still exists and still means what it meant.** It records a payment
+made somewhere else. They are two routes on purpose: one route doing both is one
+route where a bug either records a payment that never happened or makes one that
+was only meant to be written down.
+
+The rest of this document is the reasoning behind all of it, and §5 is the one
+part that is still a plan rather than a thing.
 
 ---
 
@@ -237,23 +253,45 @@ can tell is wrong.
 Small, because the ledger is already right. Every statement `IF NOT EXISTS`,
 no `ALTER TABLE`, one paste — the 048 rule.
 
-**`wo_funding`** (051, not yet built) — money in. One row per funding event against a work order,
-never a mutable balance: a balance is a number two writes can disagree about,
-and "where did the money come from" has to be answerable later.
+**`wo_funding`** (051, **built**) — money in. One row per funding event against a
+work order, never a mutable balance: a balance is a number two writes can
+disagree about, and "where did the money come from" has to be answerable later.
+
+What shipped, which differs from the sketch in three ways worth recording:
 
 ```
 id, work_order_id, account_id,
-amount_cents,
-status         'pending' | 'settled' | 'returned' | 'failed'
-method         'ach' | 'card' | 'wire'
-processor      'stripe'
-processor_ref  the payment intent / transfer id
-created_at, settled_at, returned_at
+amount_cents, currency,
+status              'pending' | 'funded' | 'failed' | 'refunded'
+processor           'stripe'
+processor_intent_id the PaymentIntent
+processor_charge_id the charge UNDER it, which is a different id
+error               Stripe's own words when it refuses
+refunded_cents      part-refunds are real
+created_by, created_at, funded_at
 ```
 
-Funded-and-unspent is then `SUM(settled funding) − SUM(non-void releases)`,
-derived rather than stored, for the reason `net_cents` is derived: two numbers
-that should agree eventually will not.
+`processor_charge_id` is separate because a transfer names the **charge** as its
+`source_transaction`, not the intent — holding only the intent would mean
+fetching Stripe again at the moment money goes out. `error` is there because a
+funding attempt that vanishes is a screen saying nothing happened when a card was
+refused. And there is no `method` column: Stripe's `automatic_payment_methods`
+decides card or ACH, and storing our guess at which it was would be a second
+record of something Stripe already knows.
+
+**`wo_transfers`** (051, **built**) — money out, one row per *attempt*. This was
+not in the sketch at all, and it has to exist: `wo_releases.method`/`.reference`
+records the transfer that **worked**, and has nowhere to put one that was
+refused, retried, or reversed weeks later. `ux_wo_transfer_live` is unique on
+`release_id` **where `status <> 'failed'`** — partial, because a plain unique
+index leaves somebody unpayable after one declined card, and no index at all
+pays the same milestone twice under a race.
+
+Funded-and-unspent is `SUM(funded) − SUM(refunded) − SUM(paid or pending
+transfers)`, derived rather than stored, for the reason `net_cents` is derived:
+two numbers that should agree eventually will not. A **pending** transfer counts
+as gone — money Stripe has been told to move, and treating it as available is how
+one balance pays two releases.
 
 **`payout_accounts`** (050, **built**) — the subcontractor's verified payout
 destination, per company. Holds the partner's account id and KYC state, **never a bank
@@ -278,37 +316,48 @@ payout_ref      the partner's transfer id
 `method` already exists and takes `'ach'` or `'instant'` without changing
 shape, which is what it was put there for.
 
-**`CHECK.sql`** gets a line per column, and one invariant that must read
-zero: **a release marked paid with no `payout_ref` and a non-manual method**
-— money reported as sent with nothing saying where it went.
+**`CHECK.sql`** gets a line per column, and **two** invariants that must read
+zero rather than the one sketched here. A release marked paid through
+`method = 'stripe'` with no transfer behind it is money reported as sent with
+nothing saying where it went. And the reverse, which is worse: a transfer marked
+paid against a release nothing says was paid — money that left and cannot be
+reconciled. Both scoped to Stripe-settled releases, because a cheque
+legitimately has no transfer row and `'manual'` still means what it always meant.
 
 ---
 
-## 7. The gates, including one that is missing
+## 7. The gates — all three are built
 
-`settle` currently checks the waiver chain and nothing else.
+For most of this ledger's life `settle` checked the waiver chain and nothing
+else, so *"refusing to pay a subcontractor whose insurance lapsed"* — which
+CLAUDE.md lists as a reason a GC would route payment through SubSub at all — was
+enforced by nothing.
 
-CLAUDE.md lists, as a reason a GC would route payment through SubSub,
-*"refusing to pay a subcontractor whose insurance lapsed"*. **That is not
-implemented.** The settle route does not look at `docStatus` at all.
+`app/shared/paygate.js` is that gate, and it follows the rule already settled
+for assignment: **the date that matters is the work's, not today's.** A
+certificate that lapsed *after* the milestone was verified does not make that
+work uninsured, so it does not block that payment; it is reported beside the
+button, because that is the moment to ask for the renewal. A certificate already
+lapsed **on the day of the work** does block: the account has an uninsured job on
+their record and this is the last leverage they will ever have over it.
 
-It belongs in this work, because it is the one gate that is worth real money
-to a GC and it is the one this product is uniquely able to enforce — we hold
-the certificate and its live expiry. The rule should follow the one already
-settled for assignment: **the date that matters is the work's, not today's.**
-A certificate that lapsed *after* the milestone was verified does not make
-that work uninsured, so it must not block that payment — it raises an urgent
-request for a replacement, exactly as an expiry under a scheduled job does.
+Three gates, and both routes (`settle` and `pay`) run all of them:
 
-Three gates on payment, then:
+1. **Waiver chain clear** — `waiverStateFor`. Override with a written reason.
+2. **Cover in force on the work's date** — `coverStateFor`. Override with its
+   own, separate written reason. Insurance, a bond and a W-9; **not** the signed
+   agreement, which is `OPTIONAL_KINDS` — the hiring account's own form, and
+   holding payment over a document they never issued is the permanently-amber
+   failure `docs.js` exists to prevent.
+3. **Payee KYC verified, and the money actually funded** — `canPay`. A hard
+   stop rather than an override, because no reason makes an unverified payee
+   reachable or makes unfunded money exist. Stripe would refuse the transfer
+   anyway, so a screen offering the button is a screen that lies.
 
-1. **Waiver chain clear** — exists, keep.
-2. **Cover in force on the work's date** — to build.
-3. **Payee KYC verified** — new, and a hard stop rather than an override:
-   the partner will refuse the transfer anyway, so a screen that offers the
-   button is a screen that lies.
-
-Gates 1 and 2 take an override with a written reason. Gate 3 cannot.
+**Gates 1 and 2 have separate overrides and separate reasons, deliberately.** A
+missing waiver and an uninsured job are different problems, and one checkbox
+covering both would let a reason typed about the waiver stand as the recorded
+justification for paying against lapsed cover.
 
 ---
 
@@ -410,6 +459,18 @@ to say what is being asked for rather than just refusing.
 
 ### 10.3 Funding, and the shape that actually does escrow
 
+> **Built, as described.** Migration 051, `app/shared/escrow.js`,
+> `POST /api/work-orders/:id/fund` and `/fund/confirm`. The absence of
+> `transfer_data` and `on_behalf_of` on the funding intent is asserted **on the
+> request Stripe actually receives** (`test:escrow`), because that is the one
+> place the claim below is checkable — a comment saying "this is not a
+> destination charge" is not a guard. What ships uses Stripe's
+> `automatic_payment_methods` rather than pinning `us_bank_account`, so a card
+> works while ACH is being enabled; the shape is otherwise exactly this.
+>
+> **The correction two paragraphs down is still the open question.** Nothing
+> here should take real money until counsel has answered it.
+
 **Separate charges and transfers.** The GC pays into the *platform* account:
 `POST /v1/payment_intents` with `transfer_group` set to the work order id and
 `payment_method_types: ["us_bank_account"]` for ACH. The money sits in the
@@ -447,6 +508,15 @@ the risk (faster, and a real cost line). Card funding settles far faster and
 costs about 2.9%, which at these ticket sizes is a way to lose money at scale.
 
 ### 10.4 Releasing, which the ledger already computes
+
+> **Built.** `POST /api/releases/:id/pay`, `wo_transfers`. Two details worth
+> recording because they were not obvious from this section. The transfer names
+> the funding charge as its **`source_transaction`** — without it the transfer
+> needs the platform balance already settled and Stripe refuses with
+> `balance_insufficient`, so it is correctness rather than a nicety. And the fee
+> needed **no Stripe mechanism at all**: the account funds the gross, the sub is
+> sent the net, and the difference stays where it already is.
+> `application_fee_amount` belongs to destination charges, which this is not.
 
 On `POST /api/milestones/:id/verify`, after the `wo_releases` row is written:
 
@@ -520,14 +590,23 @@ the first route, and the existing billing paths are owed the same.
 2. ~~Migration 050 and `app/shared/pay.js`~~ — **done.**
 3. ~~Sub onboarding to the partner (KYC)~~ — **done.** Account → Company,
    *Getting paid*. `test:payouts` and `test:payoutsui`.
-4. Funding a work order, and showing the sub that it is funded. **This is the
-   first thing with standalone value** — it is worth shipping even before
-   payouts work.
-5. Standard payout on verify-and-clear.
-6. The insurance gate.
+4. ~~Funding a work order~~ — **done.** Migration 051, `wo_funding`, the money
+   strip on the work order's progress panel, and Stripe's Payment Element
+   embedded in it. Not a destination charge, which is the whole legal shape:
+   see §10.3.
+5. ~~Standard payout on verify-and-clear~~ — **done.**
+   `POST /api/releases/:id/pay`, `wo_transfers`, `test:escrow`.
+6. ~~The insurance gate~~ — **done.** `app/shared/paygate.js`, `test:paygate`.
 7. Instant payout, last, because it is an option on a thing that must already
-   work.
+   work. **Still open, and read §5 before building it** — the honest version
+   needs a genuinely faster rail, and if we are already holding the money
+   against a verified milestone and a clear waiver then any wait is one we
+   invented and charging to remove it is a fee for nothing.
 
-Steps 1–4 are most of the value. A subcontractor who can see the money for
-their job is already in has been given something no other system in this
-trade gives them.
+**Still owed, and both are bigger than anything left on that list.** Counsel on
+§10.3 — the escrow shape is the question, and nothing here should take real
+money until it is answered. And showing the **subcontractor** that their work is
+funded: everything built so far is on the hiring side, and "a subcontractor who
+can see the money for their job is already in has been given something no other
+system in this trade gives them" is still true and still unbuilt. `/api/my-work`
+is the shape it belongs on.

@@ -39,6 +39,12 @@ on:
   push:
     paths:
       - "app/worker/**"
+      # The Worker imports these -- every rule module the API reads lives in
+      # app/shared, so a change to one of them IS a change to the API. Without
+      # this line a fix to app/shared/paygate.js, which decides whether money
+      # may leave, would sit in the repository with every deploy reporting
+      # success and nothing saying it had not shipped.
+      - "app/shared/**"
       - "app/wrangler.toml"
       - "app/package.json"
       - "app/package-lock.json"

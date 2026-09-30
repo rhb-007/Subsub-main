@@ -44,9 +44,11 @@ const read = (f) => readFileSync(resolve(root, ".github/workflows", f), "utf8");
 // does not have. Anchored on `push:` so a `paths:` under something else -- a
 // pull_request trigger, say -- cannot be mistaken for it.
 function pushPaths(src) {
-  const m = src.match(/\n  push:\n    paths:\n((?:      - "[^"]+"\n)+)/);
+  const m = src.match(/\n  push:\n    paths:\n((?:      (?:- "[^"]+"|#[^\n]*)\n|\n)+)/);
   if (!m) return null;
-  return m[1].trim().split("\n").map((l) => l.trim().replace(/^- "/, "").replace(/"$/, ""));
+  return m[1].split("\n").map((l) => l.trim())
+    .filter((l) => l.startsWith('- "'))
+    .map((l) => l.replace(/^- "/, "").replace(/"$/, ""));
 }
 
 const app = pushPaths(read("deploy-app.yml"));
@@ -88,6 +90,31 @@ for (const f of WORKFLOWS) {
   // a Zapier integration on every push is not something anybody wants.
   if (!list) { ck(`${f} is press-only, which is allowed`, true); continue; }
   ck(`${f} watches itself`, list.includes(`.github/workflows/${f}`));
+}
+
+// THE API DEPLOY HAS TO WATCH EVERY DIRECTORY THE WORKER IMPORTS FROM, and it
+// did not. `deploy-api.yml` watched `app/worker/**` and nothing else, while
+// worker/index.js imports two dozen rule modules out of `app/shared/` -- so a
+// fix to `app/shared/paygate.js`, which decides whether money may leave, would
+// have sat in the repository with every deploy reporting success and nothing
+// saying it had not shipped. The same silence this whole file exists for, one
+// directory further in and on the half that handles money.
+//
+// Derived from the imports rather than a hand-kept list, because a list written
+// by whoever added the import is the same record twice.
+{
+  const workerDir = resolve(root, "app/worker");
+  const dirs = new Set();
+  for (const f of readdirSync(workerDir).filter((x) => x.endsWith(".js"))) {
+    const src = readFileSync(resolve(workerDir, f), "utf8");
+    for (const m of src.matchAll(/from\s+"\.\.\/([a-z0-9_-]+)\//gi)) dirs.add(`app/${m[1]}`);
+  }
+  ck("the Worker imports from somewhere outside itself", dirs.size > 0, [...dirs].join(" "));
+  for (const d of [...dirs].sort()) {
+    ck(`deploy-api.yml watches ${d}, which the Worker imports from`,
+      (api || []).some((p) => p === `${d}/**` || p.startsWith(`${d}/`)),
+      (api || []).join(" "));
+  }
 }
 
 // A pattern matching nothing is a guard that cannot fire.

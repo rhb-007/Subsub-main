@@ -1296,10 +1296,8 @@ refactor.
   before the GC has funded is not a speed fee at all; it is lending, and it is
   a different company.
 
-  Still open and listed there: **payment is not gated on cover.** `settle`
-  checks the waiver chain and nothing else, so *refusing to pay a
-  subcontractor whose insurance lapsed* — named above as a reason to route
-  payment through here — is a claim nothing enforces.
+  That was listed there as still open for a while, and it is closed: **payment
+  is now gated on cover as well as on the waiver.** See the entry below.
 
 - **Being paid starts with Stripe deciding who you are, and coming back from
   them does not mean it worked.** Migration 050, `app/shared/pay.js` and
@@ -1457,6 +1455,255 @@ refactor.
   that does not leak, and 1099s that are generated rather than reconstructed.
   The bank moves money for free; what is being bought is the reason to let
   it go.
+
+- **Payment is gated on cover, and the date it asks about is the JOB'S.**
+  `settle` checked the waiver chain and nothing else, so *refusing to pay a
+  subcontractor whose insurance lapsed* — named two entries up as a reason to
+  route payment through here at all — was enforced by nothing. A release
+  against a company with no certificate on file went out exactly like one
+  against a company fully covered, and no screen said a word.
+  `app/shared/paygate.js` holds the rule.
+
+  **The date is the job's, not today's, and getting that backwards is the whole
+  trap.** It is the same rule `docs.js` has always stated, applied here rather
+  than a second one invented beside it. A certificate that lapsed **after** the
+  work does not make the work uninsured, and refusing to pay for it punishes
+  somebody for a renewal that has nothing to do with this job. A certificate
+  already lapsed **on the day of the work** is the real exposure: the hiring
+  account has an uninsured job on their record, and the moment before the money
+  goes is the last leverage they will ever have over it. Today's position is
+  still **reported** — a lapsed certificate on somebody you are about to pay is
+  the moment to ask for the renewal — and never blocks. The test asserts both
+  directions, because pinning one of the two passes with the date swapped.
+
+  **Three documents, each for its own reason.** Insurance and a bond are cover.
+  A **W-9 is not cover at all** — it is the ability to report the payment, which
+  is why the document-request mail has always said "we can't issue payment
+  without it". And the **signed agreement is not a bar**, because it is
+  `OPTIONAL_KINDS`: the hiring account's own form, on their terms, which plenty
+  of them never send. Holding payment over a document they themselves never
+  issued is the permanently-amber failure `docs.js` exists to prevent, wearing
+  its most expensive hat. A test asserts the gate excludes it *because* it is
+  optional rather than because somebody remembered to leave it off a list.
+
+  **Verification counts here, unlike the send gate.** Sending is about whether
+  the subcontractor has a certificate to send, so presence is the question
+  there. This is the hiring account's own money against their own verdict: an
+  unverified certificate is one nobody here has read.
+
+  **Two gates, two overrides, two reasons, and they are deliberately not one.**
+  A missing waiver and an uninsured job are different problems and somebody
+  paying anyway is saying a different thing about each. One checkbox covering
+  both would let a reason typed about the waiver stand as the recorded
+  justification for paying against lapsed cover — the catch-wide-enough-to-hide
+  -a-real-error shape pointed at the one place it costs most. Each is refused on
+  its own and each writes its own event. Both are overridable, for the reason
+  the waiver override already exists: refusing outright would have SubSub
+  holding a subcontractor's money over a document the *hiring* account has not
+  got round to reading.
+
+  **Cover is asked FIRST, and that is a fact about the route rather than an
+  accident.** With both outstanding it is the one reported, because it is the
+  more serious of the two. Pinning it took two goes: the first version of the
+  assertion passed a waiver override, which makes *both* orderings answer
+  `cover_outstanding` — a restatement rather than a test. It needs both gates
+  outstanding and neither overridden.
+
+  **A database without 037 must not stop payment, and that was a real
+  regression.** The gate reads `company_docs`, which is where an expiry lives —
+  and on a database that never ran that migration there is no table, so the
+  first version threw, which the route turned into `migration_needed`, which
+  means *nobody could be paid at all*. Worse than the gap it reports. It falls
+  back to the booleans on `companies` exactly as the document read path does:
+  `docShapeWithLegacy` reads them and leaves `expiresOn` null, which `docs.js`
+  treats as "does not expire". On such a database that is the honest limit of
+  what is known, and presence plus this account's verdict is still strictly more
+  than the nothing that was checked before. Narrow — only `missingSchema` —
+  because a catch wide enough to hide a real error would hide it in front of
+  money.
+
+  **And `milestone-test.mjs`'s hand-written base schema earned its keep.** Its
+  comment says *"if a route reaches for a column that is not here, that is worth
+  knowing"*, and it duly reported that settling now reads `engagements.doc_review`,
+  the document booleans on `companies` and `jobs.date`. Those are real columns on
+  every real database, so the fixture gained them rather than the route gaining a
+  catch. Its fixture also had to start satisfying cover, or every assertion in it
+  about the *waiver* was answering a question about insurance instead.
+
+- **Money actually moves, and the shape of that is a legal conclusion.**
+  Migration 051, `app/shared/escrow.js`, `wo_funding` and `wo_transfers`. 033
+  wrote this ledger for a processor that did not exist; this is the processor.
+  Everything about releasing money was already there except the money.
+
+  **Separate charges and transfers**, because it is the only Stripe arrangement
+  that *holds* money between funding and release — which is what "pay against
+  verified work" requires, since the whole point is that the money is already
+  there when the milestone is met. `transfer_data` or `on_behalf_of` on the
+  funding intent would make it a destination charge: money that arrives already
+  spent, and so cannot be held against a milestone that has not been met. A test
+  asserts their absence **on the request Stripe actually receives**, because that
+  is the one place the claim is checkable. It follows, and EASY-PAY.md §10.3 says
+  so, that the funds sit in a balance attributed to the platform with SubSub as
+  merchant of record — still the question for counsel rather than a detail under
+  it.
+
+  **The fee is not a Stripe concept here at all.** The account funds the gross
+  and the subcontractor is transferred the net; the difference stays where it
+  already is. `application_fee_amount` belongs to destination charges. So
+  `money.js`'s cumulative cut, stamped onto the release when it was made, *is*
+  the fee with nothing further to compute — and `PLATFORM_FEE_BPS` is still
+  zero, which is a pricing decision and not a route's to make. **Retainage is
+  the same shape**: money funded and not yet transferred, which means held, for
+  months, and that is the sharpest edge of the escrow question above.
+
+  **`settle` and `pay` are two routes on purpose.** `settle` records money that
+  moved somewhere else — a cheque, a bank transfer, whatever they already do —
+  and `pay` moves it. Folding them together would make one route where a bug
+  either records a payment that never happened or makes one that was only meant
+  to be written down, which is the worst place in this codebase for that
+  ambiguity. They share the gates and nothing else, and `/pay` re-runs both of
+  them with the same two overrides: a second rail that skipped them would be a
+  door round the cover gate rather than a way through it.
+
+  **Nothing is believed from the browser.** `/fund/confirm` reads the
+  PaymentIntent back from Stripe, and the **amount** with it — a caller who
+  could name it could pay a dollar and claim five thousand, and every gate below
+  reads that figure. Same property as `card-confirm` and a sharper reason. The
+  transfer amount is likewise the release's `net_cents` and never the body's,
+  which is the same rule as the draft route refusing `status`. The first version
+  of the test did not pin that one and a mutation walked straight through it.
+
+  **Money is never lent.** A transfer larger than what has been funded is SubSub
+  advancing money on a general contractor's promise, which is credit and a
+  different company — EASY-PAY.md's own words. `availableCents` is the whole of
+  that guard, and it is not overridable by anybody: no reason makes an
+  unverified payee reachable or makes unfunded money exist. Those facts are
+  checked *before* the two paperwork gates, because asking somebody to justify
+  paying without cover and only then telling them the money is not there is two
+  decisions in the wrong order.
+
+  **One live transfer per release, and a failed one is retryable.** Those pull
+  against each other, which is why `ux_wo_transfer_live` is **partial**
+  (`status <> 'failed'`): a plain unique index leaves somebody unpayable because
+  a card bounced once, and no index at all pays the same milestone twice under a
+  race. The sequential case is caught by the release already being `paid`, so
+  the index is asserted **directly** — otherwise the half that matters under
+  load could go with nothing noticing. Worth knowing for the next mutation run:
+  `freshDb` applies `schema.sql` **and** the migrations a test names, so the
+  index has two sources and removing it from one leaves the other. Mutating it
+  means mutating both.
+
+  **A reversal reopens the release.** A transfer that comes back weeks later has
+  to stop the roster saying somebody was paid, or the money is in our balance
+  and the only record of it says paid. It goes back to `due`, and the reversal is
+  its own append-only line rather than an edit to the one that said it was paid.
+
+  **Unspent money comes back, and retainage is not unspent.** Money in with no
+  way out is a trap, so `refundableCents` is available minus owed — offering the
+  balance back would be refunding your way out of a holdback. A partial refund
+  across several charges reports what actually went, because saying "it failed"
+  when some of it is already on its way has somebody press it again.
+
+  **Both CHECK.sql invariants must read zero.** A release marked paid through
+  `method = 'stripe'` with no transfer behind it is the original bug in a new
+  place — somebody told their money went, and nothing carries it. A transfer
+  marked paid against a release nothing says was paid is worse: money that left
+  and cannot be reconciled. Scoped to Stripe-settled releases, because a cheque
+  legitimately has no transfer row.
+
+- **A review can say WHAT is wrong, because pass or fail could not.** Review was
+  a verdict and a free-text note. The checklist looked like it carried the
+  detail and it did not: **an unticked box meant "I have not got to this yet"
+  and "I checked, and it is not there" with one mark**, and nothing anywhere
+  could tell them apart. So the commonest correctable fault in construction
+  compliance — the hiring account missing from the additional insured schedule —
+  had one move: reject the whole certificate and type a paragraph. What then
+  went to the subcontractor was `docRequestEmail`, the generic "upload your
+  compliance documents" notice, **about a document they had already uploaded.**
+
+  Three states per item in `app/shared/doccheck.js` — `unanswered`, `ok`,
+  `wrong` — which is the same fix `docs.js` made in colour: expired and
+  never-added are both red and are told apart by the words, because they are
+  different problems needing different actions. The **unanswered** row is drawn
+  plain, with no tint: "I have not looked at this yet" is not worth drawing
+  attention to, and tinting it would make a half-read form look like a form full
+  of problems.
+
+  **`findings` is the record and `checks` is derived from it.** Two
+  independently stored answers to one question is two answers, so the route
+  overrides whatever `checks` the body sent. Which the test had to assert with a
+  **disagreeing** `checks` in the body — sending none at all leaves the field
+  undefined, which is caught too but for a weaker reason.
+
+  **And the legacy read must not invent findings.** Every review written before
+  this has a `checks` object where `false` means "the box was not ticked", not
+  "found wrong" — that being the exact ambiguity this replaces. So it maps to
+  `unanswered`, never to `wrong`: the alternative would retroactively put faults
+  on documents that are already verified, which is the same bug inverted.
+
+  **Each fault carries its own instruction, prefilled.** "Ask your agent to add
+  Outerhome as an additional insured on the CGL" is something somebody forwards
+  to their broker in one go; the same sentence inside a paragraph about three
+  other things is a paragraph that gets re-read and half-actioned. It is
+  prefilled because a reviewer who has to compose it will leave it blank, and a
+  finding with no instruction is the disabled-control-with-no-reason failure
+  pointed at somebody else's inbox. The standing text is per item in the shared
+  module and a reviewer may overwrite it.
+
+  **THERE WAS ONE LIST TOO MANY, and the merge was forced the same way
+  `shared/trades.js` was.** `INSURANCE_LINES`, `INSURANCE_ATTEST` and
+  `BOND_MIN` lived in `App.tsx` and again in `worker/mail.js`, agreeing by luck
+  and by whoever last edited both. That stopped being survivable the moment the
+  email has to name the **specific** line a reviewer marked wrong: two lists
+  means an email naming a line the screen never asked about. One list, and the
+  insurance path stopped being a second code path while it was at it — which is
+  how it had ended up the only kind the email could not name a finding from.
+
+  **`docFindingsEmail` says what was RIGHT as well as what was not.** A list of
+  four faults with no mention of the eight lines that were fine reads as "start
+  again", and the commonest answer to that is a telephone call asking what is
+  actually wanted. It also **never says "rejected"**: the stored verdict still
+  is, but a subcontractor reading that goes looking for a new policy when what
+  is wanted is an endorsement. The subject counts the fixes, because a subject
+  line decides whether this is opened today or next week.
+
+  **THERE IS NO FOURTH STATUS, and the obvious move would cost more than it
+  buys.** The difference between "rejected" and "three things to fix" is tone,
+  and the findings carry the substance. A `changes` value in `status` would have
+  to be answered by `docStatus`, `missingDocs`, `docsComplete`, the assignment
+  gate, the nav badge and the send gate — and a document needing changes is not
+  usable either way, so every one of them would answer exactly as it does for
+  `rejected`. Eight places to get right for a word. So **the verdict stays a
+  verdict and the words follow the findings**, on the roster row, in the modal's
+  summary, in the panel heading and in the subject line.
+
+  **The mail is chosen by the findings, not by the caller**, and the preview and
+  the send pick it through one function — a preview that could be asked for the
+  wrong template is a preview that disagrees with what gets sent. The route had
+  to learn the **kind**: the bug at the heart of all this was that a rejection
+  carried no answer to *which document*, so the generic notice was the only one
+  it could ever compose. It is logged as its own `doc_findings` kind, because
+  "we told them what was wrong with their certificate" and "we asked them for
+  documents" are different events and the console counts both.
+
+  **And a note is only required when nothing is marked.** The findings *are* the
+  reason. Demanding a paragraph anyway would have a reviewer who has just named
+  four specific faults retype them as prose.
+
+  **Which broke the one screen the subcontractor acts on, and nearly shipped.**
+  `MyDocRow` read *Needs a new copy — {note}*, and the note is optional now, so
+  a certificate sent back with three named faults would have rendered a dangling
+  em dash and nothing at all — on the screen somebody opens straight after
+  reading the email about it. It counts the faults, lists them with each
+  instruction, and keeps the old sentence without the dash when there are none.
+  The general shape: **making a field optional makes every screen that prints it
+  unconditionally a screen with a hole in it**, and the holes are wherever it was
+  being interpolated after a dash or a colon.
+
+  **And rejecting is recorded before the notify modal opens**, so closing that
+  modal without sending leaves a contractor waiting on a job that will never be
+  issued, over a fault nobody told them about — the same silent failure one
+  screen along. The modal says so, at the moment of closing.
 
 - **A lien waiver is a chain, and it rolls up as a status.** A waiver binds
   only the party that signs it, so one from your subcontractor does nothing
@@ -3103,6 +3350,23 @@ refactor.
   **A missing path entry is the same silence, one directory further in**: green
   runs, an unchanged screen, and nothing anywhere saying a deploy did not
   happen. So when the build starts reading something new, it goes in the list.
+
+  **And `deploy-api.yml` was missing `app/shared/**`, which is the worst place
+  for it.** It watched `app/worker/**` and nothing else, while the Worker imports
+  two dozen rule modules out of `app/shared/` — so a fix to
+  `app/shared/paygate.js`, which decides whether money may leave, would have sat
+  in the repository with every deploy reporting success. `test:deploypaths` only
+  compared the app against the console, because those are the pair that are one
+  bundle built twice; the API's list was checked for existing on disk and for
+  watching itself, and for nothing else. It now **derives** the directories from
+  the Worker's own imports, because a list written by whoever added the import is
+  the same record twice.
+
+  **Which uncovered the same failure inside the test.** Its `paths:` parser
+  wanted consecutive quoted entries, so the first YAML comment in the block
+  ended the match and every path after it went unchecked — a shorter list
+  reported as the whole list, which is this test's own failure mode turned on
+  itself. Adding a comment beside the new entry is what surfaced it.
 - Migrations are applied **by hand** in the D1 console, in order. Every one
   that adds a column or table gets a line in
   `app/worker/migrations/CHECK.sql`, which answers "did I run that one?"
@@ -3206,6 +3470,14 @@ refactor.
   badge counts **presence, not approval**: `missingDocs()` asks whether a hiring
   account has verified a document and nobody verifies their own, so it would
   have read 4 after all four were uploaded. Same rule the send gate follows.
+
+- **A backtick inside a template literal closes it, and that includes a
+  comment.** Recorded three times now and hit a third: `embed.js` is one big
+  template so its comments cannot contain one; a backtick in a CSS comment took
+  the whole app down behind one `dot is not defined`; and a SQL comment inside
+  `milestone-test.mjs`'s `BASE` template made the file fail to parse. The guard
+  that catches it cheaply is to assert the extracted literal contains no
+  backtick at all, which is one line beside whatever the literal is for.
 
 - **A `\uXXXX` escape in JSX *text* is six literal characters**, not a
   character — JSX only processes escapes inside string and template literals.

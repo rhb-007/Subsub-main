@@ -193,16 +193,25 @@ try {
     t.ck("carrying the edit", patches[0]?.company === "Roundhouse Kick Construction",
       String(patches[0]?.company));
 
-    // And it must not quietly delete a document this form has no control for.
-    // It knows about three kinds; DOC_KINDS has four. Listing them flat
-    // replaced the whole object and wiped the W-9 of anybody who had one --
-    // their client's roster then read "not on file" for a document that was.
-    t.ck("the W-9 on file survives the edit",
-      patches[0]?.docFiles?.w9 === "roundhouse-w9.pdf",
-      JSON.stringify(patches[0]?.docFiles));
-    t.ck("and the certificate is still named",
-      patches[0]?.docFiles?.insurance === "roundhouse-coi.pdf",
-      JSON.stringify(patches[0]?.docFiles));
+    // It must not touch a document column at all, which is stronger than the
+    // thing this used to check.
+    //
+    // The first fix made `build()` spread the existing `docFiles` before
+    // overriding the three kinds the form knew about, because listing them flat
+    // wiped the W-9 of anybody who had one. The second went further: it sends
+    // none of `bond`, `insurance`, `contract` or `docFiles`, because those are
+    // the columns `mayWriteCompanyDocs` guards on the document routes and a
+    // plain PATCH at them was the back door round that check. The upload rows
+    // go through those routes instead.
+    //
+    // So there is no `docFiles` in the patch to check a W-9 inside, and
+    // asserting one would be asserting the weaker of the two guarantees.
+    const docKeys = ["docFiles", "insurance", "bond", "contract"]
+      .filter((k) => k in (patches[0] || {}));
+    t.ck("the form sends no document column at all", docKeys.length === 0,
+      `sent: ${docKeys.join(", ")}`);
+    t.ck("so nothing on file can be clobbered by an edit",
+      patches[0]?.docFiles === undefined, JSON.stringify(patches[0]?.docFiles));
     await ctx.close();
   }
   console.log("\n-- a contractor with their own account keeps their own record --");

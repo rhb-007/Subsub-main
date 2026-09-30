@@ -169,7 +169,10 @@ try {
       return {
         issuer: byLabel(/carrier/i), policy: byLabel(/policy number/i),
         money,
-        ticked: [...f.querySelectorAll(".rv-check input")].filter((i) => i.checked).length,
+        // Confirmed lines. Three-state buttons rather than check boxes since a
+        // review learned to say what is WRONG as well as what is right, so what
+        // "ticked" means on screen is `.rv-fbtn.ok.on`.
+        ticked: f.querySelectorAll(".rv-fbtn.ok.on").length,
         note: f.querySelector("textarea")?.value || "",
         banner: document.querySelector(".rv-draft")?.innerText || "",
       };
@@ -266,7 +269,7 @@ try {
         const el = f.querySelector(".rv-issuer input");
         const d = Object.getOwnPropertyDescriptor(el.constructor.prototype, "value");
         d.set.call(el, who); el.dispatchEvent(new Event("input", { bubbles: true }));
-        f.querySelector(".rv-check input")?.click();
+        f.querySelector(".rv-fbtn.ok")?.click();
       }, `Who wrote the ${kind}`);
       await wait(300);
       await page.evaluate(() => {

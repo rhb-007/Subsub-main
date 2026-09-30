@@ -98,8 +98,18 @@ export function requirementLabel(key) {
 // Never from a Stripe object directly: the row is what a page load gets, and
 // a second derivation off a live fetch is the second opinion this module
 // exists to prevent.
+// The same question `payoutsReady` asks of a Stripe account, asked of OUR row.
+//
+// It exists because money has to be able to ask it. `ready` below is
+// `kyc_status === 'verified'`, which happens to be derived from both
+// capabilities -- so reading that would be relying on a derivation stored in
+// another column at another time, and the first caller to need this asked for
+// `.payable`, got `undefined`, and refused every payment on a fully verified
+// account. Both halves, read directly, named once.
+export const rowPayable = (row) => !!row && !!row.transfers_active && !!row.payouts_enabled;
+
 export function payoutSummary(row) {
-  if (!row) return { status: "none", ready: false, requirements: [], disabledReason: null };
+  if (!row) return { status: "none", ready: false, payable: false, requirements: [], disabledReason: null };
   let requirements = [];
   try {
     const parsed = JSON.parse(row.requirements || "[]");
@@ -108,6 +118,9 @@ export function payoutSummary(row) {
   return {
     status: PAYOUT_STATES.includes(row.kyc_status) ? row.kyc_status : "pending",
     ready: row.kyc_status === "verified",
+    // Whether money can actually reach them, which is a different question
+    // from whether Stripe has finished with their paperwork.
+    payable: rowPayable(row),
     // Both halves, because "why can't I be paid yet" has two different
     // answers and one of them is not about documents at all.
     transfersActive: !!row.transfers_active,

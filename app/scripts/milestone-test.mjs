@@ -33,11 +33,23 @@ const { default: worker } = await import("../worker/index.js");
 const BASE = `
 CREATE TABLE accounts (id TEXT PRIMARY KEY, name TEXT, kind TEXT, company_id TEXT);
 CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, email TEXT, auth_id TEXT);
-CREATE TABLE companies (id TEXT PRIMARY KEY, company TEXT, license TEXT);
+-- The document booleans and doc_files, because settling is now gated on cover
+-- as well as on the waiver -- see shared/paygate.js. docShapeWithLegacy reads
+-- these when there is no company_docs row, which on this deliberately minimal
+-- base is every time.
+CREATE TABLE companies (id TEXT PRIMARY KEY, company TEXT, license TEXT,
+  insurance INTEGER DEFAULT 0, bond INTEGER DEFAULT 0, contract INTEGER DEFAULT 0,
+  w9 INTEGER DEFAULT 0, doc_files TEXT DEFAULT '{}');
 CREATE TABLE memberships (id TEXT PRIMARY KEY, user_id TEXT, account_id TEXT, role TEXT, company_id TEXT);
 CREATE TABLE properties (id TEXT PRIMARY KEY, account_id TEXT, state TEXT);
-CREATE TABLE jobs (id TEXT PRIMARY KEY, account_id TEXT, property_id TEXT, title TEXT, updated_at TEXT);
-CREATE TABLE engagements (id TEXT PRIMARY KEY, account_id TEXT, company_id TEXT);
+-- jobs.date, because the cover gate asks about the DAY OF THE WORK rather
+-- than today, which is the whole of that rule.
+CREATE TABLE jobs (id TEXT PRIMARY KEY, account_id TEXT, property_id TEXT, title TEXT,
+  date TEXT, updated_at TEXT);
+-- engagements.doc_review, because the cover gate reads this account's own
+-- verdict: an unverified certificate is one nobody here has read.
+CREATE TABLE engagements (id TEXT PRIMARY KEY, account_id TEXT, company_id TEXT,
+  doc_review TEXT DEFAULT '{}');
 CREATE TABLE work_orders (
   id TEXT PRIMARY KEY, wo_number INTEGER, job_id TEXT, trade TEXT, company_id TEXT,
   engagement_id TEXT, value_cents INTEGER, status TEXT, voided_at TEXT);
@@ -51,15 +63,24 @@ const seed = () => {
   const db = freshDb({ base: BASE, migrations: MIGRATIONS });
   db.exec(`
     INSERT INTO accounts(id,name,kind) VALUES ('acc1','Outerhome','general_contractor');
-    INSERT INTO companies(id,company) VALUES ('cmp_sub','Cascade Roofworks');
+    -- Paperwork in order, so the WAIVER gate is the one these tests are about.
+    -- Settling is gated on cover as well now, and it is asked first, so a
+    -- company with no documents refuses with cover_outstanding before the
+    -- waiver is ever looked at. The booleans are enough here: with no
+    -- company_docs table docShapeWithLegacy reads them and leaves the expiry
+    -- null, which shared/docs.js treats as "does not expire".
+    INSERT INTO companies(id,company,insurance,bond,w9) VALUES ('cmp_sub','Cascade Roofworks',1,1,1);
     INSERT INTO users(id,name) VALUES ('u_admin','Richard'),('u_pm','Miguel'),('u_sub','Dana');
     INSERT INTO memberships(id,user_id,account_id,role,company_id) VALUES
       ('m1','u_admin','acc1','admin',NULL),
       ('m2','u_pm','acc1','pm',NULL),
       ('m3','u_sub','acc1','contractor','cmp_sub');
     INSERT INTO properties(id,account_id,state) VALUES ('p1','acc1','WA');
-    INSERT INTO jobs(id,account_id,property_id,title) VALUES ('j1','acc1','p1','Roof');
-    INSERT INTO engagements(id,account_id,company_id) VALUES ('e1','acc1','cmp_sub');
+    INSERT INTO jobs(id,account_id,property_id,title,date) VALUES ('j1','acc1','p1','Roof','2026-03-10');
+    -- And this account's own verdict on them, because the cover gate asks for
+    -- that rather than mere presence: this is the hiring account's own money.
+    INSERT INTO engagements(id,account_id,company_id,doc_review) VALUES ('e1','acc1','cmp_sub',
+      '{"insurance":{"status":"verified"},"bond":{"status":"verified"},"w9":{"status":"verified"}}');
     INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,value_cents,status)
       VALUES ('wo1',1,'j1','roofing','cmp_sub','e1',100000,'accepted');
     -- A second account, to prove scoping.
@@ -201,6 +222,26 @@ console.log("\n-- the waiver gate --");
     { method: "POST", body: { method: "check", override: true } }));
   ck("an override without a reason is refused", s === 400 && b.error === "override_reason_required",
     `${s} ${b.error}`);
+
+  // And the COVER gate is asked first, which is a fact about this route rather
+  // than an accident of how the fixture is seeded: a company with no paperwork
+  // is refused for that before the waiver is looked at, and a waiver override
+  // does not carry past it. Recorded here because the fixture above now
+  // deliberately satisfies cover so these assertions can be about the waiver --
+  // without this, swapping the order would change nothing anybody could see.
+  db.exec(`UPDATE companies SET insurance = 0 WHERE id = 'cmp_sub'`);
+  [s, b] = await json(await call(env, ADMIN, `/api/releases/${v.releaseId}/settle`,
+    { method: "POST", body: { method: "check" } }));
+  ck("with BOTH outstanding, cover is the one reported", s === 409 && b.error === "cover_outstanding",
+    `${s} ${b.error}`);
+  ck("and it says what is missing", (b.cover?.problems || []).some((x) => x.kind === "insurance"),
+    JSON.stringify(b.cover));
+  // And a waiver override does not carry past it, which is the separate half.
+  [s, b] = await json(await call(env, ADMIN, `/api/releases/${v.releaseId}/settle`,
+    { method: "POST", body: { method: "check", override: true, overrideReason: "Owner said so" } }));
+  ck("a waiver override does not clear the cover gate",
+    s === 409 && b.error === "cover_outstanding", `${s} ${b.error}`);
+  db.exec(`UPDATE companies SET insurance = 1 WHERE id = 'cmp_sub'`);
 
   // Labour only, with a signed waiver through today: clear.
   const today = new Date().toISOString().slice(0, 10);

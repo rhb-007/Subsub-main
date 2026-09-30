@@ -166,7 +166,11 @@ try {
           if (/carrier|policy number/i.test(lab)) return;
           set(i, "2000000");
         });
+        // The per-line confirmations are three-state buttons now, not check
+        // boxes -- an unticked box could not say "I checked, and it is wrong".
+        // Pressing every "Fine" is what this test always meant by ticking them.
         f.querySelectorAll('input[type="checkbox"]').forEach((cb) => { if (!cb.checked) cb.click(); });
+        f.querySelectorAll(".rv-fbtn.ok").forEach((b) => { if (!b.classList.contains("on")) b.click(); });
       });
       await wait(400);
       await page.evaluate(() => {

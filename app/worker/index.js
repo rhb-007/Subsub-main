@@ -8,7 +8,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { sendEmail, docRequestEmail, workOrderIssuedEmail, applicationReceivedEmail,
+import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
@@ -56,6 +56,11 @@ import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from 
 // Whether somebody can actually be paid, decided once and read by the
 // routes, the webhook and the browser.
 import { payoutSummary, rowFromStripe } from "../shared/pay.js";
+import { coverState, coverProblemText, PAY_GATE_KINDS } from "../shared/paygate.js";
+import { problemsIn, checksFrom, findingsFor, allConfirmed,
+  FINDING_STATES, CHECK_KINDS } from "../shared/doccheck.js";
+import { fundingState, canPay, CURRENCY,
+  MIN_FUND_CENTS, MAX_FUND_CENTS } from "../shared/escrow.js";
 import { verifyAccessJwt } from "./access.js";
 import {
   hostnameConfig, brandedHost, provisionHostname, deprovisionHostname, checkHostname, diagnose,
@@ -1526,6 +1531,92 @@ app.post("/api/stripe/webhook", async (c) => {
           stripeTime(obj.period_end) || new Date().toISOString(),
           obj.status === "paid" ? stripeTime(obj.status_transitions?.paid_at) : null,
           obj.attempt_count ?? 0).run();
+        break;
+      }
+
+      // ---- 051. Work-order funding and the transfers that spend it -------
+      //
+      // These are PLATFORM events, not connected-account ones: the charge is
+      // taken on our own account (separate charges and transfers), so they
+      // arrive here and not at the Connect endpoint.
+      //
+      // The browser confirms funding too, through /fund/confirm, and both
+      // write the same row. That is deliberate rather than redundant: the
+      // browser is what redraws the screen somebody is standing on, and this
+      // is what is correct when they close the tab mid-payment -- which is
+      // the case where nothing else would ever mark the money as arrived.
+      case "payment_intent.succeeded": {
+        const woId = obj.metadata?.work_order_id;
+        if (!woId) break;                       // a subscription charge, not ours
+        const charge = typeof obj.latest_charge === "string" ? obj.latest_charge : obj.latest_charge?.id;
+        const landed = Math.round(Number(obj.amount_received ?? obj.amount) || 0);
+        // Keyed on the intent, so this cannot invent a row for a funding
+        // attempt no route ever started.
+        await c.env.DB.prepare(
+          `UPDATE wo_funding SET status = 'funded', amount_cents = ?, processor_charge_id = ?,
+             error = NULL, funded_at = COALESCE(funded_at, CURRENT_TIMESTAMP)
+           WHERE processor_intent_id = ? AND status <> 'funded'`
+        ).bind(landed, charge || null, obj.id).run();
+        break;
+      }
+
+      case "payment_intent.payment_failed": {
+        if (!obj.metadata?.work_order_id) break;
+        await c.env.DB.prepare(
+          `UPDATE wo_funding SET status = 'failed', error = ?
+             WHERE processor_intent_id = ? AND status = 'pending'`
+        ).bind(String(obj.last_payment_error?.message || "declined").slice(0, 500), obj.id).run();
+        break;
+      }
+
+      // A transfer that comes back weeks later. The release has to stop reading
+      // as paid, or the roster says somebody was paid while the money is in our
+      // balance -- and the only record of it was the release that still says
+      // paid, which is the reconciliation nobody can do. It goes back to `due`,
+      // which is what it is.
+      //
+      // REVERSAL IS THE ONLY WEBHOOK CASE, and that is worth stating because the
+      // obvious thing is to also handle a "transfer failed" event. A transfer
+      // Stripe refuses fails SYNCHRONOUSLY on the API call, which /pay already
+      // catches and marks `failed` with Stripe's own words -- so there is nothing
+      // for a webhook to tell us. And a failed PAYOUT is a different object
+      // entirely: that is money leaving the subcontractor's Stripe balance for
+      // their bank, which is between them and Stripe, and reopening our release
+      // over it would say the transfer did not happen when it did.
+      //
+      // Still open, and bigger than this: a funding charge DISPUTED or refunded
+      // after its transfers have gone. The money is out and the charge is
+      // reversed, and nothing here handles it.
+      case "transfer.reversed": {
+        const t = await c.env.DB.prepare(
+          `SELECT * FROM wo_transfers WHERE processor = 'stripe' AND processor_transfer_id = ?`
+        ).bind(obj.id).first();
+        if (!t) break;                          // not one of ours
+        await c.env.DB.prepare(
+          `UPDATE wo_transfers SET status = 'reversed', reversed_at = CURRENT_TIMESTAMP,
+             error = COALESCE(error, ?) WHERE id = ?`
+        ).bind(`Stripe ${event.type}`, t.id).run();
+        await c.env.DB.prepare(
+          `UPDATE wo_releases SET status = 'due', method = NULL, reference = NULL,
+             settled_at = NULL, settled_by = NULL
+           WHERE id = ? AND status = 'paid' AND reference = ?`
+        ).bind(t.release_id, obj.id).run();
+        // Append-only, so the reversal is its own line rather than an edit to
+        // the one that said it was paid. "Who said this was paid, and what
+        // happened to it" has to stay answerable.
+        //
+        // Written directly rather than through `woEvent`, which reads the seat
+        // off `c.get("auth")` -- a webhook has none, and there is no person to
+        // name here anyway. Same reasoning as `job_sources.created_by` being
+        // NULL: naming somebody would put a sentence in the audit trail saying
+        // they did a thing they did not do.
+        await c.env.DB.prepare(
+          `INSERT INTO wo_events (id, work_order_id, account_id, kind, payload, idem_key)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        ).bind(uid(), t.work_order_id, t.account_id, "release.reversed",
+          JSON.stringify({ releaseId: t.release_id, transferId: t.id, reference: obj.id,
+            amountCents: t.amount_cents, type: event.type }),
+          `reversed:${obj.id}`).run().catch(() => {});
         break;
       }
 
@@ -7313,11 +7404,44 @@ app.post("/api/subs/:companyId/documents/:kind/review", requireRole("admin", "pm
   if (!engagement) return c.json({ error: "not_found" }, 404);
 
   const docReview = parseJson(engagement.doc_review, {});
+
+  // PER-ITEM FINDINGS, and `checks` DERIVED from them rather than stored beside.
+  //
+  // A review was pass or fail with a free-text note, and an unticked box meant
+  // two different things -- "not got to this yet" and "checked, and it is not
+  // there" -- which nothing could tell apart. So the one correctable problem
+  // that matters most in construction compliance, the hiring account missing
+  // from the additional insured schedule, could only be reported by rejecting
+  // the whole certificate and typing a paragraph.
+  //
+  // `findings` is the record. `checks` is written from it so that anything
+  // still reading the old shape agrees by construction -- two independently
+  // stored answers to one question is two answers.
+  const findings = {};
+  // Whether the CALLER sent findings, not whether any of them carried an answer.
+  // Those come apart: a reviewer who opened the form and answered nothing still
+  // sends a full map of `unanswered`, and writing it is right -- but a caller
+  // that sent no `findings` key at all must not have one invented, because
+  // `findingsFor` prefers a stored map over the legacy `checks` object and an
+  // invented all-unanswered map would mask the checks that same call sent.
+  const gaveFindings = !!body.findings && typeof body.findings === "object";
+  if (gaveFindings) {
+    const acct = await c.env.DB.prepare(`SELECT name FROM accounts WHERE id = ?`).bind(accountId).first();
+    const norm = findingsFor({ findings: body.findings }, kind, acct?.name || "the hiring account");
+    for (const [id, f] of Object.entries(norm)) {
+      // An unanswered line with nothing typed against it is the absence of an
+      // answer, not an answer -- so it is not a row.
+      if (f.state === "unanswered" && !f.note) continue;
+      findings[id] = { state: f.state, note: String(f.note || "").slice(0, 600) || undefined };
+    }
+  }
+
   // The whole entry is REPLACED, which is what drops any saved draft: a
   // half-read certificate that outlived the decision would reopen over a
   // finished review. Stated rather than left to the spread, because a later
   // change that carried the old entry forward would resurrect it silently.
-  docReview[kind] = { ...body, verifiedBy: userId, verifiedAt: new Date().toISOString().slice(0, 10) };
+  docReview[kind] = { ...body, verifiedBy: userId, verifiedAt: new Date().toISOString().slice(0, 10),
+    ...(gaveFindings ? { findings, checks: checksFrom(findings) } : {}) };
   delete docReview[kind].draft;
   delete docReview[kind].draftAt;
   delete docReview[kind].draftBy;
@@ -8709,7 +8833,9 @@ app.get("/api/work-orders/:id/plan", async (c) => {
       payload: parseJson(e.payload, {}),
     })),
     releases: (rel.results || []).map((r) => ({
-      id: r.id, milestoneId: r.milestone_id || null, grossCents: r.gross_cents,
+      // The work order it belongs to, so a caller holding one release does not
+      // need a second prop to ask about the money behind it.
+      id: r.id, workOrderId: r.work_order_id, milestoneId: r.milestone_id || null, grossCents: r.gross_cents,
       retainageCents: r.retainage_cents, feeBps: r.fee_bps, feeCents: r.fee_cents,
       netCents: r.net_cents, status: r.status, method: r.method || null,
       reference: r.reference || null, settledAt: r.settled_at || null,
@@ -8927,6 +9053,61 @@ async function waiverStateFor(c, { wo, release, asOf }) {
   });
 }
 
+// Was this company's paperwork good for the work this release pays for?
+//
+// Reads the same three sources the roster reads and hands them to
+// shared/paygate.js, which holds the rule. The job's date is fetched rather
+// than taken from the release, because a release records money and a job
+// records when the work was: see the module for why that difference is the
+// whole point.
+//
+// A job with no date falls back to today, which is the only honest answer
+// available -- it is also very rare, since /api/jobs requires one.
+async function coverStateFor(c, { wo, release }) {
+  const company = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`)
+    .bind(release.company_id).first();
+  // A DATABASE WITHOUT 037 MUST NOT STOP PAYMENT. `company_docs` is where the
+  // expiry lives, and on a database that never ran that migration there is no
+  // table -- which threw, which this route turned into `migration_needed`, which
+  // means nobody could be paid at all. That is worse than the gap it reports.
+  //
+  // So it falls back to the booleans on `companies`, exactly as the document
+  // read path does: `docShapeWithLegacy` reads them and leaves `expiresOn` null,
+  // which `docs.js` treats as "does not expire". On such a database that is the
+  // honest limit of what is known -- the boolean says a certificate was handed
+  // over and nothing anywhere records when it runs out -- so the gate checks
+  // presence and this account's own verdict, which is still strictly more than
+  // the nothing it checked before.
+  //
+  // Narrow on purpose: only `missingSchema`, which is the documented pre-037
+  // shape. Any other failure still throws, because a catch wide enough to hide
+  // a real error here would hide it in front of money.
+  let rows = {};
+  try { rows = await currentDocRows(c.env.DB, release.company_id); }
+  catch (err) { if (!missingSchema(err)) throw err; }
+  const engagement = await c.env.DB.prepare(
+    `SELECT doc_review FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(release.account_id, release.company_id).first();
+  const job = await c.env.DB.prepare(`SELECT date FROM jobs WHERE id = ?`)
+    .bind(wo.job_id).first();
+  return coverState({
+    docs: docShapeWithLegacy(rows, company),
+    docReview: parseJson(engagement?.doc_review, {}),
+    jobDate: job?.date || null,
+    asOf: dayKeyUtc(),
+  });
+}
+
+app.get("/api/releases/:id/cover-state", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const r = await c.env.DB.prepare(`SELECT * FROM wo_releases WHERE id = ? AND account_id = ?`)
+    .bind(c.req.param("id"), accountId).first();
+  if (!r) return c.json({ error: "not_found" }, 404);
+  const { wo, error } = await loadWorkOrder(c, r.work_order_id);
+  if (error) return error;
+  return c.json(await coverStateFor(c, { wo, release: r }));
+});
+
 app.get("/api/releases/:id/waiver-state", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   const r = await c.env.DB.prepare(`SELECT * FROM wo_releases WHERE id = ? AND account_id = ?`)
@@ -8943,11 +9124,17 @@ app.get("/api/releases/:id/waiver-state", requireRole("admin", "pm"), async (c) 
 // already do. `method` is the seam a processor drops into later without this
 // route changing shape.
 //
-// GATED ON THE WAIVER, which is the point of the whole mechanism. An
-// override exists because a real business has to be able to pay somebody on
-// a Friday afternoon -- but it is recorded as its own event with a reason,
-// so "we always override it" is a visible fact rather than a habit nobody
-// can see.
+// GATED ON THE WAIVER AND ON COVER, which is the point of the whole
+// mechanism -- and for most of this ledger's life it was only the first of
+// the two. Paying a subcontractor who was uninsured on the day of the work is
+// the thing routing payment through here is supposed to prevent, and nothing
+// checked it; see shared/paygate.js for which documents count and why the
+// date asked about is the job's rather than today's.
+//
+// An override exists for each because a real business has to be able to pay
+// somebody on a Friday afternoon -- but each is recorded as its own event
+// with its own reason, so "we always override it" is a visible fact rather
+// than a habit nobody can see.
 app.post("/api/releases/:id/settle", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const r = await c.env.DB.prepare(`SELECT * FROM wo_releases WHERE id = ? AND account_id = ?`)
@@ -8961,6 +9148,30 @@ app.post("/api/releases/:id/settle", requireRole("admin", "pm"), async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const method = String(b.method || "manual").trim().slice(0, 40);
   const reference = String(b.reference || "").trim().slice(0, 120) || null;
+
+  // TWO GATES, TWO OVERRIDES, TWO REASONS, and they are deliberately not one.
+  //
+  // A missing waiver and an uninsured job are different problems and somebody
+  // paying anyway is saying a different thing about each. One checkbox
+  // covering both would let a reason typed about the waiver stand as the
+  // recorded justification for paying against lapsed cover -- which is the
+  // "a catch wide enough to hide a real error" shape pointed at the one place
+  // it costs the most. So each is asked separately and each reason lands
+  // against its own event.
+  const cover = await coverStateFor(c, { wo, release: r });
+  if (!cover.clear && !b.coverOverride) {
+    return c.json({ error: "cover_outstanding", cover }, 409);
+  }
+  if (!cover.clear) {
+    // Overridable at all, for the reason the waiver override exists: refusing
+    // outright would have SubSub holding a subcontractor's money over a
+    // document the HIRING account has not got round to reading. But it is on
+    // the record with a name against it.
+    const whyCover = String(b.coverOverrideReason || "").trim().slice(0, 500);
+    if (!whyCover) return c.json({ error: "cover_reason_required", cover }, 400);
+    await woEvent(c, { workOrderId: wo.id, milestoneId: r.milestone_id, kind: "release.cover_override",
+      payload: { releaseId: r.id, reason: whyCover, cover } });
+  }
 
   const chain = await waiverStateFor(c, { wo, release: r, asOf: dayKeyUtc() });
   if (!chain.clear && !b.override) {
@@ -8983,9 +9194,460 @@ app.post("/api/releases/:id/settle", requireRole("admin", "pm"), async (c) => {
   if (!res.meta?.changes) return c.json({ error: "already_paid" }, 409);
 
   await woEvent(c, { workOrderId: wo.id, milestoneId: r.milestone_id, kind: "release.settled",
-    payload: { releaseId: r.id, method, reference, netCents: r.net_cents, chainClear: chain.clear },
+    payload: { releaseId: r.id, method, reference, netCents: r.net_cents,
+      chainClear: chain.clear, coverClear: cover.clear,
+      coverProblems: cover.problems },
     idemKey: `settle:${r.id}` });
-  return c.json({ ok: true, status: "paid", chainClear: chain.clear });
+  return c.json({ ok: true, status: "paid", chainClear: chain.clear, coverClear: cover.clear });
+});
+
+
+// ---------------------------------------------------------------------------
+// The funded side: money in against a work order, money out per release
+// ---------------------------------------------------------------------------
+// 033 left `wo_releases.method` and `.reference` as the seam a payment rail
+// drops into. This is the rail. Migration 051 holds the two tables and
+// shared/escrow.js holds the arithmetic and the refusals; EASY-PAY.md §10.3
+// holds the legal shape, which decided everything about how these routes work.
+//
+// SEPARATE CHARGES AND TRANSFERS. The account's card funds a PaymentIntent
+// with no `transfer_data` and no `on_behalf_of`, so the money lands in the
+// platform balance; releasing creates a Transfer to the subcontractor's
+// connected account. That is the only Stripe arrangement that HOLDS money
+// between funding and release, which is the whole product claim -- and it also
+// makes SubSub merchant of record, which is the open question rather than a
+// detail under it.
+//
+// THE FEE IS NOT A STRIPE CONCEPT HERE. The account funds the gross and the
+// subcontractor is sent the net; the difference stays where it already is.
+// `application_fee_amount` belongs to destination charges. So money.js's
+// cumulative cut, stamped onto the release at the moment it was made, is the
+// fee with nothing further to compute -- and `PLATFORM_FEE_BPS` is still zero,
+// which is a pricing decision and not this route's to make.
+//
+// SETTLE AND PAY ARE TWO ROUTES ON PURPOSE. `settle` records money that moved
+// somewhere else -- a cheque, a bank transfer, whatever they already do -- and
+// `pay` moves it. Folding them together would make one route where a bug
+// either records a payment that never happened or makes one that was only
+// meant to be written down, which is the worst place in this codebase for that
+// ambiguity to live. They share the gates and nothing else.
+
+const fundingMigration = () => ({ error: "migration_needed", migration: "051_escrow" });
+
+// Every figure about one work order's money, from the two tables.
+//
+// `dueCents` is what is OWED and unpaid, which is what makes `shortfall`
+// answerable -- "you have funded $1,500 and owe $4,000" is actionable where
+// "insufficient funds" is not.
+async function woMoney(c, workOrderId) {
+  const f = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(CASE WHEN status IN ('funded','refunded') THEN amount_cents ELSE 0 END), 0) AS funded,
+            COALESCE(SUM(refunded_cents), 0) AS refunded
+       FROM wo_funding WHERE work_order_id = ?`
+  ).bind(workOrderId).first();
+  // A pending transfer counts as gone. It is money Stripe has been told to
+  // move, and treating it as still available is how the same balance pays two
+  // releases.
+  const t = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(CASE WHEN status IN ('paid','pending') THEN amount_cents ELSE 0 END), 0) AS out
+       FROM wo_transfers WHERE work_order_id = ?`
+  ).bind(workOrderId).first();
+  const d = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(net_cents), 0) AS due FROM wo_releases
+      WHERE work_order_id = ? AND status = 'due'`
+  ).bind(workOrderId).first();
+  return fundingState({
+    fundedCents: f?.funded || 0, refundedCents: f?.refunded || 0,
+    transferredCents: t?.out || 0, dueCents: d?.due || 0,
+  });
+}
+
+// Is this company reachable by money at all? Re-derived from the row rather
+// than latched, for the reason pay.js gives: Stripe withdraws a capability as
+// readily as it grants one.
+async function payeeState(c, companyId) {
+  const row = await c.env.DB.prepare(
+    `SELECT * FROM payout_accounts WHERE company_id = ? AND processor = 'stripe'`
+  ).bind(companyId).first();
+  return { row, ...payoutSummary(row) };
+}
+
+// What the money panel on a work order draws.
+app.get("/api/work-orders/:id/funding", requireRole("admin", "pm"), async (c) => {
+  const { wo, error } = await loadWorkOrder(c, c.req.param("id"));
+  if (error) return error;
+  try {
+    const money = await woMoney(c, wo.id);
+    const payee = await payeeState(c, wo.company_id);
+    const { results: fundings } = await c.env.DB.prepare(
+      `SELECT id, amount_cents, status, error, refunded_cents, created_at, funded_at
+         FROM wo_funding WHERE work_order_id = ? ORDER BY created_at DESC LIMIT 50`
+    ).bind(wo.id).all();
+    const { results: transfers } = await c.env.DB.prepare(
+      `SELECT t.id, t.release_id, t.amount_cents, t.status, t.error, t.created_at, t.paid_at,
+              t.processor_transfer_id
+         FROM wo_transfers t WHERE t.work_order_id = ? ORDER BY t.created_at DESC LIMIT 50`
+    ).bind(wo.id).all();
+    return c.json({
+      ...money,
+      configured: !!c.env.STRIPE_SECRET_KEY,
+      // The payee's STATUS and nothing else about them. Which requirements
+      // Stripe is still asking of a subcontractor is between Stripe and the
+      // subcontractor; the hiring account needs to know only whether money
+      // can reach them, and the screen says to ask them rather than listing
+      // their outstanding identity documents.
+      payeeReady: payee.payable === true,
+      payeeStatus: payee.status || "none",
+      fundings: (fundings || []).map((r) => ({
+        id: r.id, amountCents: r.amount_cents, status: r.status, error: r.error,
+        refundedCents: r.refunded_cents, createdAt: r.created_at, fundedAt: r.funded_at,
+      })),
+      transfers: (transfers || []).map((r) => ({
+        id: r.id, releaseId: r.release_id, amountCents: r.amount_cents, status: r.status,
+        error: r.error, createdAt: r.created_at, paidAt: r.paid_at,
+        reference: r.processor_transfer_id,
+      })),
+    });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(fundingMigration(), 503);
+    throw err;
+  }
+});
+
+// Put money behind a work order.
+//
+// Returns a client secret. The card is confirmed in the browser by Stripe's
+// Payment Element, exactly as the subscription's card change is, so a number
+// never comes near us -- and nothing here is believed on the way back: see
+// /fund/confirm.
+app.post("/api/work-orders/:id/fund", requireRole("admin"), async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const { wo, error } = await loadWorkOrder(c, c.req.param("id"));
+  if (error) return error;
+  const { accountId, userId } = c.get("auth");
+
+  const b = await c.req.json().catch(() => ({}));
+  const amount = Math.round(Number(b.amountCents) || 0);
+  if (amount < MIN_FUND_CENTS || amount > MAX_FUND_CENTS) {
+    return c.json({ error: "bad_amount", min: MIN_FUND_CENTS, max: MAX_FUND_CENTS }, 400);
+  }
+
+  const a = await c.env.DB.prepare(`SELECT stripe_customer_id FROM accounts WHERE id = ?`)
+    .bind(accountId).first();
+
+  const id = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO wo_funding (id, work_order_id, account_id, amount_cents, currency, created_by)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(id, wo.id, accountId, amount, CURRENCY, userId || null).run();
+  } catch (err) {
+    if (missingSchema(err)) return c.json(fundingMigration(), 503);
+    throw err;
+  }
+
+  try {
+    const pi = await stripeCall(c.env, "/payment_intents", {
+      params: {
+        amount, currency: CURRENCY,
+        ...(a?.stripe_customer_id ? { customer: a.stripe_customer_id } : {}),
+        // NO `transfer_data` and NO `on_behalf_of`. Either one would settle
+        // this charge straight into somebody else's balance, which is a
+        // destination charge -- money that arrives already spent, and so
+        // cannot be held against a milestone that has not been met.
+        //
+        // `transfer_group` is what ties the later transfers to this charge in
+        // Stripe's own reporting, so a reconciliation does not depend on our
+        // tables being right.
+        transfer_group: `wo:${wo.id}`,
+        automatic_payment_methods: { enabled: "true" },
+        metadata: { work_order_id: wo.id, account_id: accountId, funding_id: id },
+      },
+      // Two tabs on one screen must not raise two charges.
+      idempotencyKey: `wo-fund:${id}`,
+    });
+    await c.env.DB.prepare(`UPDATE wo_funding SET processor_intent_id = ? WHERE id = ?`)
+      .bind(pi.id, id).run();
+    await woEvent(c, { workOrderId: wo.id, kind: "funding.started",
+      payload: { fundingId: id, amountCents: amount }, idemKey: `fund-start:${id}` });
+    return c.json({ fundingId: id, clientSecret: pi.client_secret, amountCents: amount });
+  } catch (err) {
+    // The row stays, carrying why. A funding attempt that vanishes is a
+    // screen that says nothing happened when a card was refused.
+    await c.env.DB.prepare(`UPDATE wo_funding SET status = 'failed', error = ? WHERE id = ?`)
+      .bind(String(err?.message || err).slice(0, 500), id).run();
+    console.error("[escrow] fund failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// And confirm it.
+//
+// THE INTENT IS READ BACK FROM STRIPE, never believed from the browser. This is
+// the same property `card-confirm` has and for a sharper reason: a route that
+// took "it succeeded" from the caller would let anybody mark a work order
+// funded without paying, and every gate below this one reads that figure.
+app.post("/api/work-orders/:id/fund/confirm", requireRole("admin"), async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const { wo, error } = await loadWorkOrder(c, c.req.param("id"));
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+
+  let row;
+  try {
+    row = await c.env.DB.prepare(
+      `SELECT * FROM wo_funding WHERE id = ? AND work_order_id = ?`
+    ).bind(String(b.fundingId || ""), wo.id).first();
+  } catch (err) {
+    if (missingSchema(err)) return c.json(fundingMigration(), 503);
+    throw err;
+  }
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (row.status === "funded") return c.json({ ok: true, status: "funded", already: true });
+  if (!row.processor_intent_id) return c.json({ error: "not_started" }, 409);
+
+  try {
+    const pi = await stripeCall(c.env, `/payment_intents/${row.processor_intent_id}`,
+      { method: "GET", params: { expand: ["latest_charge"] } });
+    if (pi?.status !== "succeeded") {
+      // Not an error: Stripe returns somebody to us whether they finished or
+      // abandoned the sheet, exactly as onboarding does. What it is not is
+      // funded, and saying so is the whole job.
+      const why = pi?.last_payment_error?.message || null;
+      if (why) {
+        await c.env.DB.prepare(`UPDATE wo_funding SET error = ? WHERE id = ?`)
+          .bind(String(why).slice(0, 500), row.id).run();
+      }
+      return c.json({ ok: false, status: pi?.status || "unknown", detail: why }, 409);
+    }
+    const charge = typeof pi.latest_charge === "string" ? pi.latest_charge : pi.latest_charge?.id;
+    // Stripe is the authority on the amount too. A caller who could name it
+    // could fund a dollar and claim five thousand.
+    const landed = Math.round(Number(pi.amount_received ?? pi.amount) || 0);
+    const res = await c.env.DB.prepare(
+      `UPDATE wo_funding SET status = 'funded', amount_cents = ?, processor_charge_id = ?,
+         error = NULL, funded_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status <> 'funded'`
+    ).bind(landed, charge || null, row.id).run();
+    if (res.meta?.changes) {
+      await woEvent(c, { workOrderId: wo.id, kind: "funding.received",
+        payload: { fundingId: row.id, amountCents: landed, charge: charge || null },
+        idemKey: `fund-ok:${row.id}` });
+    }
+    return c.json({ ok: true, status: "funded", amountCents: landed, ...(await woMoney(c, wo.id)) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(fundingMigration(), 503);
+    console.error("[escrow] confirm failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// Money out.
+//
+// Everything `settle` refuses, this refuses, plus the two things only a real
+// rail can be refused for. The gates are not re-implemented -- a second
+// opinion on whether cover is clear is a second place for it to be wrong.
+app.post("/api/releases/:id/pay", requireRole("admin"), async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const { accountId, userId } = c.get("auth");
+  const r = await c.env.DB.prepare(`SELECT * FROM wo_releases WHERE id = ? AND account_id = ?`)
+    .bind(c.req.param("id"), accountId).first();
+  if (!r) return c.json({ error: "not_found" }, 404);
+  const { wo, error } = await loadWorkOrder(c, r.work_order_id);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+
+  let money, payee;
+  try {
+    money = await woMoney(c, wo.id);
+    payee = await payeeState(c, r.company_id);
+  } catch (err) {
+    if (missingSchema(err)) return c.json(fundingMigration(), 503);
+    throw err;
+  }
+
+  // The facts first, because none of them is overridable and there is no
+  // point asking somebody for a reason before saying the money is not there.
+  //
+  // THE AMOUNT IS THE RELEASE'S, never the body's. Same rule as the draft
+  // route refusing `status`: a figure taken from the caller here is a figure
+  // somebody chooses.
+  const verdict = canPay({ release: { status: r.status, netCents: r.net_cents },
+    funding: money, payable: payee.payable === true });
+  if (!verdict.ok) {
+    return c.json({ error: verdict.reason, ...verdict, funding: money,
+      payeeStatus: payee.status || "none" }, verdict.reason === "already_paid" ? 409 : 409);
+  }
+
+  // Then the two paperwork gates, in the same order and with the same
+  // overrides `settle` uses. A /pay that skipped them would be a door round
+  // the cover gate rather than a second rail through it.
+  const cover = await coverStateFor(c, { wo, release: r });
+  if (!cover.clear && !b.coverOverride) return c.json({ error: "cover_outstanding", cover }, 409);
+  if (!cover.clear) {
+    const whyCover = String(b.coverOverrideReason || "").trim().slice(0, 500);
+    if (!whyCover) return c.json({ error: "cover_reason_required", cover }, 400);
+    await woEvent(c, { workOrderId: wo.id, milestoneId: r.milestone_id, kind: "release.cover_override",
+      payload: { releaseId: r.id, reason: whyCover, cover } });
+  }
+  const chain = await waiverStateFor(c, { wo, release: r, asOf: dayKeyUtc() });
+  if (!chain.clear && !b.override) return c.json({ error: "waiver_outstanding", ...chain }, 409);
+  if (!chain.clear) {
+    const why = String(b.overrideReason || "").trim().slice(0, 500);
+    if (!why) return c.json({ error: "override_reason_required", ...chain }, 400);
+    await woEvent(c, { workOrderId: wo.id, milestoneId: r.milestone_id, kind: "release.override",
+      payload: { releaseId: r.id, reason: why, chain } });
+  }
+
+  // The attempt row goes in FIRST, and the partial unique index on it is what
+  // makes two people pressing pay at once cost one transfer. The same ordering
+  // as the document upload for the same reason: a record that arrives after
+  // the thing it records is a record that can be missing.
+  const transferId = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO wo_transfers (id, release_id, work_order_id, account_id, company_id,
+         amount_cents, currency, processor_destination, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(transferId, r.id, wo.id, accountId, r.company_id, r.net_cents, CURRENCY,
+      payee.row?.processor_account_id || null, userId || null).run();
+  } catch (err) {
+    if (missingSchema(err)) return c.json(fundingMigration(), 503);
+    if (/UNIQUE constraint failed/i.test(String(err?.message || err))) {
+      return c.json({ error: "already_paying" }, 409);
+    }
+    throw err;
+  }
+
+  // Which funding this draws on, for `source_transaction`. Without it the
+  // transfer needs the platform balance to be settled already and Stripe
+  // refuses with `balance_insufficient`; with it Stripe queues the transfer
+  // against that charge's own availability. So it is correctness, not a
+  // nicety -- and it is also the link a reconciliation follows.
+  const src = await c.env.DB.prepare(
+    `SELECT processor_charge_id FROM wo_funding
+      WHERE work_order_id = ? AND status = 'funded' AND processor_charge_id IS NOT NULL
+      ORDER BY funded_at LIMIT 1`
+  ).bind(wo.id).first();
+
+  try {
+    const tr = await stripeCall(c.env, "/transfers", {
+      params: {
+        amount: r.net_cents, currency: CURRENCY,
+        destination: payee.row.processor_account_id,
+        transfer_group: `wo:${wo.id}`,
+        ...(src?.processor_charge_id ? { source_transaction: src.processor_charge_id } : {}),
+        metadata: { release_id: r.id, work_order_id: wo.id, account_id: accountId },
+      },
+      idempotencyKey: `wo-pay:${r.id}`,
+    });
+    await c.env.DB.prepare(
+      `UPDATE wo_transfers SET status = 'paid', processor_transfer_id = ?,
+         paid_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).bind(tr.id, transferId).run();
+
+    // The release records the transfer that worked, through the seam 033 left
+    // for exactly this: `method` names the rail and `reference` carries its id.
+    const done = await c.env.DB.prepare(
+      `UPDATE wo_releases SET status = 'paid', method = 'stripe', reference = ?,
+         settled_at = CURRENT_TIMESTAMP, settled_by = ?
+       WHERE id = ? AND status = 'due'`
+    ).bind(tr.id, userId, r.id).run();
+    // The money has gone and the release was already closed by somebody else --
+    // recorded as paid by cheque, most likely, between the gate and the
+    // transfer. It is the one state here that needs a person to look at it, so
+    // it is said in three places rather than swallowed: the log, the ledger
+    // event, and the reply, because a caller told plainly "paid" would never
+    // ask. `m051_inv_transfer_without_paid` in CHECK.sql is the fourth.
+    const orphan = !done.meta?.changes;
+    if (orphan) {
+      console.error("[escrow] transferred against a release that was not due:", r.id, tr.id);
+    }
+    await woEvent(c, { workOrderId: wo.id, milestoneId: r.milestone_id, kind: "release.paid",
+      payload: { releaseId: r.id, transferId, reference: tr.id, netCents: r.net_cents,
+        feeCents: r.fee_cents, feeBps: r.fee_bps, retainageCents: r.retainage_cents,
+        chainClear: chain.clear, coverClear: cover.clear,
+        ...(orphan ? { orphan: true } : {}) },
+      idemKey: `pay:${r.id}` });
+    return c.json({ ok: true, status: "paid", reference: tr.id,
+      netCents: r.net_cents, chainClear: chain.clear, coverClear: cover.clear,
+      ...(orphan ? { alreadySettled: true } : {}),
+      ...(await woMoney(c, wo.id)) });
+  } catch (err) {
+    // Failed, and marked failed rather than left pending -- the partial index
+    // excludes 'failed' precisely so a refusal can be tried again.
+    await c.env.DB.prepare(`UPDATE wo_transfers SET status = 'failed', error = ? WHERE id = ?`)
+      .bind(String(err?.message || err).slice(0, 500), transferId).run();
+    await woEvent(c, { workOrderId: wo.id, milestoneId: r.milestone_id, kind: "release.pay_failed",
+      payload: { releaseId: r.id, transferId, detail: String(err?.message || err).slice(0, 500) } });
+    console.error("[escrow] transfer failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
+// Money in with no way out is a trap, so unspent funding comes back.
+//
+// `refundableCents` is deliberately NOT the available balance: retainage is
+// owed, it is simply not owed yet, and offering it back as "unspent" is how
+// somebody refunds their way out of a holdback.
+app.post("/api/work-orders/:id/refund", requireRole("admin"), async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const { wo, error } = await loadWorkOrder(c, c.req.param("id"));
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+
+  let money;
+  try { money = await woMoney(c, wo.id); }
+  catch (err) {
+    if (missingSchema(err)) return c.json(fundingMigration(), 503);
+    throw err;
+  }
+  const amount = Math.round(Number(b.amountCents) || money.refundableCents);
+  if (amount <= 0) return c.json({ error: "nothing_refundable", funding: money }, 409);
+  if (amount > money.refundableCents) {
+    return c.json({ error: "over_refundable", funding: money }, 409);
+  }
+
+  // Newest first: the most recent money in is the least likely to have been
+  // what a release already drew on.
+  const { results: rows } = await c.env.DB.prepare(
+    `SELECT * FROM wo_funding
+      WHERE work_order_id = ? AND status = 'funded' AND processor_charge_id IS NOT NULL
+      ORDER BY funded_at DESC`
+  ).bind(wo.id).all();
+
+  let left = amount;
+  const done = [];
+  for (const row of rows || []) {
+    if (left <= 0) break;
+    const spare = Math.max(0, row.amount_cents - row.refunded_cents);
+    if (!spare) continue;
+    const take = Math.min(spare, left);
+    try {
+      const rf = await stripeCall(c.env, "/refunds", {
+        params: { charge: row.processor_charge_id, amount: take,
+          metadata: { work_order_id: wo.id, funding_id: row.id } },
+        idempotencyKey: `wo-refund:${row.id}:${row.refunded_cents + take}`,
+      });
+      await c.env.DB.prepare(
+        `UPDATE wo_funding SET refunded_cents = refunded_cents + ?,
+           status = CASE WHEN refunded_cents + ? >= amount_cents THEN 'refunded' ELSE status END
+         WHERE id = ?`
+      ).bind(take, take, row.id).run();
+      done.push({ fundingId: row.id, amountCents: take, reference: rf.id });
+      left -= take;
+    } catch (err) {
+      console.error("[escrow] refund failed:", err?.message || err);
+      // Partial success is real and has to be reported as such: some money is
+      // already on its way back and saying "it failed" would have somebody
+      // press it again.
+      return c.json({ error: "stripe_failed", detail: String(err?.message || err),
+        refunded: done, funding: await woMoney(c, wo.id) }, 502);
+    }
+  }
+  await woEvent(c, { workOrderId: wo.id, kind: "funding.refunded",
+    payload: { amountCents: amount - left, parts: done } });
+  return c.json({ ok: true, refunded: done, ...(await woMoney(c, wo.id)) });
 });
 
 app.put("/api/uploads/:kind/:fileName", async (c) => {
@@ -12664,7 +13326,7 @@ async function logSms(env, { accountId, companyId, to, kind, result }) {
 
 // Everything the document-request template needs, fetched once and shared by
 // the preview and the send so the two cannot drift.
-async function docRequestContext(c, companyId, jobId, trade) {
+async function docRequestContext(c, companyId, jobId, trade, kind) {
   const { accountId } = c.get("auth");
   const row = await c.env.DB.prepare(
     `SELECT co.*, en.doc_review FROM companies co
@@ -12681,40 +13343,72 @@ async function docRequestContext(c, companyId, jobId, trade) {
     : null;
   return {
     company: row, contact: row.contact, docReview: parseJson(row.doc_review, {}),
-    job, trade: trade || null, account,
+    job, trade: trade || null, account, kind: kind || null,
   };
+}
+
+// Which of the two mails this is.
+//
+// A document that is nearly right and a document nobody has sent are different
+// news, and for most of this feature's life both got the second one -- a
+// reviewer who found the hiring account missing from the additional insured
+// schedule could only send "upload your compliance documents", about a
+// certificate already on file. The findings decide, not the caller: a preview
+// that could be asked for the wrong template is a preview that disagrees with
+// what gets sent.
+function docMailFor(ctx) {
+  const kind = ctx.kind;
+  const review = kind ? ctx.docReview?.[kind] : null;
+  if (kind && review && problemsIn(review, kind, ctx.account?.name || "our team").length) {
+    return { mail: docFindingsEmail({ ...ctx, review, note: review.note || null }), template: "findings" };
+  }
+  return { mail: docRequestEmail(ctx), template: "request" };
 }
 
 // What will be sent, built by the same function that sends it. The admin
 // reviews this before pressing send.
 app.get("/api/notify/documents/preview", requireRole("admin", "pm"), async (c) => {
-  const ctx = await docRequestContext(c, c.req.query("companyId"), c.req.query("jobId"), c.req.query("trade"));
+  const ctx = await docRequestContext(c, c.req.query("companyId"), c.req.query("jobId"),
+    c.req.query("trade"), c.req.query("kind"));
   if (!ctx) return c.json({ error: "not_engaged" }, 404);
-  const mail = docRequestEmail(ctx);
+  const { mail, template } = docMailFor(ctx);
   return c.json({
     to: ctx.company.email || null, subject: mail.subject, text: mail.text,
-    missing: mail.missing, configured: !!(c.env.RESEND_API_KEY && c.env.MAIL_FROM),
+    missing: mail.missing || null, template,
+    // What the screen needs to head the panel honestly: "3 things to fix on
+    // their certificate" rather than "request documents".
+    problems: (mail.problems || []).map((p) => ({ id: p.id, label: p.label })),
+    kind: ctx.kind || null,
+    configured: !!(c.env.RESEND_API_KEY && c.env.MAIL_FROM),
   });
 });
 
 app.post("/api/notify/documents", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
-  const ctx = await docRequestContext(c, b.companyId, b.jobId, b.trade);
+  const ctx = await docRequestContext(c, b.companyId, b.jobId, b.trade, b.kind);
   if (!ctx) return c.json({ error: "not_engaged" }, 404);
 
   const to = ctx.company.email;
   if (!to) return c.json({ error: "no_email_on_file" }, 400);
 
-  const mail = docRequestEmail(ctx);
+  // The same function the preview used, so what was reviewed on screen is what
+  // goes out -- including which of the two mails it is.
+  const { mail, template } = docMailFor(ctx);
   const result = await sendEmail(c.env, { to, subject: mail.subject, text: mail.text, html: mail.html });
-  await logMail(c.env, { accountId, companyId: ctx.company.id, to, kind: "doc_request",
+  // Logged under its own kind, because "we told them what was wrong with their
+  // certificate" and "we asked them for documents" are different events and the
+  // console counts both.
+  await logMail(c.env, { accountId, companyId: ctx.company.id, to,
+    kind: template === "findings" ? "doc_findings" : "doc_request",
     subject: mail.subject, result, sentBy: userId });
 
   if (!result.ok) return c.json({ error: result.error, detail: result.detail }, 502);
   await logActivity(c.env, accountId, userId, "email_sent",
-    `Requested documents from ${ctx.company.company}`);
-  return c.json({ ok: true, to, id: result.id });
+    template === "findings"
+      ? `Told ${ctx.company.company} what to fix on their ${(ctx.kind || "document").replace("w9", "W-9")}`
+      : `Requested documents from ${ctx.company.company}`);
+  return c.json({ ok: true, to, id: result.id, template });
 });
 
 // Asking a subcontractor to turn auto-schedule on. The account cannot set it

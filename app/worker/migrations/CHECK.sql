@@ -164,4 +164,33 @@ SELECT
   -- itself.
   (SELECT COUNT(*) FROM payout_accounts
     WHERE kyc_status = 'verified'
-      AND (payouts_enabled = 0 OR transfers_active = 0))                                       AS m050_inv_verified_but_stuck;
+      AND (payouts_enabled = 0 OR transfers_active = 0))                                       AS m050_inv_verified_but_stuck,
+  -- 051. Money in against a work order, money out per release. The live-
+  -- transfer index is counted separately because it is the half that holds
+  -- when two people press pay at once -- the table alone takes the second
+  -- transfer and reports success, which is the one failure this whole ledger
+  -- exists to make impossible. It is PARTIAL (status <> 'failed') so a
+  -- declined attempt can be retried; a plain unique index there would leave
+  -- somebody unpayable because a card bounced once.
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_funding')                 AS m051_wo_funding,
+  (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_transfers')               AS m051_wo_transfers,
+  (SELECT COUNT(*) FROM sqlite_master
+    WHERE type='index' AND name='ux_wo_transfer_live')                                          AS m051_one_live_transfer,
+  (SELECT COUNT(*) FROM sqlite_master
+    WHERE type='index' AND name='ux_wo_funding_intent')                                         AS m051_one_per_intent,
+  -- Invariants, both of which must read ZERO.
+  --
+  -- A release marked paid with no transfer behind it is the ORIGINAL bug in a
+  -- new place: somebody was told their money went and nothing carries it.
+  -- Scoped to Stripe-settled releases, because a cheque legitimately has no
+  -- transfer row -- `method` is the seam and 'manual' still means what it
+  -- always meant.
+  (SELECT COUNT(*) FROM wo_releases r
+    WHERE r.status = 'paid' AND r.method = 'stripe'
+      AND NOT EXISTS (SELECT 1 FROM wo_transfers t
+                       WHERE t.release_id = r.id AND t.status IN ('paid','pending')))           AS m051_inv_paid_without_transfer,
+  -- And the reverse, which is worse: money that left against a release
+  -- nothing says was paid. That is a transfer nobody can reconcile.
+  (SELECT COUNT(*) FROM wo_transfers t
+    JOIN wo_releases r ON r.id = t.release_id
+    WHERE t.status = 'paid' AND r.status <> 'paid')                                             AS m051_inv_transfer_without_paid;

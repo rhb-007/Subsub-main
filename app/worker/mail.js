@@ -11,6 +11,9 @@
 // The platform has no inbox. Everything here is a one-way system notification
 // that points the recipient back into their portal, and says so.
 
+import { INSURANCE_LINES, BOND_MIN, checkItems, problemsIn,
+  outcomeWords } from "../shared/doccheck.js";
+
 export const DOC_KINDS = ["insurance", "bond", "contract", "w9"];
 export const DOC_LABELS = {
   insurance: "Certificate of insurance",
@@ -18,22 +21,11 @@ export const DOC_LABELS = {
   contract: "Signed subcontractor agreement",
   w9: "IRS Form W-9",
 };
-const INSURANCE_LINES = [
-  { label: "Commercial General Liability", sub: "per occurrence", min: 1000000 },
-  { label: "General aggregate", sub: "", min: 2000000 },
-  { label: "Products & completed operations", sub: "", min: 2000000 },
-  { label: "Auto liability", sub: "combined single limit", min: 1000000 },
-  { label: "Employer's liability", sub: "", min: 1000000 },
-  { label: "Umbrella / excess", sub: "higher-risk or larger subs", min: 1000000, optional: true },
-];
-const INSURANCE_ATTEST = (who) => [
-  `${who} named as additional insured on CGL`,
-  "Primary & non-contributory wording present",
-  "WA L&I workers' comp account active (or exempt)",
-  "Policy period covers the work dates",
-  "Carrier and policy number legible",
-];
-const BOND_MIN = 30000;
+// The schedule and the checklist come from shared/doccheck.js, which is the one
+// list. They were copied here, and agreed with the app by luck -- which stopped
+// being survivable the moment `docFindingsEmail` had to name the specific line a
+// reviewer marked wrong: two lists means an email naming a line the screen never
+// asked about.
 
 const money = (n) => "$" + Number(n).toLocaleString("en-US");
 
@@ -86,7 +78,7 @@ INSURANCE REQUIREMENTS
 ${INSURANCE_LINES.map((l) =>
   `  ${l.label}${l.sub ? ` (${l.sub})` : ""}: ${money(l.min)}${l.optional ? " (if applicable)" : ""}`).join("\n")}
   Workers' compensation: WA L&I active account, as applicable
-${INSURANCE_ATTEST(who).map((a) => `  • ${a}`).join("\n")}
+${checkItems("insurance", who).map((a) => `  • ${a.label}`).join("\n")}
 ` : "";
 
   const bondBlock = missing.includes("bond") ? `
@@ -125,6 +117,93 @@ This is an automated message from an unmonitored address. Replies aren't receive
     text,
     html: textToHtml(text, docsLink(account?.subdomain)),
     missing,
+  };
+}
+
+// A document that is nearly right, and what is wrong with it.
+//
+// This is the mail the review screen could not send. A reviewer who found the
+// hiring account missing from the additional insured schedule had one move --
+// reject the certificate -- and what went out was `docRequestEmail`, the
+// generic "upload your compliance documents" notice, about a document the
+// subcontractor had already uploaded. So the commonest correctable problem in
+// construction compliance was reported as though nothing had arrived.
+//
+// Three things about it are decisions rather than layout.
+//
+// IT SAYS WHAT WAS RIGHT AS WELL AS WHAT WAS NOT. A list of four faults with no
+// mention of the eight lines that were fine reads as "start again", and the
+// commonest answer to that is a phone call asking what is actually wanted.
+//
+// EACH FAULT CARRIES ITS OWN INSTRUCTION. "Ask your agent to add Outerhome as
+// an additional insured" is something somebody forwards to their broker in one
+// go. The same sentence inside a paragraph about three other things is a
+// paragraph that gets re-read and half-actioned.
+//
+// AND IT DOES NOT SAY "REJECTED" WHERE THERE ARE FINDINGS. The verdict stored
+// is still `rejected` -- see shared/doccheck.js for why there is no fourth
+// status -- but a subcontractor reading "your certificate of insurance was
+// rejected" goes looking for a new policy, and what is wanted is an endorsement.
+// The words follow the findings.
+export function docFindingsEmail({ company, contact, account, kind, review, note }) {
+  const who = account?.name || "our team";
+  const name = DOC_LABELS[kind] || "your document";
+  const inline = (DOC_LABELS[kind] || "document").toLowerCase();
+  const problems = problemsIn(review, kind, who);
+  const items = checkItems(kind, who);
+  const words = outcomeWords(review, kind, who);
+  // What they got right, which is the half that stops this reading as a refusal.
+  const fine = items.filter((it) => !problems.some((p) => p.id === it.id)
+    && (review?.findings?.[it.id]?.state === "ok" || review?.checks?.[it.id] === true));
+
+  const problemBlock = problems.length ? `
+WHAT NEEDS FIXING
+${problems.map((p, i) => `  ${i + 1}. ${p.label}
+     ${p.fix || "Please correct this and send it again."}`).join("\n\n")}
+` : `
+WHAT NEEDS FIXING
+  ${note ? note : "See the note below."}
+`;
+
+  const fineBlock = fine.length ? `
+WHAT IS ALREADY FINE
+${fine.map((f) => `  \u2713 ${f.label}`).join("\n")}
+` : "";
+
+  const noteBlock = note && problems.length ? `
+ALSO FROM ${who.toUpperCase()}
+  ${note}
+` : "";
+
+  const text = `Hi ${contact || company.company},
+
+${who} has read the ${inline} you sent and there ${problems.length === 1 ? "is one thing" : problems.length ? `are ${problems.length} things` : "is something"} to correct before it can be accepted. Everything else on it is fine \u2014 you do not need to start again.
+${problemBlock}${fineBlock}${noteBlock}
+WHEN YOU HAVE IT
+  Upload the corrected ${inline} here \u2014 it replaces the one on file, and
+  nothing else about your account changes.
+
+  ${docsLink(account?.subdomain)}
+
+  Your username: ${company.email || "(no email on file)"}
+
+A photo from your phone is fine as long as the figures are readable.
+
+\u2014 ${who}
+
+This is an automated message from an unmonitored address. Replies aren't received, and documents emailed back won't be filed. Please upload them at the link above.`;
+
+  return {
+    // Not "rejected". The subject line is what decides whether this gets opened
+    // today or next week, and one naming the document plus the number of fixes
+    // is a task where "rejected" is bad news to be avoided.
+    subject: problems.length
+      ? `${name}: ${words.headline}`
+      : `${name}: needs correcting`,
+    text,
+    html: textToHtml(text, docsLink(account?.subdomain)),
+    problems,
+    kind,
   };
 }
 
