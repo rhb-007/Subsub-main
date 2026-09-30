@@ -2961,9 +2961,25 @@ export default function SubSub() {
     if (atSeatLimit) { setAddMenu(false); setUpgradePrompt({ kind: "user" }); return; }
     setUserForm(true);
   };
-  const updateSub = (sub) => {
-    patchSub(sub.id, sub);
-    setEditing(null);
+  const [subSaveErr, setSubSaveErr] = useState("");
+  const updateSub = async (sub) => {
+    setSubSaveErr("");
+    const { propertyIds, ...rest } = sub;
+    try {
+      if (propertyIds !== undefined) await api.setSubProperties(sub.id, propertyIds);
+      if (Object.keys(rest).length) await api.patchSub(sub.id, rest);
+      // Only once the server has taken it.
+      const { co, en } = splitPatch(sub);
+      if (Object.keys(co).length) patchCompany(sub.id, co);
+      if (Object.keys(en).length) patchEngagement(sub.id, en);
+      setEditing(null);
+    } catch (err) {
+      console.error("[persist] updateSub refused:", err);
+      const who = allSubs.find((x) => x.id === sub.id)?.company || "This contractor";
+      setSubSaveErr(err?.body?.error === "company_not_yours"
+        ? `${who} answers for their own record — their name, contact, licence and crews are theirs to change, not yours. Nothing was saved. Close and reopen this form and it will show you the part that is yours.`
+        : "That did not save. Try again in a moment.");
+    }
   };
   // One place for the "you've been matched but we need paperwork" email.
   // Available from every surface where a non-compliant contractor appears.
@@ -6292,7 +6308,8 @@ export default function SubSub() {
             setBillingNote(`Asked ${r.company} again.`);
           }}
           onClose={() => setRequestedOpen(null)} /></Modal>}
-      {editing && <Modal onClose={() => setEditing(null)} wide>
+      {editing && <Modal onClose={() => { setEditing(null); setSubSaveErr(""); }} wide>
+        {subSaveErr && <div className="form-err" role="alert">{subSaveErr}</div>}
         <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub}
           onUploadDoc={(k, file) => uploadSubDoc(editing.id, k, file)}
           onDeleteDoc={(k) => deleteSubDoc(editing.id, k)}
@@ -24974,7 +24991,16 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
   // capabilities you need, which buildings you scope them to, your notes and
   // your rating. That is the whole of what a hiring account has an opinion
   // about, and it is what this form becomes.
-  const locked = !!existing?.hasPortal;
+  //
+  // IT READS `answersForItself`, NOT `hasPortal`, and the difference is the
+  // whole bug this line had. `hasPortal` is scoped to this account -- "is
+  // there somebody *I* can ask?" -- which is the right question for the
+  // auto-schedule switch and the wrong one here: a roofer whose only login is
+  // on ANOTHER general contractor's account answered no, so this form opened
+  // fully editable over a record the server would refuse to let anybody here
+  // write. Exactly the hole `companyAnswersForItself` was written unscoped to
+  // close, left open on the screen in front of it.
+  const locked = !!existing?.answersForItself;
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const toggle = (k, v) => setF((s) => ({ ...s, [k]: s[k].includes(v) ? s[k].filter((x) => x !== v) : [...s[k], v] }));
 

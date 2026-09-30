@@ -891,6 +891,49 @@ refactor.
   auto-schedule, which already said the hiring side cannot commit the other
   side's calendar; it was applied to one column and not to the row it sits in.
 
+- **The screen asked the scoped question where the server enforces the
+  unscoped one.** `companyAnswersForItself` was written *deliberately*
+  unscoped — "does anybody answer for this company at all", never "is there
+  somebody *I* can ask?" — and this file already says why: scoping it leaves a
+  roofer whose only seat is on another general contractor's account editable
+  by this one. The route closed that hole. **`SubForm`'s lock then read
+  `hasPortal`, which is the scoped count**, so the form opened fully editable
+  over exactly that contractor, and the server answered `company_not_yours` to
+  a save the screen had already invited. The predicate was right, unscoped, in
+  one of the two places that needed it.
+
+  `/api/subs` now carries **both**, because they are two questions and each has
+  its own consumer: `hasPortal` scoped, for the auto-schedule switch, which is
+  about whether there is somebody here to ask; `answersForItself` unscoped, for
+  whose record this is. A test asserts they **disagree on that one row**, which
+  is the only case either could be checked against.
+
+  It is `EXISTS`, never `COUNT`. A count of seats across every account is a
+  count of how many other people hire them — their book, and nobody else's to
+  collect. A bare yes/no is the whole of what drawing the right form needs.
+
+  **And a refused save read as a save.** `updateSub` patched optimistically and
+  closed the modal; `persist` only `console.error`s. So the edit sat on screen
+  over a write that never happened, until a reload — which is *a save that
+  reports success and writes nothing is how somebody re-types the same
+  correction three times*, the failure the route itself refuses by answering
+  rather than quietly dropping the company half, reintroduced one layer up. It
+  awaits and **then** patches, the modal stays open with the reason on it, and
+  closing clears it. The assertion is that `setEditing(null)` appears in the
+  try and **not** in the catch: the first version matched the brace layout
+  instead, which is a whitespace test that a reformat breaks and a
+  `setEditing(null)` moved into the catch sails through.
+
+  **What stays editable is a decision, not an oversight.** A contractor this
+  account typed in — no login anywhere, no account of their own — is a record
+  only this account holds, so refusing would leave a mistyped phone number
+  nobody on earth can fix. That is the line: **you may correct a record you
+  created, and you may never edit a business somebody else answers for.**
+
+  And the SQL comment took the backtick trap for the fifth time: that query is
+  a template literal, so naming `en_seats` in its own comment closed it and the
+  whole Worker failed to parse.
+
 - **There was no way to take a contractor off a roster, and the answer is a
   status rather than a delete.** `engagements.status` has carried `ended` since
   the schema was written and nine reads across the Worker and its migrations

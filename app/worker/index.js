@@ -4727,7 +4727,27 @@ app.get("/api/subs", async (c) => {
             (SELECT COUNT(*) FROM memberships ms
               WHERE ms.company_id = co.id AND ms.account_id = en.account_id
                 AND ms.role = 'contractor') as en_seats,
-            (SELECT COUNT(*) FROM accounts ac WHERE ac.company_id = co.id) as en_own_account
+            (SELECT COUNT(*) FROM accounts ac WHERE ac.company_id = co.id) as en_own_account,
+            -- DOES ANYBODY ANSWER FOR THIS COMPANY AT ALL -- which is a
+            -- different question from the one directly above, and the browser
+            -- needs both. en_seats is scoped to this account and asks "is
+            -- there somebody *I* can ask?", which is what the auto-schedule
+            -- switch turns on. This one is unscoped and asks whether the
+            -- company row is theirs rather than ours, which is what decides
+            -- whether this account may edit it -- and it is the predicate
+            -- companyAnswersForItself enforces on the PATCH route, so the
+            -- screen drawing the other one offered a form whose save the
+            -- server threw away.
+            --
+            -- (No backticks in here: this SQL is a template literal, and one
+            -- in a comment closes it. Fifth time.)
+            --
+            -- EXISTS, never COUNT. A count of seats across every account is a
+            -- count of how many other people hire them, which is their book
+            -- and nobody else's to collect. A bare yes/no is the whole of what
+            -- drawing the right form needs.
+            (SELECT EXISTS(SELECT 1 FROM memberships ms2
+               WHERE ms2.company_id = co.id AND ms2.role = 'contractor')) as en_any_seat
      FROM engagements en JOIN companies co ON co.id = en.company_id
      WHERE en.account_id = ? ${onlyMine}`
   ).bind(accountId, ...scopeVals).all();
@@ -4744,6 +4764,11 @@ app.get("/api/subs", async (c) => {
   subs.forEach((sub, i) => {
     sub.hasPortal = hasPortal({
       hasSeat: (results[i].en_seats || 0) > 0,
+      ownsAccount: (results[i].en_own_account || 0) > 0,
+    });
+    // Whose record this is. Same shape, unscoped seat -- see the query.
+    sub.answersForItself = hasPortal({
+      hasSeat: !!results[i].en_any_seat,
       ownsAccount: (results[i].en_own_account || 0) > 0,
     });
   });
