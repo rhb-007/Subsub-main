@@ -5842,7 +5842,12 @@ export default function SubSub() {
 
       {can("portal") && tab !== "account" && (
         mySub ? (
-          <ContractorPortal weather={weather} sub={mySub} jobs={jobs} pane={pane} mine={myAssignments} brand={brand} me={me} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
+          <ContractorPortal weather={weather} sub={mySub} jobs={jobs} pane={pane} mine={myAssignments} brand={brand} me={me}
+            /* The kind of the account this seat is IN, because the verb beside
+               the client count follows who is hiring. Off `account` rather
+               than `brand`: brand is what gets shown and is stripped on
+               Basic, account is what is true. */
+            hostKind={kindOf(account)} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
             elsewhere={elsewhere}
             onGoClient={(accountId) => { setCurrentAccountId(accountId); setSelected(null); setPane("jobs"); }}
             quotes={myQuotes}
@@ -20650,7 +20655,7 @@ function SendDocPack({ company, anyOnFile }) {
   );
 }
 
-function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [], onGoClient,
+function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [], onGoClient, hostKind = null,
   quotes = [], onAnswerQuote, brand, me, orders, now,
   connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage,
   overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow }) {
@@ -20685,7 +20690,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   // has work of ours on it.
   const clientKinds = [
     ...elsewhere.map((m) => m.elsewhere.accountKind).filter(Boolean),
-    ...(mine.length ? [kindOf(account)] : []),
+    ...(mine.length && hostKind ? [hostKind] : []),
   ];
 
   // Still being asked. An answered one drops out of the list rather than
