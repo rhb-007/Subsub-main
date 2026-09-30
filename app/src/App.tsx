@@ -33,7 +33,7 @@ import {
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
-  Maximize2, Share2, ImagePlus, History,
+  Maximize2, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE } from "./lib/api";
 // The same file the Worker imports, so a problem cannot be an emergency in
@@ -65,6 +65,7 @@ import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
 import { applyFormHtml, applyLink, applyUrl, applyTargetOk } from "../shared/embed.js";
 import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
+import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine } from "../shared/greeting.js";
 import { TRADES } from "../shared/trades.js";
 import { SOURCE_PRESETS } from "../shared/crmsources.js";
@@ -2152,6 +2153,7 @@ export default function SubSub() {
   // toggle carries the active count, so a narrowed list still says so while
   // collapsed -- which is the thing that makes closing it safe.
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [offRosterOpen, setOffRosterOpen] = useState(false);
   const [jobZip, setJobZip] = useState("");
   const [inRangeOnly, setInRangeOnly] = useState(false);
   const [selected, setSelected] = useState(null);
@@ -2498,8 +2500,26 @@ export default function SubSub() {
   const mySub = role === "contractor"
     ? subs.find((s) => s.id === membership.companyId)
     : null;
+  // REMOVED CONTRACTORS COME OFF THE LIST, and are kept where they can be
+  // put back. `engagements.status` has had `ended` since the schema was
+  // written, eleven reads in the Worker guarded on it, and NOTHING EVER WROTE
+  // ONE -- so there was no way to remove anybody from a roster at all. This is
+  // the browser half; `shared/roster.js` is the rule both halves read.
+  //
+  // They are NOT hidden altogether: a status is reversible where a delete is
+  // not, and a removed contractor nobody can find is a removal nobody can
+  // undo -- which is the no-way-in failure this file keeps recording.
+  const offRoster = useMemo(() => subs.filter((s) => !onRoster(s.status)), [subs]);
+  // Everyone still on the roster, for every count that says how many there
+  // are. The nav badge and the page head read this rather than `subs`, or the
+  // tab says thirty over a list of twenty-nine.
+  const liveSubs = useMemo(() => subs.filter((s) => onRoster(s.status)), [subs]);
   const filtered = useMemo(() => {
     const list = subs.filter((s) => {
+      // Off the roster, off the picker, off every count -- and the server
+      // agrees: POST /api/jobs/:jobId/assign answers `not_engaged` for the
+      // same two states, so this is not a gate that lives in the browser.
+      if (!onRoster(s.status)) return false;
       // Scoped to a building. A vendor with no buildings listed works them
       // all, so they belong in every building's list rather than in none --
       // which is what "every vendor on the account can work it" means on
@@ -3176,6 +3196,21 @@ export default function SubSub() {
   const setAutoSchedule = async (companyId, on) => {
     await api.patchSub(companyId, { autoSchedule: on });
     patchEngagement(companyId, { autoSchedule: on });
+  };
+
+  // ---- taking somebody off the roster -------------------------------------
+  // It AWAITS and then moves, for the reason setAutoSchedule does: the server
+  // can refuse this (a contractor who is not on your roster reads as missing,
+  // so it cannot be walked to find out which company ids are real), and an
+  // optimistic patch would take somebody off the screen and log the refusal
+  // to the console. The modal is what shows the failure, so this throws.
+  const endEngagement = async (companyId, status) => {
+    const sb = subs.find((x) => x.id === companyId);
+    const res = await api.endEngagement(companyId, status);
+    patchEngagement(companyId, { status: res.status });
+    logEvent(`engagement_${res.status}`,
+      `${res.status === "ended" ? "Removed" : res.status === "paused" ? "Paused" : "Added back"} ${sb?.company || "a contractor"}`);
+    return res;
   };
 
   // ---- handing a building over --------------------------------------------
@@ -4855,7 +4890,7 @@ export default function SubSub() {
           )}
           {can("contractors") && (
             <button className={tab === "network" ? "on" : ""} onClick={() => setTab("network")}>
-              {rosterWords(account).Many} <span className="count">{subs.length}</span>
+              {rosterWords(account).Many} <span className="count">{liveSubs.length}</span>
             </button>
           )}
           {can("calendar") && (
@@ -5018,9 +5053,9 @@ export default function SubSub() {
       {tab === "network" && can("contractors") && (
         <main className="ss-main">
           <PageHead title={rosterWords(account).Many}
-            sub={subs.length === 0
+            sub={liveSubs.length === 0
               ? "Nobody on your list yet."
-              : `${subs.length} on your list \u00b7 ${subs.filter(docsComplete).length} ready to schedule`}>
+              : `${liveSubs.length} on your list \u00b7 ${liveSubs.filter(docsComplete).length} ready to schedule`}>
             {can("contractors") && runsTheAccount(role, membership) && (
               <>
                 <button className="btn-solid" onClick={() => setInviteOpen(true)}>
@@ -5284,6 +5319,46 @@ export default function SubSub() {
                 );
               })}
             </div>
+          )}
+
+          {/* WHERE A REMOVAL IS UNDONE. Ending an engagement is reversible, and
+              a reversible act with nowhere to reverse it from is a delete
+              wearing a softer word -- so the people taken off the roster are
+              kept here, named, with the button that puts them back.
+
+              FOLDED, like every other filter and secondary panel on this
+              screen: it is reference rather than work, and six removed
+              contractors between the roster and the bottom of the page is six
+              rows nobody came for. The count rides on the toggle, which is
+              what makes closing it safe. */}
+          {offRoster.length > 0 && can("contractors") && (
+            <section className="offroster">
+              <button className="or-toggle" onClick={() => setOffRosterOpen((v) => !v)}>
+                {offRosterOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                Not on your roster
+                <span className="sec-count">{offRoster.length}</span>
+              </button>
+              {offRosterOpen && (
+                <div className="or-list">
+                  {offRoster.map((s) => (
+                    <div key={s.id} className="or-row">
+                      <div className="or-main">
+                        <span className="or-name">{s.company}</span>
+                        <span className="or-said">{offRosterText(s.status)}</span>
+                      </div>
+                      <div className="or-acts">
+                        <button className="mini" onClick={() => setSelected(s)}>
+                          <Eye size={13} /> Open
+                        </button>
+                        <button className="mini primary" onClick={() => endEngagement(s.id, "active")}>
+                          <UserPlus size={13} /> Add back
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
           )}
         </main>
       )}
@@ -5934,6 +6009,8 @@ export default function SubSub() {
             })()}
             onInviteSent={refreshInvites}
             canManage={can("contractors")} myName={me?.name || ""}
+            word={rosterWords(account).one}
+            onEnd={(status) => endEngagement(selected.id, status)}
             onAgreementChanged={() => hydrateAccount(account.id, currentUserId, { quiet: true })}
             jobs={jobs} onSaveNotes={saveNotes} onRequestDocs={requestDocs}
             onSetAuto={(on) => setAutoSchedule(selected.id, on)}
@@ -23998,7 +24075,115 @@ function PortalInvite({ sub, invite, onSent }) {
   );
 }
 
-function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, onAgreementChanged, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto }) {
+// ---- taking somebody off the roster --------------------------------------
+// There was no way to do this at all. `engagements.status` has carried
+// `ended` since the schema was written, eleven reads in the Worker guard on
+// it, and NOTHING EVER WROTE ONE -- so the only way to stop working with a
+// contractor was to leave them on the roster and not pick them. The eighth
+// time this file has recorded correct pieces with no way in.
+//
+// WHAT IT IS NOT IS A DELETE, and the reasons are all already in this file.
+// `companies` is a shared row read by every account that engages them, so
+// deleting it would take a contractor off somebody else's roster too. The job
+// history has to survive, because "were they insured on the day of that job"
+// is the question a dispute asks and the work orders, releases and completion
+// events are what answer it -- the same rule the building handover follows
+// when it refuses to move a departing client's jobs. And their certificates
+// are their own records, not this account's copy of them.
+//
+// So it is a status, which makes it REVERSIBLE -- and that is what decides the
+// confirmation. `ConfirmRemove` names who and says what goes; the staff
+// console's typed-name modal is for what cannot be undone, and making somebody
+// type a contractor's name to do something with an Add-back button beside it
+// would train them to type names.
+//
+// PAUSE IS OFFERED because it means something: `onRoster` in shared/roster.js
+// is read by the assign route as well as by this screen, so a paused
+// contractor cannot be given work. It was not offered until that was true --
+// a control whose state nothing reads is a control that lies.
+function EndEngagement({ sub, word, onEnd }) {
+  const [asking, setAsking] = useState(null);
+  const [check, setCheck] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const off = !onRoster(sub.status);
+
+  // The check runs BEFORE the modal opens, so the consequence can name what is
+  // still booked and how many people lose access. Opening the modal first and
+  // filling it in afterwards would put the question in front of somebody above
+  // an empty space, and they would answer it before it was finished.
+  const ask = async (status) => {
+    setErr(""); setBusy(true);
+    try {
+      const r = await api.engagementEndCheck(sub.id);
+      setCheck(r); setAsking(status);
+    } catch (e) {
+      console.error("[roster] end-check failed:", e);
+      // The check is a courtesy and must not be the thing that stops somebody
+      // leaving a contractor. Ask anyway, with what is known.
+      setCheck({ liveWork: [], seats: 0 }); setAsking(status);
+    } finally { setBusy(false); }
+  };
+
+  if (off) {
+    return (
+      <div className="end-eng off">
+        <div className="ee-said">
+          <UserMinus size={15} />
+          <div>
+            <strong>{offRosterText(sub.status)}.</strong>{" "}
+            <span className="muted">
+              Everything they did here is still on the record. Add them back and they are
+              assignable again straight away.
+            </span>
+          </div>
+        </div>
+        {err && <div className="form-err">{err}</div>}
+        <button className="mini" disabled={busy} onClick={async () => {
+          setErr(""); setBusy(true);
+          try { await onEnd("active"); }
+          catch (e) {
+            console.error("[roster] add back failed:", e);
+            setErr("That did not go through. Try again in a moment.");
+          } finally { setBusy(false); }
+        }}><UserPlus size={13} /> {busy ? "Adding back…" : "Add back to roster"}</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="end-eng">
+      {err && <div className="form-err">{err}</div>}
+      <div className="ee-row">
+        <button className="mini" disabled={busy} onClick={() => ask("paused")}>
+          <PauseCircle size={13} /> Pause
+        </button>
+        <button className="mini danger" disabled={busy} onClick={() => ask("ended")}>
+          <UserMinus size={13} /> Remove from roster
+        </button>
+      </div>
+      <p className="ee-note">
+        Pausing keeps them and their paperwork and stops them being offered work.
+        Removing takes them off your roster; nothing about their jobs, payments or
+        documents is deleted, and you can add them back.
+      </p>
+      {asking && (
+        <ConfirmRemove
+          name={sub.company}
+          what={`engagement ${asking}`}
+          verb={asking === "paused" ? "Pause" : "Remove"}
+          consequence={endConsequence({
+            status: asking, word,
+            liveWork: check?.liveWork || [], seats: check?.seats || 0,
+          })}
+          onCancel={() => setAsking(null)}
+          onConfirm={async () => { await onEnd(asking); setAsking(null); }} />
+      )}
+    </div>
+  );
+}
+
+function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto }) {
   const ready = sub.bond && sub.insurance && sub.contract;
   const [notes, setNotes] = useState(sub.notes || "");
   const [dirty, setDirty] = useState(false);
@@ -24302,6 +24487,14 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
           <button className="btn-notify" onClick={() => onRequestDocs(sub)}><Mail size={14} /> Request docs</button>
         </div>
       )}
+      {/* LAST, and quiet. Removing somebody is not what this card is for --
+          it is opened to check a certificate or book a job -- so it sits below
+          everything rather than in the corner where Edit used to fight the
+          close X. Gated on `canManage`, which the caller passes as
+          can("contractors") to match requireRole("admin","pm") on the route:
+          using the admin-only gate would make the screen stricter than the
+          route, which this file has already called the same lie as looser. */}
+      {canManage && onEnd && <EndEngagement sub={sub} word={word} onEnd={onEnd} />}
     </div>
   );
 }
@@ -27704,6 +27897,35 @@ p.fld-note{margin:6px 0 0}
   border-radius:10px;padding:0 11px;color:var(--ink-soft)}
 .sort-ctl select{border:0;background:none;padding:9px 0;font-size:13px;font-weight:600;color:var(--ink);
   font-family:inherit;cursor:pointer;outline:none;max-width:190px}
+/* Removed and paused contractors, folded. Reference rather than work, so it
+   sits below the roster and starts closed with its count on the toggle. */
+.offroster{margin-top:22px;border-top:1px solid var(--line);padding-top:14px}
+.or-toggle{display:flex;align-items:center;gap:7px;background:none;border:0;padding:4px 0;
+  font-size:13px;font-weight:700;color:var(--ink-soft);cursor:pointer;font-family:inherit}
+.or-toggle:hover{color:var(--ink)}
+.or-list{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.or-row{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 13px}
+.or-main{display:flex;flex-direction:column;gap:2px;min-width:0}
+.or-name{font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.or-said{font-size:11.5px;color:var(--ink-soft)}
+.or-acts{display:flex;gap:7px;flex:none}
+@media(max-width:560px){
+  .or-row{flex-direction:column;align-items:stretch}
+  .or-acts{justify-content:flex-end}
+}
+/* The remove control on a contractor's card. Last, quiet, and separated from
+   the actions above it by a rule, because the buttons it sits under are the
+   ones somebody came for. */
+.end-eng{margin-top:22px;border-top:1px solid var(--line);padding-top:14px}
+.ee-row{display:flex;gap:8px;flex-wrap:wrap}
+.ee-note{margin:9px 0 0;font-size:11.5px;line-height:1.55;color:var(--ink-soft)}
+.ee-said{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;line-height:1.55;
+  color:var(--ink);margin-bottom:11px}
+.ee-said svg{flex:none;margin-top:2px;color:var(--ink-soft)}
+.end-eng.off{background:var(--paper);border:1px solid var(--line);border-radius:11px;padding:13px 14px;margin-top:22px}
+.mini.danger{border-color:color-mix(in srgb, var(--red) 40%, var(--line));color:var(--red)}
+.mini.danger:hover{background:color-mix(in srgb, var(--red) 8%, transparent);border-color:var(--red)}
 .filters{padding-bottom:4px}
 
 /* plan notice spacing */

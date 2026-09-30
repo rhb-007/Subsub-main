@@ -213,6 +213,14 @@ export const api = {
   deleteDocument: (companyId, kind) =>
     request(`/subs/${companyId}/documents/${kind}`, { method: "DELETE" }),
 
+  // Removing somebody ENDS the engagement and deletes nothing: `companies` is
+  // a shared row, and the job history has to survive the question "were they
+  // insured on the day of that job". The check runs first so the modal can
+  // name what is still booked -- it never blocks.
+  engagementEndCheck: (companyId) => request(`/subs/${companyId}/end-check`),
+  endEngagement: (companyId, status = "ended") =>
+    request(`/subs/${companyId}/end`, { method: "POST", body: JSON.stringify({ status }) }),
+
   // Subcontractor agreements. An agreement is between TWO PARTIES, so it is
   // keyed on the pair and not on the company -- see shared/agreement.js.
   agreementTerms: () => request("/agreement-terms"),

@@ -42,6 +42,7 @@ import { canRequestQuotes, quotableSubs, validInvitees, canQuote, validQuote,
   quoteJobShape, rankQuotes, canAward, requestState, MAX_INVITES } from "../shared/quotes.js";
 import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { hasPortal, canSet as canSetAuto, AUTO_DENY_TEXT } from "../shared/autoschedule.js";
+import { onRosterSql, OFF_ROSTER } from "../shared/roster.js";
 import { WEATHER_TTL_MIN, weatherLabel } from "../shared/greeting.js";
 import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
@@ -4915,10 +4916,15 @@ const SUB_COMPANY_COL = {
   docFiles: "doc_files", notify: "notify",
 };
 const SUB_COMPANY_JSON_FIELDS = new Set(["crews", "coverage", "unavailableDays", "warranty", "docFiles", "notify"]);
+// `status` is deliberately NOT here. Removing somebody takes a seat away and
+// clears their auto-schedule flag as well as writing the column, and a PATCH
+// that wrote the word and nothing else would leave a standing permission
+// against a contractor nobody is watching. POST /api/subs/:companyId/end is
+// the one door, and it does the whole job.
 const SUB_ENGAGEMENT_COL = {
   docReview: "doc_review", categories: "categories", caps: "caps",
   rating: "rating", ratedJobs: "rated_jobs", accepted: "accepted", declined: "declined",
-  autoSchedule: "auto_schedule", notes: "notes", status: "status",
+  autoSchedule: "auto_schedule", notes: "notes",
 };
 const SUB_ENGAGEMENT_JSON_FIELDS = new Set(["docReview", "categories", "caps"]);
 
@@ -5236,6 +5242,146 @@ async function storeLicenseCheck(db, companyId, state, result) {
   await db.prepare(`UPDATE companies SET license_check = ? WHERE id = ?`)
     .bind(JSON.stringify(result), companyId).run();
 }
+
+// ===========================================================================
+// Taking a contractor off your roster.
+//
+// THE ENGAGEMENT ENDS; NOTHING IS DELETED. `engagements.status` has had
+// `ended` since the start and every read in this Worker already guards on it
+// -- and nothing ever wrote it, so the state the schema was built for was
+// unreachable. This is the door.
+//
+// Three things must survive, and each one is a rule already written down here:
+//
+//   `companies` IS SHARED. One name, one licence, one set of documents, read
+//   by every account that engages them -- and they may have their own login.
+//   Deleting that row to tidy one roster takes a contractor off every other
+//   roster they are on.
+//
+//   THE JOB HISTORY STAYS. "Were they insured on the day of that job" is the
+//   question a dispute asks, and the work orders, the releases, the completion
+//   events and the documents-on-the-day are what answer it. Same rule the
+//   handover follows: a job an account ran is a job it may later be asked to
+//   account for.
+//
+//   AND THEIR DOCUMENTS ARE THEIRS. A certificate is the contractor's own
+//   record, not this account's copy of it.
+//
+// So "remove" is a status, which also makes it REVERSIBLE -- a delete is not,
+// and "remove" that can be undone is a very different thing to confirm.
+// ===========================================================================
+
+// What ending it would cost, so the screen can say so before anybody presses.
+// Live work is the part worth naming: a work order still open on an unfinished
+// job means somebody is due on site.
+async function engagementLiveWork(env, accountId, companyId) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT w.id, w.wo_number, j.title, j.date
+         FROM work_orders w JOIN jobs j ON j.id = w.job_id
+        WHERE w.company_id = ? AND j.account_id = ?
+          AND w.voided_at IS NULL
+          AND w.status IN ('pending','accepted')
+          AND COALESCE(j.status, '') <> 'completed'
+        ORDER BY j.date LIMIT 20`
+    ).bind(companyId, accountId).all();
+    return (results || []).map((r) => ({
+      id: r.id, number: r.wo_number || null, job: r.title || null, date: r.date || null,
+    }));
+  } catch (err) {
+    // A database behind the code must not make removing somebody impossible;
+    // the count is a warning, not the act.
+    if (missingSchema(err)) return [];
+    throw err;
+  }
+}
+
+app.get("/api/subs/:companyId/end-check", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const { companyId } = c.req.param();
+  const eng = await c.env.DB.prepare(
+    `SELECT id, status FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(accountId, companyId).first();
+  // Somebody else's contractor and one that does not exist give the same
+  // answer, so this cannot be walked to find out which ids are real.
+  if (!eng) return c.json({ error: "not_found" }, 404);
+  const seats = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM memberships
+      WHERE account_id = ? AND company_id = ? AND role = 'contractor'`
+  ).bind(accountId, companyId).first();
+  return c.json({
+    status: eng.status,
+    liveWork: await engagementLiveWork(c.env, accountId, companyId),
+    seats: seats?.n || 0,
+  });
+});
+
+// `ended` or `paused`, because they are different things and offering only one
+// makes people choose the wrong one. Paused is "not right now" -- a season, a
+// lapsed certificate, a falling-out that may mend. Ended is "we do not work
+// with them". Both come off the pickable roster; only one reads as final.
+app.post("/api/subs/:companyId/end", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const { companyId } = c.req.param();
+  const body = await c.req.json().catch(() => ({}));
+  // Three targets and nothing else. `ended` is the default because that is
+  // what the button says; `active` is how somebody is added back, which is
+  // what makes this reversible.
+  const to = ["ended", "paused", "active"].includes(body.status) ? body.status : "ended";
+
+  const eng = await c.env.DB.prepare(
+    `SELECT id, status FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(accountId, companyId).first();
+  if (!eng) return c.json({ error: "not_found" }, 404);
+  if (eng.status === to) return c.json({ ok: true, status: to, unchanged: true });
+
+  // LIVE WORK DOES NOT BLOCK, and that is deliberate. The handover made the
+  // same call for the same reason: a repair going nowhere is very often WHY
+  // somebody is being removed, and refusing until the work is finished hands
+  // the party you are trying to leave a hostage. It is named on the way out
+  // instead, and the work orders stay with their jobs so the record holds.
+  const live = OFF_ROSTER.includes(to)
+    ? await engagementLiveWork(c.env, accountId, companyId) : [];
+
+  await c.env.DB.prepare(`UPDATE engagements SET status = ? WHERE id = ?`).bind(to, eng.id).run();
+
+  let seatsRemoved = 0;
+  if (OFF_ROSTER.includes(to)) {
+    // AUTO-SCHEDULE OFF for both, because it writes to their calendar as
+    // accepted. A flag left on against somebody who is not being offered work
+    // is a standing permission nobody is watching.
+    await c.env.DB.prepare(`UPDATE engagements SET auto_schedule = 0 WHERE id = ?`)
+      .bind(eng.id).run();
+  }
+  if (to === "ended") {
+    // THE SEAT GOES ONLY WHEN IT ENDS, and that is what separates the two.
+    // Pausing is "not right now" -- a season, a lapsed certificate, a
+    // falling-out that may mend -- and taking somebody's login away over it
+    // costs them their history with this account for something reversible,
+    // which un-pausing could not give back: re-issuing a login silently would
+    // hand somebody a key without anybody deciding to. Ending is "we do not
+    // work with them", and there access is the thing that has to stop.
+    //
+    // Their `users` row stays either way -- a person is global and holds seats
+    // in other accounts -- and so does everything they did here, with their
+    // name on it.
+    const gone = await c.env.DB.prepare(
+      `DELETE FROM memberships
+        WHERE account_id = ? AND company_id = ? AND role = 'contractor'`
+    ).bind(accountId, companyId).run();
+    seatsRemoved = gone?.meta?.changes || 0;
+  }
+
+  const who = await c.env.DB.prepare(`SELECT company FROM companies WHERE id = ?`)
+    .bind(companyId).first();
+  const verb = to === "ended" ? "Removed" : to === "paused" ? "Paused" : "Re-added";
+  await logActivity(c.env, accountId, userId, `engagement_${to}`,
+    `${verb} ${who?.company || "a contractor"}`);
+  await logEvent(c.env, accountId, userId, `engagement.${to}`, companyId,
+    { from: eng.status, liveWork: live.length, seatsRemoved });
+
+  return c.json({ ok: true, status: to, liveWork: live, seatsRemoved });
+});
 
 app.post("/api/subs/:companyId/verify-license", requireRole("admin", "pm"), async (c) => {
   const companyId = c.req.param("companyId");
@@ -7091,8 +7237,14 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   // work order against one would commit the account to a price it never set.
   if (job.requested_by && !job.approved_at) return c.json({ error: "not_approved" }, 409);
 
+  // ON THE ROSTER, not merely once engaged. This read had no status check at
+  // all, so a contractor who had been removed -- or paused -- was still
+  // assignable: the roster hid them and the route issued the work order
+  // anyway, which is the gate-lives-in-the-browser lie this file refuses
+  // everywhere else. `not_engaged` is the right answer and the existing one:
+  // they are not.
   const engagement = await c.env.DB.prepare(
-    `SELECT * FROM engagements WHERE account_id = ? AND company_id = ?`
+    `SELECT * FROM engagements WHERE account_id = ? AND company_id = ? AND ${onRosterSql()}`
   ).bind(accountId, companyId).first();
   if (!engagement) return c.json({ error: "not_engaged" }, 404);
 

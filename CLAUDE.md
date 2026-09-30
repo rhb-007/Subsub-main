@@ -891,6 +891,106 @@ refactor.
   auto-schedule, which already said the hiring side cannot commit the other
   side's calendar; it was applied to one column and not to the row it sits in.
 
+- **There was no way to take a contractor off a roster, and the answer is a
+  status rather than a delete.** `engagements.status` has carried `ended` since
+  the schema was written and nine reads across the Worker and its migrations
+  guard on it. **Nothing anywhere ever wrote one.** So the only way to stop working with somebody was
+  to leave them on the roster and not pick them — the eighth time this file has
+  recorded correct pieces with no way in, and the first where the missing piece
+  was a column that already existed.
+
+  **A DELETE IS REFUSED, three times over, and every reason is already in this
+  file.** `companies` is a shared row read by every account that engages them,
+  so deleting it takes a contractor off somebody else's roster too. The job
+  history has to survive, because *were they insured on the day of that job* is
+  the question a dispute asks and the work orders, releases and completion
+  events are what answer it — the same rule the building handover follows when
+  it refuses to move a departing client's jobs. And their certificates are
+  their own records, not this account's copy of them. So `POST
+  /api/subs/:companyId/end` writes a word and nothing else, and that is what
+  makes it **reversible**, which in turn is what decides the confirmation:
+  `ConfirmRemove` names who and says what goes, and the staff console's
+  typed-name modal stays for what cannot be undone.
+
+  **The gate is on the server, and it was not there at all.** Hiding somebody
+  from the roster screen is not the same as making them unassignable —
+  `POST /api/jobs/:jobId/assign` read the engagement with **no status check**,
+  so the browser would have hidden them and the route issued the work order
+  anyway. That is the gate-lives-in-the-browser lie, found in the one place it
+  costs a contractor turning up at a job nobody meant to give them. It answers
+  the existing `not_engaged`, because they are not.
+
+  **`paused` is offered only BECAUSE that gate refuses it too.** It was read by
+  nothing — no assignment check, no roster filter, no screen — so offering a
+  Pause button would have been offering a control whose state nothing acts on,
+  which is the screen-that-lies rule pointed at a switch. `onRoster` in
+  `app/shared/roster.js` is the one predicate, read by the assign route and by
+  the roster filter, and `paused` and `ended` are both off it.
+
+  **But only ending takes the login, and that is the whole difference between
+  them.** Pausing is *not right now* — a season, a lapsed certificate, a
+  falling-out that may mend — and taking somebody's seat away over something
+  reversible costs them their history with this account for a document that
+  renews next week, which un-pausing could not give back: **re-issuing a login
+  silently would hand somebody a key without anybody deciding to**, so a seat
+  never comes back by itself and an invite is the only way in. Ending is *we do
+  not work with them*, and there access is the thing that has to stop.
+  Auto-schedule goes for both, because a flag left on against somebody who is
+  not being offered work is a standing permission to write to their calendar
+  that nobody is watching.
+
+  **Live work is named and never blocks.** Same call the handover makes for the
+  same reason: a repair going nowhere is very often *why* somebody is being
+  removed, and refusing until it is finished hands the party you are leaving a
+  hostage. The work orders stay with their jobs rather than being voided —
+  voiding them here would silently cancel work somebody may already be on site
+  for. `/end-check` runs **before** the modal opens, so the consequence can name
+  what is booked and how many people lose access; opening the modal first and
+  filling it in afterwards puts the question in front of somebody above an empty
+  space, and they answer it before it is finished.
+
+  **`onRoster` is a DENY LIST on purpose.** The obvious
+  `["invited","active"].includes(status)` drops every row whose status did not
+  come back — an older shape, a projection that left the column out, a seeded
+  fixture — silently off somebody's roster. Unknown means on. `invited` is not
+  off it either: a contractor the account typed in and has not heard back from
+  is the commonest row on any roster and is given work every day.
+
+  **And `status` came OFF the patchable column list.** `PATCH
+  /api/subs/:companyId` accepted it, which was a second door that wrote the word
+  and left the seat and the auto-schedule flag exactly as they were — the
+  back-door-round-the-check shape this file already records about
+  `mayWriteCompanyDocs`. One door, and it does the whole job.
+
+  **What is NOT the roster gate, and must not be harmonised with it:** the seven
+  `!= 'ended'` checks on invites, company-document writes and issuing an
+  agreement. Those ask *is there a relationship at all*, which a paused
+  contractor answers yes to — they are still your contractor, their certificate
+  is still yours to read. Two questions, deliberately two predicates, and
+  `shared/roster.js` says so at the top.
+
+  **Where a removal is undone is a collapsed section below the roster**, because
+  a reversible act with nowhere to reverse it from is a delete wearing a softer
+  word. Folded like every other secondary panel here, with the count on the
+  toggle, which is what makes closing it safe.
+
+  Three assertions could not fail and mutation caught each one. A bare
+  `/Add back/` found the card's own control and passed with the button deleted
+  from the list — the `.embed-code-btn` trap again. `className="offroster"`
+  survives inside `{false && (...)}`, so the assertion has to read the **gate**
+  rather than the markup under it. And *it asks first* checked only that a modal
+  was rendered, which is satisfied by a button that also ends the engagement —
+  the property is that **agreeing** is what does it, so the assertion reads
+  `onConfirm`.
+
+  And one live bug the suite found on its first run: `engagementLiveWork`
+  selected `w.number`, and the column is `wo_number`. The query threw,
+  `missingSchema` recognised "no such column", and the catch — written so a
+  database behind the code could not make removing somebody impossible —
+  reported **zero booked jobs** on a contractor with two. *A catch wide enough
+  to hide a real error is a catch that will*, for the fifth time, in a new
+  place.
+
 - **Removing somebody asks first, and a filter panel does not open itself.**
 
   **Two removals fired straight off a trash icon.** The row vanished, the

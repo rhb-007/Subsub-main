@@ -1069,8 +1069,14 @@ console.log("\n-- what you are in somebody else's account --");
   // The switcher said only "Switch to Cascade Management", which reads as
   // taking the place over. The commonest second seat is the opposite of that:
   // a contractor seat, created by accepting their request to hire you.
-  ck("a contractor seat says who hires whom",
-    seatDescription("contractor") === "you are their subcontractor",
+  ck("a contractor seat under a GENERAL CONTRACTOR says subcontractor",
+    seatDescription("contractor", null, "general_contractor") === "you are their subcontractor",
+    seatDescription("contractor", null, "general_contractor"));
+  ck("and under a PROPERTY MANAGER it says contractor, because nobody is sub to anything",
+    seatDescription("contractor", null, "property_manager") === "you are their contractor",
+    seatDescription("contractor", null, "property_manager"));
+  ck("an unknown hirer takes the neutral word rather than inventing a chain",
+    seatDescription("contractor") === "you are their contractor",
     seatDescription("contractor"));
   ck("an owner seat says what is theirs",
     /own a building they run/.test(seatDescription("owner")), seatDescription("owner"));
