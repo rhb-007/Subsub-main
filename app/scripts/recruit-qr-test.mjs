@@ -9,10 +9,13 @@
 //   standing there holding a phone is worse than no code at all. That is the
 //   whole reason `applyUrl` exists rather than the panel building the URL.
 //
-//   AND IT MUST NOT BE PLAN-GATED. `POST /api/apply/:subdomain` checks no
-//   plan, so withholding the code on Basic would make the cheapest growth
-//   lever a paid feature -- the mistake the embed panel already records
-//   against itself.
+//   IT IS SCALE, BY DECISION, AND THE SNIPPET BESIDE IT IS NOT. That pair is
+//   gated differently on purpose and a later pass will want to harmonise
+//   them: the snippet is the cheapest growth lever and `POST
+//   /api/apply/:subdomain` checks no plan, while the code is the in-person
+//   gesture that goes with a branded address, which is itself Scale. Both
+//   branches are asserted, because a component left on one answer is right
+//   for one plan and never checked for the other.
 //
 //   THE FORM HAS TO OPEN AT THE OTHER END. `openingApplication` required a
 //   real subdomain, so the fallback address would have drawn a sign-in page:
@@ -81,15 +84,22 @@ buildApp({ outDir: OUT, apiPort: API });
 
 const ACCOUNT = {
   id: "acc_x", name: "Outerhome", subdomain: "outerhome", kind: "general_contractor",
-  plan: "basic", billing: "monthly", useDefaultMark: true, theme: null, trades: ["roofing"],
+  plan: "scale", billing: "monthly", useDefaultMark: true, theme: null, trades: ["roofing"],
   logoKey: null, subscriptionStatus: "active", hostnameStatus: null,
   user: { id: "usr_r", name: "Richard Braun", email: "rb@outerhome.co", role: "admin" },
 };
+// The same account without the plan. `hostnameStatus` stays null in both, so
+// the fallback address is what is drawn either way -- which is the point: a
+// Scale account whose custom hostname is still being provisioned gets a code
+// that works rather than one that resolves to nothing.
+const BASIC = { ...ACCOUNT, plan: "basic" };
+let PLAN = "scale";
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path) => {
-  if (path.startsWith("/api/account-by-subdomain/")) return [200, ACCOUNT];
-  if (path === "/api/account") return [200, ACCOUNT];
+  const acct = PLAN === "scale" ? ACCOUNT : BASIC;
+  if (path.startsWith("/api/account-by-subdomain/")) return [200, acct];
+  if (path === "/api/account") return [200, acct];
   if (path === "/api/subs" || path === "/api/jobs" || path === "/api/invites"
     || path === "/api/connect-requests" || path === "/api/my-connect-requests"
     || path === "/api/properties" || path === "/api/tenants"
@@ -178,10 +188,6 @@ console.log("\n-- both ways in reach the same code --");
   // somebody about to point a stranger's camera at it is shown the address.
   t.ck("the address is shown, because a code cannot be read",
     /app\.subsub\.work\/\?apply=outerhome/.test(onBranding?.url || ""), onBranding?.url);
-  // On BASIC, which is the case the whole design turns on: the code is
-  // present, not withheld, and says which address it carries.
-  t.ck("on Basic it is offered rather than withheld",
-    !!onBranding && !!onBranding.url);
   t.ck("and says the address will switch to their own once it is live",
     /subsub\.work is live|switches to your own/i.test(onBranding?.note || ""),
     onBranding?.note?.slice(0, 80));
@@ -224,6 +230,61 @@ console.log("\n-- both ways in reach the same code --");
   const body = await page.evaluate(() => document.body.innerText);
   t.ck("no \\uXXXX survives into the page", !/\\u[0-9a-fA-F]{4}/.test(body));
   await page.close(); await ctx.close();
+}
+
+// ---- and the Basic branch, which is the half a single-plan test never sees --
+//
+// Asserted because the snippet beside it is deliberately NOT gated this way.
+// A pass that only ever drives Scale would be satisfied by no gate at all.
+console.log("\n-- on Basic the code is withheld, and the snippet is not --");
+{
+  PLAN = "basic";
+  const { ctx, page } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+    seat: { userId: "usr_r", accountId: "acc_x" }, viewport: { width: 1340, height: 1500 } });
+  await wait(2200);
+  await page.evaluate(() => [...document.querySelectorAll("nav button, .nav-item, header button")]
+    .find((b) => /My account|Account/i.test(b.innerText || ""))?.click());
+  await wait(600);
+  await page.evaluate(() => [...document.querySelectorAll("button")]
+    .find((b) => b.innerText.trim() === "Branding")?.click());
+  await wait(900);
+
+  const seen = await page.evaluate(() => ({
+    // Read through `?.` so a missing panel reports as a missing panel rather
+    // than throwing and hiding every assertion after it.
+    qr: !!document.querySelector(".rq-panel"),
+    snippet: !!document.querySelector(".embed-strip"),
+    branding: /Branding comes with Scale/i.test(document.body.innerText),
+  }));
+  t.ck("the Branding tab really did open, so the next two can fail",
+    seen.branding, JSON.stringify(seen));
+  t.ck("the code is withheld on Basic", seen.qr === false, JSON.stringify(seen));
+  // THE PAIR. Same tab, same form behind them, different gate -- and this is
+  // the assertion that stops the two being harmonised in either direction.
+  t.ck("but the snippet beside it is still there, which is the whole pair",
+    seen.snippet === true, JSON.stringify(seen));
+
+  // And the add-a-contractor gate agrees with the tab, or the screen offers a
+  // code the Branding tab does not have.
+  await page.evaluate(() => [...document.querySelectorAll("button")]
+    .find((x) => /^(Sub)?contractors\s*\d*$/i.test(x.innerText.trim().replace(/\n/g, " ")))?.click());
+  await wait(900);
+  await page.evaluate(() => [...document.querySelectorAll("button")]
+    .find((x) => /^\+?\s*Add$/.test(x.innerText.trim()))?.click());
+  await wait(500);
+  await page.evaluate(() => [...document.querySelectorAll("button, [role=menuitem]")]
+    .find((x) => /^(Sub)?contractor$/i.test(x.innerText.trim()))?.click());
+  await wait(900);
+  const gateOnBasic = await page.evaluate(() => ({
+    gate: !!document.querySelector(".cx-gate"),
+    qr: !!document.querySelector(".cx-gate-qr"),
+  }));
+  t.ck("the add form opened, so this assertion can fail", gateOnBasic.gate,
+    JSON.stringify(gateOnBasic));
+  t.ck("and it does not offer a code the Branding tab withholds",
+    gateOnBasic.qr === false, JSON.stringify(gateOnBasic));
+  await page.close(); await ctx.close();
+  PLAN = "scale";
 }
 
 await browser.close();

@@ -526,6 +526,20 @@ refactor.
   switches to their own once the hostname is live — because somebody deciding
   whether to put this on a van needs to know that.
 
+  **It is Scale, and the snippet beside it is not.** That pair is gated
+  differently on purpose and a later pass will want to harmonise them: the
+  snippet is the cheapest growth lever and `POST /api/apply/:subdomain` checks
+  no plan, while the code is the in-person gesture that goes with a branded
+  address — and `<sub>.subsub.work` is itself Scale. Same form behind both,
+  different reach. Both plan branches are asserted, because a component left on
+  one answer is right for one plan and never checked for the other, and
+  `test:embedplace` still guards the snippet against being dragged inside
+  `canBrand`.
+
+  The `?apply=<sub>` fallback stays even so: a Scale account whose custom
+  hostname is still being provisioned gets a code that works rather than one
+  that resolves to nothing.
+
   **Two ways in, one component.** The panel is on Branding, beside the form it
   is a code for; the add-a-contractor gate opens the same one, because *typing a
   company name off a business card while somebody waits* is exactly the moment
@@ -870,6 +884,66 @@ refactor.
   a line saying their details are theirs. This is the same shape as
   auto-schedule, which already said the hiring side cannot commit the other
   side's calendar; it was applied to one column and not to the row it sits in.
+
+- **Removing somebody asks first, and a filter panel does not open itself.**
+
+  **Two removals fired straight off a trash icon.** The row vanished, the
+  request went, and the only way to find out you had hit the wrong row was that
+  the wrong person was gone — a teammate's seat in Account → Users, and a tenant
+  in Account → Tenants. A trash icon in a list is a one-pixel target beside
+  every other row's, on a screen run from an iPad.
+
+  `ConfirmRemove` is **not** the typed-name confirmation the staff console uses
+  for deleting an account or a company, and the difference is the point: this
+  takes away a *seat*, which can be given back by inviting them again, and
+  making somebody type a colleague's name to do it would train them to type
+  names. **Typed confirmation is for what cannot be undone.** What this owes
+  them instead is naming who, and saying what actually goes — *remove user*
+  does not say whether their jobs, reports and reviews go with them, and that
+  is the thing somebody hesitates over. The tenant's names the **unit and the
+  building**, because "remove tenant" on a portfolio screen does not say which
+  home.
+
+  A failure **leaves the modal open with the reason on it**. Closing on failure
+  would read as success, which is the one outcome worse than the silent removal
+  this replaces — and the tenant path used to remove the row optimistically and
+  report failure into a note beside a list the person had already gone from.
+
+  **"A modal appeared" is not the property under test.** The modal could appear
+  *and* the request still go, so the test counts the API calls: zero until
+  somebody agrees, one afterwards. And **Cancel has to leave them there** — a
+  modal whose Cancel removes anyway is worse than no modal, because it was asked
+  and answered. Both are mutation-checked.
+
+  **And the filters start folded.** A panel that opens itself puts six controls
+  between the search box and the first row, so the screen answers *how would you
+  like to narrow this* before it has shown anybody what there is. The search box
+  stays in both, because searching is what somebody came to do and it is one
+  box. The **active count rides on the toggle**, which is what makes closing it
+  safe: a narrowed list is never silently narrowed.
+
+  The tenants panel had no toggle at all — always expanded, same cost with no
+  way to pay it down — and folding it hit the trap this file already records:
+  **`[hidden]` is a UA rule at the weakest specificity**, `.tn-filter-row` sets
+  `display:flex`, so it needed `.tn-filter-row[hidden]{display:none}` *after*
+  that rule. The test reads the **computed** display rather than the attribute,
+  because only the computed value knows whether the override fired — and
+  deleting it is a mutation that fails.
+
+  Two test traps worth keeping. A `page.evaluate` returning a **DOM node** throws
+  rather than returning a partial object, which reads exactly like the screen not
+  having rendered. And the first line of a `.user-row` is the **avatar
+  initials**, not the name, so a check on it found "RB" and reported a screen
+  that had opened perfectly as not having opened.
+
+  **Still open, and it needs a decision rather than a guess:** what should happen
+  when the person removed is the last one who can answer for an account or a
+  company. `DELETE /api/account-users/:userId` removes the *membership*, not the
+  `users` row — a person is global and holds seats in many accounts — and it
+  already refuses `cannot_remove_self` for an admin, so an account cannot reach
+  zero admins through it. Cascading to delete the account or the company row is
+  a different and much larger act, and getting the trigger wrong destroys
+  customer data.
 
 - **An empty modal is a child that threw.** There is no error boundary, so a
   throw during render blanks the whole page — except inside a modal, where what

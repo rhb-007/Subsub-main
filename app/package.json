@@ -148,6 +148,7 @@
     "test:crmsources": "node --no-warnings scripts/crm-sources-test.mjs",
     "test:payouts": "node --no-warnings scripts/payout-onboard-test.mjs",
     "test:payoutsui": "node scripts/payout-setup-ui-test.mjs",
+    "test:confirmremove": "node --no-warnings scripts/confirm-remove-ui-test.mjs",
     "test:recruitqr": "node --no-warnings scripts/recruit-qr-test.mjs",
     "test:rosterword": "node scripts/roster-word-test.mjs",
     "test:billingmanage": "node --no-warnings scripts/billing-manage-test.mjs"

@@ -2140,7 +2140,12 @@ export default function SubSub() {
   const [fEarn, setFEarn] = useState([]);
   const [fDone, setFDone] = useState([]);
   const [sortBy, setSortBy] = useState("match");
-  const [filtersOpen, setFiltersOpen] = useState(true);
+  // MINIMISED ON ARRIVAL. A filter panel that opens itself puts six controls
+  // between the search box and the first row, so the screen answers "how would
+  // you like to narrow this" before it has shown anybody what there is. The
+  // toggle carries the active count, so a narrowed list still says so while
+  // collapsed -- which is the thing that makes closing it safe.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [jobZip, setJobZip] = useState("");
   const [inRangeOnly, setInRangeOnly] = useState(false);
   const [selected, setSelected] = useState(null);
@@ -6166,7 +6171,8 @@ export default function SubSub() {
       )}
       {adding && <Modal onClose={() => { setAdding(false); setResumeAssign(null); }} wide>
         <SubForm properties={accountProperties} onSubmit={addSub}
-          onRecruitQr={isHiring(account) ? () => { setAdding(false); setRecruitQr(true); } : null}
+          onRecruitQr={isHiring(account) && PLANS[plan].branding
+            ? () => { setAdding(false); setRecruitQr(true); } : null}
           onOpenExisting={(match) => openExistingContractor(match)}
           onConnect={async (match) => {
             const made = await api.requestConnect({ companyId: match.companyId });
@@ -9361,6 +9367,57 @@ function CompanyEditFields({ co, onSave, onCancel }) {
 // Deleting an account or company is destructive and cross-references other
 // records (memberships, engagements). Require the name typed back, the same
 // pattern as most infra consoles, so it can't happen from a stray click.
+// REMOVING SOMEBODY ASKS FIRST.
+//
+// Both of these fired straight off a trash icon: the row vanished, the request
+// went, and the only way to find out you had hit the wrong row was that the
+// wrong person was gone. A trash icon in a list is a one-pixel target beside
+// every other row's, on a screen run from an iPad.
+//
+// It is NOT the typed-name confirmation the staff console uses for deleting an
+// account or a company, and the difference is the point: this takes away a
+// seat, which can be given back by inviting them again, and making somebody
+// type a colleague's name to do it would train them to type names. Typed
+// confirmation is for what cannot be undone. What this owes them instead is
+// naming who, and saying what actually goes -- because "remove user" does not
+// say whether their reports, their buildings or their history go with them.
+function ConfirmRemove({ name, what, consequence, verb = "Remove", onConfirm, onCancel }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  return (
+    <Modal onClose={onCancel}>
+      <div className="form">
+        <h2>
+          <AlertTriangle size={18} style={{ color: "var(--red)", verticalAlign: -3, marginRight: 8 }} />
+          {verb} {name}?
+        </h2>
+        <p className="form-sub">{consequence}</p>
+        {err && <div className="form-err">{err}</div>}
+        <div className="form-actions">
+          <button className="btn-ghost" type="button" onClick={onCancel}>Cancel</button>
+          <button className="btn-danger" type="button" disabled={busy}
+            onClick={async () => {
+              setBusy(true); setErr("");
+              try { await onConfirm(); }
+              catch (e) {
+                console.error(`[remove] ${what} failed:`, e);
+                // Left open with the reason on it. Closing on failure would
+                // read as success, which is the one outcome worse than the
+                // silent removal this modal exists to replace.
+                setErr(e?.body?.error === "cannot_remove_self"
+                  ? "You cannot remove your own admin seat — somebody has to be able to administer this account."
+                  : "That did not go through. Try again in a moment.");
+                setBusy(false);
+              }
+            }}>
+            <Trash2 size={15} /> {busy ? `${verb.replace(/e$/, "")}ing…` : verb}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function DeleteConfirmModal({ item, onConfirm, onCancel }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
@@ -9507,6 +9564,8 @@ function TenantsPane({ properties, accountKind }) {
   const [opened, setOpened] = useState(null);
   const [importing, setImporting] = useState(false);
   const [q, setQ] = useState("");
+  // Collapsed on arrival, like the roster's.
+  const [tnFiltersOpen, setTnFiltersOpen] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const [note, setNote] = useState("");
   const office = tenantWhere(accountKind) === "office";
@@ -9574,10 +9633,13 @@ function TenantsPane({ properties, accountKind }) {
   const narrowed = !!(fProp || fState || fStatus || q.trim());
   const clearFilters = () => { setFProp(""); setFState(""); setFStatus(""); setQ(""); };
 
+  // Asks first, and the request only goes once somebody has agreed. The
+  // previous version removed the row optimistically and reported failure into
+  // a note beside a list the person had already gone.
+  const [removing, setRemoving] = useState(null);
   const remove = async (t) => {
     setBusyId(t.userId);
     try { await api.removeTenant(t.userId); setRows((cur) => cur.filter((x) => x.userId !== t.userId)); }
-    catch (e) { console.error("[tenants] remove failed:", e); setNote("Could not remove them."); }
     finally { setBusyId(null); }
   };
 
@@ -9617,7 +9679,7 @@ function TenantsPane({ properties, accountKind }) {
         <Modal onClose={closeEditor} wide>
           <TenantEditor tenant={opened} properties={properties} unitWord={unitWord}
             onClose={closeEditor} onSaved={load}
-            onRemoved={(t) => { setOpened(null); remove(t); }} />
+            onRemoved={(t) => { setOpened(null); setRemoving(t); }} />
         </Modal>
       )}
       <div className="jobs-head">
@@ -9640,11 +9702,35 @@ function TenantsPane({ properties, accountKind }) {
       {err && <p className="billing-err" role="alert">{err}</p>}
       {note && <p className="rollup-note" role="status">{note}</p>}
 
+      {removing && (
+        <ConfirmRemove name={removing.name || "this tenant"} what="tenant"
+          consequence={
+            "This takes away their access to report problems at "
+            + `${removing.unit ? `unit ${removing.unit}, ` : ""}`
+            + `${removing.propertyName || "this building"}. `
+            + "The repairs they have already reported stay on your jobs list with "
+            + "their name on them. You can add them again at any time."
+          }
+          onConfirm={async () => { await remove(removing); setRemoving(null); }}
+          onCancel={() => setRemoving(null)} />
+      )}
+
       {(rows || []).length > 0 && (
         <div className="tn-filters">
           <input className="tn-search" value={q} onChange={(e) => setQ(e.target.value)}
             placeholder="Search by name, unit, building, email or phone" />
-          <div className="tn-filter-row">
+          {/* Search stays; the three selects fold. Searching is what somebody
+              came to do and it is one box, where the filters are the part that
+              pushes the list off the screen. The count rides on the toggle so
+              a narrowed list is never silently narrowed. */}
+          <button type="button" className="filter-toggle tn-filter-toggle"
+            onClick={() => setTnFiltersOpen((v) => !v)}
+            aria-expanded={tnFiltersOpen}>
+            <Filter size={14} /> Filters
+            {narrowed && <span className="ft-count">on</span>}
+            <ChevronDown size={14} className={`ft-chev ${tnFiltersOpen ? "open" : ""}`} />
+          </button>
+          <div className="tn-filter-row" hidden={!tnFiltersOpen}>
             {states.length > 1 && (
               <label className="tn-filter">State
                 <select value={fState} onChange={(e) => {
@@ -9725,7 +9811,7 @@ function TenantsPane({ properties, accountKind }) {
                   </button>
                 )}
                 <button className="icon-x" title="Remove this tenant"
-                  disabled={busyId === t.userId} onClick={() => remove(t)}><Trash2 size={13} /></button>
+                  disabled={busyId === t.userId} onClick={() => setRemoving(t)}><Trash2 size={13} /></button>
               </div>
             </div>
           ))}
@@ -15866,6 +15952,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     // Only where there are buildings for tenants to be in.
     .concat(canManage && ACCOUNT_KINDS[accountKind].properties ? [["tenants", "Tenants"]] : [])
     .concat(canManage ? [["billing", "Subscription"]] : []);
+  // Who is about to be removed, so the row does not vanish before anybody
+  // has agreed to it.
+  const [removing, setRemoving] = useState(null);
   const brandingOn = PLANS[plan].branding;
   const [pane, setPane] = useState("profile");
   // Somewhere else asked for a particular pane -- the set-up checklist
@@ -16511,10 +16600,15 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           preview and its live address are all on this tab already. */}
       {/* The code, above the snippet, because the two are the same offer at
           different distances: this one is for somebody standing in front of
-          you, that one is for somebody on your website. Outside the canBrand
-          branch, like EmbedApply and for the same reason -- recruiting is the
-          cheapest growth lever here and must not be a paid feature. */}
-      {pane === "branding" && canManage && applySubdomain && applySubdomain !== "app"
+          you, that one is for somebody on your website.
+          AND THEY ARE GATED DIFFERENTLY ON PURPOSE, which a later pass will be
+          tempted to harmonise. The SNIPPET sits outside `canBrand` because it
+          is the cheapest growth lever here and `POST /api/apply/:subdomain`
+          checks no plan -- test:embedplace exists to catch it being moved
+          inside. The CODE is Scale, by decision: it is the in-person gesture
+          that goes with a branded address, and `<sub>.subsub.work` is itself
+          Scale. Same form behind both, different reach. */}
+      {pane === "branding" && canManage && canBrand && applySubdomain && applySubdomain !== "app"
         && ACCOUNT_KINDS[accountKind]?.hires !== false && (
         <RecruitQr subdomain={applySubdomain} accountName={brand.name}
           words={rosterWords({ kind: accountKind })}
@@ -16526,6 +16620,18 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))}
           theme={brand?.theme || null}
           liveHost={hostnameStatus === "active"} />
+      )}
+
+      {removing && (
+        <ConfirmRemove name={removing.name} what="user"
+          consequence={
+            `This takes away ${removing.name}'s access to this account. `
+            + "Their own record stays, and the jobs, reports and reviews they have "
+            + "already made are kept with their name on them — nothing they did is "
+            + "erased. You can invite them back at any time."
+          }
+          onConfirm={async () => { await onRemoveUser(removing.id); setRemoving(null); }}
+          onCancel={() => setRemoving(null)} />
       )}
 
       {pane === "users" && canManage && (
@@ -16603,7 +16709,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     )}
                     <button className="edit-btn" onClick={() => onEditUser(u)}><Pencil size={13} /> Edit</button>
                     {u.id !== currentUserId && (
-                      <button className="icon-x" onClick={() => onRemoveUser(u.id)} title="Remove user"><Trash2 size={13} /></button>
+                      <button className="icon-x" onClick={() => setRemoving(u)} title="Remove user"><Trash2 size={13} /></button>
                     )}
                   </div>
                 </div>
@@ -28579,6 +28685,9 @@ iframe.dv-frame{display:block}
    stylesheet is one template literal, and a backtick in a CSS comment has
    taken the entire app down behind one unrelated error. */
 /* The recruiting code. No backtick anywhere in this block. */
+/* A filter panel folded away, and the toggle that says it is narrowed. */
+.tn-filter-toggle{margin:0}
+.tn-filter-row[hidden]{display:none}
 .rq-wrap{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-top:12px}
 .rq-wrap .qr{flex:none;border:1px solid var(--line);border-radius:10px;background:#fff}
 .rq-side{flex:1;min-width:190px;display:flex;flex-direction:column;gap:9px}
