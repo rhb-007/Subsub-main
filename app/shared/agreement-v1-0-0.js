@@ -1,44 +1,36 @@
-// The SubSub standard subcontractor agreement, as data.
+// SubSub standard subcontractor agreement, VERSION 1.0.0 — SUPERSEDED, FROZEN.
 //
-// WHY THIS IS DATA AND NOT PROSE IN A COMPONENT. Three things read it: the
-// screen a subcontractor signs on, the Worker that hashes exactly what was
-// signed, and the re-render that has to reproduce a document from years ago
-// byte for byte. A template one of them held privately would be three
-// documents that happen to agree today.
+// DO NOT EDIT ANY PROSE IN THIS FILE. Not a typo, not a comma, not a heading.
 //
-// WHAT THIS IS NOT. It is not legal advice and it is not reviewed. A
-// subcontract has no prescribed form -- which is why SubSub can offer one at
-// all, where `waivers.js` deliberately authors nothing, since roughly a dozen
-// states prescribe lien-waiver wording exactly and a form that deviates can
-// be void. But a subcontract has the opposite problem: no form is mandated
-// and several of its most important clauses are VOID BY STATUTE in particular
-// states. Anti-indemnity statutes differ enormously; "pay-if-paid" is
-// unenforceable in many states; some states void an advance waiver of lien
-// rights. So a clause that is ordinary in Washington can be unenforceable in
-// California, silently, and the document still looks right.
+// A stored agreement names the template version it was rendered from, and the
+// hash recorded at signature is a hash of THIS text. `renderAgreement` looks
+// the version up exactly and throws on a miss, so reproducing a document
+// signed under 1.0.0 means rendering it from here, unchanged, for as long as
+// that document matters -- which for a contract is years after it ends.
 //
-// Two things follow, and they are the whole design of this file.
+// WHY IT IS A WHOLE COPY RATHER THAN A PATCH ON THE CURRENT ONE. 1.1.0 changes
+// one section out of fifteen, so deriving one from the other is the obvious
+// move and it is refused. Either direction leaves a trap: derive the current
+// one from this and editing a clause means editing a frozen file; derive this
+// one from the current and editing any OTHER clause silently rewrites what
+// somebody already signed. Only a full copy is safe by construction, and
+// CLAUDE.md already accepted that price in its own words -- superseded
+// versions are never deleted.
 //
-// THE INDEMNITY IS DELIBERATELY NARROW. It reaches only harm caused by the
-// subcontractor's own negligence, and expressly not the hiring party's. A
-// broad-form indemnity -- the sub covering the GC for the GC's own fault --
-// is the clause anti-indemnity statutes exist to strike, so the widest
-// version would be the one most likely to be thrown out. Narrow is both
-// safer and more likely to survive.
+// It lives in its own file so the living template stays one readable version
+// rather than an archive with the current text somewhere inside it. Each
+// superseded version gets a file; `TEMPLATES` imports them all.
 //
-// THERE IS NO PAY-IF-PAID CLAUSE. Making the sub's payment conditional on the
-// owner paying the GC is unenforceable in many states and, in a product whose
-// stated reason for existing is paying against verified work, would contradict
-// the thing being sold.
+// `agreement-test.mjs` renders this against a HARD-CODED hash, so drift here
+// from any cause -- an edit, a shared helper changing under it, a dependency
+// moving -- fails loudly rather than at the moment somebody disputes a job.
 //
-// `reviewed` IS NOT SOMETHING ANYBODY GETS FOR FREE, the same rule the
-// licensing dataset runs on: an entry naming a real firm and a real date,
-// written by somebody who did not read the statute, reads exactly like one
-// that was read line by line -- so it is null until a lawyer has actually
-// read this, and the screen says so while it is.
+// What changed in 1.1.0, recorded here so the diff is not the only record:
+// section 9 (Warranty) gained a response time for a defect notice, the warranty
+// period renders as years where it is a whole number of them, and the default
+// period moved from 12 months to 36.
 
 import { US_STATES } from "./states.js";
-import { AGREEMENT_V1_0_0 } from "./agreement-v1-0-0.js";
 
 const money = (cents) => {
   const n = Math.round(Number(cents) || 0) / 100;
@@ -47,23 +39,6 @@ const money = (cents) => {
 const stateName = (code) =>
   (US_STATES.find(([c]) => c === String(code || "").toUpperCase()) || [])[1] || null;
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-// A period of months, written the way somebody would say it.
-//
-// "36 months" is correct and reads as a number somebody has to convert; a
-// warranty is quoted in years by everybody who sells one. Whole years become
-// years, anything else stays in months, and 12 becomes "1 year" rather than
-// "1 years".
-//
-// A SEPARATE FUNCTION RATHER THAN A CHANGE TO `plural`, which is the trap this
-// file is built to avoid: `plural` is used by the frozen 1.0.0 archive as well,
-// so teaching it about years would rewrite section 9 of every agreement signed
-// under that version -- a different document, under a heading saying it was
-// signed. Shared helpers are part of the template, and a version freezes its
-// text, not just its section list.
-const months = (n) => {
-  const m = Math.round(Number(n) || 0);
-  return m >= 12 && m % 12 === 0 ? plural(m / 12, "year", "years") : plural(m, "month", "months");
-};
 
 // A party, written the way it should read in a contract: the name, then the
 // address on one line, then the licence if there is one. Missing pieces are
@@ -103,19 +78,14 @@ const PARTY_TERMS = {
 // renders with a blank where a party name belongs is worse than one using a
 // slightly formal word.
 const NEUTRAL_TERMS = { hiring: "Hiring Party", hired: "Contractor", doc: "Contractor Agreement" };
-export const partyTermsFor = (kind) => PARTY_TERMS[kind] || NEUTRAL_TERMS;
+const partyTermsFor = (kind) => PARTY_TERMS[kind] || NEUTRAL_TERMS;
 
-export const STANDARD_AGREEMENT = {
+export const AGREEMENT_V1_0_0 = {
   id: "subsub-standard-subcontract",
   // Bumped whenever a word changes. A stored agreement names the version it
   // was rendered from, so editing this file can never change what somebody
   // already signed.
-  //
-  // 1.1.0 changed section 9 only: a defect notice now has a response time
-  // against it, and the period renders as years where it is a whole number of
-  // them. 1.0.0 is frozen in `agreement-v1-0-0.js` and still renders every
-  // agreement issued under it.
-  version: "1.1.0",
+  version: "1.0.0",
   // IT IS SUBSUB'S FORM AND IT SAYS SO. Whose document this is, is the first
   // thing either party needs to know -- a form headed with the hiring
   // company's name reads as their own bespoke paper, which is the opposite of
@@ -237,25 +207,10 @@ export const STANDARD_AGREEMENT = {
     {
       id: "warranty",
       heading: "9. Warranty",
-      // A DEFECT NOTICE NOW HAS A CLOCK ON IT, and the two halves of that are
-      // deliberately separate obligations. "Within a reasonable time" alone is
-      // the whole of what this said, and it is unenforceable in practice: the
-      // hiring party cannot tell a subcontractor who is coming on Thursday from
-      // one who is never coming, and by the time the difference is obvious the
-      // leak has run for a fortnight. So there are two: ANSWER within a fixed
-      // number of business hours, saying when you will attend, and CORRECT
-      // within a reasonable time, which is the part that genuinely depends on
-      // what is wrong.
-      //
-      // Business hours, not hours. 48 clock hours from a Friday afternoon is
-      // Sunday, and a term that lands on a weekend is one nobody meets and
-      // nobody enforces. What a business hour is has to be SAID rather than
-      // assumed, because it is the operative number.
       body: (x) => [
         `The ${x.T.hired} warrants that its work will be free from defects in workmanship and, unless a work order says the ${x.T.hiring} supplies them, in materials.`,
-        `This warranty runs for ${months(x.terms.warrantyMonths)} from the date the work under a work order is completed, and is in addition to any manufacturer's warranty, which the ${x.T.hired} will pass through to the ${x.T.hiring}.`,
-        `On notice of a defect within that period, the ${x.T.hired} will acknowledge the notice within ${plural(x.terms.warrantyResponseHours, "business hour", "business hours")} of receiving it, and will say when it will attend. Business hours are the hours between 8am and 5pm on a day that is not a Saturday, a Sunday or a public holiday in the state that governs this agreement.`,
-        `The ${x.T.hired} will then correct the defect at its own expense within a reasonable time, having regard to what is wrong, the safety of the property and its occupants, and the availability of any material required. If it does not acknowledge the notice or does not correct the defect, the ${x.T.hiring} may have it corrected and recover the reasonable cost.`,
+        `This warranty runs for ${plural(x.terms.warrantyMonths, "month", "months")} from the date the work under a work order is completed, and is in addition to any manufacturer's warranty, which the ${x.T.hired} will pass through to the ${x.T.hiring}.`,
+        `On notice of a defect within that period, the ${x.T.hired} will correct it at its own expense within a reasonable time. If it does not, the ${x.T.hiring} may have it corrected and recover the reasonable cost.`,
       ],
     },
     {
@@ -317,25 +272,4 @@ export const STANDARD_AGREEMENT = {
       ],
     },
   ],
-};
-
-// KEYED BY ID AND VERSION, AND EVERY VERSION EVER SIGNED STAYS HERE FOREVER.
-//
-// Keyed by id alone, a version bump would silently re-render every agreement
-// signed under the old text using the new one: a different document, drawn
-// under a heading saying it was signed, and no longer matching its own hash.
-// The hash would catch it only if somebody checked, and nobody checks a
-// document that looks right.
-//
-// So the lookup is exact, a miss throws rather than falling back, and the
-// price of being able to reproduce a signed contract is that superseded
-// versions are never deleted from this file.
-export const templateKey = (id, version) => `${id}@${version}`;
-
-export const TEMPLATES = {
-  [templateKey(STANDARD_AGREEMENT.id, STANDARD_AGREEMENT.version)]: STANDARD_AGREEMENT,
-  // Superseded, and here for as long as one agreement signed under it matters.
-  // Its own file, frozen, never edited -- see the header there for why it is a
-  // whole copy rather than a patch on the current text.
-  [templateKey(AGREEMENT_V1_0_0.id, AGREEMENT_V1_0_0.version)]: AGREEMENT_V1_0_0,
 };

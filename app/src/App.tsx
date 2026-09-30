@@ -55,7 +55,7 @@ import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/a
 import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
   isOptionalDoc, docStatus as docStatusOf,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso } from "../shared/docs.js";
-import { agreementStateText, typedNameMatches } from "../shared/agreement.js";
+import { agreementStateText, typedNameMatches, renderAgreement } from "../shared/agreement.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -21458,6 +21458,55 @@ function SignAgreement({ agreement, myName, onClose, onDone }) {
 // It sits on the contractor's own card, which is where somebody is standing
 // when they notice there is no agreement -- the same reason PortalInvite is
 // there rather than behind a blank form somewhere else.
+// The per-subcontractor override, on the subcontractor.
+//
+// Same terms, same list, same component as Account -> Your subcontractor
+// agreement; what differs is only which of them this is for. A second field
+// grid would be a second thing to keep in step with `TERM_FIELDS`, so there is
+// one and this passes it different state.
+//
+// IT COUNTS WHAT IS DIFFERENT FROM THE ACCOUNT'S STANDING TERMS, on the
+// toggle, and that is what makes folding it safe: a set somebody edited and
+// then collapsed still says so, and a set nobody touched says nothing. The
+// comparison is against the standing terms the server sent for this send, not
+// against `defaultTerms()` -- an account that has set its own 60-day payment
+// term has not "changed" anything by sending it.
+//
+// Reset is offered only when there is something to reset, because a control
+// that does nothing is a control somebody presses to find out.
+function SubTermsEditor({ fields = [], terms = {}, base = {}, company, onSet, onReset }) {
+  const [open, setOpen] = useState(false);
+  const changed = (fields || [])
+    .filter((f) => f.kind !== "state")
+    .filter((f) => String(terms[f.id] ?? "") !== String(base[f.id] ?? ""));
+  return (
+    <div className="agr-over">
+      <button type="button" className="agr-over-tog" onClick={() => setOpen((v) => !v)}>
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span>Terms for {company}</span>
+        {changed.length > 0 && (
+          <em className="agr-over-n">{changed.length} changed</em>
+        )}
+      </button>
+      {open && <>
+        <p className="cx-sub">
+          Your standard terms, for this contractor only. Changing one here does
+          not change the terms you send anybody else — those are in
+          Account&nbsp;→&nbsp;Company.
+        </p>
+        <TermFields fields={fields} terms={terms} onSet={onSet} />
+        {changed.length > 0 && (
+          <div className="form-actions">
+            <button type="button" className="btn-ghost sm" onClick={onReset}>
+              Back to my standard terms
+            </button>
+          </div>
+        )}
+      </>}
+    </div>
+  );
+}
+
 function AgreementPanel({ sub, canManage, myName, onChanged }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
@@ -21478,6 +21527,36 @@ function AgreementPanel({ sub, canManage, myName, onChanged }) {
     }
   };
   useEffect(() => { load(); }, [sub.id]);
+
+  // WHAT THE PREVIEW SHOWS IS WHAT PRESSING SEND WOULD PRODUCE, which stopped
+  // being true the moment the terms above it became editable. `data.preview`
+  // is the server's render of the account's STANDING terms, so a warranty
+  // changed to two years for this contractor would have been previewed at
+  // three and sent at two -- the screen-that-lies rule pointed at the one
+  // screen whose entire job is showing somebody what they are about to sign.
+  //
+  // Rendered here from the SAME function the server uses, rather than
+  // re-fetched: one implementation cannot disagree with itself, and a round
+  // trip per keystroke would make the preview lag the form it is a preview of.
+  // A throw is impossible in practice (the version is this bundle's own) but
+  // is caught anyway and falls back to the server's copy: a preview one term
+  // out of date beats a modal that renders nothing, which is the empty-modal
+  // failure this file already records.
+  const livePreview = useMemo(() => {
+    if (!data?.preview || !terms || !data?.parties) return data?.preview || null;
+    try {
+      return renderAgreement({
+        templateId: data.preview.templateId,
+        templateVersion: data.preview.templateVersion,
+        parties: data.parties,
+        terms,
+        issuedOn: new Date().toISOString().slice(0, 10),
+      });
+    } catch (e) {
+      console.error("[agreement] preview render failed:", e);
+      return data.preview;
+    }
+  }, [data?.preview, data?.parties, terms]);
 
   if (!data) return null;
   if (data.migration) {
@@ -21515,6 +21594,23 @@ function AgreementPanel({ sub, canManage, myName, onChanged }) {
           You haven't asked {sub.company} for one. Until you do, it isn't counted
           against their compliance.
         </p>
+        {/* THE OVERRIDE TRAVELLED AND NOTHING COULD SET IT. `mergeTerms(stored,
+            body.terms)` has taken a per-subcontractor override since the route
+            was written, the screen has been posting `terms` on issue since
+            then, and the only thing that ever wrote `terms` was the load --
+            so every send carried the account's standing terms back unchanged.
+            Correct pieces with no way in, which this product keeps producing
+            and which is why the entry point matters more than the mechanism.
+
+            Folded, because most accounts use one set for everybody and that is
+            the case that must stay one press. The count of what has been
+            changed rides on the toggle, so a modified set is never silently
+            modified -- the same rule the roster's filter panel follows. */}
+        {canManage && terms && (
+          <SubTermsEditor fields={data.fields} terms={terms} base={data.previewTerms}
+            company={sub.company} onSet={(id, v) => setTerms((t) => ({ ...t, [id]: v }))}
+            onReset={() => setTerms(data.previewTerms)} />
+        )}
         {canManage && <div className="agr-actions">
           <button className="btn-ghost sm" type="button" onClick={() => setPreview(true)}>
             Read the SubSub agreement
@@ -21570,10 +21666,10 @@ function AgreementPanel({ sub, canManage, myName, onChanged }) {
       {preview && (
         <Modal onClose={() => setPreview(false)} wide>
           <div className="form">
-            <h2>{(ag?.document || data.preview)?.title || "Subcontractor agreement"}</h2>
+            <h2>{(ag?.document || livePreview)?.title || "Subcontractor agreement"}</h2>
             <p className="form-sub">
               {ag ? agreementStateText(ag, { subName: sub.company, hiringName: "you" })
-                : `SubSub's standard form, with your company filled in. This is what ${sub.company} will be asked to sign.`}
+                : `SubSub's standard form, with your company and your terms filled in. This is what ${sub.company} will be asked to sign.`}
             </p>
             {/* WHAT THIS SAYS NOW, AND WHAT IT DELIBERATELY NO LONGER SAYS.
                 It named its own provenance -- that SubSub wrote the form, that
@@ -21594,7 +21690,7 @@ function AgreementPanel({ sub, canManage, myName, onChanged }) {
                 something anybody gets for free. This gate stays keyed to it, so
                 the day a lawyer does read the text the box comes off by
                 itself. */}
-            {!data.preview?.reviewed && (
+            {!livePreview?.reviewed && (
               <div className="agr-warn">
                 <b>A starting point, not legal advice.</b>
                 <span>
@@ -21602,7 +21698,7 @@ function AgreementPanel({ sub, canManage, myName, onChanged }) {
                 </span>
               </div>
             )}
-            <AgreementDoc document={ag?.document || data.preview} />
+            <AgreementDoc document={ag?.document || livePreview} />
             {canManage && ag?.waitingOn === "hiring_countersign" && <>
               <div className="agr-sign">
                 <label>
@@ -21637,6 +21733,76 @@ function AgreementPanel({ sub, canManage, myName, onChanged }) {
 // Most hiring accounts use one set for everybody, which is why this is an
 // account setting with a per-subcontractor override rather than a form filled
 // in every time.
+// The term grid, ONE implementation, because two screens edit the same list.
+//
+// The account's standing terms are one of them and a particular contractor's
+// override is the other, and a second copy would be a second thing to keep in
+// step with `TERM_FIELDS` -- which is the whole reason that list is named
+// rather than free-form. It is driven entirely by `fields`, which the server
+// sends straight from `TERM_FIELDS`, so a term added there appears on both
+// screens with nothing edited here.
+//
+// A NUMBER WITH NO UNIT IS NOT AN EDITABLE VALUE. "Warranty on the work: 36"
+// does not say months, and this panel already had five fields measured in
+// days, months and years with nothing on any of them saying which -- readable
+// only to whoever wrote the list. The unit comes off `kind`, so it cannot
+// disagree with what the server validates against.
+const TERM_UNITS = { days: "days", months: "months", years: "years", hours: "business hours", bps: "%" };
+
+function TermFields({ fields = [], terms = {}, onSet }) {
+  return (
+    <div className="agr-fields">
+      {/* Governing law is not edited as a number: it comes off the account's
+          own address and is stamped at issue. */}
+      {fields.filter((f) => f.kind !== "state").map((f) => (
+        <label key={f.id} className={`agr-field agr-${f.kind}`}>
+          <span>{f.label}</span>
+          {/* A CHECKBOX IS NOT WRAPPED, and that is not tidiness. The bool row
+              is laid out by `.agr-field.agr-bool span{order:2}`, which puts the
+              tick before its label -- and a second span inside the row makes
+              that rule select two elements and the order stop meaning
+              anything. Only the numeric kinds carry a unit, so only they need
+              the wrapper. */}
+          {f.kind === "bool" ? (
+            <input type="checkbox" checked={!!terms[f.id]}
+              onChange={(e) => onSet(f.id, e.target.checked)} />
+          ) : (
+            <span className="agr-in">
+              {f.kind === "money" ? (
+                <input type="number" min="0" step="1000"
+                  value={Math.round((terms[f.id] || 0) / 100)}
+                  onChange={(e) => onSet(f.id, Math.round(Number(e.target.value || 0) * 100))} />
+              ) : f.kind === "bps" ? (
+                <input type="number" min="0" max="20" step="0.5"
+                  value={(terms[f.id] || 0) / 100}
+                  onChange={(e) => onSet(f.id, Math.round(Number(e.target.value || 0) * 100))} />
+              ) : (
+                // A NUMBER, NOT THE STRING THE INPUT HANDED OVER. Money and
+                // bps are already converted by the arithmetic above them;
+                // this branch passed `e.target.value` straight through, so
+                // days, months, years and hours went to the route as strings.
+                // Harmless in the end -- `validTerms` coerces on the way in,
+                // which is why nothing showed -- and still wrong here: the
+                // same rule says normalise on the way IN, and a term held as
+                // "24" compares unequal to the 24 beside it in every
+                // comparison the screen makes about itself.
+                //
+                // Empty stays empty rather than becoming 0, or the box cannot
+                // be cleared to type a new number into.
+                <input type="number" min={f.min ?? 0} max={f.max}
+                  value={terms[f.id] ?? ""}
+                  onChange={(e) => onSet(f.id, e.target.value === "" ? "" : Number(e.target.value))} />
+              )}
+              {TERM_UNITS[f.kind] && <em className="agr-unit">{TERM_UNITS[f.kind]}</em>}
+            </span>
+          )}
+          {f.note && <em className="cx-sub">{f.note}</em>}
+        </label>
+      ))}
+    </div>
+  );
+}
+
 function StandardTermsPanel({ myName }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
@@ -21694,29 +21860,7 @@ function StandardTermsPanel({ myName }) {
           </select></label>
       </div>
 
-      <div className="agr-fields">
-        {(d.fields || []).filter((f) => f.kind !== "state").map((f) => (
-          <label key={f.id} className={`agr-field agr-${f.kind}`}>
-            <span>{f.label}</span>
-            {f.kind === "bool" ? (
-              <input type="checkbox" checked={!!d.terms[f.id]}
-                onChange={(e) => set(f.id, e.target.checked)} />
-            ) : f.kind === "money" ? (
-              <input type="number" min="0" step="1000"
-                value={Math.round((d.terms[f.id] || 0) / 100)}
-                onChange={(e) => set(f.id, Math.round(Number(e.target.value || 0) * 100))} />
-            ) : f.kind === "bps" ? (
-              <input type="number" min="0" max="20" step="0.5"
-                value={(d.terms[f.id] || 0) / 100}
-                onChange={(e) => set(f.id, Math.round(Number(e.target.value || 0) * 100))} />
-            ) : (
-              <input type="number" min={f.min ?? 0} max={f.max}
-                value={d.terms[f.id] ?? ""} onChange={(e) => set(f.id, e.target.value)} />
-            )}
-            {f.note && <em className="cx-sub">{f.note}</em>}
-          </label>
-        ))}
-      </div>
+      <TermFields fields={d.fields} terms={d.terms} onSet={set} />
 
       {err && <div className="form-err">{err}</div>}
       <div className="form-actions">
@@ -29206,6 +29350,25 @@ iframe.dv-frame{display:block}
 .agr-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:12px 0}
 .agr-field{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600}
 .agr-field em{font-weight:400;font-style:normal}
+/* The input and its unit on one line, the input taking whatever is left. A
+   number with no unit beside it is not an editable value: this grid already
+   held five fields measured in days, months and years with nothing saying
+   which. */
+.agr-in{display:flex;align-items:center;gap:7px}
+/* The per-contractor override, folded. Most accounts use one set for
+   everybody, so the common case is one press and this stays shut -- with the
+   count of what has been changed on the toggle, because a narrowed or
+   modified thing must never be silently modified. */
+.agr-over{margin:10px 0 12px;padding:9px 11px;border:1px solid var(--line);
+  border-radius:10px;background:var(--paper)}
+.agr-over-tog{display:flex;align-items:center;gap:7px;width:100%;padding:0;
+  border:0;background:none;font:inherit;font-size:12.5px;font-weight:700;
+  color:var(--ink);cursor:pointer;text-align:left}
+.agr-over-n{flex:none;margin-left:auto;padding:1px 7px;border-radius:999px;
+  font-size:11px;font-weight:700;font-style:normal;
+  background:var(--amber-bg,#fef3c7);color:var(--amber-ink,#92400e)}
+.agr-in input{flex:1;min-width:0}
+.agr-unit{flex:none;font-size:11.5px;color:var(--ink-soft);white-space:nowrap}
 .agr-field.agr-bool{flex-direction:row;align-items:center;gap:8px}
 .agr-field.agr-bool span{order:2}
 @media (max-width:620px){

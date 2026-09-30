@@ -88,7 +88,21 @@ export const TERM_FIELDS = [
     label: "Pay approved invoices within" },
   { id: "retainageBps", kind: "bps", def: 0, min: 0, max: 2000,
     label: "Retainage", note: "Zero leaves it out of the agreement." },
-  { id: "warrantyMonths", kind: "months", def: 12, min: 0, max: 120, label: "Warranty period" },
+  // THREE YEARS, and the number is the account's to change -- which is the
+  // whole reason this is a term rather than a sentence in the template. The
+  // default moved from 12; a stored agreement carries its own copy, stamped at
+  // issue, so nothing already signed moves with it.
+  { id: "warrantyMonths", kind: "months", def: 36, min: 0, max: 120,
+    label: "Warranty on the work",
+    note: "Whole years read as years in the agreement." },
+  // How long they have to ANSWER a defect notice, which is a different promise
+  // from how long they have to fix it. Business hours rather than hours,
+  // because 48 hours from a Friday afternoon is a Sunday and a term that lands
+  // on a weekend is one nobody meets. The agreement says what a business hour
+  // is; this is only the number.
+  { id: "warrantyResponseHours", kind: "hours", def: 48, min: 1, max: 240,
+    label: "Respond to a warranty call within",
+    note: "Business hours. They still get a reasonable time to do the repair." },
   { id: "noticeDays", kind: "days", def: 7, min: 1, max: 90,
     label: "Notice to end the agreement" },
   { id: "cureDays", kind: "days", def: 3, min: 1, max: 60,

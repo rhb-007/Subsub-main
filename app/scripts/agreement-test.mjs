@@ -30,6 +30,7 @@
 //   node --no-warnings scripts/agreement-test.mjs
 
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 
 let pass = 0, fail = 0;
@@ -594,6 +595,107 @@ console.log("\n-- and a database without 052 --");
   const roster = await call(env, "/api/subs");
   ck("and the roster still loads, rather than the whole screen going",
     roster.status === 200, `${roster.status}`);
+}
+
+console.log("\n-- the warranty clause, and the terms behind it --");
+{
+  const parties = {
+    kind: "general_contractor",
+    hiring: { name: "Outerhome LLC", street: "1 Pike St", city: "Seattle", state: "WA", zip: "98101" },
+    sub: { name: "Bay Roofing Inc", street: "4 Dock Rd", city: "Tacoma", state: "WA", zip: "98402" },
+  };
+  const s9 = (terms) => A.renderAgreement({ parties, terms, issuedOn: "2026-01-15" })
+    .sections.find((x) => x.id === "warranty").paragraphs.join(" ");
+
+  const def = A.defaultTerms();
+  ck("the warranty runs three years by default", def.warrantyMonths === 36, String(def.warrantyMonths));
+  // Quoted in years by everybody who sells one, so "36 months" is a number
+  // somebody has to convert in their head on a document they are signing.
+  ck("and reads as years rather than months", /runs for 3 years from the date/.test(s9(def)), s9(def));
+  ck("a whole year is singular", /runs for 1 year from/.test(s9({ ...def, warrantyMonths: 12 })));
+  ck("and a part year stays in months",
+    /runs for 18 months from/.test(s9({ ...def, warrantyMonths: 18 })));
+
+  // TWO OBLIGATIONS, NOT ONE. "Within a reasonable time" alone cannot
+  // distinguish a subcontractor coming on Thursday from one who is never
+  // coming, and by the time it can, the leak has run for a fortnight.
+  ck("a defect notice has to be answered within the response time",
+    /acknowledge the notice within 48 business hours/.test(s9(def)), s9(def));
+  ck("and the repair itself still gets a reasonable time",
+    /correct the defect at its own expense within a reasonable time/.test(s9(def)));
+  ck("the response time is the account's to change",
+    /within 12 business hours/.test(s9({ ...def, warrantyResponseHours: 12 })));
+  ck("and reads singular at one", /within 1 business hour of/.test(s9({ ...def, warrantyResponseHours: 1 })));
+  // BUSINESS HOURS ARE DEFINED IN THE DOCUMENT. 48 clock hours from a Friday
+  // afternoon is a Sunday, so the operative number has to say what it counts.
+  ck("and what a business hour is, is said rather than assumed",
+    /not a Saturday, a Sunday or a public holiday/.test(s9(def)), s9(def));
+
+  ck("both are validated like every other term",
+    A.validTerms({ warrantyMonths: "24", warrantyResponseHours: "8" }).warrantyMonths === 24
+      && A.validTerms({ warrantyResponseHours: "8" }).warrantyResponseHours === 8);
+  ck("and clamped rather than refused, because a term nobody can save is a form nobody finishes",
+    A.validTerms({ warrantyResponseHours: 0 }).warrantyResponseHours === 1
+      && A.validTerms({ warrantyMonths: 9999 }).warrantyMonths === 120);
+}
+
+console.log("\n-- and 1.0.0 still renders 1.0.0 --");
+{
+  // THE ONE ASSERTION THAT MAKES A VERSION BUMP SAFE. A stored agreement names
+  // the version it was rendered from and carries a hash of that text, so a
+  // superseded template has to keep producing the same bytes for as long as a
+  // document signed under it matters. The failure it guards is the one nobody
+  // catches by looking: the WRONG CONTRACT STILL READS LIKE A CONTRACT, under
+  // a heading saying it was signed.
+  //
+  // Hard-coded rather than compared against a re-render, because a re-render
+  // of the same file agrees with itself whatever the file says. This catches a
+  // stray edit, a shared helper changing under it -- `plural` learning about
+  // years would have rewritten this section -- and a dependency moving.
+  const V1 = "e01d263589a56c747a7814b563a14d2addd59fb5ebcdc5dcea896d702a689d21";
+  const parties = {
+    kind: "general_contractor",
+    hiring: { name: "Outerhome LLC", street: "1 Pike St", city: "Seattle", state: "WA", zip: "98101", license: "OUTERH*781QA" },
+    sub: { name: "Bay Roofing Inc", street: "4 Dock Rd", city: "Tacoma", state: "WA", zip: "98402", license: "BAYROO*112KK" },
+  };
+  // The terms as they stood when 1.0.0 was current. Written out rather than
+  // taken from `defaultTerms()`, which has moved since and will move again.
+  const terms = {
+    cglPerOccurrenceCents: 100000000, cglAggregateCents: 200000000,
+    autoLiabilityCents: 100000000, umbrellaCents: 0, workersComp: true,
+    additionalInsured: true, primaryNonContributory: true, waiverOfSubrogation: true,
+    paymentDays: 30, retainageBps: 0, warrantyMonths: 12,
+    noticeDays: 7, cureDays: 3, recordsYears: 4, governingState: "WA",
+  };
+  // CAUGHT, BECAUSE THE SUBJECT CAN VANISH. Dropping 1.0.0 from `TEMPLATES` is
+  // exactly the mistake this block exists to catch, and `renderAgreement`
+  // answers it by throwing -- which at the top level of a script kills the run
+  // and takes every assertion after it with it. One real failure reported as
+  // silence. Same lesson the front-door card's test records about reading
+  // through `link?.`: a test that cannot survive its own subject reports least
+  // when it matters most.
+  let text = null, renderErr = null;
+  try {
+    text = A.canonicalText(A.renderAgreement({ templateId: "subsub-standard-subcontract",
+      templateVersion: "1.0.0", parties, terms, issuedOn: "2026-01-15" }));
+  } catch (e) { renderErr = e.code || String(e); }
+  ck("1.0.0 is still in TEMPLATES and still renders", text !== null, String(renderErr));
+  const got = text === null ? null : createHash("sha256").update(text, "utf8").digest("hex");
+  ck("the frozen 1.0.0 hashes to exactly what it always did", got === V1, String(got));
+  ck("and still carries its own warranty wording, not 1.1.0's",
+    text !== null && /runs for 12 months/.test(text) && !/business hour/.test(text));
+
+  // The current version is a different document and must not answer to the
+  // old key, or the freeze buys nothing.
+  ck("1.1.0 is a different document", text !== null && A.canonicalText(
+    A.renderAgreement({ templateVersion: "1.1.0", parties, terms, issuedOn: "2026-01-15" })) !== text);
+
+  // LOUD, NOT A FALLBACK. A version that is not here has to throw rather than
+  // render whatever is current under a heading saying it was signed.
+  let threw = null;
+  try { A.renderAgreement({ templateVersion: "0.9.0", parties, terms, issuedOn: "2026-01-15" }); }
+  catch (e) { threw = e.code; }
+  ck("and an unknown version throws rather than falling back", threw === "unknown_template", String(threw));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

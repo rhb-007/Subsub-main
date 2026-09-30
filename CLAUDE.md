@@ -328,6 +328,105 @@ refactor.
   Taking the sentence off a screen does not make it untrue, and this remains the
   one part of this feature a build cannot supply.
 
+  **THE WARRANTY IS THREE YEARS, IT HAS A CLOCK ON IT, AND VERSION 1.1.0 IS THE
+  FIRST TIME THE VERSIONING MACHINERY WAS ACTUALLY SPENT.** Section 9 said the
+  work would be corrected *within a reasonable time* and nothing else, which
+  cannot distinguish a subcontractor coming on Thursday from one who is never
+  coming — and by the time it can, the leak has run for a fortnight. So it is
+  **two obligations**: acknowledge the notice within `warrantyResponseHours`
+  and say when you will attend, then correct within a reasonable time, which is
+  the part that genuinely depends on what is wrong.
+
+  **Business hours, and the document says what one is.** 48 clock hours from a
+  Friday afternoon is a Sunday, and a term that lands on a weekend is one
+  nobody meets and nobody enforces. It is the operative number, so *8am to 5pm
+  on a day that is not a Saturday, a Sunday or a public holiday in the
+  governing state* is in the clause rather than assumed.
+
+  `warrantyMonths` moved from 12 to **36** and renders as **years** where it is
+  a whole number of them: a warranty is quoted in years by everybody who sells
+  one, so *36 months* is a number the reader has to convert on a document they
+  are signing. A stored agreement carries its own terms, stamped at issue, so
+  nothing already signed moved with the default.
+
+  **`months()` IS A NEW HELPER RATHER THAN A CHANGE TO `plural`, and that is
+  the whole lesson of this change.** `plural` is used by the frozen 1.0.0
+  archive too, so teaching it about years would have rewritten section 9 of
+  every agreement signed under that version — a different document, under a
+  heading saying it was signed. **A version freezes its TEXT, not its section
+  list**, and a shared helper is part of that text. The mutation that proves it
+  is in the suite: teaching the archive's own `plural` about years fails the
+  golden hash.
+
+  **1.0.0 lives in `agreement-v1-0-0.js`, as a whole copy, and the copy is the
+  point.** 1.1.0 changes one section out of fifteen, so deriving one from the
+  other is the obvious move and it is refused in both directions: derive the
+  current one from the archive and editing a clause means editing a frozen
+  file; derive the archive from the current one and editing any **other** clause
+  silently rewrites what somebody already signed. Only a full copy is safe by
+  construction, which is the price this file had already accepted in words —
+  now paid. Its own file rather than a second literal in the living one, so the
+  current template stays one readable version; each superseded version gets a
+  file and `TEMPLATES` imports them.
+
+  **The guard is a HARD-CODED hash, not a re-render.** A re-render of the same
+  file agrees with itself whatever the file says. `agreement-test.mjs` renders
+  1.0.0 from fixed parties, fixed terms and a fixed date and compares the
+  SHA-256 of `canonicalText` against a literal, so drift from any cause fails —
+  a stray edit, a shared helper moving under it, a dependency changing. Four
+  mutations fail it, including a one-word edit in a section nobody touched.
+
+  **And that block catches its own throw.** Dropping 1.0.0 from `TEMPLATES` is
+  exactly what it exists to catch, and `renderAgreement` answers it by throwing
+  — which at the top level of a script kills the run and takes every assertion
+  after it. One real failure reported as silence, which is the
+  read-through-`link?.` lesson in a new place.
+
+- **A per-subcontractor override that nothing could set.** `mergeTerms(stored,
+  body.terms)` has taken one since the issue route was written, the panel has
+  posted `terms` on issue since then, and **the only thing that ever wrote
+  `terms` was the load** — so every send carried the account's standing terms
+  straight back. Ninth time this file has recorded correct pieces with no way
+  in, and every static check of both halves passed the whole time.
+
+  It is on the **contractor**, folded, because most accounts use one set for
+  everybody and that case must stay one press — with **the count of what
+  differs on the toggle**, which is what makes closing it safe, the same rule
+  the roster's filter panel follows. Measured against the **standing terms the
+  server sent**, not `defaultTerms()`: an account that has set its own 60-day
+  payment term has not changed anything by sending it. Reset appears only when
+  there is something to reset.
+
+  **`TermFields` is one component**, shared with Account → Your subcontractor
+  agreement. Two field grids would be two things to keep in step with
+  `TERM_FIELDS`, which is the whole reason that list is named rather than
+  free-form — a term added there now appears on both screens with nothing
+  edited.
+
+  **A number with no unit is not an editable value.** The grid held five fields
+  measured in days, months and years with nothing saying which, readable only
+  to whoever wrote the list. The unit comes off `kind`, so it cannot disagree
+  with what the server validates against. The trap it hit: wrapping every input
+  to hang the unit off made `.agr-field.agr-bool span{order:2}` select two
+  spans and the checkbox row reverse, so a bool is deliberately **not**
+  wrapped.
+
+  **And the preview had to follow, or the screen lies on the one page whose job
+  is showing somebody what they are about to sign.** `data.preview` is the
+  server's render of the standing terms, so a warranty changed to two years
+  previewed at three and sent at two. It renders through **the same
+  `renderAgreement`** the server uses rather than re-fetching: one
+  implementation cannot disagree with itself, and a round trip per keystroke
+  would make the preview lag the form it previews. A throw falls back to the
+  server's copy — a preview one term stale beats an empty modal.
+
+  One thing this uncovered a layer down: the plain-number branch passed
+  `e.target.value` through, so days, months, years and hours reached the route
+  as **strings**. Harmless in the end, because `validTerms` coerces on the way
+  in, which is why nothing ever showed it — and still wrong, since a term held
+  as `"24"` compares unequal to the `24` beside it in every comparison the
+  screen makes about itself, the change count included.
+
   **Uploading a signed agreement IS signing it**, and without that the "I'll
   use my own paper" route was a dead end: the hiring account issued an
   `uploaded` agreement, the screen told the subcontractor to upload their

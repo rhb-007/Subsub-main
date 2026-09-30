@@ -14,6 +14,7 @@
     "test:paygate": "node --no-warnings scripts/paygate-test.mjs",
     "test:escrow": "node --no-warnings scripts/escrow-test.mjs",
     "test:agreement": "node --no-warnings scripts/agreement-test.mjs",
+    "test:agrterms": "node --no-warnings scripts/agreement-terms-ui-test.mjs",
     "test:removesub": "node --no-warnings scripts/remove-sub-test.mjs",
     "test:reviewguard": "node --no-warnings scripts/review-guard-test.mjs",
     "test:subeditguard": "node --no-warnings scripts/sub-edit-guard-test.mjs",
