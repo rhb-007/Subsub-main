@@ -1336,11 +1336,42 @@ refactor.
   "not verified", and names Stripe's requirement keys in words: *a photo ID*,
   not `individual.verification.document`.
 
-  **One connected account per company, held twice.** The idempotency key
-  (`payout-acct:<companyId>`) makes an ordinary double-press cost nothing; the
-  unique index is what is correct when two requests arrive at once, which a
-  pre-check cannot cover — the same pairing, for the same reason, as
-  `ux_job_sources_external`.
+  **One connected account per company, held twice.** The idempotency key makes
+  an ordinary double-press cost nothing; the unique index is what is correct
+  when two requests arrive at once, which a pre-check cannot cover — the same
+  pairing, for the same reason, as `ux_job_sources_external`.
+
+  **And the key carries the controller's shape, because a refusal outlives the
+  fix for it.** Stripe saves the status and body of the first request made
+  under a key and replays them for 24 hours — an error as faithfully as a
+  success. So when `losses.payments` was corrected and deployed, every press
+  afterwards was still answered by the *previous* request, and the panel drew
+  the identical sentence. That reads as the fix not having worked, and no
+  amount of looking at the screen can tell the two apart: **a replayed 400 and
+  a live one are the same words.**
+
+  `payoutAccountKey` is `payout-acct:<companyId>:<controller shape>`, and both
+  halves survive: same company and same controller give the same key, so two
+  tabs still cannot mint two connected accounts; a changed controller gives a
+  different one, which is exactly the case where the saved answer was given
+  about terms no longer on offer. **Derived rather than a `v2` somebody
+  bumps** — a version constant beside the controller is two records of one
+  fact, and the next person to change the controller would get a cached answer
+  about the old one, which is this bug again with nothing new to learn from it.
+  Only the controller goes in, never the company's email: that changes for its
+  own reasons and would mint a second account when it did. Sorted, so
+  reordering the literal is not a change. `PAYOUT_CONTROLLER` lives in
+  `shared/pay.js` beside the key for the same reason — the request and the key
+  are one fact, and holding them apart is what let this happen.
+
+  **And a replay says so on the screen.** `Idempotent-Replayed` is the only
+  thing that distinguishes them, so it travels with the thrown error, into the
+  route's body, onto the panel — *Stripe is repeating an earlier refusal rather
+  than answering this attempt*. That sentence is the difference between waiting
+  a day and going back round the same change again.
+
+  The old assertion was `/^payout-acct:/`, which passes for either key: the
+  could-not-fail shape this file keeps catching, on the one field that mattered.
 
   A rejected account is **refused rather than sent round the form again**, an
   `account.updated` for a connected account we hold no row for is accepted
