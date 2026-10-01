@@ -17973,6 +17973,24 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
   const late = dated.filter((j) => j.date < todayK);
   const ahead = dated.filter((j) => j.date >= todayK);
   const next = ahead[0] || null;
+  // AND EVERYTHING AFTER THE NEXT ONE, because the panel is called "what's
+  // scheduled" and was answering with exactly one job.
+  //
+  // Reported as the dead space: one card, then a couple of inches of nothing,
+  // then the fortnight strip -- on an account with a job on the 12th and
+  // another on the 10th of the following month. The second one existed, was
+  // on the Jobs screen, was in "Needs a contractor" lower down the same page,
+  // and the one panel whose whole subject is *when* said nothing about it.
+  //
+  // The strip cannot carry it either: it is fourteen days by design, so
+  // anything past a fortnight is invisible there and the gap was the only
+  // thing standing in for it.
+  //
+  // Capped, because the slack is finite and a panel that grows with the
+  // book stops being a summary -- the rest is one press away on the
+  // calendar, which is what the count links to.
+  const REST_SHOWN = 4;
+  const rest = ahead.slice(1);
   const undated = jobs.filter((j) => !isClosed(j) && !j.date).length;
   // Two weeks: as far ahead as anybody plans from a dashboard, and it fits
   // across a phone by scrolling rather than by shrinking to nothing.
@@ -18046,6 +18064,33 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
               sometimes. */}
         </div>
       )}
+
+      {/* What is booked after the next one. It takes the slack the same way
+          the empty state does -- `flex:1 1 auto`, never `flex:1`, because a
+          zero basis collapses the box on the days there is none to take. */}
+      {next && (rest.length > 0 ? (
+        <div className="sh-rest">
+          {rest.slice(0, REST_SHOWN).map((j) => (
+            <button key={j.id} className="shr-row" onClick={() => onOpenJob(j.id)}>
+              <span className="shr-when">{relDay(j.date, todayK)}</span>
+              <span className="shr-title">{j.title}</span>
+              {/* The same badge the card above carries, because a job nobody
+                  is on is the one worth seeing from here, and a row that
+                  looked identical either way would make the list decoration. */}
+              <span className={`shr-fill ${j.trades.every((t) => j.assignments[t]) ? "full" : ""}`}>{fill(j)}</span>
+            </button>
+          ))}
+          {rest.length > REST_SHOWN && (
+            <button className="shr-more" onClick={() => onGoCalendar("")}>
+              and {rest.length - REST_SHOWN} more →
+            </button>
+          )}
+        </div>
+      ) : (
+        /* One job and nothing after it leaves the same dead air, so the
+           panel says so rather than drawing a blank. */
+        <p className="sh-only">Nothing else booked in.</p>
+      ))}
 
       {/* The fortnight, so "is anything happening Thursday" is answered by
           looking rather than by opening something. */}
@@ -27742,6 +27787,32 @@ p.fld-note{margin:6px 0 0}
   border:1px dashed var(--line);border-radius:12px}
 .sh-none > svg{opacity:.5;margin-bottom:6px}
 .sh-none p{margin:0;font-size:13.5px}
+
+/* What is booked after the next one.
+   Same flex:1 1 auto as .sh-none and for the same reason: it takes the
+   slack the panel has when the card beside it is taller, and a zero basis
+   would collapse it on the days there is none. justify-content:flex-start
+   so two rows sit under the next card rather than floating in the middle of
+   the space they are filling.
+   No backticks anywhere in here: this stylesheet is one template literal and
+   a backtick in a comment closes it. */
+.sh-rest{flex:1 1 auto;display:flex;flex-direction:column;gap:1px;
+  justify-content:flex-start;margin-top:8px}
+.shr-row{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;cursor:pointer;
+  padding:7px 6px;border-radius:9px;text-align:left;font:inherit}
+.shr-row:hover{background:var(--paper)}
+.shr-when{flex:none;font-size:11.5px;font-weight:700;color:var(--ink-soft);min-width:78px}
+.shr-title{flex:1;min-width:0;font-size:13.5px;font-weight:600;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shr-fill{flex:none;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;
+  background:#fbf0dd;color:var(--amber-ink)}
+.shr-fill.full{background:#e6f0e9;color:var(--brand-dk)}
+.shr-more{background:none;border:0;cursor:pointer;font:700 12px Inter,sans-serif;color:var(--brand);
+  padding:6px 6px;text-align:left}
+.shr-more:hover{text-decoration:underline;text-underline-offset:2px}
+/* One booked job and nothing after it leaves the same gap the empty state
+   was written for, so it is said rather than left blank. */
+.sh-only{flex:1 1 auto;margin:10px 0 0;font-size:12.5px;color:var(--ink-soft)}
 
 /* The fortnight. It scrolls sideways on a phone rather than shrinking to
    fourteen unreadable slivers. */

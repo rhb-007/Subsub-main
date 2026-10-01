@@ -4405,6 +4405,38 @@ refactor.
   jobs that only exist at runtime, so asserting that the source *mentions*
   `aim` passes with the value never used.
 
+  **AND THE PANEL IT IS OPENED FROM ANSWERED WITH ONE JOB.** *What's scheduled*
+  drew the next booked job and then two hundred pixels of nothing above the
+  fortnight strip — reported with a red box round the gap, on an account with a
+  job on the 12th and another on the 10th of the following month. The second
+  job existed, was on the Jobs screen, and was in **Needs a contractor** lower
+  down the same page; the one panel whose entire subject is *when* said nothing
+  about it. The strip cannot carry it either — fourteen days by design — so the
+  gap was all that stood in for a job six weeks out.
+
+  It lists what is booked after the next one, taking the slack with
+  `flex:1 1 auto`, the same rule and the same reason `.sh-none` already
+  records: a zero basis collapses the box on the days there is none to take.
+  Each row carries the **fill badge**, because a job nobody is on is the one
+  worth seeing from here and a row that read identically either way would make
+  the list decoration. **Capped at four**, with the count linking to the
+  calendar: a panel that grows with the book has stopped being a summary. And
+  one job with nothing after it **says so**, because that leaves the identical
+  dead air and a blank is what reads as a panel that failed to draw.
+
+  **The property under test is the GAP, not the row.** A row can render and the
+  dead air survive, so the suite measures the distance from the last block in
+  the panel to the top of the strip: 211px before, 0 after, and three separate
+  mutations each put it back (deleting the block, deleting the single-job line,
+  and changing `flex:1 1 auto` to `flex:0 0 auto` — which leaves every row on
+  screen and 172px of gap under them). Nothing static could see any of it: the
+  rows come from jobs that exist only at runtime and the slack comes from the
+  height of the *other* card in the row.
+
+  And the sixth recorded instance of the oldest trap in this file: a comment
+  added to that CSS block quoted `flex:1 1 auto` in backticks, which closed the
+  stylesheet's template literal and failed the parse.
+
   **Still open, and reported in the same breath: the Calendar tab is not a
   calendar of jobs.** It is `AvailabilityView` — contractors down the side,
   fourteen days across, a cell booked only when a job that day is assigned to

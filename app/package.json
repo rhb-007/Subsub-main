@@ -81,6 +81,7 @@
     "test:scheduled": "node scripts/tenant-scheduled-test.mjs",
     "test:schedule": "node scripts/schedule-test.mjs",
     "test:calmonth": "node --no-warnings scripts/calendar-month-test.mjs",
+    "test:schedrest": "node --no-warnings scripts/schedule-rest-test.mjs",
     "test:dashlayout": "node scripts/dash-layout-test.mjs",
     "test:dashwidth": "node scripts/dash-width-test.mjs",
     "test:bootflash": "node scripts/boot-flash-test.mjs",
