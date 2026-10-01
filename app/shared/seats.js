@@ -72,3 +72,47 @@ export const hasAdminSeat = (rows = []) => (rows || []).some((r) => r && r.role 
 // panel they appear on is called Team.
 export const TEAM_ROLES = ["admin", "pm"];
 export const isTeamSeat = (role) => TEAM_ROLES.includes(role);
+
+// WHEN A STAFF SESSION STANDS IN FOR AN ADMIN THE ACCOUNT HAS NOT GOT.
+//
+// `pickSeat` made an admin-less account OPENABLE. It did not make it usable,
+// and the difference is the whole of this. Landing in the pm seat it picked,
+// the console's own banner has to explain that Account, billing and branding
+// are gone -- and the screens that remain are quietly wrong in the same
+// direction: `runsTheAccount` is false, so a property opens with no vendor
+// list, no Edit, no owners panel and one sentence telling the manager to add
+// an owner who will appoint a manager, which is the opposite of what a
+// managing agent is looking at it for. Reported as exactly that: "it says
+// assign someone to manage it -- the admin should be able to access
+// everything within this account".
+//
+// There is nobody inside the account who can fix it either: every door to
+// granting the admin role is requireRole("admin"), which this file already
+// records. So the one seat that could repair it is the staff one, and it was
+// the seat being refused.
+//
+// Two conditions, and both are load-bearing.
+//
+// A TEAM SEAT, never a guest. An owner or a tenant on somebody's account is
+// their client, and standing in their seat is how support sees what a client
+// sees -- the same rule `isTeamSeat` carries for the role control, reused
+// rather than restated. A contractor seat is a different app again.
+//
+// NO ADMIN ANYWHERE ON THE ACCOUNT. On an account that has one, nothing is
+// widened: staff who name a pm seat get a pm's view, so reproducing "a
+// project manager cannot see X" stays possible, which is the reason naming a
+// seat was added in the first place.
+//
+// It is deliberately NOT conditional on whether a seat was named, and that is
+// a trade rather than an oversight: the session row records which seat, not
+// how it was chosen, and adding a column to tell the two apart would buy the
+// ability to reproduce a pm's view on an account where a pm's view and the
+// account's view are already the same thing. Nothing distinct is lost.
+//
+// What it does NOT do is change the account. The membership still says pm,
+// because that is true of the PERSON, whose role and buildings are theirs;
+// what is replaced is who is sitting in the seat, for thirty minutes, in a
+// row staff can be held to. Promoting somebody for real is a separate,
+// explicit act with its own route.
+export const staffStandsIn = (role, seats = []) =>
+  isTeamSeat(role) && !hasAdminSeat(seats);

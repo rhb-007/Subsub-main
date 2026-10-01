@@ -45,6 +45,11 @@ CREATE TABLE memberships (id TEXT PRIMARY KEY, user_id TEXT, account_id TEXT, ro
 CREATE TABLE superadmins (user_id TEXT PRIMARY KEY, role TEXT, finance INTEGER DEFAULT 0, impersonate INTEGER DEFAULT 0);
 CREATE TABLE activity (id TEXT PRIMARY KEY, account_id TEXT, at TEXT, user_id TEXT, kind TEXT, text TEXT, meta TEXT);
 CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT, actor_id TEXT, kind TEXT, subject_id TEXT, payload TEXT, at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE membership_properties (membership_id TEXT, property_id TEXT);
+CREATE TABLE membership_jobs (membership_id TEXT, job_id TEXT);
+CREATE TABLE properties (id TEXT PRIMARY KEY, account_id TEXT, name TEXT, address TEXT,
+  city TEXT, state TEXT, zip TEXT, units INTEGER, notes TEXT,
+  owner_account_id TEXT, owner_declared_at TEXT);
 CREATE TABLE impersonation_sessions (
   token TEXT PRIMARY KEY, account_id TEXT NOT NULL, act_as_user_id TEXT NOT NULL,
   staff_user_id TEXT NOT NULL, reason TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -74,7 +79,8 @@ const seed = () => {
       ('u_pug','Mega Slavo','mega@puget.test',NULL),
       ('u_else','Somebody Else','else@sound.test',NULL),
       ('u_pm','Dana Pine','dana@soundpm.test',NULL),
-      ('u_ten','Tenant Person','ten@soundpm.test',NULL);
+      ('u_ten','Tenant Person','ten@soundpm.test',NULL),
+      ('u_dana2','Dana Two','dana2@soundpm.test',NULL);
     INSERT INTO superadmins(user_id,role,impersonate) VALUES ('u_staff','superadmin',1),('u_nofl','superadmin',0);
     INSERT INTO memberships(id,user_id,account_id,role,company_id) VALUES
       ('m1','u_admin','acc1','admin',NULL),
@@ -84,7 +90,23 @@ const seed = () => {
       -- acc3 has a tenant too, so the fallback is choosing rather than
       -- taking the only row there is.
       ('m5','u_ten','acc3','tenant',NULL),
-      ('m6','u_pm','acc3','pm',NULL);
+      ('m6','u_pm','acc3','pm',NULL),
+      -- A pm on an account that DOES have an admin, scoped to one of its two
+      -- buildings. The only fixture either direction of the standing-in rule
+      -- can be checked against: an unscoped pm would pass whether or not the
+      -- scope is dropped, and an account with no admin cannot show that a
+      -- healthy one is left alone.
+      ('m7','u_dana2','acc2','pm',NULL);
+    -- BOTH pms are scoped to one of their account's two buildings, and the
+    -- standing-in one has to be or the fixture cannot tell the rules apart:
+    -- an unscoped pm sees the whole book whether or not the scope is dropped,
+    -- so the assertion below would pass with the drop deleted. It did.
+    INSERT INTO membership_properties(membership_id,property_id) VALUES ('m7','p_a'),('m6','p_c');
+    INSERT INTO properties(id,account_id,name,owner_account_id) VALUES
+      ('p_a','acc2','Alder Court','acc2'),
+      ('p_b','acc2','Birch House','acc2'),
+      ('p_c','acc3','Cedar Flats','acc3'),
+      ('p_d','acc3','Dogwood Mews','acc3');
   `);
   return { db, env: { DB: makeD1(db),
     SUPABASE_URL: "http://127.0.0.1:8918", SUPABASE_ANON_KEY: "stub",
@@ -200,6 +222,76 @@ try {
       JSON.stringify({ f: ok.fellBack, a: ok.accountHasAdmin }));
   }
 
+  console.log("\n-- AND THE SEAT IT FELL BACK TO RUNS THE ACCOUNT --");
+  {
+    // THE SECOND HALF OF THE SAME REPORT. Falling back made the account
+    // openable and not usable: a pm cannot reach Account, billing or
+    // branding, and `runsTheAccount` being false also empties the screens
+    // that remain -- a property opened with no vendor list, no Edit, no
+    // owners panel, and one sentence telling a managing agent to add an
+    // owner who will appoint a manager. Reported as "it says assign someone
+    // to manage it -- the admin should be able to access everything within
+    // this account".
+    //
+    // Nobody inside the account can fix it either: every door to granting
+    // the admin role is requireRole("admin").
+    const { env } = seed();
+    const [, b] = await json(await impersonate(env, "staff", "acc3"));
+    ck("the reply says the session is standing in", b.standingIn === true, String(b.standingIn));
+
+    // `/api/billing/card` is requireRole("admin") and, with no Stripe key,
+    // answers 501 for an admin and 403 for anybody else -- so it reads the
+    // EFFECTIVE role out of the middleware without needing a schema.
+    const card = (tok) => worker.fetch(new Request("https://api.subsub.work/api/billing/card",
+      { headers: { "X-Impersonation-Token": tok } }), env);
+    ck("and an admin-only route lets it through", (await card(b.token)).status === 501,
+      String((await card(b.token)).status));
+
+    // And the scope goes with the role. A pm's buildings narrow a PERSON,
+    // and there is no person here -- an admin still scoped to some of the
+    // book is the hybrid `runsTheAccount` refuses anyway, so leaving it
+    // would redraw the half-shut account one layer down.
+    const props = await worker.fetch(new Request("https://api.subsub.work/api/properties",
+      { headers: { "X-Impersonation-Token": b.token } }), env);
+    const rows = await props.json();
+    ck("and it sees the whole book", Array.isArray(rows) && rows.length === 2,
+      JSON.stringify(rows));
+
+    // AN ACCOUNT THAT HAS AN ADMIN IS NOT WIDENED. This is why naming a seat
+    // still reproduces a complaint: a scoped pm stays a scoped pm.
+    const [, p2] = await json(await impersonate(env, "staff", "acc2", { userId: "u_dana2" }));
+    ck("a pm on an account with an admin does not stand in", p2.standingIn === false,
+      String(p2.standingIn));
+    ck("so the admin-only route still refuses it", (await card(p2.token)).status === 403,
+      String((await card(p2.token)).status));
+    const scoped = await (await worker.fetch(new Request("https://api.subsub.work/api/properties",
+      { headers: { "X-Impersonation-Token": p2.token } }), env)).json();
+    ck("and their buildings are still only theirs",
+      scoped.length === 1 && scoped[0].id === "p_a", JSON.stringify(scoped));
+
+    // A GUEST IS NEVER PROMOTED, however short of admins the account is. An
+    // owner or a tenant is somebody else's client; standing in their seat is
+    // how support sees what a client sees.
+    const [, t] = await json(await impersonate(env, "staff", "acc3", { userId: "u_ten" }));
+    ck("a tenant seat on the same admin-less account does not stand in",
+      t.standingIn === false, String(t.standingIn));
+    ck("and gets no admin route", (await card(t.token)).status === 403,
+      String((await card(t.token)).status));
+
+    // The audit trail says what was done, not only whose seat it was. "(pm
+    // seat)" over a session that reached billing understates it.
+    const { db: db3, env: env3 } = seed();
+    await impersonate(env3, "staff", "acc3");
+    const act = db3.prepare(`SELECT text, meta FROM activity WHERE kind='impersonation'`).get();
+    ck("the activity row says it ran as an admin", /ran as one/.test(act.text), act.text);
+    ck("and the meta records it", JSON.parse(act.meta).ranAsAdmin === true, act.meta);
+    const { db: db4, env: env4 } = seed();
+    await impersonate(env4, "staff", "acc2", { userId: "u_dana2" });
+    const plain = db4.prepare(`SELECT text, meta FROM activity WHERE kind='impersonation'`).get();
+    ck("an ordinary pm seat still reads as a pm seat",
+      /\(pm seat\)$/.test(plain.text) && JSON.parse(plain.meta).ranAsAdmin === false, plain.text);
+  }
+
   console.log("\n-- and nobody at all is still refused, in its own words --");
   {
     const { env } = seed();
@@ -223,9 +315,29 @@ try {
     ck("the screen no longer answers the retired code", !/no_admin_on_account/.test(APP));
     ck("it answers the one the route sends", /no_seat_on_account/.test(APP));
     ck("and tells somebody what to do about it", /Add a user to it first/.test(APP));
-    // The banner explains the restricted view rather than leaving it a mystery.
-    ck("the banner names the seat when it fell back", /impersonating\.seatRole &&/.test(APP));
-    ck("and says why there was no better one", /This account has no admin/.test(APP));
+    // The banner has two sentences to say now, and they are different
+    // sentences. Standing in: the account has nobody to administer it, and
+    // this session is being one -- the customer's to fix. A named non-admin
+    // seat on a healthy account: this is that person's view, which is what
+    // was asked for.
+    ck("the banner has a standing-in branch", /impersonating\.standingIn \?/.test(APP));
+    ck("and still names a deliberately named seat", /impersonating\.seatRole \?/.test(APP));
+    ck("and says what is actually wrong with the account",
+      /This account has <b>no admin<\/b>/.test(APP));
+    ck("and what to do about it", /Give somebody the admin role/.test(APP));
+
+    // THE SCOPE GOES WITH THE ROLE IN THE BROWSER TOO, which is where the
+    // reported symptom actually was: `runsTheAccount` is
+    // `isStaffRole(role) && !isScoped(membership)`, so promoting the role
+    // alone leaves a scoped pm drawing the half-shut property panel. Read
+    // statically because driving the console's sign-in in a browser needs the
+    // staff console, Supabase and a live API; what that costs is that this
+    // pins the shape rather than the behaviour, so the next line pins that
+    // nothing reads the raw seat for the role any more.
+    ck("the effective membership drops the scope as well as the role",
+      /role: "admin", propertyIds: \[\], jobIds: \[\]/.test(APP));
+    ck("and the role is read off that, not off the seat row",
+      /const role = membership\.role;/.test(APP) && !/const role = seat\.role;/.test(APP));
   }
 
 } finally {

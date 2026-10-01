@@ -51,7 +51,7 @@ import { JOB_SCOPED_ROLES, jobScopeFrom, maySeeJob as maySeeJobIds } from "../sh
 import { jobIsClosed, jobClosure } from "../shared/jobstate.js";
 // Which seat to open an account as. One rule, so the console's "1 team user"
 // and this route cannot disagree about whether anybody is there.
-import { pickSeat, hasAdminSeat, isTeamSeat } from "../shared/seats.js";
+import { pickSeat, hasAdminSeat, isTeamSeat, staffStandsIn } from "../shared/seats.js";
 import { WEATHER_TTL_MIN, weatherLabel } from "../shared/greeting.js";
 import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
@@ -326,14 +326,33 @@ app.use("/api/*", async (c, next) => {
     // The seat can be removed while somebody is in it.
     if (!seat) return c.json({ error: "forbidden" }, 403);
 
+    // STANDING IN FOR AN ADMIN THE ACCOUNT HAS NOT GOT. The rule and the
+    // reasoning are in shared/seats.js; what it needs here is whether an
+    // admin exists at all, which the seat row cannot answer. One narrow
+    // indexed read, on the one session type that can need it.
+    const admin = await c.env.DB.prepare(
+      `SELECT role FROM memberships WHERE account_id = ? AND role = 'admin' LIMIT 1`
+    ).bind(sess.account_id).first();
+    const runs = staffStandsIn(seat.role, admin ? [admin] : []);
+
     c.set("auth", {
       userId: sess.act_as_user_id, accountId: sess.account_id,
-      role: seat.role, companyId: seat.company_id,
+      role: runs ? "admin" : seat.role, companyId: seat.company_id,
       membershipId: seat.id,
       // Staff sitting in an owner's seat see the owner's buildings and no
       // others. Support is not a reason to widen somebody's access.
-      propertyIds: await propertyScope(c.env.DB, seat),
-      jobIds: await jobScope(c.env.DB, seat),
+      //
+      // The scope goes with the role when the session is standing in,
+      // because a scope narrows a PERSON and there is no person here: an
+      // admin still scoped to four of a hundred buildings is the hybrid
+      // `runsTheAccount` refuses anyway, so leaving it would re-create the
+      // half-shut account this is fixing one layer down.
+      propertyIds: runs ? null : await propertyScope(c.env.DB, seat),
+      jobIds: runs ? null : await jobScope(c.env.DB, seat),
+      // The seat's own role, when the session is standing in over it. Kept
+      // because an auth context whose role is not the membership's role is
+      // the one thing that would be unrecoverable afterwards.
+      stoodInFor: runs ? seat.role : null,
       // Who is really here. Nothing reads it yet; it is set because a
       // session whose real actor is unrecoverable is the one thing this
       // table exists to prevent.
@@ -13659,11 +13678,15 @@ app.post("/api/platform/impersonate/:accountId", async (c) => {
   // than a way to reach anybody else.
   const wanted = String(b.userId || "").trim();
   let target = null;
-  let seats = [];
+  // Every seat on the account, whichever branch runs. The named branch could
+  // read one row, and then `runsAccount` below would have to ask a second
+  // question of the same table -- two reads of one fact, which is how the KPI
+  // and this route came to disagree about this very account.
+  const { results: allSeats } = await c.env.DB.prepare(
+    `SELECT user_id, role FROM memberships WHERE account_id = ?`).bind(accountId).all();
+  const seats = allSeats || [];
   if (wanted) {
-    target = await c.env.DB.prepare(
-      `SELECT user_id, role FROM memberships WHERE account_id = ? AND user_id = ?`
-    ).bind(accountId, wanted).first();
+    target = seats.find((r) => String(r.user_id) === wanted) || null;
     if (!target) return c.json({ error: "not_on_this_account" }, 409);
   } else {
     // PREFER AN ADMIN, THEN FALL BACK -- it used to be `role = 'admin'` and
@@ -13679,9 +13702,6 @@ app.post("/api/platform/impersonate/:accountId", async (c) => {
     // for ANY role on this account, deliberately, so support can see what a
     // subcontractor sees. The default was only deciding what happened when
     // nobody said.
-    const { results } = await c.env.DB.prepare(
-      `SELECT user_id, role FROM memberships WHERE account_id = ?`).bind(accountId).all();
-    seats = results || [];
     target = pickSeat(seats);
     // Only now is it true, and the reply says what IS there so the console can
     // put a number on screen rather than a flat denial over a header that
@@ -13689,20 +13709,30 @@ app.post("/api/platform/impersonate/:accountId", async (c) => {
     if (!target) return c.json({ error: "no_seat_on_account", seats: 0 }, 409);
   }
 
+  // What the session can actually do, which is not always what the seat says.
+  const runs = staffStandsIn(target.role, seats);
+  // SAID IN THE AUDIT TRAIL, because that is where it matters most. "(pm
+  // seat)" over a session that reached billing and branding is a record that
+  // understates what was done; the seat and the fact it was run as an admin
+  // are two different things and the row carries both.
+  const howFar = target.role === "admin" ? ""
+    : runs ? ` (${target.role} seat — no admin on the account, so it ran as one)`
+    : ` (${target.role} seat)`;
+
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO activity (id, account_id, at, user_id, kind, text, meta)
        VALUES (?, ?, datetime('now'), NULL, 'impersonation', ?, ?)`
     ).bind(uid(), accountId,
-      `${staff.name} signed in as this account${target.role === "admin" ? "" : ` (${target.role} seat)`}`,
+      `${staff.name} signed in as this account${howFar}`,
       JSON.stringify({ staffUserId: staff.userId, reason: b.reason || null,
-        actAsUserId: target.user_id, actAsRole: target.role })),
+        actAsUserId: target.user_id, actAsRole: target.role, ranAsAdmin: runs })),
     c.env.DB.prepare(
       `INSERT INTO events (account_id, actor_id, kind, subject_id, payload)
        VALUES (?, ?, 'impersonation_started', ?, ?)`
     ).bind(accountId, staff.userId, accountId,
       JSON.stringify({ reason: b.reason || null, staffEmail: staff.email,
-        actAsUserId: target.user_id, actAsRole: target.role })),
+        actAsUserId: target.user_id, actAsRole: target.role, ranAsAdmin: runs })),
   ]);
   // The session itself. Thirty minutes is long enough to look at a problem
   // and short enough that a forgotten tab is not a standing key to somebody
@@ -13718,12 +13748,20 @@ app.post("/api/platform/impersonate/:accountId", async (c) => {
   return c.json({
     ok: true, accountId, accountName: account.name,
     actAsUserId: target.user_id, actAsRole: target.role, token, expiresAt: expires,
-    // WHETHER THIS IS THE WHOLE ACCOUNT OR A CORNER OF IT. Landing in a pm
-    // seat and finding Account and billing missing reads as the console being
-    // broken; said out loud it reads as the account having no admin, which is
-    // the thing actually wrong and the thing the customer needs telling about.
+    // WHICH SEAT IT LANDED IN, and separately WHAT IT CAN DO IN IT. The two
+    // were one field and that was the bug underneath the report: the banner
+    // said "you are in a pm seat, Account and billing are not reachable",
+    // which was true and is no longer -- a team seat on an account with no
+    // admin runs it, because nobody inside the account can grant the role
+    // that would. See shared/seats.js.
+    //
+    // `fellBack` is still about how the seat was CHOSEN; `runsAccount` is
+    // about what it reaches. Keeping them apart is what lets the banner name
+    // the thing the customer has to fix without also claiming half the
+    // product is missing.
     fellBack: !wanted && target.role !== "admin",
-    accountHasAdmin: wanted ? null : hasAdminSeat(seats),
+    accountHasAdmin: hasAdminSeat(seats),
+    standingIn: runs,
   });
 });
 

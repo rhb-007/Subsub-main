@@ -2236,8 +2236,27 @@ export default function SubSub() {
   // Role is per ACCOUNT, not per user: the same person can be a contractor in
   // one account and an admin in another.
   const myMemberships = memberships.filter((m) => m.userId === currentUserId);
-  const membership = myMemberships.find((m) => m.accountId === currentAccountId)
+  const seat = myMemberships.find((m) => m.accountId === currentAccountId)
     || myMemberships[0] || { role: "contractor", accountId: currentAccountId };
+  // A STAFF SESSION STANDING IN FOR AN ADMIN THE ACCOUNT HAS NOT GOT. The
+  // rule is in shared/seats.js and the Worker's auth context already runs on
+  // it; this is the browser reading the same answer rather than working out a
+  // second one, because the seat ROW still says pm -- which is true of the
+  // person, whose role and buildings are theirs and unchanged.
+  //
+  // Over the whole membership and not only the role: `runsTheAccount` is
+  // `isStaffRole(role) && !isScoped(membership)`, so a scoped pm promoted by
+  // role alone would still draw the half-shut account this is fixing -- a
+  // property with no vendor list, no Edit and one line telling a managing
+  // agent to add an owner who will appoint a manager.
+  //
+  // Safe to hold in memory because `resumeSession` refuses to resume an
+  // impersonated session at all: a refresh ends it, so this can never be
+  // stale against the token the API is checking.
+  const standingIn = !!impersonating?.standingIn;
+  const membership = standingIn
+    ? { ...seat, role: "admin", propertyIds: [], jobIds: [] }
+    : seat;
   const role = membership.role;
   // Two gates, not one: the role says what this person may do, the account type
   // says what this account has at all. A general contractor has no building
@@ -4705,8 +4724,22 @@ export default function SubSub() {
                   // reads as the tool being broken; naming it reads as the
                   // account having no admin, which is the real problem and
                   // the customer's to fix.
-                  seatRole: r.fellBack ? r.actAsRole : null,
-                  noAdmin: r.accountHasAdmin === false });
+                  // WHICH SEAT, whenever it is not an admin one -- and not
+                  // only when the server picked it. A staff member who names
+                  // a contractor seat deliberately gets the contractor portal
+                  // and used to get no explanation for it at all, because
+                  // this read `fellBack`, which is about how the seat was
+                  // chosen rather than about what it is.
+                  seatRole: r.actAsRole === "admin" ? null : r.actAsRole,
+                  noAdmin: r.accountHasAdmin === false,
+                  // WHAT THE SESSION REACHES, which is not what the seat
+                  // says. An account with no admin has nobody inside it who
+                  // can grant the role, so a team seat stands in -- the
+                  // Worker decided that and this carries the answer. Deriving
+                  // it here from seatRole and noAdmin would be the same fact
+                  // held twice, in two languages, which is the shape that put
+                  // "nobody to sign in as" over "1 team users".
+                  standingIn: !!r.standingIn });
                 setCurrentAccountId(r.accountId); setCurrentUserId(r.actAsUserId);
                 setSuperadminView(false);
 
@@ -4773,17 +4806,30 @@ export default function SubSub() {
         <div className="imp-banner">
           <Shield size={14} />
           <span>Viewing <b>{impersonating.account.name}</b> as superadmin ({impersonating.by}). Actions are recorded.
-            {/* WHY HALF THE NAV IS MISSING. Without an admin on the account
-                the session opens in the best seat there is, and a project
-                manager cannot reach Account, billing or branding -- which
-                looks like the console having failed rather than like the
-                account being short of somebody. Both halves are said: the
-                seat, and the reason there was no better one. */}
-            {impersonating.seatRole && (
-              <> This account has no admin, so you are in
-                a <b>{ROLES[impersonating.seatRole]?.label || impersonating.seatRole}</b> seat
-                — Account, billing and branding are not reachable from it.</>
-            )}</span>
+            {/* WHAT IS WRONG WITH THE ACCOUNT, which is a different
+                sentence from what is wrong with this session.
+
+                It used to say the nav was missing: without an admin the
+                session opened in the best seat there was, and a project
+                manager cannot reach Account, billing or branding. That is no
+                longer what happens -- a team seat stands in and reaches all
+                of it, because every door to granting the admin role is
+                admin-only, so nobody inside the account could repair it.
+
+                The banner still fires, because the account genuinely has
+                nobody to administer it and that is the customer's to fix. It
+                says so, and says that this session is standing in, so
+                anything done here reads as staff having done it rather than
+                as the account being well. */}
+            {impersonating.standingIn ? (
+              <> This account has <b>no admin</b> — you are standing in as one from
+                a {ROLES[impersonating.seatRole]?.label || impersonating.seatRole || "team"} seat.
+                Give somebody the admin role on it and that stops being necessary.</>
+            ) : impersonating.seatRole ? (
+              <> You are in a <b>{ROLES[impersonating.seatRole]?.label || impersonating.seatRole}</b> seat,
+                so this is that person&rsquo;s view of the account rather than the whole of it.
+                {impersonating.noAdmin && " This account has no admin."}</>
+            ) : null}</span>
           <button onClick={async () => {
             // Hand the seat back rather than just walking away from it: the
             // session would expire on its own, but a revoked one cannot be
