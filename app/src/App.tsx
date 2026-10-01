@@ -4683,7 +4683,9 @@ export default function SubSub() {
             // over — the banner in the interface is not the record.
             //
             // asUserId is optional and names a person on that account; without
-            // it the server takes an admin, which is what it always did.
+            // it the server picks one -- an admin if there is one, otherwise
+            // the most able seat there is, which is what makes an account with
+            // no admin openable at all.
             if (staff) {
               try {
                 const r = await api.platform.impersonate(acct.id, null, asUserId);
@@ -4692,7 +4694,14 @@ export default function SubSub() {
                 // "contractor with no contractor record" -- an empty screen
                 // where the account should have been.
                 setAuth({ userId: r.actAsUserId, accountId: r.accountId, impersonation: r.token });
-                setImpersonating({ by: me.name, account: acct, token: r.token });
+                setImpersonating({ by: me.name, account: acct, token: r.token,
+                  // WHICH SEAT, when it is not an admin one. Landing in a pm
+                  // seat and finding Account, billing and branding missing
+                  // reads as the tool being broken; naming it reads as the
+                  // account having no admin, which is the real problem and
+                  // the customer's to fix.
+                  seatRole: r.fellBack ? r.actAsRole : null,
+                  noAdmin: r.accountHasAdmin === false });
                 setCurrentAccountId(r.accountId); setCurrentUserId(r.actAsUserId);
                 setSuperadminView(false);
 
@@ -4719,9 +4728,14 @@ export default function SubSub() {
                 setImpersonating(null); setSuperadminView(true);
                 setPlatformErr(e?.status === 403
                   ? "You do not have permission to sign in as an account."
-                  : e?.body?.error === "no_admin_on_account"
-                    ? "That account has nobody on it to sign in as."
-                    : (e?.message || "Could not start that session."));
+                  // It is no longer "no admin" -- the route falls back to any
+                  // seat -- so this only fires when the account has genuinely
+                  // nobody on it, and it says the thing to do about that.
+                  : e?.body?.error === "no_seat_on_account"
+                    ? "Nobody has a seat on that account yet, so there is nothing to sign in as. Add a user to it first, below."
+                    : e?.body?.error === "not_on_this_account"
+                      ? "That person does not have a seat on this account."
+                      : (e?.message || "Could not start that session."));
               }
               return;
             }
@@ -4753,7 +4767,18 @@ export default function SubSub() {
       {impersonating && (
         <div className="imp-banner">
           <Shield size={14} />
-          <span>Viewing <b>{impersonating.account.name}</b> as superadmin ({impersonating.by}). Actions are recorded.</span>
+          <span>Viewing <b>{impersonating.account.name}</b> as superadmin ({impersonating.by}). Actions are recorded.
+            {/* WHY HALF THE NAV IS MISSING. Without an admin on the account
+                the session opens in the best seat there is, and a project
+                manager cannot reach Account, billing or branding -- which
+                looks like the console having failed rather than like the
+                account being short of somebody. Both halves are said: the
+                seat, and the reason there was no better one. */}
+            {impersonating.seatRole && (
+              <> This account has no admin, so you are in
+                a <b>{ROLES[impersonating.seatRole]?.label || impersonating.seatRole}</b> seat
+                — Account, billing and branding are not reachable from it.</>
+            )}</span>
           <button onClick={async () => {
             // Hand the seat back rather than just walking away from it: the
             // session would expire on its own, but a revoked one cannot be

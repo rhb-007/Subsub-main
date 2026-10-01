@@ -1478,6 +1478,61 @@ refactor.
   a different and much larger act, and getting the trigger wrong destroys
   customer data.
 
+
+- **"THAT ACCOUNT HAS NOBODY ON IT TO SIGN IN AS", OVER A HEADER READING "1
+  TEAM USERS".** Two queries disagreeing about one account, in front of
+  somebody who could see both at once. The KPI counts `memberships WHERE role
+  <> 'contractor'`; the impersonation route looked up
+  `memberships WHERE account_id = ? AND role = 'admin'`. A project manager
+  satisfies the first and not the second.
+
+  **An account with no admin is not a rare shape, it is one the console makes.**
+  `POST /api/platform/accounts` writes an admin membership only **inside
+  `if (ownerEmail)`**, and `POST /api/platform/accounts/:id/users` defaults to
+  `pm` (`["admin","pm","contractor"].includes(b.role) ? b.role : "pm"`). So an
+  account created without an owner address and then given one person is exactly
+  this, and **nobody could get into it to find out** — which is the only way
+  anybody would have.
+
+  **Widening the default gates nothing, and that is why it is the right fix
+  rather than a relaxation.** The route has accepted a named `userId` for *any*
+  role since support needed to see what a subcontractor sees — still a seat on
+  that account, still read from `memberships`. So `role = 'admin'` was never a
+  permission boundary; it only decided what happened when the caller named
+  nobody. `app/shared/seats.js` picks admin, then pm, then owner, tenant,
+  contractor.
+
+  **It CHOOSES rather than taking the first row back.** acc3 in the fixture has
+  a tenant as well as a pm, because taking the tenant would open a guest seat
+  scoped to named buildings and call it the account — and a fixture with one
+  seat on it passes whichever rule is in force. An **unrecognised role sorts
+  last**, not first: ranking it zero would silently make it the default the day
+  a role is added.
+
+  **The restricted view says why it is restricted.** A pm seat cannot reach
+  Account, billing or branding, so landing in one and finding half the nav gone
+  reads as the console having failed. `fellBack` and `accountHasAdmin` come
+  back on the reply and the banner says both — the seat, *and* that the account
+  has no admin, which is the thing actually wrong and the customer's to fix.
+  An admin sign-in says neither, because a banner that fires every time is a
+  banner nobody reads.
+
+  **And the error that remains is a different error.** `no_admin_on_account` is
+  gone; `no_seat_on_account` fires only when there is genuinely nobody, and the
+  screen names the way out — add a user — rather than stating a fact. The test
+  pins that the browser no longer answers the **retired code**, because a screen
+  left handling a code the server stopped sending falls through to a raw
+  `e.message` and reads as an unexplained failure.
+
+  **Still open, and a product decision rather than a refactor: an account can
+  exist with no admin at all, and nothing tells its owner.** Three things point
+  at it — the console's account INSERT skips the admin without an email, its
+  add-user defaults to `pm`, and `DELETE /api/account-users/:userId` only
+  refuses `cannot_remove_self`, which stops an account reaching zero admins
+  through *that* door and not through the others. The console now says so while
+  somebody is signed in as one; what it does not do is list such accounts, and
+  that is where it belongs.
+
 - **An empty modal is a child that threw.** There is no error boundary, so a
   throw during render blanks the whole page — except inside a modal, where what
   is left is a white box over an intact screen. I produced one in this very

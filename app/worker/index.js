@@ -49,6 +49,9 @@ import { JOB_SCOPED_ROLES, jobScopeFrom, maySeeJob as maySeeJobIds } from "../sh
 // them read `status` -- a work order could be issued against a job closed out
 // last week. One predicate, both sides.
 import { jobIsClosed, jobClosure } from "../shared/jobstate.js";
+// Which seat to open an account as. One rule, so the console's "1 team user"
+// and this route cannot disagree about whether anybody is there.
+import { pickSeat, hasAdminSeat } from "../shared/seats.js";
 import { WEATHER_TTL_MIN, weatherLabel } from "../shared/greeting.js";
 import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
@@ -13655,15 +13658,35 @@ app.post("/api/platform/impersonate/:accountId", async (c) => {
   // table, so naming a user is choosing among people already there rather
   // than a way to reach anybody else.
   const wanted = String(b.userId || "").trim();
-  const target = wanted
-    ? await c.env.DB.prepare(
-        `SELECT user_id, role FROM memberships WHERE account_id = ? AND user_id = ?`
-      ).bind(accountId, wanted).first()
-    : await c.env.DB.prepare(
-        `SELECT user_id, role FROM memberships WHERE account_id = ? AND role = 'admin' LIMIT 1`
-      ).bind(accountId).first();
-  if (!target) {
-    return c.json({ error: wanted ? "not_on_this_account" : "no_admin_on_account" }, 409);
+  let target = null;
+  let seats = [];
+  if (wanted) {
+    target = await c.env.DB.prepare(
+      `SELECT user_id, role FROM memberships WHERE account_id = ? AND user_id = ?`
+    ).bind(accountId, wanted).first();
+    if (!target) return c.json({ error: "not_on_this_account" }, 409);
+  } else {
+    // PREFER AN ADMIN, THEN FALL BACK -- it used to be `role = 'admin'` and
+    // nothing else, so an account with no admin could not be opened at all.
+    // That is not a rare shape: the account INSERT above only writes an admin
+    // when it is given an owner email, and the console's add-user defaults to
+    // `pm`. An account made without an address and then given one person is
+    // exactly it, and the header said "1 Team users" over "nobody to sign in
+    // as" -- the KPI counts every non-contractor membership and this wanted
+    // an admin.
+    //
+    // It gates nothing to widen it: a named `userId` has always been accepted
+    // for ANY role on this account, deliberately, so support can see what a
+    // subcontractor sees. The default was only deciding what happened when
+    // nobody said.
+    const { results } = await c.env.DB.prepare(
+      `SELECT user_id, role FROM memberships WHERE account_id = ?`).bind(accountId).all();
+    seats = results || [];
+    target = pickSeat(seats);
+    // Only now is it true, and the reply says what IS there so the console can
+    // put a number on screen rather than a flat denial over a header that
+    // disagrees with it.
+    if (!target) return c.json({ error: "no_seat_on_account", seats: 0 }, 409);
   }
 
   await c.env.DB.batch([
@@ -13695,6 +13718,12 @@ app.post("/api/platform/impersonate/:accountId", async (c) => {
   return c.json({
     ok: true, accountId, accountName: account.name,
     actAsUserId: target.user_id, actAsRole: target.role, token, expiresAt: expires,
+    // WHETHER THIS IS THE WHOLE ACCOUNT OR A CORNER OF IT. Landing in a pm
+    // seat and finding Account and billing missing reads as the console being
+    // broken; said out loud it reads as the account having no admin, which is
+    // the thing actually wrong and the thing the customer needs telling about.
+    fellBack: !wanted && target.role !== "admin",
+    accountHasAdmin: wanted ? null : hasAdminSeat(seats),
   });
 });
 

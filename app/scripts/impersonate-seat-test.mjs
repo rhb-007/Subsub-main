@@ -55,7 +55,16 @@ const seed = () => {
   const db = freshDb({ base: BASE, migrations: [] });
   db.exec(`
     INSERT INTO accounts(id,name,kind) VALUES ('acc1','Cascade Management','property_manager'),
-                                              ('acc2','Sound PM','property_manager');
+                                              ('acc2','Sound PM','property_manager'),
+                                              -- THE REPORTED SHAPE: one seat, and it is not an admin.
+                                              -- The console's account INSERT only writes an admin when
+                                              -- it is given an owner email, and its add-user defaults
+                                              -- to pm, so an account made without an address and
+                                              -- then given one person is exactly this.
+                                              ('acc3','Sound Property Management','property_manager'),
+                                              -- And one with nobody on it at all, which is the only
+                                              -- case that may still refuse.
+                                              ('acc4','Empty Co','property_manager');
     INSERT INTO companies(id,company) VALUES ('cmp_sj','San Juan Exteriors'),('cmp_pug','Puget Electricity');
     INSERT INTO users(id,name,email,auth_id) VALUES
       ('u_staff','Staff Person','staff@subsub.test','auth_staff'),
@@ -63,13 +72,19 @@ const seed = () => {
       ('u_admin','Account Admin','admin@cascade.test',NULL),
       ('u_sj','Richard Braun','rb@sanjuan.test',NULL),
       ('u_pug','Mega Slavo','mega@puget.test',NULL),
-      ('u_else','Somebody Else','else@sound.test',NULL);
+      ('u_else','Somebody Else','else@sound.test',NULL),
+      ('u_pm','Dana Pine','dana@soundpm.test',NULL),
+      ('u_ten','Tenant Person','ten@soundpm.test',NULL);
     INSERT INTO superadmins(user_id,role,impersonate) VALUES ('u_staff','superadmin',1),('u_nofl','superadmin',0);
     INSERT INTO memberships(id,user_id,account_id,role,company_id) VALUES
       ('m1','u_admin','acc1','admin',NULL),
       ('m2','u_sj','acc1','contractor','cmp_sj'),
       ('m3','u_pug','acc1','contractor','cmp_pug'),
-      ('m4','u_else','acc2','admin',NULL);
+      ('m4','u_else','acc2','admin',NULL),
+      -- acc3 has a tenant too, so the fallback is choosing rather than
+      -- taking the only row there is.
+      ('m5','u_ten','acc3','tenant',NULL),
+      ('m6','u_pm','acc3','pm',NULL);
   `);
   return { db, env: { DB: makeD1(db),
     SUPABASE_URL: "http://127.0.0.1:8918", SUPABASE_ANON_KEY: "stub",
@@ -154,6 +169,65 @@ try {
         === "Staff Person signed in as this account",
       db2.prepare(`SELECT text FROM activity WHERE kind='impersonation'`).get().text);
   }
+  console.log("\n-- AN ACCOUNT WITH NO ADMIN CAN BE OPENED AT ALL --");
+  {
+    // REPORTED FROM THE CONSOLE: the header read "1 Team users" and pressing
+    // the button said "That account has nobody on it to sign in as". Two
+    // queries disagreeing about one account, in front of somebody who could
+    // see both -- the KPI counts every non-contractor membership, and this
+    // route wanted `role = 'admin'`.
+    const { db, env } = seed();
+    const [s, b] = await json(await impersonate(env, "staff", "acc3"));
+    ck("it opens", s === 200, `${s} ${JSON.stringify(b)}`);
+    // It CHOOSES: a pm over a tenant, because a pm is the most complete view of
+    // the account's own work. Taking the tenant would open a guest seat scoped
+    // to named buildings and call it the account.
+    ck("in the most able seat there is", b.actAsUserId === "u_pm", JSON.stringify(b));
+    ck("and names the role", b.actAsRole === "pm", String(b.actAsRole));
+    ck("the session is for that person",
+      db.prepare(`SELECT act_as_user_id a FROM impersonation_sessions`).get()?.a === "u_pm");
+
+    // SAID OUT LOUD, because the screen behind it is about to be missing
+    // Account, billing and branding -- which reads as the console having
+    // failed rather than as the account being short of somebody.
+    ck("the reply says it fell back", b.fellBack === true, String(b.fellBack));
+    ck("and that the account has no admin", b.accountHasAdmin === false, String(b.accountHasAdmin));
+
+    // An admin seat must not claim it fell back, or the banner fires on every
+    // ordinary sign-in and people stop reading it.
+    const [, ok] = await json(await impersonate(env, "staff", "acc1"));
+    ck("an ordinary admin sign-in says neither", ok.fellBack === false && ok.accountHasAdmin === true,
+      JSON.stringify({ f: ok.fellBack, a: ok.accountHasAdmin }));
+  }
+
+  console.log("\n-- and nobody at all is still refused, in its own words --");
+  {
+    const { env } = seed();
+    const [s, b] = await json(await impersonate(env, "staff", "acc4"));
+    ck("an account with no memberships is refused", s === 409, `${s} ${JSON.stringify(b)}`);
+    // A DIFFERENT ERROR FROM THE OLD ONE. `no_admin_on_account` was shown over a
+    // header saying there was a user; this only fires when there is genuinely
+    // nobody, so the console can say the thing to do about it.
+    ck("and says there is no seat, not no admin", b.error === "no_seat_on_account", String(b.error));
+    ck("naming a person who is not there is still its own refusal",
+      (await json(await impersonate(env, "staff", "acc4", { userId: "u_pm" })))[1].error === "not_on_this_account");
+  }
+
+  console.log("\n-- the console says the same two things the route does --");
+  {
+    const { readFileSync } = await import("node:fs");
+    const APP = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+    // The old message is gone WITH the old error code, or the screen keeps
+    // answering a code the server no longer sends -- which falls through to
+    // a raw `e.message` and reads as an unexplained failure.
+    ck("the screen no longer answers the retired code", !/no_admin_on_account/.test(APP));
+    ck("it answers the one the route sends", /no_seat_on_account/.test(APP));
+    ck("and tells somebody what to do about it", /Add a user to it first/.test(APP));
+    // The banner explains the restricted view rather than leaving it a mystery.
+    ck("the banner names the seat when it fell back", /impersonating\.seatRole &&/.test(APP));
+    ck("and says why there was no better one", /This account has no admin/.test(APP));
+  }
+
 } finally {
   supa.close();
 }
