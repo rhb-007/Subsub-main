@@ -57,6 +57,7 @@ import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso, DOC_LABELS } from "../shared/docs.js";
 import { setupGaps, mayFinishSetup, firstGapStep } from "../shared/setup.js";
 import { jobIsClosed, jobClosure, completionEffects } from "../shared/jobstate.js";
+import { hasAdminSeat } from "../shared/seats.js";
 import { agreementStateText, typedNameMatches, renderAgreement } from "../shared/agreement.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -4631,6 +4632,10 @@ export default function SubSub() {
             await platformWrite(() => api.platform.addUser(accountId, u),
               "Could not add that user.");
           }}
+          onSetUserRole={async (accountId, userId, role) => {
+            await platformWrite(() => api.platform.setUserRole(accountId, userId, role),
+              "Could not change that role.");
+          }}
           onPatchAccount={async (id, patch) => {
             await platformWrite(() => api.platform.patchAccount(id, patch),
               "Could not change that account.");
@@ -7577,7 +7582,7 @@ const monthKey = (iso) => (iso || "").slice(0, 7);
 
 function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   accounts, users, memberships, companies, engagements,
-  jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onImpersonate, onSignOut,
+  jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onSetUserRole, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
   onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck }) {
   const [screen, setScreen] = useState("dashboard");
@@ -7585,6 +7590,10 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   const [menu, setMenu] = useState(false);
   const [actFilter, setActFilter] = useState("all");
   const [addUser, setAddUser] = useState(null);
+  // A failed role change says so beside the control that was pressed. The
+  // console-wide banner is at the top of the page, nowhere near it -- the same
+  // thing the password reset already records about itself.
+  const [roleErr, setRoleErr] = useState("");
   const [newAccount, setNewAccount] = useState(null);   // form data while open
   const [newCompany, setNewCompany] = useState(null);
   const [editCompanyId, setEditCompanyId] = useState(null);
@@ -7830,6 +7839,15 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   }, {}));
 
   const open = rows.find((r) => r.a.id === openId);
+  // The team seats on the open account, and whether any of them can administer
+  // it. Read through the shared predicate rather than a second `=== "admin"`
+  // here, so this panel and the impersonate route cannot hold two opinions
+  // about the same account -- which is exactly the disagreement that produced
+  // "1 Team users" over "nobody to sign in as".
+  const teamSeats = open
+    ? memberships.filter((m) => m.accountId === open.a.id && m.role !== "contractor")
+    : [];
+  const teamHasAdmin = hasAdminSeat(teamSeats);
 
   const isSuper = admin.role === "superadmin";
   const NAV = [
@@ -8282,18 +8300,48 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
             <div className="pf-panel">
               <div className="pf-panel-hd">
                 <h3>Team</h3>
-                <button className="pf-mini" onClick={() => setAddUser(addUser ? null : { name: "", email: "", role: "pm" })}>
+                <button className="pf-mini" onClick={() => setAddUser(addUser ? null : {
+                  name: "", email: "",
+                  // ADMIN WHEN THERE IS NO ADMIN, matching what the route now
+                  // enforces. The form opened on `pm` and the route defaulted
+                  // to `pm`, so adding the owner of a new account without
+                  // touching the dropdown produced an account nobody could
+                  // administer -- and no screen anywhere said so.
+                  role: teamHasAdmin ? "pm" : "admin",
+                })}>
                   <Plus size={13} /> Add user
                 </button>
               </div>
+              {/* The condition itself, said plainly. An account with no admin
+                  cannot reach its own users, billing or branding, and cannot
+                  grant the role from inside -- every door to it is
+                  requireRole("admin"). So it is the console's to fix, and
+                  until somebody looks at this panel nothing reports it. */}
+              {!teamHasAdmin && (
+                <p className="pf-noadmin">
+                  <AlertTriangle size={13} /> Nobody on this account is an Admin, so they cannot
+                  reach Account, billing or branding — and they cannot grant it themselves.
+                  Make somebody an Admin below.
+                </p>
+              )}
               {addUser && (
                 <div className="pf-adduser">
                   <input placeholder="Full name" value={addUser.name} onChange={(e) => setAddUser({ ...addUser, name: e.target.value })} />
                   <input placeholder="Work email" type="email" value={addUser.email} onChange={(e) => setAddUser({ ...addUser, email: e.target.value })} />
-                  <select value={addUser.role} onChange={(e) => setAddUser({ ...addUser, role: e.target.value })}>
-                    <option value="admin">Admin</option>
-                    <option value="pm">{roleLabelIn(kindOf(open.a), "pm")}</option>
-                  </select>
+                  {/* ON AN ACCOUNT WITH NO ADMIN THE CHOICE IS NOT OFFERED,
+                      because the route refuses it. Showing a dropdown whose
+                      other option is silently overridden is the screen-that-
+                      lies rule with the lie on the server side -- so the
+                      control says what will happen instead of pretending
+                      there is a decision to make. */}
+                  {teamHasAdmin ? (
+                    <select value={addUser.role} onChange={(e) => setAddUser({ ...addUser, role: e.target.value })}>
+                      <option value="admin">Admin</option>
+                      <option value="pm">{roleLabelIn(kindOf(open.a), "pm")}</option>
+                    </select>
+                  ) : (
+                    <span className="pf-forced">Admin — the first person on an account runs it</span>
+                  )}
                   <button className="btn-solid small" disabled={!addUser.name.trim() || !addUser.email.trim()}
                     onClick={async () => {
                       try { await onAddUser(open.a.id, addUser); setAddUser(null); }
@@ -8354,13 +8402,32 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                   <div key={m.userId} className="pf-line">
                     <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
                     <span className="pf-line-main"><b>{u.name}</b><span className="pf-sub">{u.email}</span></span>
-                    <span className={`role-badge r-${m.role}`}>{roleLabelIn(kindOf(open.a), m.role)}</span>
+                    {/* THE ROLE IS A CONTROL, not a badge. There was no way
+                        to change one anywhere -- not here, and not in the
+                        customer's own app without already being an admin --
+                        so an account whose only person was a project manager
+                        had no route back except SQL. The last admin cannot be
+                        demoted; the server refuses and says so. */}
+                    <select className={`role-sel r-${m.role}`} value={m.role}
+                      onChange={async (e) => {
+                        setRoleErr("");
+                        try { await onSetUserRole(open.a.id, u.id, e.target.value); }
+                        catch (err) {
+                          setRoleErr(err?.body?.error === "last_admin"
+                            ? `${u.name} is the only Admin on this account. Make somebody else an Admin first.`
+                            : "Could not change that role.");
+                        }
+                      }}>
+                      <option value="admin">Admin</option>
+                      <option value="pm">{roleLabelIn(kindOf(open.a), "pm")}</option>
+                    </select>
                     <button className="pf-mini" onClick={() => { setResetErr(""); setResetLink(null); setResetFor({ userId: u.id, name: u.name, email: u.email, accountId: open.a.id }); }}>
                       <Key size={12} /> Reset password
                     </button>
                   </div>
                 ) : null;
               })}
+              {roleErr && <p className="pf-host-err">{roleErr}</p>}
             </div>
 
             <MailLog accountId={open.a.id} load={onMailLog} />
@@ -28427,6 +28494,18 @@ p.fld-note{margin:6px 0 0}
 .job-phase{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
   background:#e9f0f6;color:#2b5c85;padding:3px 8px;border-radius:20px}
 .job-phase.done{background:#e8f2ea;color:#1f6b4a}
+/* The role control in the console's Team panel, and the warning above it when
+   nobody on the account can administer it. */
+.pf-forced{font-size:11.5px;font-weight:700;color:#1f6b4a;background:#eef5f1;
+  border:1px solid #cfe3d8;border-radius:20px;padding:6px 11px;white-space:nowrap}
+.role-sel{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
+  border:1px solid var(--line);border-radius:20px;padding:4px 8px;background:var(--card);
+  color:var(--ink-soft);cursor:pointer;flex:none}
+.role-sel.r-admin{border-color:#1f6b4a;color:#1f6b4a;background:#eef5f1}
+.pf-noadmin{display:flex;align-items:flex-start;gap:7px;font-size:12.5px;line-height:1.45;
+  background:#fdf3e7;border:1px solid #efd6ad;color:#7a4e10;border-radius:9px;
+  padding:9px 11px;margin:0 0 12px}
+.pf-noadmin svg{flex:none;margin-top:2px}
 .job-card.done{background:#fbfcfb}
 /* A COMPLETED JOB READS AS COMPLETED, rather than as a live one with a green
    line at the bottom. The card kept full contrast and full-strength trade

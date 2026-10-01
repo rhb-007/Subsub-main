@@ -691,6 +691,12 @@ export const api = {
     addUser: (accountId, user) =>
       request(`/platform/accounts/${needId(accountId, "account_id")}/users`,
         { method: "POST", body: JSON.stringify(user) }),
+    // Admin or pm. The only way to grant the admin role to an account that has
+    // nobody holding it -- every other door is `requireRole("admin")`, which
+    // such an account cannot get through.
+    setUserRole: (accountId, userId, role) =>
+      request(`/platform/accounts/${needId(accountId, "account_id")}/users/${needId(userId, "user_id")}`,
+        { method: "PATCH", body: JSON.stringify({ role }) }),
     // Returns only the address it went to. The token lives in the email and
     // nowhere else, which is what makes this safe to do on someone's behalf.
     resetPassword: (userId, accountId) =>

@@ -1533,6 +1533,58 @@ refactor.
   somebody is signed in as one; what it does not do is list such accounts, and
   that is where it belongs.
 
+- **AND THE CAUSE WAS THAT THE FIRST PERSON ON AN ACCOUNT WAS NOT ITS ADMIN.**
+  The entry above fixed the symptom — staff could not sign in. Asked why the
+  account had no admin in the first place, and the answer is two defaults that
+  only hurt together:
+
+  `POST /api/platform/accounts` writes an admin membership **inside
+  `if (ownerEmail)`**, so an account created without an owner address gets
+  nobody. `POST /api/platform/accounts/:id/users` then defaulted to `pm`
+  (`["admin","pm","contractor"].includes(b.role) ? b.role : "pm"`), **and the
+  console's form opened on `pm` too**. So: make the account, add the owner,
+  leave the dropdown alone — an account whose one person cannot reach Account,
+  billing or branding.
+
+  **And it could not get out of that by itself.** Every door to granting the
+  admin role is `requireRole("admin")`, so the account could not produce one
+  from inside; and the console — which exists precisely to answer what a
+  customer cannot — could add people and reset passwords and **not change this
+  one field**. There was no route to change a role anywhere. The only remaining
+  remedy was SQL against D1, which is the answer this file refuses everywhere
+  else.
+
+  **FORCED, NOT DEFAULTED.** The first team seat on an account is an admin
+  whatever the form said, because *a default that produces an account nobody
+  can administer is not a default, it is a trap* — and the person who finds it
+  is the customer, weeks later, looking for billing. The test asks for `pm`
+  **explicitly** rather than sending an empty body, because only that tells
+  forcing from defaulting.
+
+  **A contractor seat is exempt, and that is load-bearing.** It is a roster
+  seat with a `company_id` behind it, not a member of this team; promoting one
+  on an admin-less account would hand the account to a subcontractor it hires.
+  Mutating that condition to `true` fails two assertions.
+
+  **The screen does not offer a choice the route overrides.** On an account
+  with no admin the dropdown is replaced by what will happen — *Admin, the
+  first person on an account runs it*. A control whose other option is
+  silently overwritten is the screen-that-lies rule **with the lie on the
+  server side**, which is worse: nothing on the page is wrong, and what gets
+  stored is not what was picked.
+
+  `PATCH /api/platform/accounts/:id/users/:userId` is the way out for accounts
+  already in that state. Admin and pm only — converting a contractor seat
+  either way would invent or discard the company behind it — and **the last
+  admin may not be demoted**, for the reason `cannot_remove_self` refuses on
+  the customer side: this route is the only thing that could undo it, so
+  refusing here is what keeps that true.
+
+  **And the panel reports the condition** rather than leaving it to be found by
+  somebody pressing a button, reading `hasAdminSeat` — the same predicate the
+  impersonate route uses, so the two cannot drift back into the disagreement
+  that started this.
+
 - **An empty modal is a child that threw.** There is no error boundary, so a
   throw during render blanks the whole page — except inside a modal, where what
   is left is a white box over an intact screen. I produced one in this very

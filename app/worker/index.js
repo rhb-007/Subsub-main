@@ -14276,12 +14276,37 @@ app.post("/api/platform/accounts/:id/users", async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const name = String(b.name || "").trim();
   const email = String(b.email || "").trim().toLowerCase();
-  const role = ["admin", "pm", "contractor"].includes(b.role) ? b.role : "pm";
+  let role = ["admin", "pm", "contractor"].includes(b.role) ? b.role : "pm";
   if (!name) return c.json({ error: "name_required" }, 400);
   if (!EMAIL_RE.test(email)) return c.json({ error: "invalid_email" }, 400);
 
   const account = await c.env.DB.prepare(`SELECT id FROM accounts WHERE id = ?`).bind(accountId).first();
   if (!account) return c.json({ error: "not_found" }, 404);
+
+  // THE FIRST PERSON ON AN ACCOUNT IS ITS ADMIN, whatever the form said.
+  //
+  // This defaulted to `pm` and the console's form opened on `pm` too, so
+  // adding the owner of a new account and not touching the dropdown gave them
+  // a project manager seat -- on an account that had no admin, because the
+  // account INSERT only writes one when it is given an owner email. That is
+  // how Sound Property Management ended up with one person who could not
+  // reach Account, billing or branding, and nobody who could grant it: every
+  // door to making somebody an admin is `requireRole("admin")`, so the
+  // account had locked itself out of its own settings on the day it was made.
+  //
+  // Forced rather than merely defaulted. A default that produces an account
+  // nobody can administer is not a default, it is a trap -- and the person
+  // who would discover it is the customer, weeks later, looking for billing.
+  // Contractor seats are deliberately exempt: that is a roster seat with a
+  // company behind it, not a member of this team, and promoting one would put
+  // a subcontractor in charge of the account that hires them.
+  let forcedAdmin = false;
+  if (role !== "contractor") {
+    const anyAdmin = await c.env.DB.prepare(
+      `SELECT 1 AS yes FROM memberships WHERE account_id = ? AND role = 'admin' LIMIT 1`
+    ).bind(accountId).first();
+    if (!anyAdmin) { forcedAdmin = role !== "admin"; role = "admin"; }
+  }
 
   // Somebody may already exist here from an application or another account;
   // reuse the person rather than creating a second row for the same address.
@@ -14300,7 +14325,8 @@ app.post("/api/platform/accounts/:id/users", async (c) => {
     `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, ?)`
   ).bind(uid(), user.id, accountId, role).run();
   await auditPlatform(c.env, staff, accountId, "user_added",
-    `${staff.name} added ${name} as ${role}`, { userId: user.id, email, role });
+    `${staff.name} added ${name} as ${role}${forcedAdmin ? " (first person on the account)" : ""}`,
+    { userId: user.id, email, role, forcedAdmin });
 
   // Same rule as everywhere else: added is not the same as able to get in.
   // Somebody added from the console had a seat and no way to reach it.
@@ -14308,7 +14334,67 @@ app.post("/api/platform/accounts/:id/users", async (c) => {
   const invite = await inviteAccountUser(c, { accountId, user: full, role,
     invitedBy: { id: null, name: staff?.name || "SubSub" } });
 
-  return c.json({ id: user.id, name, email, role, invite }, 201);
+  // `forcedAdmin` so the console can say the role was overridden. A route that
+  // quietly stores something other than what the form showed is the
+  // screen-that-lies rule with the lie on the server side.
+  return c.json({ id: user.id, name, email, role, forcedAdmin, invite }, 201);
+});
+
+// Change a team member's role.
+//
+// THERE WAS NO WAY TO DO THIS ANYWHERE, and that is what made an account with
+// no admin a dead end rather than a nuisance. Every door to granting the role
+// is `requireRole("admin")` on the customer side, so an account whose only
+// person is a project manager could not produce an admin from inside itself,
+// and the console -- which exists precisely to answer what a customer cannot
+// -- could add people and reset passwords and not change this one field. The
+// only remaining remedy was SQL against D1.
+//
+// Admin and pm only. A contractor seat carries a `company_id` and belongs to
+// a company on the roster; turning one into an admin would hand the account
+// to a subcontractor it hires, and turning an admin into one would invent a
+// company that is not there.
+app.patch("/api/platform/accounts/:id/users/:userId", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+
+  const accountId = c.req.param("id");
+  const userId = c.req.param("userId");
+  const b = await c.req.json().catch(() => ({}));
+  const role = String(b.role || "");
+  if (!["admin", "pm"].includes(role)) return c.json({ error: "bad_role" }, 400);
+
+  const m = await c.env.DB.prepare(
+    `SELECT role FROM memberships WHERE account_id = ? AND user_id = ?`
+  ).bind(accountId, userId).first();
+  if (!m) return c.json({ error: "not_on_this_account" }, 404);
+  // A roster seat is not a team seat, and the two must not be converted into
+  // each other through a field.
+  if (m.role === "contractor") return c.json({ error: "contractor_seat" }, 409);
+
+  // The last admin may not be demoted, for the reason `cannot_remove_self`
+  // refuses on the customer side: an account with nobody who can administer
+  // it cannot get itself back, and this route is the only thing that could
+  // undo it. Refusing here is what keeps that true.
+  if (m.role === "admin" && role !== "admin") {
+    const others = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM memberships
+        WHERE account_id = ? AND role = 'admin' AND user_id <> ?`
+    ).bind(accountId, userId).first();
+    if (!others?.n) return c.json({ error: "last_admin" }, 409);
+  }
+
+  if (m.role === role) return c.json({ ok: true, role, changed: false });
+
+  await c.env.DB.prepare(
+    `UPDATE memberships SET role = ? WHERE account_id = ? AND user_id = ?`
+  ).bind(role, accountId, userId).run();
+  const who = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(userId).first();
+  await auditPlatform(c.env, staff, accountId, "user_role_changed",
+    `${staff.name} changed ${who?.name || "a user"} from ${m.role} to ${role}`,
+    { userId, from: m.role, to: role });
+
+  return c.json({ ok: true, role, changed: true, from: m.role });
 });
 
 // Staff never see or set a password. This starts the same reset the person
