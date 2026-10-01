@@ -51,7 +51,7 @@ import { JOB_SCOPED_ROLES, jobScopeFrom, maySeeJob as maySeeJobIds } from "../sh
 import { jobIsClosed, jobClosure } from "../shared/jobstate.js";
 // Which seat to open an account as. One rule, so the console's "1 team user"
 // and this route cannot disagree about whether anybody is there.
-import { pickSeat, hasAdminSeat } from "../shared/seats.js";
+import { pickSeat, hasAdminSeat, isTeamSeat } from "../shared/seats.js";
 import { WEATHER_TTL_MIN, weatherLabel } from "../shared/greeting.js";
 import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
@@ -14368,9 +14368,14 @@ app.patch("/api/platform/accounts/:id/users/:userId", async (c) => {
     `SELECT role FROM memberships WHERE account_id = ? AND user_id = ?`
   ).bind(accountId, userId).first();
   if (!m) return c.json({ error: "not_on_this_account" }, 404);
-  // A roster seat is not a team seat, and the two must not be converted into
-  // each other through a field.
-  if (m.role === "contractor") return c.json({ error: "contractor_seat" }, 409);
+  // A SEAT THAT IS NOT A TEAM SEAT IS NOT CHANGEABLE HERE, and the first
+  // version of this refused only `contractor` -- which missed the two that
+  // matter most. A building owner and a tenant hold GUEST seats on somebody
+  // else's account, scoped to named buildings; promoting one hands a client,
+  // or a tenant, admin of their agent's whole business. The console's Team
+  // panel lists every non-contractor membership, so both were on screen with
+  // a role control beside them.
+  if (!isTeamSeat(m.role)) return c.json({ error: "not_a_team_seat", seat: m.role }, 409);
 
   // The last admin may not be demoted, for the reason `cannot_remove_self`
   // refuses on the customer side: an account with nobody who can administer

@@ -54,3 +54,21 @@ export function pickSeat(rows = []) {
 // real problem for the CUSTOMER rather than only for support -- and nothing
 // anywhere said so.
 export const hasAdminSeat = (rows = []) => (rows || []).some((r) => r && r.role === "admin");
+
+// WHO IS ON THE TEAM, as opposed to who merely holds a seat here.
+//
+// `memberships WHERE role <> 'contractor'` is NOT the team, and the console's
+// Team panel has filtered that way since it was written: a building owner
+// invited onto a managing agent's account, and a tenant of one of its
+// buildings, both pass it. They are guests — scoped to named buildings,
+// there to watch their own property or report a leak — and the account they
+// are guests ON belongs to somebody else.
+//
+// That matters the moment a role becomes editable. Promoting a guest is not a
+// smaller version of promoting a project manager: it hands a client, or a
+// tenant, admin of their agent's whole business — every other building, every
+// contractor on the roster, the billing. A contractor seat was already
+// refused for exactly this reason and the other two were missed, because the
+// panel they appear on is called Team.
+export const TEAM_ROLES = ["admin", "pm"];
+export const isTeamSeat = (role) => TEAM_ROLES.includes(role);

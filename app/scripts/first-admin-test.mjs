@@ -184,8 +184,10 @@ try {
       (await json(await patch(env, "acc_has", "u_admin", { role: "pm" })))[0] === 200);
 
     const { env: e2 } = seed();
+    // One rule for all three non-team seats rather than a special case per
+    // seat -- which is how owner and tenant were missed in the first place.
     ck("a contractor seat is refused",
-      (await json(await patch(e2, "acc_has", "u_sub", { role: "admin" })))[1].error === "contractor_seat");
+      (await json(await patch(e2, "acc_has", "u_sub", { role: "admin" })))[1].error === "not_a_team_seat");
     ck("somebody not on the account is refused",
       (await json(await patch(e2, "acc_none", "u_admin", { role: "admin" })))[1].error === "not_on_this_account");
     ck("and a role that is not a team role is refused",
@@ -194,6 +196,35 @@ try {
       (await worker.fetch(new Request(
         "https://api.subsub.work/api/platform/accounts/acc_has/users/u_pm",
         { method: "PATCH", body: "{}", headers: { "Content-Type": "application/json" } }), e2)).status >= 400);
+  }
+
+  console.log("\n-- A GUEST SEAT IS NOT A TEAM SEAT --");
+  {
+    // THE BUG THE ROLE CONTROL SHIPPED WITH. The console's Team panel lists
+    // every membership that is not a contractor, which is NOT the team: a
+    // building owner invited onto a managing agent's account and a tenant of
+    // one of its buildings both appear there. The first version of this route
+    // refused only `contractor`, so either of them could be made an admin --
+    // handing a client, or a tenant, admin of their agent's whole business:
+    // every other building, every contractor on the roster, the billing.
+    const { db, env } = seed();
+    db.exec(`INSERT INTO users(id,name,email) VALUES ('u_own','Owner Guest','own@landlord.test'),
+                                                    ('u_ten','Tenant Guest','ten@flat.test')`);
+    db.exec(`INSERT INTO memberships(id,user_id,account_id,role) VALUES
+               ('g1','u_own','acc_has','owner'), ('g2','u_ten','acc_has','tenant')`);
+    const [s1, b1] = await json(await patch(env, "acc_has", "u_own", { role: "admin" }));
+    ck("a building owner guest cannot be promoted", s1 === 409 && b1.error === "not_a_team_seat",
+      `${s1} ${JSON.stringify(b1)}`);
+    ck("and the refusal names the seat it is", b1.seat === "owner", String(b1.seat));
+    ck("a tenant cannot either",
+      (await json(await patch(env, "acc_has", "u_ten", { role: "admin" })))[1].error === "not_a_team_seat");
+    ck("and neither of them moved",
+      roleOf(db, "acc_has", "own@landlord.test") === "owner"
+      && roleOf(db, "acc_has", "ten@flat.test") === "tenant");
+    // The contractor case still refuses, under the one rule rather than its
+    // own special case.
+    ck("a contractor seat is still refused",
+      (await json(await patch(env, "acc_has", "u_sub", { role: "admin" })))[1].error === "not_a_team_seat");
   }
 
   console.log("\n-- the console says the same thing the route does --");
@@ -218,6 +249,15 @@ try {
       /Nobody on this account is an Admin/.test(APP));
     // The role is a control, which is the thing that did not exist.
     ck("the role is editable", /onSetUserRole\(open\.a\.id, u\.id, e\.target\.value\)/.test(APP));
+    // AND ONLY FOR A TEAM SEAT. The select carries just Admin and Property
+    // manager, so drawing it over an `owner` row renders a control reading
+    // "Admin" for somebody who is not one -- a screen stating a role that is
+    // not held, which is worse than the missing control it replaced.
+    ck("but only for a team seat", /\{!isTeamSeat\(m\.role\) \? \(/.test(APP));
+    ck("a guest keeps a plain badge", /role-badge r-\$\{m\.role\}[\s\S]{0,160}roleLabelIn\(kindOf\(open\.a\), m\.role\)/.test(APP));
+    // And the warning does not send somebody to promote a row that cannot be.
+    ck("with only guests, the warning says to add a user instead",
+      /The only seats here are guests, who cannot be promoted/.test(APP));
     ck("and a refusal says which person is the obstacle",
       /is the only Admin on this account/.test(APP));
     // Read through the shared predicate, not a second === "admin" here.

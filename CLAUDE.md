@@ -1585,6 +1585,36 @@ refactor.
   impersonate route uses, so the two cannot drift back into the disagreement
   that started this.
 
+- **AND THE ROLE CONTROL SHIPPED WITH A HOLE IN IT, BECAUSE "NOT A CONTRACTOR"
+  IS NOT "ON THE TEAM".** The panel it sits in filters
+  `memberships WHERE role <> 'contractor'` and is called **Team**, and that is
+  the whole of why this was missed: a **building owner** invited onto a
+  managing agent's account and a **tenant** of one of its buildings both pass
+  that filter. They are guests — scoped to named buildings, there to watch
+  their own property or report a leak — and the account they are guests on
+  belongs to somebody else.
+
+  Two things followed, and the second is the serious one. The `<select>` holds
+  only Admin and the pm label, so drawing it over an `owner` row rendered a
+  control reading **Admin** for somebody who is not one — *a screen stating a
+  role that is not held*, which is worse than the missing control it replaced.
+  And the route refused `contractor` **by name** rather than asking the
+  question, so **a guest could be promoted**: handing a client, or a tenant,
+  admin of their agent's entire business — every other building, every
+  contractor on the roster, the billing. The mutation that proves it answers
+  `{"ok":true,"role":"admin","from":"owner"}`.
+
+  `isTeamSeat` is the one predicate now, and the refusal is
+  `not_a_team_seat` rather than a case per seat, which is how the other two
+  were missed. A guest keeps a plain badge.
+
+  **The general form, and it is a new one for this file: a filter that EXCLUDES
+  the obvious exception is not the same as one that INCLUDES the intended set.**
+  `role <> 'contractor'` was written when the only thing to keep out was the
+  roster, and it silently widened every time a new role was added — `owner` and
+  `tenant` walked in behind it. The panel's own name said "team" and nothing
+  checked that it held one.
+
 - **An empty modal is a child that threw.** There is no error boundary, so a
   throw during render blanks the whole page — except inside a modal, where what
   is left is a white box over an intact screen. I produced one in this very

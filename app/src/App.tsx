@@ -57,7 +57,7 @@ import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso, DOC_LABELS } from "../shared/docs.js";
 import { setupGaps, mayFinishSetup, firstGapStep } from "../shared/setup.js";
 import { jobIsClosed, jobClosure, completionEffects } from "../shared/jobstate.js";
-import { hasAdminSeat } from "../shared/seats.js";
+import { hasAdminSeat, isTeamSeat } from "../shared/seats.js";
 import { agreementStateText, typedNameMatches, renderAgreement } from "../shared/agreement.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -8321,7 +8321,14 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 <p className="pf-noadmin">
                   <AlertTriangle size={13} /> Nobody on this account is an Admin, so they cannot
                   reach Account, billing or branding — and they cannot grant it themselves.
-                  Make somebody an Admin below.
+                  {/* WHAT TO DO DEPENDS ON WHO IS THERE. With only guest seats
+                      -- a building owner, a tenant -- there is nobody below to
+                      promote, and saying "make somebody an Admin below" sends
+                      the reader to a row whose role is deliberately not a
+                      control. */}
+                  {teamSeats.some((m) => isTeamSeat(m.role))
+                    ? " Make somebody an Admin below."
+                    : " The only seats here are guests, who cannot be promoted — use Add user, and the first one becomes the Admin."}
                 </p>
               )}
               {addUser && (
@@ -8408,6 +8415,23 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                         so an account whose only person was a project manager
                         had no route back except SQL. The last admin cannot be
                         demoted; the server refuses and says so. */}
+                    {/* A GUEST'S ROLE IS NOT A CONTROL. This panel lists
+                        every non-contractor membership, which is not the same
+                        as the team: a building owner invited onto a managing
+                        agent's account and a tenant of one of its buildings
+                        both appear here, and both are guests scoped to named
+                        buildings.
+                        The first version drew the dropdown for them too, with
+                        only Admin and Property manager in it -- so an owner's
+                        seat rendered a control reading "Admin", which is a
+                        screen saying somebody holds a role they do not. And
+                        changing it would have handed a client admin of their
+                        agent's whole business. */}
+                    {!isTeamSeat(m.role) ? (
+                      <span className={`role-badge r-${m.role}`} title="A guest seat, scoped to their own buildings">
+                        {roleLabelIn(kindOf(open.a), m.role)}
+                      </span>
+                    ) : (
                     <select className={`role-sel r-${m.role}`} value={m.role}
                       onChange={async (e) => {
                         setRoleErr("");
@@ -8421,6 +8445,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                       <option value="admin">Admin</option>
                       <option value="pm">{roleLabelIn(kindOf(open.a), "pm")}</option>
                     </select>
+                    )}
                     <button className="pf-mini" onClick={() => { setResetErr(""); setResetLink(null); setResetFor({ userId: u.id, name: u.name, email: u.email, accountId: open.a.id }); }}>
                       <Key size={12} /> Reset password
                     </button>
