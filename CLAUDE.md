@@ -4017,6 +4017,53 @@ refactor.
   CRM it will fire on. Silence is only safe when nothing was asked; here
   something was, and it was not understood.
 
+  **AND THE MARKETING SITE ANSWERS *WILL IT WORK WITH MINE* IN THREE TIERS,
+  BECAUSE THEY ARE THREE DIFFERENT PROMISES.** The index never answered it at
+  all, which is a top-three objection for a general contractor — and the
+  receivers table that does answer it sits halfway down a page about field
+  names. A flat wall of logos was the obvious move and it is refused for this
+  entry's own reason, one layer out: **a name on a marketing page is a stronger
+  claim than a field map**, because nobody reads the caveat under a row of
+  names. A ServiceTitan logo is a promise that ServiceTitan works.
+
+  So: **Built in** (SubSub reads their fields — JobNimbus), **Through an
+  automation tool** (Zapier, Make, n8n — a claim about the sender, true today
+  and always was), and **Everything else** (a webhook address). Only the first
+  is a claim about SubSub, and the page says so in those words.
+
+  **The first tier is pinned to `SOURCE_PRESETS`, exactly and in both
+  directions.** Each name carries `data-src`, and `test:discover` requires
+  those ids to equal the `verified` presets with `generic` excluded. A preset
+  missing from the page is a receiver nobody is told about; a name on the page
+  with no preset is the looks-supported-fails-silently failure with better
+  typography. **Checking one direction passes with "ServiceTitan" sitting in
+  that list**, which is the mutation that proves it.
+
+  Hand-written in both pages rather than generated, because the marketing site
+  has no build step — the same trade `get-started.html`'s copy of the states
+  list already makes, with a test keeping it honest rather than a generator.
+  The two pages are also required to use the **same three tier names in the
+  same order**: somebody arrives at the developer page from the index, and a
+  second vocabulary for one fact reads as two different answers.
+
+  **Logos are deliberately not shipped**, and that is a decision rather than a
+  gap. Text names carry nearly all of the recognition at none of the trademark
+  question — reproducing somebody's mark is governed by their brand guidelines,
+  which is a lawyer's five minutes and not a build's.
+
+  One layout note worth keeping, because it is this file's oldest shape in a
+  new place: the three paragraphs are different lengths, so the name chips sat
+  at three different heights. The card is a flex column with the names pushed
+  down by `margin:auto 0 0`, and **a row that is almost aligned reads as a
+  mistake rather than as a table** — the same sentence the compliance pack's
+  date column earned. Asserted as the mechanism rather than the position,
+  because this suite is static and both halves are needed for either to work.
+
+  **Still open, and pre-existing:** `developers.html` scrolls sideways at
+  390px — the field tables and the long webhook URLs overflow, measured at 541px
+  against a 390px viewport with none of this change applied. It matters slightly
+  more now that the index links to it.
+
 - **The Zapier app buys no capability, and that is the honest way to describe
   it.** `/api/v1/hooks/generic/<token>` already worked from a *Webhooks by
   Zapier* step. What the app adds is three things worth having anyway: the

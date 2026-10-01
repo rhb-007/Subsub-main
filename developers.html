@@ -383,6 +383,20 @@ body.nav-open{overflow:hidden}
 .dev-note p + p{margin-top:9px}
 .dev-cta{display:inline-block;background:#1f6b4a;color:#fff;text-decoration:none;font-weight:700;
   font-size:15px;padding:13px 22px;border-radius:9px;margin-top:8px}
+/* The three tiers. Same three claims as the marketing index and deliberately
+   the same words, because somebody arrives here from there and a second
+   vocabulary for one fact reads as two different answers. */
+.dev-ints{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:18px 0 4px}
+.dev-int{display:flex;flex-direction:column;border:1px solid #e3e9e6;border-radius:10px;
+  padding:14px 15px}
+.dev-int-tag{display:block;font-size:11px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:#1f6b4a}
+.dev-int h3{margin:7px 0 6px;font-size:14.5px}
+.dev-int p{font-size:13.5px;line-height:1.55;color:#4a5550}
+.dev-int ul{list-style:none;padding:11px 0 0;margin:auto 0 0;display:flex;flex-wrap:wrap;gap:6px}
+.dev-int li{font-size:13px;font-weight:600;padding:3px 9px;border-radius:999px;
+  background:#f3f8f5;border:1px solid #e3e9e6}
+@media (max-width:700px){ .dev-ints{grid-template-columns:1fr} }
 </style>
 </head>
 <body>
@@ -414,6 +428,44 @@ body.nav-open{overflow:hidden}
   <strong>My account → Profile → Connect your CRM</strong>. It is shown once, when you create it:
   SubSub stores only a fingerprint of it, so nobody here can read it back to you.</p>
 </div>
+
+<!-- FIRST, because it is the first question. The receivers table further down
+     answers it precisely and answers it in the middle of a page about field
+     names; somebody deciding whether to read on needs it here.
+
+     Three tiers rather than one list of names, because they are three
+     different promises and flattening them would claim the strongest one for
+     everything in the list. `test:discover` requires the Built-in tier's
+     `data-src` ids to be exactly the verified entries in SOURCE_PRESETS, so a
+     name cannot be added here ahead of a receiver that reads it. -->
+<h2>Will it work with mine?</h2>
+<div class="dev-ints">
+  <div class="dev-int">
+    <span class="dev-int-tag">Built in</span>
+    <h3>Nothing to map</h3>
+    <p>SubSub reads their own field names. One address into their webhook step.</p>
+    <ul><li data-src="jobnimbus">JobNimbus</li></ul>
+  </div>
+  <div class="dev-int">
+    <span class="dev-int-tag">Through an automation tool</span>
+    <h3>Whatever they connect to</h3>
+    <p>One webhook step, mapping their fields onto SubSub's. Works today.</p>
+    <ul><li>Zapier</li><li>Make</li><li>n8n</li></ul>
+  </div>
+  <div class="dev-int">
+    <span class="dev-int-tag">Everything else</span>
+    <h3>Anything that sends a request</h3>
+    <p>A CRM's own outgoing webhook, a script, a scheduler.</p>
+    <ul><li>Your own code</li></ul>
+  </div>
+</div>
+<p>
+  <strong>Only the first tier is a claim about SubSub.</strong> The other two are a claim about
+  the thing doing the sending, which is why they are separated: a system in the second or third
+  tier works today and always has, and a system in the first needs somebody here to have had a
+  real payload from it in front of them. That is the whole difference, and it is the difference
+  that decides whether anything needs mapping.
+</p>
 
 <h2>The endpoint</h2>
 <pre class="dev-pre"><code>POST https://api.subsub.work/api/v1/jobs

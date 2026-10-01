@@ -151,6 +151,28 @@ nav.top a.btn-gold:hover{color:#20160A}
 .aud:hover .more::after,.aud:focus-visible .more::after{transform:translateX(4px)}
 @media (prefers-reduced-motion:reduce){ .aud .more::after{transition:none} }
 
+/* ---------- integrations ----------
+   THREE TIERS, BECAUSE THEY ARE THREE DIFFERENT CLAIMS and a flat list of
+   names would make them one. "SubSub reads JobNimbus's own fields" and "a
+   Zapier step can post to SubSub" are both true and are not the same promise,
+   and the gap between them is exactly where an integration that looks
+   supported fails silently on first contact. The tier is the honesty. */
+.ints{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;margin-top:44px}
+/* A COLUMN, so the names line up across all three. The paragraphs are
+   different lengths, so without this the chips sit at three different heights
+   — and a row that is almost aligned reads as a mistake rather than as a
+   table, which is the same lesson the compliance pack's date column records. */
+.int{display:flex;flex-direction:column;padding-top:22px;border-top:2px solid var(--forest)}
+.int-tag{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--gold-ink)}
+.int h3{margin-top:9px;font-size:19px;letter-spacing:-.02em}
+.int p{margin-top:9px;font-size:15.5px;color:var(--muted);line-height:1.55}
+/* The names, which are the whole point: "works with any CRM" is true and
+   useless, because somebody has to recognise their own tool to believe it. */
+.int-names{display:flex;flex-wrap:wrap;gap:7px;margin:auto 0 0;padding:14px 0 0;list-style:none}
+.int-names li{font-size:14px;font-weight:600;padding:4px 10px;border-radius:999px;
+  background:var(--bone);border:1px solid var(--rule)}
+
 /* ---------- pricing ---------- */
 .plans{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:44px}
 .plan{background:var(--white);border:1.5px solid var(--rule);border-radius:var(--r);
@@ -281,7 +303,7 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
   .cmp th:first-child{width:40%}
 }
 @media (max-width:760px){
-  .rows2,.auds,.plans,.foot{grid-template-columns:1fr}
+  .rows2,.auds,.plans,.foot,.ints{grid-template-columns:1fr}
   .steps-bar{flex-direction:column}
   .steps-bar div{border-right:0;border-bottom:1px solid var(--rule)}
   .steps-bar div:last-child{border-bottom:0}
@@ -755,6 +777,62 @@ body.nav-open{overflow:hidden}
           <span class="more">How SubSub works across a portfolio</span>
         </a>
       </div>
+    </div>
+  </section>
+
+  <!-- WILL THIS WORK WITH WHAT I ALREADY USE is a top-three objection for a
+       general contractor, and nothing on this page answered it. It is answered
+       in TIERS rather than as a wall of names, because the tiers are different
+       promises: one of them is SubSub reading a CRM's own fields, one is an
+       automation tool doing the connecting, and one is a URL. Flattening them
+       would claim the first for everything in the list.
+
+       A name appears in "Built in" only where SOURCE_PRESETS carries
+       `verified` for it -- somebody has had a real payload from that system in
+       front of them. `test:discover` reads the data and the `data-src`
+       attributes below and requires them to match exactly, which is what stops
+       a name being added here because it would look good. -->
+  <section class="sec sec-bone" id="integrations">
+    <div class="wrap">
+      <h2 class="h-lg" style="max-width:24ch">It takes the jobs you already schedule.</h2>
+      <p class="lede" style="max-width:58ch">
+        Keep scheduling wherever you schedule. The job lands in SubSub with its trades
+        unassigned — which is the queue you open SubSub to clear — and you pick who does
+        the work.
+      </p>
+      <div class="ints">
+        <div class="int">
+          <span class="int-tag">Built in</span>
+          <h3>Nothing to map</h3>
+          <p>SubSub reads these systems' own field names. Paste one address into their
+          webhook step and jobs start arriving.</p>
+          <ul class="int-names">
+            <li data-src="jobnimbus">JobNimbus</li>
+          </ul>
+        </div>
+        <div class="int">
+          <span class="int-tag">Through an automation tool</span>
+          <h3>Whatever they connect to</h3>
+          <p>If your CRM is on one of these, it reaches SubSub today — one webhook step,
+          no code. What they connect to is their list, and it is a long one.</p>
+          <ul class="int-names">
+            <li>Zapier</li><li>Make</li><li>n8n</li>
+          </ul>
+        </div>
+        <div class="int">
+          <span class="int-tag">Everything else</span>
+          <h3>Anything that can send a web request</h3>
+          <p>A CRM with its own outgoing webhook, a script, a scheduler. One address,
+          one token, SubSub's field names.</p>
+          <ul class="int-names">
+            <li>Your own code</li><li>Any outgoing webhook</li>
+          </ul>
+        </div>
+      </div>
+      <p class="lede" style="max-width:58ch;font-size:16px">
+        Not sure which one yours is? <a href="developers.html">Connect your CRM</a> names the
+        fields, the addresses and what to do when a system is not listed.
+      </p>
     </div>
   </section>
 

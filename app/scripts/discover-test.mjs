@@ -17,6 +17,7 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SOURCE_PRESETS } from "../shared/crmsources.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
@@ -272,6 +273,86 @@ console.log("\nand the app's links to this site land somewhere");
     from.replace(/\.html$/, "") === to.replace(/\.html$/, ""));
   ck("no redirect differs from its source only by .html", loops.length === 0,
     JSON.stringify(loops));
+}
+
+console.log("\n-- the integrations tiers say what is true of each tier --");
+{
+  // A NAME IS A CLAIM, AND THE TIER DECIDES WHICH CLAIM IT IS.
+  //
+  // `SOURCE_PRESETS` already refuses to invent a receiver for a CRM whose real
+  // payload nobody has seen -- "an integration that looks supported, fails on
+  // first contact, and fails in the way that is hardest to debug". A NAME ON A
+  // MARKETING PAGE IS A STRONGER CLAIM THAN A FIELD MAP, because nobody reads
+  // the caveat under a list of names. So the Built-in tier is pinned to the
+  // data rather than to whoever edited the HTML.
+  //
+  // Exact, in BOTH directions. A preset missing from the page is a receiver
+  // nobody is told about; a name on the page with no preset is the failure
+  // above with better typography. Checking only one direction would pass with
+  // "ServiceTitan" sitting in that list.
+  //
+  // `generic` is excluded because it is not a system: it is the absence of
+  // one, and it is the third tier's whole subject.
+  const built = Object.entries(SOURCE_PRESETS)
+    .filter(([id, p2]) => p2.verified && id !== "generic")
+    .map(([id]) => id)
+    .sort();
+  ck("there is at least one built-in receiver to name", built.length > 0, built.join(","));
+
+  for (const page of ["index.html", "developers.html"]) {
+    const html = read(page);
+    const named = [...html.matchAll(/data-src="([^"]+)"/g)].map((m) => m[1]).sort();
+    ck(`${page} names exactly the verified presets as built in`,
+      JSON.stringify(named) === JSON.stringify(built),
+      `page: ${named.join(",") || "(none)"} | data: ${built.join(",")}`);
+
+    // The tier LABELS, because the tiers are the honesty and a page that lost
+    // them is a flat list of names again. Read case-insensitively: these are
+    // uppercased by CSS on one page and not the other.
+    const lower = html.toLowerCase();
+    for (const tag of ["built in", "through an automation tool", "everything else"]) {
+      ck(`${page} keeps the "${tag}" tier`, lower.includes(tag));
+    }
+
+    // The automation tier is only honest while it names tools that really do
+    // reach SubSub today through the generic endpoint.
+    for (const tool of ["Zapier", "Make", "n8n"]) {
+      ck(`${page} names ${tool} as an automation route`, html.includes(`>${tool}<`));
+    }
+  }
+
+  // AND THE TWO PAGES AGREE WORD FOR WORD ON THE TIER NAMES. Somebody arrives
+  // at the developer page from the index, and a second vocabulary for one fact
+  // reads as two different answers.
+  const tagsOf = (page) =>
+    [...read(page).matchAll(/class="(?:dev-)?int-tag">([^<]+)</g)].map((m) => m[1].trim());
+  ck("both pages use the same three tier names, in the same order",
+    JSON.stringify(tagsOf("index.html")) === JSON.stringify(tagsOf("developers.html")),
+    `${tagsOf("index.html").join(" / ")} vs ${tagsOf("developers.html").join(" / ")}`);
+
+  // The index sends somebody who wants the detail to the page that has it.
+  ck("the index points at the CRM page", /href="developers\.html"/.test(read("index.html")));
+
+  // THE NAMES ARE WHAT GETS SCANNED, so they line up across the three columns.
+  // The paragraphs above them are different lengths, so the chip rows only
+  // align because the card is a flex column pushing them to the bottom — and a
+  // row that is almost aligned reads as a mistake rather than as a table.
+  // Asserted as the mechanism, because the rendered position needs a browser
+  // and this suite is static: `margin-top:auto` inside a flex column is the
+  // whole of what does it, and either half alone does nothing.
+  for (const [page, card, names] of [
+    ["index.html", ".int{", ".int-names{"],
+    ["developers.html", ".dev-int{", ".dev-int ul{"],
+  ]) {
+    const css = read(page);
+    const rule = (sel) => (css.slice(css.indexOf(sel)).match(/^[^}]*\}/) || [""])[0];
+    ck(`${page} lays the tier card out as a column`,
+      /flex-direction:column/.test(rule(card)) && /display:flex/.test(rule(card)),
+      rule(card).replace(/\s+/g, " ").slice(0, 90));
+    ck(`${page} pushes the names to the bottom of it`,
+      /margin:\s*auto 0 0/.test(rule(names)),
+      rule(names).replace(/\s+/g, " ").slice(0, 90));
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
