@@ -21,6 +21,17 @@
 // timezone, no midnight-in-another-zone bug.
 
 export const DOC_KINDS = ["insurance", "bond", "contract", "w9"];
+
+// The words for them, here rather than in the browser bundle, because this
+// module already decides what a kind IS and a second list of names is a
+// second list to keep in step -- the trap `shared/trades.js` was created to
+// close and `INSURANCE_LINES` was merged to close again.
+export const DOC_LABELS = {
+  insurance: "Certificate of insurance",
+  bond: "Surety bond",
+  contract: "Signed subcontractor agreement",
+  w9: "IRS Form W-9",
+};
 // The ones with a shelf life. A contract and a W-9 are signed once.
 export const EXPIRING_KINDS = ["insurance", "bond"];
 

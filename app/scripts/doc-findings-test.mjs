@@ -83,6 +83,16 @@ console.log("\n-- one list, not three --");
     !/const INSURANCE_LINES\s*=\s*\[/.test(MAIL) && !/const INSURANCE_ATTEST\s*=/.test(MAIL)
       && !/const BOND_MIN\s*=/.test(MAIL));
   ck("and imports it", /from "\.\.\/shared\/doccheck\.js"/.test(MAIL));
+  // Same merge, one list along: mail.js held its own DOC_KINDS and DOC_LABELS,
+  // agreeing with shared/docs.js by luck. An email naming a document by a word
+  // no screen uses is an email about a row the reader cannot find.
+  ck("nor its own DOC_KINDS or DOC_LABELS",
+    !/^export const DOC_KINDS\s*=/m.test(MAIL) && !/^export const DOC_LABELS\s*=/m.test(MAIL));
+  // Imported, not `export ... from`: that re-exports without binding either
+  // name here, so the module loads and `missingDocs` throws on the first email
+  // sent. The assertion below is what catches it, and this is what names it.
+  ck("and imports them rather than only re-exporting",
+    /import \{[^}]*DOC_KINDS[^}]*\} from "\.\.\/shared\/docs\.js"/.test(MAIL));
 }
 
 console.log("\n-- three states, and the middle one is the whole point --");

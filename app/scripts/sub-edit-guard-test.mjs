@@ -199,8 +199,16 @@ console.log("\n-- a refused save does not read as a save --");
   }
   // A stale message about a form that is no longer on screen is the sign-in
   // page's two-messages-at-once failure; closing clears it.
-  ck("and closing the modal clears it",
-    /onClose=\{\(\) => \{ setEditing\(null\); setSubSaveErr\(""\); \}\}/.test(APP));
+  {
+    // Read the edit modal's own onClose and require both calls in it, rather
+    // than matching the whole expression: that is a whitespace test, and a
+    // third setter added beside them -- which is what happened -- fails it
+    // while the property it is about still holds.
+    const open = APP.indexOf("{editing && <Modal onClose=");
+    const oc = open < 0 ? "" : APP.slice(open, APP.indexOf("wide>", open));
+    ck("and closing the modal clears it",
+      oc.includes("setEditing(null)") && oc.includes('setSubSaveErr("")'), oc);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -54,7 +54,8 @@ import { INSURANCE_LINES, OPTIONAL_LINES, BOND_MIN, INSURANCE_MIN, checkItems, f
 import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/autoschedule.js";
 import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
   isOptionalDoc, docStatus as docStatusOf,
-  coversJob as coversJobDocs, daysBetween as daysBetweenIso } from "../shared/docs.js";
+  coversJob as coversJobDocs, daysBetween as daysBetweenIso, DOC_LABELS } from "../shared/docs.js";
+import { setupGaps, mayFinishSetup, firstGapStep } from "../shared/setup.js";
 import { agreementStateText, typedNameMatches, renderAgreement } from "../shared/agreement.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -1117,7 +1118,8 @@ function crewRatings(sub, jobs) {
 }
 const crewCount = (s) => (s.crews || []).length;
 const headCount = (s) => (s.crews || []).reduce((n, c) => n + (c.members?.length || 0), 0);
-const DOC_LABELS = { insurance: "Certificate of insurance", bond: "Surety bond", contract: "Signed subcontractor agreement", w9: "IRS Form W-9" };
+// DOC_LABELS moved to shared/docs.js, beside DOC_KINDS, so the list and the
+// words for it cannot disagree. Imported at the top with the rest.
 // DOC_KINDS was a second copy of the list in shared/docs.js. That module
 // decides which kinds expire and what a status means, and two lists that can
 // disagree about what a document even is defeats the point of having it.
@@ -2205,6 +2207,10 @@ export default function SubSub() {
   const [quotePanel, setQuotePanel] = useState(null);    // { job, trade }
   const [addMenu, setAddMenu] = useState(false);
   const [editing, setEditing] = useState(null); // sub being edited
+  // Which step that form opens on. Its own state rather than a field on the
+  // record above: `editing` is what `build()` turns into the PATCH body, so
+  // anything parked in it is a field this account would send to the server.
+  const [editStep, setEditStep] = useState(1);
   const [tab, setTab] = useState("dashboard");
 
   const capOptions = useMemo(() => {
@@ -3894,6 +3900,23 @@ export default function SubSub() {
         // answer. Carried explicitly rather than through ENGAGEMENT_FIELDS so
         // splitPatch() can never try to write it back.
         if ("hasPortal" in flat) en.hasPortal = !!flat.hasPortal;
+        // AND THE UNSCOPED ONE BESIDE IT, which was being dropped — so the
+        // fix that gave `SubForm` the right predicate shipped over a field
+        // that never arrived.
+        //
+        // `/api/subs` has carried `answersForItself` since that change, and
+        // nothing here read it into state: it is neither a companies column
+        // nor an engagements one, so both whitelists drop it, exactly as they
+        // drop `hasPortal` and `docs`. `locked = !!existing?.answersForItself`
+        // therefore read `undefined` on every row and was permanently false —
+        // the three-step form opened fully editable over a contractor
+        // somebody else answers for, and the server answered
+        // `company_not_yours` to a save the screen had invited. The source
+        // reads exactly right, which is why no static check could see it, and
+        // only a row where the two predicates DISAGREE can tell: no portal
+        // here, a seat somewhere else. Third instance of
+        // drop-a-field-you-did-not-list.
+        if ("answersForItself" in flat) en.answersForItself = !!flat.answersForItself;
         // Same for what the documents say. These are read off company_docs,
         // which is neither a companies column nor an engagements one, so the
         // whitelists drop them -- and a roster whose `docs` is undefined reads
@@ -6088,7 +6111,9 @@ export default function SubSub() {
             jobs={jobs} onSaveNotes={saveNotes} onRequestDocs={requestDocs}
             onSetAuto={(on) => setAutoSchedule(selected.id, on)}
             onAskAuto={() => { setAskingAuto(selected); setSelected(null); }}
-            onEdit={() => { setEditing(selected); setSelected(null); }}
+            /* Continue setup passes the step it wants; Edit passes nothing
+               and opens where it always did. */
+            onEdit={(step) => { setEditStep(Number(step) || 1); setEditing(selected); setSelected(null); }}
             onReviewDoc={(sb, kind) => { setSelected(null); setReviewing({ sub: sb, kind }); }}
             onVerifyLicense={(sb) => verifyLicense(sb.id)}
             onSchedule={() => { setAssignSub({ sub: selected }); setSelected(null); }} />
@@ -6351,9 +6376,9 @@ export default function SubSub() {
             setBillingNote(`Asked ${r.company} again.`);
           }}
           onClose={() => setRequestedOpen(null)} /></Modal>}
-      {editing && <Modal onClose={() => { setEditing(null); setSubSaveErr(""); }} wide>
+      {editing && <Modal onClose={() => { setEditing(null); setEditStep(1); setSubSaveErr(""); }} wide>
         {subSaveErr && <div className="form-err" role="alert">{subSaveErr}</div>}
-        <SubForm properties={accountProperties} existing={editing} onSubmit={updateSub}
+        <SubForm properties={accountProperties} existing={editing} openStep={editStep} onSubmit={updateSub}
           onUploadDoc={(k, file) => uploadSubDoc(editing.id, k, file)}
           onDeleteDoc={(k) => deleteSubDoc(editing.id, k)}
           onCancel={() => setEditing(null)} /></Modal>}
@@ -24470,6 +24495,56 @@ function AutoScheduleCard({ sub, onSet, onAsk }) {
 //
 // Says the address before sending rather than after, because an invite to a
 // stale email is a fortnight of nobody knowing.
+// FINISHING SETUP FOR SOMEBODY WHO NEVER ARRIVED.
+//
+// A contractor the account invited and who has not opened the link has a
+// half-filled record: a name, maybe an email, and blanks everywhere else.
+// Nobody is coming to finish it -- that is what "not arrived" means -- and
+// until it is finished they cannot be matched to a job, cannot be assigned
+// and sit on the roster as a row that does nothing.
+//
+// The account could always do it: `PATCH /api/subs/:companyId` takes the
+// company half exactly when nobody answers for that company, which is this
+// population precisely. What was missing is the way in. `Edit` is on the
+// card, and `Edit` is a generic word that does not read as "they have not
+// done this and you may" -- the ninth time this file has recorded a correct
+// route with nothing pointing at it.
+//
+// It NAMES the gaps rather than counting them, and each one says which step
+// fills it in. "Setup incomplete" sends somebody into a three-step form to
+// hunt; four named things with a button that opens at the first of them is
+// the same rule as the compliance pack naming what is missing and as
+// `openPane.focus` pointing rather than landing.
+//
+// The gate is `mayFinishSetup`, which reads `answersForItself` -- unscoped --
+// and never `hasPortal`. A roofer whose only login is on another general
+// contractor's account has no portal HERE and is still somebody else's record
+// to edit; the server answers `company_not_yours`, and offering the form over
+// it would be the screen looser than the route. One predicate, because
+// "nobody answers for them anywhere" and "they never set their account up"
+// are the same sentence.
+function SetupGaps({ sub, canManage, onContinue }) {
+  if (!canManage || !mayFinishSetup(sub)) return null;
+  const gaps = setupGaps(sub);
+  if (!gaps.length) return null;
+  return (
+    <div className="setup-gaps">
+      <ClipboardList size={13} />
+      <div className="sg-main">
+        <b>Setup not finished — {gaps.length} {gaps.length === 1 ? "thing" : "things"}</b>
+        <span>Nobody has signed in as {sub.company} to fill these in. You can do it for
+          them, and they keep whatever you enter when they do arrive.</span>
+        <ul className="sg-list">
+          {gaps.map((g) => <li key={g.key}>{g.label}</li>)}
+        </ul>
+      </div>
+      <button className="btn-ghost sm" onClick={() => onContinue?.(firstGapStep(gaps))}>
+        <Pencil size={13} /> Continue setup
+      </button>
+    </div>
+  );
+}
+
 function PortalInvite({ sub, invite, onSent }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(null);
@@ -24684,6 +24759,10 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
         )}
         {/* On the record, because that is where somebody is standing when they
             notice nobody can sign in as this contractor. */}
+        {/* The record first, the nudge second. Both are answers to "they
+            have not arrived", and doing it yourself is the one that does not
+            depend on somebody else opening an email. */}
+        <SetupGaps sub={sub} canManage={canManage} onContinue={onEdit} />
         <PortalInvite sub={sub} invite={invite} onSent={onInviteSent} />
         {/* And the agreement, for the same reason. An agreement is between
             this account and this contractor, so it belongs on their card and
@@ -25274,7 +25353,7 @@ function useConnectMatch(enabled, { email, phone, license }) {
   return { match, checking, searched };
 }
 
-function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenExisting, onRecruitQr, onUploadDoc, onDeleteDoc }) {
+function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect, onOpenExisting, onRecruitQr, onUploadDoc, onDeleteDoc }) {
   const init = existing ? {
     company: existing.company, contact: existing.contact, phone: existing.phone, email: existing.email,
     categories: existing.categories, caps: existing.caps,
@@ -25431,7 +25510,11 @@ function SubForm({ onSubmit, onCancel, existing, properties, onConnect, onOpenEx
   });
   // Three steps: who they are, what they do, who's on the crew + paperwork.
   // Editing an existing record opens on step 1 but can jump between steps.
-  const [step, setStep] = useState(locked ? 2 : 1);
+  const [step, setStep] = useState(() => {
+    if (locked) return 2;
+    const want = Number(openStep);
+    return want >= 1 && want <= 3 ? want : 1;
+  });
   const STEPS = locked ? [] : [
     { n: 1, label: "Company" },
     { n: 2, label: "Trades & coverage" },
@@ -27916,6 +27999,29 @@ p.fld-note{margin:6px 0 0}
    roster it sits above. */
 /* No login yet. Amber rather than red: a contractor who has not been invited
    is unfinished business, not a fault. */
+/* What is still blank on a record nobody has arrived to fill in.
+   Deliberately NOT the amber of .portal-inv beside it: amber here means a
+   problem with the contractor, and a half-filled record on somebody who has
+   not opened their invite is an ordinary state of affairs with work in it.
+   Plain surface, so the two read as what-to-do and who-to-chase rather than
+   as two warnings. */
+.setup-gaps{display:flex;align-items:flex-start;gap:10px;margin-top:11px;padding:11px 13px;
+  border:1px solid var(--line);background:var(--paper);border-radius:10px;
+  font-size:13px;line-height:1.5;color:var(--ink)}
+.setup-gaps > svg{flex:none;margin-top:2px;color:var(--ink-soft)}
+.sg-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.sg-main b{font-weight:700}
+.sg-main span{color:var(--ink-soft)}
+/* The gaps are the point of the panel, so they are a list rather than a
+   sentence: four things somebody works through, not a paragraph to parse. */
+.sg-list{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:4px 6px}
+.sg-list li{font-size:12px;font-weight:600;color:var(--ink);
+  background:var(--card);border:1px solid var(--line);border-radius:20px;padding:2px 9px}
+.setup-gaps .btn-ghost{flex:none;align-self:center;white-space:nowrap}
+@media (max-width:560px){
+  .setup-gaps{flex-wrap:wrap}
+  .setup-gaps .btn-ghost{margin-left:23px}
+}
 .portal-inv{display:flex;align-items:flex-start;gap:10px;margin-top:11px;padding:11px 13px;
   border:1px solid #e6d3ab;background:#fbf2e2;border-radius:10px;
   font-size:13px;line-height:1.5;color:var(--amber-ink)}

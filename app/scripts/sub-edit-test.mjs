@@ -55,7 +55,7 @@ let SUB = {
   status: "active", autoSchedule: 0,
   notify: { email: true, sms: false },
   mailStreet: "", mailCity: "", mailState: "", mailZip: "",
-  hasPortal: false,
+  hasPortal: false, answersForItself: false,
 };
 
 const web = serveApp({ dir: OUT, port: WEB });
@@ -220,7 +220,18 @@ try {
     // of document booleans, read by EVERY account that engages them. Having
     // somebody on your roster is enough to edit a record you typed in; it is
     // not enough to rewrite a company that has its own people.
-    SUB = { ...SUB, hasPortal: true };
+    // IT IS `answersForItself` THAT LOCKS THE FORM, not `hasPortal`, and this
+    // line named the old one. The lock was corrected to the unscoped question
+    // -- "does anybody anywhere answer for this company" -- precisely because
+    // the scoped one left a roofer whose only seat is on another general
+    // contractor's account editable from here; this fixture was not moved with
+    // it, so these ten assertions have been failing ever since, reading as the
+    // fix not working rather than as the fixture asking the old question.
+    //
+    // Both are set, and they AGREE here: a contractor with their own account
+    // has a seat and answers for themselves. The row where they disagree is
+    // the subject of test:setupgaps, which is where it belongs.
+    SUB = { ...SUB, hasPortal: true, answersForItself: true };
     patches.length = 0;
     const { ctx, page, crashes } = await open();
     await page.evaluate(() => [...document.querySelectorAll("nav.tabs button")]

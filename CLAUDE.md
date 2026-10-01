@@ -1191,6 +1191,85 @@ refactor.
   a template literal, so naming `en_seats` in its own comment closed it and the
   whole Worker failed to parse.
 
+- **AND `SUBFORM`'S LOCK HAD BEEN DEAD SINCE THE DAY IT WAS CORRECTED, BECAUSE
+  THE FIELD IT READS NEVER REACHED THE BROWSER.** The entry above is the fix:
+  `/api/subs` carries `answersForItself` unscoped, `hasPortal` scoped, and the
+  form reads the first. `hydrateAccount` then dropped it — `splitSeed`'s two
+  whitelists are `COMPANY_FIELDS` and `ENGAGEMENT_FIELDS`, and a field that is
+  neither a `companies` column nor an `engagements` one is silently not carried,
+  which is why `hasPortal` and `docs` are named there by hand. So
+  `locked = !!existing?.answersForItself` was `!!undefined`: **permanently
+  false, for every row, on every account.** The three-step form opened fully
+  editable over exactly the contractor the predicate was corrected to protect,
+  and the server answered `company_not_yours` to a save the screen had already
+  invited — the screen-is-looser-than-the-route lie, reintroduced one layer up
+  from where it was fixed.
+
+  **No static check could see it.** The route is right, the component is right,
+  and `locked = !!existing?.answersForItself` reads exactly as intended — the
+  misspelt-capability shape, which this file already records as the one failure
+  mode mutation cannot catch, in a new place: a field that is absent is
+  indistinguishable from a field that is false, it fails closed in the direction
+  that opens the form, and nothing anywhere reports it.
+
+  **And `test:subedit` had been RED for just as long, which is worse than it
+  being green.** Its fixture still set only `hasPortal`, so it was asking the
+  *old* question of the new predicate — 21 passed, 10 failed, every failure
+  reading as *the fix does not work* rather than as *the fixture asks the wrong
+  thing*. A suite that is red for a stale reason is a suite nobody reads, and
+  the one real bug in it was underneath. Both halves fixed: the field is carried
+  in `hydrateAccount` beside `hasPortal`, and the fixture sets both predicates —
+  `false/false` for the editable row, `true/true` for the locked one — because
+  only a row they **disagree** on can tell the two apart at all.
+
+- **An invited contractor who never arrived can be finished by hand, and the
+  feature is NAMING what is blank.** `PortalInvite` could resend the link and
+  that was the whole of it: a record somebody typed off a business card sat with
+  no trades, no coverage and no documents, and the only way to find out which
+  was to open the three-step form and read all three. A count would have been
+  the same failure in one number — *2 of 6* does not say which two, which is the
+  distinction the subcontractor's own checklist already earned.
+
+  `app/shared/setup.js` is the one rule. `setupGaps` names what is missing and
+  **which step each one is on**, so *Continue setup* opens the form where the
+  work is rather than at step 1; `firstGapStep` is that choice, and `openStep`
+  threads it through `SubForm` so there is one form and not a second copy of it.
+
+  **The gate is `mayFinishSetup`, which reads `answersForItself` and never
+  `hasPortal`.** That is the entry above, applied: filling a company's details
+  in is a write to the shared `companies` row, so offering it over a contractor
+  somebody else answers for is inviting a save the route refuses with
+  `company_not_yours`. The scoped question — *is there somebody here to ask* —
+  is the auto-schedule one and is the wrong one here, and the test fixture puts
+  a seat on another account so a scoped check fails it.
+
+  **Documents count by PRESENCE, never verification**, the same rule the send
+  gate and the nav badge follow: nobody verifies their own paperwork, so asking
+  whether this account has approved it would leave a row permanently blank after
+  all four were uploaded. And it reads **`REQUIRED_KINDS`**, so the signed
+  agreement is never a gap — it is the hiring account's own form, and a to-do
+  nobody can tick is the permanently-amber failure `docs.js` exists to prevent.
+
+  It is drawn on a **plain surface rather than amber**, because an unfinished
+  record somebody is about to finish is a to-do and not a problem — the same
+  distinction the never-added dot makes by being hollow.
+
+  **And it forced one list too many out, for the fourth time.** `DOC_LABELS`
+  lived in `App.tsx` and again in `worker/mail.js`, agreeing by luck — the shape
+  `shared/trades.js` was created to close and `INSURANCE_LINES` was merged to
+  close again. A rule module naming a document needs the words, and a third copy
+  in the place where being wrong is least visible — an email naming a document
+  by a word no screen uses, about a row the reader then cannot find — is what
+  made the merge compulsory rather than tidy. It is in `shared/docs.js`, beside
+  `DOC_KINDS`, which already decides what a kind *is*.
+
+  **`export … from` re-exports without binding either name locally**, so
+  `mail.js` loaded fine and `missingDocs` threw `DOC_KINDS is not defined` on
+  the first email sent — a module that is correct until it is used. Imported and
+  then re-exported. The assertion that caught it was an existing one that
+  actually *calls* `docRequestEmail`; the two new ones name the cause, because a
+  static check that only looks for the import passes on the broken form.
+
 - **There was no way to take a contractor off a roster, and the answer is a
   status rather than a delete.** `engagements.status` has carried `ended` since
   the schema was written and nine reads across the Worker and its migrations

@@ -13,14 +13,15 @@
 
 import { INSURANCE_LINES, BOND_MIN, checkItems, problemsIn,
   outcomeWords } from "../shared/doccheck.js";
-
-export const DOC_KINDS = ["insurance", "bond", "contract", "w9"];
-export const DOC_LABELS = {
-  insurance: "Certificate of insurance",
-  bond: "Surety bond",
-  contract: "Signed subcontractor agreement",
-  w9: "IRS Form W-9",
-};
+// The kinds and their words come from shared/docs.js, which is the one list, for
+// the same reason the checklist below does: an email naming a document by a word
+// no screen uses is an email about a row the reader cannot find. Re-exported
+// because this file's own exports were the copy.
+// Imported and then re-exported, NOT `export ... from`: that re-exports
+// without binding either name in this file, so `missingDocs` below throws on
+// `DOC_KINDS` -- a module that loads fine and fails on the first email sent.
+import { DOC_KINDS, DOC_LABELS } from "../shared/docs.js";
+export { DOC_KINDS, DOC_LABELS };
 // The schedule and the checklist come from shared/doccheck.js, which is the one
 // list. They were copied here, and agreed with the app by luck -- which stopped
 // being survivable the moment `docFindingsEmail` had to name the specific line a
