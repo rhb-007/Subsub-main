@@ -44,6 +44,11 @@ import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { hasPortal, canSet as canSetAuto, AUTO_DENY_TEXT } from "../shared/autoschedule.js";
 import { onRoster, onRosterSql, OFF_ROSTER } from "../shared/roster.js";
 import { JOB_SCOPED_ROLES, jobScopeFrom, maySeeJob as maySeeJobIds } from "../shared/jobscope.js";
+// Whether a job is finished with. The browser's `isClosed` was the only copy,
+// so the three routes that commit a contractor read the job row and none of
+// them read `status` -- a work order could be issued against a job closed out
+// last week. One predicate, both sides.
+import { jobIsClosed, jobClosure } from "../shared/jobstate.js";
 import { WEATHER_TTL_MIN, weatherLabel } from "../shared/greeting.js";
 import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
@@ -7471,12 +7476,24 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
     payKind, rate, capHours } = await c.req.json();
 
   const job = await c.env.DB.prepare(
-    `SELECT id, requested_by, approved_at, date FROM jobs WHERE id = ? AND account_id = ?`
+    `SELECT id, requested_by, approved_at, date, status, withdrawn_at, declined_at
+       FROM jobs WHERE id = ? AND account_id = ?`
   ).bind(jobId, accountId).first();
   if (!job || !maySeeJob(c.get("auth"), jobId)) return c.json({ error: "job_not_found" }, 404);
   // A request an owner raised is not work anybody has agreed to yet. Issuing a
   // work order against one would commit the account to a price it never set.
   if (job.requested_by && !job.approved_at) return c.json({ error: "not_approved" }, 409);
+  // AND A JOB THAT IS FINISHED WITH IS NOT WORK EITHER. This row did not carry
+  // `status` at all until now, so a job closed out last week took a work order
+  // exactly as a live one did -- and the card went on offering the button,
+  // because the empty slot's action row had no check either. A work order
+  // against a closed job is a contractor turning up to work nobody is
+  // expecting. The reason is named, so the screen can say which of the three
+  // it was rather than "no".
+  {
+    const shut = jobClosure(job);
+    if (shut.closed) return c.json({ error: "job_closed", reason: shut.reason }, 409);
+  }
 
   // ON THE ROSTER, not merely once engaged. This read had no status check at
   // all, so a contractor who had been removed -- or paused -- was still
@@ -11876,9 +11893,18 @@ app.post("/api/jobs/:jobId/overflow", requireRole("admin", "pm"), async (c) => {
   if (!trade) return c.json({ error: "trade_required" }, 400);
 
   const job = await c.env.DB.prepare(
-    `SELECT id, title, date, address, area, zip, severity FROM jobs WHERE id = ? AND account_id = ?`
+    `SELECT id, title, date, address, area, zip, severity, status, withdrawn_at, declined_at
+       FROM jobs WHERE id = ? AND account_id = ?`
   ).bind(jobId, accountId).first();
   if (!job || !maySeeJob(c.get("auth"), jobId)) return c.json({ error: "job_not_found" }, 404);
+
+  // Finished with. Broadcasting a closed job reaches past this account to
+  // companies who would answer an offer that cannot be taken up -- the one
+  // door of the three where being wrong costs somebody ELSE their time.
+  {
+    const shut = jobClosure(job);
+    if (shut.closed) return c.json({ error: "job_closed", reason: shut.reason }, 409);
+  }
 
   // Overflow means overflow. An account with somebody of their own who could
   // take this is not overflowing, and without this check the feature is a

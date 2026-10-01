@@ -4536,6 +4536,101 @@ refactor.
   once money has moved — and it is a product decision with real edges, not a
   refactor.
 
+- **A COMPLETED JOB WENT ON TAKING CONTRACTORS, AND NEITHER HALF WAS HOLDING
+  THE LINE.** Reported as *"if a job is marked off as complete, it shouldn't be
+  still in the jobs overview looking like it can be edited"*. The screen was
+  the half that showed; the half that mattered is that **all three routes said
+  yes**.
+
+  The empty trade slot's action row had **no `done` check at all**, so a
+  completed job drew *Assign & issue WO*, *Ask for quotes* and *Overflow*
+  exactly as a live one did — and pressing any of them worked, because
+  `isClosed` lived in `App.tsx` and nowhere else. `POST /api/jobs/:jobId/assign`
+  selected `id, requested_by, approved_at, date` and never read `status`;
+  `canRequestQuotes` checked `withdrawnAt` and not `status`; the overflow post
+  route checked neither. So this was not the ordinary gate-lives-in-the-browser
+  lie, where the screen is looser than the route — **the screen and the route
+  were both open**, and the only thing between a closed-out job and a work
+  order was that nobody had pressed the button yet.
+
+  What that costs is a contractor turning up to work nobody is expecting, which
+  is the same failure the handover entry calls the worst moment this product can
+  produce. Overflow is worse again, because it reaches **past this account** to
+  companies who would spend an afternoon pricing an offer that cannot be taken
+  up.
+
+  `app/shared/jobstate.js` is the one predicate, read by the card and by all
+  three routes. It **reads both spellings** — the browser holds `withdrawnAt`,
+  the Worker passes a raw row with `withdrawn_at` — because normalising at each
+  call site is a conversion to forget at the twenty-first one, and a missed one
+  here reads as *not closed*, which is the direction that opens the gate. The
+  mutation that proves it is dropping the snake_case half.
+
+  **`status` had to be added to two SELECTs, and the column is as load-bearing
+  as the check.** Without it the predicate reads `undefined` and answers
+  cheerfully, so the gate fails open with nothing on any screen to see. Both are
+  asserted separately, because the check alone passes over a row that cannot
+  answer it — the two-guards-covering-for-each-other shape, again.
+
+  **Withdrawn keeps the answer it already had.** `canRequestQuotes` answers
+  `withdrawn` for a withdrawal and `job_closed` for the other two: a job somebody
+  took back and a job that was finished are different events, and the screen
+  already has words for the first. Same reason expired and never-added share a
+  colour in `docs.js` and are told apart by the words.
+
+  On the card the three buttons become **one line saying which closure it was**,
+  not a disabled button and not a blank: a dead control is something people press
+  twice before reading, and an empty row where buttons were reads as a screen
+  that failed to draw. It names the way back, because *Reopen* is at the foot of
+  the card and only obvious once you know the job is **shut rather than broken**.
+
+  **Greyed, and deliberately not greyed out.** `opacity:.72` on the trade rows
+  with the ratings and the issue buttons brought back to full strength — the
+  notes, the star ratings and the warranty claims are the entire reason to open
+  a finished job, and muting those to make a point about editing would take the
+  screen's actual purpose away. The test asserts the rows are **under 1 and at
+  least 0.6**: one bound alone passes a card greyed to the point of being
+  unreadable.
+
+  **And the live job is asserted in the same place.** A fix that greys
+  everything is not a fix, and checking only the completed card cannot tell the
+  two apart — the diagonal coverage that left `hiresLabel` half-wired.
+
+- **Completing a job asks first, and the question is what it costs rather than
+  whether you are sure.** It fired straight off the button, and what it does is
+  not guessable from the button: the rating and the notes open, and the three
+  ways to put somebody on a trade shut.
+
+  **It is NOT `ConfirmRemove` with a different verb.** That one is red, carries
+  a warning triangle and a trash icon, and **those are the message as much as
+  the words are** — the same reason the hire-both-ways screen could not wear the
+  upgrade gate's chrome. Completing is affirmative and reversible, so
+  `ConfirmComplete` is green with a tick, and the sentence says it can be
+  reopened, which is what makes a plain confirmation the right weight rather
+  than the typed-name one.
+
+  **What is still outstanding is NAMED, not counted.** *4 things outstanding* is
+  a number somebody presses past; *Roofing — nobody assigned* is one they stop
+  at. And one of the two lists is a thing the card **cannot** show: a trade
+  whose contractor has not answered their work order yet counts as filled, so it
+  reads 1/1 on the card and is exactly the state worth being told about before
+  closing. The reported job was completed with **0/1 trades** — nobody was ever
+  on it — which is the commonest way this gets pressed by mistake.
+
+  **`completeJob` had to become awaited.** It patched optimistically and
+  `persist` only logs, so a refused completion drew the card as closed over a
+  write that never happened — the save-that-reports-success shape this file
+  already records about `updateSub`, on the one action that shuts three others.
+  The modal stays open with the reason on it.
+
+  Three assertions in the suite are the ones worth keeping, and each is
+  mutation-proved: **a modal appearing is not the property** (the request could
+  still go, so the API calls are counted — zero until somebody agrees, one
+  afterwards); **Cancel must leave the job open**, because a confirmation whose
+  Cancel does it anyway is worse than none, having been asked and answered; and
+  the routes are asserted **on their own**, because a screen assertion passing
+  while the route is open is precisely what happened here.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

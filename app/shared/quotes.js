@@ -14,6 +14,10 @@
 // overflow's gates apply -- no opt-in, no three months, no rating floor, no
 // fee -- because these are already your contractors, which is the product.
 
+// Whether a job is finished with, shared with the card and the two routes
+// beside this one, so all three cannot hold different answers.
+import { jobClosure } from "./jobstate.js";
+
 // Statuses, in one place, so nothing spells them differently.
 export const REQUEST_STATUS = ["open", "awarded", "cancelled"];
 export const INVITE_STATUS = ["invited", "quoted", "passed", "withdrawn"];
@@ -38,7 +42,13 @@ export function canRequestQuotes(job = {}, { role, hasOpenRequest, liveWorkOrder
   // A request that was never approved is not work anybody may be asked to
   // price: the account has not agreed to have it done.
   if (job.requestedBy && !job.approvedAt) return { ok: false, reason: "not_approved" };
-  if (job.withdrawnAt) return { ok: false, reason: "withdrawn" };
+  // Finished with, by any of the three routes out. `withdrawnAt` was checked
+  // and `status` was not, so a completed job could be sent out to be priced --
+  // and the companies asked would have spent an afternoon on work that was
+  // closed out last week. One predicate for all three, shared with the card
+  // and with the two routes beside this one.
+  const shut = jobClosure(job);
+  if (shut.closed) return { ok: false, reason: shut.reason === "withdrawn" ? "withdrawn" : "job_closed" };
   // Already committed. Asking for quotes on a trade somebody is already
   // issued would be asking companies to price work that is gone.
   if (liveWorkOrder) return { ok: false, reason: "already_issued" };

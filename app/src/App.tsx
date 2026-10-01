@@ -56,6 +56,7 @@ import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
   isOptionalDoc, docStatus as docStatusOf,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso, DOC_LABELS } from "../shared/docs.js";
 import { setupGaps, mayFinishSetup, firstGapStep } from "../shared/setup.js";
+import { jobIsClosed, jobClosure, completionEffects } from "../shared/jobstate.js";
 import { agreementStateText, typedNameMatches, renderAgreement } from "../shared/agreement.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -642,7 +643,11 @@ const ALWAYS_SCOPED_ROLES = ["owner", "tenant"];
 const isLiveJob = (j) => !j.withdrawnAt && !j.declinedAt && !(j.requestedBy && !j.approvedAt);
 // Closed out: finished, taken back by whoever reported it, or turned down.
 // The Jobs tab files all three under Completed -- none is going anywhere.
-const isClosed = (j) => j.status === "completed" || !!j.withdrawnAt || !!j.declinedAt;
+//
+// It is `shared/jobstate.js` now rather than a line here. This was the only
+// copy, so the three routes that commit a contractor never learned it: a
+// completed job took a work order exactly as a live one did.
+const isClosed = jobIsClosed;
 // How long a report can still be corrected by whoever made it.
 // How long ago a job last moved, in words, or null once it stops being news.
 //
@@ -2175,6 +2180,9 @@ export default function SubSub() {
   const [askingAuto, setAskingAuto] = useState(null); // "turn auto-schedule on?" request
   const [transfers, setTransfers] = useState([]);   // buildings changing hands
   const [postingOverflow, setPostingOverflow] = useState(null); // { job, trade }
+  // The job somebody is about to close out, held so the confirmation can name
+  // what is still outstanding on it.
+  const [completingJob, setCompletingJob] = useState(null);
   const [overflowPosts, setOverflowPosts] = useState([]);
   const [overflowOffers, setOverflowOffers] = useState([]);
   const [overflowStanding, setOverflowStanding] = useState(null);
@@ -2706,10 +2714,13 @@ export default function SubSub() {
   };
 
   // Mark a job complete — this is what unlocks rating and notes.
-  const completeJob = (id) => {
+  // Awaited, THEN patched. The optimistic version drew the card as complete
+  // over a write that may not have happened -- and `persist` only logs, so a
+  // refusal was invisible until a reload. Same rule as `updateSub`.
+  const completeJob = async (id) => {
     const jb = allJobs.find((j) => j.id === id);
+    await api.completeJob(id);
     if (jb) logEvent("job_completed", `Completed ${jb.title}`);
-    persist("completeJob", api.completeJob(id));
     setJobs((js) => js.map((j) => j.id === id ? {
       ...j, status: "completed", completedAt: new Date().toISOString().slice(0, 10) } : j));
   };
@@ -5790,6 +5801,28 @@ export default function SubSub() {
                                   );
                                 })()}
                               </div>
+                            ) : done ? (
+                              // NOTHING TO PRESS ON A JOB THAT IS FINISHED
+                              // WITH. This branch used to be the three buttons
+                              // below, drawn on a completed job exactly as on a
+                              // live one -- and all three worked, because no
+                              // route read `status` either. A work order issued
+                              // here is a contractor turning up to work nobody
+                              // is expecting.
+                              //
+                              // It says which of the three closures it was
+                              // rather than going blank: an empty row where
+                              // buttons were reads as a screen that failed to
+                              // draw, and the way back (Reopen, at the foot of
+                              // the card) is only obvious once you know the job
+                              // is shut rather than broken.
+                              <div className="trade-actions">
+                                <span className="trade-shut">
+                                  <Lock size={12} /> {jobClosure(j).label.toLowerCase() === "completed"
+                                    ? "Job completed — reopen it to assign this"
+                                    : `Job ${jobClosure(j).label.toLowerCase()} — nothing to assign`}
+                                </span>
+                              </div>
                             ) : (
                               <div className="trade-actions">
                                 <button className="trade-assign" onClick={() => setAssigning({ job: j, trade: t })}>
@@ -5889,7 +5922,12 @@ export default function SubSub() {
                               {allAssigned ? "All trades assigned — mark complete when the work is finished to rate crews."
                                 : `${j.trades.length - filled} trade${j.trades.length - filled > 1 ? "s" : ""} still unassigned.`}
                             </span>
-                            <button className="btn-solid jf-btn" onClick={() => completeJob(j.id)}>
+                            {/* Asked, not fired. This closed the job straight
+                                off the press, and closing it shuts the three
+                                ways to put somebody on a trade -- which is a
+                                thing to be told before it happens rather than
+                                discovered on a card that has gone quiet. */}
+                            <button className="btn-solid jf-btn" onClick={() => setCompletingJob(j)}>
                               <CheckCircle2 size={15} /> Mark job complete
                             </button>
                           </>
@@ -6142,6 +6180,22 @@ export default function SubSub() {
           heading carries what seatDescription was repeating on every row;
           ordered by what is waiting on the person there; searchable, over
           their own memberships only -- nothing is sent anywhere. */}
+      {/* Closing one out. The effects are read off the job and the two lists
+          beside it, so the modal names what is loose on THIS job rather than
+          describing completion in general. */}
+      {completingJob && (
+        <ConfirmComplete
+          job={completingJob}
+          effects={completionEffects(completingJob, {
+            openQuotes: quoteReqs.filter((r) => r.jobId === completingJob.id && r.status === "open").length,
+            openOverflow: overflowPosts.filter((p) => p.jobId === completingJob.id && p.status === "open").length,
+          })}
+          onCancel={() => setCompletingJob(null)}
+          onConfirm={async () => {
+            await completeJob(completingJob.id);
+            setCompletingJob(null);
+          }} />
+      )}
       {/* Asking. The list is the account's OWN roster for that trade -- there
           is nothing to search, because there is nothing here but people they
           already work with. */}
@@ -9646,6 +9700,79 @@ function ConfirmRemove({ name, what, consequence, verb = "Remove", onConfirm, on
               }
             }}>
             <Trash2 size={15} /> {busy ? `${verb.replace(/e$/, "")}ing…` : verb}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Completing a job is a decision, so it is asked rather than fired off a
+// button. Deliberately NOT `ConfirmRemove` with a different verb: that one is
+// red, carries a warning triangle and a trash icon, and those are the message
+// as much as the words are -- the same reason the hire-both-ways screen could
+// not wear the upgrade gate's chrome. Completing is affirmative and reversible.
+//
+// It is not "are you sure". It says what completing DOES -- the rating and the
+// notes open, the three ways to put somebody on a trade shut -- and what is
+// still outstanding on this particular job, because a job nobody was ever
+// assigned to is the commonest way this gets pressed by mistake and the card
+// above it only counts filled slots.
+function ConfirmComplete({ job, effects, onConfirm, onCancel }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const { unassigned = [], awaiting = [], openQuotes = 0, openOverflow = 0 } = effects || {};
+  const loose = unassigned.length + awaiting.length + openQuotes + openOverflow;
+  return (
+    <Modal onClose={onCancel}>
+      <div className="form">
+        <h2>
+          <CheckCircle2 size={18} style={{ color: "var(--brand)", verticalAlign: -3, marginRight: 8 }} />
+          Mark {job.title} complete?
+        </h2>
+        <p className="form-sub">
+          The job closes: you can rate the crews and add job notes, and it stops
+          taking contractors — Assign, Ask for quotes and Overflow all shut.
+          You can reopen it afterwards.
+        </p>
+        {loose > 0 && (
+          // Named, not counted. "4 things outstanding" is the number somebody
+          // presses past; "Roofing has nobody on it" is the one they stop at.
+          <div className="cc-loose">
+            <div className="form-sec">Still outstanding</div>
+            <ul>
+              {unassigned.map((t) => (
+                <li key={`u-${t}`}><b>{TRADE_LABEL[t] || t}</b> — nobody assigned, and no work order was ever issued</li>
+              ))}
+              {awaiting.map((t) => (
+                <li key={`a-${t}`}><b>{TRADE_LABEL[t] || t}</b> — the contractor has not answered their work order yet</li>
+              ))}
+              {openQuotes > 0 && (
+                <li>{openQuotes} open quote request{openQuotes > 1 ? "s" : ""} — the companies you asked will not be able to answer</li>
+              )}
+              {openOverflow > 0 && (
+                <li>{openOverflow} trade{openOverflow > 1 ? "s" : ""} out to overflow — those posts stop taking answers</li>
+              )}
+            </ul>
+          </div>
+        )}
+        {err && <div className="form-err">{err}</div>}
+        <div className="form-actions">
+          <button className="btn-ghost" type="button" onClick={onCancel}>Cancel</button>
+          <button className="btn-solid" type="button" disabled={busy}
+            onClick={async () => {
+              setBusy(true); setErr("");
+              try { await onConfirm(); }
+              catch (e) {
+                // Left open with the reason on it, the rule ConfirmRemove
+                // follows: closing on a failed save reads as success, and
+                // the card behind would already be drawn as complete.
+                console.error("[completeJob] refused:", e);
+                setErr("That did not go through. Try again in a moment.");
+                setBusy(false);
+              }
+            }}>
+            <CheckCircle2 size={15} /> {busy ? "Completing…" : "Mark complete"}
           </button>
         </div>
       </div>
@@ -28276,6 +28403,31 @@ p.fld-note{margin:6px 0 0}
   background:#e9f0f6;color:#2b5c85;padding:3px 8px;border-radius:20px}
 .job-phase.done{background:#e8f2ea;color:#1f6b4a}
 .job-card.done{background:#fbfcfb}
+/* A COMPLETED JOB READS AS COMPLETED, rather than as a live one with a green
+   line at the bottom. The card kept full contrast and full-strength trade
+   rows, so the only thing saying it was shut was a sentence under everything
+   else -- and the buttons above it were still live. Muted, not hidden: the
+   notes, the ratings and the history are the reason to open a finished job,
+   and greying it to the point of being unreadable would take those away to
+   make a point about editing. */
+.job-card.done .trade-row{opacity:.72}
+.job-card.done .job-card-head h3{color:var(--ink-soft)}
+/* What stands in for the three buttons. Not a disabled button: a dead control
+   is something somebody presses twice before reading, and this has to say the
+   job is shut rather than that the press failed. */
+.trade-shut{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;
+  color:var(--ink-soft);background:var(--paper);border:1px dashed var(--line);
+  padding:7px 11px;border-radius:8px}
+/* The rating stars and the issue/change-order buttons are the point of a
+   finished job, so they come back to full strength inside the muted row. */
+.job-card.done .trade-row .star-rate,
+.job-card.done .trade-row .sc-cta,
+.job-card.done .trade-issue{opacity:1}
+/* What is still loose on the job being closed out. */
+.cc-loose{margin:14px 0 2px}
+.cc-loose ul{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
+.cc-loose li{font-size:12.5px;color:var(--ink-soft);line-height:1.45}
+.cc-loose li b{color:var(--ink);font-weight:700}
 .job-meas{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px}
 .meas-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;background:var(--paper);
   border:1px solid var(--line);padding:4px 9px;border-radius:6px;color:var(--ink-soft)}
