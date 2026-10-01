@@ -4841,6 +4841,20 @@ export default function SubSub() {
                 actions.push(["job", "Job", "New job", Calendar, () => tryAddJob()]);
               }
               if (actions.length === 1) {
+                // ON THE DASHBOARD THIS IS THE SECOND COPY OF THE SAME BUTTON.
+                // The dashboard's own call to action is `New job` (or
+                // `Request work` for an owner), and when a seat has exactly
+                // one thing it can add, that one thing IS a job -- so the
+                // header drew the identical control beside it. Reported from
+                // a property manager's dashboard as "it says add job twice",
+                // which is exactly what it is.
+                //
+                // It only duplicates HERE: on Jobs, Calendar, Properties and
+                // the rest there is no second copy and the header button is
+                // the only way in, so it is dropped on this one screen rather
+                // than removed. A seat with a real menu keeps it everywhere —
+                // `Add` over four items is not a duplicate of anything.
+                if (tab === "dashboard") return null;
                 // On its own there is no "Add" above it to lean on, so it
                 // says what it does rather than naming a noun.
                 const [, , solo, Icon, go] = actions[0];

@@ -4883,6 +4883,35 @@ refactor.
   the routes are asserted **on their own**, because a screen assertion passing
   while the route is open is precisely what happened here.
 
+- **THE HEADER'S ADD CONTROL DREW A SECOND COPY OF THE DASHBOARD'S OWN BUTTON.**
+  Reported from a property manager's dashboard as *"it says add job twice"*,
+  beside a general contractor's where it reads correctly — which is the whole
+  reason nothing had caught it.
+
+  The dashboard's call to action is `New job` (`Request work` for an owner).
+  The header's Add collapses to a **single button** when the seat has exactly
+  one thing it can add — and that one thing is the job. So the two sat side by
+  side saying the same word. A seat with a real menu never showed it: *Add*
+  over four items is not a duplicate of anything, and an unscoped admin on
+  either kind has four. It takes a **narrowed** seat to see it, which is the
+  seat nobody demos with.
+
+  It is dropped **on that one screen**, not removed. Everywhere else — Jobs,
+  Calendar, Properties — there is no second copy and the header button is the
+  only way in, so removing it outright would take the action away to fix a
+  duplicate. The mutation that proves each half: deleting the check puts
+  `["New job","New job"]` back on the dashboard, and widening it to every
+  screen fails the Jobs assertion.
+
+  **And the Add list per account kind was already right**, which is worth
+  pinning rather than assuming: `can("properties")` is `hasProperties(account)`
+  and not the role's list alone, so a property manager, a portfolio manager and
+  a building owner get **Property** and a general contractor does not — it
+  works job to job and has no building list to add one to. `test:addmenu`
+  asserts all four kinds **in the same place**, because a rule with two
+  branches checked on one branch is the diagonal coverage that left
+  `hiresLabel` half-wired.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
