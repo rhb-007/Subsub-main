@@ -4143,6 +4143,87 @@ refactor.
   against a 390px viewport with none of this change applied. It matters slightly
   more now that the index links to it.
 
+
+- **The comparison pages name OTHER COMPANIES' prices, which is what makes them
+  different from every other page here.** Everything else on this site describes
+  SubSub, where being wrong is embarrassing. Seven of these describe a
+  competitor, where being wrong is a reader quoting a figure at a salesperson
+  who corrects them — and two of the seven, Buildertrend and Procore, publish no
+  pricing at all, so those are ranges read off somebody's page on a particular
+  day.
+
+  So **the review date is data, not a line in a README.** `updated:` is in each
+  file's frontmatter, rendered where a reader can weigh it, and `test:compare`
+  fails once a page is past `STALE_AFTER_DAYS` — a quarter plus a fortnight to
+  act on it. It **names the pages**, because a count is not a work queue. Same
+  rule the licensing dataset runs on, and for the same reason: *re-check
+  quarterly* written in a README is a thing nobody does.
+
+  **Three claims were checked against the product rather than against memory,
+  and two were wrong.**
+
+  The **licence** one is the sharp one. `SOCRATA_STATES` wires seven states and
+  exactly one — WA — carries `fieldMappingVerified: true`; the comment above it
+  says the other six have never been exercised against a live response, and the
+  whole marketing site says WA L&I. A page saying *verified against the state
+  registry* reads as true to a Texas GC and is not. The guard reads the
+  **Worker** for the count rather than holding a second copy of it, and requires
+  any page using that phrase to name Washington.
+
+  **Payment** has not shipped — the site says *Coming soon* in three places —
+  and the hub listed `pay` among what SubSub does. **And the guard for it could
+  not fail.** The first version kept only sentence fragments containing the word
+  "SubSub", on the reasoning that the rest are about competitors; every one of
+  these pages is about SubSub throughout, so the subject is usually in the
+  *previous* sentence. The mutation that proved it — changing the hub to read
+  *"…dispatch, warranty and paying your subcontractors"* — sailed straight
+  through. It is an **allow list** now: every use of the word is flagged and the
+  senses that are legitimately not a claim about shipped functionality are
+  struck out by name, so unknown means flag it.
+
+  **And the hub had no disclosure at all** — seven comparisons written by the
+  company being compared, recommended from a page that did not say so. The test
+  found it, which is the only reason it is there.
+
+- **These are generated, and the three traps they hit are all already in this
+  file.** `content/compare/pages/*.md` is the source, `npm run compare` writes
+  `compare/` and `blog/`. Generated rather than nine hand-written files for the
+  reason the licensing pages are: the header, footer and stylesheet are sliced
+  out of a real page at build time, so changing the nav cannot leave nine pages
+  wearing last month's — which is silent, and they are the pages a search engine
+  sends people to. Markdown rather than a data structure because these are
+  **prose**, and prose edited as a JavaScript object is prose nobody edits.
+
+  **`readChrome().css` is a whole `<style>` block, not its contents.** Wrapping
+  it in another `<style>` closed it at the inner tag, so four kilobytes of the
+  site's stylesheet rendered **to the page as text** on an unstyled page. Every
+  static assertion passed while it did: the header was present, the footer was
+  present, every heading was present. *Present in the source* and *in force in a
+  browser* are different questions and only the second is the one anybody cares
+  about, so `test:compare` loads a built page and asserts the stylesheet parsed,
+  that no CSS leaks as text, and that the page's own rules applied. The slice
+  now says what it returns, where the next caller reads it.
+
+  **The backtick trap, for the seventh time**, in a comment explaining a CSS
+  rule inside `PAGE_CSS`. The one-line guard this file prescribes is beside it.
+
+  **And not scrolling sideways was only half of the phone fix.** The first
+  version put each table in an overflow box: the page was fine and the table
+  clipped its last column mid-word — *Mid-size to enterprise commercial
+  constructio* — which reads as a broken page rather than as a table with more
+  to the right, and a scroll shadow is too quiet to argue otherwise. At 560px
+  the rows **stack**, each answer carrying its column's heading from `data-h`,
+  because two bare values under one label say nothing about which product is
+  which. The markup does not change, so it is still a table to a crawler and on
+  a wide screen. The assertions measure **cells**, not the page.
+
+  **Every marked-up answer is text the reader can see.** The FAQ pairs are read
+  out of the body rather than written a second time beside it, and each is
+  checked word by word against the page's own visible text — a fabricated answer
+  scores near zero. Same rule, and same test shape, as the licensing pages.
+
+  Still open and unchanged: `developers.html` scrolls sideways at 390px.
+
 - **The Zapier app buys no capability, and that is the honest way to describe
   it.** `/api/v1/hooks/generic/<token>` already worked from a *Webhooks by
   Zapier* step. What the app adds is three things worth having anyway: the

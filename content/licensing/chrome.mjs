@@ -20,6 +20,10 @@ const between = (src, open, close) => {
 export function readChrome(fromFile) {
   const src = readFileSync(fromFile, "utf8");
   return {
+    // NOTE: each of these carries its own tags -- `css` is a whole
+    // `<style>...</style>` block, not its contents. Wrapping it in another
+    // `<style>` closes it at the inner tag and renders the rest of the
+    // stylesheet to the page as text, on an unstyled page. Emit it bare.
     css: between(src, "<style>", "</style>"),
     header: between(src, '<header class="site">', "</header>"),
     footer: between(src, '<footer class="site">', "</footer>"),
