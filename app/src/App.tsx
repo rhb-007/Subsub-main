@@ -29,7 +29,7 @@ import {
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
-  Globe, RefreshCw, ExternalLink, ImageOff, ScanLine, ArrowRight, Code2,
+  Globe, RefreshCw, ExternalLink, ImageOff, ScanLine, ArrowRight, ChevronLeft, Code2,
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
@@ -11478,15 +11478,28 @@ const TENANT_WHEN = [
 // one, so the bytes come back through the same client as every other call
 // and go on the page as a blob URL. Revoked on unmount, because a tenant
 // scrolling their reports would otherwise hold every photo they had opened.
-function ReportPhoto({ jobId, photo, onOpen }) {
+// The bytes need an Authorization header, so neither an <img src> nor an
+// <a href> can carry one -- hence the blob, fetched on mount and revoked when
+// the thumbnail goes.
+//
+// `onLoaded` is how the lightbox beside it gets a picture without fetching a
+// second copy of the same bytes: every photo in a set has one of these
+// mounted, each owns exactly one object URL, and two owners of one URL means
+// revoking either blanks the other. A failure reports `null` rather than
+// staying quiet, so the lightbox can say so instead of spinning for ever.
+function ReportPhoto({ jobId, photo, onOpen, onLoaded }) {
   const [url, setUrl] = useState(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let live = true, made = null;
     api.reportPhotoBlob(jobId, photo.id)
-      .then((u) => { if (live) { made = u; setUrl(u); } else URL.revokeObjectURL(u); })
-      .catch((e) => { console.error("[photo] load failed:", e); if (live) setFailed(true); });
+      .then((u) => { if (live) { made = u; setUrl(u); onLoaded?.(photo.id, u); } else URL.revokeObjectURL(u); })
+      .catch((e) => { console.error("[photo] load failed:", e);
+        if (live) { setFailed(true); onLoaded?.(photo.id, null); } });
     return () => { live = false; if (made) URL.revokeObjectURL(made); };
+    // onLoaded deliberately out of the deps: the parents pass an inline
+    // setter, so including it would re-fetch every photo on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, photo.id]);
   if (failed) return <div className="ph-thumb is-gone"><ImageOff size={16} /><span>Couldn't load</span></div>;
   if (!url) return <div className="ph-thumb is-loading" aria-label="Loading photo" />;
@@ -11494,6 +11507,94 @@ function ReportPhoto({ jobId, photo, onOpen }) {
     <button type="button" className="ph-thumb" onClick={() => onOpen?.(url, photo)}>
       <img src={url} alt={photo.name} />
     </button>
+  );
+}
+
+// ONE LIGHTBOX, AND IT HOLDS THE SET RATHER THAN ONE PICTURE.
+//
+// There were two copies of this -- the tenant's own report and the manager's
+// view of the same report -- and each showed exactly the photo that was
+// tapped, closing on any click, with no way to the next one but closing and
+// finding the right thumbnail again. Three photos of a leak are one piece of
+// evidence read in order: the ceiling, the floor, the meter. Reported as
+// exactly that: "they should be strung together, so you can increase size and
+// arrow forward or back to view the other images without closing them."
+//
+// Two copies of one thing is two things to keep in step, so it is one
+// component, used from all three grids.
+//
+// IT FETCHES NOTHING. Every photo in the set already has a thumbnail mounted
+// behind it, each owning one object URL for those bytes -- see `onLoaded`
+// above. A photo still arriving reads as loading and one that failed says so,
+// in the same words its thumbnail uses, rather than as a broken frame.
+//
+// AND IT WRAPS AT BOTH ENDS. A dead Next on the last of three is the
+// disabled-control-with-no-reason failure on the one control whose whole job
+// is to be pressed, and a set of three has no boundary worth defending. With
+// one photo there are no arrows at all, because there is nowhere to go -- and
+// no counter either, since "1 of 1" is a number about nothing.
+function PhotoLightbox({ photos = [], urls = {}, at = 0, onAt, onClose }) {
+  const n = photos.length;
+  // Clamped rather than indexed raw: a photo can be removed from under an
+  // open lightbox, and reading past the end of the array is the unguarded
+  // read that renders a modal as a white box.
+  const i = n ? ((at % n) + n) % n : 0;
+  const ph = n ? photos[i] : null;
+
+  useEffect(() => {
+    if (!ph) return undefined;
+    const key = (e) => {
+      // Stopped rather than let through: this is the innermost thing on
+      // screen, and Escape here means this picture and not the report behind
+      // it.
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+      else if (n > 1 && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+        e.preventDefault();
+        onAt(((i + (e.key === "ArrowRight" ? 1 : -1)) % n + n) % n);
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [i, n, ph]);
+
+  if (!ph) return null;
+  const url = urls[ph.id];
+  const go = (d) => onAt(((i + d) % n + n) % n);
+
+  return (
+    // A div and not a button, because it contains buttons and a button inside
+    // a button is not a thing. Escape and the explicit close cover the
+    // keyboard; the backdrop covers the tap.
+    <div className="ph-lightbox" onClick={onClose} role="dialog" aria-modal="true"
+      aria-label={`Photo ${i + 1} of ${n}`}>
+      <button type="button" className="phl-x" onClick={onClose} aria-label="Close photo">
+        <X size={20} />
+      </button>
+      {n > 1 && (
+        <button type="button" className="phl-nav" aria-label="Previous photo"
+          onClick={(e) => { e.stopPropagation(); go(-1); }}>
+          <ChevronLeft size={28} />
+        </button>
+      )}
+      <figure className="phl-frame" onClick={(e) => e.stopPropagation()}>
+        {url === null
+          ? <div className="phl-gone"><ImageOff size={22} /><span>Couldn&rsquo;t load this one</span></div>
+          : url === undefined
+          ? <div className="phl-gone" aria-live="polite"><span>Loading&hellip;</span></div>
+          : <img src={url} alt={ph.name} />}
+        <figcaption className="phl-cap">
+          {n > 1 && <span className="phl-count">{i + 1} of {n}</span>}
+          <span className="phl-name">{ph.name}</span>
+        </figcaption>
+      </figure>
+      {n > 1 && (
+        <button type="button" className="phl-nav" aria-label="Next photo"
+          onClick={(e) => { e.stopPropagation(); go(1); }}>
+          <ChevronRight size={28} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -11516,7 +11617,14 @@ function TenantReportModal({
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // WHICH photo is open, by index into the set -- not the photo itself, and
+  // not its url. An index is what Next and Previous move, and holding the url
+  // was half of why there was no way between them.
   const [lightbox, setLightbox] = useState(null);
+  // What each thumbnail managed to load, so the lightbox can draw a picture
+  // without fetching a second copy of the same bytes. See `onLoaded`.
+  const [shotUrls, setShotUrls] = useState({});
+  const seeShot = (id, u) => setShotUrls((m) => ({ ...m, [id]: u }));
   const [confirmWithdraw, setConfirmWithdraw] = useState(false);
   const [withdrawNote, setWithdrawNote] = useState("");
 
@@ -11631,7 +11739,8 @@ function TenantReportModal({
                 <div className="ph-grid">
                   {photos.map((ph) => (
                     <div key={ph.id} className="ph-holder">
-                      <ReportPhoto jobId={job.id} photo={ph} onOpen={(u) => setLightbox({ url: u, name: ph.name })} />
+                      <ReportPhoto jobId={job.id} photo={ph} onLoaded={seeShot}
+                        onOpen={() => setLightbox(photos.indexOf(ph))} />
                       <button type="button" className="ph-x" disabled={busy}
                         onClick={() => dropPhoto(ph.id)} aria-label={`Remove ${ph.name}`}><X size={12} /></button>
                     </div>
@@ -11671,8 +11780,8 @@ function TenantReportModal({
                 <h4>Photos you sent <span className="sec-count">{photos.length}</span></h4>
                 <div className="ph-grid">
                   {photos.map((ph) => (
-                    <ReportPhoto key={ph.id} jobId={job.id} photo={ph}
-                      onOpen={(u) => setLightbox({ url: u, name: ph.name })} />
+                    <ReportPhoto key={ph.id} jobId={job.id} photo={ph} onLoaded={seeShot}
+                      onOpen={() => setLightbox(photos.indexOf(ph))} />
                   ))}
                 </div>
               </div>
@@ -11727,11 +11836,9 @@ function TenantReportModal({
           </>
         )}
 
-        {lightbox && (
-          <button type="button" className="ph-lightbox" onClick={() => setLightbox(null)}
-            aria-label="Close photo">
-            <img src={lightbox.url} alt={lightbox.name} />
-          </button>
+        {lightbox !== null && (
+          <PhotoLightbox photos={photos} urls={shotUrls} at={lightbox}
+            onAt={setLightbox} onClose={() => setLightbox(null)} />
         )}
       </div>
     </Modal>
@@ -17867,7 +17974,11 @@ function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], su
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [declining, setDeclining] = useState(false);
+  // The index of the open photo, and what each thumbnail loaded. Same shape
+  // as the tenant's own view of the same report, through the same component.
   const [lightbox, setLightbox] = useState(null);
+  const [shotUrls, setShotUrls] = useState({});
+  const seeShot = (id, u) => setShotUrls((m) => ({ ...m, [id]: u }));
   const photos = job.photos || [];
 
   const approve = async () => {
@@ -17978,8 +18089,8 @@ function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], su
             <h4>Photos they sent <span className="sec-count">{photos.length}</span></h4>
             <div className="ph-grid">
               {photos.map((ph) => (
-                <ReportPhoto key={ph.id} jobId={job.id} photo={ph}
-                  onOpen={(u) => setLightbox({ url: u, name: ph.name })} />
+                <ReportPhoto key={ph.id} jobId={job.id} photo={ph} onLoaded={seeShot}
+                  onOpen={() => setLightbox(photos.indexOf(ph))} />
               ))}
             </div>
           </div>
@@ -18016,10 +18127,9 @@ function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], su
           </>
         )}
 
-        {lightbox && (
-          <button type="button" className="ph-lightbox" onClick={() => setLightbox(null)} aria-label="Close photo">
-            <img src={lightbox.url} alt={lightbox.name} />
-          </button>
+        {lightbox !== null && (
+          <PhotoLightbox photos={photos} urls={shotUrls} at={lightbox}
+            onAt={setLightbox} onClose={() => setLightbox(null)} />
         )}
       </div>
     </Modal>
@@ -27897,9 +28007,38 @@ p.fld-note{margin:6px 0 0}
   font-size:12.5px;font-weight:650;cursor:pointer;font-family:inherit}
 .ph-add:hover{border-color:var(--brand);color:var(--brand)}
 .ph-add:disabled{opacity:.55;cursor:default}
-.ph-lightbox{position:fixed;inset:0;z-index:80;background:rgba(10,18,15,.88);border:0;padding:24px;
-  display:flex;align-items:center;justify-content:center;cursor:zoom-out}
-.ph-lightbox img{max-width:100%;max-height:100%;border-radius:10px;display:block}
+.ph-lightbox{position:fixed;inset:0;z-index:80;background:rgba(10,18,15,.92);padding:24px;
+  display:flex;align-items:center;justify-content:center;gap:10px;cursor:zoom-out}
+/* The frame is the only thing that is not the way out, so it is the only
+   thing that does not wear the zoom-out cursor. */
+.phl-frame{margin:0;min-width:0;display:flex;flex-direction:column;align-items:center;
+  gap:9px;cursor:default;max-height:100%}
+.phl-frame img{max-width:100%;max-height:calc(100vh - 110px);border-radius:10px;display:block;
+  background:#0a120f}
+.phl-cap{display:flex;align-items:center;gap:9px;color:rgba(255,255,255,.82);
+  font:600 12px Inter,sans-serif;min-height:17px}
+/* The counter is the whole reason the arrows are not decoration: a set you
+   can move through has to say where in it you are. */
+.phl-count{background:rgba(255,255,255,.16);border-radius:20px;padding:2px 9px;
+  font-weight:750;letter-spacing:.02em;flex:none}
+.phl-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.phl-nav,.phl-x{flex:none;display:inline-flex;align-items:center;justify-content:center;
+  border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.1);color:#fff;
+  border-radius:999px;cursor:pointer;padding:0}
+.phl-nav{width:46px;height:46px}
+.phl-nav:hover,.phl-x:hover{background:rgba(255,255,255,.2)}
+.phl-x{position:absolute;top:16px;right:16px;width:38px;height:38px}
+.phl-gone{display:flex;flex-direction:column;align-items:center;gap:7px;
+  color:rgba(255,255,255,.7);font:600 12.5px Inter,sans-serif;padding:40px 30px}
+/* On a phone the arrows take the width the picture needs, so they go under
+   it -- still a tap each, and still beside the counter that says which of
+   the set is on screen. */
+@media (max-width:560px){
+  .ph-lightbox{padding:16px;flex-wrap:wrap;align-content:center}
+  .phl-frame{order:1;flex:1 0 100%}
+  .phl-nav{order:2;width:52px;height:44px}
+  .phl-frame img{max-height:calc(100vh - 190px)}
+}
 
 /* ---- one report, in full ---- */
 /* The modal's close button is absolutely positioned at top right, so
