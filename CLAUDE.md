@@ -4358,6 +4358,73 @@ refactor.
   This is the one exception to "not a directory", and it stays an exception
   because nothing about it is browsable.
 
+- **The calendar opens where the work is, not on today's month.** Reported from
+  the dashboard, which is where it costs most. *What's scheduled* names the
+  next dated job however far ahead it is — a job on 10 November, read on 1
+  October — and then **Open the calendar** landed on an empty October grid. The
+  screen you came from had just said where the work was and the screen you
+  arrived at could not show it. Same failure as a count that routes somebody
+  somewhere unable to display what it counted.
+
+  Two halves, and the second is the whole of the conservatism. `aim` moves the
+  grid **only when today's month is empty** — any dated job in it, past or
+  future, finished or not, and it stays put, because a month with work in it is
+  where somebody expects to land and being yanked to December would hide three
+  jobs earlier this month. And it moves **forward only**: everything being in
+  the past means nothing is coming, and today's empty month is the honest
+  answer to that, where opening on August would read as the calendar having
+  lost its place.
+
+  The cursor is **null until somebody pages**, derived rather than seeded. A
+  `useState(() => …)` initialiser runs once, and on a cold load straight into
+  the calendar the jobs have not arrived yet — so it would aim at an empty list
+  and sit on the wrong month with nothing saying so. Paging or pressing *Today*
+  pins it, or paging back into an empty month would bounce the reader forward
+  again.
+
+  **An empty grid answers nothing**, so one names the next job and goes there in
+  one press — the same shape as the undated line beside it, which is the other
+  way a job is real and not on this grid. It prints the **date**, not
+  `relDay`: that helper is written to start a sentence (*Today*, *In 70 days*),
+  so it read as *"The next job is In 70 days"* mid-clause, and the date is what
+  the line is for anyway since the question is which month to look in.
+
+  **THE FIXTURE FOR THE DOES-NOT-MOVE BRANCH PASSED VACUOUSLY, and mutation is
+  what caught it.** The current-month job was dated the 1st — which on the day
+  this was written *was* today, so it was also the next job ahead, so
+  "stay on a month with work in it" and "jump to the next job" gave the same
+  answer and the assertion held whichever rule was in force. A discriminating
+  fixture needs a current-month job strictly **in the past**, which on the 1st
+  of a month cannot exist. So it is computed (five days back, floored at the
+  1st) and the suite **says out loud** on the one day it cannot tell the rules
+  apart, rather than reporting a green that means nothing. Proved by running it
+  with the browser's clock shifted ten days, where the mutation fails two
+  assertions.
+
+  A static check could not have covered any of this: the aim is computed from
+  jobs that only exist at runtime, so asserting that the source *mentions*
+  `aim` passes with the value never used.
+
+  **Still open, and reported in the same breath: the Calendar tab is not a
+  calendar of jobs.** It is `AvailabilityView` — contractors down the side,
+  fourteen days across, a cell booked only when a job that day is assigned to
+  *that contractor* — so a job with nobody on it has no row to appear on and is
+  invisible there by construction. Its own page heading reads **Availability**
+  while the nav tab says **Calendar**, which is two names for one screen, the
+  trap this file already records about *Your code* under *My QR code*. Renaming
+  it is a product decision rather than a refactor.
+
+  **And a job cannot be removed at all**, which came up in the same session. A
+  job arrives from four doors — the form, an owner or tenant request, the API,
+  a CRM hook — and leaves through one: *Mark job complete*, which writes a
+  completion event. `DELETE /api/jobs/:id` does not exist, `withdraw` is the
+  requester's own move and an API job has no requester, and `decline` answers
+  `not_a_request`. So tidying anything up means recording that work was done.
+  The answer is almost certainly the shape the roster already settled on — a
+  status rather than a delete, work orders voided so nobody turns up, refused
+  once money has moved — and it is a product decision with real edges, not a
+  refactor.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

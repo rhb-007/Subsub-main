@@ -2946,8 +2946,10 @@ export default function SubSub() {
     setJobForm({ ...(forSub ? { forSub } : {}), ...(forProperty ? { forProperty } : {}),
       ...(forDate ? { forDate } : {}) });
   };
-  // Arriving at the calendar from the dashboard. An empty date means "the
-  // calendar, wherever it was" rather than a day.
+  // Arriving at the calendar from the dashboard. An empty date means "open
+  // where the work is" rather than a day -- the grid picks the month itself,
+  // which is the only way this lands somewhere worth looking when the next
+  // job is in a month nobody has scrolled to.
   const goJobCalendar = (date) => {
     pickJobView("calendar");
     setJobDay(date && DATE_KEY_RE.test(date) ? date : "");
@@ -17702,13 +17704,49 @@ function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], su
 // Same jobs, same actions -- picking one here hands it to the list, which
 // scrolls to it and marks it, so there is one place a job is edited and
 // this is a way of finding it rather than a second copy of it.
+// `monthKey` is already defined above and does exactly this; a second copy
+// here would be two records of one fact.
+const monthOf = (k) => { const d = dayFromKey(k); return { y: d.getFullYear(), m: d.getMonth() }; };
+
 function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
   const todayK = dayKey();
-  const [cursor, setCursor] = useState(() => {
-    const start = selected && DATE_KEY_RE.test(selected) ? selected : todayK;
-    const d = dayFromKey(start);
-    return { y: d.getFullYear(), m: d.getMonth() };
-  });
+  // THE CALENDAR OPENS WHERE THE WORK IS, not on today's month.
+  //
+  // Reported from the dashboard, which is where it is worst: "What's
+  // scheduled" names the next job however far out it is -- a job on 10
+  // November, read in October -- and then "Open the calendar" landed on an
+  // empty October grid. The screen you came from had just told you where the
+  // work was and the screen you arrived at could not show it, which is the
+  // same lie as a count that routes somewhere unable to display what it
+  // counted.
+  //
+  // IT ONLY MOVES WHEN THIS MONTH IS EMPTY, which is the whole of the
+  // conservatism in it. A month with work in it is where somebody expects to
+  // land, and being yanked to December because the only job *ahead* is there
+  // would hide three jobs earlier this month. So: anything dated in today's
+  // month -- past or future, done or not, since a month with finished work in
+  // it is still a month with something to look at -- and it stays put.
+  //
+  // Forward only when it does move. Everything being in the past means
+  // nothing is coming, and today's empty month is the honest answer to that;
+  // opening on August because that is where the last job was would read as
+  // the calendar having lost its place.
+  const aim = useMemo(() => {
+    const dated = jobs.filter((j) => j.date).map((j) => j.date);
+    if (dated.some((k) => monthKey(k) === monthKey(todayK))) return todayK;
+    return dated.filter((k) => k >= todayK).sort()[0] || todayK;
+  }, [jobs, todayK]);
+  // The nearest thing still to come, for the line under an empty month.
+  const nextAhead = useMemo(() => jobs
+    .filter((j) => j.date && j.date >= todayK && !isClosed(j))
+    .map((j) => j.date).sort()[0] || "", [jobs, todayK]);
+  // null means "follow the work" -- derived on every render rather than
+  // seeded once, because the jobs arrive after mount on a cold load and a
+  // cursor initialised from an empty list is a cursor stuck on the wrong
+  // month with nothing to say so. Paging or pressing Today pins it.
+  const [cursor, setCursor] = useState(null);
+  const at = cursor
+    || monthOf(selected && DATE_KEY_RE.test(selected) ? selected : aim);
   // Rebuilt per render rather than memoised on `jobs`: the array is replaced
   // on every optimistic write, so a memo keyed on it saves nothing and a
   // memo keyed on anything else goes stale.
@@ -17717,18 +17755,20 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
   Object.values(byDay).forEach((list) => list.sort((a, b) =>
     String(a.time || "").localeCompare(String(b.time || ""))));
 
-  const first = new Date(cursor.y, cursor.m, 1);
-  const days = new Date(cursor.y, cursor.m + 1, 0).getDate();
+  const first = new Date(at.y, at.m, 1);
+  const days = new Date(at.y, at.m + 1, 0).getDate();
   const pad = first.getDay();
   const cells = [
     ...Array.from({ length: pad }, () => null),
-    ...Array.from({ length: days }, (_, i) => dayKey(new Date(cursor.y, cursor.m, i + 1))),
+    ...Array.from({ length: days }, (_, i) => dayKey(new Date(at.y, at.m, i + 1))),
   ];
   while (cells.length % 7) cells.push(null);
-  const step = (n) => setCursor((c) => {
-    const d = new Date(c.y, c.m + n, 1);
-    return { y: d.getFullYear(), m: d.getMonth() };
-  });
+  // Stepping pins the cursor: from here on it is the reader's place, not the
+  // work's, or paging back to an empty month would bounce them forward again.
+  const step = (n) => {
+    const d = new Date(at.y, at.m + n, 1);
+    setCursor({ y: d.getFullYear(), m: d.getMonth() });
+  };
   const monthLabel = first.toLocaleDateString(undefined, { month: "long", year: "numeric" });
   const inMonth = jobs.filter((j) => j.date && j.date.slice(0, 7) === dayKey(first).slice(0, 7)).length;
   const undated = jobs.filter((j) => !j.date);
@@ -17749,8 +17789,7 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
           <ChevronRight size={16} />
         </button>
         <button className="jcal-today" onClick={() => {
-          const d = dayFromKey(todayK);
-          setCursor({ y: d.getFullYear(), m: d.getMonth() });
+          setCursor(monthOf(todayK));
           onSelect(todayK);
         }}>Today</button>
       </div>
@@ -17819,6 +17858,20 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
             </button>
           ))}
         </div>
+      )}
+
+      {/* An empty grid answers nothing, and somebody who pages back into one
+          has no way of knowing whether the month is empty or the calendar is
+          broken. It names the next job and goes there in one press -- the
+          same shape as the undated line below it, which is the other way a
+          job is real and not on this grid. */}
+      {inMonth === 0 && nextAhead && monthKey(nextAhead) !== monthKey(dayKey(first)) && (
+        <p className="jcal-undated">
+          Nothing booked in {monthLabel}. The next job is on {niceDay(nextAhead)}.{" "}
+          <button className="sh-link" onClick={() => { setCursor(monthOf(nextAhead)); onSelect(nextAhead); }}>
+            Show it
+          </button>
+        </p>
       )}
 
       {undated.length > 0 && (
@@ -17935,7 +17988,11 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
     <section className="sched-hero">
       <div className="sh-head">
         <h3><Calendar size={16} /> {isOwner ? "Coming up at your buildings" : "What's scheduled"}</h3>
-        <button className="sh-all" onClick={() => onGoCalendar(todayK)}>
+        {/* No day, deliberately. Passing today forced the grid onto today's
+            month, so this button landed on an empty October while the panel
+            it sits in was naming a job in November. Empty lets the calendar
+            open where the work is. */}
+        <button className="sh-all" onClick={() => onGoCalendar("")}>
           Open the calendar <ChevronRight size={14} />
         </button>
       </div>
