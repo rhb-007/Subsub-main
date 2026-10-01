@@ -4191,6 +4191,83 @@ refactor.
   token's owner would put a sentence in front of somebody saying they did a
   thing they did not do.
 
+  **And `GET /api/v1/properties` is the third, because `propertyId` was a UUID
+  in a text box.** The field has been offered since the API shipped and could
+  only be used by going to look an id up — and a wrong one is a job refused as
+  `property_not_found`, which an integrator reads as a broken Zap. Exactly the
+  typing-`windows_doors` failure the trades dropdown exists to prevent, on the
+  one field whose value nobody can possibly hold in their head.
+
+  **It offers precisely what `ingestJob` accepts**, which is why the clause is
+  `account_id = ?` and nothing more: that route takes a building this account
+  **operates** and no other, deliberately unlike `POST /api/jobs` on the
+  screen, which also takes one the caller owns and somebody else runs. Wider
+  and the picker offers a building the route refuses; narrower and it hides one
+  the route would take. Both are the screen-that-lies rule pointed at a picker,
+  and **only a fixture holding another account's building can check either
+  direction** — the two-guards-covering-for-each-other shape this file keeps
+  recording.
+
+  **The label is assembled by the server, not by the Zapier app.** Two callers
+  would name one building two ways. Name plus address, because two buildings
+  called *Building A* are told apart by where they are.
+
+  **And it is PAGED, which is both halves or neither.** Zapier shows the first
+  page of a dropdown and says nothing about there being more, so a building
+  past it is indistinguishable from a building that is not on the account —
+  which is the typo this removes, arrived at from the other side.
+  `canPaginate` is what makes Zapier ask for page 1; passing `bundle.meta.page`
+  is what makes the answer different. Each is asserted, because either alone
+  passes.
+
+- **Three of Zapier's listing checks are code, and the integration works
+  perfectly without any of them.** That is what makes them easy to leave: no
+  press fails, nothing is red, and the only symptom is an integration nobody
+  can find or connect.
+
+  **The description has to say what SubSub IS**, not what the integration does.
+  It is printed under the name with no other sentence introducing the product,
+  so one opening *Post scheduled jobs from your CRM* describes a feature to
+  somebody who does not yet know what the thing is. It lives in
+  `deploy-zapier.yml`, because that is the only place it is ever sent —
+  `register -y` with an existing `.zapierapprc` **updates**, so re-running that
+  press with *First time only* ticked is how a change to the line reaches
+  Zapier.
+
+  **`CHANGELOG.md` is a hard requirement of `zapier promote`**, and the refusal
+  is right: promoting moves real Zaps onto a new version and the people on them
+  are owed a record of what changed under their feet. A test pins that its
+  newest heading names the version being pushed — a changelog two versions
+  behind is worse than none, because it is read and believed. Which is also why
+  the Property dropdown is **1.1.0** rather than a second 1.0.0 with different
+  contents: a pushed version is one somebody may already be connected to, the
+  same rule the agreement templates follow.
+
+  **An auth field that describes a screen has to link to the page documenting
+  it.** Directions alone leave somebody searching our site from inside a Zapier
+  modal, which is where an integration gets abandoned. Absolute, because a
+  relative href rendered on zapier.com resolves to zapier.com.
+
+  **The three Publishing tasks that are not code are not bugs.** A connected
+  account, three users with live Zaps and a task that has actually run are
+  satisfied *by* using the integration, and a logo is an upload in Zapier's own
+  console. They block the **App Directory**, which is a listing, and a private
+  integration is reached by invitation — `Manage → Sharing` — rather than by
+  being searchable. Somebody who cannot find "SubSub" in Zapier's app picker is
+  not looking at a broken integration.
+
+  **And `cleanInputData` stays at its default**, which Zapier warns about and
+  which is the right answer here: it trims strings and drops empty ones, and
+  `ingestJob` wants exactly that — an empty string stored where a column means
+  *not given* is a lie a screen reads back. The warning is for integrations
+  whose API distinguishes `""` from absent. Ours does not.
+
+  **`externalId` stays a plain text box, and that warning should never be
+  satisfied.** It is the customer's own CRM's id for the job; SubSub does not
+  hold their CRM's records and cannot enumerate them. A dropdown there would be
+  a list of ids SubSub has already seen, which is the opposite of what the
+  field is for — its whole job is naming a job SubSub has *not* seen.
+
 - **There was one trade list too many, and the Zapier dropdown is what forced
   the merge.** `TRADE_IDS` in the Worker validated; `CATEGORIES` in `App.tsx`
   carried ids, labels and a lucide icon each. They agreed by luck and by

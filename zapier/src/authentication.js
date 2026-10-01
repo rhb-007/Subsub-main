@@ -21,9 +21,14 @@ module.exports = {
       label: "SubSub API token",
       // Said where they are pasting it, not in help text read afterwards --
       // the token is shown once and the panel is the only place it exists.
+      // The LINK is here as well as the directions, because Zapier asks for
+      // one: a field whose help text describes a screen without pointing at
+      // the page documenting it leaves somebody searching our site from
+      // inside a Zapier modal.
       helpText:
         "In SubSub: **My account → Profile → Connect your CRM → Create token**. " +
-        "It starts `ssk_` and is shown once. The API is part of the Scale plan.",
+        "It starts `ssk_` and is shown once. The API is part of the Scale plan. " +
+        "Full instructions: [subsub.work/developers](https://subsub.work/developers)",
     },
   ],
   test,

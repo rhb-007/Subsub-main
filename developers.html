@@ -576,7 +576,7 @@ Content-Type: application/json</code></pre>
   "url": "https://app.subsub.work/?job=5b0f…"
 }</code></pre>
 
-<h2>Two reads, for building an integration</h2>
+<h2>Three reads, for building an integration</h2>
 <p>
   Both take the same <code>Authorization: Bearer</code> header, and both are checked the same way
   a <code>POST</code> is — same plan gate, same token lookup. A read endpoint that is a lighter
@@ -596,13 +596,21 @@ Content-Type: application/json</code></pre>
     <code>windows_doors</code> from memory. It is the same list that validates
     <code>trades</code> on a job, so what you pick from and what is accepted cannot disagree.</td>
   </tr>
+  <tr>
+    <td><code>GET /api/v1/properties</code></td>
+    <td>The buildings on your account — <code>id</code>, name, address and a ready-made
+    <code>label</code> — so <code>propertyId</code> can be a list too. A property id is a UUID, and
+    one typed from memory is a job refused as <code>property_not_found</code>. It offers exactly the
+    buildings a job will be accepted for. Paged 100 at a time: add <code>?page=1</code> for the
+    next, and a short page is the last one.</td>
+  </tr>
 </table>
 
 <h2>Zapier</h2>
 <p>
   <strong>SubSub has a Zapier app</strong>, so a Zap can create a job without anybody pasting a URL:
-  the token is a Zapier connection, and <em>Trades</em> is a dropdown rather than a text box. It
-  uses this endpoint — Zapier can set a header, so it does not need the webhook address above.
+  the token is a Zapier connection, and <em>Trades</em> and <em>Property</em> are dropdowns rather
+  than text boxes. It uses this endpoint — Zapier can set a header, so it does not need the webhook address above.
 </p>
 <p>
   It is a private app while it is new, which means you join it by invitation rather than finding it

@@ -12848,6 +12848,52 @@ app.get("/api/v1/trades", async (c) => {
   return c.json({ ok: true, trades: TRADES });
 });
 
+// The account's own buildings, so `propertyId` can be a dropdown too.
+//
+// Same reason as the trades: a job carrying a property id typed from memory is
+// refused with `property_not_found`, and the integrator is left comparing a
+// uuid against a screen. It is a uuid -- nobody holds one in their head, so
+// the field was unusable without this.
+//
+// IT OFFERS EXACTLY WHAT `ingestJob` ACCEPTS, which is why the WHERE clause is
+// `account_id = ?` and nothing more. That route takes a building this account
+// OPERATES and no other -- deliberately, unlike `POST /api/jobs` on the screen,
+// which also takes one the caller owns and somebody else runs. A dropdown
+// listing a building the route then refuses is the screen-that-lies rule
+// pointed at a picker; so is one that hides a building the route would take.
+//
+// PAGED, because a dropdown that silently stops at its first page is a
+// building that does not exist as far as the person picking is concerned --
+// the same failure as the typo this removes, arrived at from the other side.
+// Zapier asks for page 0, 1, 2 ... and stops when a page comes back short.
+const V1_PAGE = 100;
+app.get("/api/v1/properties", async (c) => {
+  const ctx = await apiCaller(c);
+  if (ctx.res) return ctx.res;
+  const page = Math.max(0, Math.min(999, Number(c.req.query("page")) || 0));
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, name, address, city, state, zip FROM properties
+      WHERE account_id = ?
+      ORDER BY lower(TRIM(name)) ASC, id ASC
+      LIMIT ? OFFSET ?`
+  ).bind(ctx.accountId, V1_PAGE, page * V1_PAGE).all();
+  return c.json({
+    ok: true,
+    page,
+    properties: (results || []).map((r) => ({
+      id: r.id, name: r.name, address: r.address, city: r.city,
+      state: r.state, zip: r.zip,
+      // Assembled here rather than in the Zapier app, because the app is not
+      // the only caller and two of them would label the same building two
+      // ways. Address included: two buildings called "Building A" are told
+      // apart by where they are, and a picker that cannot distinguish them is
+      // a picker somebody guesses in.
+      label: [r.name, [r.address, r.city].filter(Boolean).join(", ")]
+        .filter(Boolean).join(" -- "),
+    })),
+  });
+});
+
 // ---- The tokens themselves, from inside the account ----------------------
 // Admin only. A project manager runs work; wiring the company's CRM to it is
 // an account-level decision, and a token is a key to create jobs on it.

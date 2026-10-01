@@ -183,6 +183,16 @@ jobs:
           echo "role:";     list role
           echo "category:"; list app_category
 
+      # WHY THE DESCRIPTION BELOW READS "SubSub is a ...".
+      #
+      # Zapier's App Directory checks it, and the check is right: the
+      # description is printed under the name with no other sentence
+      # introducing the product, so one that opens "Post scheduled jobs from
+      # your CRM" describes a feature to somebody who does not yet know what
+      # the thing is. `register -y` with an existing .zapierapprc UPDATES, so
+      # re-running this workflow with "First time only" ticked is what applies
+      # a change to this line.
+      #
       # First press only, and only when asked for by name.
       - name: Register the integration
         if: ${{ inputs.register }}
@@ -220,7 +230,7 @@ jobs:
           done
           set +e
           npx --yes zapier-platform-cli@19.1.0 register "SubSub" \
-            --desc "Post scheduled jobs from your CRM into SubSub, ready to assign contractors." \
+            --desc "SubSub is a contractor management tool for general contractors and property managers: post scheduled jobs from your CRM into SubSub, ready to assign contractors to." \
             --url "https://subsub.work" \
             --audience private \
             --category "$CATEGORY" \

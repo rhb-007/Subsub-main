@@ -48,6 +48,7 @@ const M048 = readFileSync(new URL("../worker/migrations/048_api.sql", import.met
 
 const jobCreate = require("../../zapier/src/creates/job.js");
 const tradeTrigger = require("../../zapier/src/triggers/trade.js");
+const propertyTrigger = require("../../zapier/src/triggers/property.js");
 const auth = require("../../zapier/src/authentication.js");
 const { handleError } = require("../../zapier/src/middleware.js");
 
@@ -79,6 +80,49 @@ console.log("\n-- the package is one Zapier will accept --");
   const ignore = readFileSync(new URL("../../zapier/.gitignore", import.meta.url), "utf8");
   ck("and .zapierapprc is not gitignored", !/\.zapierapprc/.test(ignore),
     ignore.split("\n").filter(Boolean).join(" "));
+
+  // `zapier promote` HARD-ERRORS without this file, which is a refusal worth
+  // keeping: promoting moves real Zaps onto a new version, and the people on
+  // them are owed a record of what changed under their feet. Found by reading
+  // the CLI rather than by a failed press.
+  let log = "";
+  try { log = readFileSync(new URL("../../zapier/CHANGELOG.md", import.meta.url), "utf8"); } catch {}
+  ck("there is a CHANGELOG, which promote refuses to run without", log.length > 0);
+  // And it names THIS version. A changelog whose newest heading is two
+  // versions back is worse than none: it is read and believed.
+  ck("and it has a heading for the version being pushed",
+    new RegExp(`^##\\s+${pkg.version.replace(/\./g, "\\.")}\\s*$`, "m").test(log),
+    pkg.version);
+}
+
+// ---- what Zapier's own listing check wants --------------------------------
+//
+// Zapier's App Directory blocks on these, and both are right for a reason
+// worth keeping rather than merely satisfying. They are also the two that no
+// amount of testing the integration can find, because the integration works
+// perfectly without them.
+console.log("\n-- and what Zapier's listing check asks for is there --");
+{
+  // THE DESCRIPTION SAYS WHAT SUBSUB IS, NOT WHAT THE INTEGRATION DOES. It is
+  // printed under the name with no other sentence introducing the product, so
+  // one opening "Post scheduled jobs from your CRM" describes a feature to
+  // somebody who does not yet know what the thing is.
+  //
+  // It lives in the workflow because that is the only place it is ever sent:
+  // `register -y` with an existing .zapierapprc UPDATES the integration, so
+  // re-running that press is how a change to this line reaches Zapier.
+  const wf = readFileSync(new URL("../../.github/workflows/deploy-zapier.yml", import.meta.url), "utf8");
+  const desc = /--desc "([^"]+)"/.exec(wf)?.[1] || "";
+  ck("the integration description is set at all", desc.length > 20, desc.slice(0, 40));
+  ck("and opens by saying what SubSub is", /^SubSub is a /.test(desc), desc.slice(0, 40));
+
+  // A FIELD THAT DESCRIBES A SCREEN HAS TO POINT AT THE PAGE DOCUMENTING IT.
+  // Directions alone leave somebody searching our site from inside a Zapier
+  // modal, which is where an integration gets abandoned. Absolute, because a
+  // relative href in help text rendered on zapier.com resolves to zapier.com.
+  const help = auth.fields.find((f) => f.key === "apiKey")?.helpText || "";
+  ck("the token field links to the documentation",
+    /https:\/\/subsub\.work\/developers/.test(help), help.slice(-60));
 }
 
 // ---- the two lists -------------------------------------------------------
@@ -171,6 +215,46 @@ console.log("\n-- the dropdown is filled from the list that validates the answer
   ck("as a list, because a job has more than one", tradesField.list === true);
 }
 
+// ---- the property dropdown -----------------------------------------------
+//
+// The field it fills asked for a UUID in a text box. Nobody holds one of those
+// in their head, so the only way to use it was to go and look it up -- and a
+// wrong one is a job refused as `property_not_found`, which an integrator
+// reads as a broken Zap. Same shape as typing `windows_doors`.
+console.log("\n-- and the buildings are a dropdown, not a uuid in a text box --");
+{
+  const rows = [
+    { id: "p_1", name: "Alder Court", label: "Alder Court -- 14 Alder Way, Seattle" },
+    { id: "p_2", name: "Birch House", label: "Birch House -- 2 Birch St, Tacoma" },
+  ];
+  const z = zStub({ "https://api.subsub.work/api/v1/properties": { properties: rows } });
+  const got = await propertyTrigger.operation.perform(z, { authData: { apiKey: "ssk_test" }, meta: {} });
+  ck("it lists the account's buildings", got.length === 2, String(got.length));
+  ck("each with an id Zapier can key on", got.every((r) => r.id && r.label));
+  // The label is SubSub's, not assembled here: this app is not the only caller
+  // of that route, and two of them would name one building two ways.
+  ck("labelled by the server, not relabelled here",
+    got[0].label === rows[0].label, got[0].label);
+  ck("the trigger does not sit in the trigger list", propertyTrigger.display.hidden === true);
+  ck("it is registered, or the dropdown resolves to nothing",
+    require("../../zapier/index.js").triggers.property === propertyTrigger);
+
+  const field = jobCreate.operation.inputFields.find((f) => f.key === "propertyId");
+  ck("and the Property field uses it", field.dynamic === "property.id.label", String(field.dynamic));
+  ck("and is not a list, because a job is at one building", !field.list);
+
+  // PAGING IS BOTH HALVES OR NEITHER. Zapier shows the first page of a
+  // dropdown and says nothing about there being more, so a building past it is
+  // indistinguishable from a building that is not on the account -- the typo
+  // this removes, arrived at from the other side. `canPaginate` is what makes
+  // Zapier ask for page 1; passing `bundle.meta.page` is what makes the answer
+  // different.
+  ck("it declares it can paginate", propertyTrigger.operation.canPaginate === true);
+  await propertyTrigger.operation.perform(z, { authData: { apiKey: "ssk_test" }, meta: { page: 2 } });
+  ck("and the page asked for is the page requested",
+    String(zStub.last.params?.page) === "2", JSON.stringify(zStub.last.params));
+}
+
 // ---- what a person sees when it fails ------------------------------------
 console.log("\n-- a refusal reaches a person, naming the field --");
 {
@@ -242,6 +326,52 @@ console.log("\n-- and the endpoints it depends on answer --");
   const none = await get("me", null);
   ck("and a missing one says how to send it", none.status === 401 && /Authorization/.test(none.body.message || ""),
     JSON.stringify(none.body));
+
+  // ---- /v1/properties -----------------------------------------------------
+  //
+  // THE DROPDOWN MUST OFFER EXACTLY WHAT `ingestJob` ACCEPTS. That route takes
+  // a building this account OPERATES and no other, so a list that is wider
+  // offers one the route refuses and a list that is narrower hides one it
+  // would take. Both are the screen-that-lies rule pointed at a picker, and
+  // only a fixture holding somebody else's building can tell either way.
+  db.exec(`
+    INSERT INTO properties(id,account_id,name,address,city,state,zip,owner_account_id) VALUES
+      ('p_b','acc_gc','Birch House','2 Birch St','Tacoma','WA','98402','acc_gc'),
+      ('p_a','acc_gc','Alder Court','14 Alder Way','Seattle','WA','98101','acc_gc'),
+      ('p_x','acc_basic','Elsewhere','9 Other Rd','Boise','ID','83702','acc_basic');
+  `);
+  const props = await get("properties", minted.token);
+  ck("/v1/properties answers this account's buildings",
+    (props.body.properties || []).map((r) => r.id).join(",") === "p_a,p_b",
+    JSON.stringify((props.body.properties || []).map((r) => r.id)));
+  // Address in the label, because two buildings called "Building A" are told
+  // apart by where they are and a picker that cannot distinguish them is a
+  // picker somebody guesses in.
+  ck("labelled by name and where it is",
+    /Alder Court/.test(props.body.properties?.[0]?.label || "")
+      && /14 Alder Way/.test(props.body.properties?.[0]?.label || ""),
+    props.body.properties?.[0]?.label);
+  // And it must be a label the route would then accept, which is the only
+  // assertion that ties the two together.
+  const viaId = await worker.fetch(new Request("https://api.subsub.work/api/v1/jobs", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${minted.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ externalId: "CRM-PROP-1", title: "Gutter clear",
+      trades: ["gutters"], date: "2026-11-02", propertyId: props.body.properties?.[0]?.id }),
+  }), env);
+  ck("and a building it offered is one the job route takes", viaId.status === 201,
+    String(viaId.status));
+  // The other account's building is not in the list AND is not accepted, which
+  // are two guards that would otherwise cover for each other.
+  const viaOther = await worker.fetch(new Request("https://api.subsub.work/api/v1/jobs", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${minted.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ externalId: "CRM-PROP-2", title: "Gutter clear",
+      trades: ["gutters"], date: "2026-11-02", propertyId: "p_x" }),
+  }), env);
+  ck("while another account's is refused as not found", viaOther.status === 404,
+    String(viaOther.status));
+  ck("and /v1/properties is not public", (await get("properties", null)).status === 401);
 
   const tr = await get("trades", minted.token);
   ck("/v1/trades answers the whole list", (tr.body.trades || []).length === TRADES.length,

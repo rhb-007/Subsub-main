@@ -41,7 +41,11 @@ const inputFields = [
   { key: "zip", label: "ZIP" },
   {
     key: "propertyId",
-    label: "SubSub property ID",
+    label: "SubSub property",
+    // Dynamic for the same reason Trades is, and a sharper one: this is a
+    // uuid. A text box asking for one is a field somebody fills in by going to
+    // look it up, and a wrong one is a job refused as `property_not_found`.
+    dynamic: "property.id.label",
     helpText: "Use instead of an address for a building already on your account.",
   },
   { key: "time", label: "Time", helpText: "24-hour, e.g. 08:00." },

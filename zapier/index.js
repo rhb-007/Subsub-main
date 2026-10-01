@@ -2,6 +2,7 @@ const authentication = require("./src/authentication");
 const { handleError } = require("./src/middleware");
 const jobCreate = require("./src/creates/job");
 const tradeTrigger = require("./src/triggers/trade");
+const propertyTrigger = require("./src/triggers/property");
 
 const { version } = require("./package.json");
 const platformVersion = require("zapier-platform-core").version;
@@ -14,6 +15,9 @@ module.exports = {
   // its own errors nicely and a trigger that did not would be two behaviours
   // for one failure.
   afterResponse: [handleError],
-  triggers: { [tradeTrigger.key]: tradeTrigger },
+  triggers: {
+    [tradeTrigger.key]: tradeTrigger,
+    [propertyTrigger.key]: propertyTrigger,
+  },
   creates: { [jobCreate.key]: jobCreate },
 };
