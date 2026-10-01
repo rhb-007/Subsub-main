@@ -4243,6 +4243,37 @@ refactor.
   contents: a pushed version is one somebody may already be connected to, the
   same rule the agreement templates follow.
 
+  **AND THE FOURTH IS NOT A LISTING CHECK AT ALL: THE ERROR HANDLER WRITTEN TO
+  CARRY SUBSUB'S WORDS THREW THE ONE ERROR TYPE THAT EATS THEM.** A 401 was
+  raised as `RefreshAuthError`, which tells Zapier to go and **refresh** the
+  credential. That is right for session auth, where there is a refresh to
+  perform. This app is `custom` auth — an API token, with nothing to refresh —
+  so Zapier cannot act on it and substitutes its own sentence: *authentication
+  failed: Cannot refresh authentication for app with auth type `custom`*.
+
+  Which names no token, no account and nothing to do about either, on **the
+  single call every person makes before they can make any other**. The first
+  real connection attempt was therefore unexplainable from the screen, and the
+  one fact that would have explained it — what SubSub said, in SubSub's words —
+  was discarded by the middleware that exists to carry it. Same shape as a
+  catch wide enough to hide a real error, one layer out: **the failure path ate
+  the message.**
+
+  `ExpiredAuthError` is the counterpart for a credential that cannot be
+  refreshed: Zapier keeps our words and asks the person to reconnect, which is
+  the only thing a bad token can be answered with. Three assertions, because
+  pinning the new name alone is weaker than it looks: the type is
+  `ExpiredAuthError`, it is **not** `RefreshAuthError`, and **the message
+  survives** — the last being the whole job of the file and the thing that was
+  lost. The original test asserted only `name === "RefreshAuthError"`, so it
+  passed for the entire life of the bug: **a test can pin the wrong answer as
+  firmly as the right one.**
+
+  And it could not have been caught here. Only Zapier knows which error names
+  it can act on for which auth type, so the first real connection was always
+  going to be the test — the same thing already recorded about `losses.payments`
+  and the controller shape.
+
   **An auth field that describes a screen has to link to the page documenting
   it.** Directions alone leave somebody searching our site from inside a Zapier
   modal, which is where an integration gets abandoned. Absolute, because a

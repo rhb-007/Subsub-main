@@ -14,6 +14,11 @@ One heading per pushed version, newest first.
   only be used by going to look one up, and a wrong one was a job refused for
   naming a building that does not exist.
 - The API token field links to the setup instructions.
+- **A rejected token now says so.** A 401 was reported as a failed credential
+  *refresh*, which this kind of connection cannot do — so Zapier replaced
+  SubSub's explanation with "Cannot refresh authentication for app with auth
+  type `custom`", which names nothing you can act on. It now carries SubSub's
+  own words and asks you to reconnect.
 
 ## 1.0.0
 

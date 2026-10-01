@@ -158,6 +158,7 @@ const zStub = (answers = {}) => ({
   errors: {
     Error: class extends Error { constructor(m, c, s) { super(m); this.name = "ZapError"; this.code = c; this.status = s; } },
     RefreshAuthError: class extends Error { constructor(m) { super(m); this.name = "RefreshAuthError"; } },
+    ExpiredAuthError: class extends Error { constructor(m) { super(m); this.name = "ExpiredAuthError"; } },
   },
 });
 
@@ -270,12 +271,27 @@ console.log("\n-- a refusal reaches a person, naming the field --");
   ck("and names the field", /externalId/.test(said.message), said.message);
 
   let authErr = null;
-  try { handleError({ status: 401, json: { error: "invalid_token" } }, z); }
+  try { handleError({ status: 401, json: { error: "invalid_token",
+    message: "That token is not valid." } }, z); }
   catch (e) { authErr = e; }
-  // RefreshAuthError is what tells Zapier the CONNECTION is the problem. A
-  // plain error reports a broken Zap and sends somebody to their fields.
+  // ExpiredAuthError is what tells Zapier the CONNECTION is the problem on an
+  // auth it cannot refresh. A plain error reports a broken Zap and sends
+  // somebody to their fields.
   ck("a 401 asks them to reconnect rather than reporting a broken Zap",
-    authErr && authErr.name === "RefreshAuthError", String(authErr && authErr.name));
+    authErr && authErr.name === "ExpiredAuthError", String(authErr && authErr.name));
+  // AND NOT RefreshAuthError, which is the one that shipped and is the reason
+  // the first real connection attempt was unexplainable. It tells Zapier to go
+  // and refresh the credential; this app is `custom` auth, with nothing to
+  // refresh, so Zapier discards our sentence and substitutes
+  // "Cannot refresh authentication for app with auth type `custom`" -- which
+  // names no token, no account and nothing to do. The handler written to carry
+  // SubSub's words threw the one error type that eats them.
+  ck("and NOT as a refresh, which custom auth cannot do",
+    authErr && authErr.name !== "RefreshAuthError", String(authErr && authErr.name));
+  // The message has to survive, because that is the entire job of this
+  // middleware and it is what was lost.
+  ck("and SubSub's own words reach the person",
+    /That token is not valid/.test(authErr?.message || ""), String(authErr?.message));
 
   let plan = null;
   try { handleError({ status: 403, json: { error: "scale_required",
