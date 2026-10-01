@@ -4331,6 +4331,40 @@ refactor.
 
   Still open and unchanged: `developers.html` scrolls sideways at 390px.
 
+- **THE FRONT PAGE CARRIED SIX MARKED-UP ANSWERS AND HAD NO FAQ ON IT.**
+  Asked where the FAQ was. There was not one: `index.html` has shipped a
+  `FAQPage` block with six questions since it was written, and five of the six
+  answers were nowhere in its body text. That is against Google's own rule for
+  the type — the content has to be visible to the reader — and it is the rule
+  this file already states for the licensing pages, broken on the page with the
+  most traffic. **Only a crawler reads structured data, so nothing about it
+  looks wrong**, which is why it sat there.
+
+  The section is built **from the stored answers verbatim**, so the two cannot
+  say different things. `pricing.html` was the same shape from the other
+  direction: a real visible FAQ of ten questions, and a `FAQPage` block
+  carrying six *different* ones, paraphrased. There the markup was rewritten
+  from the page rather than the page from the markup — the visible copy is what
+  a reader gets and what the rule is about. The CTA at the end of it ("I'd
+  rather see it first.") is deliberately **not** an entry: an FAQ item is a
+  question somebody searches, not a link.
+
+  **The guard checks the QUESTION as well as the answer, and the first version
+  did not.** A mutation changing only the question walked straight through —
+  and a fabricated *question* over a real answer is the actual abuse, because
+  it is how a page ranks for something it does not address. Checked across
+  every page on the marketing site, not only the generated ones, because the
+  page that was wrong is the one nobody thought to look at.
+
+  **And `.qa` is defined per page**, because this site has no shared stylesheet
+  and no build step — so a section pasted from another page renders unspaced.
+  The rules travel with it.
+
+  The footer's Resources column now carries the roundup article and the FAQ as
+  well as Compare: an article reachable only from one hub and the sitemap is
+  the orphan failure the licensing pages shipped with, measured in traffic that
+  never arrives.
+
 - **The Zapier app buys no capability, and that is the honest way to describe
   it.** `/api/v1/hooks/generic/<token>` already worked from a *Webhooks by
   Zapier* step. What the app adds is three things worth having anyway: the

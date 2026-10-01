@@ -378,6 +378,10 @@ body.nav-open{overflow:hidden}
   .cta-row{flex-direction:column;align-items:stretch}
   .cta-row .btn{width:100%;justify-content:center}
 }
+  .qa{display:grid;grid-template-columns:1fr 1fr;gap:34px 44px;margin-top:44px}
+  .qa h3{font-size:17.5px;letter-spacing:-.02em}
+  .qa p{margin-top:8px;font-size:15.5px;color:var(--muted);line-height:1.55}
+  @media (max-width:760px){.qa{grid-template-columns:1fr;gap:28px}}
 </style>
 <style>
   /* overflow-x because the crew is deliberately wider than its column and runs
@@ -836,6 +840,50 @@ body.nav-open{overflow:hidden}
     </div>
   </section>
 
+  <!-- THE ANSWERS THE STRUCTURED DATA ALREADY CLAIMED.
+       This page has carried a FAQPage block with six questions in it since it
+       was written, and had no FAQ on it at all -- five of the six answers were
+       nowhere in the body text. That is against Google's own FAQPage rule,
+       which is that the content has to be visible to the reader, and it is the
+       same rule this repository states for the licensing pages: EVERY
+       MARKED-UP ANSWER MUST BE TEXT THE READER CAN SEE. Markup that answers a
+       question the page does not is the one thing structured data must never
+       do, because only a crawler reads it and nobody would notice.
+
+       These are the stored answers verbatim, so the two cannot drift; the test
+       checks every answer on the site word by word against its own page. -->
+  <section class="sec sec-bone" id="faq">
+    <div class="wrap">
+      <h2 class="h-md">Questions people ask.</h2>
+      <div class="qa">
+        <div>
+          <h3>What does SubSub do?</h3>
+          <p>SubSub is contractor management software. You onboard subcontractors, review and approve their compliance documents, schedule their crews onto jobs, issue a work order per trade, and record callbacks, warranty claims and ratings — in one system.</p>
+        </div>
+        <div>
+          <h3>Do subcontractors pay to use SubSub?</h3>
+          <p>No. Subcontractor logins are free on every plan and do not use a seat. They maintain their own company details, crews, calendars and compliance documents.</p>
+        </div>
+        <div>
+          <h3>What compliance documents does SubSub track?</h3>
+          <p>Certificate of insurance, surety bond, signed subcontractor agreement and IRS Form W-9. Each is reviewed against your requirements, and a subcontractor cannot be assigned to a job until all four are verified.</p>
+        </div>
+        <div>
+          <h3>Does SubSub verify contractor licenses?</h3>
+          <p>Yes. Washington L&amp;I contractor registrations are checked against public state records, which also report the bond and insurance the state has on file, so an uploaded certificate can be cross-checked against it.</p>
+        </div>
+        <div>
+          <h3>Does SubSub track subcontractor labor warranties?</h3>
+          <p>Yes. Each subcontractor states how long they warranty their labor — one to ten years, or lifetime — and SubSub holds that against every job they complete. Defects reported within 30 days of completion are treated as callbacks; later issues are measured against their stated warranty term, so you can see whether a failure is still covered.</p>
+        </div>
+        <div>
+          <h3>How does SubSub handle change orders?</h3>
+          <p>A work order is never edited once accepted. Any change — added scope, deducted scope, or a no-cost change like a date move — is raised as a numbered change order that the other party accepts or declines. Either side can raise one: the general contractor, or the subcontractor who finds hidden conditions on site. The revised value is the original plus every accepted change order, and the work order document shows the full schedule.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section class="band">
     <div class="wrap band-in">
       <div>
@@ -874,7 +922,9 @@ body.nav-open{overflow:hidden}
     <div>
       <h4>Resources</h4>
       <a href="compare/">Compare SubSub</a>
+      <a href="blog/best-subcontractor-management-software/">Best subcontractor software</a>
       <a href="licensing/">Licensing by state</a>
+      <a href="index.html#faq">FAQ</a>
       <a href="developers.html">Connect your CRM</a>
     </div>
   </div>

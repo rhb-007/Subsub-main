@@ -263,6 +263,60 @@ console.log("\n-- the structured answers are answers the reader can see --");
     faqPairs("## Other\n**Q?**\nA.\n").length === 0);
 }
 
+console.log("\n-- EVERY marked-up answer on the site is text the reader can see --");
+{
+  // THIS FOUND A LIVE ONE. index.html had carried a FAQPage block with six
+  // questions since it was written and had no FAQ section on it at all --
+  // five of the six answers were nowhere in the body. That is against
+  // Google's own rule for FAQPage, and it is the rule this repository already
+  // states for the licensing pages: markup that answers a question the page
+  // does not is the one thing structured data must never do, because only a
+  // crawler reads it and nobody would notice.
+  //
+  // Checked across the WHOLE marketing site rather than only the pages this
+  // suite generates, because the one that was wrong is the one nobody thought
+  // to look at.
+  const pages = readdirSync(root).filter((f) => f.endsWith(".html"))
+    .concat(plan.map((p) => join(p.dir, "index.html")));
+  let checked = 0;
+  const bad = [];
+  for (const f of pages) {
+    const html = read(f);
+    // The reader's text: no script, no style, no tags.
+    const text = html.replace(/<script[\s\S]*?<\/script>/g, " ")
+      .replace(/<style[\s\S]*?<\/style>/g, " ")
+      .replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    for (const m of html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)) {
+      let d; try { d = JSON.parse(m[1].replace(/\\u003c/g, "<")); } catch { continue; }
+      for (const g of (d["@graph"] || [d])) {
+        if (g["@type"] !== "FAQPage") continue;
+        for (const q of g.mainEntity || []) {
+          checked += 1;
+          // THE QUESTION AS WELL AS THE ANSWER, and the first version checked
+          // only the answer -- which a mutation walked straight through by
+          // changing the question and leaving the answer alone. That is not a
+          // nitpick: a fabricated QUESTION over a real answer is the actual
+          // abuse, because it is how a page ranks for something it does not
+          // address, and it is invisible to everybody but a crawler.
+          for (const part of [q.name, q.acceptedAnswer?.text]) {
+            const words = String(part || "")
+              .replace(/[^\w\s$.]/g, " ").split(/\s+/).filter((w) => w.length > 3);
+            const hit = words.filter((w) => text.includes(w)).length;
+            if (hit / Math.max(words.length, 1) < 0.9) {
+              bad.push(`${f}: ${String(part).slice(0, 48)} (${Math.round(100 * hit / Math.max(words.length, 1))}%)`);
+            }
+          }
+        }
+      }
+    }
+  }
+  ck("there are marked-up answers to check", checked >= 20, String(checked));
+  ck("and every one of them is on its own page", bad.length === 0, JSON.stringify(bad.slice(0, 4)));
+  // The page the live one was on, named, so a regression there is obvious
+  // rather than one line in a list.
+  ck("the front page has a visible FAQ", /id="faq"/.test(read("index.html")));
+}
+
 console.log("\n-- findable: the footer, the sitemaps, the index --");
 {
   // Pages nobody links are pages nobody reads -- the orphan failure the
@@ -275,6 +329,20 @@ console.log("\n-- findable: the footer, the sitemaps, the index --");
     return !/<h4>Resources<\/h4>[\s\S]{0,300}href="compare\/"/.test(foot);
   });
   ck("and every one links Compare from Resources", noLink.length === 0, JSON.stringify(noLink));
+  // The roundup is the page search sends people to, and it was reachable only
+  // from the compare hub and the sitemap -- an article nobody links is an
+  // article nobody reads, which is the orphan failure the licensing pages
+  // shipped with.
+  const noArticle = footerPages.filter((f) => {
+    const foot = read(f).slice(read(f).indexOf('<footer class="site">'));
+    return !/href="blog\/best-subcontractor-management-software\/"/.test(foot);
+  });
+  ck("and the roundup article too", noArticle.length === 0, JSON.stringify(noArticle));
+  const noFaq = footerPages.filter((f) => {
+    const foot = read(f).slice(read(f).indexOf('<footer class="site">'));
+    return !/href="index\.html#faq"/.test(foot);
+  });
+  ck("and the FAQ", noFaq.length === 0, JSON.stringify(noFaq));
 
   // The generated pages take the footer from the chrome slice, so they only
   // get it after `npm run compare` -- the same forget-to-rebuild trap the
