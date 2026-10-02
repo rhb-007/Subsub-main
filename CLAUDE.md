@@ -6288,10 +6288,23 @@ refactor.
   asserted too, named rather than taken on trust, because the entire bug is
   that they differ.
 
-  **Still open, and a decision rather than a build:** the other twenty-odd
-  invariants are in the same position — correct as far as anybody knows, and
-  never run against a row. Seeding each one needs a fixture from the feature
-  that owns it, which is where it belongs rather than in the drift test.
+  **TWO CLASSES WERE THEN AUDITED ACROSS EVERY INVARIANT, so a later pass does
+  not repeat it.** This one was the only comparison of two date columns in the
+  repository. And the sibling fault — a `<>` or `NOT IN` against a column that
+  can be NULL, where the comparison is NULL and the row drops out of the count
+  meant to report it — bites none of the six that use one: `memberships.role`,
+  `accounts.kind`, `wo_releases.status`, `inspections.status`,
+  `inspection_rooms.status` and `payout_accounts.payouts_enabled` /
+  `.transfers_active` are all `NOT NULL` on the live database as well as in
+  `schema.sql` (003 added `kind` as `NOT NULL DEFAULT`, so the migrated shape
+  agrees). Everything else reads through `IS NULL`, `COALESCE` or `NOT EXISTS`.
+
+  **Still open, and a decision rather than a build:** that audit is static, and
+  the faults it cannot see are the ones the 057 bug actually was — a query that
+  parses, compares columns that exist, and answers the wrong question. The other
+  twenty-odd invariants are still correct only as far as anybody knows, because
+  none has been run against a row. Seeding each one needs a fixture from the
+  feature that owns it, which is where it belongs rather than in the drift test.
 
 ## Working here
 
