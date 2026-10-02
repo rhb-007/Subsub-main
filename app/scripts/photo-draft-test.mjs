@@ -508,6 +508,75 @@ try {
     ck("a full-size phone photograph would cost four times as much",
       tokens(2576, 1932) > 3 * tokens(1120, 840), `${tokens(2576, 1932)} vs ${tokens(1120, 840)}`);
   }
+  console.log("\n-- and the invariant that counts a draft dated after the finish --");
+  {
+    // THIS RAN AGAINST AN EMPTY DATABASE AND THEREFORE COULD NOT FAIL. Every
+    // invariant in CHECK.sql reads zero on an empty database because there
+    // are no rows to compare, which is what `schema-drift-test` asserts and
+    // is all it can assert -- so the QUERY had never been exercised. It read
+    // 8 on the live database with the gate above working perfectly.
+    //
+    // The cause is that this project writes timestamps two ways:
+    // `drafted_at` is the route's `toISOString()` and `finished_at` is
+    // CURRENT_TIMESTAMP, and compared as TEXT the 'T' sorts above the space.
+    // So the ORDINARY case -- draft a room, finish the inspection, same
+    // visit -- reported itself as a draft written after the door shut.
+    //
+    // It is driven through the real routes and read out of the real
+    // CHECK.sql, by column name, so this cannot drift from the file an
+    // operator actually pastes. Reverting either side to a raw comparison
+    // fails the first assertion.
+    const CHECK = readFileSync(new URL("../worker/migrations/CHECK.sql", import.meta.url), "utf8")
+      .replace(/;\s*$/, "");
+    const invariant = (db) => db.prepare(CHECK).get().m057_inv_drafted_after_finish;
+
+    const { db, env } = seed();
+    const { id, roomId, photos } = await walkedRoom(env, { photos: 1 });
+    reply = answer([{ ref: 1, draft: "Scuff to the wall left of the door.", unclear: false }]);
+    await call(env, `/api/inspections/${id}/rooms/${roomId}/drafts`,
+      { method: "POST", body: { photos: [{ id: photos[0].id, data: px() }] } });
+    await call(env, `/api/inspections/${id}/rooms/${roomId}`, { method: "PATCH", body: { status: "ok" } });
+    await call(env, `/api/inspections/${id}`, { method: "PATCH", body: { finish: true } });
+
+    const stored = db.prepare(`SELECT drafted_at FROM inspection_photo_notes WHERE photo_id = ?`)
+      .get(photos[0].id).drafted_at;
+    const fin = db.prepare(`SELECT finished_at FROM inspections WHERE id = ?`).get(id).finished_at;
+    // The two formats, named, because the whole bug is that they differ and
+    // a later pass reading this wants to see it rather than take it on trust.
+    ck("a draft is stored as an ISO timestamp", /^\d{4}-\d\d-\d\dT/.test(stored), stored);
+    ck("and a finish as CURRENT_TIMESTAMP, which is the other format",
+      /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(fin), fin);
+    // THE ASSERTION THE LIVE DATABASE FAILED. Drafted before finishing, on
+    // the same day, through the routes that refuse the reverse.
+    ck("drafting and then finishing on one visit reads ZERO",
+      invariant(db) === 0, String(invariant(db)));
+
+    // AND IT STILL CATCHES WHAT IT IS FOR. Hand-written, because the route
+    // refuses to produce one -- which is the point: the only way this count
+    // goes above zero is a route that stopped asking.
+    db.prepare(`UPDATE inspection_photo_notes SET drafted_at = ? WHERE photo_id = ?`)
+      .run(new Date(Date.now() + 864e5).toISOString(), photos[0].id);
+    ck("a draft genuinely dated after the finish is still counted",
+      invariant(db) === 1, String(invariant(db)));
+
+    // A TIMESTAMP NOTHING CAN PARSE IS COUNTED TOO. `datetime()` answers
+    // NULL for one, and a comparison against NULL is NULL -- so without the
+    // explicit IS NULL arms this row would drop out of the count that exists
+    // to report it. A catch wide enough to hide a real error is a catch that
+    // will.
+    db.prepare(`UPDATE inspection_photo_notes SET drafted_at = 'yesterday afternoon' WHERE photo_id = ?`)
+      .run(photos[0].id);
+    ck("and so is a timestamp nothing can parse",
+      invariant(db) === 1, String(invariant(db)));
+
+    // Nothing drafted at all is still zero, so the IS NULL arms have not
+    // turned the never-drafted row -- the commonest one there is -- into a
+    // violation.
+    db.prepare(`UPDATE inspection_photo_notes SET drafted_at = NULL WHERE photo_id = ?`)
+      .run(photos[0].id);
+    ck("a photograph nobody drafted is not a violation",
+      invariant(db) === 0, String(invariant(db)));
+  }
 } finally {
   globalThis.fetch = realFetch;
 }

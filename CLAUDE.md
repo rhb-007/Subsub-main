@@ -6240,6 +6240,59 @@ refactor.
   engagement-only save, putting the documents back behind the lock, and offering
   Delete on somebody else's record.
 
+- **AN INVARIANT READ 8 ON A LIVE DATABASE WITH THE GATE IT CHECKS WORKING
+  PERFECTLY, BECAUSE THIS PROJECT WRITES TIMESTAMPS TWO WAYS.** `CHECK.sql`'s
+  `m057_inv_drafted_after_finish` counts a photo draft written after the
+  inspection was finished — a one-way door the route refuses and the screen
+  does not offer. Both halves of that gate are correct and the count read 8.
+
+  `drafted_at` is the route's `new Date().toISOString()`
+  (`2026-10-02T09:15:00.000Z`); `finished_at` is SQLite's `CURRENT_TIMESTAMP`
+  (`2026-10-02 11:40:00`). Compared as TEXT, `'T'` (0x54) sorts above `' '`
+  (0x20) — so **whenever the date halves are equal the ISO value always
+  compares greater**, and the ordinary case, somebody walking a unit and
+  closing it out on the same visit, reports itself as a draft written after
+  the door shut. Across different days it is correct, which is why it reads as
+  a plausible number rather than as every row.
+
+  **Both formats are long-standing and neither is wrong.** Fifty `toISOString()`
+  writes and seventy-one `CURRENT_TIMESTAMP`s, plus fifty-eight columns
+  defaulting to it. They are both UTC, so nothing about the data is broken —
+  what is broken is any SQL that compares a column from one family against one
+  from the other. `datetime()` on **both** sides is the whole fix, and the only
+  such comparison in the repository was this one. Changing the write instead
+  was refused: the existing rows are ISO, so it would put two formats in one
+  column and leave the comparison needing normalising anyway.
+
+  **And an unparseable timestamp is counted, not skipped.** `datetime()`
+  answers NULL for one and a comparison against NULL is NULL, so a route
+  writing a malformed date would have **dropped out of the count that exists to
+  report it** — a catch wide enough to hide a real error, in the one place whose
+  only job is reporting them. The `IS NULL` arms are explicit, and the row
+  carrying no draft at all stays uncounted, because never-drafted is the
+  commonest row there is.
+
+  **WHAT LET IT SHIP IS THE REAL LESSON: `schema-drift-test` RUNS EVERY
+  INVARIANT AGAINST AN EMPTY DATABASE.** Every one of them reads zero there
+  because there are no rows, so **no invariant's comparison has ever been
+  executed by the suite** — it proves CHECK.sql parses and that a fresh install
+  is clean, which is all it can prove, and it is not nothing. But a wrong query
+  passes it forever, and this is the could-not-fail shape this file keeps
+  catching, sitting underneath the mechanism built to catch the others. So an
+  invariant is only exercised by **its own feature's suite seeding the case**:
+  `photo-draft-test` drives a real draft and a real finish, then runs the real
+  `CHECK.sql` and reads the column **by name**, so the test cannot drift from
+  the file an operator pastes. Three mutations fire — the raw comparison (which
+  reproduces the live 8), dropping the unparseable arms, and dropping the
+  `IS NOT NULL` guard — each on its own assertion. The two stored formats are
+  asserted too, named rather than taken on trust, because the entire bug is
+  that they differ.
+
+  **Still open, and a decision rather than a build:** the other twenty-odd
+  invariants are in the same position — correct as far as anybody knows, and
+  never run against a row. Seeding each one needs a fixture from the feature
+  that owns it, which is where it belongs rather than in the drift test.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

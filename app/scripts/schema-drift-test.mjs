@@ -171,6 +171,17 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
   if (row) {
     // On an empty database every did-I-run-it count is 1 and every invariant
     // is 0. That is the shape a new environment should report.
+    //
+    // WHAT THIS CANNOT PROVE, and a later pass must not read it as more:
+    // every invariant reads zero here because there are no ROWS, so none of
+    // their comparisons ever run. It checks that CHECK.sql PARSES and that a
+    // fresh install is clean -- it cannot check that any invariant's query is
+    // right. `m057_inv_drafted_after_finish` shipped comparing an ISO
+    // timestamp against a CURRENT_TIMESTAMP one, read 8 on the live database
+    // over perfectly ordinary rows, and passed here the whole time. An
+    // invariant is only exercised by its own feature's suite seeding the
+    // case; `photo-draft-test` does that for 057 by running this same file
+    // against a database it has walked.
     const zeroes = Object.entries(row).filter(([k, v]) => /_(unowned|without|others_with)$/.test(k) && v !== 0);
     ck("and every invariant reads zero on an empty database",
       zeroes.length === 0, JSON.stringify(zeroes));

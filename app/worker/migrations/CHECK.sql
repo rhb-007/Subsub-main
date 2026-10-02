@@ -303,12 +303,31 @@ SELECT
   -- Invariant, must read ZERO: a draft written after the inspection was
   -- finished. Drafting is a write, and finishing is a one-way door --
   -- `whyNotDraft` refuses it, so a row here is a route that stopped asking.
+  --
+  -- `datetime()` ON BOTH SIDES, AND THAT IS NOT TIDYING. This project writes
+  -- timestamps two ways and always has: `drafted_at` is the route's
+  -- `new Date().toISOString()` (`2026-10-02T09:15:00.000Z`) and `finished_at`
+  -- is SQLite's CURRENT_TIMESTAMP (`2026-10-02 11:40:00`). Compared as TEXT
+  -- the 'T' sorts above the space, so a draft written at nine and an
+  -- inspection finished at eleven ON THE SAME DAY read as drafted after it --
+  -- which is the ordinary case, somebody walking a unit and closing it out on
+  -- one visit. It read 8 on the live database with the gate working perfectly.
+  -- Both families are UTC, so normalising is the whole of what is needed, and
+  -- any OTHER cross-family comparison added here needs the same thing.
+  --
+  -- AND AN UNPARSEABLE TIMESTAMP IS COUNTED, because `datetime()` answers
+  -- NULL for one and a comparison against NULL is NULL -- so a route writing
+  -- a malformed date would drop out of this count rather than be reported by
+  -- it. That is the direction that hides a real error, which is the one this
+  -- file refuses everywhere else.
   (SELECT COUNT(*) FROM inspection_photo_notes n
      JOIN inspection_photos p ON p.id = n.photo_id
      JOIN inspection_rooms r  ON r.id = p.room_id
      JOIN inspections i       ON i.id = r.inspection_id
     WHERE n.drafted_at IS NOT NULL AND i.finished_at IS NOT NULL
-      AND n.drafted_at > i.finished_at)                                                         AS m057_inv_drafted_after_finish,
+      AND (datetime(n.drafted_at) IS NULL
+        OR datetime(i.finished_at) IS NULL
+        OR datetime(n.drafted_at) > datetime(i.finished_at)))                                   AS m057_inv_drafted_after_finish,
 
   -- 058. What somebody is to the account that engaged them.
   (SELECT COUNT(*) FROM pragma_table_info('engagements')
