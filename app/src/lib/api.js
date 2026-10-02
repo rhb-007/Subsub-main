@@ -316,6 +316,19 @@ export const api = {
     if (!res.ok) throw new Error(`photo_${res.status}`);
     return URL.createObjectURL(await res.blob());
   },
+  // One caption, saved on blur like the room's own note. This is the only
+  // route that turns a draft into the record -- nothing promotes one by
+  // itself.
+  captionInspectionPhoto: (id, roomId, photoId, caption) =>
+    request(`/inspections/${id}/rooms/${roomId}/photos/${photoId}`,
+      { method: "PATCH", body: JSON.stringify({ caption }) }),
+  // Drafting the notes for a room. The pictures travel downscaled -- see
+  // `jpegForDraft` in App.tsx and `DRAFT_LONG_EDGE` in shared/photodraft.js
+  // -- because Claude bills a photograph by area and a full-size phone
+  // picture costs four times as much for detail nobody needs.
+  draftInspectionPhotos: (id, roomId, photos) =>
+    request(`/inspections/${id}/rooms/${roomId}/drafts`,
+      { method: "POST", body: JSON.stringify({ photos }) }),
   raiseInspectionJob: (id, body) =>
     request(`/inspections/${id}/job`, { method: "POST", body: JSON.stringify(body) }),
   // To the building's owners, by seat id. The server intersects them with the

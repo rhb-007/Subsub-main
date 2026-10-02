@@ -173,7 +173,9 @@
     "test:confirmremove": "node --no-warnings scripts/confirm-remove-ui-test.mjs",
     "test:recruitqr": "node --no-warnings scripts/recruit-qr-test.mjs",
     "test:rosterword": "node scripts/roster-word-test.mjs",
-    "test:billingmanage": "node --no-warnings scripts/billing-manage-test.mjs"
+    "test:billingmanage": "node --no-warnings scripts/billing-manage-test.mjs",
+    "test:photodraft": "node --no-warnings scripts/photo-draft-test.mjs",
+    "test:photodraftui": "node --no-warnings scripts/photo-draft-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

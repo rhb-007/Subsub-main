@@ -1971,3 +1971,18 @@ CREATE TABLE IF NOT EXISTS inspection_sends (
 );
 CREATE INDEX IF NOT EXISTS idx_inspection_sends ON inspection_sends(inspection_id, sent_at DESC);
 
+-- 057. What is written about an inspection photograph. `caption` is the
+-- manager's own words and is the record the owner reads; `draft` is what the
+-- model wrote when asked and is the team's working note. Stored beside each
+-- other rather than one overwriting the other, so a draft nobody kept never
+-- reads as a record somebody made.
+CREATE TABLE IF NOT EXISTS inspection_photo_notes (
+  photo_id      TEXT PRIMARY KEY REFERENCES inspection_photos(id) ON DELETE CASCADE,
+  caption       TEXT,
+  draft         TEXT,
+  draft_unclear INTEGER NOT NULL DEFAULT 0,
+  drafted_at    TEXT,
+  drafted_by    TEXT REFERENCES users(id),
+  updated_at    TEXT DEFAULT CURRENT_TIMESTAMP
+);
+

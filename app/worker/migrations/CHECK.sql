@@ -288,4 +288,24 @@ SELECT
   -- route that stopped asking.
   (SELECT COUNT(*) FROM inspection_sends s
      JOIN inspections i ON i.id = s.inspection_id
-    WHERE i.status <> 'finished')                                                               AS m056_inv_sent_unfinished;
+    WHERE i.status <> 'finished')                                                               AS m056_inv_sent_unfinished,
+
+  -- 057. What is written about a photograph. No rows until somebody drafts
+  -- or captions one, so what is checked is the shape.
+  (SELECT COUNT(*) FROM pragma_table_info('inspection_photo_notes')
+    WHERE name IN ('photo_id','caption','draft','draft_unclear','drafted_at','drafted_by'))     AS m057_photo_notes,
+  -- Invariant, must read ZERO: a note against a photograph that is not
+  -- there. The foreign key says it cannot happen and this is here because
+  -- m055_inv_orphan_rooms is -- a route that takes an id from the body
+  -- without joining it back is what produces one.
+  (SELECT COUNT(*) FROM inspection_photo_notes n
+    WHERE NOT EXISTS (SELECT 1 FROM inspection_photos p WHERE p.id = n.photo_id))               AS m057_inv_orphan_notes,
+  -- Invariant, must read ZERO: a draft written after the inspection was
+  -- finished. Drafting is a write, and finishing is a one-way door --
+  -- `whyNotDraft` refuses it, so a row here is a route that stopped asking.
+  (SELECT COUNT(*) FROM inspection_photo_notes n
+     JOIN inspection_photos p ON p.id = n.photo_id
+     JOIN inspection_rooms r  ON r.id = p.room_id
+     JOIN inspections i       ON i.id = r.inspection_id
+    WHERE n.drafted_at IS NOT NULL AND i.finished_at IS NOT NULL
+      AND n.drafted_at > i.finished_at)                                                         AS m057_inv_drafted_after_finish;

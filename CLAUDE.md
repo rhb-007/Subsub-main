@@ -5167,6 +5167,137 @@ refactor.
   decides which other tables may hold rows for that seat, and a route that
   writes it alone leaves records nothing reads — until something reads them.
 
+- **A MODEL DRAFTS THE PHOTO NOTE AND THE MANAGER KEEPS IT, AND THE WHOLE
+  FEATURE IS THE WORD "DRAFT".** A managing agent photographs forty things in
+  a flat and then types forty sentences most of which the photograph already
+  says. So Claude reads each picture and drafts the line. **This is the first
+  outbound AI call in the product**, and three things about it are decisions
+  rather than implementation.
+
+  **IT WAS PRICED BEFORE IT WAS BUILT, and the price is what fixes the
+  size.** Claude bills a picture by **area** — `ceil(w/28) * ceil(h/28)`
+  visual tokens — so a photograph straight off a phone (4032x3024) is 4,784
+  tokens and 1120px on the long edge is 1,200, for detail nobody needs in
+  order to see that a wall is scuffed. At Sonnet 5.5's $2/$10 per MTok that
+  is **about four cents for a twelve-photograph room** against sixteen. So
+  `DRAFT_LONG_EDGE` is a **cost constant and not a quality one**, 1120 is
+  deliberately under the *smaller* models' resolution cap so moving the model
+  later cannot quietly quadruple the bill, and `photo-draft-test.mjs`
+  asserts the arithmetic rather than trusting it.
+
+  **Thinking is OFF for the same reason** — `{type: "between_tools"}`, which
+  is the lowest setting this model takes and not `disabled`, which it answers
+  400 to. Thinking is billed as output, so turning it on multiplies what a
+  one-line caption costs with nothing on any screen different; the quoted
+  price assumes it is off, and a mutation that turns it on fails.
+
+  **THE DOWNSCALE HAPPENS IN THE BROWSER, which is not where it belongs.** A
+  Worker has no image processing and Cloudflare's is a separate product
+  behind its own setup, so the alternative was paying four times over. It is
+  nearly free there because `ReportPhoto` has already fetched the bytes to
+  draw the thumbnail. What makes it safe is that **none of it is trusted**:
+  every posted id must be a photograph **of that room** and
+  `MAX_DRAFT_BYTES` is the ceiling, so a hand-made request cannot cost more
+  than a real press. Both are mutation-checked, and the one place the
+  downscale itself is observable is the body of the request the browser
+  sends — so the UI suite decodes it and reads the dimensions back. A static
+  check that `jpegForDraft` exists passes with `scale = 1`.
+
+  **A DRAFT IS NOT THE RECORD, and that is the entire shape of the data.**
+  `caption` is the manager's words and is what the owner reads; `draft` is
+  what the model wrote and is the team's working note. Stored **beside** each
+  other — the same rule `engagements.doc_review`'s draft follows — so nothing
+  downstream can read a half-answer as an answer. A draft nobody kept is **not
+  in the report**: an offer that was never accepted, which is the line
+  `inForce` draws about a countersignature. The upsert on the draft route
+  **names neither half of `caption`**, so a re-draft cannot overwrite a
+  sentence somebody has already kept, which is the one way this feature could
+  destroy the record it exists to help write.
+
+  **AND THE BOX DOES NOT SAVE ON BLUR WHILE IT HOLDS A DRAFT.** That is the
+  half a static check cannot see and the half that matters: the draft arrives
+  in the field, because a sentence behind a button is a sentence nobody
+  reads — but *a preselection mistaken for your own choice is worse than a
+  blank*, the lesson the trade suggestions already paid for, and here the
+  blank is the truth. So an unkept draft is **dashed**, says it is a draft,
+  and clicking away from it records nothing. Typing in it or pressing **Keep**
+  is what makes it theirs. Dirtiness is **derived** by comparing the box
+  against what it was seeded with rather than a `touched` flag — a flag is a
+  second record of one fact and it is the one that gets missed.
+
+  **UNREADABLE IS AN ANSWER, and it does not seed the box.** A dark or
+  blurred photograph is the one a model will confidently invent a description
+  of, and an invented line on a deposit record reads exactly like a real one.
+  `unclear` comes back on the schema, and its words are shown **beside** an
+  empty field rather than inside it — what it could not see is a reason to
+  take another photograph, and is not something anybody should be able to keep
+  as the condition record with one press.
+
+  **The prompt says what a condition record IS**, and three of its
+  instructions are load-bearing rather than padding. **Condition, not
+  contents** — a model asked to describe a photograph writes a tour of the
+  room. **No cause and no blame** — whose fault the mark is, is the entire
+  deposit dispute, and a record that has already decided is one the other
+  side can attack. **Never invent** — see `unclear`. Each is pinned, because
+  a later pass trimming the prompt would take them for verbosity.
+
+  **WHAT LEAVES IS SAID AT THE CONTROL, and asserted field by field.** A
+  photograph of the inside of a rented home goes to a third party, which is a
+  bigger step than the weather lookup this file already records as
+  deliberately server-side — and it is not guessable from a button, so the
+  note sits under it rather than in help text nobody opens. The tenant's
+  name, the address, the building and the account are each asserted **absent**
+  from the request, because the screen promises exactly that and a field added
+  to the prompt later would break the promise rather than the build. Claude
+  also refuses to identify people in a photograph, which for this use is the
+  right behaviour rather than a limitation.
+
+  `shared/photodraft.js` holds the model, the prompt, the schema, the size and
+  the caps, because the route, the screen and the tests all describe them.
+  `worker/ai.js` is one JSON POST over plain `fetch` — the same trade
+  `billing.js` makes with Stripe, and every outbound provider in this Worker
+  goes through one named helper rather than an SDK. **`ANTHROPIC_API_BASE` is
+  spent from the day it shipped**, unlike `STRIPE_API_BASE`, which sat unused
+  for years: the suite stubs at `fetch` and asserts the request *shape*, which
+  is the only place several of these claims are checkable at all.
+
+  Three smaller things. **Structured outputs rather than "reply with only
+  JSON"** — a caption about a cracked basin carries an apostrophe or a quoted
+  measurement sooner or later, and free-text JSON fails on exactly that. The
+  answer is **keyed by `ref`, never by position**: a model that skips one or
+  answers out of order would otherwise shift every caption by one, which on a
+  condition record is not a cosmetic error. And the reply is **read by block
+  type, not `content[0]`** — a reply can open with a thinking block, so
+  position-reading breaks the day somebody changes a thinking setting, with
+  nothing in the request looking different.
+
+  **No key is a named refusal and never a 500**, and `aiDrafts` on the
+  inspection is what keeps the button off a screen that cannot use it —
+  `mail_not_configured`'s shape, for the same reason: only the Worker knows
+  whether there is a key. **A failure writes nothing**, which is what makes
+  "try again" the honest sentence, and an answer about zero photographs is a
+  refusal rather than a success — a press reporting "done" having written
+  nothing is the save-that-reports-success shape this file refuses elsewhere.
+  Rate-limited **per account**, because every press spends real money and the
+  one thing a limit has to stop is a loop.
+
+  Two test traps, both already here. Assigning `.value` on a controlled
+  textarea **does not reach React's onChange**, so the first version of the
+  edit-a-draft block reported the product as broken when the harness was
+  wrong; it goes through the node's own descriptor setter, as four other
+  suites already do. And the owner-read block indexed `mine.rooms[0]`
+  unguarded, so it **threw on exactly the case it exists to catch** — the
+  read-through-`link?.` lesson, for the fourth time. One real fixture bug
+  underneath it: finishing an inspection is `{finish: true}`, and the
+  `{status: "finished"}` body answers `nothing_to_change`, so the 404 the
+  owner correctly got read as the feature being broken.
+
+  **Still open, and a decision rather than a build: it reads the words and
+  not the photographs for the trade suggestions.** `suggestTrades` works off
+  the room notes; this reads the pictures. Pointing the vision call at the
+  trade grid as well is the obvious next thing and is a second cost per
+  inspection for a selection somebody confirms in one tap either way.
+
 - **MOVE-IN AND MOVE-OUT UNIT INSPECTIONS.** A managing agent walks a unit
   when somebody moves in and again when they move out, room by room, with
   photographs, and raises the work from what they find. *"The carpet was like

@@ -63,6 +63,8 @@ import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   MAX_ROOM_PHOTOS, roomName, inspectionTally, flaggedRooms,
   whyNotFinish, canSendInspection, mayWriteInspection,
   suggestTrades } from "../shared/inspection.js";
+import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
+  MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { agreementStateText, typedNameMatches, renderAgreement } from "../shared/agreement.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -11594,6 +11596,46 @@ const TENANT_WHEN = [
 // mounted, each owns exactly one object URL, and two owners of one URL means
 // revoking either blanks the other. A failure reports `null` rather than
 // staying quiet, so the lightbox can say so instead of spinning for ever.
+// DOWNSCALING A PHOTOGRAPH BEFORE IT IS READ, which is a cost decision and
+// the reason it happens in the browser at all.
+//
+// Claude bills a picture by area, so a phone photograph straight off the
+// camera costs four times what 1120px does for detail nobody needs in order
+// to see that a wall is scuffed. A Worker cannot resize an image and
+// Cloudflare's image product is separate setup, so this is the only place it
+// can happen -- and it is nearly free here, because the thumbnail has
+// already fetched the bytes.
+//
+// IT DOES NOT OWN THE URL IT IS GIVEN. `ReportPhoto` owns exactly one object
+// URL per photograph and revoking it blanks the thumbnail, so this reads
+// from whatever url it is handed and revokes nothing. The caller revokes
+// only a url it made itself.
+async function jpegForDraft(src) {
+  const img = await new Promise((ok, no) => {
+    const i = new Image();
+    i.onload = () => ok(i);
+    i.onerror = () => no(new Error("decode_failed"));
+    i.src = src;
+  });
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  if (!w || !h) throw new Error("decode_failed");
+  // Never upscale: a small photograph is sent as it is. Enlarging it would
+  // cost more tokens for pixels that carry nothing.
+  const scale = Math.min(1, DRAFT_LONG_EDGE / Math.max(w, h));
+  const cv = document.createElement("canvas");
+  cv.width = Math.max(1, Math.round(w * scale));
+  cv.height = Math.max(1, Math.round(h * scale));
+  cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+  // JPEG, always, which is why the route hard-codes that media type rather
+  // than reading the original's: the original may be HEIC off an iPhone,
+  // which the API does not take at all.
+  const url = cv.toDataURL("image/jpeg", DRAFT_QUALITY);
+  const comma = url.indexOf(",");
+  if (comma < 0) throw new Error("encode_failed");
+  return url.slice(comma + 1);
+}
+
 function ReportPhoto({ jobId, photo, onOpen, onLoaded, load }) {
   const [url, setUrl] = useState(null);
   const [failed, setFailed] = useState(false);
@@ -25101,7 +25143,81 @@ function Modal({ children, onClose, wide }) {
 
 // One room. Name, verdict, note, photographs -- in that order, because that
 // is the order somebody fills it in standing in the room.
-function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPhotos, onRemovePhoto }) {
+// ONE PHOTOGRAPH'S CAPTION, and the whole of the draft-is-not-the-record
+// rule lives in this component.
+//
+// A draft arrives in the box because a sentence somebody has to find a
+// button to see is a sentence they will not read. But a preselection
+// mistaken for your own choice is worse than a blank -- the lesson the trade
+// suggestions already paid for -- so an unkept draft is drawn DASHED, says
+// it is a draft, and **does not save on blur**. Clicking away from it leaves
+// the record empty, which is the honest state: nobody has said anything yet.
+// Typing in it or pressing Keep is what makes it theirs.
+//
+// Dirtiness is DERIVED by comparing the box against what it was seeded
+// with, rather than a `touched` flag set in the change handler: a flag is a
+// second record of one fact and it is the one that gets missed.
+function PhotoCaption({ photo, locked, onSave }) {
+  const kept = photo.caption || "";
+  const draft = photo.draft || "";
+  // AN UNREADABLE PHOTOGRAPH DOES NOT SEED THE BOX. The model's answer there
+  // is "too dark to tell", which is true and is not a condition record --
+  // seeding it would let somebody keep it as one with a single press.
+  const seed = kept || (draft && !photo.draftUnclear ? draft : "");
+  const [text, setText] = useState(seed);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  // Re-seeded when the row changes under it: every save and every draft
+  // re-reads the whole inspection, and a box still showing what it opened
+  // with is the stale-snapshot bug this file has grown four times.
+  useEffect(() => { setText(seed); setErr(""); }, [seed]);
+
+  const edited = text !== seed;
+  // Showing a draft nobody has kept or touched. The one state where blur
+  // must do nothing.
+  const unkept = !kept && !!seed && !edited;
+
+  const save = async (value) => {
+    setBusy(true); setErr("");
+    try { await onSave(value); }
+    catch (e) {
+      console.error("[inspection] caption:", e);
+      setErr(DRAFT_REFUSALS[e?.body?.error] || "That didn't save. Try again.");
+    } finally { setBusy(false); }
+  };
+
+  if (locked) return kept ? <p className="insp-note-ro">{kept}</p> : null;
+
+  return (
+    <div className="insp-cap">
+      <textarea className={`insp-cap-box ${unkept ? "is-draft" : ""}`} rows={2}
+        maxLength={MAX_CAPTION} value={text} disabled={busy}
+        aria-label={`Note about ${photo.name}`}
+        placeholder="What this photo shows"
+        onChange={(e) => setText(e.target.value)}
+        /* Only when it is theirs. An untouched draft blurring would promote
+           itself, which is the one thing this component exists to prevent. */
+        onBlur={() => { if (!unkept && text !== kept) save(text); }} />
+      {unkept && (
+        <div className="insp-cap-foot">
+          <span className="insp-cap-tag"><Sparkles size={11} /> Drafted — edit it or keep it</span>
+          <button type="button" className="insp-cap-keep" disabled={busy}
+            onClick={() => save(text)}>Keep</button>
+        </div>
+      )}
+      {!kept && !!draft && photo.draftUnclear && (
+        /* The model said it could not make this one out. Its words, below an
+           empty box rather than inside it, because what it could not see is
+           worth knowing and is not the record. */
+        <p className="insp-cap-unclear">Couldn't read this one — {draft}</p>
+      )}
+      {err && <p className="cov-hint" role="alert">{err}</p>}
+    </div>
+  );
+}
+
+function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPhotos, onRemovePhoto,
+  onCaption, onDraft, canAiDraft = false }) {
   const [name, setName] = useState(room.name);
   const [note, setNote] = useState(room.note || "");
   const [busy, setBusy] = useState("");
@@ -25109,6 +25225,14 @@ function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPh
   const [shots, setShots] = useState({});
   const [lightbox, setLightbox] = useState(null);
   const photos = room.photos || [];
+  // What is left to draft. A photograph somebody has already captioned is
+  // done -- re-reading it would spend money to produce a sentence that
+  // cannot be used, since a draft never overwrites a kept caption.
+  const undrafted = photos.filter((p) => !p.caption && !p.draft);
+  const whyNot = whyNotDraft({
+    finished: locked, configured: canAiDraft,
+    photos: photos.length, undrafted: undrafted.length,
+  });
 
   // Re-seeded when the row changes under it -- adding a photo re-reads the
   // whole inspection, and a field still showing what it opened with is the
@@ -25120,10 +25244,15 @@ function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPh
     try { await fn(); }
     catch (e) {
       console.error("[inspection] room:", e);
-      setErr(e?.body?.error === "already_finished"
-        ? "This inspection is finished, so it cannot be changed."
-        : e?.body?.error === "too_many" ? `That room already has ${MAX_ROOM_PHOTOS} photos.`
-        : "That didn't go through. Try again.");
+      const code = e?.body?.error;
+      // `DRAFT_REFUSALS` first, because it is where the drafting reasons and
+      // their words live together -- a reason added there arrives with its
+      // sentence rather than falling through to "that didn't go through",
+      // which is the dead end a refused press must never be.
+      setErr(DRAFT_REFUSALS[code]
+        || (code === "already_finished" ? "This inspection is finished, so it cannot be changed."
+          : code === "too_many" ? `That room already has ${MAX_ROOM_PHOTOS} photos.`
+          : "That didn't go through. Try again."));
     } finally { setBusy(""); }
   };
 
@@ -25181,20 +25310,58 @@ function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPh
             onBlur={() => note !== (room.note || "") && run("note", () => onPatch(room.id, { note }))} />
         )}
 
+      {/* A LIST RATHER THAN `.ph-grid`, which is the tenant report's and stays
+          its own: a row of 84px tiles is right for scanning and useless for
+          editing the sentence under each one. One per row means the text box
+          gets the width of the card, which on a phone is the only shape that
+          works at all -- and scanning down a column of thumbnails is no
+          worse than across a row of them. */}
       {photos.length > 0 && (
-        <div className="ph-grid">
+        <div className="insp-shots">
           {photos.map((ph) => (
-            <div key={ph.id} className="ph-holder">
-              <ReportPhoto photo={ph} onLoaded={(id, u) => setShots((m) => ({ ...m, [id]: u }))}
-                load={() => api.inspectionPhotoBlob(inspectionId, ph.id)}
-                onOpen={() => setLightbox(photos.indexOf(ph))} />
-              {!locked && (
-                <button type="button" className="ph-x" disabled={!!busy}
-                  aria-label={`Remove ${ph.name}`}
-                  onClick={() => run("del", () => onRemovePhoto(room.id, ph.id))}><X size={12} /></button>
-              )}
+            <div key={ph.id} className="insp-shot">
+              <div className="ph-holder">
+                <ReportPhoto photo={ph} onLoaded={(id, u) => setShots((m) => ({ ...m, [id]: u }))}
+                  load={() => api.inspectionPhotoBlob(inspectionId, ph.id)}
+                  onOpen={() => setLightbox(photos.indexOf(ph))} />
+                {!locked && (
+                  <button type="button" className="ph-x" disabled={!!busy}
+                    aria-label={`Remove ${ph.name}`}
+                    onClick={() => run("del", () => onRemovePhoto(room.id, ph.id))}><X size={12} /></button>
+                )}
+              </div>
+              <PhotoCaption photo={ph} locked={locked}
+                onSave={(caption) => onCaption(room.id, ph.id, caption)} />
             </div>
           ))}
+        </div>
+      )}
+
+      {/* DRAFTING THE NOTES. Offered only when the route would take it --
+          the same `whyNotDraft` the Worker asks -- so there is no press here
+          that answers 503, and none withheld that would have worked.
+          `all_drafted` and `no_photos` draw nothing at all: both are the
+          ordinary state of a room rather than a problem, and a disabled
+          button saying "every photo already has a draft" is an explanation
+          nobody asked for. */}
+      {!locked && !whyNot && (
+        <div className="insp-draft">
+          <button type="button" className="insp-draft-go" disabled={!!busy}
+            onClick={() => run("draft", () => onDraft(room.id, undrafted.slice(0, MAX_DRAFT_PHOTOS), shots))}>
+            <Sparkles size={14} />
+            {busy === "draft" ? "Reading the photos…"
+              : undrafted.length === 1 ? "Draft a note for this photo"
+              : `Draft notes for ${Math.min(undrafted.length, MAX_DRAFT_PHOTOS)} photos`}
+          </button>
+          {/* WHAT LEAVES, said at the control rather than in help text
+              nobody opens. A photograph of the inside of somebody's home
+              going to a third party is not guessable from a button, and it
+              is the one thing about this feature a person is entitled to
+              know before pressing it. */}
+          <p className="insp-draft-note">
+            Reads the photo with Claude to draft the note. Nothing else about the
+            property, the tenant or the building is sent, and you edit every line.
+          </p>
         </div>
       )}
       {!locked && photos.length < MAX_ROOM_PHOTOS && (
@@ -25260,6 +25427,41 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
   };
 
   const patchRoom = (roomId, body) => api.patchInspectionRoom(inspection.id, roomId, body).then(onReload);
+
+  // DRAFTING A ROOM'S PHOTO NOTES.
+  //
+  // The downscale happens here because this is where the bytes are: every
+  // photograph on screen has a `ReportPhoto` behind it holding one object
+  // URL for them, handed up through `onLoaded`. A thumbnail that failed to
+  // load has none, so this fetches a copy for that one rather than skipping
+  // it -- a photograph silently left undrafted is the shape this project
+  // keeps paying for.
+  //
+  // AND IT REVOKES ONLY WHAT IT MADE. `ReportPhoto` owns its url and
+  // revoking that one blanks the thumbnail, so a url read out of `shots` is
+  // borrowed and left alone.
+  const draftRoom = async (roomId, want, shots = {}) => {
+    const body = [];
+    for (const ph of want) {
+      const borrowed = shots[ph.id];
+      let mine = null;
+      try {
+        const src = borrowed || (mine = await api.inspectionPhotoBlob(inspection.id, ph.id));
+        body.push({ id: ph.id, data: await jpegForDraft(src) });
+      } catch (e) {
+        // One unreadable photograph must not cost the other eleven their
+        // drafts, so this is the one place a skip is right -- and the count
+        // the screen reports afterwards comes off the server's answer, so a
+        // skipped one is visibly still undrafted rather than quietly lost.
+        console.warn("[photo-draft] skipped one:", ph.id, e?.message || e);
+      } finally {
+        if (mine) URL.revokeObjectURL(mine);
+      }
+    }
+    if (!body.length) throw Object.assign(new Error("no_photos"), { body: { error: "no_photos" } });
+    await api.draftInspectionPhotos(inspection.id, roomId, body);
+    await onReload();
+  };
 
   // One way in for both doors — a tapped suggestion and the typed box — so
   // they cannot drift apart about what an empty name does or what happens
@@ -25379,7 +25581,14 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
             onRemove={(roomId) => api.removeInspectionRoom(inspection.id, roomId).then(onReload)}
             onAddPhotos={(roomId, photos) => api.addInspectionPhotos(inspection.id, roomId, photos).then(onReload)}
             onRemovePhoto={(roomId, photoId) =>
-              api.removeInspectionPhoto(inspection.id, roomId, photoId).then(onReload)} />
+              api.removeInspectionPhoto(inspection.id, roomId, photoId).then(onReload)}
+            onCaption={(roomId, photoId, caption) =>
+              api.captionInspectionPhoto(inspection.id, roomId, photoId, caption).then(onReload)}
+            onDraft={draftRoom}
+            /* Read off the inspection rather than assumed: only the Worker
+               knows whether there is a key, and a button that cannot work
+               must not be drawn. */
+            canAiDraft={!!inspection.aiDrafts} />
         ))}
         {rooms.length === 0 && (
           <p className="prop-none">No rooms yet. Add the first one below — you can type any name,
@@ -29149,6 +29358,42 @@ p.fld-note{margin:6px 0 0}
 .ph-x:hover{background:rgba(18,33,28,.95)}
 .ph-size{position:absolute;left:0;right:0;bottom:0;background:rgba(18,33,28,.66);color:#fff;
   font-size:9.5px;font-weight:600;text-align:center;padding:2px 0;letter-spacing:.02em}
+/* ---- a photograph and what is written about it, on an inspection ---- */
+/* One per row. The thumbnail keeps its 84px so a column of them still scans,
+   and everything left over goes to the text -- which on a phone is the whole
+   card. .ph-grid is the tenant report's and is deliberately untouched. */
+.insp-shots{display:flex;flex-direction:column;gap:10px;margin-top:9px}
+.insp-shot{display:flex;gap:10px;align-items:flex-start}
+/* flex:1 is what makes the box take the rest of the row rather than its own
+   content's width -- the same thing the dashboard title's max-width turned
+   out to need, and invisible until a long sentence is in it. min-width:0 so
+   a long unbroken word cannot push the row wider than the card. */
+.insp-cap{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.insp-cap-box{width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid var(--line);
+  border-radius:8px;background:var(--card);color:var(--ink);font:inherit;font-size:12.5px;
+  line-height:1.45;resize:vertical}
+.insp-cap-box:focus{outline:none;border-color:var(--brand);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 18%,transparent)}
+/* DASHED IS THE MESSAGE. The same mark the suggested trade chip wears, for
+   the same reason: this is not yours yet, and nothing has been recorded. */
+.insp-cap-box.is-draft{border-style:dashed;border-color:color-mix(in srgb,var(--brand) 55%,var(--line));
+  background:color-mix(in srgb,var(--brand) 4%,var(--card))}
+.insp-cap-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.insp-cap-tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:650;
+  color:var(--brand)}
+.insp-cap-keep{padding:4px 11px;border:1px solid var(--brand);border-radius:999px;
+  background:var(--brand);color:#fff;font:inherit;font-size:11.5px;
+  font-weight:700;cursor:pointer}
+.insp-cap-keep:disabled{opacity:.55;cursor:default}
+.insp-cap-unclear{margin:0;font-size:11.5px;line-height:1.45;color:var(--ink-soft)}
+.insp-draft{margin-top:10px}
+.insp-draft-go{display:inline-flex;align-items:center;gap:7px;padding:9px 14px;
+  border:1px solid color-mix(in srgb,var(--brand) 55%,var(--line));border-radius:9px;
+  background:color-mix(in srgb,var(--brand) 6%,var(--card));color:var(--brand);
+  font:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
+.insp-draft-go:hover{background:color-mix(in srgb,var(--brand) 12%,var(--card))}
+.insp-draft-go:disabled{opacity:.6;cursor:default}
+.insp-draft-note{margin:6px 0 0;font-size:11px;line-height:1.5;color:var(--ink-soft);max-width:52ch}
 .ph-add{display:inline-flex;align-items:center;gap:6px;margin-top:9px;padding:9px 13px;
   border:1px dashed var(--line);border-radius:9px;background:var(--card);color:var(--ink);
   font-size:12.5px;font-weight:650;cursor:pointer;font-family:inherit}

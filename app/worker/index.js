@@ -49,6 +49,9 @@ import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_
   whyNotFinish, inspectionTally, flaggedRooms, inspectionJobTitle,
   inspectionJobScope, whyNotSend, mayWriteInspection,
   INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
+import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
+  draftSystem, draftContext, readDrafts, whyNotDraft } from "../shared/photodraft.js";
+import { aiConfigured, claudeCall, replyJson } from "./ai.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -10856,13 +10859,23 @@ const inspectionRowToJs = (r) => ({
   status: r.status, finishedAt: r.finished_at || null, jobId: r.job_id || null,
   createdAt: r.created_at, createdBy: r.created_by || null,
 });
-const inspectionRoomToJs = (r, photos = []) => ({
+// `drafts` decides whether the model's unkept drafts travel. THE CAPTION IS
+// THE RECORD AND THE DRAFT IS THE TEAM'S WORKING NOTE, so an owner reading
+// their own report gets captions and nothing else -- a sentence nobody kept
+// is not a thing this account has said about their building, and handing it
+// over would make a working note read like a finding. Same line that keeps
+// `recipients` and `sends` off a reading seat's copy.
+const inspectionRoomToJs = (r, photos = [], { drafts = false } = {}) => ({
   id: r.id, name: r.name, status: r.status, note: r.note || "",
   position: r.position,
   // Ids and names only. The key is an R2 path and handing it to the browser
   // invites somebody to ask for a different one -- the same rule the avatar
   // and the report photo both follow.
-  photos: photos.map((p) => ({ id: p.id, name: p.name || "photo", type: p.content_type || "image/jpeg" })),
+  photos: photos.map((p) => ({
+    id: p.id, name: p.name || "photo", type: p.content_type || "image/jpeg",
+    caption: p.caption || "",
+    ...(drafts ? { draft: p.draft || "", draftUnclear: !!p.draft_unclear } : {}),
+  })),
 });
 
 // The one resolver. Answers `not_found` for an inspection on another account
@@ -10897,20 +10910,36 @@ async function inspectionFor(c, auth, id) {
   return { row };
 }
 
-async function inspectionRooms(db, inspectionId) {
+async function inspectionRooms(db, inspectionId, opts = {}) {
   const { results: rooms } = await db.prepare(
     `SELECT * FROM inspection_rooms WHERE inspection_id = ? ORDER BY position, created_at`
   ).bind(inspectionId).all();
   const list = rooms || [];
   if (!list.length) return [];
-  const { results: shots } = await db.prepare(
-    `SELECT p.* FROM inspection_photos p
-       JOIN inspection_rooms r ON r.id = p.room_id
-      WHERE r.inspection_id = ? ORDER BY p.created_at`
-  ).bind(inspectionId).all();
+  // LEFT JOIN, because a photograph with nothing written about it is the
+  // ordinary case and an inner join would drop every one of them -- which
+  // reads as the photos having been deleted.
+  let shots = [];
+  try {
+    ({ results: shots } = await db.prepare(
+      `SELECT p.*, n.caption, n.draft, n.draft_unclear FROM inspection_photos p
+         JOIN inspection_rooms r ON r.id = p.room_id
+         LEFT JOIN inspection_photo_notes n ON n.photo_id = p.id
+        WHERE r.inspection_id = ? ORDER BY p.created_at`
+    ).bind(inspectionId).all());
+  } catch (err) {
+    // A database without 057 has no captions, which is the rooms drawn
+    // without them rather than an inspection that will not open.
+    if (!missingSchema(err)) throw err;
+    ({ results: shots } = await db.prepare(
+      `SELECT p.* FROM inspection_photos p
+         JOIN inspection_rooms r ON r.id = p.room_id
+        WHERE r.inspection_id = ? ORDER BY p.created_at`
+    ).bind(inspectionId).all());
+  }
   const byRoom = {};
   for (const p of shots || []) (byRoom[p.room_id] ||= []).push(p);
-  return list.map((r) => inspectionRoomToJs(r, byRoom[r.id] || []));
+  return list.map((r) => inspectionRoomToJs(r, byRoom[r.id] || [], opts));
 }
 
 app.get("/api/inspections", requireRole(...INSPECTION_READ_ROLES), async (c) => {
@@ -11016,12 +11045,19 @@ app.get("/api/inspections/:id", requireRole(...INSPECTION_READ_ROLES), async (c)
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
-  const base = { ...inspectionRowToJs(row), rooms: await inspectionRooms(c.env.DB, row.id) };
+  const base = { ...inspectionRowToJs(row), rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) };
   // WHO ELSE WAS TOLD IS THE TEAM'S OWN RECORD. The audience is the other
   // owners' names and addresses, which is not a reading seat's to collect --
   // the same rule that keeps an overflow distribution list server-side.
   if (!mayWriteInspection(auth.role)) return c.json(base);
-  return c.json({ ...base, ...(await inspectionAudience(c.env.DB, row)) });
+  // WHETHER DRAFTING CAN WORK AT ALL, so the button is drawn exactly when
+  // the route would take it. Without this the screen either offers a press
+  // that answers 503 -- a dead end with no explanation on it -- or withholds
+  // one that would have worked, and this project calls those the same lie.
+  // On the payload rather than derived in the browser, because only the
+  // Worker knows whether there is a key: the same reason
+  // `mail_not_configured` is reported rather than guessed.
+  return c.json({ ...base, aiDrafts: aiConfigured(c.env), ...(await inspectionAudience(c.env.DB, row)) });
 });
 
 // SENDING THE REPORT TO THE BUILDING'S OWNER.
@@ -11063,7 +11099,7 @@ app.post("/api/inspections/:id/send", requireRole(...INSPECTION_WRITE_ROLES), as
 
   const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(row.account_id).first();
   const prop = await c.env.DB.prepare(`SELECT name FROM properties WHERE id = ?`).bind(row.property_id).first();
-  const rooms = await inspectionRooms(c.env.DB, row.id);
+  const rooms = await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) });
   const tally = inspectionTally(rooms);
   const link = `${accountOrigin(account)}/`;
 
@@ -11113,7 +11149,7 @@ app.patch("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async 
   const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
 
   if (b.finish === true) {
-    const rooms = await inspectionRooms(c.env.DB, row.id);
+    const rooms = await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) });
     // The gate is the shared one, so the screen and the route cannot
     // disagree about what a finished inspection is.
     const why = whyNotFinish(rooms);
@@ -11139,7 +11175,7 @@ app.patch("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async 
   if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
   await c.env.DB.prepare(`UPDATE inspections SET ${sets.join(", ")} WHERE id = ?`).bind(...vals, row.id).run();
   const after = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(row.id).first();
-  return c.json({ ...inspectionRowToJs(after), rooms: await inspectionRooms(c.env.DB, row.id) });
+  return c.json({ ...inspectionRowToJs(after), rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 
 app.delete("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
@@ -11172,7 +11208,7 @@ app.post("/api/inspections/:id/rooms", requireRole(...INSPECTION_WRITE_ROLES), a
     `INSERT INTO inspection_rooms (id, inspection_id, name, status, note, position)
      VALUES (?, ?, ?, 'unchecked', NULL, ?)`
   ).bind(id, row.id, name, Number(n.last) + 1).run();
-  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) }, 201);
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) }, 201);
 });
 
 app.patch("/api/inspections/:id/rooms/:roomId", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
@@ -11203,7 +11239,7 @@ app.patch("/api/inspections/:id/rooms/:roomId", requireRole(...INSPECTION_WRITE_
   if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
   await c.env.DB.prepare(`UPDATE inspection_rooms SET ${sets.join(", ")} WHERE id = ?`)
     .bind(...vals, room.id).run();
-  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) });
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 
 app.delete("/api/inspections/:id/rooms/:roomId", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
@@ -11215,7 +11251,7 @@ app.delete("/api/inspections/:id/rooms/:roomId", requireRole(...INSPECTION_WRITE
     `DELETE FROM inspection_rooms WHERE id = ? AND inspection_id = ?`
   ).bind(c.req.param("roomId"), row.id).run();
   if (!res.meta?.changes) return c.json({ error: "not_found" }, 404);
-  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) });
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 
 // Photos, attached after the bytes are already in R2 through
@@ -11255,7 +11291,7 @@ app.post("/api/inspections/:id/rooms/:roomId/photos", requireRole(...INSPECTION_
   }
   if (!stmts.length) return c.json({ error: "nothing_to_add" }, 400);
   await c.env.DB.batch(stmts);
-  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) });
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 
 app.delete("/api/inspections/:id/rooms/:roomId/photos/:photoId", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
@@ -11273,7 +11309,196 @@ app.delete("/api/inspections/:id/rooms/:roomId/photos/:photoId", requireRole(...
   // The object stays in R2. A photo taken off a room is still evidence of
   // what was walked, and an accidental removal a minute after uploading is
   // far the likelier event -- the same reasoning the report photo follows.
-  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) });
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
+});
+
+// KEEPING A CAPTION. The field under a photograph, saved on blur like the
+// room's own note.
+//
+// This is the route that makes a draft into the record, and it is the only
+// one: nothing promotes a draft by itself. The caption is written from what
+// the browser sends -- which is what the person had in the box, draft or
+// their own words or the two mixed -- so keeping an unedited draft and
+// typing the same sentence are the same act and produce the same row. The
+// draft is left alongside, untouched, because "what did the model say" is a
+// question worth being able to answer after somebody has edited it.
+app.patch("/api/inspections/:id/rooms/:roomId/photos/:photoId", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  if (row.status === "finished") return c.json({ error: "already_finished" }, 409);
+  // Pinned three ways, as every other route on a photograph is: the
+  // inspection, then the room on it, then the photo in that room. An id in
+  // the body or the path is a claim and the join is what makes it true.
+  const photo = await c.env.DB.prepare(
+    `SELECT p.id FROM inspection_photos p
+       JOIN inspection_rooms r ON r.id = p.room_id
+      WHERE p.id = ? AND r.id = ? AND r.inspection_id = ?`
+  ).bind(c.req.param("photoId"), c.req.param("roomId"), row.id).first();
+  if (!photo) return c.json({ error: "not_found" }, 404);
+
+  const b = await c.req.json().catch(() => ({}));
+  const caption = String(b.caption ?? "").trim().slice(0, MAX_CAPTION);
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO inspection_photo_notes (photo_id, caption, updated_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(photo_id) DO UPDATE SET caption = excluded.caption, updated_at = CURRENT_TIMESTAMP`
+    ).bind(photo.id, caption || null).run();
+  } catch (err) {
+    const migrationNeeded = missingSchema(err);
+    if (migrationNeeded) return c.json({ error: "migration_needed", migration: "057_photo_captions" }, 503);
+    throw err;
+  }
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
+});
+
+// DRAFTING THE PHOTO NOTES.
+//
+// A managing agent photographs forty things in a flat and then writes forty
+// sentences about them, most of which the photograph already says. So the
+// model drafts each line and they correct it.
+//
+// A DRAFT IS NOT THE RECORD. It is written to `draft`, never to `caption`,
+// and the report the owner reads carries captions only -- so a draft nobody
+// kept is a working note and not something this account has said about
+// somebody's home. The route beside this one is the only way across, and it
+// needs a press. Same shape as the document review's own draft, which is
+// stored beside `status` rather than as it for the same reason.
+//
+// FINISHED IS REFUSED, because drafting writes to the inspection and
+// finishing is a one-way door -- the gate `whyNotDraft` holds and CHECK.sql
+// counts. Everything about the request itself -- the model, the prompt, the
+// schema, the size, the caps -- is in `shared/photodraft.js`, so the screen
+// and the tests read the same rules the route does.
+//
+// THE PICTURES ARRIVE FROM THE BROWSER, DOWNSCALED, AND ARE CAPPED HERE.
+// Claude bills a photograph by area, so a full-size phone picture costs four
+// times what 1120px does for detail nobody needs to see a scuffed wall. A
+// Worker cannot resize an image, so the browser does it -- it already holds
+// the bytes it drew the thumbnail from. What makes that safe is that none of
+// it is trusted: every id must be a photograph OF THIS ROOM, and
+// MAX_DRAFT_BYTES is the ceiling, so a hand-made request cannot cost more
+// than a real press.
+app.post("/api/inspections/:id/rooms/:roomId/drafts", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  // One predicate, the same one the button reads, so the screen cannot offer
+  // what this refuses. `photos` and `undrafted` are counted below; what is
+  // known here is the two that do not need the room.
+  const early = whyNotDraft({
+    finished: row.status === "finished",
+    configured: aiConfigured(c.env),
+    photos: 1, undrafted: 1,
+  });
+  if (early) return c.json({ error: early }, early === "ai_not_configured" ? 503 : 409);
+
+  const room = await c.env.DB.prepare(
+    `SELECT * FROM inspection_rooms WHERE id = ? AND inspection_id = ?`
+  ).bind(c.req.param("roomId"), row.id).first();
+  if (!room) return c.json({ error: "not_found" }, 404);
+
+  // PER ACCOUNT, because every press spends real money and the one thing a
+  // rate limit has to stop is a loop. Forty presses an hour is far more
+  // walking than anybody does in one and well short of a bill worth
+  // noticing.
+  const rl = await rateLimit(c.env, "photo-draft", auth.accountId, { limit: 40, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+
+  const { results: have } = await c.env.DB.prepare(
+    `SELECT id FROM inspection_photos WHERE room_id = ? ORDER BY created_at`
+  ).bind(room.id).all();
+  const mine = new Set((have || []).map((p) => p.id));
+
+  const b = await c.req.json().catch(() => ({}));
+  const want = [];
+  for (const p of Array.isArray(b.photos) ? b.photos : []) {
+    const id = String(p?.id || "");
+    // THE ID IS CHECKED, NEVER TRUSTED -- the same rule the attach route
+    // applies to an R2 key. Without this a photograph on another room, or
+    // another account's inspection, would be read and captioned.
+    if (!mine.has(id)) continue;
+    const data = String(p?.data || "");
+    if (!data) continue;
+    // The ceiling, and it is the whole of what stops a hand-made request
+    // costing more than a press. Base64 is 4 characters per 3 bytes.
+    if (data.length * 3 / 4 > MAX_DRAFT_BYTES) return c.json({ error: "too_big" }, 413);
+    want.push({ id, data });
+    if (want.length >= MAX_DRAFT_PHOTOS) break;
+  }
+  if (!want.length) return c.json({ error: "no_photos" }, 400);
+
+  // Images before the text that asks about them, each introduced by the
+  // label the answer refers back to -- which is what makes `ref` mean
+  // something rather than a position in an array.
+  const content = [];
+  want.forEach((p, i) => {
+    content.push({ type: "text", text: `Photo ${i + 1}:` });
+    // Always JPEG: the browser re-encodes when it downscales, so the type
+    // is a fact about our own pipeline rather than something to read off the
+    // original -- and the original may be HEIC, which this API does not take.
+    content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: p.data } });
+  });
+  content.push({ type: "text", text: draftContext({
+    roomName: room.name, note: room.note || "", count: want.length,
+  }) });
+
+  let drafts;
+  try {
+    const msg = await claudeCall(c.env, {
+      model: DRAFT_MODEL,
+      // Enough for a sentence or two per photograph and no more. A caption
+      // is a line; a cap that allowed an essay would invite one.
+      max_tokens: 120 * want.length + 200,
+      system: draftSystem({ kindLabel: INSPECTION_KINDS[row.kind]?.label || "Move-in" }),
+      messages: [{ role: "user", content }],
+      // THINKING OFF, deliberately. Describing what is in a photograph is a
+      // perception task rather than a reasoning one, and thinking is billed
+      // as output -- turning it on would multiply the cost of a one-line
+      // caption several times over for nothing anybody would read.
+      // `between_tools` rather than `disabled`, which this model refuses.
+      thinking: { type: "between_tools" },
+      // Structured output rather than "reply with only JSON": a caption
+      // about a cracked basin carries an apostrophe or a quoted measurement
+      // sooner or later, and free-text JSON fails on exactly that.
+      output_config: { format: { type: "json_schema", schema: DRAFT_SCHEMA } },
+    });
+    drafts = readDrafts(replyJson(msg), want.length);
+  } catch (err) {
+    // NARROW IN WHAT IT PROMISES, WIDE IN WHAT IT CATCHES, and the two are
+    // different things. Nothing was written, so "try again" is always true
+    // and is what the screen says; what is NOT done is swallow it silently,
+    // because the person pressed the button and is waiting.
+    console.warn("[photo-draft] not drafted:", err?.code || "", err?.message || err);
+    return c.json({ error: err?.message === "ai_not_configured" ? "ai_not_configured" : "ai_unavailable" },
+      err?.message === "ai_not_configured" ? 503 : 502);
+  }
+  if (!drafts.length) return c.json({ error: "ai_unavailable" }, 502);
+
+  const now = new Date().toISOString();
+  try {
+    await c.env.DB.batch(drafts.map((d) => c.env.DB.prepare(
+      `INSERT INTO inspection_photo_notes (photo_id, draft, draft_unclear, drafted_at, drafted_by, updated_at)
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(photo_id) DO UPDATE SET
+         draft = excluded.draft, draft_unclear = excluded.draft_unclear,
+         drafted_at = excluded.drafted_at, drafted_by = excluded.drafted_by,
+         updated_at = CURRENT_TIMESTAMP`
+    // The caption is deliberately absent from both halves of that upsert. A
+    // re-draft must not overwrite a sentence somebody has already kept --
+    // which is the one way this feature could destroy the record it exists
+    // to help write.
+    ).bind(want[d.ref - 1].id, d.draft, d.unclear ? 1 : 0, now, auth.userId)));
+  } catch (err) {
+    const migrationNeeded = missingSchema(err);
+    if (migrationNeeded) return c.json({ error: "migration_needed", migration: "057_photo_captions" }, 503);
+    throw err;
+  }
+  await logActivity(c.env, auth.accountId, auth.userId, "inspection_drafted",
+    `Drafted notes for ${drafts.length} photo${drafts.length === 1 ? "" : "s"} in ${room.name}`);
+  return c.json({ ok: true, drafted: drafts.length,
+    rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 
 // Serving one back. The caller names an inspection and a photo on it, never a
@@ -11318,7 +11543,7 @@ app.post("/api/inspections/:id/job", requireRole(...INSPECTION_WRITE_ROLES), asy
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
   if (row.job_id) return c.json({ error: "already_raised", jobId: row.job_id }, 409);
-  const rooms = await inspectionRooms(c.env.DB, row.id);
+  const rooms = await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) });
   const flagged = flaggedRooms(rooms);
   // Nothing was wrong, so there is nothing to do. Said rather than creating
   // an empty job somebody then has to find and close.
