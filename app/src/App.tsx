@@ -34,6 +34,7 @@ import {
   // standing for the idea of one.
   QrCode as QrCodeIcon,
   Maximize2, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles,
+  Info,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE } from "./lib/api";
 // The same file the Worker imports, so a problem cannot be an emergency in
@@ -69,6 +70,8 @@ import { agreementStateText, renderAgreement } from "../shared/agreement.js";
 import { typedNameMatches, typedNameHint } from "../shared/typedname.js";
 import { ENGAGED_AS, engagedAs, isHandyman, mayEngageHandyman, mayCover,
   tradesAllowed, requiredDocsFor, needsLicense, ENGAGED_REFUSALS } from "../shared/engaged.js";
+import { handymanCapCheck, handymanCapText,
+  HANDYMAN_GLOBAL_RULES } from "../shared/handycap.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -6378,6 +6381,12 @@ export default function SubSub() {
       {assigning && <Modal onClose={() => setAssigning(null)} wide>
         <PickContractor allJobs={allJobs} accountId={account.id} words={rosterWords(account)} job={assigning.job} trade={assigning.trade}
           replacing={assigning.replacing} subs={subs} jobs={jobs}
+          /* WHERE THE WORK IS, for the handyman licence ceiling. The building's
+             state, because licensing follows the property rather than the
+             contractor -- the same rule `lien_waivers.governing_state` keeps.
+             A job at no building falls back to the company's own state inside
+             the component, which is the only thing left to read. */
+          workState={accountProperties.find((p) => p.id === assigning.job.propertyId)?.state || null}
           onPick={(sub, details) => assignContractor(assigning.job.id, assigning.trade, sub, details)}
           onNotify={(sub) => requestDocs(sub, assigning.job, assigning.trade)}
           onAddSub={() => addContractorForSlot(assigning.job, assigning.trade)}
@@ -19825,6 +19834,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
 }
 // ---- Pick a contractor for one trade slot --------------------------------
 function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing, onPick, onNotify, onAddSub, onCancel,
+  workState = null,
   words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
   // When re-matching after an expiry, the sub who didn't reply drops off the list.
   const pool = replacing ? subs.filter((x) => x.id !== replacing) : subs;
@@ -19856,6 +19866,32 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
   // A line is ready when its ceiling is known, whichever way it is priced.
   const lineReady = (t) => lineMax(t) !== null;
   const lineTotal = openLines.reduce((n, t) => n + (lineMax(t) || 0), 0);
+  // THE HANDYMAN CEILING, BEFORE THE PRESS.
+  //
+  // A handyman works without a contractor licence and every state's exemption
+  // for that is a dollar figure, so this is the one screen where the figure can
+  // still be changed. `shared/handycap.js` holds the numbers and the whole
+  // argument for why it warns and never blocks; the route records the same
+  // verdict afterwards, read from the same predicate so the two cannot
+  // disagree.
+  //
+  // IT COUNTS WHAT THEY ALREADY HOLD ON THIS JOB, because the rule the dataset
+  // states is that splitting one project across invoices to stay under a cap is
+  // prohibited -- so a screen comparing one work order at a time would be
+  // teaching exactly that. The lines being issued now are not in `assignments`
+  // yet, so the two halves are added rather than one replacing the other.
+  const heldOnJob = chosen
+    ? Object.values(job.assignments || {})
+      .filter((a) => a && a.subId === chosen.id)
+      .reduce((n, a) => n + (Number(moneyRaw(a.value || "")) || 0), 0)
+    : 0;
+  const capChk = chosen ? handymanCapCheck({
+    engagedAs: chosen.engagedAs,
+    state: workState || chosen.state,
+    trades: openLines,
+    jobDollars: lineTotal + heldOnJob,
+  }) : null;
+  const capSay = capChk ? handymanCapText(capChk) : null;
   const pickSub = (sb) => {
     const init = { [trade]: { on: true, scope: "", value: "" } };
     bundleable(sb).forEach((t) => { init[t] = { on: false, scope: "", value: "" }; });
@@ -20042,6 +20078,22 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
           <div className="wol-total">
             <span>{openLines.length} work orders</span>
             <strong>{formatMoney(lineTotal)} total to {chosen.company}</strong>
+          </div>
+        )}
+
+        {/* NEVER A GATE. Issue stays enabled whatever this says -- the figures
+            are secondary-source and thirteen states' are explicitly
+            unconfirmed, so refusing on one would stop real work over a number
+            nobody has checked. It is drawn above the button so it is read
+            before the press rather than after it. */}
+        {capSay && (
+          <div className={`hcap hcap-${capChk.level}`}>
+            <div className="hcap-top">
+              {capChk.level === "warn" ? <AlertTriangle size={14} /> : <Info size={14} />}
+              <strong>{capSay.head}</strong>
+            </div>
+            <p>{capSay.why}</p>
+            {capSay.note && <p className="hcap-note">{capSay.note}</p>}
           </div>
         )}
 
@@ -27999,6 +28051,39 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
             ))}
           </div>
           <p className="fld-note">{ENGAGED_AS[f.engagedAs]?.note}</p>
+          {/* WHAT THAT MEANS WHERE THEY WORK, at the moment somebody decides it.
+              Every state's handyman exemption is a dollar figure and six states
+              have none at all, so marking a person a handyman in Maryland is a
+              different act from marking one in Texas -- and this is the only
+              screen where that decision is taken. No job and no money here, so
+              the figure is the state's own ceiling rather than a comparison.
+
+              The COMPANY'S state, which is the only one available here, and
+              deliberately not the same question the assign form asks: that one
+              reads the building's, because licensing follows where the work is.
+              A later pass will want to unify them and must not. */}
+          {isHandyman(f.engagedAs) && (() => {
+            const chk = handymanCapCheck({ engagedAs: f.engagedAs, state: f.state,
+              trades: f.categories });
+            const say = chk && handymanCapText(chk);
+            if (!say) return null;
+            return (
+              <div className={`hcap hcap-${chk.level}`}>
+                <div className="hcap-top">
+                  {chk.level === "warn" ? <AlertTriangle size={14} /> : <Info size={14} />}
+                  <strong>{say.head}</strong>
+                </div>
+                <p>{say.why}</p>
+                {say.note && <p className="hcap-note">{say.note}</p>}
+                {/* The rules that are true wherever there is a figure, said
+                    once here rather than repeated per state. The permit one is
+                    the half no dataset can answer for a particular job. */}
+                <ul className="hcap-rules">
+                  {HANDYMAN_GLOBAL_RULES.map((r) => <li key={r}>{r}</li>)}
+                </ul>
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -29723,6 +29808,27 @@ p.fld-note{margin:6px 0 0}
 .insp-draft-go:hover{background:color-mix(in srgb,var(--brand) 12%,var(--card))}
 .insp-draft-go:disabled{opacity:.6;cursor:default}
 .insp-draft-note{margin:6px 0 0;font-size:11px;line-height:1.5;color:var(--ink-soft);max-width:52ch}
+
+/* THE HANDYMAN LICENCE CEILING. Two tones, because one of them is a thing to
+   know and the other is a thing to act on -- and the amber is never a refusal:
+   Issue stays live underneath it, for the reason handycap.js gives at length.
+   No backtick appears in this block; this stylesheet is one template literal. */
+.hcap{margin:12px 0 0;padding:11px 13px;border-radius:10px;border:1px solid var(--line);
+  background:var(--card)}
+.hcap-top{display:flex;align-items:flex-start;gap:7px;font-size:13px;line-height:1.4;
+  color:var(--ink)}
+.hcap-top svg{flex:none;margin-top:1px}
+.hcap p{margin:5px 0 0;font-size:12px;line-height:1.55;color:var(--ink-soft);max-width:62ch}
+/* The dataset's own caveat, set apart from the figure above it: a note that
+   moves the number is read differently from the number. One rule, because a
+   property set twice in one stylesheet is a property decided by ordering. */
+.hcap-note{font-size:11.5px;font-style:italic}
+.hcap-rules{margin:7px 0 0;padding-left:18px;font-size:11.5px;line-height:1.5;
+  color:var(--ink-soft)}
+.hcap-rules li{margin:2px 0}
+.hcap-warn{border-color:color-mix(in srgb,var(--amber) 42%,var(--line));
+  background:color-mix(in srgb,var(--amber) 9%,var(--card))}
+.hcap-warn .hcap-top svg{color:var(--amber)}
 
 /* THE WALKTHROUGH. A strip that reads and a card that is pressed.
    No backtick appears in this block: this stylesheet is one template literal

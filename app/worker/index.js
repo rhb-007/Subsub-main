@@ -55,6 +55,7 @@ import { aiConfigured, claudeCall, replyJson } from "./ai.js";
 import { typedNameMatches } from "../shared/typedname.js";
 import { ENGAGED_AS, isEngagedAs, engagedAs, isHandyman, mayEngageHandyman,
   mayCover, requiredDocsFor, needsLicense } from "../shared/engaged.js";
+import { handymanCapCheck, handymanCapText } from "../shared/handycap.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -7816,7 +7817,79 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
     return c.json({ error: "migration_needed", migration }, 503);
   }
 
-  await logEvent(c.env, accountId, userId, "wo.issued", id, { jobId, trade, companyId, woNumber });
+  // THE HANDYMAN CEILING, RECORDED RATHER THAN ENFORCED.
+  //
+  // `engaged_as = 'handyman'` says this company works without a contractor
+  // licence, and every state's exemption for that is a dollar figure. The
+  // figures are in `shared/handycap.js` with the whole argument for why this
+  // WARNS and never refuses: they are secondary-source numbers, thirteen of the
+  // fifty-one are explicitly unconfirmed, and a figure nobody has checked must
+  // not be the thing that stops a work order.
+  //
+  // So the screen is where it is said -- before the press, where it can still
+  // change the number -- and this is the trail: *they were told and issued it
+  // anyway* has to survive, because a warning on a screen is not a record. It
+  // runs AFTER the insert so the row just written is in the sums.
+  let capWarning = null;
+  if (isHandyman(engagement.engaged_as)) {
+    try {
+      // WHERE THE WORK IS, not where the contractor is registered. Licensing
+      // follows the property, the same rule `lien_waivers.governing_state`
+      // already keeps -- and the company's own state is the fallback, because
+      // a job at no building is the one case nothing else can answer.
+      const where = await c.env.DB.prepare(
+        `SELECT COALESCE(NULLIF(p.state, ''), NULLIF(co.state, '')) AS state
+           FROM jobs j
+           LEFT JOIN properties p ON p.id = j.property_id
+           LEFT JOIN companies co ON co.id = ?
+          WHERE j.id = ?`
+      ).bind(companyId, jobId).first();
+      // EVERYTHING THIS COMPANY HOLDS ON THIS JOB, not the one work order just
+      // issued, because the dataset's own rule is that splitting a project
+      // across invoices to stay under a cap is prohibited -- and a
+      // per-work-order comparison is a screen that teaches people to do it.
+      //
+      // A deny list on the status, for the reason `onRoster` is one: a
+      // declined or voided work order is money nobody owes, and anything else
+      // -- including a spelling this code has not heard of -- counts, because
+      // under-counting here is the direction that fails to warn.
+      const sums = await c.env.DB.prepare(
+        `SELECT
+           COALESCE(SUM(CASE WHEN w.job_id = ? THEN w.value_cents ELSE 0 END), 0) AS job_cents,
+           COALESCE(SUM(CASE WHEN COALESCE(j.date, substr(w.issued_at, 1, 10)) >= ?
+                             THEN w.value_cents ELSE 0 END), 0) AS year_cents,
+           GROUP_CONCAT(CASE WHEN w.job_id = ? THEN w.trade END) AS job_trades
+           FROM work_orders w JOIN jobs j ON j.id = w.job_id
+          WHERE w.company_id = ? AND j.account_id = ?
+            AND w.status <> 'declined' AND w.voided_at IS NULL`
+      ).bind(jobId, `${new Date().getUTCFullYear()}-01-01`, jobId, companyId, accountId).first();
+      const chk = handymanCapCheck({
+        engagedAs: engagement.engaged_as,
+        state: where?.state || null,
+        trades: String(sums?.job_trades || "").split(",").filter(Boolean),
+        jobDollars: (sums?.job_cents || 0) / 100,
+        accountYearDollars: (sums?.year_cents || 0) / 100,
+      });
+      if (chk) capWarning = { ...chk, text: handymanCapText(chk) };
+    } catch (err) {
+      // A figure that could not be worked out must not cost somebody their
+      // work order: this whole thing is advisory. Narrow, because a catch wide
+      // enough to hide a real error is a catch that will.
+      if (!missingSchema(err)) throw err;
+      console.warn("[assign] handyman cap check unavailable:", err?.message || err);
+    }
+  }
+
+  await logEvent(c.env, accountId, userId, "wo.issued", id, {
+    jobId, trade, companyId, woNumber,
+    // Only the verdict and the figures, never the prose: the words change and
+    // the log is read months later.
+    handymanCap: capWarning
+      ? { state: capWarning.state, basis: capWarning.basis, reason: capWarning.reason,
+        level: capWarning.level, capDollars: capWarning.capDollars,
+        figureDollars: capWarning.figureDollars, over: capWarning.over }
+      : null,
+  });
 
   // Tell them. A work order nobody knows about is why response deadlines get
   // missed. Failure is logged and does not undo the issue.
@@ -7878,7 +7951,8 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
     `Issued ${woNumber} to ${await companyName(c.env.DB, companyId)} · ${trade}`);
   await touchJob(c.env, jobId);
   await notifyTenant(c, jobId, autoScheduled ? "booked" : "arranging");
-  return c.json({ id, woNumber, status: autoScheduled ? "accepted" : "pending", notified }, 201);
+  return c.json({ id, woNumber, status: autoScheduled ? "accepted" : "pending",
+    notified, capWarning }, 201);
 });
 
 // Sending somebody out, without waiting for a manager to wake up.

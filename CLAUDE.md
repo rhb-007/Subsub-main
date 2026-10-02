@@ -6026,6 +6026,126 @@ refactor.
   inspection, the add row gated behind a step, the work step marked done
   whenever rooms exist, and `send` listed with nobody to send to.
 
+- **AND THE HANDYMAN FINALLY HAS A CEILING, WHICH IS A SET OF FIGURES NOBODY MAY
+  REFUSE A WORK ORDER ON.** The entry above shipped `engaged_as = 'handyman'`
+  and recorded what was left open in its own words: *"there is no value or
+  permit ceiling. 'Lighter work' is expressed only as a trade list, so a
+  handyman can be issued a $40,000 work order for painting."* Every state's
+  licence exemption for unlicensed work **is** a dollar figure, so the ceiling
+  is the thing that makes the relationship mean anything rather than being a
+  label. Supplied as a dataset of all fifty-one jurisdictions;
+  `app/shared/handycap.js` is the figures and the rules for reading them.
+
+  **IT WARNS, IT NEVER BLOCKS, AND THAT IS THE WHOLE DECISION.** Every other
+  gate here refuses — `documents_incomplete`, `trade_not_handyman`,
+  `cover_outstanding`. This one must not, for a reason the dataset states about
+  itself: *compiled from secondary sources, verify each state before relying on
+  it, not legal advice*. **Thirteen of the fifty-one carry `verify: true`**, and
+  for a dozen more the note beside the figure outranks it — Tennessee is $3,000
+  rather than $25,000 in nine named counties, Washington's exemption is void the
+  moment you advertise. **A number nobody has checked must never be the thing
+  that stops a work order**, which is the licensing dataset's own `reviewed`
+  rule pointed at money. So the shape is the one `docs.js` already uses for a
+  certificate lapsing under booked work: say it, loudly, where somebody can act
+  on it, and cancel nothing. `test:handycap` asserts the **status** as well as
+  the body — turning it into a 409 is the mutation that exists to be caught —
+  and `test:handycapui` reads the Issue button's `disabled` back out of the
+  browser, because an assertion that the component *mentions* the check passes
+  with the button wired shut.
+
+  **WHICH PUTS IT BEFORE THE PRESS.** A warning that arrives with the 201 is a
+  warning about a commitment already made, so the screen is where it is said —
+  on the form where the figure is typed, above the button rather than under it,
+  which the suite measures as a rectangle rather than trusting source order. The
+  route records the same verdict afterwards because **a warning on a screen is
+  not a record**: *they were told and issued it anyway* has to survive, which is
+  a trail and not a gate. Both halves read the one predicate so they cannot
+  disagree, and the event log gets the figures and deliberately **not the
+  prose** — the words change and the log is read months later.
+
+  **THE STATE IS THE BUILDING'S, NOT THE CONTRACTOR'S**, because licensing
+  follows where the work is — the rule `lien_waivers.governing_state` already
+  keeps. Only a fixture whose building and whose company are in **different
+  states** can tell those apart, so the handyman is registered in Oregon
+  ($1,000) and the building is in Washington ($500) and the figure is $700:
+  under one, over the other. A job at no building falls back to the company's
+  own state, which is the only thing left to read, and that fallback has its own
+  fixture. **The picker on the roster form deliberately asks a different
+  question** — there is no job there to have a building, so it reads the
+  company's state — and a later pass will want to unify them and must not.
+
+  **IT COUNTS THE WHOLE JOB, because splitting is what the dataset explicitly
+  prohibits.** A per-work-order comparison is a screen that teaches people to
+  split one project across invoices to stay under a cap, which is the third
+  global rule. Two $300 work orders on one job are $600 against a $500 cap, and
+  that is the assertion: comparing the single line passes every other one.
+
+  **FOUR BASES ARE FOUR SENTENCES, NOT FOUR NUMBERS.** `per_job` is a ceiling on
+  this work; `annual` is a ceiling on their year; `none` is no exemption at all,
+  at any amount, in six jurisdictions; `no_state_license` is a state that
+  licenses nobody. A cap of 0 and no cap at all are both "no number to compare"
+  and they are **opposite answers**, told apart by the words — `docs.js`'s
+  expired-and-never-added rule, on a dataset.
+
+  **AND AN ANNUAL CAP IS NEVER ANSWERED "UNDER IT".** That figure counts the
+  handyman's whole business across every client and SubSub sees one slice, so the
+  sentence names it as such — *committed through this account this year… and
+  SubSub cannot see their other clients*. The same honesty the waiver roll-up
+  keeps by never saying "clear", only "clear through a date". One job over the
+  annual cap is over it on its own, with no year figure at all, because that is
+  the one case nobody can argue with and dropping it is a silent miss.
+
+  **THE COLOUR FOLLOWS THE MONEY, AND THAT IS WHY PLUMBING IS A NOTE.** The
+  dataset's first global rule says electrical, plumbing, HVAC, gas and
+  structural work sit outside every exemption — which speaks directly to a
+  decision already recorded above, that `HANDYMAN_TRADES` keeps plumbing and
+  electrical because *a dripping tap and a tripped breaker are what this was
+  asked for*. Both are kept: reversing it would refuse the two examples the
+  feature exists for. What changes is that the screen now **says so** instead of
+  the product holding the caveat privately. But it says it **quietly** under the
+  figure, because a warning on every tap washer is *a red number that never
+  clears is how people learn to stop reading badges* — already written here
+  about the nav count — and then the one that matters, $8,000 of re-piping,
+  is drawn like a washer. Over the figure it leads the verdict, since then no
+  amount would have been exempt and being under would not have helped. Two
+  mutations, one per axis: making the colour follow the trade fails one
+  assertion, making the trade always lead the verdict fails a different one.
+
+  **THE FIGURES WERE TRANSCRIBED MECHANICALLY, NOT BY HAND.** A digit typed
+  wrong here is a wrong number on a screen somebody relies on, which is the
+  `npm run paste` lesson this repository paid for once against a live database —
+  so the table was generated from the supplied JSON. The suite then checks the
+  shape rather than trusting it: exactly the fifty-one `states.js` knows and
+  nothing else, every basis one of the four, `none` implies no figure,
+  `no_state_license` implies no figure, every measurable basis positive and
+  naming what it takes to go above it. **No row carries a state name**, because
+  `stateName` already holds those. And the unconfirmed thirteen are **printed as
+  a work queue** rather than counted, the rule the licensing dataset runs on: a
+  count is not something anybody can act on.
+
+  **One tension left as supplied rather than silently corrected:** Alaska reads
+  `basis: "none"` while its own note describes a handyman licence covering jobs
+  up to $10,000. Editing somebody else's dataset to make it internally tidy is
+  how a figure nobody checked becomes a figure somebody invented, so the note
+  renders and a reader sees both.
+
+  **The words live in the module**, for the reason `docStatusText` does: the
+  form, the route's recorded detail and the tests all describe one thing. Three
+  mutations came out of writing them and each is now pinned — the licensing
+  authority **lowercased into a sentence** (*"needs l&i contractor
+  registration"*), a **raw trade id** reaching prose (`windows_doors`), and a
+  `${}` surviving into rendered text, which is the same class as a `\uXXXX`
+  escape in JSX and which this project has shipped twice. All three are checked
+  across **every state at three figures and three trade sets** — 459
+  combinations — because only one of them was ever wrong.
+
+  **Still open, and the user's call rather than a build:** the permit rule. *Work
+  requiring a building permit usually voids the exemption* is true wherever
+  there is a figure and no dataset can answer it for a particular job, so it is
+  said as a standing rule on the picker and nothing computes it. A permit flag
+  on a work order would be the way, and it is a question about what people will
+  actually fill in rather than an endpoint.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -462,6 +462,46 @@ try {
       /no contractor licen/i.test(after?.note || ""), after?.note);
     t.ck("and that insurance is not required of one",
       /insurance is not required/i.test(after?.note || ""), after?.note);
+
+    // AND WHAT THAT MEANS WHERE THEY WORK, which is the figure half of the
+    // same decision. Asserted HERE because this is the form that opens the
+    // picker, and the lesson `roleLocked` taught is that a static check on a
+    // control passes while nothing can reach it -- the second call site of
+    // `handymanCapCheck` needs the same proof the first one got.
+    const cap = await page.evaluate(() => {
+      const el = document.querySelector(".hcap");
+      if (!el) return null;
+      return {
+        tone: el.classList.contains("hcap-warn") ? "warn" : "note",
+        head: (el.querySelector("strong")?.innerText || "").trim(),
+        body: [...el.querySelectorAll("p")].map((x) => (x.innerText || "").replace(/\s+/g, " ").trim()),
+        rules: [...el.querySelectorAll(".hcap-rules li")].map((x) => (x.innerText || "").trim()),
+      };
+    });
+    t.ck("the state's handyman ceiling is drawn on the picker", !!cap, JSON.stringify(cap));
+    // Pike Maintenance is a Washington company, so this is Washington's figure
+    // -- the company's own state, which is deliberately NOT the building's
+    // state the assign form reads: there is no job here to have a building.
+    t.ck("naming their state and its figure",
+      /Washington/.test(cap?.head || "") && /\$500/.test(cap?.head || ""), cap?.head);
+    t.ck("with no job to compare, so no verdict about one",
+      cap?.tone === "note", JSON.stringify(cap?.tone));
+    // The rules that hold wherever there is a figure, said once rather than
+    // per state -- and the permit one is the half no dataset can answer for a
+    // particular job.
+    t.ck("and the rules that hold everywhere", (cap?.rules || []).length === 4,
+      JSON.stringify(cap?.rules));
+    t.ck("including the one about splitting invoices",
+      (cap?.rules || []).some((r) => /splitting/i.test(r)), JSON.stringify(cap?.rules));
+    t.ck("and the one about permits",
+      (cap?.rules || []).some((r) => /permit/i.test(r)), JSON.stringify(cap?.rules));
+    // AND IT IS NOT THERE FOR A SUBCONTRACTOR, asserted by going back -- the
+    // same place, so a block drawn for everybody cannot pass.
+    await page.evaluate(() => [...document.querySelectorAll(".insp-kind.seg button")]
+      .find((b) => /Subcontractor/i.test(b.innerText || ""))?.click());
+    await wait(400);
+    t.ck("and it goes when they are a subcontractor again",
+      await page.evaluate(() => !document.querySelector(".hcap")));
     await ctx.close();
   }
 
