@@ -32,6 +32,19 @@ keep_vars = true
 # Leaving both unset (the default) runs on the dev-stub auth — see
 # app/README.md "Local development".
 
+# Claude, for drafting the note on an inspection photograph. Set in the
+# Cloudflare dashboard the same way as the Supabase pair above (Worker →
+# Settings → Variables), as a SECRET:
+#   ANTHROPIC_API_KEY = "sk-ant-..."
+# Leaving it unset is a supported state and not a broken one: `aiConfigured`
+# answers false, the inspection read reports `aiDrafts: false`, and the
+# screen draws no drafting button at all -- so nothing anywhere offers a
+# press that would answer 503. The captions stay typeable by hand.
+#
+# ANTHROPIC_API_BASE exists only so `photo-draft-test.mjs` can assert the
+# request shape without making Anthropic answer anything. Never set it in
+# production.
+
 # Filled in after you run `wrangler d1 create subsub-db` — see app/README.md.
 [[d1_databases]]
 binding = "DB"
