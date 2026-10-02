@@ -312,7 +312,10 @@ export function signRefusalText(reason) {
 // already stores and what this mirrors. What makes it weak is a name typed
 // into a box with nothing tying it to a person, so the name has to match the
 // signer and it has to be their own act.
-export const typedNameMatches = (typed, expected) => {
-  const norm = (s) => String(s || "").trim().replace(/\s+/g, " ").toLowerCase();
-  return !!norm(typed) && norm(typed) === norm(expected);
-};
+//
+// The predicate itself moved to `shared/typedname.js`: the staff console's
+// two delete confirmations ask the same question, and each had written its
+// own stricter copy rather than reach into this module for it -- which is
+// how one of them ended up comparing against an untrimmed stored name and
+// refusing for ever. It is a validation rule, not contract text, so unlike
+// `PARTY_TERMS` it belongs outside the versioned document.

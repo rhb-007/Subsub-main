@@ -5167,6 +5167,106 @@ refactor.
   decides which other tables may hold rows for that seat, and a route that
   writes it alone leaves records nothing reads — until something reads them.
 
+- **A COMPANY COULD NOT BE DELETED FROM THE CONSOLE, AND THERE WERE THREE
+  BUGS BEHIND ONE DEAD BUTTON.** Reported as *"can't delete subcontractors in
+  admin console - stops here"*, with a screenshot of the name typed
+  correctly and **Delete company** still greyed out.
+
+  **THE LABEL AND THE COMPARISON WERE DIFFERENT STRINGS.** `DeleteConfirmModal`
+  read `typed.trim() === item.name` — the typed side trimmed, the **stored**
+  side not. HTML collapses trailing whitespace, so a company whose name had
+  picked up a space rendered identically in *Type **X** to confirm* and never
+  matched. The button was dead for ever, for that row only, and **no static
+  check can see it**: the expression reads exactly as intended. It is the
+  misspelt-capability shape again — fails closed, and nothing reports it.
+
+  **AND THE CAUSE WAS ONE ROUTE ALONG.** `POST /api/platform/companies` has
+  always trimmed the name; `PATCH` beside it wrote `b[key]` raw. So **editing
+  a company is what put the space there** — and the Delete button lives in
+  that very edit panel. A write that is correct on create and not on update
+  is the same two-records-of-one-fact shape this file keeps recording, with
+  the stale copy being the one people actually use.
+
+  **AND THE BUTTON SAID NOTHING, which is what "stops here" actually
+  describes.** *A disabled control with no reason beside it is
+  indistinguishable from a broken one* — written here already, and the
+  countersign box three thousand lines away has had that hint since it was
+  written. This one had none, so a reader has no way to tell a refused name
+  from a broken console. `typedNameHint` is the sentence, and it stays
+  **silent while the box is empty**: a confirmation that tells somebody off
+  before they have started is one they stop reading.
+
+  **THE PREDICATE EXISTED AND NOBODY USED IT.** `typedNameMatches` — trim,
+  collapse, lowercase — has been in `shared/agreement.js` since
+  countersigning shipped, and the staff console had written **three** stricter
+  copies: the modal and both delete routes. It now lives in
+  `shared/typedname.js`, out of the agreement module because it is a
+  validation rule rather than contract text (unlike `PARTY_TERMS`, which is
+  frozen inside the versioned document on purpose), and all four call sites
+  read it. **Both** delete routes were changed, not just the reported one:
+  fixing the company branch and leaving the account branch is the diagonal
+  coverage that left `hiresLabel` half-wired.
+
+  **What it tolerates is a decision.** Whitespace and case, because a typed
+  confirmation exists to make somebody stop, read the name and decide — not
+  to test their shift key, and a name that must be reproduced character-exact
+  is one people copy and paste, which defeats the asking. It still refuses a
+  different name, a prefix and a substring, and each is pinned.
+
+  **AND UNDERNEATH ALL OF IT, TWO ROUTES HAD BEEN THROWING 500 THE WHOLE
+  TIME** — found only because the suite drove them rather than asserting the
+  predicate. `auditPlatform` writes `activity`, whose `account_id` is `NOT
+  NULL` because it is explicitly the **per-account** stream, and every
+  company action passed `null` into it: **create, edit and delete on the
+  console's Companies screen all failed**, with "that didn't work" over a
+  company that was still there. And `DELETE /api/platform/accounts/:id` ran
+  `UPDATE activity SET account_id = NULL` to keep the trail after the row
+  went — a statement that column can never accept — so **deleting an account
+  threw too**.
+
+  Both are fixed the same way and **widening the column is refused**: a row
+  in `activity` with no account is a row in nobody's stream, and that stream
+  is read by the customer-facing feed. The per-account row is written only
+  when there is an account; `events`, whose `account_id` is nullable
+  precisely because it is the platform-wide log, always gets one and the
+  account delete nulls it rather than losing it. The trail is the point —
+  *a support action nobody can reconstruct afterwards is indistinguishable
+  from an intrusion* is the comment above these routes — so the suite
+  asserts the `account_deleted` record **survives the account**, names the
+  staff member, and is detached rather than gone.
+
+  The general form, and it is new here: **a NOT NULL column is a claim about
+  what the table is for.** `activity.account_id` says a row belongs to one
+  customer. Two routes wrote as though it did not, and both were wrong about
+  the table rather than about the column — so the fix is to stop writing the
+  row, not to loosen the constraint.
+
+  **The fixture is the test.** A clean company name passes whichever
+  comparison is in force, so every assertion here runs against a row whose
+  stored name carries the trailing space — the only row either direction can
+  be told apart on. Six mutations fire: the exact comparison in the route and
+  again in the modal, the trim removed from `PATCH`, the per-account row
+  written for an account-less action, the hint deleted, and the predicate
+  relaxed into a prefix match. The browser suite reproduces the screenshot
+  exactly under the first of those — name typed as drawn, button disabled,
+  nothing said.
+
+  Two harness traps, both already in this file. The console reads its session
+  from `localStorage`, so going straight to the page lands on *Continue with
+  Google* — where every selector finds nothing and the suite reports the
+  **feature** as broken; signing in is now its own assertion that prints
+  what is on screen instead. And two checks read `!m?.hint`, which is **true
+  when the modal is absent**, so they passed loudest exactly when the subject
+  had disappeared. They require the modal first now.
+
+  **Still open, and not worth a migration:** rows already stored with
+  untrimmed names stay as they are. Nothing is harmed — the comparison
+  normalises both sides, so they delete fine — but a tidy-up is
+  `UPDATE companies SET company = TRIM(company) WHERE company <> TRIM(company)`
+  if the stray space ever shows up somewhere it matters. Deliberately **not**
+  a CHECK.sql invariant, because one shipped knowing it reads non-zero is a
+  bug report nobody can action.
+
 - **A MODEL DRAFTS THE PHOTO NOTE AND THE MANAGER KEEPS IT, AND THE WHOLE
   FEATURE IS THE WORD "DRAFT".** A managing agent photographs forty things in
   a flat and then types forty sentences most of which the photograph already

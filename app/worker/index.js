@@ -52,6 +52,7 @@ import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
 import { aiConfigured, claudeCall, replyJson } from "./ai.js";
+import { typedNameMatches } from "../shared/typedname.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -77,7 +78,7 @@ import { payoutSummary, rowFromStripe, PAYOUT_CONTROLLER, payoutAccountKey } fro
 import {
   AGREEMENT_SOURCES, TERM_FIELDS, STANDARD_AGREEMENT, validTerms, mergeTerms,
   renderAgreement, canonicalText, kindsFor, agreementDocShape, waitingOn,
-  inForce, isLive, canSign, typedNameMatches,
+  inForce, isLive, canSign,
 } from "../shared/agreement.js";
 import { coverState, coverProblemText, PAY_GATE_KINDS } from "../shared/paygate.js";
 import { problemsIn, checksFrom, findingsFor, allConfirmed,
@@ -14684,17 +14685,40 @@ function requireSuperadmin(c, staff) {
 }
 
 // One place, so every one of these writes leaves the same trail.
+//
+// NOT EVERY STAFF ACTION BELONGS TO AN ACCOUNT, and writing as though it did
+// is what made three routes throw. `activity` is the PER-ACCOUNT stream --
+// its own comment says so, and `account_id` is NOT NULL because a row in it
+// is something that happened to one customer. A company is shared across
+// every account that engages it and belongs to none of them, so creating,
+// editing or deleting one passed `null` into that column and the whole
+// batch failed: a 500 on the console's Companies screen, on all three
+// writes, for as long as they have existed.
+//
+// So the per-account row is written only when there IS an account, and
+// `events` -- whose `account_id` is nullable precisely because it is the
+// platform-wide log -- always gets one. The trail is what matters here: a
+// support action nobody can reconstruct afterwards is indistinguishable
+// from an intrusion, and that sentence is three lines up.
+//
+// Widening `activity.account_id` to nullable was the other way out and is
+// refused: it would put rows in every account's stream that belong to no
+// account, and that stream is read by the customer-facing feed.
 async function auditPlatform(env, staff, accountId, kind, text, meta) {
-  await env.DB.batch([
-    env.DB.prepare(
+  const payload = JSON.stringify({ ...(meta || {}), staffEmail: staff.email });
+  const stmts = [];
+  if (accountId) {
+    stmts.push(env.DB.prepare(
       `INSERT INTO activity (id, account_id, at, user_id, kind, text, meta)
        VALUES (?, ?, datetime('now'), NULL, ?, ?, ?)`
-    ).bind(uid(), accountId, kind, text, JSON.stringify({ ...(meta || {}), staffUserId: staff.userId, staffEmail: staff.email })),
-    env.DB.prepare(
-      `INSERT INTO events (account_id, actor_id, kind, subject_id, payload)
-       VALUES (?, ?, ?, ?, ?)`
-    ).bind(accountId, staff.userId, kind, accountId, JSON.stringify({ ...(meta || {}), staffEmail: staff.email })),
-  ]);
+    ).bind(uid(), accountId, kind, text,
+      JSON.stringify({ ...(meta || {}), staffUserId: staff.userId, staffEmail: staff.email })));
+  }
+  stmts.push(env.DB.prepare(
+    `INSERT INTO events (account_id, actor_id, kind, subject_id, payload)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(accountId || null, staff.userId, kind, accountId || null, payload));
+  await env.DB.batch(stmts);
 }
 
 app.post("/api/platform/accounts", async (c) => {
@@ -14873,7 +14897,7 @@ app.delete("/api/platform/accounts/:id", async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const account = await c.env.DB.prepare(`SELECT id, name, subdomain FROM accounts WHERE id = ?`).bind(id).first();
   if (!account) return c.json({ error: "not_found" }, 404);
-  if (String(b.confirmName || "").trim() !== account.name) {
+  if (!typedNameMatches(b.confirmName, account.name)) {
     return c.json({ error: "confirm_name_mismatch" }, 400);
   }
 
@@ -14891,8 +14915,22 @@ app.delete("/api/platform/accounts/:id", async (c) => {
 
   // Rows that point at the account but carry no cascade of their own. The
   // rest (memberships, engagements, jobs, properties, invites) cascade.
+  //
+  // `activity` IS DELIBERATELY NOT IN THIS LIST, and it used to be. The line
+  // read `UPDATE activity SET account_id = NULL`, written to keep the trail
+  // after the account went -- and `activity.account_id` is NOT NULL, so that
+  // statement could never run. **Deleting an account threw a 500 every
+  // time**, which is what the console's "that didn't work" was reporting
+  // over a customer who was still there.
+  //
+  // Letting it cascade is the answer rather than widening the column, for
+  // the reason `auditPlatform` now gives: `activity` is the per-account
+  // stream, so a row in it with no account is a row in nobody's stream. The
+  // trail survives in `events`, whose `account_id` is nullable precisely
+  // because it is the platform-wide log -- including the `account_deleted`
+  // row written a few lines up, which is the one somebody would come looking
+  // for.
   await c.env.DB.batch([
-    c.env.DB.prepare(`UPDATE activity SET account_id = NULL WHERE account_id = ?`).bind(id),
     c.env.DB.prepare(`UPDATE events SET account_id = NULL WHERE account_id = ?`).bind(id),
     c.env.DB.prepare(`DELETE FROM accounts WHERE id = ?`).bind(id),
   ]);
@@ -14943,7 +14981,13 @@ app.patch("/api/platform/companies/:id", async (c) => {
     if (key === "email" && b.email && !EMAIL_RE.test(String(b.email).trim())) {
       return c.json({ error: "invalid_email" }, 400);
     }
-    sets.push(`${column} = ?`); vals.push(b[key] === "" ? null : b[key]);
+    // TRIMMED, which POST has always done and this had never done. A name
+    // stored with a trailing space renders identically everywhere -- HTML
+    // collapses it -- and then fails every exact comparison made about it,
+    // which is how a company became undeletable. Empty after trimming is
+    // null, the same as an empty string was.
+    const raw = typeof b[key] === "string" ? b[key].trim() : b[key];
+    sets.push(`${column} = ?`); vals.push(raw === "" || raw === undefined ? null : raw);
   }
   if (b.phone !== undefined) {
     const phone = String(b.phone || "").trim() ? normalizePhone(b.phone) : null;
@@ -14969,7 +15013,7 @@ app.delete("/api/platform/companies/:id", async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const co = await c.env.DB.prepare(`SELECT id, company FROM companies WHERE id = ?`).bind(id).first();
   if (!co) return c.json({ error: "not_found" }, 404);
-  if (String(b.confirmName || "").trim() !== co.company) {
+  if (!typedNameMatches(b.confirmName, co.company)) {
     return c.json({ error: "confirm_name_mismatch" }, 400);
   }
 

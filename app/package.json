@@ -175,7 +175,9 @@
     "test:rosterword": "node scripts/roster-word-test.mjs",
     "test:billingmanage": "node --no-warnings scripts/billing-manage-test.mjs",
     "test:photodraft": "node --no-warnings scripts/photo-draft-test.mjs",
-    "test:photodraftui": "node --no-warnings scripts/photo-draft-ui-test.mjs"
+    "test:photodraftui": "node --no-warnings scripts/photo-draft-ui-test.mjs",
+    "test:consoledelete": "node --no-warnings scripts/console-delete-test.mjs",
+    "test:consoledeleteui": "node --no-warnings scripts/console-delete-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

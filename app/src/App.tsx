@@ -65,7 +65,8 @@ import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   suggestTrades } from "../shared/inspection.js";
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
-import { agreementStateText, typedNameMatches, renderAgreement } from "../shared/agreement.js";
+import { agreementStateText, renderAgreement } from "../shared/agreement.js";
+import { typedNameMatches, typedNameHint } from "../shared/typedname.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -10069,7 +10070,16 @@ function ConfirmComplete({ job, effects, onConfirm, onCancel }) {
 function DeleteConfirmModal({ item, onConfirm, onCancel }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
-  const match = typed.trim() === item.name;
+  // THE SHARED PREDICATE, not a stricter local one. This compared
+  // `typed.trim()` against the STORED name untrimmed -- and a company whose
+  // name had picked up a trailing space renders identically in the label
+  // below, because HTML collapses it. So the requirement a reader sees and
+  // the value the code compares were different strings, the button was dead
+  // for ever, and nothing on the screen said why. Reported as "can't delete
+  // subcontractors in admin console - stops here", which is exactly what it
+  // looked like.
+  const match = typedNameMatches(typed, item.name);
+  const hint = typedNameHint(typed, item.name);
   const noun = item.kind === "account" ? "account" : "company";
   return (
     <Modal onClose={onCancel}>
@@ -10085,6 +10095,11 @@ function DeleteConfirmModal({ item, onConfirm, onCancel }) {
         <label className="fld">Type <b>{item.name}</b> to confirm
           <input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus />
         </label>
+        {/* WHY THE BUTTON IS DEAD, beside it. A disabled control with no
+            reason next to it is indistinguishable from a broken one, and
+            this one had none at all -- the countersign box three thousand
+            lines down has said so since it was written. */}
+        {hint && <p className="cx-sub" role="alert">{hint}</p>}
         <div className="form-actions">
           <button className="btn-ghost" onClick={onCancel}>Cancel</button>
           <button className="btn-danger" disabled={!match || busy}
