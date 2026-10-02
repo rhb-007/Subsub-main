@@ -4912,6 +4912,153 @@ refactor.
   branches checked on one branch is the diagonal coverage that left
   `hiresLabel` half-wired.
 
+- **AN ACCOUNT WITH NO ADMIN COULD BE OPENED AND NOT USED, AND THE SECOND HALF
+  LOOKED NOTHING LIKE THE FIRST.** `pickSeat` fixed "that account has nobody
+  on it to sign in as" by falling back to the best seat there was. What it did
+  not fix is what the person then found: a project manager cannot reach
+  Account, billing or branding — the banner already had to say so — and
+  `runsTheAccount` being false quietly empties the screens that remain.
+
+  Reported from a property manager's own property: *"it says assign someone to
+  manage it… the admin of the account should be able to manage it! Why is it
+  asking this? The admin should be able to access everything within this
+  account."* Which is exactly what the panel does with `canManage` false: no
+  vendor list, no Edit, no Remove, no owners panel, and the handover block
+  reduced to one sentence telling a managing agent to **add an owner who will
+  appoint a manager**. Nothing on that screen is wrong; it is the right screen
+  for a seat nobody should have been in.
+
+  **Nobody inside the account could repair it either**, which is what makes
+  this the staff seat's job rather than the customer's: every door to granting
+  the admin role is `requireRole("admin")`, so the one seat that could produce
+  an admin was the seat being refused.
+
+  `staffStandsIn` in `app/shared/seats.js`. A **team seat**, on an account with
+  **no admin anywhere**, runs it — and both halves are load-bearing. A guest is
+  never promoted: an owner or a tenant is somebody else's client, and standing
+  in their seat is how support sees what a client sees, which is `isTeamSeat`
+  reused rather than restated. And an account that **has** an admin is never
+  widened, so naming a pm seat still reproduces a pm's complaint, which is the
+  reason naming a seat was added at all.
+
+  **The scope goes with the role.** A pm's buildings narrow a *person* and
+  there is no person here; an admin still scoped to part of the book is the
+  hybrid `runsTheAccount` refuses anyway, so keeping it would redraw the
+  half-shut account one layer down. The browser replaces the **whole
+  membership** for that reason and reads the answer off the impersonate reply
+  rather than deriving a second one — the seat row still says `pm`, because
+  that is true of the person, whose role and buildings are unchanged. Safe to
+  hold in memory because `resumeSession` refuses to resume an impersonated
+  session at all, so a refresh ends it and the flag cannot go stale against the
+  token the API is checking.
+
+  **It is deliberately not conditional on whether a seat was NAMED**, and that
+  is a trade rather than an oversight: the session row records which seat, not
+  how it was chosen, and a column to tell the two apart would buy the ability
+  to reproduce a pm's view on an account where a pm's view and the account's
+  view are already the same thing.
+
+  **The audit trail says what was done, not only whose seat it was.** "(pm
+  seat)" over a session that reached billing and branding is a record that
+  understates it, so the row names both and the meta carries `ranAsAdmin`.
+
+  **And the banner now has two sentences where it had one.** They are different
+  sentences: *this account has no admin, you are standing in as one, give
+  somebody the role* is the customer's to fix; *you are in a pm seat, so this
+  is that person's view* is what was asked for. The second case said nothing at
+  all before, because the banner read `fellBack` — which is about how the seat
+  was **chosen** rather than about what it **is** — so a staff member who
+  deliberately opened a contractor seat got the contractor portal and no
+  explanation for it.
+
+  **Still open, and unchanged by any of this: the console does not list
+  accounts with no admin.** Three doors make them — the account INSERT skips
+  the admin without an owner email, add-user forces the first *team* seat and
+  a contractor seat is exempt, and `DELETE /api/account-users/:userId` only
+  refuses `cannot_remove_self`. Staff are now told while signed in as one;
+  finding them without signing in is where it belongs.
+
+- **A set of photographs is one piece of evidence, so the lightbox holds the
+  set.** Reported looking at a tenant's report: *"when viewing images of an
+  issue a tenant sent me, they should be strung together, so you can increase
+  size and arrow forward or back to view the other images without closing
+  them."*
+
+  There were **two** one-picture lightboxes — the tenant's own view of their
+  report and the manager's view of the same report — each drawing exactly the
+  photo that was tapped, each closing on any click, and neither able to reach
+  the next one. Three photos of a leak are the ceiling, the floor and the meter
+  reading, read in order; what was there made that three round trips through a
+  grid. Two copies of one thing is two things to keep in step, so it is one
+  `PhotoLightbox` used from both modals and fed by all three grids.
+
+  **It fetches nothing.** Every photo in a set already has a thumbnail mounted
+  behind it, and each of those owns exactly one object URL for those bytes —
+  two owners of one URL means revoking either blanks the other. So
+  `ReportPhoto` reports what it loaded through `onLoaded` and the lightbox
+  reads that map: `undefined` is still arriving, `null` failed and says so in
+  the same words the thumbnail uses, and the set can still be walked past it.
+
+  **It wraps at both ends**, because a dead Next on the last of three is the
+  disabled-control-with-no-reason failure on the one control whose whole job is
+  to be pressed, and a set of three has no boundary worth defending. The
+  **counter is what makes the arrows mean something** — a set you can move
+  through has to say where in it you are — so with one photo there are neither,
+  `1 of 1` being a number about nothing. A `div` rather than a `button`, now
+  that it contains buttons.
+
+  **What the suite says out loud rather than claiming:** `Modal` binds no
+  Escape handler, so the lightbox's `stopPropagation` changes nothing today and
+  no test can tell. It is there against the day `Modal` grows one. What the two
+  assertions beside it do catch is the lightbox having no Escape of its own,
+  and the box being rendered outside `.modal`, where its own backdrop click
+  would reach `.modal-backdrop` and close the report underneath.
+
+  And the fixture needed a job's **whole** shape to appear on the dashboard at
+  all. A partial one loaded, rendered nothing, and read exactly like the modal
+  never opening — an hour on a bug that was a missing `accountId`.
+
+- **The only thing on the dashboard that is a person waiting on an answer was
+  under five numbers that are not.** *Asked for by owners and tenants* sat
+  below the KPI tiles. Reported: *"move the section of the issues sent to pm by
+  the tenant or owner, this should go to the top and share scheduled jobs as
+  it's the most important for a property manager to see right when they
+  login."*
+
+  It joins `dash-top` beside the schedule, which is the other question this
+  page exists to answer — what is happening and when, and who is waiting on me.
+  Built once into a variable and rendered there rather than written out twice.
+  Already capped, too: `DashRows` shows three and offers the rest, which is
+  what keeps a panel in that row from growing with the book.
+
+  **Not gated on the account kind.** A general contractor has no owners and no
+  tenants, so the list is empty for them and the panel does not render — a kind
+  check would be a second record of a fact the data already carries. The suite
+  **says** that rather than pinning it, because catching an added gate would
+  need a general contractor holding a tenant's request and there is no way for
+  a GC to have one: a fixture for it would be the test-of-its-own-fixture trap.
+
+  Three things had to follow and none is decoration. It wears **the schedule
+  panel's own card**, compared against that panel rather than against a
+  literal, because a run of bare rows beside a card reads as content that
+  failed to land in one. Its rows take `--paper`, or a card-coloured row on a
+  card disappears — the same pairing the schedule panel's own rows use. And the
+  **row wraps**: Decline and Approve are about 170px of a 340px column, which
+  leaves the title ellipsed to nothing, and the decline box wants 320px of its
+  own.
+
+  Measured rather than read off the source, because **source order is not
+  screen order inside a grid** and a static check that the JSX moved passes
+  whether or not the panel lands anywhere near the schedule.
+
+  One thing it found a layer down: **`severity: "standard"` is a shape the
+  product never produces.** `jobRowToJs` answers `"911"`, `"urgent"` or `null`,
+  and the dashboard's emergencies filter is `j.severity && …` — so a fixture
+  saying "standard" files every ordinary job under *Needs attention now*, and
+  the screen under test stops being the screen. `job-closed-test.mjs` still
+  carries it; it asserts nothing about that section, so it passes, which is
+  exactly why it is written down here.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
