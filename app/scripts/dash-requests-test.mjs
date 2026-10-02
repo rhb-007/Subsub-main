@@ -56,16 +56,41 @@ const jobBase = {
 };
 // A scheduled job, so the schedule panel has something in it, and three
 // requests, so the cap is exercised as well as the placement.
-const BOOKED = { ...jobBase, id: "job_b", title: "Gutter clear", date: "2026-10-12",
+// LONG HERE TOO, because the overflow is a property of every `.dash-row-open`
+// and not of this one panel: the title is sized to its own text in a
+// full-width section as readily as in a 340px one, it just needs more words
+// to show. A short title in the wide sections is a fixture that cannot catch
+// the rule holding them.
+const BOOKED = { ...jobBase, id: "job_b",
+  title: "Gutter clear and downpipe check across the whole of the east elevation",
+  date: "2026-10-12",
   trades: ["roofing"], assignments: {}, status: "active" };
-const REQS = ["Water through the ceiling", "Front door will not lock", "No hot water"]
+// THE FIRST TITLE IS THE REPORTED ONE, at its real length. A short title
+// cannot catch a row that does not clip: every assertion about the overflow
+// passes on "No hot water" whatever the CSS says, which is the
+// fixture-that-cannot-fail shape this suite already fixed once.
+const REQS = ["Barely any water pressure in the main bathroom - both the shower and the basin",
+  "Front door will not lock", "No hot water"]
   .map((title, n) => ({ ...jobBase, id: `job_r${n}`, title, date: "2026-10-20",
     trades: ["plumbing"], assignments: {}, status: "requested", requestedBy: "usr_t",
     createdAt: "Sep 30", photos: [{ id: `ph_${n}`, name: "shot.png" }],
     reportDetail: { unit: "3B", problem: "A leak", started: "Today", words: "Dripping." } }));
 
+// AN URGENT ONE, because the emergencies section is the OTHER place a row is
+// a button -- and `.dash-row-open` being align-items:flex-start is what sizes
+// a title to its own text. Every other section's row is a plain div, whose
+// children stretch and therefore clip on their own, so a fixture with no
+// emergency in it cannot tell whether the rule holding those buttons is
+// there. Approved and active rather than a request, so the counts the rest of
+// this suite asserts do not move.
+const URGENT = { ...jobBase, id: "job_u",
+  title: "Water coming through the ceiling of the ground floor lobby by the lift",
+  date: "2026-10-02", trades: ["plumbing"], assignments: {}, status: "active",
+  severity: "urgent", approvedAt: "2026-10-01", requestedBy: "usr_t",
+  photos: [], createdAt: "Oct 1" };
+
 let KIND = "property_manager";
-let JOBS = [BOOKED, ...REQS];
+let JOBS = [BOOKED, URGENT, ...REQS];
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path) => {
@@ -116,6 +141,48 @@ const geometry = (page) => page.evaluate(() => {
     approvalLists: document.querySelectorAll(".dash-sec h3").length,
     headings: [...document.querySelectorAll(".dash-sec h3")]
       .map((h) => h.innerText.replace(/\s+/g, " ").trim()),
+    // The same measurement in a FULL-WIDTH section, where the rule that
+    // holds it is `max-width` on .dr-title rather than the clamp. Two
+    // mechanisms, each pinned where it is the only thing working -- otherwise
+    // the narrow one covers for the wide one and removing either changes no
+    // outcome, which is the two-guards trap.
+    wide: [...document.querySelectorAll(".dash-sec:not(.sec-top)")]
+      .map((sec) => {
+        const el = sec.querySelector(".dr-title");
+        if (!el) return null;
+        const r = el.getBoundingClientRect(), sr = sec.getBoundingClientRect();
+        return { right: Math.round(r.right), limit: Math.round(sr.right),
+          clipped: el.scrollWidth > el.clientWidth,
+          text: (el.innerText || "").trim().slice(0, 40) };
+      }).filter(Boolean),
+    // THE TITLE AGAINST THE BOX IT IS IN. Measured rather than read off the
+    // stylesheet: `.dr-title` has carried white-space:nowrap, overflow:hidden
+    // and text-overflow:ellipsis the whole time and the title still ran out
+    // of the card, because an ellipsis only happens when something upstream
+    // decides the width -- and the column flex container it sits in was
+    // `align-items:flex-start`, which makes a child as wide as its text. An
+    // assertion on the CSS properties passes over exactly that bug.
+    title: (() => {
+      const el = panel?.querySelector(".dr-title");
+      if (!el || !panel) return null;
+      const r = el.getBoundingClientRect();
+      const pr = panel.getBoundingClientRect();
+      const pcs = getComputedStyle(panel);
+      const cs = getComputedStyle(el);
+      return {
+        right: Math.round(r.right),
+        // The panel's CONTENT right edge: a title that stops exactly on the
+        // border is still in the padding, which reads as touching the edge.
+        limit: Math.round(pr.right - parseFloat(pcs.paddingRight || "0")),
+        // Cut one way or the other -- an ellipsis on one line or a clamp at
+        // two. Either is "it stays in the box"; neither is "it ran out of
+        // it", which is what was reported.
+        clipped: el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight,
+        lines: Math.round(r.height / parseFloat(cs.lineHeight || "0")),
+        clientW: el.clientWidth,
+        text: (el.innerText || "").trim(),
+      };
+    })(),
   };
 });
 
@@ -132,8 +199,7 @@ try {
     const { ctx, page } = await open();
     const g = await geometry(page);
     t.ck("the panel is on the page", !!g.panel, JSON.stringify(g.panel));
-    t.ck("and it is the owners-and-tenants one",
-      /asked for by owners and tenants/i.test(g.head), g.head);
+    t.ck("and it is the requests one", /work requests/i.test(g.head), g.head);
 
     // THE PROPERTY UNDER TEST. Beside the schedule means level with it, in
     // the same row -- not under it, and above the tiles it used to sit below.
@@ -162,13 +228,29 @@ try {
     // buttons drop under what they are about.
     t.ck("the row wraps", g.wrap === "wrap", String(g.wrap));
 
+    // A LONG TITLE STAYS INSIDE THE CARD. Reported with a red line drawn
+    // round a title running off the right of the panel and off the screen.
+    t.ck("the title stops inside the panel",
+      g.title && g.title.right <= g.title.limit + 1, JSON.stringify(g.title));
+    t.ck("and is cut rather than simply hidden",
+      g.title.clipped === true && g.title.clientW > 100, JSON.stringify(g.title));
+    // TWO LINES, NOT ONE. In a 340px column an ellipsis leaves about a third
+    // of the sentence, and the title IS the problem being reported -- a queue
+    // that has stopped saying what is in it. Both bounds, because one alone
+    // passes over a row that grows with the title.
+    t.ck("it wraps to two lines rather than ellipsing at a third of it",
+      g.title.lines === 2, JSON.stringify(g.title));
+
     // Capped, like every other section in that row. Three shown, the rest
     // offered -- a panel that grows with the book has stopped summarising.
     t.ck("three rows are shown", g.rows === 3, String(g.rows));
 
+    t.ck("a long title in a full-width section stays in it too",
+      g.wide.length > 0 && g.wide.every((w) => w.right <= w.limit + 1), JSON.stringify(g.wide));
+
     // AND THERE IS ONE OF IT. A move done by copying leaves the old one
     // below the tiles, and the page then carries the same queue twice.
-    const dupes = g.headings.filter((h) => /asked for by owners and tenants/i.test(h));
+    const dupes = g.headings.filter((h) => /work requests/i.test(h));
     t.ck("and the section appears exactly once", dupes.length === 1, JSON.stringify(g.headings));
     await ctx.close().catch(() => {});
   }
@@ -200,6 +282,21 @@ try {
     const over = await page.evaluate(() =>
       document.documentElement.scrollWidth - document.documentElement.clientWidth);
     t.ck("and nothing scrolls sideways", over <= 1, String(over));
+    // AND THE SAME TITLE ON A PHONE, which is the width this product is
+    // actually run at: a card that clips at 1340 and not at 390 is a fix
+    // checked at the width that flatters it.
+    t.ck("the title stops inside the panel here too",
+      g.title && g.title.right <= g.title.limit + 1, JSON.stringify(g.title));
+    t.ck("and still cut at two lines",
+      g.title.clipped === true && g.title.lines === 2, JSON.stringify(g.title));
+    // AND THE FULL-WIDTH SECTIONS, which is where `max-width` on .dr-title is
+    // the only thing holding the line -- at 1340 those columns are wide
+    // enough that no title reaches the edge, so this is the width at which
+    // that half can fail at all. Removing it puts the title 300px past the
+    // card here and changes nothing at desktop.
+    t.ck("a full-width section's title is cut rather than running on",
+      g.wide.length > 0 && g.wide.every((w) => w.right <= w.limit + 1)
+        && g.wide.some((w) => w.clipped === true), JSON.stringify(g.wide));
     await ctx.close().catch(() => {});
   }
 
@@ -217,7 +314,7 @@ try {
     t.ck("and the schedule takes back the width", g.hero.w > 500, String(g.hero.w));
     t.ck("the tiles are still there", !!g.tiles, JSON.stringify(g.tiles));
     await ctx.close().catch(() => {});
-    JOBS = [BOOKED, ...REQS];
+    JOBS = [BOOKED, URGENT, ...REQS];
   }
 
   console.log("\n-- a general contractor has no owners or tenants to ask --");
@@ -243,7 +340,7 @@ try {
     t.ck("nothing is drawn", g.panel === null, JSON.stringify(g.panel));
     await ctx.close().catch(() => {});
     KIND = "property_manager";
-    JOBS = [BOOKED, ...REQS];
+    JOBS = [BOOKED, URGENT, ...REQS];
   }
 
 } finally {

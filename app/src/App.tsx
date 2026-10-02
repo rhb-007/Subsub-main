@@ -18868,7 +18868,18 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // which is what keeps a panel in a row from growing with the book.
   const requestPanel = awaitingApproval.length === 0 ? null : (
       <section className="dash-sec sec-top">
-        <h3><Building2 size={15} /> {isOwner ? "Waiting on approval" : "Asked for by owners and tenants"}
+        {/* WORK REQUESTS, not "asked for by owners and tenants". The old
+            heading described WHO rather than WHAT, which is a sentence to
+            read where a heading should be a name -- and the row under it
+            already says who asked, by name and role. Deliberately NOT "work
+            order requests", which is what was asked for: a work order is a
+            specific object in this product, issued to one company at a price
+            against an approved job, and these are requests for work that is
+            not a job yet. Two names for one noun is how somebody concludes
+            there are two lists, which this file already records about "Your
+            code" under "My QR code". It mirrors the owner's own button,
+            which reads Request work. */}
+        <h3><Building2 size={15} /> {isOwner ? "Your work requests" : "Work requests"}
           <span className="sec-count amber">{awaitingApproval.length}</span></h3>
         <DashRows id="approvals">
         {awaitingApproval.map((j) => {
@@ -29368,6 +29379,18 @@ strong.insp-name{background:none;border:0;padding:0}
    decline box wants 320px of its own and does not fit at all. So it wraps and
    the buttons take their own line under the thing they are about. */
 .dash-sec.sec-top .dash-row-main{flex:1 1 100%}
+/* AND IN THIS PANEL IT WRAPS RATHER THAN ELLIPSING. The column is about
+   340px and the title IS the problem somebody is reporting -- "Barely any
+   water pressure in the main bathroom" cut to "Barely any water pressure in
+   the ma..." is a queue that has stopped saying what is in it, which is the
+   screen-that-answers-nothing shape rather than a layout preference. Two
+   lines, clamped, so a long one cannot make the row grow without end.
+   overflow-wrap:anywhere because an address or a part number has no spaces
+   to break at and would overflow on its own.
+   No backticks anywhere in here: the whole stylesheet is one template
+   literal, and one in a comment closes it. */
+.dash-sec.sec-top .dr-title{white-space:normal;overflow-wrap:anywhere;line-height:1.35;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .dash-sec.sec-top .dash-row-btns{margin-left:auto}
 
 /* ---- the schedule panel, at the top of the dashboard ------------------
@@ -29814,7 +29837,15 @@ strong.insp-name{background:none;border:0;padding:0}
 .dash-row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
   border-radius:11px;padding:12px 14px;margin-bottom:8px}
 .dash-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.dr-title{font-size:14px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* max-width is what makes the ellipsis beside it happen at all, and it was
+   missing. The .dash-row-open rule below is align-items:flex-start, so every
+   child of that column flex container is sized to ITS OWN TEXT, not the row --
+   which means overflow:hidden has nothing to clip against and a long title
+   runs straight out of the card and off the screen. Reported with a red line
+   drawn round one. The three properties after it have been here the whole
+   time and did nothing. */
+.dr-title{font-size:14px;font-weight:700;color:var(--ink);max-width:100%;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dr-meta{font-size:11.5px;color:var(--ink-soft)}
 /* The request row opens. A button, not a div with a click, so it is
    keyboard reachable and announced as doing something. */

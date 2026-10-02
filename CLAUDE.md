@@ -5346,6 +5346,62 @@ refactor.
   above and is not one a send feature settles: an owner is the client, and the
   tenant is the person the document will be used against.
 
+
+- **AN ELLIPSIS ONLY HAPPENS WHEN SOMETHING UPSTREAM DECIDES THE WIDTH, and
+  nothing did.** Reported with a red line drawn round a request title running
+  out of its card and off the right of the screen: *"Barely any water pressure
+  in the main bathroom - both the shower and the basin"*, 642px of text in a
+  340px panel.
+
+  `.dr-title` has carried `white-space:nowrap`, `overflow:hidden` and
+  `text-overflow:ellipsis` since it was written, and all three did nothing.
+  `.dash-row-open` is `align-items:flex-start`, so every child of that column
+  flex container is sized to **its own text** rather than to the row — and
+  `overflow:hidden` on a box that is exactly as wide as its content has
+  nothing to clip. **A static assertion on those three properties passes over
+  precisely this bug**, which is why the test measures the title's rendered
+  right edge against the panel's content edge instead.
+
+  **Two mechanisms, each pinned where it is the only one working.**
+  `max-width:100%` on `.dr-title` holds the full-width sections; in the ~340px
+  `sec-top` panel the title **wraps to two lines, clamped**, because an
+  ellipsis there leaves about a third of the sentence and the title *is* the
+  problem somebody is reporting — a queue that has stopped saying what is in
+  it, which is the screen-that-answers-nothing shape rather than a layout
+  preference. `overflow-wrap:anywhere`, because an address or a part number
+  has no spaces to break at.
+
+  **And the fixture could not tell whether half of it was there.** Deleting
+  `max-width` changed **no outcome**: every other dashboard section's row is a
+  plain `div`, whose children stretch and therefore clip on their own, so the
+  only rows the rule holds are the two that are **buttons** — the requests
+  panel, which now wraps instead, and the **emergencies** list. The suite had
+  no emergency in it, so one guard was covering for the other. An urgent job
+  with a long title is what makes the mutation fail, 281px past the card at
+  390px. The two-guards-covering-for-each-other shape, for the sixth time.
+
+  Three smaller things, all of them this file's own rules. A **short title
+  cannot catch a row that does not clip**, so the fixture carries the reported
+  one at its real length rather than "No hot water". The wide-section check
+  only discriminates at **390px**, because at 1340 those columns are wide
+  enough that no title reaches the edge — checking it only at desktop is
+  choosing the width that flatters it. And a clamp needs an **explicit
+  line-height** or the measurement reads `normal`, which is not a number.
+
+  **The heading said WHO rather than WHAT.** *Asked for by owners and tenants*
+  is a sentence where a heading should be a name, and the row under it already
+  says who asked, by name and by role. It is **Work requests**, which mirrors
+  the owner's own button reading *Request work*. Deliberately **not** *work
+  order requests*, which is what was asked for: a work order is a specific
+  object here — issued to one company, at a price, against an approved job —
+  and these are requests for work that is not a job yet. Two names for one
+  noun is how somebody concludes there are two lists, the trap already
+  recorded about *Your code* under *My QR code*.
+
+  And the backtick trap for the **eighth** time, in the comment explaining the
+  `max-width` — written while adding a guard against it to the block three
+  rules below, which is the one it was checked against.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
