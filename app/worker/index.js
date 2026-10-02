@@ -14,7 +14,7 @@ import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, app
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
   connectRequestEmail, connectRequestSms, workOrderIssuedSms,
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
-  docRenewedEmail, embedNudgeEmail, docInboxEmail } from "./mail.js";
+  docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -47,7 +47,8 @@ import { JOB_SCOPED_ROLES, jobScopeFrom, maySeeJob as maySeeJobIds } from "../sh
 import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole } from "../shared/propscope.js";
 import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_ROOMS,
   whyNotFinish, inspectionTally, flaggedRooms, inspectionJobTitle,
-  inspectionJobScope } from "../shared/inspection.js";
+  inspectionJobScope, whyNotSend, mayWriteInspection,
+  INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -539,6 +540,27 @@ const OWNER_ALLOWED = [
   [/^\/api\/property-transfers\/[^/]+\/(decide|cancel)$/, ["POST"]],
   [/^\/api\/properties\/[^/]+\/history$/, ["GET"]],
   [/^\/api\/properties$/, ["GET"]],        // scoped: their buildings
+  // THE MOVE-IN AND MOVE-OUT RECORD OF THEIR OWN UNITS, read only. A deposit
+  // argument is run from these two documents and the owner of the building is
+  // the one person besides the agent who has to be able to produce them.
+  //
+  // GET only, and that is the whole of what makes it safe to list here: every
+  // write route behind it is INSPECTION_WRITE_ROLES, so an owner is refused
+  // twice -- once by the method not being on this line, and once by the role.
+  // `inspectionFor` then applies the seat's property scope and refuses a
+  // DRAFT, because a half-walked document says nothing while looking like it
+  // says everything.
+  //
+  // AND THIS LIST IS WHY THE ROLE CAPABILITY WAS NOT ENOUGH. An owner's seat
+  // gained `INSPECTION_READ_ROLES` on the route and the Inspections tab on
+  // the screen, and every one of those reads still answered 403 -- because
+  // what a guest seat may reach is recorded HERE as well, in a second
+  // vocabulary. Correct pieces with no way in, for the tenth time, and this
+  // is the shape: a role list and a path allowlist are two records of one
+  // fact, and a new route refuses a guest until BOTH of them say otherwise.
+  [/^\/api\/inspections$/, ["GET"]],                  // scoped: their buildings
+  [/^\/api\/inspections\/[^/]+$/, ["GET"]],           // scoped, and finished only
+  [/^\/api\/inspections\/[^/]+\/photos\/[^/]+$/, ["GET"]],
   [/^\/api\/jobs$/, ["GET", "POST"]],      // scoped; POST creates a request
   [/^\/api\/subs$/, ["GET"]],              // scoped: who works their buildings
   [/^\/api\/service-calls$/, ["GET"]],     // scoped: on their own jobs
@@ -10860,6 +10882,18 @@ async function inspectionFor(c, auth, id) {
   }
   if (!row) return { error: "not_found", status: 404 };
   if (!maySeeProperty(auth, row.property_id)) return { error: "not_found", status: 404 };
+  // AN OWNER READS A FINISHED ONE AND NOTHING ELSE. The property scope above
+  // already narrows them to their own buildings -- this is the second half:
+  // a draft is a half-walked document and the whole reason finishing is gated
+  // is that one with blanks in it says nothing while looking like it says
+  // everything. The same answer as a building that is not theirs, so this
+  // cannot be used to find out which drafts exist.
+  // A ROLE THAT CANNOT WRITE ONE, rather than `owner` by name: the same
+  // predicate the routes are built from, so a read-only role added later is
+  // narrowed by this the day it exists rather than seeing every draft.
+  if (!mayWriteInspection(auth.role) && row.status !== "finished") {
+    return { error: "not_found", status: 404 };
+  }
   return { row };
 }
 
@@ -10879,22 +10913,27 @@ async function inspectionRooms(db, inspectionId) {
   return list.map((r) => inspectionRoomToJs(r, byRoom[r.id] || []));
 }
 
-app.get("/api/inspections", requireRole("admin", "pm"), async (c) => {
+app.get("/api/inspections", requireRole(...INSPECTION_READ_ROLES), async (c) => {
   const auth = c.get("auth");
   // The property scope, in the SQL rather than after it: a list filtered in
   // the browser is a list the API sent.
   const scope = scopeClause(auth, "property_id");
+  // The same rule `inspectionFor` applies one row at a time. In the SQL
+  // rather than after it: a list filtered in the browser is a list the API
+  // sent, and a draft of somebody's unit is not an owner's to read.
+  const onlyDone = mayWriteInspection(auth.role) ? "" : " AND i.status = 'finished' ";
   let results = [];
   try {
     ({ results } = await c.env.DB.prepare(
       `SELECT i.*,
+              (SELECT COUNT(*) FROM inspection_sends s WHERE s.inspection_id = i.id) AS n_sent,
               (SELECT COUNT(*) FROM inspection_rooms r WHERE r.inspection_id = i.id) AS n_rooms,
               (SELECT COUNT(*) FROM inspection_rooms r WHERE r.inspection_id = i.id
                  AND r.status IN ('follow_up','fail')) AS n_flagged,
               (SELECT COUNT(*) FROM inspection_rooms r WHERE r.inspection_id = i.id
                  AND r.status = 'unchecked') AS n_unchecked
          FROM inspections i
-        WHERE i.account_id = ? ${scope.sql}
+        WHERE i.account_id = ? ${scope.sql} ${onlyDone}
         ORDER BY COALESCE(i.inspected_on, i.created_at) DESC, i.created_at DESC
         LIMIT 200`
     ).bind(auth.accountId, ...scope.vals).all());
@@ -10906,10 +10945,11 @@ app.get("/api/inspections", requireRole("admin", "pm"), async (c) => {
   return c.json((results || []).map((r) => ({
     ...inspectionRowToJs(r),
     rooms: r.n_rooms, flagged: r.n_flagged, unchecked: r.n_unchecked,
+    sent: r.n_sent || 0,
   })));
 });
 
-app.post("/api/inspections", requireRole("admin", "pm"), async (c) => {
+app.post("/api/inspections", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
   const auth = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
   if (!isInspectionKind(b.kind)) return c.json({ error: "bad_kind" }, 400);
@@ -10942,11 +10982,120 @@ app.post("/api/inspections", requireRole("admin", "pm"), async (c) => {
   return c.json({ ...inspectionRowToJs(row), rooms: [] }, 201);
 });
 
-app.get("/api/inspections/:id", requireRole("admin", "pm"), async (c) => {
+// Who may be sent this report, and who already has it. Both are read from
+// the one place that decides: a seat on THIS account, with the role `owner`,
+// scoped to THIS building. An owner reading their own copy gets neither --
+// who else was told is the account's record of what it did, not a fact the
+// recipient needs, and the shortest way to keep it that way is not to send it.
+async function inspectionAudience(db, row) {
+  const { results: owners } = await db.prepare(
+    `SELECT u.id, u.name, u.email FROM memberships m
+       JOIN users u ON u.id = m.user_id
+       JOIN membership_properties mp ON mp.membership_id = m.id
+      WHERE m.account_id = ? AND m.role = 'owner' AND mp.property_id = ?
+      ORDER BY u.name`
+  ).bind(row.account_id, row.property_id).all();
+  let sends = [];
+  try {
+    ({ results: sends } = await db.prepare(
+      `SELECT user_id, sent_at, emailed FROM inspection_sends
+        WHERE inspection_id = ? ORDER BY sent_at DESC`
+    ).bind(row.id).all());
+  } catch (err) {
+    // A database without 056 has sent nobody anything, which is a panel with
+    // no history rather than a screen that fails to load.
+    if (!missingSchema(err)) throw err;
+  }
+  return {
+    recipients: (owners || []).map((u) => ({ id: u.id, name: u.name, email: realEmail(u.email) })),
+    sends: (sends || []).map((r) => ({ userId: r.user_id, at: r.sent_at, emailed: !!r.emailed })),
+  };
+}
+
+app.get("/api/inspections/:id", requireRole(...INSPECTION_READ_ROLES), async (c) => {
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
-  return c.json({ ...inspectionRowToJs(row), rooms: await inspectionRooms(c.env.DB, row.id) });
+  const base = { ...inspectionRowToJs(row), rooms: await inspectionRooms(c.env.DB, row.id) };
+  // WHO ELSE WAS TOLD IS THE TEAM'S OWN RECORD. The audience is the other
+  // owners' names and addresses, which is not a reading seat's to collect --
+  // the same rule that keeps an overflow distribution list server-side.
+  if (!mayWriteInspection(auth.role)) return c.json(base);
+  return c.json({ ...base, ...(await inspectionAudience(c.env.DB, row)) });
+});
+
+// SENDING THE REPORT TO THE BUILDING'S OWNER.
+//
+// A move-in and a move-out report are the two documents a deposit argument is
+// run from, and the owner of the building is the one person besides the agent
+// who has to be able to produce them.
+//
+// IT IS A LINK INTO THEIR OWN SEAT, not an attachment and not a public token.
+// They were invited onto this account scoped to exactly this building, so the
+// permission already exists and is already right; minting a token would be a
+// second surface, a second expiry and a second thing to revoke, for somebody
+// who can already sign in. It also means the record stays live rather than
+// being a copy that starts going stale the moment it is sent -- the same
+// reason the compliance pack is a link rather than a PDF.
+//
+// FINISHED ONLY. `whyNotSend` is the shared rule, and it is the same gate
+// `whyNotFinish` enforces one step earlier: a half-walked document says
+// nothing while looking like it says everything, and sending one would undo
+// that by a different door.
+app.post("/api/inspections/:id/send", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  const why = whyNotSend(inspectionRowToJs(row));
+  if (why) return c.json({ error: why }, 409);
+
+  const { recipients } = await inspectionAudience(c.env.DB, row);
+  // Once. A Request body is a stream and reading it twice gets nothing the
+  // second time -- which would have read as "you picked nobody".
+  const b = await c.req.json().catch(() => ({}));
+  const asked = Array.isArray(b.userIds) ? b.userIds.map(String) : [];
+  // AN ID IN THE BODY IS A CLAIM. Intersected with the audience rather than
+  // trusted, so naming any other user id on the platform sends them nothing
+  // -- the report would otherwise reach somebody with no seat to read it on
+  // and no relationship to the building.
+  const to = recipients.filter((u) => asked.includes(u.id));
+  if (!to.length) return c.json({ error: "no_recipients", recipients: recipients.length }, 400);
+
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(row.account_id).first();
+  const prop = await c.env.DB.prepare(`SELECT name FROM properties WHERE id = ?`).bind(row.property_id).first();
+  const rooms = await inspectionRooms(c.env.DB, row.id);
+  const tally = inspectionTally(rooms);
+  const link = `${accountOrigin(account)}/`;
+
+  const done = [];
+  for (const u of to) {
+    const mail = inspectionReportEmail({
+      firstName: String(u.name || "").split(" ")[0],
+      account, kindLabel: INSPECTION_KINDS[row.kind]?.label || "Inspection",
+      propertyName: prop?.name, unit: row.unit, walkedOn: row.inspected_on,
+      tenantName: row.tenant_name, rooms: tally.rooms, flagged: tally.flagged, link,
+    });
+    const sent = u.email ? await sendEmail(c.env, { to: u.email, ...mail }) : { ok: false, error: "no_recipient" };
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO inspection_sends (id, inspection_id, user_id, sent_by, emailed)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(uid(), row.id, u.id, auth.userId, sent.ok ? 1 : 0).run();
+    } catch (err) {
+      const migrationNeeded = missingSchema(err);
+      if (!migrationNeeded) throw err;
+      return c.json({ error: "migration_needed", migration: "056_inspection_sends" }, 503);
+    }
+    // THE ROW RECORDS WHETHER IT WENT, rather than that it was pressed. A
+    // send marked true over a mail failure is the lie `sent_at` exists to
+    // refuse, and it is the reason an owner says they never got it while the
+    // screen says they did.
+    done.push({ userId: u.id, name: u.name, emailed: !!sent.ok, error: sent.ok ? null : sent.error });
+  }
+  await logActivity(c.env, row.account_id, auth.userId, "inspection_sent",
+    `Sent the ${INSPECTION_KINDS[row.kind]?.label.toLowerCase() || ""} inspection${
+      row.unit ? ` of unit ${row.unit}` : ""} to ${done.map((d) => d.name).join(", ")}`);
+  return c.json({ ok: true, sent: done, ...(await inspectionAudience(c.env.DB, row)) });
 });
 
 // The header fields, and finishing.
@@ -10955,7 +11104,7 @@ app.get("/api/inspections/:id", requireRole("admin", "pm"), async (c) => {
 // evidence in a deposit argument months later, and a record that can be
 // edited after the fact is one the other side can say was edited after the
 // fact. Everything stays readable; nothing stays writable.
-app.patch("/api/inspections/:id", requireRole("admin", "pm"), async (c) => {
+app.patch("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
@@ -10993,7 +11142,7 @@ app.patch("/api/inspections/:id", requireRole("admin", "pm"), async (c) => {
   return c.json({ ...inspectionRowToJs(after), rooms: await inspectionRooms(c.env.DB, row.id) });
 });
 
-app.delete("/api/inspections/:id", requireRole("admin", "pm"), async (c) => {
+app.delete("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
@@ -11006,7 +11155,7 @@ app.delete("/api/inspections/:id", requireRole("admin", "pm"), async (c) => {
 
 // A room. The name is free text with a suggested list on the screen; the
 // status starts `unchecked`, which is a real answer.
-app.post("/api/inspections/:id/rooms", requireRole("admin", "pm"), async (c) => {
+app.post("/api/inspections/:id/rooms", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
@@ -11026,7 +11175,7 @@ app.post("/api/inspections/:id/rooms", requireRole("admin", "pm"), async (c) => 
   return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) }, 201);
 });
 
-app.patch("/api/inspections/:id/rooms/:roomId", requireRole("admin", "pm"), async (c) => {
+app.patch("/api/inspections/:id/rooms/:roomId", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
@@ -11057,7 +11206,7 @@ app.patch("/api/inspections/:id/rooms/:roomId", requireRole("admin", "pm"), asyn
   return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) });
 });
 
-app.delete("/api/inspections/:id/rooms/:roomId", requireRole("admin", "pm"), async (c) => {
+app.delete("/api/inspections/:id/rooms/:roomId", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
@@ -11074,7 +11223,7 @@ app.delete("/api/inspections/:id/rooms/:roomId", requireRole("admin", "pm"), asy
 // the one upload kind that checks the type and the size, and an inspection
 // photo is the same thing from the same phone. A second kind would be a
 // second set of limits to keep in step.
-app.post("/api/inspections/:id/rooms/:roomId/photos", requireRole("admin", "pm"), async (c) => {
+app.post("/api/inspections/:id/rooms/:roomId/photos", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
@@ -11109,7 +11258,7 @@ app.post("/api/inspections/:id/rooms/:roomId/photos", requireRole("admin", "pm")
   return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) });
 });
 
-app.delete("/api/inspections/:id/rooms/:roomId/photos/:photoId", requireRole("admin", "pm"), async (c) => {
+app.delete("/api/inspections/:id/rooms/:roomId/photos/:photoId", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
@@ -11131,7 +11280,7 @@ app.delete("/api/inspections/:id/rooms/:roomId/photos/:photoId", requireRole("ad
 // key: the key is read from the row after the same check every other route on
 // that inspection makes. An <img src> cannot carry an Authorization header,
 // so the browser fetches this like any other call and renders the blob.
-app.get("/api/inspections/:id/photos/:photoId", requireRole("admin", "pm"), async (c) => {
+app.get("/api/inspections/:id/photos/:photoId", requireRole(...INSPECTION_READ_ROLES), async (c) => {
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
@@ -11164,7 +11313,7 @@ app.get("/api/inspections/:id/photos/:photoId", requireRole("admin", "pm"), asyn
 //
 // ONE JOB PER INSPECTION. Raising a second would be two contractors asked for
 // the same work, found out when both turn up.
-app.post("/api/inspections/:id/job", requireRole("admin", "pm"), async (c) => {
+app.post("/api/inspections/:id/job", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);

@@ -276,4 +276,16 @@ SELECT
   (SELECT COUNT(*) FROM inspections i
     WHERE i.status = 'finished'
       AND EXISTS (SELECT 1 FROM inspection_rooms r
-                   WHERE r.inspection_id = i.id AND r.status = 'unchecked'))                     AS m055_inv_finished_unchecked;
+                   WHERE r.inspection_id = i.id AND r.status = 'unchecked'))                     AS m055_inv_finished_unchecked,
+
+  -- 056. Who has been sent an inspection report. No rows is the ordinary
+  -- state, so what is checked is the shape.
+  (SELECT COUNT(*) FROM pragma_table_info('inspection_sends')
+    WHERE name IN ('inspection_id','user_id','sent_by','emailed','sent_at'))                    AS m056_inspection_sends,
+  -- Invariant, must read ZERO: a report sent from an inspection that is not
+  -- finished. `canSendInspection` refuses it, because a half-walked document
+  -- says nothing while looking like it says everything -- a row here is a
+  -- route that stopped asking.
+  (SELECT COUNT(*) FROM inspection_sends s
+     JOIN inspections i ON i.id = s.inspection_id
+    WHERE i.status <> 'finished')                                                               AS m056_inv_sent_unfinished;

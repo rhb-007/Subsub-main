@@ -1954,3 +1954,20 @@ CREATE TABLE IF NOT EXISTS inspection_photos (
 );
 CREATE INDEX IF NOT EXISTS idx_inspection_photos ON inspection_photos(room_id, created_at);
 
+-- Who has been sent an inspection report (056). Here as well as in the
+-- migration, in the same change: schema.sql is what a fresh database and every
+-- freshDb() test is built from.
+CREATE TABLE IF NOT EXISTS inspection_sends (
+  id            TEXT PRIMARY KEY,
+  inspection_id TEXT NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
+  -- The owner it went to. A seat on this account, scoped to this building --
+  -- never a free-typed address, because the report is read through their own
+  -- login and an address with no seat behind it has nothing to open.
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  -- Who pressed it. An inspection is evidence and so is sending one.
+  sent_by       TEXT REFERENCES users(id),
+  emailed       INTEGER NOT NULL DEFAULT 0,
+  sent_at       TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_inspection_sends ON inspection_sends(inspection_id, sent_at DESC);
+

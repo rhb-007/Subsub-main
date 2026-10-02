@@ -318,6 +318,11 @@ export const api = {
   },
   raiseInspectionJob: (id, body) =>
     request(`/inspections/${id}/job`, { method: "POST", body: JSON.stringify(body) }),
+  // To the building's owners, by seat id. The server intersects them with the
+  // owners of that building, so an id here is a request rather than a
+  // recipient.
+  sendInspection: (id, userIds) =>
+    request(`/inspections/${id}/send`, { method: "POST", body: JSON.stringify({ userIds }) }),
 
   // Tenants. The first two need a signed-in manager; the last two are how
   // somebody holding a link becomes a tenant, before they have any account.

@@ -48,11 +48,34 @@ const LIST = () => [{ id: "insp_1", propertyId: "prop_1", unit: "3B", kind: "mov
   flagged: DETAIL.rooms.filter((r) => r.status === "follow_up" || r.status === "fail").length,
   unchecked: DETAIL.rooms.filter((r) => r.status === "unchecked").length }];
 
+// Who the finished report may be sent to, and who has had it. Held apart
+// from DETAIL because the server hands these two fields to a TEAM seat only
+// -- who else was told is the account's own record and not an owner's to
+// collect -- so the stub has to be able to withhold them the way the route
+// does.
+let RECIPIENTS = [
+  { id: "u_own", name: "Marion Oakes", email: "marion@oakes.test" },
+  { id: "u_own2", name: "Rhys Vance", email: "rhys@vance.test" },
+];
+let SENDS = [];
+
 const sent = [];
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/inspections" && method === "GET") return [200, LIST()];
-  if (path === "/api/inspections/insp_1" && method === "GET") return [200, DETAIL];
+  if (path === "/api/inspections/insp_1" && method === "GET") {
+    // The route gives an owner the inspection and nothing about the audience.
+    return [200, ROLE === "owner" ? DETAIL
+      : { ...DETAIL, recipients: RECIPIENTS, sends: SENDS }];
+  }
+  if (path === "/api/inspections/insp_1/send" && method === "POST") {
+    sent.push({ path, body });
+    const to = RECIPIENTS.filter((u) => (body.userIds || []).includes(u.id));
+    if (!to.length) return [400, { error: "no_recipients" }];
+    SENDS = [...to.map((u) => ({ userId: u.id, at: new Date().toISOString(), emailed: true })), ...SENDS];
+    return [200, { ok: true, sent: to.map((u) => ({ userId: u.id, name: u.name, emailed: true })),
+      recipients: RECIPIENTS, sends: SENDS }];
+  }
   const room = /^\/api\/inspections\/insp_1\/rooms\/(r\d)$/.exec(path);
   if (room && method === "PATCH") {
     sent.push({ path, body });
@@ -420,6 +443,225 @@ try {
       !v.acts.some((a) => /finish/i.test(a.label)), JSON.stringify(v.acts));
     t.ck("and no Add room box", !v.addIsFreeText, String(v.addIsFreeText));
     await ctx.close().catch(() => {});
+  }
+
+  console.log("\n-- sending the finished report to the building's owner --");
+  {
+    // READ THE PANEL rather than looking for the component. A static check
+    // that `InspectionSend` is mounted passes with the names never drawn and
+    // the button never wired, which is the assertion-that-cannot-fail shape
+    // this repository keeps paying for.
+    const panel = (page) => page.evaluate(() => {
+      const el = document.querySelector(".insp-send");
+      if (!el) return null;
+      return {
+        heading: (el.querySelector(".form-sec")?.innerText || "").replace(/\s+/g, " ").trim(),
+        note: (el.querySelector(".panel-note")?.innerText || "").replace(/\s+/g, " ").trim(),
+        who: [...el.querySelectorAll(".insp-to li")].map((li) => ({
+          name: (li.querySelector("b")?.innerText || "").trim(),
+          email: (li.querySelector(".dr-meta")?.innerText || "").trim(),
+          ticked: !!li.querySelector("input[type=checkbox]")?.checked,
+          state: (li.querySelector(".tn-chip")?.innerText || "").replace(/\s+/g, " ").trim(),
+        })),
+        button: (el.querySelector(".insp-send-act button")?.innerText || "").replace(/\s+/g, " ").trim(),
+        buttonOff: !!el.querySelector(".insp-send-act button")?.disabled,
+        notes: [...el.querySelectorAll(".fld-note")].map((n) => n.innerText.replace(/\s+/g, " ").trim()),
+      };
+    });
+
+    // A DRAFT GOES NOWHERE, and the panel is not there at all rather than
+    // being there with a dead button: a half-walked document says nothing
+    // while looking like it says everything.
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
+    SENDS = [];
+    {
+      const { ctx, page } = await openOne();
+      t.ck("a draft offers no send at all", (await panel(page)) === null);
+      await ctx.close().catch(() => {});
+    }
+
+    const finished = () => {
+      DETAIL = { ...JSON.parse(JSON.stringify(FIXTURE)), status: "finished",
+        finishedAt: "2026-10-02 01:00:00" };
+      DETAIL.rooms = DETAIL.rooms.map((r) => ({ ...r, status: r.status === "unchecked" ? "ok" : r.status }));
+    };
+
+    {
+      finished(); SENDS = []; sent.length = 0;
+      const { ctx, page } = await openOne();
+      let v = await panel(page);
+      t.ck("a finished one offers it", !!v, JSON.stringify(v));
+      t.ck("named for what it does", /send it to the owner/i.test(v.heading), v.heading);
+      // WHAT SENDING ACTUALLY DOES. The owner can already open a finished
+      // report from their own seat, so the email is the telling and not the
+      // access -- and nothing is attached, because a copy starts going stale
+      // the moment it is sent.
+      t.ck("and it says they read it in their own account",
+        /own account/i.test(v.note) && /link/i.test(v.note), v.note);
+      t.ck("both owners of the building are listed",
+        v.who.map((w) => w.name).join("|") === "Marion Oakes|Rhys Vance",
+        JSON.stringify(v.who.map((w) => w.name)));
+      t.ck("with the address each would go to",
+        v.who[0].email === "marion@oakes.test", JSON.stringify(v.who[0]));
+      // DEFAULTED TO WHOEVER HAS NOT HAD IT, which is the press somebody
+      // opened this to make.
+      t.ck("nobody has had it, so everybody is ticked",
+        v.who.every((w) => w.ticked === true), JSON.stringify(v.who.map((w) => w.ticked)));
+      t.ck("and each row says so", v.who.every((w) => /not sent/i.test(w.state)),
+        JSON.stringify(v.who.map((w) => w.state)));
+      t.ck("the button offers a first send", /send the report/i.test(v.button), v.button);
+
+      // A PANEL APPEARING IS NOT THE PROPERTY UNDER TEST. Nothing may leave
+      // until somebody presses, so the requests are counted either side.
+      t.ck("nothing has been sent by drawing it",
+        sent.filter((x) => /\/send$/.test(x.path)).length === 0, JSON.stringify(sent));
+      await page.evaluate(() => document.querySelector(".insp-send-act button")?.click());
+      await wait(1400);
+      t.ck("pressing it sends exactly one request",
+        sent.filter((x) => /\/send$/.test(x.path)).length === 1, JSON.stringify(sent));
+      t.ck("carrying both ids",
+        (sent.find((x) => /\/send$/.test(x.path))?.body?.userIds || []).sort().join(",") === "u_own,u_own2",
+        JSON.stringify(sent.find((x) => /\/send$/.test(x.path))?.body));
+
+      // AND IT RE-READS THE INSPECTION rather than patching the row in place.
+      // Who has it and when is the server's answer -- a locally invented
+      // "Sent" disagrees with it the moment a mail fails.
+      v = await panel(page);
+      t.ck("both rows now read as sent", v.who.every((w) => /^sent/i.test(w.state)),
+        JSON.stringify(v.who.map((w) => w.state)));
+      t.ck("and the button offers it again rather than a first send",
+        /again/i.test(v.button), v.button);
+      t.ck("it names who it went to", v.notes.some((n) => /Marion Oakes/.test(n) && /Rhys Vance/.test(n)),
+        JSON.stringify(v.notes));
+      await ctx.close().catch(() => {});
+    }
+
+    {
+      // ONE ALREADY HAS IT. The default is the one who does not, because
+      // re-sending to somebody who has it is not what this press is for --
+      // and the row that has it says when.
+      finished();
+      SENDS = [{ userId: "u_own", at: "2026-10-02 02:00:00", emailed: true }];
+      const { ctx, page } = await openOne();
+      const v = await panel(page);
+      t.ck("the one who has it is not ticked", v.who.find((w) => w.name === "Marion Oakes").ticked === false,
+        JSON.stringify(v.who));
+      t.ck("the one who has not is", v.who.find((w) => w.name === "Rhys Vance").ticked === true,
+        JSON.stringify(v.who));
+      t.ck("and the sent row says when", /^sent /i.test(v.who[0].state), v.who[0].state);
+      await ctx.close().catch(() => {});
+    }
+
+    {
+      // A MAIL THAT DID NOT GO SAYS SO. A row reading "Sent" over an owner
+      // who was never told is how somebody says they never got it while the
+      // screen says they did.
+      finished();
+      SENDS = [{ userId: "u_own", at: "2026-10-02 02:00:00", emailed: false }];
+      const { ctx, page } = await openOne();
+      const v = await panel(page);
+      t.ck("a failed mail is not drawn as sent",
+        /not emailed/i.test(v.who[0].state) && !/^sent/i.test(v.who[0].state), v.who[0].state);
+      await ctx.close().catch(() => {});
+    }
+
+    {
+      // NOT A DISABLED BUTTON. With nobody to send to there is nothing to
+      // press, and a dead Send says neither what is wrong nor where to go.
+      finished(); SENDS = []; RECIPIENTS = [];
+      const { ctx, page } = await openOne();
+      const v = await panel(page);
+      t.ck("with no owner on the building the panel is still there", !!v, JSON.stringify(v));
+      t.ck("and offers no button at all", v.who.length === 0 && v.button === "",
+        JSON.stringify({ who: v.who.length, b: v.button }));
+      t.ck("it says where the owner is added instead",
+        /Properties/.test(v.note) && /owner/i.test(v.note), v.note);
+      await ctx.close().catch(() => {});
+      RECIPIENTS = [
+        { id: "u_own", name: "Marion Oakes", email: "marion@oakes.test" },
+        { id: "u_own2", name: "Rhys Vance", email: "rhys@vance.test" },
+      ];
+    }
+
+    {
+      // UNTICKING EVERYBODY NAMES THE REASON. The disabled condition is
+      // wider than nothing, so it is said rather than left to be pressed.
+      finished(); SENDS = [];
+      const { ctx, page } = await openOne();
+      await page.evaluate(() => [...document.querySelectorAll(".insp-to input[type=checkbox]")]
+        .forEach((b) => { if (b.checked) b.click(); }));
+      await wait(500);
+      const v = await panel(page);
+      t.ck("Send is dead with nobody ticked", v.buttonOff === true, JSON.stringify(v.button));
+      t.ck("and the reason is beside it", v.notes.some((n) => /tick who/i.test(n)),
+        JSON.stringify(v.notes));
+      await ctx.close().catch(() => {});
+    }
+
+    console.log("\n-- and an owner reads it without a single write on the screen --");
+    {
+      // THE SCREEN FOLLOWS THE ROUTE. Every write route behind this screen is
+      // admin/pm, so an owner offered Finish, Raise a job, Send or a room
+      // form is a screen looser than the route -- the same lie as stricter,
+      // paid for in a 403 after the press.
+      finished(); SENDS = [{ userId: "u_own", at: "2026-10-02 02:00:00", emailed: true }];
+      ROLE = "owner";
+      const { ctx, page } = await openOne();
+      const v = await read(page);
+      t.ck("they can read every room", v.rooms.length >= 3, String(v.rooms.length));
+      t.ck("with the verdicts and the notes",
+        /Nail hole repair/.test(v.rooms[1].note), v.rooms[1].note);
+      t.ck("and nothing on it can be typed into",
+        v.rooms.every((r) => r.canEdit === false), JSON.stringify(v.rooms.map((r) => r.canEdit)));
+      // SAID RATHER THAN CLAIMED: the next three are true of any FINISHED
+      // inspection, so they hold for an admin too and `canEdit` cannot be
+      // what makes them pass -- mutating it back leaves all three green. They
+      // are here because this is the screen somebody reads, and the three
+      // that do pin `canEdit` are Raise a job, the send panel and New
+      // inspection below, each of which a finished inspection still offers.
+      t.ck("no Finish", !v.acts.some((a) => /finish/i.test(a.label)), JSON.stringify(v.acts));
+      t.ck("no Raise a job", !v.acts.some((a) => /raise a job/i.test(a.label)), JSON.stringify(v.acts));
+      t.ck("no Add room", v.addIsFreeText === false);
+      // AND NOT THE SEND PANEL, which is the one this change added: sending
+      // the report on is the account's act, and who else was told is their
+      // record rather than this owner's to read.
+      t.ck("and no send panel", (await panel(page)) === null);
+      t.ck("Close is still there, so it is not a dead end",
+        v.acts.some((a) => /close/i.test(a.label)), JSON.stringify(v.acts));
+      await ctx.close().catch(() => {});
+    }
+
+    {
+      // The list is theirs to read and not theirs to add to.
+      const { ctx, page } = await open();
+      await go(page, "^inspections");
+      await wait(900);
+      const head = await page.evaluate(() => ({
+        rows: document.querySelectorAll(".insp-row").length,
+        add: [...document.querySelectorAll(".add-btn")].map((b) => b.innerText.trim()),
+        blurb: (document.querySelector(".dash-hello p")?.innerText || "").replace(/\s+/g, " ").trim(),
+      }));
+      t.ck("an owner sees the inspection in the list", head.rows === 1, JSON.stringify(head));
+      t.ck("and is not offered a new one", !head.add.some((x) => /new inspection/i.test(x)),
+        JSON.stringify(head.add));
+      await ctx.close().catch(() => {});
+      ROLE = "admin";
+    }
+
+    {
+      // AND THE SAME PLACE SAYS THE OTHER BRANCH, because a rule checked on
+      // one branch is the diagonal coverage that left `hiresLabel` half
+      // wired: a fix that hid the button from everybody would pass the
+      // assertion above.
+      const { ctx, page } = await open();
+      await go(page, "^inspections");
+      await wait(900);
+      const add = await page.evaluate(() => [...document.querySelectorAll(".add-btn")]
+        .map((b) => b.innerText.trim()));
+      t.ck("a manager still gets New inspection", add.some((x) => /new inspection/i.test(x)),
+        JSON.stringify(add));
+      await ctx.close().catch(() => {});
+    }
   }
 
   console.log("\n-- nothing threw --");

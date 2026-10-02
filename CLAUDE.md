@@ -5240,6 +5240,112 @@ refactor.
   decision about what a deposit conversation looks like inside this product —
   it needs an answer about who may dispute what, not an endpoint.
 
+
+- **THE FINISHED INSPECTION GOES TO THE BUILDING'S OWNER, AND THE ROLE
+  CAPABILITY WAS NOT ENOUGH TO LET THEM READ IT.** A move-in and a move-out
+  report are the two documents a deposit argument is run from, and the owner is
+  the one person besides the agent who has to be able to produce them. Migration
+  056, `inspection_sends`, `whyNotSend` in `app/shared/inspection.js`.
+
+  **It is a LINK into their own seat, not an attachment and not a token.** They
+  were invited onto this building scoped to exactly it, so the permission
+  already exists and is already right; minting a token would be a second
+  surface, a second expiry and a second thing to revoke for somebody who can
+  already sign in. It also keeps the record **live** — a PDF starts going stale
+  the moment it is sent, which is the same reason the compliance pack is a link.
+  So the email is the **telling** and not the access, which is why a mail that
+  fails is worth saying out loud and is still not a lost report, and the panel
+  says both.
+
+  **FINISHED ONLY, through the gate that already exists.** `whyNotSend` is
+  beside `whyNotFinish` and asks the same question, because a half-walked
+  document says nothing while looking like it says everything — and a sent one
+  is the document somebody quotes back. Sending a draft would undo that gate by
+  a different door.
+
+  **AND THE FEATURE SHIPPED REFUSED, BY A LIST THE ROUTE NEVER SEES.** The
+  owner's seat was given `INSPECTION_READ_ROLES` on three routes and the
+  Inspections tab on the screen, and every one of those reads answered **403** —
+  because what a guest seat may reach is recorded in `OWNER_ALLOWED` as well,
+  in a second vocabulary, as a path and a method rather than a role. Correct
+  pieces with no way in, for the tenth time, and this is the general shape:
+  **a role list and a path allowlist are two records of one fact, and a new
+  route refuses a guest until BOTH of them say otherwise.** That direction is
+  deliberate and must not be relaxed — the allowlist's own comment says a new
+  route should fail closed — so the fix is three `["GET"]` lines, not a
+  loosening.
+
+  **GET is the whole of what is listed, and that is what makes it safe.** Every
+  write route behind the screen is `INSPECTION_WRITE_ROLES`, so an owner is
+  refused twice: once by the method not being on the line, once by the role.
+  Those two guards cover for each other — mutating the allowlist to carry
+  `PATCH`, `DELETE` and `POST` changed **no outcome**, because the role guard
+  held — which is the shape this file keeps recording, so the allowlist's
+  methods are pinned **statically** as well as driven.
+
+  **THE ROLES ARE ONE LIST RATHER THAN THIRTEEN.** `requireRole("admin","pm")`
+  was written out ten times and `("admin","pm","owner")` three, and the
+  screen's own `canEdit` defaulted to **true** — which is what this was one
+  edit away from shipping: an owner holding the tab, offered Finish, Raise a
+  job, Send and a room form, every one of them a 403 after the press.
+  `INSPECTION_WRITE_ROLES` / `INSPECTION_READ_ROLES` and `mayWriteInspection`,
+  read by the routes and by the screen, and a test asserts **every** inspection
+  route takes its roles from one of the two.
+
+  **A DRAFT IS NOT THEIRS TO READ, and the refusal is `not_found`.** Same rule
+  `jobscope.js` already records: `forbidden` on a real id beside `not_found` on
+  an invented one is how somebody walks the account's inspection list one guess
+  at a time. The list route filters in the SQL for the same reason a scoped
+  list does — a list filtered in the browser is a list the API sent.
+
+  **WHO ELSE WAS TOLD IS THE TEAM'S OWN RECORD.** `recipients` and `sends` are
+  on the team's read and absent from an owner's, because the audience is the
+  other owners' names and addresses — the same rule that keeps an overflow
+  distribution list server-side. An owner reading their own report learns
+  nothing about who else holds one.
+
+  **AN ID IN THE BODY IS A CLAIM.** The posted ids are intersected with the
+  audience rather than trusted, so naming any other user on the platform sends
+  them nothing. The discriminating fixture is an owner of **the other building
+  on the same account**: they are a real user, a real owner, and a check that
+  merely asked for owners would have mailed them a unit they have nothing to do
+  with. An empty list is **not** a send to everybody, either — defaulting would
+  make a stray press mail every owner on the building.
+
+  **A ROW PER SEND, AND IT RECORDS WHETHER THE MAIL WENT.** Re-sending appends
+  rather than updating: *we sent it in October and again in January* is a
+  different fact from the second half alone, and the first is the one that
+  matters when somebody says they never got it. `emailed` is the send's own
+  answer rather than the press's — a row reading "Sent" over an owner who was
+  never told is exactly how somebody says they never received it while the
+  screen says they did. An owner with no address at all is still recorded and
+  still drawn as *Not emailed*, because **we never told them** is the fact
+  somebody needs months later.
+
+  **The panel defaults to whoever has NOT had it**, and ticks everybody once
+  they all have — an empty set behind a dead Send is the
+  disabled-control-with-no-reason failure, and sending it again is the only
+  thing left to want there. With no owner on the building it draws **no button
+  at all** and says where an owner is added instead, rather than a dead Send
+  that says neither what is wrong nor where to go. It **re-reads the
+  inspection** rather than patching the row, because who has it and when is the
+  server's answer — a locally invented "Sent" disagrees with it the moment a
+  mail fails, the same rule the pack card's upload follows.
+
+  **The owner's copy of the screen is the same component.** `canEdit` gates
+  Finish, Raise a job, the room form, the send panel and *New inspection*;
+  the empty states and the blurb follow it too, because *walk a unit room by
+  room* is an instruction to somebody who is not walking anything. Close stays,
+  so it is not a dead end. And the manager's branch is asserted **in the same
+  place**, because a fix that hid the button from everybody passes an assertion
+  written only against the owner — the diagonal coverage that left `hiresLabel`
+  half-wired.
+
+  **And the owner is the only party this adds.** The tenant the report is
+  about is still not shown it, which is the product decision recorded directly
+  above and is not one a send feature settles: an owner is the client, and the
+  tenant is the person the document will be used against.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -126,3 +126,46 @@ export function inspectionJobScope(inspection = {}, rooms = []) {
   });
   return [head, ...lines].join("\n");
 }
+
+// WHO MAY BE SENT ONE, AND WHEN.
+//
+// Only a FINISHED inspection goes anywhere. A draft is half a walk, and the
+// whole reason `whyNotFinish` refuses an unmarked room is that a document
+// with blanks in it says nothing while looking like it says everything —
+// which is exactly the document somebody would quote back. Sending one would
+// undo that gate by a different door.
+//
+// Both kinds send. The move-in report is the one that answers "it was like
+// that when I moved in" and the move-out report is the one that raises the
+// question, so an owner who gets one and not the other has half a record.
+export function whyNotSend(inspection = {}) {
+  if (inspection.status !== "finished") return "not_finished";
+  return null;
+}
+export const canSendInspection = (inspection) => whyNotSend(inspection) === null;
+
+// The report is read through the owner's OWN seat, so the only people it can
+// be sent to are the ones who have one on this building. A free-typed address
+// would need a public token, a second surface and an expiry — and the person
+// this is for already has a login that is already scoped to exactly this
+// building, which is the whole reason they were invited.
+export const inspectionRecipients = (owners = [], propertyId) =>
+  (owners || []).filter((u) => u && u.role === "owner"
+    && (u.propertyIds || []).includes(propertyId));
+
+// WHICH SEATS MAY WALK A UNIT, AND WHICH MAY ONLY READ ONE.
+//
+// Named here rather than restated on the screen and again on each of thirteen
+// routes. A screen stricter than the route is the same lie as one that is
+// looser, and the way both happen is a role list written twice — which this
+// feature was one edit away from: an owner's seat gained the Inspections tab
+// and every write button on the detail screen was still drawn from a default.
+//
+// An owner READS. They own the building and a move-out report is theirs to
+// produce in a deposit argument; walking the unit is the agent's job, every
+// write route is one of these two roles, and a button offered to an owner
+// would be a button the server answers 403 to.
+export const INSPECTION_WRITE_ROLES = ["admin", "pm"];
+export const INSPECTION_READ_ROLES = [...INSPECTION_WRITE_ROLES, "owner"];
+export const mayWriteInspection = (role) =>
+  INSPECTION_WRITE_ROLES.includes(String(role || ""));

@@ -921,3 +921,46 @@ of them. It lasts ${days} days.
 -- SubSub`;
   return { subject: "Everything sent to you, on one page", text };
 }
+
+// A finished move-in or move-out report, to the owner of the building.
+//
+// IT CARRIES NO PHOTOGRAPHS, and that is the design rather than a saving. A
+// unit is a dozen rooms and a phone fills each with four, so the attachment
+// would be tens of megabytes and the thing worth looking at — a room, its
+// verdict, its note and its pictures together — is not a thing an email can
+// draw. What it does carry is the shape of the answer (how many rooms, how
+// many flagged) and a link into their own seat, where the record lives and
+// stays live.
+//
+// The counts are in the message because an owner reading on a phone decides
+// from them whether to open it tonight or on Monday, and "0 flagged" is the
+// commonest and best answer this product can give them.
+export function inspectionReportEmail({ firstName, account, kindLabel, propertyName,
+  unit, walkedOn, tenantName, rooms, flagged, link }) {
+  const who = account?.name || "your property manager";
+  const place = [propertyName, unit ? `Unit ${unit}` : null].filter(Boolean).join(", ");
+  const verdict = flagged
+    ? `${flagged} of the ${rooms} rooms ${flagged === 1 ? "needs" : "need"} something doing.`
+    : `All ${rooms} rooms were fine — nothing flagged.`;
+  const text = `Hi ${firstName || "there"},
+
+${who} has finished the ${String(kindLabel || "").toLowerCase()} inspection of ${place || "your building"}${
+  walkedOn ? `, walked on ${walkedOn}` : ""}${tenantName ? `, for ${tenantName}` : ""}.
+
+${verdict}
+
+Read it here, room by room, with the photographs:
+  ${link}
+
+It stays on your account, so it is there the next time anybody asks what the
+place looked like on the day.
+
+-- ${who}
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+  return {
+    subject: `${who}: ${kindLabel || "Inspection"} report for ${place || "your building"}`,
+    text,
+    html: textToHtml(text, link),
+  };
+}

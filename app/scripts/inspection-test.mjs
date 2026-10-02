@@ -27,7 +27,8 @@
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { inspectionTally, whyNotFinish, inspectionJobScope, flaggedRooms,
-  ROOM_STATUSES, STANDARD_ROOMS } from "../shared/inspection.js";
+  ROOM_STATUSES, STANDARD_ROOMS, INSPECTION_READ_ROLES,
+  mayWriteInspection } from "../shared/inspection.js";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
@@ -82,18 +83,33 @@ const seed = () => {
     INSERT INTO users(id,name,email) VALUES
       ('u_admin','Christopher Lane','chris@soundpm.test'),
       ('u_pm','Dana Pine','dana@soundpm.test'),
-      ('u_them','Someone Else','x@other.test');
+      ('u_them','Someone Else','x@other.test'),
+      -- Two owners, one per building. The ONLY fixture either direction of
+      -- "who may be sent this" can be checked against: an owner of the other
+      -- building passes every check except the one that matters.
+      ('u_own','Marion Oakes','marion@oakes.test'),
+      ('u_own2','Rhys Vance','rhys@vance.test'),
+      -- And one with no address at all, which is what a seat added from the
+      -- console without an email looks like. The send has to record that the
+      -- mail did not go rather than that the button was pressed.
+      ('u_own3','Pat Reyes','u_own3@no-email.invalid');
     INSERT INTO memberships(id,user_id,account_id,role) VALUES
       ('m_admin','u_admin','acc1','admin'),
       ('m_pm','u_pm','acc1','pm'),
-      ('m_them','u_them','acc2','admin');
+      ('m_them','u_them','acc2','admin'),
+      ('m_own','u_own','acc1','owner'),
+      ('m_own2','u_own2','acc1','owner'),
+      ('m_own3','u_own3','acc1','owner');
     INSERT INTO properties(id,account_id,name,address,city,zip,owner_account_id) VALUES
       ('p_press','acc1','Press Apartments','1620 Belmont Ave','Seattle','98122','acc1'),
       ('p_ballard','acc1','Ballard Apts','2028 NW 59th','Seattle','98107','acc1'),
       ('p_theirs','acc2','Not Ours','1 Elsewhere','Tacoma','98407','acc2');
     -- A project manager narrowed to ONE of the two buildings: the only
     -- fixture either direction of the scope can be checked against.
-    INSERT INTO membership_properties(membership_id,property_id) VALUES ('m_pm','p_ballard');
+    INSERT INTO membership_properties(membership_id,property_id) VALUES
+      ('m_pm','p_ballard'),
+      ('m_own','p_press'), ('m_own3','p_press'),
+      ('m_own2','p_ballard');
   `);
   return { db, env: { DB: makeD1(db), FILES: fakeR2() } };
 };
@@ -361,7 +377,322 @@ try {
     ck("and so is somebody with no seat here", s2 === 403, String(s2));
   }
 
-  console.log("\n-- the shared rule is the one the routes read --");
+  console.log("\n-- sending the finished report to the building's owner --");
+{
+  // One walk, finished, so every assertion below is about the SEND rather
+  // than about getting an inspection into a sendable state.
+  const walk = async (env, propertyId, { finish = true, kind = "move_out" } = {}) => {
+    const [, insp] = await json(await call(env, "/api/inspections", { method: "POST",
+      body: { kind, propertyId, unit: "3B", tenantName: "Tess Nguyen", inspectedOn: "2026-10-02" } }));
+    const [, r1] = await json(await call(env, `/api/inspections/${insp.id}/rooms`,
+      { method: "POST", body: { name: "Kitchen" } }));
+    await call(env, `/api/inspections/${insp.id}/rooms/${r1.rooms[0].id}`,
+      { method: "PATCH", body: { status: "fail", note: "Cracked basin" } });
+    if (finish) await call(env, `/api/inspections/${insp.id}`, { method: "PATCH", body: { finish: true } });
+    return insp.id;
+  };
+
+  {
+    const { env } = seed();
+    const id = await walk(env, "p_press", { finish: false });
+
+    // FINISHED ONLY, and it is the shared gate rather than a second one. A
+    // half-walked document says nothing while looking like it says
+    // everything, which is the whole reason `whyNotFinish` refuses an
+    // unmarked room -- sending one would undo that by a different door.
+    let [s, b] = await json(await call(env, `/api/inspections/${id}/send`,
+      { method: "POST", body: { userIds: ["u_own"] } }));
+    ck("a draft cannot be sent", s === 409 && b.error === "not_finished", `${s} ${b.error}`);
+
+    await call(env, `/api/inspections/${id}`, { method: "PATCH", body: { finish: true } });
+    [s, b] = await json(await call(env, `/api/inspections/${id}`));
+    ck("once finished the team's read carries who it can go to", s === 200 && Array.isArray(b.recipients),
+      JSON.stringify(b.recipients));
+    // WHO IS OFFERED IS THE OWNERS OF *THIS* BUILDING. u_own2 owns Ballard
+    // and holds a seat on the same account, so a check that merely asked for
+    // owners would have offered them a unit they have nothing to do with.
+    const ids = (b.recipients || []).map((u) => u.id).sort().join(",");
+    ck("the owners of this building, and only them", ids === "u_own,u_own3", ids);
+    ck("an owner of another building on the same account is not offered",
+      !ids.includes("u_own2"), ids);
+    ck("and neither is the manager who walked it", !ids.includes("u_pm"), ids);
+    ck("nobody has been sent it yet", (b.sends || []).length === 0, JSON.stringify(b.sends));
+  }
+
+  {
+    const { db, env } = seed();
+    const id = await walk(env, "p_press");
+
+    // AN ID IN THE BODY IS A CLAIM. u_own2 is a real user, a real owner, on
+    // this very account -- and not an owner of this building. Trusting the
+    // body would mail somebody else's client a unit's move-out.
+    let [s, b] = await json(await call(env, `/api/inspections/${id}/send`,
+      { method: "POST", body: { userIds: ["u_own2"] } }));
+    ck("an owner of another building cannot be named into it",
+      s === 400 && b.error === "no_recipients", `${s} ${b.error}`);
+    ck("and nothing was written for them",
+      db.prepare(`SELECT COUNT(*) n FROM inspection_sends`).get().n === 0);
+
+    // The manager themselves, and somebody with no seat here at all.
+    [s, b] = await json(await call(env, `/api/inspections/${id}/send`,
+      { method: "POST", body: { userIds: ["u_pm", "u_them", "nobody-at-all"] } }));
+    ck("nor can a staff seat or a stranger", s === 400 && b.error === "no_recipients", `${s} ${b.error}`);
+    ck("still nothing written",
+      db.prepare(`SELECT COUNT(*) n FROM inspection_sends`).get().n === 0);
+
+    // An empty body is not a send to everybody. Defaulting to the whole
+    // audience would make a stray press mail every owner on the building.
+    [s, b] = await json(await call(env, `/api/inspections/${id}/send`, { method: "POST", body: {} }));
+    ck("an empty list sends nobody anything", s === 400 && b.error === "no_recipients", `${s} ${b.error}`);
+  }
+
+  {
+    const { db, env } = seed();
+    const id = await walk(env, "p_press");
+    // With no mail configured nothing can leave the building, and the row has
+    // to say so. A send marked true over a mail failure is the lie `sent_at`
+    // exists to refuse -- and it is exactly how an owner says they never got
+    // it while the screen says they did.
+    let [s, b] = await json(await call(env, `/api/inspections/${id}/send`,
+      { method: "POST", body: { userIds: ["u_own"] } }));
+    ck("a send is recorded even when the mail cannot go", s === 200 && b.ok === true, `${s} ${JSON.stringify(b)}`);
+    ck("and it says the mail did not go", b.sent?.[0]?.emailed === false, JSON.stringify(b.sent));
+    const row = db.prepare(`SELECT * FROM inspection_sends`).get();
+    ck("one row, for the owner that was picked", !!row && row.user_id === "u_own", JSON.stringify(row));
+    ck("stamped with who sent it", row.sent_by === "u_admin", String(row.sent_by));
+    ck("and emailed is 0 rather than 1", row.emailed === 0, String(row.emailed));
+    // The reply is the panel's own next state, so the screen does not have to
+    // derive a second answer to "who has it".
+    ck("the reply carries the history back", (b.sends || []).length === 1, JSON.stringify(b.sends));
+    ck("and it names it as not emailed", b.sends?.[0]?.emailed === false, JSON.stringify(b.sends));
+  }
+
+  {
+    // The same send with mail working. Stubbed at `fetch`, which is the
+    // boundary `sendEmail` crosses -- so what is asserted is the message that
+    // would actually leave rather than an intention to send one.
+    const { db, env } = seed();
+    const sentMail = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes("/emails")) {
+        sentMail.push(JSON.parse(init.body));
+        return new Response(JSON.stringify({ id: "mail_1" }), { status: 200 });
+      }
+      return realFetch(url, init);
+    };
+    try {
+      const env2 = { ...env, RESEND_API_KEY: "k", MAIL_FROM: "SubSub <no-reply@subsub.work>",
+        RESEND_API_BASE: "https://mail.test" };
+      const id = await walk(env2, "p_press");
+      const [s, b] = await json(await call(env2, `/api/inspections/${id}/send`,
+        { method: "POST", body: { userIds: ["u_own", "u_own3"] } }));
+      ck("both owners of the building can go at once", s === 200 && b.sent?.length === 2,
+        `${s} ${JSON.stringify(b.sent)}`);
+      ck("one mail per owner with an address", sentMail.length === 1, String(sentMail.length));
+      ck("and it went to them", sentMail[0]?.to?.[0] === "marion@oakes.test", JSON.stringify(sentMail[0]?.to));
+      ck("recorded as emailed", b.sent.find((d) => d.userId === "u_own")?.emailed === true,
+        JSON.stringify(b.sent));
+      // AN OWNER WITH NO ADDRESS IS STILL A SEAT, and the row says the mail
+      // did not go rather than quietly not existing: "we never told them" is
+      // the fact somebody needs months later.
+      ck("the one with no address is recorded, not emailed",
+        b.sent.find((d) => d.userId === "u_own3")?.emailed === false, JSON.stringify(b.sent));
+      ck("two rows either way", db.prepare(`SELECT COUNT(*) n FROM inspection_sends`).get().n === 2);
+
+      const mail = sentMail[0];
+      ck("the subject names the account and the place",
+        /Sound Property Management/.test(mail.subject) && /Press Apartments/.test(mail.subject), mail.subject);
+      ck("and which walk it was", /Move-out/i.test(mail.subject), mail.subject);
+      // A LINK, NOT AN ATTACHMENT. The owner reads it through their own seat,
+      // where it stays live -- a copy starts going stale the moment it is
+      // sent, which is the same reason the compliance pack is a link.
+      ck("the body is a link rather than an attachment",
+        /https:\/\/app\.subsub\.work\//.test(mail.text) && !/attach/i.test(mail.text),
+        mail.text.slice(0, 400));
+      ck("it says what was found", /1 of the 1 rooms/.test(mail.text), mail.text);
+      // It does not carry the photographs or the room-by-room notes: those
+      // are on the screen behind the link, where the permission is checked
+      // every time rather than once at the moment of sending.
+      ck("and not the room notes themselves", !/Cracked basin/.test(mail.text), mail.text);
+
+      // SENDING AGAIN IS A SECOND ROW, not an edit to the first. "We told them
+      // on the 2nd and again on the 9th" is the record; one row overwritten
+      // loses the first send entirely.
+      // AND IT FOLLOWS THE ACCOUNT'S OWN ADDRESS once there is one. The
+      // branded host is Scale and only resolves when Cloudflare has actually
+      // issued the certificate, which is why `accountOrigin` asks
+      // `hostname_status` rather than building a URL from the subdomain -- a
+      // link that does not load is worse than one that says SubSub.
+      db.prepare(`UPDATE accounts SET hostname_status = 'active' WHERE id = 'acc1'`).run();
+      const [, again] = await json(await call(env2, `/api/inspections/${id}/send`,
+        { method: "POST", body: { userIds: ["u_own"] } }));
+      ck("and it lands on the account's own address once that resolves",
+        /https:\/\/soundpm\.subsub\.work\//.test(sentMail[sentMail.length - 1].text),
+        sentMail[sentMail.length - 1].text.slice(0, 260));
+      ck("sending again appends rather than overwriting", (again.sends || []).length === 3,
+        JSON.stringify((again.sends || []).map((x) => x.userId)));
+      ck("it is logged on the account",
+        db.prepare(`SELECT COUNT(*) n FROM activity WHERE kind = 'inspection_sent'`).get().n === 2);
+    } finally { globalThis.fetch = realFetch; }
+  }
+
+  {
+    // THE OWNER'S OWN SIDE. They were invited onto this building, so reading a
+    // finished report needs no token and no send -- the email is the telling
+    // and not the access.
+    const { env } = seed();
+    const draft = await walk(env, "p_press", { finish: false });
+    const done = await walk(env, "p_press", { kind: "move_in" });
+
+    let [s, b] = await json(await call(env, `/api/inspections/${done}`, { who: "u_own" }));
+    ck("an owner can read a finished report of their building", s === 200 && b.id === done, `${s} ${b.error || ""}`);
+    ck("rooms and all", (b.rooms || []).length === 1, JSON.stringify((b.rooms || []).map((r) => r.name)));
+    // A DRAFT IS NOT THEIRS TO READ, and the refusal is `not_found` rather
+    // than `forbidden`: a 403 over a real id and a 404 over an invented one
+    // is how somebody walks the account's inspection list one guess at a
+    // time, which is the leak `jobscope.js` already records.
+    [s, b] = await json(await call(env, `/api/inspections/${draft}`, { who: "u_own" }));
+    ck("a draft reads as not there", s === 404 && b.error === "not_found", `${s} ${b.error}`);
+    const [, nope] = await json(await call(env, `/api/inspections/does-not-exist`, { who: "u_own" }));
+    ck("and so does one that does not exist", nope.error === "not_found", nope.error);
+
+    // WHO ELSE WAS TOLD IS THE TEAM'S OWN RECORD. The audience is the other
+    // owners' names and addresses, which is not this owner's to collect --
+    // the same rule that keeps an overflow distribution list server-side.
+    [, b] = await json(await call(env, `/api/inspections/${done}`, { who: "u_own" }));
+    ck("an owner is not shown the audience", b.recipients === undefined && b.sends === undefined,
+      JSON.stringify({ r: b.recipients, s: b.sends }));
+
+    // The list is finished ones only. A draft on their own building is a
+    // half-walked document and would read as a report.
+    [, b] = await json(await call(env, "/api/inspections", { who: "u_own" }));
+    const mine = Array.isArray(b) ? b : [];
+    ck("their list holds the finished one", mine.some((i) => i.id === done),
+      JSON.stringify(mine.map((i) => i.status)));
+    ck("and not the draft", !mine.some((i) => i.id === draft),
+      JSON.stringify(mine.map((i) => i.status)));
+    // The other building's owner sees neither, because their seat is scoped
+    // to Ballard and this walk is at Press.
+    const [, other] = await json(await call(env, "/api/inspections", { who: "u_own2" }));
+    ck("the other building's owner sees none of it", Array.isArray(other) && other.length === 0,
+      JSON.stringify(other));
+    // And the manager's own list still carries the draft, so the owner's
+    // filter is the owner's rather than the row having gone anywhere.
+    const [, teamList] = await json(await call(env, "/api/inspections"));
+    ck("the team still sees the draft", teamList.some((i) => i.id === draft),
+      JSON.stringify(teamList.map((i) => i.status)));
+
+    // AND EVERY WRITE IS REFUSED. The screen draws none of them for an owner;
+    // this is the half that holds whether or not it does.
+    const refusals = [
+      ["finish it again", `/api/inspections/${done}`, "PATCH", { unit: "9Z" }],
+      ["add a room", `/api/inspections/${done}/rooms`, "POST", { name: "Boat shed" }],
+      ["delete it", `/api/inspections/${done}`, "DELETE", undefined],
+      ["raise a job from it", `/api/inspections/${done}/job`, "POST", { trades: ["plumbing"] }],
+      ["send it on", `/api/inspections/${done}/send`, "POST", { userIds: ["u_own"] }],
+      ["start a new one", "/api/inspections", "POST", { kind: "move_in", propertyId: "p_press" }],
+    ];
+    for (const [what, path, method, body] of refusals) {
+      const [st] = await json(await call(env, path, { method, body, who: "u_own" }));
+      ck(`an owner cannot ${what}`, st === 403, String(st));
+    }
+  }
+
+  {
+    // Another account's inspection is not reachable at all, by the send route
+    // any more than by the read -- and it answers `not_found`, so this cannot
+    // be walked to find out which ids are real.
+    const { env } = seed();
+    const id = await walk(env, "p_press");
+    const [s, b] = await json(await call(env, `/api/inspections/${id}/send`,
+      { method: "POST", body: { userIds: ["u_own"] }, who: "u_them", acct: "acc2" }));
+    ck("another account cannot send ours", s === 404 && b.error === "not_found", `${s} ${b.error}`);
+  }
+
+  {
+    // A SCOPED MANAGER IS SCOPED HERE TOO. u_pm is narrowed to Ballard, so a
+    // walk at Press is not theirs to send -- the scope is applied in the one
+    // place that resolves an inspection rather than per route.
+    const { env } = seed();
+    const id = await walk(env, "p_press");
+    const [s, b] = await json(await call(env, `/api/inspections/${id}/send`,
+      { method: "POST", body: { userIds: ["u_own"] }, who: "u_pm" }));
+    ck("a manager narrowed to another building cannot send it",
+      s === 404 && b.error === "not_found", `${s} ${b.error}`);
+    // And one at their own building is.
+    const mine = await walk(env, "p_ballard");
+    const [s2, b2] = await json(await call(env, `/api/inspections/${mine}/send`,
+      { method: "POST", body: { userIds: ["u_own2"] }, who: "u_pm" }));
+    ck("and one at their own building is", s2 === 200 && b2.sent?.length === 1,
+      `${s2} ${JSON.stringify(b2.sent || b2)}`);
+  }
+
+  {
+    // BOTH KINDS SEND. The move-in report is the one that answers "it was
+    // like that when I moved in" and the move-out report is the one that
+    // raises the question; an owner with one and not the other has half a
+    // record, so neither kind is special-cased anywhere.
+    const { env } = seed();
+    for (const kind of ["move_in", "move_out"]) {
+      const id = await walk(env, "p_press", { kind });
+      const [s, b] = await json(await call(env, `/api/inspections/${id}/send`,
+        { method: "POST", body: { userIds: ["u_own"] } }));
+      ck(`a ${kind} report sends`, s === 200 && b.sent?.length === 1, `${s} ${JSON.stringify(b.sent || b)}`);
+    }
+  }
+}
+
+console.log("\n-- the roles are one list, not thirteen --");
+{
+  const W = readFileSync(new URL("../worker/index.js", import.meta.url), "utf8");
+  const APP = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  // A SCREEN STRICTER THAN THE ROUTE IS THE SAME LIE AS ONE THAT IS LOOSER,
+  // and the way both happen is a role list written twice. Every inspection
+  // route reads the shared list, and the screen's `canEdit` is the same
+  // predicate rather than a hand-kept copy.
+  const routes = [...W.matchAll(/app\.(get|post|patch|put|delete)\("\/api\/inspections[^"]*",\s*([^,]+),/g)];
+  ck("there are inspection routes to check", routes.length >= 12, String(routes.length));
+  ck("and every one of them takes its roles from the shared list",
+    routes.every((m) => /INSPECTION_(READ|WRITE)_ROLES/.test(m[2])),
+    JSON.stringify(routes.filter((m) => !/INSPECTION_(READ|WRITE)_ROLES/.test(m[2])).map((m) => m[2])));
+  ck("the writes are the write list and the reads the read one",
+    routes.filter((m) => m[1] === "get").every((m) => /READ/.test(m[2]))
+    && routes.filter((m) => m[1] !== "get").every((m) => /WRITE/.test(m[2])));
+  ck("an owner reads and does not write",
+    INSPECTION_READ_ROLES.includes("owner") && !mayWriteInspection("owner"));
+  ck("a manager and an admin write", mayWriteInspection("pm") && mayWriteInspection("admin"));
+  ck("and a tenant or a contractor does neither",
+    !mayWriteInspection("tenant") && !INSPECTION_READ_ROLES.includes("tenant")
+    && !INSPECTION_READ_ROLES.includes("contractor"));
+  // The screen asks the shared question rather than defaulting true, which is
+  // what this feature was one edit away from shipping: an owner's seat gained
+  // the tab and every write button was still drawn.
+  // AND THE GUEST PATH ALLOWLIST IS THE OTHER RECORD OF THE SAME FACT, which
+  // is what refused an owner's reads for a while: the role said yes, the path
+  // list had never heard of the feature. Both halves have to say GET, and
+  // NEITHER may say anything else -- the role guard would refuse a write
+  // today, so a write method here is two guards covering for each other with
+  // nothing reporting it, the shape this file keeps catching.
+  for (const [name, list] of [["an owner", "OWNER_ALLOWED"], ["a tenant", "TENANT_ALLOWED"]]) {
+    const block = W.slice(W.indexOf(`const ${list} = [`));
+    const body = block.slice(0, block.indexOf("\n];"));
+    const lines = body.split("\n").filter((l) => /inspections/.test(l) && !/^\s*\/\//.test(l));
+    if (list === "OWNER_ALLOWED") {
+      ck("the owner's three reads are on the path allowlist", lines.length === 3,
+        JSON.stringify(lines));
+    } else {
+      ck("a tenant reaches none of it at all", lines.length === 0, JSON.stringify(lines));
+    }
+    ck(`and nothing but GET is open to ${name}`,
+      lines.every((l) => /\[\s*"GET"\s*\]/.test(l)), JSON.stringify(lines));
+  }
+  ck("the screen reads the shared predicate", /mayWriteInspection\(role\)/.test(APP));
+  ck("and does not keep its own list of who may write",
+    !/INSPECTION_WRITE_ROLES\s*=/.test(APP));
+}
+
+console.log("\n-- the shared rule is the one the routes read --");
   {
     const W = readFileSync(new URL("../worker/index.js", import.meta.url), "utf8");
     const APP = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");

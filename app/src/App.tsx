@@ -61,7 +61,7 @@ import { hasAdminSeat, isTeamSeat } from "../shared/seats.js";
 import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole, isPropertyScoped } from "../shared/propscope.js";
 import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   MAX_ROOM_PHOTOS, roomName, inspectionTally, flaggedRooms,
-  whyNotFinish } from "../shared/inspection.js";
+  whyNotFinish, canSendInspection, mayWriteInspection } from "../shared/inspection.js";
 import { agreementStateText, typedNameMatches, renderAgreement } from "../shared/agreement.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -618,7 +618,11 @@ const ROLES = {
   // buildings they were granted. No contractor directory -- they see who is
   // coming to their own jobs, not who the account works with -- and no
   // availability calendar or uniforms, which are the account's business.
-  owner: { label: "Building owner", can: ["dashboard", "properties", "jobs", "account"] },
+  // "inspections" is a READ for an owner and nothing else: every write route
+  // is admin/pm, and the server hands them finished reports at their own
+  // buildings only. They are the one person besides the agent who has to be
+  // able to produce the move-out report when it is argued about.
+  owner: { label: "Building owner", can: ["dashboard", "properties", "inspections", "jobs", "account"] },
   // Somebody who lives or trades in one of the buildings. They report
   // problems and follow what happens to them, and that is the whole of it --
   // no dashboard, no portfolio, no other tenant's repairs, no money. Their
@@ -5616,6 +5620,14 @@ export default function SubSub() {
       {tab === "inspections" && can("inspections") && (
         <InspectionsView inspections={inspections} properties={accountProperties} subs={subs}
           unitWord={tenantWhere(kindOf(account)) === "office" ? "Suite" : "Unit"}
+          /* AN OWNER READS. The capability gets them the tab -- a move-out
+             report is theirs to produce in a deposit argument -- and every
+             write route behind this screen is admin/pm, so the one predicate
+             the routes are built from decides what is drawn. Defaulting it
+             true, which is what this was one edit away from shipping, would
+             have offered an owner Finish, Raise a job, Send and a room form
+             the server answers 403 to. */
+          canEdit={mayWriteInspection(role)}
           onReload={async () => {
             try { setInspections(await api.listInspections()); }
             catch (e) { console.warn("[inspections] reload failed:", e?.message || e); }
@@ -25163,7 +25175,7 @@ function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPh
 
 // One inspection, open.
 function InspectionDetail({ inspection, property, onReload, onClose, onRaise, onGoJobs,
-  subs = [], unitWord = "Unit" }) {
+  subs = [], unitWord = "Unit", canEdit = true }) {
   const [adding, setAdding] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -25182,7 +25194,12 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
   }, [inspection.unit, inspection.tenantName, inspection.inspectedOn]);
   const rooms = inspection.rooms || [];
   const tally = inspectionTally(rooms);
-  const locked = inspection.status === "finished";
+  // Locked covers BOTH reasons the screen is read-only, because the rooms
+  // cannot tell them apart and must not try: a finished inspection is nobody's
+  // to change, and an owner's seat is nobody's to write from. Every one of
+  // those routes is admin/pm, so a form offered here would be a form the
+  // server refuses.
+  const locked = inspection.status === "finished" || !canEdit;
   const why = whyNotFinish(rooms);
 
   const run = async (what, fn) => {
@@ -25377,9 +25394,18 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
 
       {err && <p className="billing-err" role="alert">{err}</p>}
 
+      {/* SENDING IT TO THE BUILDING'S OWNER, once it is finished.
+          Only the owners who hold a seat on this building are offered, and
+          only the server decides that: an id posted from here is intersected
+          with that list, so a name typed anywhere cannot be made a recipient.
+          A report goes to somebody who can open it. */}
+      {canEdit && canSendInspection(inspection) && (
+        <InspectionSend inspection={inspection} onReload={onReload} />
+      )}
+
       <div className="pd-acts">
         <button className="btn-ghost small" onClick={onClose}>Close</button>
-        {!locked && (
+        {!locked && canEdit && (
           <button className="btn-solid small" disabled={!!busy || !!why}
             onClick={() => run("finish", async () => {
               await api.patchInspection(inspection.id, { finish: true }); await onReload();
@@ -25391,12 +25417,15 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
             flagged, finished or not: the leak does not wait for the paperwork,
             and a manager standing in the unit with a flagged room is exactly
             who should be raising it. */}
-        {tally.flagged > 0 && !inspection.jobId && (
+        {/* A write, so it is the team's. Offering it to an owner would be the
+            screen-looser-than-the-route lie: the route is admin/pm and would
+            answer 403 to a button this screen had invited. */}
+        {canEdit && tally.flagged > 0 && !inspection.jobId && (
           <button className="btn-solid small" disabled={!!busy} onClick={() => setRaising(true)}>
             <Hammer size={14} /> Raise a job — {tally.flagged} to put right
           </button>
         )}
-        {inspection.jobId && (
+        {canEdit && inspection.jobId && (
           <button className="btn-ghost small" onClick={() => onGoJobs(inspection.jobId)}>
             <ArrowRight size={13} /> Open the job raised from this
           </button>
@@ -25405,7 +25434,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
 
       {/* A disabled Finish with nothing beside it is indistinguishable from a
           broken one, which this file has already paid for once. */}
-      {!locked && why && (
+      {!locked && canEdit && why && (
         <p className="fld-note">
           {why === "no_rooms" ? "Add a room before finishing."
             : `${tally.unchecked} room${tally.unchecked === 1 ? "" : "s"} still to mark. A room nobody has walked and a room that was fine must not read the same, so an unmarked one stops this being finished.`}
@@ -25492,7 +25521,139 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
   );
 }
 
-function InspectionsView({ inspections, properties, subs, onReload, onGoJobs, unitWord = "Unit" }) {
+// SENDING A FINISHED INSPECTION TO THE BUILDING'S OWNER.
+//
+// A move-in and a move-out report are the two documents a deposit argument is
+// run from, and the owner of the building is the one person besides the agent
+// who has to be able to produce them.
+//
+// WHO IS OFFERED IS THE SERVER'S ANSWER, never this screen's. `recipients`
+// comes back on the inspection, and every id posted is intersected with that
+// same list again on the way in -- so a name here can only ever be one the
+// route already allows, and a tick box cannot become a way to mail somebody a
+// unit's photographs.
+//
+// It is the owners SCOPED TO THIS BUILDING and nobody else. An owner holding a
+// seat on a different building has no business reading this unit's move-out,
+// and a tenant is the SUBJECT of the document rather than a party to it --
+// handing somebody the record their own deposit will be argued from is a
+// product decision about who may dispute what, not a checkbox.
+function InspectionSend({ inspection, onReload }) {
+  const to = inspection.recipients || [];
+  const sends = inspection.sends || [];
+  const sentTo = (id) => sends.find((s) => s.userId === id);
+  // DEFAULT TO WHOEVER HAS NOT HAD IT, which is the press somebody opened this
+  // to make. Once everybody has, every box is ticked instead: an empty set
+  // behind a dead Send is the disabled-control-with-no-reason failure, and
+  // sending it again is the only thing left to want here.
+  const unsent = to.filter((u) => !sentTo(u.id)).map((u) => u.id);
+  const [pick, setPick] = useState(unsent.length ? unsent : to.map((u) => u.id));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState(null);
+
+  // NOT A DISABLED BUTTON. There is nothing to tick, so there is nothing to
+  // press, and a dead Send over an empty list says neither what is wrong nor
+  // where to go. The owner has to hold a seat on this building before a
+  // report can reach them, and that is done on the building.
+  if (!to.length) {
+    return (
+      <div className="insp-send">
+        <div className="form-sec">Send it to the owner</div>
+        <p className="panel-note">
+          Nobody who owns this building holds a seat here yet. Add the owner on
+          the building in Properties and the finished report can go to them.
+        </p>
+      </div>
+    );
+  }
+
+  const go = async () => {
+    setBusy(true); setErr(""); setDone(null);
+    try {
+      const r = await api.sendInspection(inspection.id, pick);
+      setDone(r.sent || []);
+      await onReload();
+    } catch (e) {
+      console.error("[inspection] send failed:", e);
+      const code = e?.body?.error;
+      setErr(code === "not_finished" ? "Finish the inspection before sending it."
+        : code === "no_recipients" ? "Tick who it goes to."
+        : code === "migration_needed" ? "SubSub needs a database update before this works. We've been told."
+        : "That didn't send. Try again.");
+    } finally { setBusy(false); }
+  };
+
+  const failed = (done || []).filter((d) => !d.emailed);
+
+  return (
+    <div className="insp-send">
+      <div className="form-sec">Send it to the owner</div>
+      {/* WHAT SENDING ACTUALLY DOES, said plainly, because the obvious
+          reading is wrong in the way that matters. The owner was invited onto
+          this building, so they can already open a finished report from their
+          own account -- the email is the TELLING and not the access. Which is
+          why a mail that fails is worth saying out loud and is still not a
+          lost report, and why nothing is attached: a link stays live where a
+          copy starts going stale the moment it is sent. */}
+      <p className="panel-note">
+        They read it in their own account, where it stays live rather than
+        being a copy. Sending emails them a link to this one.
+      </p>
+      <ul className="insp-to">
+        {to.map((u) => {
+          const s = sentTo(u.id);
+          return (
+            <li key={u.id}>
+              <label className="insp-to-pick">
+                <input type="checkbox" checked={pick.includes(u.id)} disabled={busy}
+                  onChange={(e) => setPick((cur) => (e.target.checked
+                    ? [...new Set([...cur, u.id])]
+                    : cur.filter((x) => x !== u.id)))} />
+                <span className="insp-to-who">
+                  <b>{u.name || u.email || "An owner"}</b>
+                  {u.email ? <span className="dr-meta">{u.email}</span> : null}
+                </span>
+              </label>
+              {/* A SEND THAT DID NOT EMAIL SAYS SO. The row records whether
+                  the mail went rather than that the button was pressed, so
+                  this cannot read "Sent" over an owner who was never told --
+                  which is exactly how somebody says they never got it while
+                  the screen says they did. */}
+              {s
+                ? (s.emailed
+                  ? <span className="tn-chip ok">Sent {relTime(s.at)}</span>
+                  : <span className="tn-chip wait">Not emailed {relTime(s.at)}</span>)
+                : <span className="tn-chip">Not sent</span>}
+            </li>
+          );
+        })}
+      </ul>
+      {failed.length > 0 && (
+        <p className="fld-note">
+          The email to {failed.map((d) => d.name).join(", ")} did not go out.
+          The report is still on their own Inspections screen — tell them it is there.
+        </p>
+      )}
+      {done && failed.length === 0 && (
+        <p className="fld-note">Sent to {done.map((d) => d.name).join(", ")}.</p>
+      )}
+      {err && <p className="billing-err" role="alert">{err}</p>}
+      <div className="insp-send-act">
+        <button className="btn-solid small" disabled={busy || !pick.length} onClick={go}>
+          <Send size={14} /> {busy ? "Sending…"
+            : sends.length ? "Send it again" : "Send the report"}
+        </button>
+        {/* The disabled condition is wider than nothing, so it is named. */}
+        {!pick.length && !busy && <span className="fld-note">Tick who it goes to.</span>}
+      </div>
+    </div>
+  );
+}
+
+
+function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
+  unitWord = "Unit", canEdit = true }) {
   const [form, setForm] = useState(null);
   const [open, setOpen] = useState(null);   // the loaded inspection
   const [busy, setBusy] = useState(false);
@@ -25554,6 +25715,7 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs, un
         </div>
         {err && <p className="billing-err" role="alert">{err}</p>}
         <InspectionDetail inspection={open} subs={subs} unitWord={unitWord}
+          canEdit={canEdit}
           property={properties.find((p) => p.id === open.propertyId)}
           onReload={() => load(open.id)}
           onRaise={raise}
@@ -25568,18 +25730,23 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs, un
       <div className="dash-hello">
         <div>
           <h2>Inspections</h2>
-          <p>{inspections.length === 0
-            ? "Walk a unit room by room when somebody moves in or out, and raise the work from what you find."
-            : `${inspections.length} inspection${inspections.length === 1 ? "" : "s"}`}</p>
+          {/* An owner is not walking anything, so they are not told to.
+              What a report IS to them is the thing a deposit argument is run
+              from, which is the only reason they are on this screen. */}
+          <p>{inspections.length > 0
+            ? `${inspections.length} inspection${inspections.length === 1 ? "" : "s"}`
+            : canEdit
+              ? "Walk a unit room by room when somebody moves in or out, and raise the work from what you find."
+              : "The move-in and move-out record of a unit, as your manager walked it."}</p>
         </div>
-        {properties.length > 0 && (
+        {canEdit && properties.length > 0 && (
           <button className="add-btn small" onClick={() => setForm({ kind: "move_out" })}>
             <Plus size={14} /> New inspection
           </button>
         )}
       </div>
 
-      {properties.length === 0 && (
+      {canEdit && properties.length === 0 && (
         <div className="dash-empty"><Building2 size={24} />
           <p>Add a building first — an inspection is of a unit in one.</p>
         </div>
@@ -25587,10 +25754,13 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs, un
 
       {err && <p className="billing-err" role="alert">{err}</p>}
 
-      {inspections.length === 0 && properties.length > 0 && (
+      {inspections.length === 0 && (canEdit ? properties.length > 0 : true) && (
         <div className="dash-empty"><ClipboardList size={24} />
-          <p>No inspections yet. The record of what a unit looked like on the day
-            is the only answer to “it was like that when I moved in”.</p>
+          {canEdit
+            ? <p>No inspections yet. The record of what a unit looked like on the day
+              is the only answer to “it was like that when I moved in”.</p>
+            : <p>Nothing has been sent to you yet. A finished move-in or move-out
+              inspection of one of your units appears here.</p>}
         </div>
       )}
 
@@ -29150,6 +29320,26 @@ strong.insp-name{background:none;border:0;padding:0}
 .insp-dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--line)}
 .insp-dot.d-follow_up{background:var(--amber)}
 .insp-dot.d-fail{background:var(--red)}
+/* Sending the finished report to the building's owner. A short list of
+   names with a tick each, on the quiet surface the header fields use: this is
+   the last thing on a long screen and it is one press, not a form.
+   No backticks anywhere in here -- the whole stylesheet is one template
+   literal and one in a comment closes it. */
+.insp-send{display:flex;flex-direction:column;gap:9px;
+  padding:12px 14px;background:var(--paper);border:1px solid var(--line);border-radius:12px}
+.insp-send .form-sec{margin:0}
+.insp-send .panel-note{margin:0}
+.insp-to{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
+.insp-to li{display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+/* The whole row is the target, not the 13px box in it -- this is pressed with
+   a thumb standing in a flat. */
+.insp-to-pick{flex:1;min-width:0;display:flex;align-items:center;gap:10px;cursor:pointer;margin:0}
+.insp-to-pick input{flex:none;width:18px;height:18px;accent-color:var(--brand)}
+.insp-to-who{min-width:0;display:flex;flex-direction:column;gap:1px}
+.insp-to-who b{font:700 14px Inter,sans-serif;color:var(--ink)}
+.insp-send-act{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.insp-send-act .fld-note{margin:0}
 .pd-stats .is-flagged strong{color:var(--amber)}
 .pd-stats .is-todo strong{color:var(--ink-soft)}
 /* A dash-sec that has been promoted into the top row.
