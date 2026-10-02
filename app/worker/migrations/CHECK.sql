@@ -308,4 +308,23 @@ SELECT
      JOIN inspection_rooms r  ON r.id = p.room_id
      JOIN inspections i       ON i.id = r.inspection_id
     WHERE n.drafted_at IS NOT NULL AND i.finished_at IS NOT NULL
-      AND n.drafted_at > i.finished_at)                                                         AS m057_inv_drafted_after_finish;
+      AND n.drafted_at > i.finished_at)                                                         AS m057_inv_drafted_after_finish,
+
+  -- 058. What somebody is to the account that engaged them.
+  (SELECT COUNT(*) FROM pragma_table_info('engagements')
+    WHERE name = 'engaged_as')                                                                  AS m058_engaged_as,
+  -- Invariant, must read ZERO: a value the product does not produce. NULL is
+  -- the ordinary state and reads as subcontractor, so this counts only rows
+  -- carrying a word that is neither -- which is a route that stopped
+  -- validating against ENGAGED_AS.
+  (SELECT COUNT(*) FROM engagements
+    WHERE engaged_as IS NOT NULL
+      AND engaged_as NOT IN ('subcontractor','handyman'))                                       AS m058_inv_unknown_engaged_as,
+  -- Invariant, must read ZERO: a handyman on an account that has no buildings
+  -- to maintain. `mayEngageHandyman` refuses it, so a row here is a route
+  -- that stopped asking -- and it would be a maintenance worker excused their
+  -- insurance on a general contractor's roster.
+  (SELECT COUNT(*) FROM engagements e
+     JOIN accounts a ON a.id = e.account_id
+    WHERE e.engaged_as = 'handyman'
+      AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager'))              AS m058_inv_handyman_wrong_kind;

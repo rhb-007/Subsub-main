@@ -67,6 +67,8 @@ import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { agreementStateText, renderAgreement } from "../shared/agreement.js";
 import { typedNameMatches, typedNameHint } from "../shared/typedname.js";
+import { ENGAGED_AS, engagedAs, isHandyman, mayEngageHandyman, mayCover,
+  tradesAllowed, requiredDocsFor, needsLicense, ENGAGED_REFUSALS } from "../shared/engaged.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -809,6 +811,12 @@ const ENGAGEMENT_FIELDS = [
   // your experience of them
   "rating", "ratedJobs", "accepted", "declined", "autoSchedule", "notes",
   "status", "propertyIds",
+  // 058. What they are to you -- subcontractor or handyman. NAMED HERE OR IT
+  // IS SILENTLY DROPPED: `splitSeed` carries only what these two lists name,
+  // which is how `answersForItself` reached the form as `undefined` and left
+  // its lock permanently off. A field that is absent is indistinguishable
+  // from one that is false, and nothing anywhere reports it.
+  "engagedAs",
 ];
 
 // Split one flat seed record into its company half and engagement half.
@@ -1368,15 +1376,27 @@ const docStatus = (s, kind) => {
 const docVerified = (s, kind) => docStatus(s, kind) === "verified";
 const DOC_STATUS_LABEL = { missing: "Not uploaded", pending: "Awaiting review", verified: "Verified", rejected: "Rejected" };
 // "Missing" means not usable: absent, unreviewed, or rejected.
-const missingDocs = (s) => DOC_KINDS.filter((k) => !docVerified(s, k));
-// Full compliance = three verified documents AND an active WA registration.
+// NARROWED BY WHAT THEY ARE TO THIS ACCOUNT. A handyman is engaged without a
+// licence and without insurance, so counting either against them is the
+// permanently-amber row this product exists to prevent -- a maintenance
+// worker who can never be made compliant because the certificate the screen
+// wants is one nobody asked them for.
+//
+// `s.engagedAs` arrives on every roster row and reads `subcontractor` when
+// the column is NULL, so this is unchanged for every engagement that existed
+// before the word did.
+const missingDocs = (s) =>
+  requiredDocsFor(s?.engagedAs, DOC_KINDS).filter((k) => !docVerified(s, k));
+// Full compliance = the documents this engagement is judged on AND, for a
+// subcontractor, an active WA registration.
 const complianceGaps = (s) => [
   ...missingDocs(s).map((k) => DOC_LABELS[k]),
-  ...(licenseOk(s) ? [] : ["Active WA contractor registration"]),
+  ...(!needsLicense(s?.engagedAs) || licenseOk(s) ? [] : ["Active WA contractor registration"]),
 ];
 const unverifiedDocs = (s) => DOC_KINDS.filter((k) => s[k] && !docVerified(s, k));
 const pendingReviewDocs = (s) => DOC_KINDS.filter((k) => docStatus(s, k) === "pending");
-const docsComplete = (s) => missingDocs(s).length === 0 && licenseOk(s);
+const docsComplete = (s) =>
+  missingDocs(s).length === 0 && (!needsLicense(s?.engagedAs) || licenseOk(s));
 // email body for "matched but blocked on paperwork"
 // The documents email tells the contractor to sign in and upload — never to
 // reply with attachments. `brand` supplies the tenant's portal URL.
@@ -2862,6 +2882,8 @@ export default function SubSub() {
             + "Ask them for the renewal, then assign it again."
         : e === "documents_incomplete"
           ? `${sub.company} has documents still waiting on review, so no work order can be issued yet.`
+        : e === "trade_not_handyman"
+          ? `${sub.company} is on your roster as a handyman. ${ENGAGED_REFUSALS.trade_not_handyman}`
         : e === "not_approved"
           ? "This job is still a request nobody has approved, so no work order can be issued against it."
         : "Could not issue that work order. It has not been sent — try again.");
@@ -6579,6 +6601,7 @@ export default function SubSub() {
       )}
       {adding && <Modal onClose={() => { setAdding(false); setResumeAssign(null); }} wide>
         <SubForm properties={accountProperties} onSubmit={addSub}
+          canEngageHandyman={mayEngageHandyman(kindOf(account))}
           onRecruitQr={isHiring(account) && PLANS[plan].branding
             ? () => { setAdding(false); setRecruitQr(true); } : null}
           onOpenExisting={(match) => openExistingContractor(match)}
@@ -6633,6 +6656,7 @@ export default function SubSub() {
       {editing && <Modal onClose={() => { setEditing(null); setEditStep(1); setSubSaveErr(""); }} wide>
         {subSaveErr && <div className="form-err" role="alert">{subSaveErr}</div>}
         <SubForm properties={accountProperties} existing={editing} openStep={editStep} onSubmit={updateSub}
+          canEngageHandyman={mayEngageHandyman(kindOf(account))}
           onUploadDoc={(k, file) => uploadSubDoc(editing.id, k, file)}
           onDeleteDoc={(k) => deleteSubDoc(editing.id, k)}
           onCancel={() => setEditing(null)} /></Modal>}
@@ -27153,10 +27177,12 @@ function useConnectMatch(enabled, { email, phone, license }) {
   return { match, checking, searched };
 }
 
-function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect, onOpenExisting, onRecruitQr, onUploadDoc, onDeleteDoc }) {
+function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect,
+  onOpenExisting, onRecruitQr, onUploadDoc, onDeleteDoc, canEngageHandyman = false }) {
   const init = existing ? {
     company: existing.company, contact: existing.contact, phone: existing.phone, email: existing.email,
     categories: existing.categories, caps: existing.caps,
+    engagedAs: engagedAs(existing.engagedAs),
     city: existing.city || "", state: existing.state || "", zip2: existing.zip || "",
     license: existing.license || "", ubi: existing.ubi || "",
     propertyIds: existing.propertyIds || [],
@@ -27183,6 +27209,7 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
     available: existing.available, notes: existing.notes || "",
   } : {
     company: "", contact: "", phone: "", email: "", categories: [], caps: [],
+    engagedAs: "subcontractor",
     city: "", state: "", zip2: "",
     license: "", ubi: "",
     propertyIds: [],
@@ -27273,7 +27300,28 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
     });
   };
 
+  // CHANGING THE RELATIONSHIP HAS TO TAKE THE TRADES WITH IT. Somebody picks
+  // Roofing, then switches them to a handyman: leaving roofing ticked keeps a
+  // trade the grid no longer shows and the assign route refuses -- a form
+  // carrying a value its own screen cannot display, saved on the next press.
+  // The caps follow, because a capability belongs to a trade that is now gone.
+  const setEngagedAs = (as) => {
+    setF((s) => {
+      const keep = s.categories.filter((c) => mayCover(as, c));
+      const allowedCaps = new Set(keep.flatMap((cat) => CAP_LIBRARY[cat] || []));
+      return { ...s, engagedAs: as, categories: keep, caps: s.caps.filter((c) => allowedCaps.has(c)) };
+    });
+  };
+
   const caps = [...new Set(f.categories.flatMap((c) => CAP_LIBRARY[c] || []))];
+  // Which trades this relationship may be used for. `tradesAllowed` answers
+  // null for a subcontractor -- every trade -- rather than the full list,
+  // the same asymmetry `jobScopeFrom` uses: an empty array would mean
+  // narrowed to nothing, which is a different answer and the wrong one.
+  const tradeChoices = useMemo(() => {
+    const allowed = tradesAllowed(f.engagedAs);
+    return allowed ? CATEGORIES.filter((c) => allowed.includes(c.id)) : CATEGORIES;
+  }, [f.engagedAs]);
   const cleanRadii = (f.radii || []).filter((r) => r.zip && r.miles).map((r) => ({ zip: r.zip, miles: Number(r.miles) }));
   const coverageOk = f.covMode === "cities" ? f.cities.length > 0 : cleanRadii.length > 0;
   // clean crews: drop empty members, drop crews with no named members
@@ -27288,6 +27336,10 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
     // would be refused, and a refusal on a save somebody pressed once is a
     // save they press three more times.
     categories: f.categories, caps: f.caps, propertyIds: f.propertyIds,
+    // Sent on the LOCKED branch too: what somebody is to this account is the
+    // engagement half, which is the half this form still owns even over a
+    // contractor who answers for their own company row.
+    ...(canEngageHandyman ? { engagedAs: f.engagedAs } : {}),
     notes: f.notes, rating: Number(f.rating) || 0,
   } : {
     ...(existing ? { id: existing.id } : {}),
@@ -27297,6 +27349,10 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
     notify: { email: f.notifyEmail, sms: f.notifySms },
     mailStreet: f.mailStreet, mailCity: f.mailCity, mailState: f.mailState, mailZip: f.mailZip,
     categories: f.categories, caps: f.caps, crews: cleanCrews,
+    // Only from an account that may set it. The server refuses
+    // `handyman` from a kind with no buildings, so sending it from a
+    // general contractor's form would be a save it answers 409 to.
+    ...(canEngageHandyman ? { engagedAs: f.engagedAs } : {}),
     coverage: f.covMode === "cities"
       ? { mode: "cities", cities: f.cities, radii: [] }
       : { mode: "radius", cities: [], radii: cleanRadii },
@@ -27721,11 +27777,43 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
         </div>
       )}
 
+      {/* WHAT THEY ARE TO YOU, and it is asked before the trades because it
+          decides which trades there are. Offered only on an account with
+          buildings -- a handyman is a maintenance worker for one, and the
+          server refuses the word from anybody else, so a picker here would be
+          a control whose save is thrown away.
+
+          A segmented pair rather than two chips: exactly one answer is true
+          and exactly one can be, which the inspection screen already settled
+          for move-in / move-out. */}
+      {canEngageHandyman && (
+        <div className="fld">What they are to you
+          <div className="insp-kind seg" role="group" aria-label="Working relationship">
+            {Object.values(ENGAGED_AS).map((k) => (
+              <button key={k.id} type="button" aria-pressed={f.engagedAs === k.id}
+                className={f.engagedAs === k.id ? "on" : ""}
+                onClick={() => setEngagedAs(k.id)}>{k.label}</button>
+            ))}
+          </div>
+          <p className="fld-note">{ENGAGED_AS[f.engagedAs]?.note}</p>
+        </div>
+      )}
+
       <div className="fld">Categories (choose one or more)
-        <div className="pick-grid">{CATEGORIES.map((c) => (
+        <div className="pick-grid">{tradeChoices.map((c) => (
           <button key={c.id} type="button" className={`pick ${f.categories.includes(c.id) ? "on" : ""}`}
             onClick={() => toggleCategory(c.id)}>{c.label}</button>
         ))}</div>
+        {/* SAID, NOT MERELY DONE. Sixteen trades disappearing with no
+            explanation reads as a screen that has lost them -- and somebody
+            looking for Roofing needs to know it is the relationship rather
+            than a bug, because the fix is the control directly above. */}
+        {isHandyman(f.engagedAs) && (
+          <p className="fld-note">
+            Lighter work only, because this is a handyman. Switch them to a subcontractor above
+            for roofing, HVAC, framing and the rest.
+          </p>
+        )}
         {!f.categories.length && (
           <p className="fld-err"><AlertTriangle size={12} /> Pick at least one trade.</p>
         )}

@@ -53,6 +53,8 @@ import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOT
   draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
 import { aiConfigured, claudeCall, replyJson } from "./ai.js";
 import { typedNameMatches } from "../shared/typedname.js";
+import { ENGAGED_AS, isEngagedAs, engagedAs, isHandyman, mayEngageHandyman,
+  mayCover, requiredDocsFor, needsLicense } from "../shared/engaged.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -154,6 +156,9 @@ app.onError((err, c) => {
 const ENGAGEMENT_FIELDS = new Set([
   "docReview", "categories", "caps",
   "rating", "ratedJobs", "accepted", "declined", "autoSchedule", "notes", "status",
+  // Per-account and never on the shared company row: one account's handyman
+  // is another account's contractor.
+  "engagedAs",
 ]);
 
 const companyRowToJs = (r) => ({
@@ -180,6 +185,12 @@ const engagementRowToJs = (r) => ({
   caps: parseJson(r.caps, []),
   rating: r.rating, ratedJobs: r.rated_jobs, accepted: r.accepted, declined: r.declined,
   autoSchedule: !!r.auto_schedule, notes: r.notes,
+  // 058. What they are to THIS account. Read through `engagedAs` rather than
+  // handed over raw, so NULL -- which is every row written before the column
+  // existed -- reads as `subcontractor` on the screen exactly as it does in
+  // every rule, instead of the browser having to know what an absent value
+  // means and getting it wrong somewhere.
+  engagedAs: engagedAs(r.engaged_as),
   // Which properties this vendor is scoped to. Empty = every property on the
   // account, which is how a general contractor uses it.
   propertyIds: r.property_ids ? String(r.property_ids).split(",") : [],
@@ -5009,6 +5020,7 @@ app.get("/api/subs", async (c) => {
             en.caps as en_caps, en.rating as en_rating, en.rated_jobs as en_rated_jobs,
             en.accepted as en_accepted, en.declined as en_declined,
             en.auto_schedule as en_auto_schedule, en.notes as en_notes,
+            en.engaged_as as en_engaged_as,
             (SELECT group_concat(ep.property_id) FROM engagement_properties ep
               WHERE ep.engagement_id = en.id) as en_property_ids,
             -- Whether anybody is there to answer for this company: a seat on
@@ -5051,6 +5063,12 @@ app.get("/api/subs", async (c) => {
     doc_review: r.en_doc_review, categories: r.en_categories, caps: r.en_caps,
     rating: r.en_rating, rated_jobs: r.en_rated_jobs, accepted: r.en_accepted, declined: r.en_declined,
     auto_schedule: r.en_auto_schedule, notes: r.en_notes,
+    // NAMED IN THREE PLACES OR IT IS SILENTLY DROPPED: the SELECT, this
+    // re-map and the row shape. The first version missed the SELECT, so
+    // `engagedAs` read undefined and every handyman came back as a
+    // subcontractor -- which is not a visible failure, it is a roster that
+    // quietly asks a maintenance worker for a certificate again.
+    engaged_as: r.en_engaged_as,
     property_ids: r.en_property_ids,
   }));
   // Reachability is not an engagement column, so it is attached after
@@ -5119,7 +5137,12 @@ app.get("/api/subs", async (c) => {
         // Today's verdict, for the roster. Assignment recomputes against the
         // job's date, which is the only number that decides whether a
         // certificate actually covers the work.
-        const st = companyDocStatus(sub.docs, today, kindsFor(ag));
+        // NARROWED BY WHAT THEY ARE TO THIS ACCOUNT. `kindsFor` decides
+        // whether a signed agreement counts; `requiredDocsFor` then takes
+        // insurance and a bond off a handyman. Composed rather than replaced,
+        // so there is still one place deciding what a document kind IS.
+        const st = companyDocStatus(sub.docs, today,
+          requiredDocsFor(sub.engagedAs, kindsFor(ag)));
         sub.docState = st.state;
         sub.docAssignable = st.assignable;
         sub.docSoonest = st.soonest;
@@ -5248,6 +5271,9 @@ const SUB_ENGAGEMENT_COL = {
   docReview: "doc_review", categories: "categories", caps: "caps",
   rating: "rating", ratedJobs: "rated_jobs", accepted: "accepted", declined: "declined",
   autoSchedule: "auto_schedule", notes: "notes",
+  // 058. What they are to THIS account. Validated by the route before it
+  // reaches here -- this map only says which column a key writes to.
+  engagedAs: "engaged_as",
 };
 const SUB_ENGAGEMENT_JSON_FIELDS = new Set(["docReview", "categories", "caps"]);
 
@@ -5314,6 +5340,24 @@ app.patch("/api/subs/:companyId", async (c) => {
     `SELECT id FROM engagements WHERE account_id = ? AND company_id = ?`
   ).bind(accountId, companyId).first();
   if (!engagement) return c.json({ error: "not_found" }, 404);
+
+  // WHAT THEY ARE TO THIS ACCOUNT, and both halves are checked here because
+  // the column is what excuses a document.
+  //
+  // A handyman is not asked for insurance, a bond or a licence -- so a route
+  // that took the word on trust would let any account relabel somebody and
+  // walk the whole compliance gate. `mayEngageHandyman` is the second half:
+  // a handyman is a maintenance worker for a BUILDING, so an account with no
+  // building list has nothing for one to do, and CHECK.sql counts a row that
+  // got past this.
+  if ("engagedAs" in patch) {
+    if (!isEngagedAs(patch.engagedAs)) return c.json({ error: "bad_engaged_as" }, 400);
+    if (isHandyman(patch.engagedAs)) {
+      const acct = await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`)
+        .bind(accountId).first();
+      if (!mayEngageHandyman(acct?.kind)) return c.json({ error: "not_a_handyman_account" }, 409);
+    }
+  }
 
   // Auto-schedule books work to somebody's calendar as accepted, with no
   // buttons on their side. Hiding the toggle from the roster is not a
@@ -7657,14 +7701,33 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   ).bind(accountId, companyId).first();
   if (!engagement) return c.json({ error: "not_engaged" }, 404);
 
-  // Documents must be complete before a work order can be issued.
+  // AND ENGAGED FOR THIS KIND OF WORK. A handyman is engaged for small jobs
+  // -- a tap washer, a tripped breaker, a bedroom wall -- and `HANDYMAN_TRADES`
+  // is the only axis this product has to say so, because every slot on a job
+  // is a trade.
+  //
+  // ON THE SERVER, because the roster could simply not offer them and the
+  // route would issue the work order anyway: that is the
+  // gate-lives-in-the-browser lie, and here it ends with a maintenance worker
+  // sent to a roof. The reason is named so the screen can say which it was.
+  if (!mayCover(engagement.engaged_as, trade)) {
+    return c.json({ error: "trade_not_handyman", trade }, 409);
+  }
+
+  // Documents must be complete before a work order can be issued -- and WHICH
+  // documents follows what they are to this account. A handyman is not asked
+  // for insurance or a bond, so demanding them here would make the gate
+  // unsatisfiable for somebody the account deliberately engaged without them:
+  // the permanently-amber failure, wearing its most expensive hat, since it
+  // would refuse every work order rather than colouring a row.
   const company = await c.env.DB.prepare(
     `SELECT insurance, bond, contract, w9, doc_files, license FROM companies WHERE id = ?`
   ).bind(companyId).first();
   const docReview = parseJson(engagement.doc_review, {});
   const verified = (k) => docReview[k]?.status === "verified";
-  if (!verified("insurance") || !verified("bond") || !verified("contract")) {
-    return c.json({ error: "documents_incomplete" }, 409);
+  const mustHave = requiredDocsFor(engagement.engaged_as, ["insurance", "bond", "contract"]);
+  if (mustHave.some((k) => !verified(k))) {
+    return c.json({ error: "documents_incomplete", missing: mustHave.filter((k) => !verified(k)) }, 409);
   }
 
   // Verified is not the same as in force. A review is a verdict somebody
@@ -7683,7 +7746,12 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
     const docs = docShapeWithLegacy(rows, company);
     // Only the kinds that have a shelf life, and only the ones this account
     // requires: a W-9 with no date is not a reason to refuse anything.
-    const cover = coversJob(docs, job.date || new Date().toISOString().slice(0, 10), EXPIRING_KINDS);
+    // Narrowed the same way. EXPIRING_KINDS is insurance and a bond, and both
+    // come off a handyman -- so without this the lapse check would refuse a
+    // work order over a certificate this account never asked them for, which
+    // is the same gate one step along.
+    const cover = coversJob(docs, job.date || new Date().toISOString().slice(0, 10),
+      requiredDocsFor(engagement.engaged_as, EXPIRING_KINDS));
     if (!cover.ok && cover.lapsing.length) {
       return c.json({
         error: "documents_lapse_before_job",

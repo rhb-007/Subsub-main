@@ -1,0 +1,32 @@
+-- 058. What somebody is to the account that engaged them.
+--
+-- A roofing company on a general contractor's roster is a subcontractor. The
+-- person a managing agent calls to change a tap washer, reset a breaker and
+-- paint a bedroom wall is not, and treating them as one leaves a maintenance
+-- worker permanently short of compliance over a state licence their work does
+-- not require -- the permanently-amber failure `docs.js` exists to prevent,
+-- pointed at a person rather than a document.
+--
+-- ON `engagements` AND NEVER ON `companies`, which is the whole shape of it.
+-- The company row is SHARED: one account's handyman is another account's
+-- contractor, and writing the word there would say it for both. It is also
+-- the answer this repository already wrote down for exactly this question --
+-- "whether a general contractor requires an agreement is their call... the
+-- right answer if it comes up is per-account, not a global default."
+--
+-- NULL IS THE DEFAULT AND MEANS SUBCONTRACTOR, which is what every row that
+-- exists today already is. So this migration changes nothing about any
+-- existing roster, and `engagedAs()` in app/shared/engaged.js reads NULL and
+-- an unrecognised word identically -- failing toward the stricter answer,
+-- because the direction that fails open is the one that stops asking for a
+-- certificate.
+--
+-- No CHECK constraint, the same trade 003 made for `accounts.kind`: adding one
+-- to an existing table is a full rebuild, and the Worker validates the value
+-- against `ENGAGED_AS` on the way in.
+--
+-- ONE `ALTER TABLE ... ADD COLUMN`, so this is one paste and it is the
+-- statement that cannot be run twice. If it answers "duplicate column name",
+-- it has already been run and there is nothing to do.
+
+ALTER TABLE engagements ADD COLUMN engaged_as TEXT;

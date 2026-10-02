@@ -135,6 +135,11 @@ CREATE TABLE engagements (
   accepted       INTEGER NOT NULL DEFAULT 0,
   declined       INTEGER NOT NULL DEFAULT 0,
   auto_schedule  INTEGER NOT NULL DEFAULT 0,
+  -- 058. 'subcontractor' or 'handyman'. NULL means subcontractor, which is
+  -- what every row written before this is. Per-engagement and never on
+  -- `companies`, because that row is shared: one account's handyman is
+  -- another account's contractor.
+  engaged_as     TEXT,
   notes          TEXT,
   invited_at     TEXT DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (account_id, company_id)

@@ -5417,6 +5417,105 @@ refactor.
   trade grid as well is the obvious next thing and is a second cost per
   inspection for a selection somebody confirms in one tap either way.
 
+- **A HANDYMAN IS NOT A SUBCONTRACTOR, AND IT IS A PROPERTY OF THE
+  ENGAGEMENT RATHER THAN OF THE COMPANY.** A roofing company on a general
+  contractor's roster holds a licence, carries its own cover and works under
+  a prime contract. The person a managing agent calls to change a tap washer,
+  reset a breaker and paint a bedroom wall is not that — and treating them as
+  one leaves a maintenance worker permanently short of compliance over a
+  certificate nobody asked them for, which is `docs.js`'s permanently-amber
+  failure pointed at a person instead of a document.
+
+  Migration 058, `engagements.engaged_as`, `app/shared/engaged.js`.
+
+  **ON `engagements` AND NEVER ON `companies`, which is the whole shape.**
+  That row is **shared**: one account's handyman is another account's
+  contractor, and writing the word there would say it for both. It is also
+  the answer this file had already written down for exactly this question —
+  *"whether a general contractor requires an agreement is their call… the
+  right answer if it comes up is per-account, not a global default."* An
+  engagement **is** per-account, so this is that answer spent rather than a
+  new rule. A test asserts the other account's view of the same company is
+  untouched, which is the only thing that proves it.
+
+  **NULL READS AS SUBCONTRACTOR, and so does a word nothing recognises.**
+  Every row that exists today has no value at all, so the migration changes
+  nothing about any roster — the same asymmetry `jobScopeFrom` uses. And the
+  default is the **strict** answer deliberately: the direction that fails
+  open here is the one that stops asking for a certificate, so an unknown
+  word must not quietly excuse cover. A mutation taking the word at face
+  value fails.
+
+  **WHICH ACCOUNTS HAVE HANDYMAN WORK: the ones with buildings.** Asked for as
+  "under property manager, portfolio manager, and building owner", which is
+  exactly `ACCOUNT_KINDS_WITH_PROPERTIES` — not a coincidence, because a
+  handyman is a maintenance worker for a *building*. **Named rather than
+  derived as "not a subcontractor-hirer"**: a filter that excludes the obvious
+  exception is not one that includes the intended set, which this file already
+  paid for where `role <> 'contractor'` let an owner and a tenant into a Team
+  panel. An unknown kind is refused.
+
+  And it is a **permission, not a label**: without the account-kind half any
+  account could relabel somebody and walk the entire compliance gate, so the
+  route checks it and CHECK.sql counts a row that got past.
+
+  **PLUMBING AND ELECTRICAL ARE ON THE TRADE LIST, and that is the decision a
+  later pass will want to reverse.** A dripping tap and a tripped breaker were
+  the examples given, and those *are* plumbing and electrical. The tension is
+  real — they are also the two trades where licensing bites hardest — but the
+  line being drawn is **small work in those trades, not the trades
+  themselves**, and no list of trade ids can express "small". Narrowing it is
+  deleting two entries; doing so would also refuse the two examples the
+  feature was asked for.
+
+  **A W-9 IS STILL REQUIRED, and the signed agreement is deliberately
+  untouched.** Insurance and a bond come off — a surety bond is a
+  *contractor's* bond posted against a licence, so asking for one from
+  somebody who needs no licence is the same unanswerable row. A W-9 is **not
+  cover at all**: it is the ability to report the payment, which is why the
+  document-request mail has always said payment cannot be issued without it
+  and why `paygate.js` reads it. Nothing about being a handyman changes who
+  the IRS expects a 1099 from. And whether a hiring account wants its own form
+  signed stays their call, which is the rule already recorded — the request
+  was about insurance and a licence, so the agreement was left alone and the
+  test fixture carries one rather than the suite quietly widening the ask.
+
+  **THE TRADE GATE IS ON THE SERVER**, because the roster not offering
+  somebody is not the same as the route refusing them — and here that
+  difference is a maintenance worker sent to a roof. The picker already
+  filters by `sub.categories`, and the form strips a disallowed trade when the
+  relationship changes, so the screen agrees; the route is what makes it true.
+
+  **`requiredDocsFor` COMPOSES rather than replaces.** `kindsFor(agreement)`
+  decides whether a signed agreement counts and this narrows that answer, so
+  there is still one place deciding what a document kind *is*. It is applied
+  in four places and each was a real hole: the roster's verdict, the
+  assignment's `documents_incomplete`, the **lapse** check beside it (which
+  reads `EXPIRING_KINDS` — insurance and a bond, both excused, so without it a
+  work order would be refused over a certificate nobody asked for), and the
+  browser's own `missingDocs` / `docsComplete`.
+
+  **AND THE COLUMN HAS TO BE NAMED IN THREE PLACES OR IT IS SILENTLY
+  DROPPED.** The first run of the suite returned `subcontractor` for a
+  handyman: `/api/subs` selects named columns with `en_` aliases, and
+  `engaged_as` was in the row shape and the re-map but not the SELECT. Not a
+  visible failure — a roster that quietly goes back to asking a maintenance
+  worker for a certificate. Same shape as `answersForItself` reaching
+  `SubForm` as `undefined`, and `ENGAGEMENT_FIELDS` in the browser is the
+  fourth place for the same reason: `splitSeed` carries only what its two
+  whitelists name.
+
+  **BOTH BRANCHES ARE ASSERTED IN THE SAME PLACE**, because a change that
+  excused *everybody* their insurance passes a suite that only drives the
+  handyman — the diagonal coverage that left `hiresLabel` half-wired. The same
+  company, on the same account, with the same documents, is driven as each,
+  and the mutation that excuses everybody fails five assertions.
+
+  **Still open, and the user's call rather than a build:** there is no value
+  or permit ceiling. "Lighter work" is expressed only as a trade list, so a
+  handyman can be issued a $40,000 work order for painting. A cap would be a
+  second axis and a different decision.
+
 - **MOVE-IN AND MOVE-OUT UNIT INSPECTIONS.** A managing agent walks a unit
   when somebody moves in and again when they move out, room by room, with
   photographs, and raises the work from what they find. *"The carpet was like
