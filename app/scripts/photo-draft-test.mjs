@@ -26,7 +26,8 @@ import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { whyNotDraft, readDrafts, draftSystem, draftContext, DRAFT_MODEL,
   DRAFT_SCHEMA, DRAFT_LONG_EDGE, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
-  MAX_CAPTION, DRAFT_REFUSALS } from "../shared/photodraft.js";
+  MAX_CAPTION, DRAFT_REFUSALS, DRAFT_THINKING, draftThinking,
+  knowsThinking } from "../shared/photodraft.js";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
@@ -191,13 +192,33 @@ try {
 
     const req = sent[0].body;
     ck("the model is the one that was priced", req.model === DRAFT_MODEL, req.model);
-    // THINKING OFF. Thinking is billed as output, so turning it on would
-    // multiply what a one-line caption costs -- and the price quoted for
-    // this feature assumes it is off. `between_tools` rather than
-    // `disabled`, which this model answers 400 to.
-    ck("thinking is off", req.thinking?.type === "between_tools", JSON.stringify(req.thinking));
-    ck("and not by the spelling this model refuses",
-      req.thinking?.type !== "disabled", JSON.stringify(req.thinking));
+    // THINKING OFF. Billed as output, so turning it on multiplies what a
+    // one-line caption costs -- and the price quoted for this feature
+    // assumes none.
+    //
+    // ASSERTED AS THE MODEL/THINKING PAIR, not as a literal, because THE
+    // API VALIDATES THE COMBINATION. `between_tools` is Claude Sonnet 5.5's
+    // only way to turn thinking off and every other model answers 400 to
+    // it; `disabled` is what Sonnet 5.5 refuses. So pinning one spelling is
+    // the `losses.payments` failure exactly: a green suite over a feature
+    // that cannot work, because a model swap is the one-line change
+    // somebody will make and the field beside it is the one nothing looks
+    // at. A model absent from DRAFT_THINKING fails HERE rather than on the
+    // first real press.
+    ck("the model's thinking setting is on record at all", knowsThinking(DRAFT_MODEL), DRAFT_MODEL);
+    ck("and the request carries exactly what that model takes",
+      JSON.stringify(req.thinking ?? null) === JSON.stringify(draftThinking() ?? null),
+      `${JSON.stringify(req.thinking ?? null)} for ${DRAFT_MODEL}`);
+    ck("no model in the table is paired with a spelling it would refuse",
+      Object.entries(DRAFT_THINKING).every(([m, th]) =>
+        th === null || (m === "claude-sonnet-5-5"
+          ? th.type === "between_tools"
+          : !["between_tools", "adaptive", "enabled"].includes(th.type))),
+      JSON.stringify(DRAFT_THINKING));
+    // Whichever model is in force, thinking is never ASKED FOR -- the cost
+    // claim, independent of the spelling.
+    ck("and thinking is never switched on",
+      !["adaptive", "enabled"].includes(req.thinking?.type || ""), JSON.stringify(req.thinking));
     ck("structured output, so a caption with an apostrophe in it still parses",
       req.output_config?.format?.type === "json_schema"
       && req.output_config.format.schema.required.includes("photos"),
@@ -453,6 +474,21 @@ try {
     [s, out] = await json(await call(env, `/api/inspections/${id}/rooms/${roomId}/drafts`, { method: "POST", body }));
     ck("a reply that opens with a thinking block is still read", s === 200 && out.drafted === 1,
       `${s} ${JSON.stringify(out).slice(0, 80)}`);
+  }
+
+  console.log("\n-- what this costs, which is the whole reason for the size --");
+  {
+    // THE QUOTE, AS ARITHMETIC. A twelve-photograph room is 12 pictures at
+    // 1,200 tokens each, plus the prompt, plus a caption each. Written out
+    // because the figure was given to somebody before this was built, and a
+    // model or a size changing without it is a bill nobody agreed to.
+    const PRICES = { "claude-haiku-4-5": [1, 5], "claude-haiku-4-5-20251001": [1, 5],
+      "claude-sonnet-5-5": [2, 10], "claude-opus-5-5": [4, 20] };
+    ck("the model in force has a price on record", !!PRICES[DRAFT_MODEL], DRAFT_MODEL);
+    const [pin, pout] = PRICES[DRAFT_MODEL] || [0, 0];
+    const perRoom = ((500 + 12 * (1200 + 60)) * pin + 12 * 70 * pout) / 1e6;
+    ck("a twelve-photograph room costs cents rather than dollars",
+      perRoom > 0 && perRoom < 0.10, `$${perRoom.toFixed(4)} on ${DRAFT_MODEL}`);
   }
 
   console.log("\n-- the size the browser is told to send --");

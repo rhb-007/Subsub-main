@@ -50,7 +50,7 @@ import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_
   inspectionJobScope, whyNotSend, mayWriteInspection,
   INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
-  draftSystem, draftContext, readDrafts, whyNotDraft } from "../shared/photodraft.js";
+  draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
 import { aiConfigured, claudeCall, replyJson } from "./ai.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
@@ -11453,12 +11453,16 @@ app.post("/api/inspections/:id/rooms/:roomId/drafts", requireRole(...INSPECTION_
       max_tokens: 120 * want.length + 200,
       system: draftSystem({ kindLabel: INSPECTION_KINDS[row.kind]?.label || "Move-in" }),
       messages: [{ role: "user", content }],
-      // THINKING OFF, deliberately. Describing what is in a photograph is a
-      // perception task rather than a reasoning one, and thinking is billed
-      // as output -- turning it on would multiply the cost of a one-line
-      // caption several times over for nothing anybody would read.
-      // `between_tools` rather than `disabled`, which this model refuses.
-      thinking: { type: "between_tools" },
+      // THINKING OFF, deliberately, and the spelling comes off the model
+      // rather than being written here. Describing what is in a photograph
+      // is perception rather than reasoning, and thinking is billed as
+      // output -- turning it on would multiply what a one-line caption
+      // costs for nothing anybody would read. The reason it is not a
+      // literal: the models disagree about how to say it, so a model swap
+      // with a hard-coded setting beside it is a 400 on the first real
+      // press. `draftThinking` answers null where the field must be left
+      // off, which the spread below then omits entirely.
+      ...(draftThinking() ? { thinking: draftThinking() } : {}),
       // Structured output rather than "reply with only JSON": a caption
       // about a cracked basin carries an apostrophe or a quoted measurement
       // sooner or later, and free-text JSON fails on exactly that.

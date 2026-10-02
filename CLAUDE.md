@@ -5178,18 +5178,37 @@ refactor.
   size.** Claude bills a picture by **area** — `ceil(w/28) * ceil(h/28)`
   visual tokens — so a photograph straight off a phone (4032x3024) is 4,784
   tokens and 1120px on the long edge is 1,200, for detail nobody needs in
-  order to see that a wall is scuffed. At Sonnet 5.5's $2/$10 per MTok that
-  is **about four cents for a twelve-photograph room** against sixteen. So
-  `DRAFT_LONG_EDGE` is a **cost constant and not a quality one**, 1120 is
-  deliberately under the *smaller* models' resolution cap so moving the model
-  later cannot quietly quadruple the bill, and `photo-draft-test.mjs`
-  asserts the arithmetic rather than trusting it.
+  order to see that a wall is scuffed. At **Haiku 4.5's $1/$5 per MTok** that
+  is **about two cents for a twelve-photograph room** against eight full
+  size. So `DRAFT_LONG_EDGE` is a **cost constant and not a quality one**,
+  1120 is deliberately under the *smaller* models' resolution cap so moving
+  the model later cannot quietly quadruple the bill, and
+  `photo-draft-test.mjs` asserts the arithmetic — including the per-room
+  figure in dollars — rather than trusting it. The three options were priced
+  before one was picked: Haiku 2c a room, Sonnet 5.5 4c, Opus 5.5 8c, and
+  naming what is in a photograph is what the cheapest is for when a person
+  edits every line before it is kept.
 
-  **Thinking is OFF for the same reason** — `{type: "between_tools"}`, which
-  is the lowest setting this model takes and not `disabled`, which it answers
-  400 to. Thinking is billed as output, so turning it on multiplies what a
-  one-line caption costs with nothing on any screen different; the quoted
-  price assumes it is off, and a mutation that turns it on fails.
+  **THINKING IS OFF, AND THE SPELLING TRAVELS WITH THE MODEL, which is the
+  `losses.payments` lesson in a new place.** Thinking is billed as output, so
+  turning it on multiplies what a one-line caption costs with nothing on any
+  screen different — the quoted price assumes none. But *how you say so is
+  per model and the API validates the COMBINATION*:
+  `{type: "between_tools"}` is Claude Sonnet 5.5's only way to turn thinking
+  off and **every other model answers 400 to it**, while `{type: "disabled"}`
+  is what Sonnet 5.5 refuses, and a pre-4.6 model like Haiku 4.5 wants the
+  field left off entirely. So a model swap on its own — the obvious one-line
+  change, and the one somebody will make — is a dead feature on the first
+  real press with nothing in the source looking wrong.
+
+  `DRAFT_THINKING` is therefore a table keyed by model id, beside
+  `DRAFT_MODEL`, the way `PAYOUT_CONTROLLER` sits beside `payoutAccountKey`
+  for the same reason: the request and the setting are one fact and holding
+  them apart is what lets this happen. **A model absent from it fails the
+  suite rather than the press** — Opus 5.5 is deliberately not in it, because
+  it cannot turn thinking off at all, so listing it would need a guess.
+  Three mutations prove it: a bare model swap, Sonnet's spelling sent to
+  Haiku, and thinking switched on.
 
   **THE DOWNSCALE HAPPENS IN THE BROWSER, which is not where it belongs.** A
   Worker has no image processing and Cloudflare's is a separate product

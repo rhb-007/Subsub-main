@@ -21,11 +21,48 @@
 // same line `inForce` draws about a countersignature. Nothing anywhere
 // promotes one to the other without somebody pressing something.
 
-// Sonnet 5.5. Chosen deliberately and priced before it was: at the size
+// Haiku 4.5. Chosen deliberately and priced before it was: at the size
 // below a photograph costs 1,200 input tokens, so a twelve-photograph room
-// is about four cents at $2/$10 per million. Named here rather than in the
-// route so there is one place to change it.
-export const DRAFT_MODEL = "claude-sonnet-5-5";
+// is about TWO cents at $1/$5 per million. Naming what is in a photograph
+// is what this model is for, and a person edits every line before it is
+// kept, so the cheaper model is doing the job it is good at rather than
+// being a saving taken out of the output.
+export const DRAFT_MODEL = "claude-haiku-4-5";
+
+// AND THE THINKING SETTING TRAVELS WITH IT, because the two are one fact
+// and the API validates the COMBINATION rather than either field.
+//
+// This is the `losses.payments` lesson in a new place. That one shipped with
+// each field pinned separately and the one combination Stripe refuses
+// unlooked at, so the panel was dead on arrival and the suite was green.
+// Here: `{type:"between_tools"}` is Claude Sonnet 5.5's lowest thinking
+// setting and EVERY OTHER MODEL ANSWERS 400 TO IT, while `{type:"disabled"}`
+// is what Sonnet 5.5 refuses. So a model swap on its own -- the obvious
+// one-line change, and the one somebody will make -- breaks the feature on
+// the first real press, with nothing in the source looking wrong.
+//
+// Thinking is off on all of them on purpose: naming what is in a photograph
+// is perception rather than reasoning, thinking is billed as output, and the
+// price quoted for this feature assumes none. A pre-4.6 model does no
+// extended thinking unless asked, so there the answer is to send the field
+// at all.
+export const DRAFT_THINKING = {
+  // Pre-4.6: omit the field. `{type:"disabled"}` is accepted here too, and
+  // null is the narrower request.
+  "claude-haiku-4-5": null,
+  "claude-haiku-4-5-20251001": null,
+  // 5.5-era: thinking is ON by default, and this is the only spelling that
+  // turns it off.
+  "claude-sonnet-5-5": { type: "between_tools" },
+  // Opus 5.5 cannot turn thinking off at all -- effort is the only control
+  // -- so it is deliberately absent rather than listed with a guess. A
+  // model missing from this table fails `photo-draft-test.mjs` rather than
+  // the first press, which is the whole point of the table.
+};
+export const draftThinking = (model = DRAFT_MODEL) =>
+  Object.prototype.hasOwnProperty.call(DRAFT_THINKING, model) ? DRAFT_THINKING[model] : undefined;
+export const knowsThinking = (model) =>
+  Object.prototype.hasOwnProperty.call(DRAFT_THINKING, model);
 
 // THE SIZE WE SEND, AND IT IS A COST DECISION RATHER THAN A QUALITY ONE.
 // Claude bills a picture by area -- ceil(w/28) * ceil(h/28) visual tokens --
