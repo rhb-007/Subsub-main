@@ -5115,6 +5115,58 @@ refactor.
   which direction it reads will be handed the other one**, and it will answer
   rather than refuse. The screen is the only place that shows it.
 
+- **AN ADMIN WAS READ AS NARROWED TO NAMED BUILDINGS, AND THE ACCOUNT SHUT
+  AROUND THEM.** Reported as a property manager's own building opening with no
+  vendor list, no Edit, no Remove and no owners panel — one line reading *Add
+  the owner above and they can take this building over* — under a header
+  reading **Your buildings** instead of **Properties**. Every one of those is
+  `canManage` false. The seat was an **admin**: the impersonation banner
+  carried no fallback note at all, which only an admin seat produces.
+
+  **Two bugs, and each is invisible without the other.**
+
+  **The door.** `PATCH /api/platform/accounts/:id/users/:userId` — the
+  console's role control — wrote `memberships.role` and nothing else. The
+  customer-side route has always gone through `setMembershipProperties` and
+  `setMembershipJobs`, which delete first and write back only for a role that
+  may carry a list. So promoting a project manager scoped to named buildings
+  left their buildings behind on an admin seat. Which is the route this file
+  had just recommended pressing.
+
+  **The disagreement.** `propertyScope` answers null for anything but a pm, an
+  owner or a tenant, so the API never refused anything — nothing was ever
+  wrongly denied, which is why no error appeared anywhere. But
+  `GET /api/account-users` hands the **stored** rows to the browser, correctly,
+  because the user form has to draw the picker with what is actually there —
+  and `isScoped` read the **list** and never the **role**. Scoped on screen,
+  unscoped on the server, and `runsTheAccount` is what turned that into a
+  locked account.
+
+  `app/shared/propscope.js` is the one rule, imported by both.
+  `ALWAYS_SCOPED_ROLES` was defined in the Worker **and** in `App.tsx`, and
+  `propertyScope`'s own `role !== "pm" && !ALWAYS_SCOPED_ROLES.includes(role)`
+  was a third expression of it that the browser did not share. **Three records
+  of one fact in two languages**, which is the shape this file keeps recording
+  — and the one place it had never been applied is the question *is this seat
+  narrowed at all*.
+
+  **Fixing one half alone fixes nothing.** The door alone leaves every account
+  already in that state broken; the predicate alone leaves dead rows arriving
+  for ever. So both, plus **migration 054** for what is already there and a
+  **CHECK.sql invariant that must read zero**. That is the same shape 053
+  already counts one axis over for jobs — and nothing had ever cleared that
+  one either, so 054 does both.
+
+  **Clearing must not run on a no-op role change**, which the route's existing
+  early return already guarantees: without it, pressing Save over the role
+  somebody already holds would wipe a scoped manager's buildings. The mutation
+  that proves it is deleting that return.
+
+  And the general form, which is new: **a route that changes a row's ROLE owes
+  every list that hangs off it.** `memberships.role` is not a field, it is what
+  decides which other tables may hold rows for that seat, and a route that
+  writes it alone leaves records nothing reads — until something reads them.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
