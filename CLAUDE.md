@@ -5167,6 +5167,79 @@ refactor.
   decides which other tables may hold rows for that seat, and a route that
   writes it alone leaves records nothing reads — until something reads them.
 
+- **MOVE-IN AND MOVE-OUT UNIT INSPECTIONS.** A managing agent walks a unit
+  when somebody moves in and again when they move out, room by room, with
+  photographs, and raises the work from what they find. *"The carpet was like
+  that when I moved in"* is the commonest dispute in the business and the only
+  answer to it is two dated records of the same unit — which is why the kind
+  and the date are columns rather than something somebody types into a note.
+
+  Migration 055, `app/shared/inspection.js`, and an Inspections tab. **Gated
+  the way Properties is** — `hasProperties(account)` as well as the role —
+  because an account with no buildings has no units to walk. A **scoped**
+  project manager keeps it: the buildings they are narrowed to are the
+  buildings they inspect, which is the whole job, so it is a role capability
+  and not `canManage`. The list, every room and every photo resolve through
+  one function that applies that scope, because a scope added to nine places
+  is a scope missing from the tenth.
+
+  **FOUR STATUSES, NOT THREE.** A room nobody has walked and a room walked and
+  found fine must not look the same — the ambiguity `doccheck.js` was written
+  to remove one feature along. So `unchecked` is a real answer, it is drawn
+  **plain rather than tinted** (not got to yet is a to-do, not a problem — the
+  same distinction the never-added document dot makes by being hollow), and it
+  is the thing that stops an inspection being finished. **Fail and Follow-up
+  are both flagged**: a cracked basin and a scuffed wall need different words
+  and the same next step, which is `docs.js`'s expired-and-never-added rule in
+  a new place.
+
+  **Photos are nudged and never demanded.** A room with nothing wrong in it
+  needs no picture, and a gate that insisted would be answered with a photo of
+  the floor.
+
+  **ONE LEVEL, NOT TWO.** Rooms and the parts of a room sit at the same level
+  on every inspection sheet this was modelled on, so *Bathroom 1* and *Walls
+  and floors* are both rooms and the standard list offers both. A second,
+  nested level would be another thing to add, name, reorder and delete for a
+  distinction nobody draws on paper. And the list is a **datalist on a
+  free-text box**: every building has a room it has not heard of, and a
+  dropdown that cannot be typed past is a form that argues.
+
+  **FINISHED IS A ONE-WAY DOOR**, which is the point of it. An inspection is
+  evidence months later, and a record that can be edited afterwards is one the
+  other side can say was edited afterwards. Everything stays readable; nothing
+  stays writable, on the screen as well as in the route.
+
+  **RAISING THE WORK CREATES A JOB AND STOPS THERE**, and that is a decision
+  rather than an unfinished half. Issuing a work order is a price and a date
+  committed to a company, and this file's own rule is that the side paying
+  cannot commit the side doing the work without them answering. So the job
+  lands unassigned at the right building with its address already on it, its
+  scope is **the flagged rooms and nothing else** — a job is a list of things
+  to do, not a document to read — and Assign, Ask for quotes and Overflow are
+  one tap away on it with every gate they carry. **One job per inspection**: a
+  second would be two contractors asked for the same work, found out when both
+  turn up. An all-clear inspection says so rather than creating an empty job
+  somebody then has to find and close.
+
+  Photographs go through the **same checked upload kind** a tenant's report
+  photo uses — one set of type and size limits rather than two — and the key
+  from the body is **checked, never trusted**: without that, a key under
+  another account's prefix would attach and then be served back by the route
+  that reads it. Taking a photo off leaves the object in R2, for the reason
+  the report photo does: it is still evidence of what was walked.
+
+  `ReportPhoto` took a `load` prop rather than being copied, so there is still
+  one thumbnail and one lightbox. That is now mounted in three places, and
+  `test:lightbox` counts the mounts rather than looking for one — the
+  whichever-one-exists trap this file already records twice.
+
+  **Still open, and a product decision rather than a build:** an inspection is
+  not shown to the tenant it is about. Handing somebody the record of their own
+  move-out, with the photographs, is the obvious next thing and it is also a
+  decision about what a deposit conversation looks like inside this product —
+  it needs an answer about who may dispute what, not an endpoint.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
