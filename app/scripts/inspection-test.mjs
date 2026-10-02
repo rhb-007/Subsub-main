@@ -28,7 +28,8 @@ import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { inspectionTally, whyNotFinish, inspectionJobScope, flaggedRooms,
   ROOM_STATUSES, STANDARD_ROOMS, INSPECTION_READ_ROLES,
-  mayWriteInspection, suggestTrades, TRADE_HINTS, ROOM_TRADES } from "../shared/inspection.js";
+  mayWriteInspection, suggestTrades, TRADE_HINTS, ROOM_TRADES,
+  inspectionStep } from "../shared/inspection.js";
 import { TRADES } from "../shared/trades.js";
 
 let pass = 0, fail = 0;
@@ -855,6 +856,89 @@ console.log("\n-- the shared rule is the one the routes read --");
     // one list query that counts them.
     ck("the browser does not keep its own status list",
       !/const ROOM_STATUSES\s*=/.test(APP));
+  }
+
+console.log("\n-- where the walk has got to, as steps --");
+  {
+    const APP = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+    const R = (status, extra = {}) => ({ id: `r${Math.random()}`, name: "Kitchen", status, photos: [], ...extra });
+    const at = (o) => inspectionStep(o).at;
+
+    // THE FIRST STEP IS ADDING A ROOM, which is the sentence the request
+    // asked for: "get started by adding your first room here".
+    ck("an empty inspection is on rooms", at({ inspection: { status: "draft" }, rooms: [] }) === "rooms");
+    // AN UNMARKED ROOM IS THE WALK, not the finish. A strip saying "finish"
+    // over a room nobody has looked at would be telling somebody to sign a
+    // document with a blank in it, which is exactly what whyNotFinish refuses.
+    ck("a room nobody has marked is the walk",
+      at({ inspection: { status: "draft" }, rooms: [R(null)] }) === "walk");
+    ck("and the unchecked count comes with it",
+      inspectionStep({ inspection: { status: "draft" }, rooms: [R(null), R("ok")] }).unchecked === 1);
+
+    // WORK COMES BEFORE FINISH, because this product offers Raise a job the
+    // moment something is flagged, finished or not -- the leak does not wait
+    // for the paperwork. A strip that put the paperwork first would be
+    // telling somebody to do the opposite of what the screen does.
+    ck("a flagged room with no job raised is the work",
+      at({ inspection: { status: "draft" }, rooms: [R("fail")] }) === "work");
+    ck("and once a job is raised it moves on to finishing",
+      at({ inspection: { status: "draft", jobId: "job_1" }, rooms: [R("fail")] }) === "finish");
+
+    // NOTHING FLAGGED IS NOT AN UNFINISHED STEP, IT IS THE BEST ANSWER TO
+    // ONE. An all-clear walk sitting for ever on "raise the work" over a unit
+    // with nothing wrong in it is the permanently-amber failure docs.js
+    // exists to prevent, wearing a step number.
+    ck("an all-clear walk skips the work step",
+      at({ inspection: { status: "draft" }, rooms: [R("ok")] }) === "finish");
+    ck("and it is marked done rather than merely skipped",
+      inspectionStep({ inspection: { status: "draft" }, rooms: [R("ok")] })
+        .steps.find((x) => x.id === "work").done === true);
+
+    // SEND IS A STEP ONLY WHEN THERE IS SOMEBODY TO SEND TO. A building the
+    // account owns itself has no owner seat and never will, so listing it
+    // would leave a step that can never be ticked on every inspection of it.
+    const noOwner = inspectionStep({ inspection: { status: "finished", jobId: "j" }, rooms: [R("fail")] });
+    ck("with no owner on the building there is no send step",
+      !noOwner.steps.some((x) => x.id === "send"), JSON.stringify(noOwner.steps.map((x) => x.id)));
+    ck("and a finished walk then has nothing left at all", noOwner.at === null);
+    const withOwner = inspectionStep({ inspection: { status: "finished", jobId: "j" }, rooms: [R("fail")],
+      recipients: [{ id: "usr_o", name: "Dana" }] });
+    ck("with one, send is the last step", withOwner.at === "send");
+    ck("and it names who is still waiting",
+      withOwner.waiting.length === 1 && withOwner.waiting[0].id === "usr_o");
+    ck("once they have had it there is nothing left",
+      inspectionStep({ inspection: { status: "finished", jobId: "j" }, rooms: [R("fail")],
+        recipients: [{ id: "usr_o" }], sends: [{ userId: "usr_o" }] }).at === null);
+
+    // THE ASSIGN NUDGE IS NOT A STEP, and that is the "or later" in the
+    // request taken at its word. The job exists and leaving it on the Jobs
+    // screen is a real answer, so it must not hold the strip open.
+    const raised = inspectionStep({ inspection: { status: "draft", jobId: "job_1" }, rooms: [R("fail")] });
+    ck("a raised job offers the assign nudge", raised.nudge === "assign");
+    ck("and the work step still reads done under it",
+      raised.steps.find((x) => x.id === "work").done === true);
+    ck("nothing raised, nothing nudged",
+      inspectionStep({ inspection: { status: "draft" }, rooms: [R("fail")] }).nudge === null);
+
+    // EXACTLY ONE STEP IS CURRENT, which is what lets the card draw one set
+    // of words. Two would be two sentences claiming to be next.
+    for (const [what, arg] of [
+      ["empty", { inspection: { status: "draft" }, rooms: [] }],
+      ["mid-walk", { inspection: { status: "draft" }, rooms: [R(null), R("fail")] }],
+      ["finished with an owner", { inspection: { status: "finished", jobId: "j" }, rooms: [R("fail")],
+        recipients: [{ id: "u" }] }],
+    ]) {
+      const got = inspectionStep(arg);
+      ck(`exactly one step is current (${what})`,
+        got.steps.filter((x) => x.now).length === 1, JSON.stringify(got.steps));
+    }
+    ck("and none is, once there is nothing left",
+      noOwner.steps.filter((x) => x.now).length === 0);
+
+    // THE SCREEN READS THIS RULE RATHER THAN DERIVING A SECOND ONE.
+    ck("the walkthrough is drawn from the shared step", /inspectionStep\(/.test(APP));
+    ck("and the browser does not keep its own step list",
+      !/const INSPECTION_STEPS\s*=/.test(APP));
   }
 
 } finally { /* nothing to close */ }

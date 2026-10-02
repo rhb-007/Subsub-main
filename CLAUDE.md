@@ -5922,6 +5922,110 @@ refactor.
   taking the assertions after it down — the read-through-`link?.` lesson, for
   the third time.
 
+- **THE INSPECTION SCREEN WALKS YOU THROUGH IT, AND POINTING IS NOT GATING.**
+  Asked to make it "more of a step by step walk through, ie add another room?
+  get started by adding your first room here, recommended trades, assign sub
+  contractors or handyman or later". The screen already held every control an
+  inspection needs and said nothing at all about the order they are used in: a
+  manager opening a draft met a header form, a tally, a bare list, thirty
+  tap-to-add chips, a text box and five buttons, with no answer to *what now*.
+
+  **A WIZARD IS THE WRONG SHAPE AND THE REQUEST IS NOT ASKING FOR ONE.** A
+  wizard narrows what is available, and this screen is used standing in an
+  empty flat where the one thing that must never happen is a control being out
+  of reach — somebody photographs the bathroom while they are in it, not when a
+  sequence says to. So the steps **point**: nothing is hidden, disabled or
+  reordered, every existing affordance stays exactly where it was, and what is
+  added is a name for where you are plus one control for the next thing. The
+  suite asserts that directly, on the state where a wizard would be most
+  tempting: with no rooms yet, all thirty chips, the free-text box, its button
+  and the whole header form are still there and still enabled. Gating the add
+  row behind a step fails four assertions.
+
+  **`inspectionStep` IS THE ONE RULE**, read by the strip, the card and the
+  tests, for the reason `inspectionTally` exists rather than a count per
+  screen: three answers to "what is next" is how they come to disagree.
+
+  **THE ORDER IS ROOMS, WALK, WORK, FINISH — work BEFORE the paperwork.** This
+  product already offers *Raise a job* the moment something is flagged,
+  finished or not, because the leak does not wait for the paperwork. A strip
+  that put finishing first would be telling somebody to do the opposite of what
+  the screen does.
+
+  **NOTHING FLAGGED IS NOT AN UNFINISHED STEP, IT IS THE BEST ANSWER TO ONE.**
+  An all-clear walk marks the work step **done** rather than sitting for ever
+  on *raise the work* over a unit with nothing wrong in it — the
+  permanently-amber failure `docs.js` exists to prevent, reached through a step
+  number.
+
+  **AND `send` IS A STEP ONLY WHEN THERE IS SOMEBODY TO SEND TO.** A building
+  the account owns itself has no owner seat and never will, so listing it would
+  leave a fifth step that can never be ticked on every inspection of it. The
+  send panel keeps its own *add an owner* way in for the case where one should
+  exist. Listing it unconditionally fails three assertions.
+
+  **THE ASSIGN NUDGE IS DELIBERATELY NOT A STEP, which is "or later" taken at
+  its word.** Once a job is raised it is on the Jobs screen and leaving it
+  there is a real answer, so the step counts as **done** the moment the job
+  exists and the nudge sits below the strip on a plain surface rather than the
+  tinted one — a card wearing the colour that means *something is waiting on
+  you* over work somebody has decided to leave is how people learn to stop
+  reading the card. It names **a subcontractor or a handyman**, because a
+  managing agent hires both. And there is **no Later button**: doing nothing is
+  already later, and a control that does nothing is a control that lies.
+
+  **POINTING IS SCROLLING *AND* RINGING**, the rule the compliance pack already
+  paid for — a *Manage* button that only scrolled had answered "here is your
+  company profile" to the question "what is still missing". A `box-shadow`
+  rather than a border, because a border that thickens moves everything beside
+  it by a pixel and the whole screen appears to twitch; and the ring carries a
+  **counter as well as a key**, so asking for the same place twice takes you
+  there twice. The add row also takes the **cursor**, because a ring round a
+  box somebody still has to tap is a box they tap twice.
+
+  **The old empty-rooms paragraph came off**, because the first card says the
+  same thing and two sentences saying one thing is how somebody concludes there
+  are two places to add a room. The inspections **list** gained the opposite
+  fix: *Start the first one* beside its empty-state sentence, since the only
+  control was in the header, which on a phone is off the top of an empty screen
+  — directions with no control beside them are a dead end wearing instructions.
+
+  **What a static check could not see, and what the browser suite is therefore
+  for.** The strip has **three** states and two of them reading the same pixels
+  is the chip bug this project already paid for — correct markup, nothing on
+  screen — so the badge's own computed background and border come back and
+  deleting the current-step rule fails. The card's button is **pressed**, not
+  mentioned: wiring Finish to a no-op leaves every other assertion green. And
+  pressing *Raise a job* is read through to the form, where the trades are
+  already ticked and the line naming which word produced each one is visible,
+  which is the only place the two halves of the request meet.
+
+  **AND THE HANDYMAN PICKER FINALLY HAS PROOF THAT ANYBODY CAN REACH IT.** It
+  shipped with a server suite and static assertions, which is exactly the state
+  `roleLocked` was in: route, migration, picker and note all correct, and the
+  picker unreachable for every seat on every account kind with nothing
+  reporting it. It is driven now — the card, Edit, step 2 — on **both** account
+  kinds in the same place, because a rule checked on one branch is the diagonal
+  coverage that left `hiresLabel` half-wired.
+
+  Two of this file's own lessons were paid for again in that one block. The
+  negative assertion (*no working-relationship picker on a general contractor*)
+  **passed over a screen that had never opened**: the roster noun follows the
+  account kind, so a GC's nav reads **Subcontractors** and the harness matched
+  only `^Contractors`. What caught it is the positive assertion beside it,
+  which is the whole reason a "this is absent" check must be accompanied by a
+  "and the screen is really here" one. And the note assertion matched
+  `/licen|insur/` against whichever note happened to be showing and passed on
+  the **subcontractor's** — *"Carries their own insurance and bond"*, which is
+  the opposite claim. **An assertion that passes on either answer is not an
+  assertion about the answer**, so each note is now read on its own selected
+  half.
+
+  Eight mutations fire, each on its own assertion: the current-step CSS rule,
+  the ring, the focus, the Finish wiring, the walkthrough drawn on a finished
+  inspection, the add row gated behind a step, the work step marked done
+  whenever rooms exist, and `send` listed with nobody to send to.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

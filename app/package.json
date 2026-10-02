@@ -87,6 +87,7 @@
     "test:inviteedit": "node --no-warnings scripts/invite-edit-test.mjs",
     "test:inviteeditui": "node --no-warnings scripts/invite-edit-ui-test.mjs",
     "test:inspection": "node --no-warnings scripts/inspection-test.mjs",
+    "test:inspwalk": "node --no-warnings scripts/insp-walk-ui-test.mjs",
     "test:inspectionui": "node --no-warnings scripts/inspection-ui-test.mjs",
     "test:propscope": "node --no-warnings scripts/propscope-test.mjs",
     "test:dashreq": "node --no-warnings scripts/dash-requests-test.mjs",

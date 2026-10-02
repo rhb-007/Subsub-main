@@ -62,7 +62,7 @@ import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole, isPropertyScoped } from "../
 import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   MAX_ROOM_PHOTOS, roomName, inspectionTally, flaggedRooms,
   whyNotFinish, canSendInspection, mayWriteInspection,
-  suggestTrades } from "../shared/inspection.js";
+  suggestTrades, inspectionStep } from "../shared/inspection.js";
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { agreementStateText, renderAgreement } from "../shared/agreement.js";
@@ -25255,7 +25255,7 @@ function PhotoCaption({ photo, locked, onSave }) {
   );
 }
 
-function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPhotos, onRemovePhoto,
+function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, onRemove, onAddPhotos, onRemovePhoto,
   onCaption, onDraft, canAiDraft = false }) {
   const [name, setName] = useState(room.name);
   const [note, setNote] = useState(room.note || "");
@@ -25309,7 +25309,7 @@ function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPh
   };
 
   return (
-    <div className={`insp-room st-${room.status}`}>
+    <div className={`insp-room st-${room.status} ${ringed ? "insp-ring" : ""}`} ref={nodeRef}>
       <div className="insp-room-head">
         {locked ? <strong className="insp-name">{roomName(room)}</strong> : (
           <input className="insp-name" value={name} list="insp-rooms" maxLength={80}
@@ -25420,12 +25420,172 @@ function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPh
 }
 
 // One inspection, open.
+// THE WALKTHROUGH: WHERE YOU ARE, AND THE ONE THING TO DO NEXT.
+//
+// This screen already held every control an inspection needs and said nothing
+// about the order they are used in — reported as wanting it to be "more of a
+// step by step walk through".
+//
+// IT POINTS, IT DOES NOT GATE, which is the whole difference between this and
+// a wizard. Nothing below is hidden, disabled or reordered by it: a manager
+// standing in a bathroom photographs the bathroom, not whatever a sequence
+// says is next. So the card's control either DOES the next thing (raise,
+// finish) or takes you to where it is done (the add box, a room, the send
+// panel) — and `onPoint` scrolls AND rings, because landing somewhere is not
+// the same as pointing at something, which this product has already paid for
+// once on the compliance pack.
+//
+// `inspectionStep` decides which step is current and the card only draws it,
+// so the strip, the words and the tests cannot hold three opinions.
+function InspectionWalk({ step, busy, onPoint, onRaise, onFinish, onGoJob, firstTodo }) {
+  const n = step.unchecked;
+  const to = step.waiting.map((u) => u.name || u.email).filter(Boolean);
+
+  // One entry per step. Held as data rather than a chain of ternaries in the
+  // markup, because every one of them needs a heading, a sentence and its own
+  // control and the shapes must stay comparable.
+  const card = {
+    rooms: {
+      head: "Get started — add your first room",
+      note: "A room is any area you are walking: Bathroom 1, or Walls and floors. "
+        + "Tap one of the suggestions or type your own, and add them as you go.",
+      act: { label: "Add the first room", solid: true, go: () => onPoint("add") },
+    },
+    walk: {
+      head: `${n} room${n === 1 ? "" : "s"} still to mark`,
+      note: "Mark each one OK, follow-up or fail, and photograph anything wrong. "
+        + "A room nobody has walked and a room that was fine must not read the same, "
+        + "so an unmarked one is what stops this being finished.",
+      act: firstTodo
+        ? { label: `Go to ${firstTodo.name}`, solid: true, go: () => onPoint(firstTodo.id) }
+        : null,
+    },
+    work: {
+      head: `${step.flagged} flagged — raise the work`,
+      note: "SubSub reads your notes and photo captions and recommends the trades. "
+        + "The job lands on your Jobs screen; nothing reaches a contractor until you assign one.",
+      act: { label: "Raise a job", solid: true, go: onRaise },
+    },
+    finish: {
+      head: "Every room is marked",
+      note: "Anything else to walk? Add another room. Otherwise finish it — "
+        + "a finished inspection is nobody's to change, which is what makes it worth quoting later.",
+      act: { label: "Finish inspection", solid: true, go: onFinish },
+      also: { label: "Add another room", go: () => onPoint("add") },
+    },
+    send: {
+      head: to.length ? `Send it to ${to.join(" and ")}` : "Send it to the owner",
+      note: "A move-in and a move-out report are the two documents a deposit argument is run "
+        + "from, and the owner is the one person besides you who has to be able to produce them.",
+      act: { label: "Go to the send panel", solid: true, go: () => onPoint("send") },
+    },
+  }[step.at] || null;
+
+  return (
+    <div className="insp-walk">
+      {/* THE STRIP IS NOT A NAVIGATION CONTROL. A step somebody could tap to
+          jump to would imply the others are shut, which is the gating this
+          deliberately does not do — and three of the five are not places, they
+          are things that become true. So it reads, and the card is what you
+          press. */}
+      <ol className="insp-steps">
+        {step.steps.map((s, i) => (
+          <li key={s.id} className={s.done ? "is-done" : s.now ? "is-now" : "is-todo"}>
+            <span className="insp-step-n">{s.done ? <Check size={11} /> : i + 1}</span>
+            <span className="insp-step-l">{s.label}</span>
+          </li>
+        ))}
+      </ol>
+
+      {card && (
+        <div className="insp-next">
+          <div className="insp-next-say">
+            <strong>{card.head}</strong>
+            <p>{card.note}</p>
+          </div>
+          <div className="insp-next-acts">
+            {card.also && (
+              <button type="button" className="btn-ghost small" disabled={!!busy}
+                onClick={card.also.go}>
+                <Plus size={13} /> {card.also.label}
+              </button>
+            )}
+            {card.act && (
+              <button type="button" className={card.act.solid ? "btn-solid small" : "btn-ghost small"}
+                disabled={!!busy} onClick={card.act.go}>
+                {card.act.label} <ArrowRight size={13} />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* PUTTING SOMEBODY ON THE JOB, which is the last thing the request
+          names — "assign sub contractors or handyman or later". It is a NUDGE
+          and not a step: the job exists, it is on the Jobs screen, and leaving
+          it there is a real answer. So there is no Later button, because doing
+          nothing is already later and a control that does nothing is a control
+          that lies; and the step counts as done the moment the job is raised,
+          so this never holds the strip open. */}
+      {step.nudge === "assign" && (
+        <div className="insp-next is-extra">
+          <div className="insp-next-say">
+            <strong>Put somebody on the job</strong>
+            <p>Assign a subcontractor or a handyman to it — or leave it for later and
+              come back to it on your Jobs screen.</p>
+          </div>
+          <div className="insp-next-acts">
+            <button type="button" className="btn-ghost small" onClick={onGoJob}>
+              Open the job <ArrowRight size={13} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* NOTHING LEFT SAYS SO. An empty space where the card was reads as a
+          panel that failed to draw, which this file has already recorded about
+          the schedule. */}
+      {!card && step.nudge !== "assign" && (
+        <p className="insp-walk-done"><Check size={13} /> Nothing left to do on this one.</p>
+      )}
+    </div>
+  );
+}
+
 function InspectionDetail({ inspection, property, onReload, onClose, onRaise, onGoJobs,
   subs = [], unitWord = "Unit", canEdit = true, onAddOwner }) {
   const [adding, setAdding] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [raising, setRaising] = useState(false);
+  // POINTING AT THE NEXT THING, which is scrolling AND ringing.
+  //
+  // Landing somewhere is not the same as pointing at something -- already
+  // recorded here about the compliance pack, where a Manage button that only
+  // scrolled had answered "here is your company profile" to the question
+  // "what is still missing". So the walkthrough's controls ring their target.
+  //
+  // It is a BOX-SHADOW, because a border that thickens moves everything beside
+  // it by a pixel and the whole screen appears to twitch. And it carries a
+  // counter as well as a key, so asking for the same place twice takes you
+  // there twice -- the `focusN` rule, for the same reason.
+  const [ring, setRing] = useState(null);
+  const nodes = useRef({});
+  useEffect(() => {
+    if (!ring) return undefined;
+    const t = setTimeout(() => setRing(null), 2000);
+    return () => clearTimeout(t);
+  }, [ring]);
+  const point = (key) => {
+    setRing((cur) => ({ key, n: (cur?.n || 0) + 1 }));
+    const node = nodes.current[key];
+    if (!node) return;
+    node.scrollIntoView({ behavior: "smooth", block: "center" });
+    // The add row's whole point is typing into it, so the ring is not enough:
+    // a cursor that is not in the box is a box somebody taps a second time.
+    if (key === "add") node.querySelector("input")?.focus({ preventScroll: true });
+  };
+  const ringing = (key) => ring?.key === key;
   // The header's own fields. Held locally so typing is not a round trip per
   // keystroke, and re-seeded whenever the row changes under them -- every
   // save re-reads the inspection, and a box still showing what it opened with
@@ -25447,6 +25607,17 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
   // server refuses.
   const locked = inspection.status === "finished" || !canEdit;
   const why = whyNotFinish(rooms);
+  // WHERE THE WALK HAS GOT TO. One rule, read by the strip and the card, so
+  // they cannot disagree about which step is current.
+  const step = inspectionStep({
+    inspection, rooms,
+    recipients: inspection.recipients || [], sends: inspection.sends || [],
+  });
+  // The first room still to mark, named rather than counted: "3 to mark" does
+  // not say which three, and which is the only thing worth knowing while
+  // standing in the unit.
+  const todo = rooms.find((r) => !ROOM_STATUSES[r?.status]?.done);
+  const firstTodo = todo ? { id: todo.id, name: roomName(todo) } : null;
 
   const run = async (what, fn) => {
     setBusy(what); setErr("");
@@ -25606,6 +25777,20 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
         <span><strong>{tally.photos}</strong> photo{tally.photos === 1 ? "" : "s"}</span>
       </div>
 
+      {/* THE WALKTHROUGH. Only for a seat that is walking: an owner reads the
+          report and is not adding rooms, so a card telling them to would be a
+          control the server answers 403 to. And not on a finished one -- every
+          step is either done or nobody's to take. */}
+      {canEdit && !locked && (
+        <InspectionWalk step={step} busy={busy} firstTodo={firstTodo}
+          onPoint={point}
+          onRaise={() => setRaising(true)}
+          onFinish={() => run("finish", async () => {
+            await api.patchInspection(inspection.id, { finish: true }); await onReload();
+          })}
+          onGoJob={() => onGoJobs(inspection.jobId)} />
+      )}
+
       {/* The standard list, offered and never imposed: every building has a
           room this list has not heard of, and a dropdown that cannot be typed
           past is a form that argues. */}
@@ -25616,6 +25801,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
       <div className="insp-rooms">
         {rooms.map((r) => (
           <InspectionRoom key={r.id} inspectionId={inspection.id} room={r} locked={locked}
+            nodeRef={(el) => { nodes.current[r.id] = el; }} ringed={ringing(r.id)}
             onPatch={patchRoom}
             onRemove={(roomId) => api.removeInspectionRoom(inspection.id, roomId).then(onReload)}
             onAddPhotos={(roomId, photos) => api.addInspectionPhotos(inspection.id, roomId, photos).then(onReload)}
@@ -25629,9 +25815,12 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
                must not be drawn. */
             canAiDraft={!!inspection.aiDrafts} />
         ))}
-        {rooms.length === 0 && (
-          <p className="prop-none">No rooms yet. Add the first one below — you can type any name,
-            or pick one from the list.</p>
+        {/* The walkthrough's first card already says this, and two sentences
+            saying one thing is how somebody concludes there are two places to
+            add a room. This is the fallback for the seats the card is not
+            drawn for. */}
+        {rooms.length === 0 && (locked || !canEdit) && (
+          <p className="prop-none">No rooms were recorded on this one.</p>
         )}
       </div>
 
@@ -25667,7 +25856,8 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
               </div>
             </div>
           )}
-          <div className="insp-add">
+          <div className={`insp-add ${ringing("add") ? "insp-ring" : ""}`}
+            ref={(el) => { nodes.current.add = el; }}>
             <input ref={addBox} value={adding} list="insp-rooms"
               placeholder="Any other room or area" maxLength={80}
               onChange={(e) => setAdding(e.target.value)}
@@ -25699,9 +25889,12 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
            seeded on mount; without the key the newcomer would land in a list
            whose ticks were decided when the list was empty, and Send would be
            dead over the person somebody had just added to send to. */
-        <InspectionSend inspection={inspection} onReload={onReload}
-          key={(inspection.recipients || []).map((u) => u.id).join(",")}
-          onAddOwner={onAddOwner && property ? () => onAddOwner(property) : null} />
+        <div className={ringing("send") ? "insp-ring" : ""}
+          ref={(el) => { nodes.current.send = el; }}>
+          <InspectionSend inspection={inspection} onReload={onReload}
+            key={(inspection.recipients || []).map((u) => u.id).join(",")}
+            onAddOwner={onAddOwner && property ? () => onAddOwner(property) : null} />
+        </div>
       )}
 
       <div className="pd-acts">
@@ -26146,8 +26339,18 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
       {inspections.length === 0 && (canEdit ? properties.length > 0 : true) && (
         <div className="dash-empty"><ClipboardList size={24} />
           {canEdit
-            ? <p>No inspections yet. The record of what a unit looked like on the day
-              is the only answer to “it was like that when I moved in”.</p>
+            ? <>
+              <p>No inspections yet. The record of what a unit looked like on the day
+                is the only answer to “it was like that when I moved in”.</p>
+              {/* THE CONTROL SITS WITH THE SENTENCE. A sentence naming the
+                  thing to do with nothing beside it is a dead end wearing
+                  instructions -- the button is in the header above, which on a
+                  phone is off the top of an empty screen. Same handler and
+                  same form, so there is one way to start an inspection. */}
+              <button className="btn-solid small" onClick={() => setForm({ kind: "move_out" })}>
+                <Plus size={14} /> Start the first one
+              </button>
+            </>
             : <p>Nothing has been sent to you yet. A finished move-in or move-out
               inspection of one of your units appears here.</p>}
         </div>
@@ -29520,6 +29723,50 @@ p.fld-note{margin:6px 0 0}
 .insp-draft-go:hover{background:color-mix(in srgb,var(--brand) 12%,var(--card))}
 .insp-draft-go:disabled{opacity:.6;cursor:default}
 .insp-draft-note{margin:6px 0 0;font-size:11px;line-height:1.5;color:var(--ink-soft);max-width:52ch}
+
+/* THE WALKTHROUGH. A strip that reads and a card that is pressed.
+   No backtick appears in this block: this stylesheet is one template literal
+   and one of those closes it, which has taken the whole app down behind an
+   unrelated error nine times in this repository. */
+.insp-walk{display:flex;flex-direction:column;gap:11px}
+.insp-steps{display:flex;flex-wrap:wrap;gap:6px 14px;margin:0;padding:0;list-style:none}
+.insp-steps li{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:650;
+  color:var(--ink-soft)}
+.insp-step-n{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;
+  border-radius:999px;border:1.5px solid var(--line);background:var(--card);
+  font-size:10.5px;font-weight:750;line-height:1;flex:none}
+/* DONE, NOW AND STILL TO COME ARE THREE STATES AND NOT TWO. A step nobody has
+   reached and the one you are standing on must not read the same, which is the
+   same distinction the room statuses draw and the never-added document dot
+   draws by being hollow. */
+.insp-steps li.is-done{color:var(--brand)}
+.insp-steps li.is-done .insp-step-n{border-color:var(--brand);background:var(--brand);color:#fff}
+.insp-steps li.is-now{color:var(--ink)}
+.insp-steps li.is-now .insp-step-n{border-color:var(--brand);color:var(--brand);
+  background:color-mix(in srgb,var(--brand) 12%,var(--card))}
+.insp-next{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;
+  padding:13px 15px;border:1px solid color-mix(in srgb,var(--brand) 30%,var(--line));
+  border-radius:12px;background:color-mix(in srgb,var(--brand) 6%,var(--card))}
+/* The nudge is a plain surface, not the tinted one: the job is raised and
+   leaving it is a real answer, so it must not wear the colour that means
+   something is waiting on you. */
+.insp-next.is-extra{border-color:var(--line);background:var(--card)}
+.insp-next-say{flex:1 1 260px;min-width:0}
+.insp-next-say strong{display:block;font-size:14px;line-height:1.35;color:var(--ink)}
+.insp-next-say p{margin:4px 0 0;font-size:12px;line-height:1.55;color:var(--ink-soft);max-width:60ch}
+.insp-next-acts{display:flex;flex-wrap:wrap;gap:8px;flex:none}
+.insp-walk-done{display:inline-flex;align-items:center;gap:6px;margin:0;
+  font-size:12.5px;font-weight:650;color:var(--brand)}
+/* A BOX-SHADOW RATHER THAN A BORDER. A border that thickens moves everything
+   beside it by a pixel and the whole screen appears to twitch -- the rule the
+   compliance pack's focus ring already records. */
+.insp-ring{border-radius:12px;
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 38%,transparent);
+  transition:box-shadow .2s ease}
+@media (max-width:560px){
+  .insp-next-acts{flex:1 1 100%}
+  .insp-next-acts button{flex:1 1 auto;justify-content:center}
+}
 .ph-add{display:inline-flex;align-items:center;gap:6px;margin-top:9px;padding:9px 13px;
   border:1px dashed var(--line);border-radius:9px;background:var(--card);color:var(--ink);
   font-size:12.5px;font-weight:650;cursor:pointer;font-family:inherit}

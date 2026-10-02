@@ -144,6 +144,89 @@ export function whyNotSend(inspection = {}) {
 }
 export const canSendInspection = (inspection) => whyNotSend(inspection) === null;
 
+// WHERE THE WALK HAS GOT TO, AS STEPS.
+//
+// The screen held every control an inspection needs and said nothing about
+// the order they are used in. Reported as wanting "more of a step by step
+// walk through, ie add another room? get started by adding your first room
+// here, recommended trades, assign sub contractors or handyman or later" --
+// which is not a request for a wizard. A wizard narrows what is available,
+// and this screen is used standing in an empty flat where the one thing that
+// must never happen is a control being out of reach: somebody photographs
+// the bathroom while they are in it, not when a sequence says to.
+//
+// So the steps POINT, they do not GATE. Nothing here hides a button, refuses
+// an upload or changes what the server will accept; what it adds is a name
+// for where you are and one control for the next thing. Every existing
+// affordance stays exactly where it was.
+//
+// IT IS THE ONE RULE, read by the strip, the card and the tests, because
+// three answers to "what is next" is how they come to disagree -- the same
+// reason `inspectionTally` exists rather than a count per screen.
+//
+// THE ORDER IS ROOMS, WALK, WORK, FINISH, and work before finish is
+// deliberate: this product already offers Raise a job the moment something is
+// flagged, finished or not, because the leak does not wait for the paperwork.
+// A strip that put finishing first would be telling somebody to do the
+// paperwork before the repair, which is the opposite of what the screen does.
+//
+// AND `send` IS A STEP ONLY WHEN THERE IS SOMEBODY TO SEND TO. A building
+// with no owner seat on it has nothing to send and never will, so listing it
+// would leave a step that can never be ticked on every inspection of every
+// building the account owns itself -- the permanently-amber failure
+// `docs.js` exists to prevent, wearing a fifth number. The send panel keeps
+// its own "add an owner" way in for the case where one should exist.
+export const INSPECTION_STEPS = [
+  { id: "rooms", label: "Rooms" },
+  { id: "walk", label: "Walk it" },
+  { id: "work", label: "The work" },
+  { id: "finish", label: "Finish" },
+  { id: "send", label: "Send it" },
+];
+
+export function inspectionStep({ inspection = {}, rooms = [], recipients = [], sends = [] } = {}) {
+  const t = inspectionTally(rooms);
+  const finished = inspection.status === "finished";
+  const raised = !!inspection.jobId;
+  const canSend = (recipients || []).length > 0;
+  const had = new Set((sends || []).map((s) => s && s.userId));
+  const waiting = (recipients || []).filter((u) => u && !had.has(u.id));
+
+  const done = {
+    rooms: t.rooms > 0,
+    walk: t.rooms > 0 && t.unchecked === 0,
+    // Nothing flagged is not an unfinished step, it is the best possible
+    // answer to one. An all-clear walk must not sit for ever on "raise the
+    // work" over a unit with nothing wrong in it.
+    work: t.rooms > 0 && (t.flagged === 0 ? t.unchecked === 0 : raised),
+    finish: finished,
+    send: canSend && waiting.length === 0,
+  };
+  const steps = INSPECTION_STEPS.filter((s) => s.id !== "send" || canSend);
+  const at = steps.find((s) => !done[s.id]) || null;
+
+  return {
+    steps: steps.map((s) => ({ ...s, done: !!done[s.id], now: !!at && at.id === s.id })),
+    at: at ? at.id : null,
+    tally: t,
+    // WHAT THE CARD SAYS, decided here rather than on the screen so the words
+    // and the step cannot disagree about which one is current.
+    //
+    // `nudge` is the thing worth offering that is NOT holding anything up:
+    // putting somebody on the job that was raised. The request said "or
+    // later" and meant it -- doing nothing IS later, so there is no second
+    // button to press for it, and the step counts as done the moment the job
+    // exists. A nag over a job somebody has decided to leave is how people
+    // learn to stop reading the card.
+    nudge: raised ? "assign" : null,
+    flagged: t.flagged,
+    unchecked: t.unchecked,
+    waiting,
+    finished,
+    raised,
+  };
+}
+
 // The report is read through the owner's OWN seat, so the only people it can
 // be sent to are the ones who have one on this building. A free-typed address
 // would need a public token, a second surface and an expiry — and the person
