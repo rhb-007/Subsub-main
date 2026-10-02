@@ -67,7 +67,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   }
   if (path === "/api/inspections/insp_1" && method === "PATCH") {
     sent.push({ path, body });
-    DETAIL = { ...DETAIL, status: "finished" };
+    DETAIL = body.finish ? { ...DETAIL, status: "finished" } : { ...DETAIL, ...body };
     return [200, DETAIL];
   }
   if (path === "/api/inspections/insp_1/job" && method === "POST") {
@@ -230,6 +230,131 @@ try {
       v.rooms[3] && v.rooms[3].on.length === 0, JSON.stringify(v.rooms[3]));
     await ctx.close().catch(() => {});
   }
+
+  // The three blocks below rewrite the fixture, so it is put back afterwards
+  // — a suite whose later assertions depend on what an earlier one left is a
+  // suite that fails for the wrong reason.
+  const FIXTURE = JSON.parse(JSON.stringify(DETAIL));
+
+  console.log("\n-- THE HEADER IS EDITABLE WHILE IT IS A DRAFT --");
+  {
+    // `PATCH /api/inspections/:id` has taken the kind, the unit, the name and
+    // the date since it was written, and nothing in the browser ever sent one
+    // — only `{finish:true}`. So a move-out picked by mistake, or a unit typed
+    // wrong, could only be fixed by deleting the inspection. Reported as "does
+    // not allow me to select move in or out" and "doesn't allow me to edit
+    // once I've created", which are the same missing form.
+    DETAIL = { ...DETAIL, status: "draft", kind: "move_out", unit: "5c" };
+    const { ctx, page } = await openOne();
+    let h = await page.evaluate(() => ({
+      kinds: [...document.querySelectorAll(".insp-kind .chip")]
+        .map((b) => ({ label: b.innerText.trim(), on: b.classList.contains("on") })),
+      fields: [...document.querySelectorAll(".insp-facts input")].map((i) => i.value),
+    }));
+    t.ck("both walks are offered", h.kinds.length === 2, JSON.stringify(h.kinds));
+    t.ck("with the one it is marked", h.kinds.filter((k) => k.on).length === 1
+      && h.kinds.find((k) => k.on).label === "Move-out", JSON.stringify(h.kinds));
+    t.ck("and the unit, the name and the date are all there",
+      h.fields.length === 3 && h.fields[0] === "5c", JSON.stringify(h.fields));
+
+    sent.length = 0;
+    await page.evaluate(() => [...document.querySelectorAll(".insp-kind .chip")]
+      .find((b) => /move-in/i.test(b.innerText))?.click());
+    await wait(900);
+    t.ck("tapping the other walk sends it",
+      sent.length === 1 && sent[0].body.kind === "move_in", JSON.stringify(sent));
+    h = await page.evaluate(() => [...document.querySelectorAll(".insp-kind .chip")]
+      .map((b) => ({ label: b.innerText.trim(), on: b.classList.contains("on") })));
+    t.ck("and the screen follows", h.find((k) => k.on)?.label === "Move-in", JSON.stringify(h));
+
+    // Typed fields save on blur, not per keystroke.
+    sent.length = 0;
+    await page.evaluate(() => {
+      const el = document.querySelectorAll(".insp-facts input")[0];
+      el.focus();
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      set.call(el, "5C"); el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await wait(300);
+    t.ck("typing alone sends nothing", sent.length === 0, JSON.stringify(sent));
+    await page.evaluate(() => document.querySelectorAll(".insp-facts input")[0].blur());
+    await wait(900);
+    t.ck("leaving the box saves it", sent.length === 1 && sent[0].body.unit === "5C",
+      JSON.stringify(sent));
+    await ctx.close().catch(() => {});
+  }
+
+  console.log("\n-- AND A ROOM CAN BE ADDED WITHOUT TYPING --");
+  {
+    // A `datalist` is not a list on an iPad: the copy said "pick one from the
+    // list" over an `<input list=…>`, which iOS Safari offers nothing for. On
+    // the one device this product is run from, the screen promised something
+    // that was not there.
+    DETAIL = { ...DETAIL, status: "draft", kind: "move_out",
+      rooms: [{ id: "r1", name: "Kitchen", status: "ok", note: "", position: 0, photos: [] }] };
+    const { ctx, page } = await openOne();
+    let v = await page.evaluate(() => ({
+      chips: [...document.querySelectorAll(".insp-suggest .chip")]
+        .map((b) => b.innerText.replace(/\s+/g, " ").trim()),
+      box: !!document.querySelector(".insp-add input"),
+      addOff: document.querySelector(".insp-add button")?.disabled,
+    }));
+    t.ck("the standard rooms are tappable", v.chips.length > 10, String(v.chips.length));
+    t.ck("and a room already walked is not offered again",
+      !v.chips.some((c) => /^\+?\s*Kitchen$/i.test(c)), JSON.stringify(v.chips.slice(0, 6)));
+    t.ck("the free-text box is still there for anything else", v.box === true);
+
+    sent.length = 0;
+    await page.evaluate(() => [...document.querySelectorAll(".insp-suggest .chip")]
+      .find((b) => /Bathroom 1/.test(b.innerText))?.click());
+    await wait(1000);
+    t.ck("ONE tap adds it", sent.length === 1 && sent[0].body.name === "Bathroom 1",
+      JSON.stringify(sent));
+    v = await page.evaluate(() => [...document.querySelectorAll(".insp-suggest .chip")]
+      .map((b) => b.innerText.replace(/\s+/g, " ").trim()));
+    t.ck("and it comes off the list", !v.some((c) => /Bathroom 1/.test(c)),
+      JSON.stringify(v.slice(0, 6)));
+
+    // A DEAD BUTTON WITH NOTHING BESIDE IT is indistinguishable from a broken
+    // one, which is exactly how the empty box read: press, nothing, silence.
+    t.ck("Add room is not disabled over an empty box",
+      (await page.evaluate(() => document.querySelector(".insp-add button")?.disabled)) === false);
+    sent.length = 0;
+    await page.evaluate(() => document.querySelector(".insp-add button").click());
+    await wait(600);
+    const said = await page.evaluate(() => ({
+      err: (document.querySelector(".insp-detail .billing-err")?.innerText || "").trim(),
+      focused: document.activeElement === document.querySelector(".insp-add input"),
+    }));
+    t.ck("pressing it empty says what it wants", /type a room name/i.test(said.err), said.err);
+    t.ck("and puts the cursor in the box", said.focused === true, JSON.stringify(said));
+    t.ck("without sending anything", sent.length === 0, JSON.stringify(sent));
+    await ctx.close().catch(() => {});
+  }
+
+  console.log("\n-- AND BACK CLOSES THE INSPECTION RATHER THAN LEAVING SUBSUB --");
+  {
+    // The detail view is state, not a route, so Back walked out of the app —
+    // on an iPad the first thing anybody reaches for, landing on whatever the
+    // tab held before. Reported as "can't go back", with a Cloudflare consent
+    // screen attached.
+    DETAIL = { ...DETAIL, status: "draft" };
+    const { ctx, page } = await openOne();
+    t.ck("the inspection is open", await page.evaluate(() => !!document.querySelector(".insp-detail")));
+    await page.goBack();
+    await wait(1000);
+    const after = await page.evaluate(() => ({
+      detail: !!document.querySelector(".insp-detail"),
+      list: !!document.querySelector(".insp-list, .dash-empty"),
+      here: location.host,
+    }));
+    t.ck("Back shuts it", after.detail === false, JSON.stringify(after));
+    t.ck("and lands on the list rather than out of SubSub",
+      after.list === true && /soundpm/.test(after.here), JSON.stringify(after));
+    await ctx.close().catch(() => {});
+  }
+
+  DETAIL = JSON.parse(JSON.stringify(FIXTURE));
 
   console.log("\n-- raising the work --");
   {

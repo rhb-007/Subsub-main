@@ -25162,11 +25162,24 @@ function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPh
 }
 
 // One inspection, open.
-function InspectionDetail({ inspection, property, onReload, onClose, onRaise, onGoJobs, subs = [] }) {
+function InspectionDetail({ inspection, property, onReload, onClose, onRaise, onGoJobs,
+  subs = [], unitWord = "Unit" }) {
   const [adding, setAdding] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [raising, setRaising] = useState(false);
+  // The header's own fields. Held locally so typing is not a round trip per
+  // keystroke, and re-seeded whenever the row changes under them -- every
+  // save re-reads the inspection, and a box still showing what it opened with
+  // is the stale-snapshot bug this file has grown four times.
+  const [unit, setUnit] = useState(inspection.unit || "");
+  const [who, setWho] = useState(inspection.tenantName || "");
+  const [when, setWhen] = useState(inspection.inspectedOn || "");
+  useEffect(() => {
+    setUnit(inspection.unit || "");
+    setWho(inspection.tenantName || "");
+    setWhen(inspection.inspectedOn || "");
+  }, [inspection.unit, inspection.tenantName, inspection.inspectedOn]);
   const rooms = inspection.rooms || [];
   const tally = inspectionTally(rooms);
   const locked = inspection.status === "finished";
@@ -25191,12 +25204,34 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
 
   const patchRoom = (roomId, body) => api.patchInspectionRoom(inspection.id, roomId, body).then(onReload);
 
+  // One way in for both doors — a tapped suggestion and the typed box — so
+  // they cannot drift apart about what an empty name does or what happens
+  // after a save.
+  const addBox = useRef(null);
+  const addRoom = (name) => {
+    const want = String(name || "").trim();
+    if (!want) {
+      setErr("Type a room name, or tap one of the suggestions.");
+      addBox.current?.focus();
+      return;
+    }
+    return run("add", async () => {
+      await api.addInspectionRoom(inspection.id, want);
+      setAdding("");
+      await onReload();
+    });
+  };
+  // What is left to walk. Compared on the trimmed, case-folded name, because
+  // somebody who typed "kitchen" has done the kitchen.
+  const have = new Set(rooms.map((r) => roomName(r).trim().toLowerCase()));
+  const suggestions = STANDARD_ROOMS.filter((r) => !have.has(r.toLowerCase()));
+
   return (
     <div className="insp-detail">
       <div className="pd-head">
         <div>
           <h2>{INSPECTION_KINDS[inspection.kind]?.label || "Inspection"}
-            {inspection.unit ? ` — unit ${inspection.unit}` : ""}</h2>
+            {inspection.unit ? ` — ${unitWord.toLowerCase()} ${inspection.unit}` : ""}</h2>
           <span className="prop-addr">
             {property?.name || "A building"}
             {inspection.tenantName ? ` · ${inspection.tenantName}` : ""}
@@ -25205,6 +25240,56 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
         </div>
         <span className={`tn-chip ${locked ? "ok" : "wait"}`}>{locked ? "Finished" : "Draft"}</span>
       </div>
+
+      {/* WHICH WALK IT IS, AND WHO IT IS ABOUT, EDITABLE WHILE IT IS A DRAFT.
+          `PATCH /api/inspections/:id` has taken all four of these since it was
+          written and nothing in the browser ever sent one -- only
+          `{finish:true}` -- so the only way to correct a move-out picked by
+          mistake, or a unit number typed wrong, was to delete the inspection
+          and start again. Reported as "does not allow me to select move in or
+          out" and "doesn't allow me to edit once I've created", which are the
+          same missing form. Tenth time this file has recorded a correct route
+          with no way in.
+
+          In place rather than behind an Edit button, like the room rows below
+          it: this screen is used standing in an empty flat, and a correction
+          that costs a press to reveal is a correction somebody makes later,
+          which is never. It stops at `finished`, where everything else does. */}
+      {!locked && (
+        <div className="insp-head-edit">
+          <div className="insp-kind" role="group" aria-label="Which walk">
+            {Object.entries(INSPECTION_KINDS).map(([k, v]) => (
+              <button key={k} type="button" disabled={!!busy}
+                className={`chip ${inspection.kind === k ? "on" : ""}`}
+                aria-pressed={inspection.kind === k}
+                onClick={() => inspection.kind !== k
+                  && run("kind", () => api.patchInspection(inspection.id, { kind: k }).then(onReload))}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+          <div className="insp-facts">
+            <label className="fld">{unitWord}
+              <input value={unit} maxLength={40}
+                onChange={(e) => setUnit(e.target.value)}
+                onBlur={() => unit !== (inspection.unit || "")
+                  && run("unit", () => api.patchInspection(inspection.id, { unit }).then(onReload))} />
+            </label>
+            <label className="fld">Who is {INSPECTION_KINDS[inspection.kind]?.verb || "moving"}
+              <input value={who} maxLength={120}
+                onChange={(e) => setWho(e.target.value)}
+                onBlur={() => who !== (inspection.tenantName || "")
+                  && run("who", () => api.patchInspection(inspection.id, { tenantName: who }).then(onReload))} />
+            </label>
+            <label className="fld">Walked on
+              <input type="date" value={when}
+                onChange={(e) => setWhen(e.target.value)}
+                onBlur={() => when !== (inspection.inspectedOn || "")
+                  && run("when", () => api.patchInspection(inspection.id, { inspectedOn: when }).then(onReload))} />
+            </label>
+          </div>
+        </div>
+      )}
 
       {/* WHERE IT HAS GOT TO, named rather than counted alone: "4 of 11" does
           not say which seven, and which seven is the only thing worth knowing
@@ -25240,22 +25325,54 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
       </div>
 
       {!locked && (
-        <div className="insp-add">
-          <input value={adding} list="insp-rooms" placeholder="Room or area" maxLength={80}
-            onChange={(e) => setAdding(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && adding.trim()) {
-                e.preventDefault();
-                run("add", async () => { await api.addInspectionRoom(inspection.id, adding.trim()); setAdding(""); await onReload(); });
-              }
-            }} />
-          <button className="btn-ghost small" disabled={!adding.trim() || !!busy}
-            onClick={() => run("add", async () => {
-              await api.addInspectionRoom(inspection.id, adding.trim()); setAdding(""); await onReload();
-            })}>
-            <Plus size={14} /> {busy === "add" ? "Adding…" : "Add room"}
-          </button>
-        </div>
+        <>
+          {/* THE LIST IS TAPPABLE, BECAUSE A `datalist` IS NOT A LIST ON AN
+              iPAD. The copy said "pick one from the list" over an
+              `<input list=…>`, which on iOS Safari offers no list at all —
+              so on the one device this product is actually run from, the
+              screen promised something that was not there. Reported as not
+              being able to add a room.
+
+              So the standard rooms are chips, and a chip ADDS on one tap:
+              typing a name, pressing a second button and waiting is three
+              actions for the commonest thing on this screen. The ones already
+              on the inspection drop out, so the list gets shorter as the walk
+              goes on rather than making somebody scan thirty names for the
+              four they have left.
+
+              The free-text box stays below them, because every building has a
+              room this list has not heard of — the datalist is kept on it for
+              the browsers that do honour one, and nothing depends on it. */}
+          {suggestions.length > 0 && (
+            <div className="insp-suggest">
+              <span className="insp-suggest-lab">Tap to add</span>
+              <div className="chips">
+                {suggestions.map((r) => (
+                  <button key={r} type="button" className="chip" disabled={!!busy}
+                    onClick={() => addRoom(r)}>
+                    <Plus size={12} /> {r}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="insp-add">
+            <input ref={addBox} value={adding} list="insp-rooms"
+              placeholder="Any other room or area" maxLength={80}
+              onChange={(e) => setAdding(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); addRoom(adding); }
+              }} />
+            {/* NOT DISABLED ON AN EMPTY BOX. It was, and a dead control with
+                nothing beside it is indistinguishable from a broken one —
+                which is exactly how this read: press Add room, nothing
+                happens, nothing is said. It says what it wants and puts the
+                cursor there instead. */}
+            <button className="btn-ghost small" disabled={!!busy} onClick={() => addRoom(adding)}>
+              <Plus size={14} /> {busy === "add" ? "Adding…" : "Add room"}
+            </button>
+          </div>
+        </>
       )}
 
       {err && <p className="billing-err" role="alert">{err}</p>}
@@ -25390,6 +25507,36 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs, un
     }
   };
 
+  // BACK CLOSES THE INSPECTION RATHER THAN LEAVING SUBSUB.
+  //
+  // The detail view is state and not a route, so the browser's Back button
+  // walked out of the app entirely — on an iPad that is the first thing
+  // anybody reaches for, and where it landed was whatever the tab held
+  // before, which in the report was a Cloudflare consent screen reading
+  // "Application authorization failed". Nothing was wrong with SubSub and
+  // there was no way back into it.
+  //
+  // One entry pushed when an inspection opens, popped when it closes. The
+  // flag is what stops the two fighting: `onClose` calls `history.back()`,
+  // which fires `popstate`, which must then NOT call `history.back()` again
+  // — two steps back is the screen before this one, which is the bug wearing
+  // a smaller hat.
+  const wentBack = useRef(false);
+  useEffect(() => {
+    if (!open) return undefined;
+    window.history.pushState({ subsubInspection: open.id }, "");
+    const pop = () => { wentBack.current = true; setOpen(null); onReload(); };
+    window.addEventListener("popstate", pop);
+    return () => {
+      window.removeEventListener("popstate", pop);
+      // Only unwind the entry we pushed, and only when the close came from
+      // the screen rather than from Back.
+      if (!wentBack.current) window.history.back();
+      wentBack.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open?.id]);
+
   const raise = async (id, body) => {
     const made = await api.raiseInspectionJob(id, body);
     await load(id); await onReload();
@@ -25406,7 +25553,7 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs, un
           </button>
         </div>
         {err && <p className="billing-err" role="alert">{err}</p>}
-        <InspectionDetail inspection={open} subs={subs}
+        <InspectionDetail inspection={open} subs={subs} unitWord={unitWord}
           property={properties.find((p) => p.id === open.propertyId)}
           onReload={() => load(open.id)}
           onRaise={raise}
@@ -28980,6 +29127,20 @@ strong.insp-name{background:none;border:0;padding:0}
 .insp-note{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;
   font:inherit;font-size:13.5px;background:var(--paper);color:var(--ink);resize:vertical}
 .insp-note-ro{margin:0;font-size:13.5px;color:var(--ink)}
+/* The header's own fields, while it is a draft. Quiet: this is a correction
+   somebody makes once, above the rooms which are the work. No backticks
+   anywhere in here, the stylesheet is one template literal. */
+.insp-head-edit{display:flex;flex-direction:column;gap:10px;
+  padding:12px 14px;background:var(--paper);border:1px solid var(--line);border-radius:12px}
+.insp-kind{display:flex;gap:7px;flex-wrap:wrap}
+.insp-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 12px}
+.insp-facts .fld{margin:0}
+/* Tap to add. A chip each, wrapping, and the list shrinks as the walk goes
+   on — a standing-in-a-flat control is a thumb-width and one press. */
+.insp-suggest{display:flex;flex-direction:column;gap:7px;margin-top:2px}
+.insp-suggest-lab{font-size:11.5px;font-weight:800;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--ink-soft)}
+.insp-suggest .chip{display:inline-flex;align-items:center;gap:5px;min-height:36px}
 .insp-add{display:flex;gap:8px;align-items:center}
 .insp-add input{flex:1;min-width:0;border:1px solid var(--line);border-radius:9px;padding:10px 12px;
   font:inherit;font-size:14px;background:var(--card);color:var(--ink)}
