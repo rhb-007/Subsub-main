@@ -5402,6 +5402,100 @@ refactor.
   `max-width` — written while adding a guard against it to the block three
   rules below, which is the one it was checked against.
 
+
+- **A SELECTED STATE WRITTEN IN THE MARKUP THAT THE STYLESHEET HAD NEVER HEARD
+  OF.** Reported against the inspection screen twice over: *"move in/out … can't
+  tell if they are selected or not"* and *"same with selecting trades, can't
+  tell which are selected in order to raise a job"*. Both were the same thing.
+  `className={\`chip ${on ? "on" : ""}\`}` is written in three places and there
+  was **no `.chip` rule and no `.chip.on` rule anywhere in the stylesheet** —
+  the pills took their shape from a generic button rule and their selected
+  state from nothing at all. So a ticked trade and an untouched one were the
+  same pixels, and the grid of twenty-nine could not be read.
+
+  **No static check could have caught it and no mutation either**, which is why
+  it is worth recording as its own shape: the JSX is exactly right, the class
+  name is exactly right, and the thing that is missing is a rule in a different
+  file. It is the misspelt-capability failure in CSS — *the markup says `on`
+  and nothing downstream reads it* — and the only thing that can see it is the
+  computed pixels, which is what the test now reads.
+
+  The values are the pair `.pick.on` and `.cov-toggle button.on` already carry,
+  not a third set: two selected states differing by a shade is the
+  almost-aligned failure one layer out. And **a tick rides in the chip as well
+  as the fill**, because about one man in twelve cannot read a green against a
+  grey and this is pressed on a phone in daylight.
+
+  **MOVE-IN / MOVE-OUT IS ONE CONTROL WITH TWO HALVES, not two loose pills.**
+  Exactly one answer is true and exactly one can be, which a pair of chips
+  cannot say however they are coloured — so it is a segmented box, the chosen
+  half solid, `aria-pressed` on both. The same control in both places it is
+  asked (the New inspection modal and the header edit), because two components
+  drawing one question two ways is how somebody concludes there are two
+  questions.
+
+- **THE NOTES ALREADY NAME THE TRADE, SO THE GRID OPENS WITH THEM TICKED.**
+  Raising a job put twenty-nine trades in front of somebody who had just
+  written *"Messy a lot of people, dirt floors, trim needs to be repaired"* —
+  who has already said Final Clean, Flooring and Finish Carpentry, and was
+  being asked to say it a second time by hunting for three chips in a wall of
+  them. `suggestTrades` in `app/shared/inspection.js` reads the flagged rooms
+  and ticks what the words name.
+
+  **IT READS THE WORDS AND NOT THE PHOTOGRAPHS, and that is a limit rather than
+  an oversight.** Reading a picture needs a vision model: an outbound call per
+  photo, a key, a cost on every inspection, and — the part that is a product
+  decision and not a build — **the inside of a tenant's home leaving this
+  origin**. This file already records that the weather lookup is server-side so
+  that nothing about who is looking at SubSub leaves us, and that what does
+  leave is a town and a state, *never a customer, a person or a building*. A
+  photograph of somebody's bathroom is several steps past that. The notes are
+  where the signal already is, this costs nothing and runs offline, and a test
+  pins that a room with photographs and no words suggests nothing — so the
+  limit is stated in the suite rather than assumed to have been fixed.
+
+  **IT IS A SUGGESTION AND NEVER AN ANSWER**, and the screen is what makes that
+  true. It names what it read and the word it read it from — *Finish Carpentry
+  (“trim”)* — because **a preselection somebody mistakes for their own choice
+  is worse than an empty grid**, since they will not read it. Every chip comes
+  off, a removed suggestion stays **dashed** so putting it back does not mean
+  re-reading the paragraph, and *Back to what the notes suggested* appears only
+  once the selection differs — the same rule the agreement terms panel follows.
+  Nothing recognised says **nothing at all**: no apology, no empty banner.
+
+  **WHOLE WORDS, NEVER SUBSTRINGS**, which is the rule `crmmap.js` records for
+  a different reason and the same cost — a trade on a job nobody is doing. The
+  mutation that proves it is the one that hurts most: with substring matching,
+  *bath* inside **Bathroom 1** ticks plumbing on a cracked mirror, and *pane*
+  inside *panel* calls a glazier.
+
+  **A ROOM THAT NAMES A SYSTEM SAYS WHICH TRADE; A ROOM THAT NAMES A SPACE DOES
+  NOT.** *Shower and bath* is plumbing whatever is wrong with it; *Bathroom 1*
+  is not, and the spaces are deliberately absent from `ROOM_TRADES` with the
+  note saying why. Getting that backwards ticks plumbing on every bathroom in
+  the building.
+
+  **Only flagged rooms**, because the scope the job carries is the flagged
+  rooms — a trade suggested off a room that was fine puts somebody on site for
+  work that is not in the job. And every id in both maps is checked against
+  `TRADES`, because a hint keyed on a trade that does not exist ticks nothing
+  and nothing on any screen would say so.
+
+  Two things this uncovered beside it. *Raise the job* was **dead with no
+  reason next to it** when nothing was ticked — visible in the report as a pale
+  button with no explanation, which this file has already called
+  indistinguishable from a broken one. And an existing assertion had to change
+  rather than be kept: *it will not go without a trade* was asserting the old
+  emptiness, so it now pins that a recognised note opens the form **ready**,
+  with the nothing-ticked case pinned where the grid can actually be emptied.
+  **A test can pin the old answer as firmly as the right one**, which this file
+  records about `RefreshAuthError` and has now paid for twice.
+
+  And the backtick trap for the **ninth** time — in the comment explaining the
+  new chip rule, caught by the one-line guard this file prescribes *before* it
+  reached a build, which is the first time that guard has earned its keep at
+  the gate rather than after a failed parse.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

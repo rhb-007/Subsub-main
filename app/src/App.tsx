@@ -33,7 +33,7 @@ import {
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
-  Maximize2, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle,
+  Maximize2, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE } from "./lib/api";
 // The same file the Worker imports, so a problem cannot be an emergency in
@@ -61,7 +61,8 @@ import { hasAdminSeat, isTeamSeat } from "../shared/seats.js";
 import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole, isPropertyScoped } from "../shared/propscope.js";
 import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   MAX_ROOM_PHOTOS, roomName, inspectionTally, flaggedRooms,
-  whyNotFinish, canSendInspection, mayWriteInspection } from "../shared/inspection.js";
+  whyNotFinish, canSendInspection, mayWriteInspection,
+  suggestTrades } from "../shared/inspection.js";
 import { agreementStateText, typedNameMatches, renderAgreement } from "../shared/agreement.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -25285,14 +25286,20 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
           which is never. It stops at `finished`, where everything else does. */}
       {!locked && (
         <div className="insp-head-edit">
-          <div className="insp-kind" role="group" aria-label="Which walk">
+          {/* A SEGMENTED CONTROL, not two chips. There are exactly two
+              answers and exactly one is true, which a pair of loose pills
+              cannot say -- reported as not being able to tell which was
+              picked. Two halves of one box, the chosen half filled, with a
+              tick on it, which is the same shape `.cov-toggle` already uses
+              for the same question. */}
+          <div className="insp-kind seg" role="group" aria-label="Which walk">
             {Object.entries(INSPECTION_KINDS).map(([k, v]) => (
               <button key={k} type="button" disabled={!!busy}
-                className={`chip ${inspection.kind === k ? "on" : ""}`}
+                className={inspection.kind === k ? "on" : ""}
                 aria-pressed={inspection.kind === k}
                 onClick={() => inspection.kind !== k
                   && run("kind", () => api.patchInspection(inspection.id, { kind: k }).then(onReload))}>
-                {v.label}
+                {inspection.kind === k ? <Check size={14} /> : null} {v.label}
               </button>
             ))}
           </div>
@@ -25469,11 +25476,23 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
 // `inspectionJobScope` this previews with, so the preview cannot disagree with
 // what gets written.
 function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
-  const [trades, setTrades] = useState([]);
+  // WHAT THEY ALREADY SAID, READ BACK. Somebody who has written "trim needs
+  // to be repaired" has named the trade; making them find Finish Carpentry in
+  // a grid of twenty-nine is asking them to say it twice. `suggestTrades` is
+  // the shared rule, so the words it reads cannot drift from the words the
+  // tests pin.
+  //
+  // Computed once on mount rather than per render: the rooms cannot change
+  // while this modal is open, and re-deriving it would fight the ticks
+  // somebody is removing.
+  const suggested = useMemo(() => suggestTrades(rooms), [rooms]);
+  const [trades, setTrades] = useState(suggested.trades);
   const [date, setDate] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const flagged = flaggedRooms(rooms);
+  const sameAsSuggested = suggested.trades.length === trades.length
+    && suggested.trades.every((t) => trades.includes(t));
 
   const go = async () => {
     setBusy(true); setErr("");
@@ -25506,21 +25525,57 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
           ))}
         </ul>
         <div className="form-sec">Who it needs</div>
+        {/* THE TICKS ARE SAID OUT LOUD, with the word that produced each one.
+            A preselection somebody mistakes for their own choice is worse
+            than an empty grid, because they will not read it -- so this names
+            what was read and from where, and every chip is still theirs to
+            un-tick. Nothing recognised says nothing at all rather than
+            apologising for it. */}
+        {suggested.trades.length > 0 && (
+          <p className="insp-sugg">
+            <Sparkles size={13} /> Suggested from your notes:{" "}
+            {suggested.trades.map((id, n) => (
+              <span key={id}>
+                {n > 0 ? ", " : ""}
+                <b>{TRADES.find((t) => t.id === id)?.label || id}</b>
+                {" "}(“{suggested.why[id][0]}”)
+              </span>
+            ))}
+            . Change any of them.
+          </p>
+        )}
         <div className="chips">
-          {TRADES.map((t) => (
-            <button key={t.id} type="button"
-              className={`chip ${trades.includes(t.id) ? "on" : ""}`}
-              onClick={() => setTrades((cur) =>
-                cur.includes(t.id) ? cur.filter((x) => x !== t.id) : [...cur, t.id])}>
-              {t.label}
-            </button>
-          ))}
+          {TRADES.map((t) => {
+            const on = trades.includes(t.id);
+            return (
+              <button key={t.id} type="button" aria-pressed={on}
+                className={`chip ${on ? "on" : ""} ${suggested.why[t.id] ? "sugg" : ""}`}
+                onClick={() => setTrades((cur) =>
+                  cur.includes(t.id) ? cur.filter((x) => x !== t.id) : [...cur, t.id])}>
+                {on ? <Check size={13} /> : null} {t.label}
+              </button>
+            );
+          })}
         </div>
+        {/* Only when there is something to reset, the same rule the agreement
+            terms panel follows. */}
+        {suggested.trades.length > 0 && !sameAsSuggested && (
+          <button type="button" className="btn-ghost small insp-reset"
+            onClick={() => setTrades(suggested.trades)}>
+            Back to what the notes suggested
+          </button>
+        )}
         <label className="fld">When, if you know
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           <span className="fld-note">Leave it empty and the job sits under “no date yet”.</span>
         </label>
         {err && <p className="billing-err" role="alert">{err}</p>}
+        {/* A DISABLED CONTROL WITH NO REASON BESIDE IT is indistinguishable
+            from a broken one, which is what this was: no trade ticked, a pale
+            button, and nothing anywhere saying why. */}
+        {!trades.length && !busy && (
+          <p className="fld-note insp-need">Pick at least one trade — it is what becomes the slot a contractor fills.</p>
+        )}
         <div className="form-actions">
           <button className="btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
           <button className="btn-solid" disabled={busy || !trades.length} onClick={go}>
@@ -25809,10 +25864,16 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
           <div className="form-pane">
             <h2>New inspection</h2>
             <div className="form-sec">Which walk</div>
-            <div className="chips">
+            {/* The same segmented control as the one on the inspection
+                itself. Two components drawing one question two ways is how
+                somebody concludes there are two questions. */}
+            <div className="insp-kind seg" role="group" aria-label="Which walk">
               {Object.entries(INSPECTION_KINDS).map(([k, v]) => (
-                <button key={k} type="button" className={`chip ${form.kind === k ? "on" : ""}`}
-                  onClick={() => setForm({ ...form, kind: k })}>{v.label}</button>
+                <button key={k} type="button" className={form.kind === k ? "on" : ""}
+                  aria-pressed={form.kind === k}
+                  onClick={() => setForm({ ...form, kind: k })}>
+                  {form.kind === k ? <Check size={14} /> : null} {v.label}
+                </button>
               ))}
             </div>
             <label className="fld">Building
@@ -29313,7 +29374,6 @@ strong.insp-name{background:none;border:0;padding:0}
    anywhere in here, the stylesheet is one template literal. */
 .insp-head-edit{display:flex;flex-direction:column;gap:10px;
   padding:12px 14px;background:var(--paper);border:1px solid var(--line);border-radius:12px}
-.insp-kind{display:flex;gap:7px;flex-wrap:wrap}
 .insp-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 12px}
 .insp-facts .fld{margin:0}
 /* Tap to add. A chip each, wrapping, and the list shrinks as the walk goes
@@ -29321,6 +29381,57 @@ strong.insp-name{background:none;border:0;padding:0}
 .insp-suggest{display:flex;flex-direction:column;gap:7px;margin-top:2px}
 .insp-suggest-lab{font-size:11.5px;font-weight:800;letter-spacing:.05em;
   text-transform:uppercase;color:var(--ink-soft)}
+/* THE CHIP, WHICH HAD NO RULE AT ALL.
+   The chip class and its "on" modifier were written in three places in the
+   markup and the stylesheet had never carried either, so a selected chip and
+   an unselected one were the same pixels -- reported as not being able to
+   tell which trades were picked, which is exactly what it was. The pills were
+   getting their shape from a generic button rule and their selected state
+   from nothing.
+
+   Filled brand on white, which is not a new palette: it is the pair the
+   .pick and .cov-toggle rules already use for the same question, because two
+   selected states differing by a shade is the almost-aligned failure one
+   layer out. A tick rides in the chip as well, so the state does not rest on
+   colour alone -- about one man in twelve cannot read a green-against-grey
+   difference, and this is pressed on a phone in daylight.
+   No backticks anywhere in here: the whole stylesheet is one template
+   literal and one in a comment closes it. Ninth time, caught by the guard
+   this file prescribes rather than by a failed build. */
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chip{display:inline-flex;align-items:center;gap:5px;min-height:38px;padding:0 13px;
+  border:1px solid var(--line);background:var(--card);border-radius:9px;
+  font:600 12.5px Inter,sans-serif;color:var(--ink-soft);cursor:pointer}
+.chip:hover{border-color:var(--brand);color:var(--ink)}
+.chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.chip.on:hover{color:#fff}
+.chip:disabled{opacity:.55;cursor:default}
+.chip:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+/* A chip the notes asked for, while it is NOT ticked: the suggestion is
+   still visible after somebody removes it, so putting it back does not mean
+   re-reading the paragraph above. Dashed rather than tinted, because a
+   second filled colour beside the selected one is two things claiming to be
+   the answer. */
+.chip.sugg:not(.on){border-style:dashed;border-color:color-mix(in srgb,var(--brand) 45%,var(--line));color:var(--ink)}
+/* What was read, and the word it was read from. */
+.insp-sugg{display:block;margin:0 0 9px;font-size:12.5px;line-height:1.6;color:var(--ink-soft)}
+.insp-sugg svg{vertical-align:-2px;margin-right:4px;color:var(--brand)}
+.insp-sugg b{color:var(--ink);font-weight:700}
+.insp-reset{margin-top:9px}
+.insp-need{margin:10px 0 0;color:var(--amber-ink,#7A5410)}
+/* MOVE-IN / MOVE-OUT IS ONE CONTROL WITH TWO HALVES, not two loose pills.
+   Exactly one answer is true and the box says so: the halves share a border,
+   fill the width, and the chosen one is solid with a tick on it. */
+.insp-kind.seg{display:flex;gap:0;border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;background:var(--card)}
+.insp-kind.seg button{flex:1;min-height:42px;border:0;background:none;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  font:700 13.5px Inter,sans-serif;color:var(--ink-soft)}
+.insp-kind.seg button + button{border-left:1px solid var(--line)}
+.insp-kind.seg button:hover:not(.on){background:var(--paper);color:var(--ink)}
+.insp-kind.seg button.on{background:var(--brand);color:#fff}
+.insp-kind.seg button:disabled{opacity:.6;cursor:default}
+.insp-kind.seg button:focus-visible{outline:2px solid var(--brand);outline-offset:-3px}
 .insp-suggest .chip{display:inline-flex;align-items:center;gap:5px;min-height:36px}
 .insp-add{display:flex;gap:8px;align-items:center}
 .insp-add input{flex:1;min-width:0;border:1px solid var(--line);border-radius:9px;padding:10px 12px;

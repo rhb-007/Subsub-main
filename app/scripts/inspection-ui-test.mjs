@@ -270,7 +270,7 @@ try {
     DETAIL = { ...DETAIL, status: "draft", kind: "move_out", unit: "5c" };
     const { ctx, page } = await openOne();
     let h = await page.evaluate(() => ({
-      kinds: [...document.querySelectorAll(".insp-kind .chip")]
+      kinds: [...document.querySelectorAll(".insp-kind button")]
         .map((b) => ({ label: b.innerText.trim(), on: b.classList.contains("on") })),
       fields: [...document.querySelectorAll(".insp-facts input")].map((i) => i.value),
     }));
@@ -281,12 +281,12 @@ try {
       h.fields.length === 3 && h.fields[0] === "5c", JSON.stringify(h.fields));
 
     sent.length = 0;
-    await page.evaluate(() => [...document.querySelectorAll(".insp-kind .chip")]
+    await page.evaluate(() => [...document.querySelectorAll(".insp-kind button")]
       .find((b) => /move-in/i.test(b.innerText))?.click());
     await wait(900);
     t.ck("tapping the other walk sends it",
       sent.length === 1 && sent[0].body.kind === "move_in", JSON.stringify(sent));
-    h = await page.evaluate(() => [...document.querySelectorAll(".insp-kind .chip")]
+    h = await page.evaluate(() => [...document.querySelectorAll(".insp-kind button")]
       .map((b) => ({ label: b.innerText.trim(), on: b.classList.contains("on") })));
     t.ck("and the screen follows", h.find((k) => k.on)?.label === "Move-in", JSON.stringify(h));
 
@@ -403,8 +403,13 @@ try {
       JSON.stringify(modal.flagged));
     t.ck("and saying nothing reaches a contractor yet",
       /nothing reaches a contractor until you assign/i.test(modal.note), modal.note);
-    t.ck("and it will not go without a trade",
-      modal.go.find((b) => /raise the job/i.test(b.label))?.off === true, JSON.stringify(modal.go));
+    // IT OPENS READY NOW, which is the change: the note on the flagged room
+    // reads "Nail hole repair and paint", so Painting is already ticked and
+    // the button is live. That it will not go with NOTHING ticked is pinned
+    // in the suggestion block below, where the grid can be emptied -- here
+    // the property is that the suggestion did not also PRESS anything.
+    t.ck("the note already picked a trade, so it opens ready",
+      modal.go.find((b) => /raise the job/i.test(b.label))?.off === false, JSON.stringify(modal.go));
     t.ck("and nothing has been sent", sent.length === 0, JSON.stringify(sent));
 
     await page.evaluate(() => [...document.querySelectorAll(".modal .chip")]
@@ -661,6 +666,157 @@ try {
       t.ck("a manager still gets New inspection", add.some((x) => /new inspection/i.test(x)),
         JSON.stringify(add));
       await ctx.close().catch(() => {});
+    }
+  }
+
+  console.log("\n-- you can see which ones are picked --");
+  {
+    // MEASURED, NOT READ OFF THE MARKUP. The class was in the JSX the whole
+    // time and the stylesheet had no rule for it, so every static assertion
+    // about `.chip.on` passed over a chip that looked exactly like its
+    // neighbour. Only the computed pixels can tell the two apart.
+    const look = (page, sel) => page.evaluate((s) => {
+      const els = [...document.querySelectorAll(s)];
+      return els.map((el) => {
+        const cs = getComputedStyle(el);
+        return { text: (el.innerText || "").replace(/\s+/g, " ").trim(),
+          on: el.classList.contains("on"), bg: cs.backgroundColor, fg: cs.color,
+          border: cs.borderTopColor, style: cs.borderTopStyle,
+          pressed: el.getAttribute("aria-pressed") };
+      });
+    }, sel);
+
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
+    DETAIL.rooms = [
+      { id: "r1", name: "Dining room", status: "follow_up",
+        note: "Messy a lot of people, dirt floors, trim needs to be repaired...",
+        position: 0, photos: [] },
+      { id: "r2", name: "Kitchen", status: "ok", note: "Looks great", position: 1, photos: [] },
+    ];
+    SENDS = [];
+
+    {
+      const { ctx, page } = await openOne();
+      // THE KIND PICKER IS ONE CONTROL WITH TWO HALVES.
+      const seg = await look(page, ".insp-kind.seg button");
+      t.ck("move-in and move-out are two halves of one control", seg.length === 2,
+        JSON.stringify(seg.map((x) => x.text)));
+      const on = seg.find((x) => x.on), off = seg.find((x) => !x.on);
+      t.ck("exactly one is picked", !!on && !!off, JSON.stringify(seg.map((x) => x.on)));
+      t.ck("and it does not look like the other",
+        on.bg !== off.bg && on.fg !== off.fg,
+        JSON.stringify({ on: [on.bg, on.fg], off: [off.bg, off.fg] }));
+      t.ck("the picked one is filled rather than merely tinted",
+        on.bg !== "rgba(0, 0, 0, 0)" && on.fg === "rgb(255, 255, 255)",
+        JSON.stringify([on.bg, on.fg]));
+      // NOT COLOUR ALONE. About one man in twelve cannot read a green against
+      // a grey, and this is pressed on a phone in daylight.
+      // NOT COLOUR ALONE, and `innerText` cannot see an icon -- the first
+      // version of this assertion compared string lengths and failed over a
+      // tick that was there, which is a test measuring the wrong thing.
+      const ticks = await page.evaluate(() => [...document.querySelectorAll(".insp-kind.seg button")]
+        .map((b) => ({ on: b.classList.contains("on"), icon: !!b.querySelector("svg") })));
+      t.ck("and it carries a tick as well as a colour",
+        ticks.find((x) => x.on).icon === true && ticks.find((x) => !x.on).icon === false,
+        JSON.stringify(ticks));
+      t.ck("it says so to a screen reader too", on.pressed === "true" && off.pressed === "false",
+        JSON.stringify([on.pressed, off.pressed]));
+
+      // THE TRADES GRID, which is where this was reported.
+      await page.evaluate(() => [...document.querySelectorAll(".pd-acts button")]
+        .find((b) => /raise a job/i.test(b.innerText))?.click());
+      await wait(700);
+      const chips = await look(page, ".modal .chips .chip");
+      t.ck("every trade is offered", chips.length >= 25, String(chips.length));
+      const picked = chips.filter((c) => c.on), spare = chips.filter((c) => !c.on);
+      t.ck("some are picked and some are not", picked.length > 0 && spare.length > 0,
+        JSON.stringify({ on: picked.length, off: spare.length }));
+      t.ck("a picked trade does not look like an unpicked one",
+        picked[0].bg !== spare[0].bg && picked[0].fg !== spare[0].fg,
+        JSON.stringify({ on: [picked[0].bg, picked[0].fg], off: [spare[0].bg, spare[0].fg] }));
+      t.ck("and carries a tick",
+        picked.every((c) => c.text.length > 0) && picked[0].pressed === "true",
+        JSON.stringify(picked.map((c) => c.text)));
+
+      // THE SUGGESTION ITSELF, from the reported note.
+      t.ck("the notes picked the trades, so the grid opens with work in it",
+        picked.map((c) => c.text.replace(/^.*?([A-Z])/, "$1")).join("|").length > 0
+          && picked.length === 3, JSON.stringify(picked.map((c) => c.text)));
+      t.ck("and they are the three the words name",
+        ["Flooring", "Finish Carpentry", "Final Clean"]
+          .every((n) => picked.some((c) => c.text.includes(n))),
+        JSON.stringify(picked.map((c) => c.text)));
+
+      // SAID OUT LOUD, with the word, because a tick nobody can account for
+      // is one nobody will trust enough to leave on.
+      const note = await page.evaluate(() =>
+        (document.querySelector(".insp-sugg")?.innerText || "").replace(/\s+/g, " ").trim());
+      t.ck("the screen says the ticks came from the notes", /suggested from your notes/i.test(note), note);
+      t.ck("and names a word it read", /trim/i.test(note) && /floors/i.test(note), note);
+      t.ck("and says they can be changed", /change/i.test(note), note);
+
+      // IT IS A SUGGESTION AND NOT AN ANSWER: every one comes off.
+      t.ck("nothing to reset while it matches the suggestion",
+        await page.evaluate(() => !document.querySelector(".insp-reset")));
+      await page.evaluate(() => {
+        const c = [...document.querySelectorAll(".modal .chips .chip")].find((b) => b.classList.contains("on"));
+        c?.click();
+      });
+      await wait(400);
+      const after = await look(page, ".modal .chips .chip");
+      t.ck("a suggested trade can be un-ticked",
+        after.filter((c) => c.on).length === 2, JSON.stringify(after.filter((c) => c.on).map((c) => c.text)));
+      // AND IT IS STILL VISIBLE AS A SUGGESTION once removed, so putting it
+      // back does not mean re-reading the paragraph.
+      const dropped = after.find((c) => !c.on && c.style === "dashed");
+      t.ck("and still reads as one the notes asked for", !!dropped, JSON.stringify(dropped));
+      t.ck("the way back appears once it differs",
+        await page.evaluate(() => !!document.querySelector(".insp-reset")));
+      await page.evaluate(() => document.querySelector(".insp-reset")?.click());
+      await wait(400);
+      t.ck("and puts the three back",
+        (await look(page, ".modal .chips .chip")).filter((c) => c.on).length === 3);
+
+      // A DEAD BUTTON WITH NO REASON BESIDE IT is indistinguishable from a
+      // broken one -- which is what the screenshot showed, Raise the job pale
+      // with nothing saying why.
+      await page.evaluate(() => [...document.querySelectorAll(".modal .chips .chip")]
+        .forEach((b) => { if (b.classList.contains("on")) b.click(); }));
+      await wait(500);
+      const dead = await page.evaluate(() => {
+        const b = [...document.querySelectorAll(".modal .form-actions button")]
+          .find((x) => /raise the job/i.test(x.innerText));
+        return { off: !!b?.disabled,
+          why: (document.querySelector(".insp-need")?.innerText || "").replace(/\s+/g, " ").trim() };
+      });
+      t.ck("with nothing ticked the button is dead", dead.off === true);
+      t.ck("and the reason is beside it", /at least one trade/i.test(dead.why), dead.why);
+      await ctx.close().catch(() => {});
+    }
+
+    {
+      // THE OTHER BRANCH, in the same place: a note the rules do not
+      // recognise suggests nothing and says nothing, rather than apologising
+      // for itself on a screen somebody is trying to get through.
+      DETAIL = JSON.parse(JSON.stringify(FIXTURE));
+      DETAIL.rooms = [{ id: "r1", name: "Hallway", status: "fail", note: "needs attention",
+        position: 0, photos: [] }];
+      const { ctx, page } = await openOne();
+      await page.evaluate(() => [...document.querySelectorAll(".pd-acts button")]
+        .find((b) => /raise a job/i.test(b.innerText))?.click());
+      await wait(700);
+      const v = await page.evaluate(() => ({
+        on: [...document.querySelectorAll(".modal .chips .chip.on")].length,
+        sugg: !!document.querySelector(".insp-sugg"),
+        reset: !!document.querySelector(".insp-reset"),
+        why: (document.querySelector(".insp-need")?.innerText || "").trim(),
+      }));
+      t.ck("nothing recognised ticks nothing", v.on === 0, JSON.stringify(v));
+      t.ck("and claims no reading it did not do", v.sugg === false, JSON.stringify(v));
+      t.ck("nor offers a way back to a suggestion that was not made", v.reset === false);
+      t.ck("and the empty grid still says what it wants", /at least one trade/i.test(v.why), v.why);
+      await ctx.close().catch(() => {});
+      DETAIL = JSON.parse(JSON.stringify(FIXTURE));
     }
   }
 

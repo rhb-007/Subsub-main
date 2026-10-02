@@ -169,3 +169,142 @@ export const INSPECTION_WRITE_ROLES = ["admin", "pm"];
 export const INSPECTION_READ_ROLES = [...INSPECTION_WRITE_ROLES, "owner"];
 export const mayWriteInspection = (role) =>
   INSPECTION_WRITE_ROLES.includes(String(role || ""));
+
+// ---------------------------------------------------------------------------
+// WHICH TRADES THE FLAGGED ROOMS ARE ASKING FOR
+// ---------------------------------------------------------------------------
+//
+// Raising a job opened a grid of twenty-nine trades with nothing ticked, and
+// the person who has just walked a unit and written "trim needs to be
+// repaired" has already said which one it is. Making them find Finish
+// Carpentry in a wall of chips is asking them to say it twice, and a form
+// that asks twice is a form abandoned at the second time of asking.
+//
+// IT READS THE WORDS, AND ONLY THE WORDS. The photographs are not read and
+// nothing here pretends otherwise -- that needs a vision model, which is an
+// outbound call, a key, a cost per inspection and a decision about a tenant's
+// photographs leaving this origin. The notes are where the signal already is,
+// and this costs nothing and runs offline.
+//
+// IT IS A SUGGESTION AND NEVER AN ANSWER. Every chip it ticks can be
+// un-ticked, nothing is locked, and the screen says the ticks came from the
+// notes rather than from the person -- a preselection somebody mistakes for
+// their own choice is worse than an empty grid, because they will not read
+// it. Wrong-and-visible is cheap; wrong-and-silent is not.
+
+// Word to trade. Whole words, never substrings -- "pane" inside "panel" and
+// "ac" inside "crack" are how a glazier ends up on a job nobody is glazing,
+// which is the same instinct `crmmap.js` records for a different reason. A
+// phrase is matched whole.
+export const TRADE_HINTS = {
+  plumbing: ["leak", "leaks", "leaking", "leaked", "drip", "drips", "dripping",
+    "tap", "taps", "faucet", "faucets", "basin", "sink", "sinks", "toilet", "toilets",
+    "cistern", "shower", "bath", "bathtub", "plumb", "plumbing", "plumber",
+    "drain", "drains", "drainage", "blocked", "waste pipe", "pipe", "pipes",
+    "water pressure", "hot water", "no water", "running water"],
+  electrical: ["socket", "sockets", "outlet", "outlets", "switch", "switches",
+    "wiring", "wire", "wires", "electrical", "electric", "electrician",
+    "fuse", "breaker", "fitting", "fittings", "bulb", "bulbs", "no power",
+    "smoke alarm", "smoke alarms", "smoke detector", "co detector", "light",
+    "lights", "lighting"],
+  hvac: ["heating", "heater", "furnace", "boiler", "radiator", "radiators",
+    "thermostat", "air con", "aircon", "air conditioning", "hvac", "vent",
+    "vents", "ventilation", "extractor", "cooling", "no heat"],
+  painting: ["paint", "paints", "painted", "painting", "repaint", "scuff",
+    "scuffs", "scuffed", "scratch", "scratches", "scratched", "mark", "marks",
+    "marked", "stain", "stains", "stained", "wall", "walls", "touch up",
+    "touch-up", "nail hole", "nail holes", "filler", "peeling", "chipped"],
+  drywall: ["drywall", "sheetrock", "plasterboard", "plaster", "patch",
+    "patching", "hole in the wall", "holes in the wall"],
+  flooring: ["carpet", "carpets", "floor", "floors", "flooring", "laminate",
+    "vinyl", "lino", "floorboard", "floorboards", "hardwood", "underlay",
+    "subfloor"],
+  tile_stone: ["tile", "tiles", "tiled", "tiling", "grout", "grouting",
+    "stone", "marble", "backsplash"],
+  cabinets_counters: ["cabinet", "cabinets", "cupboard", "cupboards", "drawer",
+    "drawers", "countertop", "countertops", "counter", "worktop", "vanity"],
+  trim_carpentry: ["trim", "trims", "skirting", "baseboard", "baseboards",
+    "moulding", "molding", "architrave", "casing", "shelf", "shelves",
+    "handrail", "banister", "carpentry", "carpenter"],
+  windows_doors: ["window", "windows", "door", "doors", "lock", "locks",
+    "latch", "handle", "handles", "hinge", "hinges", "screen", "screens",
+    "glazing", "glass", "pane", "panes", "frame", "frames"],
+  cleaning: ["clean", "cleans", "cleaned", "cleaning", "dirty", "dirt",
+    "filthy", "grime", "grimy", "dust", "dusty", "rubbish", "trash", "debris",
+    "mess", "messy", "odour", "odor", "smell", "smells", "stale"],
+  restoration: ["water damage", "flood", "flooded", "flooding", "damp",
+    "mould", "mold", "mildew", "smoke damage", "fire damage", "soot",
+    "water stain", "water stains"],
+  landscaping: ["garden", "lawn", "grass", "hedge", "weeds", "overgrown",
+    "shrub", "shrubs", "tree", "trees"],
+  hardscaping: ["driveway", "paving", "pavers", "path", "paths"],
+  deck_fence: ["deck", "decking", "fence", "fences", "fencing", "gate",
+    "gates", "railing", "railings"],
+  garage_doors: ["garage door", "garage doors", "roller door", "up and over"],
+  roofing: ["roof", "roofs", "roofing", "shingle", "shingles", "flashing"],
+  gutters: ["gutter", "gutters", "downpipe", "downpipes", "downspout"],
+  masonry: ["brick", "bricks", "brickwork", "mortar", "pointing", "render"],
+  concrete: ["concrete", "slab", "screed"],
+  insulation: ["insulation", "insulated", "draught", "draughty", "drafty"],
+};
+
+// A ROOM THAT NAMES A SYSTEM SAYS WHICH TRADE; A ROOM THAT NAMES A SPACE
+// DOES NOT. "Shower and bath" is plumbing whatever is wrong with it, while
+// "Bathroom 1" flagged for a cracked mirror is not -- so the spaces are
+// deliberately absent and the note decides for them. Getting this backwards
+// would tick plumbing on every bathroom in the building.
+export const ROOM_TRADES = {
+  "sink and taps": "plumbing",
+  "toilet": "plumbing",
+  "shower and bath": "plumbing",
+  "heating and cooling": "hvac",
+  "smoke alarms": "electrical",
+  "outlets and switches": "electrical",
+  "lighting and fixtures": "electrical",
+  "windows and screens": "windows_doors",
+  "doors and locks": "windows_doors",
+  "cabinets and drawers": "cabinets_counters",
+};
+
+const WORD_RE = {};
+const hitsWord = (hay, word) => {
+  // Built once per word and kept: this runs over every flagged room every
+  // time the modal re-renders, and recompiling two hundred regexes per
+  // keystroke is the sort of thing that makes a phone feel broken.
+  let re = WORD_RE[word];
+  if (!re) {
+    const esc = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    re = WORD_RE[word] = new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`, "i");
+  }
+  return re.test(hay);
+};
+
+// Lowercased, punctuation flattened to spaces, so "floors," and "floors" are
+// the same word and a note written in one run-on line still matches.
+const flatten = (s) => ` ${String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+
+export function suggestTrades(rooms = []) {
+  const flagged = (rooms || []).filter(isFlagged);
+  const why = {};
+  const add = (trade, reason) => {
+    if (!trade || !reason) return;
+    (why[trade] ||= []);
+    if (!why[trade].includes(reason)) why[trade].push(reason);
+  };
+
+  for (const r of flagged) {
+    const name = String(r?.name || "").trim();
+    const roomTrade = ROOM_TRADES[name.toLowerCase()];
+    if (roomTrade) add(roomTrade, name);
+    // The note and the room name are read together: somebody writing
+    // "Kitchen" in the name box and "tap drips" in the note has said both
+    // halves, and only one of them is in either field.
+    const hay = flatten(`${name} ${r?.note || ""}`);
+    for (const [trade, words] of Object.entries(TRADE_HINTS)) {
+      for (const w of words) {
+        if (hitsWord(hay, w)) { add(trade, w); break; }
+      }
+    }
+  }
+  return { trades: Object.keys(why), why };
+}

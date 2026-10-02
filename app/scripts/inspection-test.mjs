@@ -28,7 +28,8 @@ import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { inspectionTally, whyNotFinish, inspectionJobScope, flaggedRooms,
   ROOM_STATUSES, STANDARD_ROOMS, INSPECTION_READ_ROLES,
-  mayWriteInspection } from "../shared/inspection.js";
+  mayWriteInspection, suggestTrades, TRADE_HINTS, ROOM_TRADES } from "../shared/inspection.js";
+import { TRADES } from "../shared/trades.js";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
@@ -377,7 +378,96 @@ try {
     ck("and so is somebody with no seat here", s2 === 403, String(s2));
   }
 
-  console.log("\n-- sending the finished report to the building's owner --");
+  console.log("\n-- the trades the notes are asking for --");
+{
+  const of = (rooms) => suggestTrades(rooms).trades;
+
+  // THE REPORTED NOTE, verbatim. A fixture written to flatter the rule is a
+  // test of its own fixture; this is the sentence off the screenshot.
+  const real = [{ name: "Dining room", status: "follow_up",
+    note: "Messy a lot of people, dirt floors, trim needs to be repaired..." }];
+  const got = suggestTrades(real);
+  ck("it reads the reported note", got.trades.sort().join(",") === "cleaning,flooring,trim_carpentry",
+    JSON.stringify(got.trades));
+  // AND IT SAYS WHICH WORD, because a tick nobody can account for is one
+  // nobody will trust enough to leave on.
+  ck("and names the word each came from",
+    got.why.trim_carpentry.includes("trim") && got.why.flooring.includes("floors")
+      && got.why.cleaning.includes("dirt"), JSON.stringify(got.why));
+
+  // ONLY WHAT IS FLAGGED. The scope the job carries is the flagged rooms, so
+  // a trade suggested off a room that was fine would put somebody on site for
+  // work that is not in the job.
+  ck("an OK room contributes nothing", of([{ name: "Kitchen", status: "ok", note: "tap drips" }]).length === 0);
+  ck("nor does one nobody has walked",
+    of([{ name: "Kitchen", status: "unchecked", note: "tap drips" }]).length === 0);
+  ck("while the same words flagged do",
+    of([{ name: "Kitchen", status: "fail", note: "tap drips" }]).includes("plumbing"));
+
+  // A ROOM THAT NAMES A SYSTEM SAYS WHICH TRADE; A ROOM THAT NAMES A SPACE
+  // DOES NOT. Getting this backwards ticks plumbing on every bathroom in the
+  // building, whatever is actually wrong in it.
+  ck("a space says nothing on its own",
+    of([{ name: "Bathroom 1", status: "fail", note: "Mirror cracked" }]).includes("plumbing") === false,
+    JSON.stringify(of([{ name: "Bathroom 1", status: "fail", note: "Mirror cracked" }])));
+  ck("a system does, whatever is wrong with it",
+    of([{ name: "Shower and bath", status: "fail", note: "Mirror cracked" }]).includes("plumbing"));
+  ck("and the room list's spaces are deliberately absent",
+    !ROOM_TRADES["kitchen"] && !ROOM_TRADES["bathroom 1"] && !ROOM_TRADES["bedroom 1"]
+      && !ROOM_TRADES["walls and floors"],
+    JSON.stringify(Object.keys(ROOM_TRADES)));
+
+  // WHOLE WORDS, NEVER SUBSTRINGS -- the rule `crmmap.js` records for a
+  // different reason, and the same failure: a trade on a job nobody is doing.
+  ck("ac inside crack is not air conditioning",
+    !of([{ name: "Ceilings", status: "fail", note: "A crack above the window" }]).includes("hvac"),
+    JSON.stringify(of([{ name: "Ceilings", status: "fail", note: "A crack above the window" }])));
+  ck("pane inside panel is not glazing",
+    !of([{ name: "Hallway", status: "fail", note: "The panel is loose" }]).includes("windows_doors"));
+  ck("tile inside ventilation is not tiling",
+    !of([{ name: "Hallway", status: "fail", note: "ventilation poor" }]).includes("tile_stone"));
+  ck("but the word itself matches with punctuation on it",
+    of([{ name: "Bedroom 2", status: "fail", note: "Carpet, stained." }]).includes("flooring"));
+  ck("and in any case",
+    of([{ name: "Bedroom 2", status: "fail", note: "CARPET RUINED" }]).includes("flooring"));
+
+  // NOTHING RECOGNISED SUGGESTS NOTHING. A guess over a sentence this does
+  // not understand is worse than an empty grid, because it reads as a
+  // reading.
+  ck("an unrecognised note suggests nothing",
+    of([{ name: "Hallway", status: "fail", note: "needs attention" }]).length === 0);
+  ck("and no rooms at all suggests nothing", of([]).length === 0 && of().length === 0);
+
+  // Several rooms fold into one set rather than one list per room.
+  const many = of([
+    { name: "Bathroom 2", status: "fail", note: "Tap drips" },
+    { name: "Living room", status: "follow_up", note: "Scuffed walls" },
+    { name: "Bedroom 1", status: "fail", note: "Carpet stained" },
+  ]);
+  ck("several rooms fold into one set",
+    many.includes("plumbing") && many.includes("painting") && many.includes("flooring"),
+    JSON.stringify(many));
+  ck("with no duplicates", new Set(many).size === many.length, JSON.stringify(many));
+
+  // EVERY HINT NAMES A REAL TRADE. A map keyed on an id that does not exist
+  // is a suggestion that silently ticks nothing -- and nothing on the screen
+  // would say so, which is the misspelt-capability shape this file records.
+  const ids = new Set(TRADES.map((t) => t.id));
+  const badHint = Object.keys(TRADE_HINTS).filter((k) => !ids.has(k));
+  const badRoom = Object.values(ROOM_TRADES).filter((v) => !ids.has(v));
+  ck("every hint names a trade that exists", badHint.length === 0, JSON.stringify(badHint));
+  ck("and so does every room mapping", badRoom.length === 0, JSON.stringify(badRoom));
+
+  // IT READS THE WORDS AND NOT THE PHOTOGRAPHS, said here rather than
+  // claimed: a room with pictures and nothing written suggests nothing, which
+  // is the honest limit of this and the thing a later pass must not assume
+  // was fixed.
+  ck("photographs are not read, and this says so",
+    of([{ name: "Hallway", status: "fail", note: "",
+      photos: [{ id: "p1" }, { id: "p2" }] }]).length === 0);
+}
+
+console.log("\n-- sending the finished report to the building's owner --");
 {
   // One walk, finished, so every assertion below is about the SEND rather
   // than about getting an inspection into a sendable state.
