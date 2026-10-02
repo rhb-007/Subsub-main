@@ -5496,6 +5496,51 @@ refactor.
   reached a build, which is the first time that guard has earned its keep at
   the gate rather than after a failed parse.
 
+
+- **DIRECTIONS WITH NO CONTROL BESIDE THEM ARE A DEAD END WEARING
+  INSTRUCTIONS.** The send panel's empty state read *"Add the owner on the
+  building in Properties and the finished report can go to them"* — a sentence
+  naming another screen, on a screen somebody had just finished a walk on.
+  Reported with the words *"so not a dead end > add owner and send"*, which is
+  the whole of it. This file has recorded the no-way-in failure a dozen times
+  in its large form, where a route exists and nothing can reach it; this is its
+  smallest, and it is the one most easily written by accident, because the
+  sentence *sounds* like help.
+
+  **It is the SAME form the Properties screen opens**, prefilled with this
+  building and the owner role — the two things pressing the button has already
+  said. `addOwner` is hoisted and passed to both, rather than a second handler
+  or a second form: two would be two things holding the same seat limit, the
+  same preset and the same invite.
+
+  **And the loop closes without leaving the screen, because the seat is written
+  on save.** `POST /api/account-users` writes the membership and its property
+  scope immediately — before the owner has set a password — so an owner added
+  here is a recipient the moment the panel re-reads, and the report goes while
+  somebody is still standing where they asked for it. That is what makes *add
+  owner and send* one gesture rather than a round trip through Properties.
+
+  Two mechanics hold it. The follow-on is held in its **own state beside the
+  form** and never on the preset: the preset is spread into the form's fields,
+  so a callback riding in there is a key that ends up in a request body, which
+  is the extra-field shape one along from the one that deleted a W-9. And it is
+  **awaited after the save**, so a refused write does not run it.
+
+  **The panel is KEYED on who it can go to**, which is the part that would have
+  shipped broken. `InspectionSend` seeds its ticks on mount from "whoever has
+  not had it" — so an owner arriving into a component mounted when the list was
+  empty lands **un-ticked**, leaving Send dead over the very person somebody
+  had just added in order to send to. The key remounts it when the recipients
+  change, which is exactly when re-defaulting is right.
+
+  And the test for all of it had two of this file's own traps in its first
+  version. It matched the submit button as Add/Save/Invite when it reads
+  **Create user**, so it clicked nothing and reported the feature as not
+  working rather than the selector as wrong. And it read `after.who[0].ticked`
+  unguarded, so the block **threw** on exactly the case it exists to catch,
+  taking the assertions after it down — the read-through-`link?.` lesson, for
+  the third time.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

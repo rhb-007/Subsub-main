@@ -100,6 +100,15 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   }
   if (path.startsWith("/api/account-by-subdomain/")) return [200, acct(KIND)];
   if (path === "/api/account") return [200, acct(KIND)];
+  if (path === "/api/account-users" && method === "POST") {
+    // The real route writes the seat and its property scope immediately, so
+    // the stub does too -- an owner is a recipient before they have set a
+    // password, which is the whole reason the button can be pressed here.
+    sent.push({ path, body });
+    RECIPIENTS = [{ id: "u_new", name: body.name, email: body.email }];
+    return [201, { id: "u_new", name: body.name, email: body.email, role: "owner",
+      propertyIds: body.propertyIds || [], hasLogin: false }];
+  }
   if (path === "/api/account-users") return [200, USERS(ROLE)];
   if (path === "/api/properties") return [200, [{ id: "prop_1", accountId: "acc_x",
     name: "Press Apartments", address: "1620 Belmont Ave", city: "Seattle", state: "WA",
@@ -571,16 +580,20 @@ try {
     }
 
     {
-      // NOT A DISABLED BUTTON. With nobody to send to there is nothing to
-      // press, and a dead Send says neither what is wrong nor where to go.
+      // NOT A DISABLED SEND. With nobody to send to there is nothing to send,
+      // and a dead Send says neither what is wrong nor what to do -- so the
+      // one button there is, is the one that fixes it. This block used to pin
+      // "no button at all" over a sentence pointing at another screen, which
+      // is the dead end the block below now drives end to end; the property
+      // that survives is that nothing offers to SEND.
       finished(); SENDS = []; RECIPIENTS = [];
       const { ctx, page } = await openOne();
       const v = await panel(page);
       t.ck("with no owner on the building the panel is still there", !!v, JSON.stringify(v));
-      t.ck("and offers no button at all", v.who.length === 0 && v.button === "",
-        JSON.stringify({ who: v.who.length, b: v.button }));
-      t.ck("it says where the owner is added instead",
-        /Properties/.test(v.note) && /owner/i.test(v.note), v.note);
+      t.ck("nobody is listed, so nothing offers to send", v.who.length === 0
+        && !/send/i.test(v.button), JSON.stringify({ who: v.who.length, b: v.button }));
+      t.ck("and the one control is the way out of it",
+        /add an owner/i.test(v.button), JSON.stringify(v.button));
       await ctx.close().catch(() => {});
       RECIPIENTS = [
         { id: "u_own", name: "Marion Oakes", email: "marion@oakes.test" },
@@ -667,6 +680,97 @@ try {
         JSON.stringify(add));
       await ctx.close().catch(() => {});
     }
+  }
+
+  console.log("\n-- with no owner on the building it is not a dead end --");
+  {
+    // Reported against the sentence this replaces: "Add the owner on the
+    // building in Properties and the finished report can go to them" is
+    // directions, and directions with no control beside them are a dead end
+    // wearing instructions -- the no-way-in failure this repository records
+    // over and over, here in its smallest form.
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
+    DETAIL = { ...DETAIL, status: "finished", finishedAt: "2026-10-02 01:00:00" };
+    DETAIL.rooms = DETAIL.rooms.map((r) => ({ ...r, status: r.status === "unchecked" ? "ok" : r.status }));
+    SENDS = []; RECIPIENTS = [];
+
+    const { ctx, page } = await openOne();
+    const empty = await page.evaluate(() => {
+      const el = document.querySelector(".insp-send");
+      return {
+        note: (el?.querySelector(".panel-note")?.innerText || "").replace(/\s+/g, " ").trim(),
+        btn: (el?.querySelector(".insp-send-act button")?.innerText || "").replace(/\s+/g, " ").trim(),
+        rows: el ? el.querySelectorAll(".insp-to li").length : -1,
+      };
+    });
+    t.ck("there is nobody to send to", empty.rows === 0, JSON.stringify(empty));
+    t.ck("and a control rather than directions", /add an owner/i.test(empty.btn), JSON.stringify(empty));
+    // AND IT DOES NOT SEND THEM SOMEWHERE ELSE TO DO IT. The old sentence
+    // named another screen; naming one at all is the thing being fixed.
+    t.ck("the copy no longer points at another screen",
+      !/in Properties/i.test(empty.note), empty.note);
+    t.ck("it says what adding them buys", /finished report/i.test(empty.note), empty.note);
+
+    // PRESSING IT OPENS THE FORM, prefilled with the building and the role --
+    // the two things pressing it has already said.
+    sent.length = 0;
+    await page.evaluate(() => document.querySelector(".insp-send-act button")?.click());
+    await wait(700);
+    const form = await page.evaluate(() => {
+      const m = document.querySelector(".modal");
+      return { open: !!m, heading: (m?.querySelector("h2")?.innerText || "").trim(),
+        roles: [...(m?.querySelectorAll(".role-pick button") || [])]
+          .map((b) => ({ label: b.innerText.replace(/\s+/g, " ").trim(), on: b.classList.contains("on") })) };
+    });
+    t.ck("the form opens", form.open === true, JSON.stringify(form));
+    t.ck("nothing has been written by opening it", sent.length === 0, JSON.stringify(sent));
+    t.ck("and the role is already owner",
+      form.roles.some((r) => r.on && /owner/i.test(r.label)), JSON.stringify(form.roles));
+
+    // ADD ONE, AND THE PANEL BEHIND IT CATCHES UP RATHER THAN STILL SAYING
+    // NOBODY OWNS THIS BUILDING.
+    await page.evaluate(() => {
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      const ins = [...document.querySelectorAll(".modal input")];
+      const fill = (el, v) => { if (!el) return; el.focus(); set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); };
+      fill(ins[0], "Marion Oakes");
+      fill(ins.find((i) => i.type === "email") || ins[1], "marion@oakes.test");
+    });
+    await wait(400);
+    // The submit reads "Create user" -- the first version of this matched
+    // Add/Save/Invite and silently clicked nothing, which reported as the
+    // feature not working rather than as the selector being wrong.
+    await page.evaluate(() => [...document.querySelectorAll(".modal .form-actions button")]
+      .find((b) => /create user/i.test(b.innerText))?.click());
+    await wait(1600);
+    const after = await page.evaluate(() => {
+      const el = document.querySelector(".insp-send");
+      return {
+        modal: !!document.querySelector(".modal"),
+        who: [...(el?.querySelectorAll(".insp-to li") || [])].map((li) => ({
+          name: (li.querySelector("b")?.innerText || "").trim(),
+          ticked: !!li.querySelector("input[type=checkbox]")?.checked })),
+        btn: (el?.querySelector(".insp-send-act button")?.innerText || "").replace(/\s+/g, " ").trim(),
+        off: !!el?.querySelector(".insp-send-act button")?.disabled,
+      };
+    });
+    t.ck("the owner was written", sent.some((x) => /account-users/.test(x.path)), JSON.stringify(sent));
+    t.ck("and the panel now lists them", after.who.length === 1 && /Marion/.test(after.who[0]?.name || ""),
+      JSON.stringify(after));
+    // THE WHOLE POINT OF THE PRESS: add owner AND send, without a second
+    // decision in between. A newcomer landing un-ticked would leave Send dead
+    // over the person somebody had just added in order to send to.
+    t.ck("ticked, because that is what the press was for", after.who[0]?.ticked === true,
+      JSON.stringify(after.who));
+    t.ck("and Send is live", after.off === false && /send the report/i.test(after.btn),
+      JSON.stringify(after));
+    await ctx.close().catch(() => {});
+
+    RECIPIENTS = [
+      { id: "u_own", name: "Marion Oakes", email: "marion@oakes.test" },
+      { id: "u_own2", name: "Rhys Vance", email: "rhys@vance.test" },
+    ];
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
   }
 
   console.log("\n-- you can see which ones are picked --");

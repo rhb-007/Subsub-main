@@ -2144,6 +2144,11 @@ export default function SubSub() {
   };
   const [mobileNav, setMobileNav] = useState(false);
   const [userForm, setUserForm] = useState(false);
+  // What to do once that form has actually written somebody. Held beside the
+  // form rather than ON it: the preset is spread into the form's fields and
+  // a callback riding in there is a key that ends up in a PATCH body, which
+  // is the extra-field shape one along from the one that deleted a W-9.
+  const [userFormDone, setUserFormDone] = useState(null);
   const [editUser, setEditUser] = useState(null);
   const [allJobs, setJobs] = useState([]);   // global; a crew can only be in one place
   const [query, setQuery] = useState("");
@@ -3196,6 +3201,23 @@ export default function SubSub() {
   const [addedUser, setAddedUser] = useState(null);
   // Which pane of My account another screen has asked for.
   const [openPane, setOpenPane] = useState(null);
+  // ADDING AN OWNER, FROM WHEREVER THE QUESTION CAME UP. The Properties screen
+  // asks it beside the building; a finished inspection asks it because there
+  // is nobody to send the report to. One handler and one form rather than a
+  // second copy of either -- two would be two things holding the same seat
+  // limit, the same preset and the same invite.
+  //
+  // The seat is written the moment this saves, before they have set a
+  // password, so an owner added here is a recipient immediately and the
+  // report can go while somebody is still standing on the screen that asked.
+  const addOwner = (p, onDone) => {
+    if (atSeatLimit) { setUpgradePrompt({ kind: "user" }); return; }
+    // The role and the building are the two things pressing this button has
+    // already said, so the form does not ask them again.
+    setUserFormDone(() => onDone || null);
+    setUserForm({ role: "owner", propertyIds: [p.id] });
+  };
+
   const addUser = async (u) => {
     setAddedUser(null);
     let r;
@@ -5636,7 +5658,9 @@ export default function SubSub() {
           /* The job it raised, opened where every other job is opened: one
              implementation of "show me this job", not a second copy of the
              card on a screen that is about something else. */
-          onGoJobs={(jobId) => { setTab("jobs"); if (jobId) openJob(jobId); }} />
+          onGoJobs={(jobId) => { setTab("jobs"); if (jobId) openJob(jobId); }}
+          /* The same handler and the same form the Properties screen uses. */
+          onAddOwner={addOwner} />
       )}
 
       {tab === "properties" && can("properties") && (
@@ -5656,12 +5680,7 @@ export default function SubSub() {
             && m.accountId === account.id && m.role === "owner"))
             .map((u) => ({ ...u, propertyIds: (memberships.find((m) => m.userId === u.id
               && m.accountId === account.id) || {}).propertyIds || [] }))}
-          onAddOwner={(p) => {
-            if (atSeatLimit) { setUpgradePrompt({ kind: "user" }); return; }
-            // The role and the building are the two things pressing this button
-            // has already said, so the form does not ask them again.
-            setUserForm({ role: "owner", propertyIds: [p.id] });
-          }}
+          onAddOwner={addOwner}
           onEditOwner={(u) => setEditUser(u)}
           onResendInvite={resendInvite}
           transfers={transfers} viewingAccountId={account.id} accountKind={kindOf(account)}
@@ -6531,10 +6550,19 @@ export default function SubSub() {
             await reloadAccounts();
             setBecomeHiring(false);
           }} /></Modal>}
-      {userForm && <Modal onClose={() => setUserForm(false)}>
-        <UserForm subs={subs} properties={accountProperties} jobs={jobs} accountKind={kindOf(account)} onSubmit={addUser}
+      {userForm && <Modal onClose={() => { setUserForm(false); setUserFormDone(null); }}>
+        <UserForm subs={subs} properties={accountProperties} jobs={jobs} accountKind={kindOf(account)}
+          onSubmit={async (b) => {
+            await addUser(b);
+            // Whoever opened the form decides what happens next -- the
+            // inspection that asked for an owner wants to re-read itself, and
+            // the Properties screen wants nothing. Awaited first, so a refused
+            // save does not run the follow-on.
+            const after = userFormDone; setUserFormDone(null);
+            if (after) await after();
+          }}
           preset={userForm === true ? null : userForm}
-          onCancel={() => setUserForm(false)} /></Modal>}
+          onCancel={() => { setUserForm(false); setUserFormDone(null); }} /></Modal>}
       {editUser && <Modal onClose={() => setEditUser(null)}>
         <UserForm subs={subs} properties={accountProperties} jobs={jobs} accountKind={kindOf(account)}
           existing={editUser} isSelf={editUser.id === currentUserId}
@@ -25187,7 +25215,7 @@ function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPh
 
 // One inspection, open.
 function InspectionDetail({ inspection, property, onReload, onClose, onRaise, onGoJobs,
-  subs = [], unitWord = "Unit", canEdit = true }) {
+  subs = [], unitWord = "Unit", canEdit = true, onAddOwner }) {
   const [adding, setAdding] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -25418,7 +25446,14 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
           with that list, so a name typed anywhere cannot be made a recipient.
           A report goes to somebody who can open it. */}
       {canEdit && canSendInspection(inspection) && (
-        <InspectionSend inspection={inspection} onReload={onReload} />
+        /* KEYED ON WHO IT CAN GO TO, so an owner added from inside the panel
+           arrives TICKED. The default is "whoever has not had it" and it is
+           seeded on mount; without the key the newcomer would land in a list
+           whose ticks were decided when the list was empty, and Send would be
+           dead over the person somebody had just added to send to. */
+        <InspectionSend inspection={inspection} onReload={onReload}
+          key={(inspection.recipients || []).map((u) => u.id).join(",")}
+          onAddOwner={onAddOwner && property ? () => onAddOwner(property) : null} />
       )}
 
       <div className="pd-acts">
@@ -25604,7 +25639,7 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
 // and a tenant is the SUBJECT of the document rather than a party to it --
 // handing somebody the record their own deposit will be argued from is a
 // product decision about who may dispute what, not a checkbox.
-function InspectionSend({ inspection, onReload }) {
+function InspectionSend({ inspection, onReload, onAddOwner }) {
   const to = inspection.recipients || [];
   const sends = inspection.sends || [];
   const sentTo = (id) => sends.find((s) => s.userId === id);
@@ -25618,18 +25653,30 @@ function InspectionSend({ inspection, onReload }) {
   const [err, setErr] = useState("");
   const [done, setDone] = useState(null);
 
-  // NOT A DISABLED BUTTON. There is nothing to tick, so there is nothing to
-  // press, and a dead Send over an empty list says neither what is wrong nor
-  // where to go. The owner has to hold a seat on this building before a
-  // report can reach them, and that is done on the building.
+  // NOT A DISABLED BUTTON, AND NOT DIRECTIONS EITHER. There is nothing to
+  // tick, so there is nothing to press -- but the first version answered that
+  // with a sentence telling somebody to go to another screen and do it there,
+  // which is a dead end wearing instructions. Reported as exactly that. The
+  // button opens the SAME form the Properties screen opens, prefilled with
+  // this building, and the panel re-reads itself afterwards: the seat is
+  // written on save, so the owner is a recipient before they have even set a
+  // password and the report goes without leaving this screen.
   if (!to.length) {
     return (
       <div className="insp-send">
         <div className="form-sec">Send it to the owner</div>
         <p className="panel-note">
-          Nobody who owns this building holds a seat here yet. Add the owner on
-          the building in Properties and the finished report can go to them.
+          Nobody who owns this building holds a seat here yet. Add them and the
+          finished report can go straight to them — they read it in their own
+          account once they set a password.
         </p>
+        {onAddOwner && (
+          <div className="insp-send-act">
+            <button className="btn-solid small" onClick={onAddOwner}>
+              <UserPlus size={14} /> Add an owner
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -25719,7 +25766,7 @@ function InspectionSend({ inspection, onReload }) {
 
 
 function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
-  unitWord = "Unit", canEdit = true }) {
+  unitWord = "Unit", canEdit = true, onAddOwner }) {
   const [form, setForm] = useState(null);
   const [open, setOpen] = useState(null);   // the loaded inspection
   const [busy, setBusy] = useState(false);
@@ -25782,6 +25829,11 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
         {err && <p className="billing-err" role="alert">{err}</p>}
         <InspectionDetail inspection={open} subs={subs} unitWord={unitWord}
           canEdit={canEdit}
+          /* AND IT RE-READS ITSELF AFTERWARDS. The seat is written on save, so
+             the owner who was just added is a recipient the moment this
+             reloads -- without it the panel would still say nobody owns this
+             building, over a row that now exists. */
+          onAddOwner={onAddOwner && ((p) => onAddOwner(p, () => load(open.id)))}
           property={properties.find((p) => p.id === open.propertyId)}
           onReload={() => load(open.id)}
           onRaise={raise}
