@@ -6146,6 +6146,100 @@ refactor.
   on a work order would be the way, and it is a question about what people will
   actually fill in rather than an endpoint.
 
+- **SUPPORT COULD NOT FIX A RECORD THE CUSTOMER CANNOT EITHER, AND THE SECOND
+  FAULT BEHIND THAT SCREEN WAS NOT ABOUT STAFF AT ALL.** Reported from an
+  impersonated session: a superadmin standing in Sound Property Management
+  opened Pacific apartment maintenance — a contractor who answers for
+  themselves — and got the refusal pane, *"they are not yours to change here"*,
+  with no way to upload a document for them. *"A superadmin should be able to
+  edit all users and upload documents on behalf of all users to get them set up
+  and then perform emergency changes."*
+
+  **THE DOCUMENTS HALF WAS A HOLE FOR EVERY ACCOUNT, NOT ONLY FOR STAFF.** The
+  block was gated on `locked`, which is `answersForItself` — and that answers
+  *may I rewrite their company record*. Uploading a certificate is a different
+  question, and `mayWriteCompanyDocs` has answered it since it was written with
+  **any live engagement**, deliberately, because a hiring account being emailed
+  a COI and uploading it is the ordinary case rather than the odd one. So for
+  every contractor with their own login the route took the upload and the screen
+  offered no control — **the screen stricter than the route, which this file has
+  called the same lie as looser three times** — and nobody could see it, because
+  the only symptom is a button that is not there.
+
+  **UPLOADING IS ADDITIVE AND DELETING IS NOT, which is why the two are not
+  gated together.** An upload supersedes rather than overwriting, so the worst
+  case is one more row in the history; a delete sets the boolean to 0 and takes
+  them off **every roster they are on**, over a record somebody else holds. The
+  route is unchanged and still allows it — so this is **prominence, not
+  permission**, the distinction the pack card already draws: the screen is not
+  inventing a stricter rule, it is declining to put a destructive control on
+  somebody else's record where a moment ago there was none. Shipping Delete as a
+  side effect of fixing Upload would have been widening scope in the one
+  direction nobody asked for.
+
+  **AND `companyAnswersForItself` WAS REFUSING THE ONE CALLER IT WAS NEVER MEANT
+  TO.** That rule stops *one hiring account* rewriting *another business's*
+  record and it does not move — a plain admin is still refused, and the test
+  pins that first. A staff member standing in the account is not that: they are
+  the one party who can fix a record while the customer is on the telephone, and
+  this file has already written down what the alternative is — *"The only
+  remaining remedy was SQL against D1, which is the answer this file refuses
+  everywhere else."*
+
+  `staffMayWriteShared` in `app/shared/seats.js`, read by the route and by the
+  form so the screen cannot invite a save the server refuses or hide one it
+  would have taken. Three things make it safe and all three are load-bearing.
+  **It reads `impersonatedBy`, which comes off the session ROW** — the caller
+  names a token and never an identity, so there is nothing a customer can send
+  to claim it, and a test posts forged `X-Impersonated-By` and `X-Staff-User-Id`
+  headers to prove it buys nothing. **It is a TEAM SEAT only**, because staff
+  sitting in a tenant's or a contractor's seat are there to see what that person
+  sees and widening those would make reproducing the customer's view impossible
+  — the entire reason naming a seat exists. And **it is not a silent power**.
+
+  **THE FIELD IT READS HAS EXISTED SINCE IMPERSONATION SHIPPED, WITH A COMMENT
+  SAYING NOTHING READ IT YET.** *"Who is really here. Nothing reads it yet; it is
+  set because a session whose real actor is unrecoverable is the one thing this
+  table exists to prevent."* Eleventh time this file has recorded a correct piece
+  with nothing wired to it, and the first where the piece was written in
+  anticipation of exactly this. It is spent now.
+
+  **RECORDED AS ITS OWN EVENT, not a flag on the ordinary one**, because *which
+  fields of somebody else's shared row* is the whole of what anybody asks
+  afterwards. `sub.company_written_by_staff` names the staff user — the only
+  place the real actor exists, since `actor_id` is the seat — and an
+  engagement-only save deliberately records **no** override, or every staff save
+  would look like one and the log would stop meaning anything. That is the
+  banner's own promise kept: *actions are recorded* is decorative otherwise.
+
+  **AND THE WARNING DID NOT BECOME SILENCE.** For staff the danger inverts
+  rather than disappearing: somebody correcting what looks like this account's
+  copy of a contractor, and changing what every account that hires them sees. So
+  the amber refusal is replaced by a note in the brand colour — **two different
+  messages must not wear one colour**, amber here means *you cannot* — saying
+  the change reaches all of them and is recorded against their name. The
+  documents note says the same thing one layer down for an ordinary account: a
+  file added here goes onto *their* record, and nothing of theirs is replaced.
+
+  **What the browser suite CANNOT reach, said rather than faked:
+  `resumeSession` deliberately refuses to resume an impersonated session** — a
+  refresh ends it, which is what stops the flag going stale against the token
+  the API is checking — so there is no way to land the harness in one. The staff
+  half is driven on the route instead, through a real `impersonation_sessions`
+  row, including a handed-back token and a token nobody issued. Writing a
+  browser assertion for it would have been a test of its own fixture.
+
+  Two traps in writing the tests. `String(row)` on a D1 row throws rather than
+  printing, so the failure detail took down the block — the
+  read-through-`link?.` shape in a new costume. And an assertion reading
+  `got.staffOverride || got.staffOverrode` **passes a rename**, which is the
+  could-not-fail shape this file keeps catching; it pins the one spelling now.
+
+  Six mutations fire, each on its own assertion: dropping the team-seat half,
+  giving the override to everybody, not recording it, recording it for an
+  engagement-only save, putting the documents back behind the lock, and offering
+  Delete on somebody else's record.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

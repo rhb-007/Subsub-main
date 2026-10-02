@@ -116,3 +116,42 @@ export const isTeamSeat = (role) => TEAM_ROLES.includes(role);
 // explicit act with its own route.
 export const staffStandsIn = (role, seats = []) =>
   isTeamSeat(role) && !hasAdminSeat(seats);
+
+// MAY THIS CALLER WRITE A COMPANY ROW SOMEBODY ELSE ANSWERS FOR?
+//
+// `companyAnswersForItself` is deliberately unscoped and the reason is
+// recorded at length: `companies` is a shared row, so "I have them on my
+// roster" is enough to correct a record I typed in myself and is NOT enough to
+// rewrite a business that has its own people. That rule is right and does not
+// move.
+//
+// What it was never meant to refuse is SUPPORT. A staff member standing in an
+// account is not another hiring account trying to overwrite somebody's
+// business: they are the one party who can fix a record while the customer is
+// on the telephone, and this project has already written down what the
+// alternative is -- *"The only remaining remedy was SQL against D1, which is
+// the answer this file refuses everywhere else."*
+//
+// Three things make it safe, and all three are load-bearing:
+//
+//   IT READS `impersonatedBy`, WHICH IS SET FROM THE SESSION ROW and never
+//   from a header. The caller names a token, never an identity, so there is
+//   nothing a customer can send to claim this. The row expires, and ending it
+//   stops this working on the next request.
+//
+//   IT IS A TEAM SEAT ONLY. Staff sitting in a tenant's or a contractor's seat
+//   are there to see what that person sees, and widening those would make
+//   "reproduce the customer's view" impossible -- which is the entire reason
+//   naming a seat exists.
+//
+//   AND IT IS NOT A SILENT POWER. The route that reads this records who really
+//   wrote the row, because the banner over the whole screen promises that
+//   actions are recorded and a promise the product does not keep is worse than
+//   one it never made.
+//
+// The field this reads has existed since impersonation shipped, with a comment
+// saying nothing read it yet and that it was set because *a session whose real
+// actor is unrecoverable is the one thing this table exists to prevent*. This
+// is it being spent.
+export const staffMayWriteShared = (ctx) =>
+  !!ctx && !!ctx.impersonatedBy && isTeamSeat(ctx.role);

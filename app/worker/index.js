@@ -63,7 +63,8 @@ import { handymanCapCheck, handymanCapText } from "../shared/handycap.js";
 import { jobIsClosed, jobClosure } from "../shared/jobstate.js";
 // Which seat to open an account as. One rule, so the console's "1 team user"
 // and this route cannot disagree about whether anybody is there.
-import { pickSeat, hasAdminSeat, isTeamSeat, staffStandsIn } from "../shared/seats.js";
+import { pickSeat, hasAdminSeat, isTeamSeat, staffStandsIn,
+  staffMayWriteShared } from "../shared/seats.js";
 import { WEATHER_TTL_MIN, weatherLabel } from "../shared/greeting.js";
 import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
@@ -5400,18 +5401,39 @@ app.patch("/api/subs/:companyId", async (c) => {
   //
   // Refused rather than quietly dropped: a save that reports success and
   // writes nothing is how somebody re-types the same correction three times.
+  //
+  // AND SUPPORT IS THE ONE CALLER IT WAS NEVER MEANT TO REFUSE. The rule stops
+  // one hiring account rewriting another business's record; a staff member
+  // standing in the account is not that. `staffMayWriteShared` says why at
+  // length -- it reads the impersonation session row rather than anything the
+  // caller sends, and only for a team seat. Recorded rather than silent,
+  // because the banner across the top of that screen promises actions are.
   const editingSelf = auth.role === "contractor" && auth.companyId === companyId;
+  let staffOverrode = null;
   if (!editingSelf) {
     const coKeys = Object.keys(patch).filter((k) => !ENGAGEMENT_FIELDS.has(k) && SUB_COMPANY_COL[k]);
     if (coKeys.length && await companyAnswersForItself(c.env, companyId)) {
-      return c.json({ error: "company_not_yours", fields: coKeys }, 409);
+      if (!staffMayWriteShared(auth)) {
+        return c.json({ error: "company_not_yours", fields: coKeys }, 409);
+      }
+      staffOverrode = coKeys;
     }
   }
 
   await applySubPatch(c.env.DB, companyId, engagement.id, patch);
 
   await logEvent(c.env, accountId, userId, "sub.updated", companyId, { fields: Object.keys(patch) });
-  return c.json({ ok: true });
+  // A SEPARATE RECORD, not a flag on the one above, because it is a different
+  // event: somebody else's shared company row was written by SubSub rather
+  // than by the account, and *which fields* is the whole of what anybody would
+  // ask afterwards. `account_id` is the account it was done from and
+  // `actor_id` is the seat; the staff user is named in the payload, which is
+  // the only place the real actor exists.
+  if (staffOverrode) {
+    await logEvent(c.env, accountId, userId, "sub.company_written_by_staff", companyId,
+      { fields: staffOverrode, staffUserId: auth.impersonatedBy, seatRole: auth.role });
+  }
+  return c.json({ ok: true, staffOverrode });
 });
 
 // ---------------------------------------------------------------------------

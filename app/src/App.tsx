@@ -58,7 +58,7 @@ import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso, DOC_LABELS } from "../shared/docs.js";
 import { setupGaps, mayFinishSetup, firstGapStep } from "../shared/setup.js";
 import { jobIsClosed, jobClosure, completionEffects } from "../shared/jobstate.js";
-import { hasAdminSeat, isTeamSeat } from "../shared/seats.js";
+import { hasAdminSeat, isTeamSeat, staffMayWriteShared } from "../shared/seats.js";
 import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole, isPropertyScoped } from "../shared/propscope.js";
 import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   MAX_ROOM_PHOTOS, roomName, inspectionTally, flaggedRooms,
@@ -6666,6 +6666,10 @@ export default function SubSub() {
         {subSaveErr && <div className="form-err" role="alert">{subSaveErr}</div>}
         <SubForm properties={accountProperties} existing={editing} openStep={editStep} onSubmit={updateSub}
           canEngageHandyman={mayEngageHandyman(kindOf(account))}
+          /* Staff standing in may correct a company somebody else answers for.
+             The same predicate the route reads, off the same two facts, so the
+             screen and the server cannot disagree about who may write it. */
+          staffWrite={staffMayWriteShared({ impersonatedBy: impersonating?.by, role })}
           onUploadDoc={(k, file) => uploadSubDoc(editing.id, k, file)}
           onDeleteDoc={(k) => deleteSubDoc(editing.id, k)}
           onCancel={() => setEditing(null)} /></Modal>}
@@ -27433,7 +27437,8 @@ function useConnectMatch(enabled, { email, phone, license }) {
 }
 
 function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect,
-  onOpenExisting, onRecruitQr, onUploadDoc, onDeleteDoc, canEngageHandyman = false }) {
+  onOpenExisting, onRecruitQr, onUploadDoc, onDeleteDoc, canEngageHandyman = false,
+  staffWrite = false }) {
   const init = existing ? {
     company: existing.company, contact: existing.contact, phone: existing.phone, email: existing.email,
     categories: existing.categories, caps: existing.caps,
@@ -27499,7 +27504,15 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
   // fully editable over a record the server would refuse to let anybody here
   // write. Exactly the hole `companyAnswersForItself` was written unscoped to
   // close, left open on the screen in front of it.
-  const locked = !!existing?.answersForItself;
+  //
+  // AND SUPPORT IS NOT LOCKED OUT. A staff member standing in the account is
+  // the one party who can fix a record while the customer is on the telephone,
+  // and the route agrees through the same predicate -- `staffMayWriteShared`
+  // -- so the form cannot invite a save the server refuses, or hide one it
+  // would have taken. The warning does not go away; it stops being a refusal
+  // and starts saying what the change reaches, which is every account that
+  // hires them.
+  const locked = !!existing?.answersForItself && !staffWrite;
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const toggle = (k, v) => setF((s) => ({ ...s, [k]: s[k].includes(v) ? s[k].filter((x) => x !== v) : [...s[k], v] }));
 
@@ -28013,6 +28026,21 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
             your own notes.</div>
         </div>
       )}
+      {/* THE WARNING STAYS; IT STOPS BEING A REFUSAL. Staff standing in may
+          write this row, and the danger then is the opposite one -- somebody
+          correcting what looks like this account's copy of a contractor and
+          changing what every account that hires them sees. So it says which
+          way the change reaches and that it is recorded, which is the promise
+          the banner across the top of the screen already makes. */}
+      {!locked && existing?.answersForItself && (
+        <div className="doc-block doc-block-staff">
+          <Shield size={15} />
+          <div><strong>You are editing {existing.company}'s own record.</strong> They answer
+            for themselves, so their contact, licence, crews and coverage are the same for
+            every account that hires them — a correction here changes it for all of them.
+            It is recorded against your name.</div>
+        </div>
+      )}
       {(properties || []).length > 0 && (
         <div className="fld">Properties they cover
           <p className="fine">Leave all unticked and they're available at every property on the
@@ -28158,8 +28186,21 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
       </div>}
       <label className="fld">Notes<textarea rows={2} value={f.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Anything worth remembering…" /></label>
       {/* Their paperwork, on their shared row -- and the same booleans the
-          documents routes guard with mayWriteCompanyDocs. */}
-      {!locked && <div className="fld">Documents
+          documents routes guard with mayWriteCompanyDocs.
+
+          NOT GATED ON `locked`, AND THAT WAS A REAL HOLE. `locked` answers
+          "may I rewrite their company record", which is a different question
+          from "may I put a certificate on file for them" -- and
+          `mayWriteCompanyDocs` has always answered the second with any live
+          engagement, deliberately, because a hiring account being emailed a COI
+          and uploading it is the ordinary case rather than the odd one.
+
+          So for a contractor who answers for themselves this block was hidden
+          from EVERYBODY -- the screen stricter than the route, which this
+          project calls the same lie as looser, and reported as exactly that:
+          a superadmin with no way to upload documents for a sub. The add path
+          still has nothing to attach to and still says so. */}
+      <div className="fld">Documents
         {/* A document is attached to a company row, and on the ADD path there
             is not one yet -- so this offered four upload buttons with nothing
             behind them. Say where they go instead of taking a file and
@@ -28187,8 +28228,25 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
                   <label className="dm-replace"><Upload size={12} /> Replace
                     <input type="file" hidden disabled={!!docBusy}
                       onChange={(e) => { uploadDoc(k, e.target.files?.[0]); e.target.value = ""; }} /></label>
-                  <button type="button" className="dm-delete" disabled={!!docBusy}
-                    onClick={() => deleteDoc(k)}><Trash2 size={12} /> Delete</button>
+                  {/* UPLOADING IS ADDITIVE AND DELETING IS NOT, which is the
+                      whole of why these two are gated differently on a company
+                      that answers for itself. An upload supersedes rather than
+                      overwrites, so the worst case is one more row in the
+                      history; a delete sets the boolean to 0 and takes them off
+                      EVERY roster they are on, over a record somebody else
+                      holds.
+
+                      PROMINENCE, NOT PERMISSION: the route is unchanged and
+                      `mayWriteCompanyDocs` still accepts any live engagement,
+                      so this is not the screen inventing a stricter rule than
+                      the server -- it is declining to put a destructive control
+                      on somebody else's record where there was none a moment
+                      ago. Support standing in gets it, because an emergency
+                      correction is the case they are there for. */}
+                  {(!existing?.answersForItself || staffWrite) && (
+                    <button type="button" className="dm-delete" disabled={!!docBusy}
+                      onClick={() => deleteDoc(k)}><Trash2 size={12} /> Delete</button>
+                  )}
                 </div>
               ) : (
                 <label className="dm-upload"><Upload size={13} /> Upload
@@ -28199,11 +28257,23 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
           ))}
         </div>
         {/* Uploaded now, not on Save -- so the form says so rather than
-            leaving somebody to press Save for a file that is already in. */}
-        <p className="fld-note dm-later">These upload as soon as you pick them.</p>
+            leaving somebody to press Save for a file that is already in.
+
+            And on a record somebody else answers for it says WHERE the file
+            lands, because that is the one thing not guessable from the row: a
+            certificate uploaded here is on their shared company row and every
+            account that hires them reads it. The upload supersedes rather than
+            overwriting, so nothing of theirs is lost -- which is also why this
+            is offered at all while Delete is not. */}
+        <p className="fld-note dm-later">These upload as soon as you pick them.
+          {existing?.answersForItself
+            ? ` ${existing.company} keeps their own paperwork, so a file you add here goes onto `
+              + "their record — every account that hires them reads the same one. "
+              + "Nothing of theirs is replaced; the newest copy becomes the current one."
+            : ""}</p>
         {docErr && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {docErr}</p>}
         </>)}
-      </div>}
+      </div>
       </>)}
 
       <div className="form-actions">
@@ -29808,6 +29878,14 @@ p.fld-note{margin:6px 0 0}
 .insp-draft-go:hover{background:color-mix(in srgb,var(--brand) 12%,var(--card))}
 .insp-draft-go:disabled{opacity:.6;cursor:default}
 .insp-draft-note{margin:6px 0 0;font-size:11px;line-height:1.5;color:var(--ink-soft);max-width:52ch}
+
+/* The staff note on a shared company row. Deliberately NOT the amber of the
+   refusal it replaces: amber here means "you cannot", and this one means "you
+   can, and it reaches further than you think" -- two different messages must
+   not wear one colour. No backtick appears in this block. */
+.doc-block-staff{border-color:color-mix(in srgb,var(--brand) 34%,var(--line));
+  background:color-mix(in srgb,var(--brand) 7%,var(--card))}
+.doc-block-staff svg{color:var(--brand)}
 
 /* THE HANDYMAN LICENCE CEILING. Two tones, because one of them is a thing to
    know and the other is a thing to act on -- and the amber is never a refusal:

@@ -264,7 +264,23 @@ try {
     t.ck("nor their email", !form.vals.includes("bsmurdq@gmail.com"), JSON.stringify(form.vals));
     t.ck("no crews to edit", !/Crews & members/i.test(form.text), form.text.slice(0, 200));
     t.ck("no coverage to edit", !/ZIP radius/i.test(form.text), form.text.slice(0, 200));
-    t.ck("and no documents to edit", !/Surety bond/i.test(form.text), form.text.slice(0, 200));
+    // AND THE DOCUMENTS ARE THE ONE THING THAT IS NOT THEIR RECORD'S TO
+    // WITHHOLD. This assertion used to require the opposite -- that the
+    // paperwork was hidden here too -- and it was pinning a bug: `locked`
+    // answers "may I rewrite their company record", while
+    // `mayWriteCompanyDocs` has always taken an upload from any live
+    // engagement, because a hiring account being emailed a certificate and
+    // uploading it is the ordinary case. The route said yes and the screen
+    // offered nothing, which is the screen-stricter-than-the-route lie, and
+    // this test held it in place. Third time this project has paid for *a test
+    // can pin the wrong answer as firmly as the right one*.
+    t.ck("but the documents ARE editable, because the route takes them",
+      /Surety bond/i.test(form.text), form.text.slice(0, 200));
+    // Uploading is additive and deleting is not: a delete takes them off every
+    // roster they are on, over a record somebody else answers for. The route is
+    // unchanged and still allows it -- this is prominence, not permission.
+    t.ck("and nothing here offers to delete one", !/Delete/i.test(form.text),
+      form.text.slice(0, 200));
     // Yours.
     t.ck("the trades are still there", /Categories/i.test(form.text), form.text.slice(0, 200));
     t.ck("and your notes", /Notes/i.test(form.text), form.text.slice(0, 200));

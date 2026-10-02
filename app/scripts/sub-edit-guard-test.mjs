@@ -168,7 +168,17 @@ console.log("\n-- the engagement half stays this account's, whoever they are --"
 
 console.log("\n-- the form reads the predicate the server enforces --");
 {
-  ck("the lock is on answersForItself", /const locked = !!existing\?\.answersForItself;/.test(APP));
+  // THE SUBJECT IS WHICH PREDICATE, NOT THE EXACT LINE. The lock must read the
+  // unscoped `answersForItself` and never the scoped `hasPortal` -- that is the
+  // bug this block exists for. Matching the whole statement also pinned its
+  // punctuation, so adding the staff-override term failed it for a reason that
+  // had nothing to do with what it protects.
+  ck("the lock is on answersForItself",
+    /const locked = !!existing\?\.answersForItself\b/.test(APP));
+  // And the only thing allowed to widen it is the shared staff predicate, so a
+  // second way out cannot be added here quietly.
+  ck("and the one thing that may widen it is the staff predicate",
+    /const locked = !!existing\?\.answersForItself && !staffWrite;/.test(APP));
   // The scoped one is the auto-schedule question and using it here is the bug.
   ck("and no longer on the scoped hasPortal",
     !/const locked = !!existing\?\.hasPortal;/.test(APP));

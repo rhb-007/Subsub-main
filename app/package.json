@@ -181,7 +181,9 @@
     "test:consoledeleteui": "node --no-warnings scripts/console-delete-ui-test.mjs",
     "test:engaged": "node --no-warnings scripts/engaged-test.mjs",
     "test:handycap": "node --no-warnings scripts/handycap-test.mjs",
-    "test:handycapui": "node --no-warnings scripts/handycap-ui-test.mjs"
+    "test:handycapui": "node --no-warnings scripts/handycap-ui-test.mjs",
+    "test:staffwrite": "node --no-warnings scripts/staffwrite-test.mjs",
+    "test:staffwriteui": "node --no-warnings scripts/staffwrite-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
