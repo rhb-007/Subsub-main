@@ -29,7 +29,7 @@ import {
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
-  Globe, RefreshCw, ExternalLink, ImageOff, ScanLine, ArrowRight, ChevronLeft, Code2,
+  Globe, RefreshCw, ExternalLink, ImageOff, ScanLine, ArrowRight, ChevronLeft, Camera, Code2,
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
@@ -59,6 +59,9 @@ import { setupGaps, mayFinishSetup, firstGapStep } from "../shared/setup.js";
 import { jobIsClosed, jobClosure, completionEffects } from "../shared/jobstate.js";
 import { hasAdminSeat, isTeamSeat } from "../shared/seats.js";
 import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole, isPropertyScoped } from "../shared/propscope.js";
+import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
+  MAX_ROOM_PHOTOS, roomName, inspectionTally, flaggedRooms,
+  whyNotFinish } from "../shared/inspection.js";
 import { agreementStateText, typedNameMatches, renderAgreement } from "../shared/agreement.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -591,7 +594,7 @@ function hydrateError(broke) {
 }
 
 const ROLES = {
-  admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
+  admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "inspections", "calendar", "jobs", "uniforms", "account"] },
   // The default label. "Property manager" rather than "project manager",
   // because three of the four account kinds are property businesses and
   // project-manager was general-contractor language left on the role
@@ -605,7 +608,12 @@ const ROLES = {
   // does not; that is the same job with or without a list, and it lives in
   // membership_properties rather than in a second role nobody could tell
   // apart from this one by its name.
-  pm: { label: "Property manager", can: ["dashboard", "contractors", "properties", "calendar", "jobs", "uniforms", "account"] },
+  // "inspections" sits beside "properties" and is gated the same way: an
+  // account with no buildings has no units to walk. A SCOPED project manager
+  // keeps it -- the buildings they are narrowed to are the buildings they
+  // inspect, which is the whole job -- so this is a role capability and not
+  // `canManage`.
+  pm: { label: "Property manager", can: ["dashboard", "contractors", "properties", "inspections", "calendar", "jobs", "uniforms", "account"] },
   // A building owner is a guest in somebody else's account, scoped to the
   // buildings they were granted. No contractor directory -- they see who is
   // coming to their own jobs, not who the account works with -- and no
@@ -2174,6 +2182,10 @@ export default function SubSub() {
   // Proposed and confirmed visits, one live per job. Scoped by the API: a
   // tenant gets their own reports', an owner their buildings'.
   const [visits, setVisits] = useState([]);
+  // Move-in and move-out inspections. Loaded beside the rest rather than on
+  // the tab, so the nav can badge the drafts without opening the screen --
+  // the no-way-in failure this file keeps recording, from the other side.
+  const [inspections, setInspections] = useState([]);
   const [raising, setRaising] = useState(null);   // { job, trade, a, kind }
   const [changeOrders, setChangeOrders] = useState([]);
   const [coForm, setCoForm] = useState(null);     // { job, trade, a, origin }
@@ -2288,7 +2300,7 @@ export default function SubSub() {
   // list, so Properties is not theirs to see whatever their role is.
   const can = (view) => {
     if (!ROLES[role].can.includes(view)) return false;
-    if (view === "properties") return hasProperties(account);
+    if (view === "properties" || view === "inspections") return hasProperties(account);
     return true;
   };
   const canRate = role === "admin" || role === "pm";
@@ -3942,6 +3954,12 @@ export default function SubSub() {
       // and must not take the whole hydrate down with them.
       loadOverflow().catch((err) => console.warn("[overflow] unavailable:", err?.message || err));
       loadTransfers().catch((err) => console.warn("[transfers] unavailable:", err?.message || err));
+      // Its own call, and its own catch: a database without 055 has no
+      // inspections, which is a nav item with no badge rather than an account
+      // that fails to load. The route answers [] for that case; this is for
+      // the seat that may not read them at all.
+      api.listInspections().then(setInspections)
+        .catch((err) => console.warn("[inspections] unavailable:", err?.message || err));
       setUniformOrders(uniformOrderRows);
       setServiceCalls(serviceCallRows);
       setProperties(propertyRows);
@@ -5155,6 +5173,16 @@ export default function SubSub() {
               Properties{accountProperties.length > 0 && <span className="count">{accountProperties.length}</span>}
             </button>
           )}
+          {can("inspections") && (
+            <button className={tab === "inspections" ? "on" : ""} onClick={() => setTab("inspections")}>
+              Inspections{inspections.filter((i) => i.status === "draft").length > 0 && (
+                /* Drafts only. A finished inspection is a document rather
+                   than something waiting on somebody, and a count that never
+                   clears is how people learn to stop reading badges. */
+                <span className="count amber">{inspections.filter((i) => i.status === "draft").length}</span>
+              )}
+            </button>
+          )}
           {can("uniforms") && (
             <button className={tab === "uniforms" ? "on" : ""} onClick={() => setTab("uniforms")}>
               Uniforms{uniformOrders.filter((o) => o.status === "pending").length > 0 &&
@@ -5583,6 +5611,19 @@ export default function SubSub() {
             </section>
           )}
         </main>
+      )}
+
+      {tab === "inspections" && can("inspections") && (
+        <InspectionsView inspections={inspections} properties={accountProperties} subs={subs}
+          unitWord={tenantWhere(kindOf(account)) === "office" ? "Suite" : "Unit"}
+          onReload={async () => {
+            try { setInspections(await api.listInspections()); }
+            catch (e) { console.warn("[inspections] reload failed:", e?.message || e); }
+          }}
+          /* The job it raised, opened where every other job is opened: one
+             implementation of "show me this job", not a second copy of the
+             card on a screen that is about something else. */
+          onGoJobs={(jobId) => { setTab("jobs"); if (jobId) openJob(jobId); }} />
       )}
 
       {tab === "properties" && can("properties") && (
@@ -11512,12 +11553,16 @@ const TENANT_WHEN = [
 // mounted, each owns exactly one object URL, and two owners of one URL means
 // revoking either blanks the other. A failure reports `null` rather than
 // staying quiet, so the lightbox can say so instead of spinning for ever.
-function ReportPhoto({ jobId, photo, onOpen, onLoaded }) {
+function ReportPhoto({ jobId, photo, onOpen, onLoaded, load }) {
   const [url, setUrl] = useState(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let live = true, made = null;
-    api.reportPhotoBlob(jobId, photo.id)
+    // `load` is how an INSPECTION room's photos use this component rather
+    // than growing a second one: the thumbnail's whole job is fetch, own,
+    // revoke and report, and which route the bytes come from is the only
+    // thing that differs. Defaulted, so every existing caller is untouched.
+    (load ? load() : api.reportPhotoBlob(jobId, photo.id))
       .then((u) => { if (live) { made = u; setUrl(u); onLoaded?.(photo.id, u); } else URL.revokeObjectURL(u); })
       .catch((e) => { console.error("[photo] load failed:", e);
         if (live) { setFailed(true); onLoaded?.(photo.id, null); } });
@@ -24994,6 +25039,504 @@ function Modal({ children, onClose, wide }) {
   );
 }
 
+
+// ---- Move-in / move-out unit inspections --------------------------------
+//
+// The screen the whole walk happens on. A managing agent stands in an empty
+// unit with a phone, adds rooms, marks each one, photographs what is wrong
+// and raises the work before leaving. So: nothing here opens a second modal
+// to change a status, and every control is a thumb-width.
+
+// One room. Name, verdict, note, photographs -- in that order, because that
+// is the order somebody fills it in standing in the room.
+function InspectionRoom({ inspectionId, room, locked, onPatch, onRemove, onAddPhotos, onRemovePhoto }) {
+  const [name, setName] = useState(room.name);
+  const [note, setNote] = useState(room.note || "");
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [shots, setShots] = useState({});
+  const [lightbox, setLightbox] = useState(null);
+  const photos = room.photos || [];
+
+  // Re-seeded when the row changes under it -- adding a photo re-reads the
+  // whole inspection, and a field still showing what it opened with is the
+  // stale-snapshot bug this file has grown three times.
+  useEffect(() => { setName(room.name); setNote(room.note || ""); }, [room.name, room.note]);
+
+  const run = async (what, fn) => {
+    setBusy(what); setErr("");
+    try { await fn(); }
+    catch (e) {
+      console.error("[inspection] room:", e);
+      setErr(e?.body?.error === "already_finished"
+        ? "This inspection is finished, so it cannot be changed."
+        : e?.body?.error === "too_many" ? `That room already has ${MAX_ROOM_PHOTOS} photos.`
+        : "That didn't go through. Try again.");
+    } finally { setBusy(""); }
+  };
+
+  const pick = async (files) => {
+    const list = [...files].slice(0, MAX_ROOM_PHOTOS - photos.length);
+    if (!list.length) return;
+    await run("photo", async () => {
+      const up = [];
+      for (const f of list) {
+        const { key, type, size } = await api.uploadReportPhoto(f);
+        up.push({ key, type, size, name: f.name });
+      }
+      await onAddPhotos(room.id, up);
+    });
+  };
+
+  return (
+    <div className={`insp-room st-${room.status}`}>
+      <div className="insp-room-head">
+        {locked ? <strong className="insp-name">{roomName(room)}</strong> : (
+          <input className="insp-name" value={name} list="insp-rooms" maxLength={80}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={() => name.trim() && name !== room.name
+              && run("name", () => onPatch(room.id, { name: name.trim() }))} />
+        )}
+        {!locked && (
+          <button className="insp-x" title="Remove this room" disabled={!!busy}
+            onClick={() => run("del", () => onRemove(room.id))}><Trash2 size={13} /></button>
+        )}
+      </div>
+
+      {/* THE VERDICT, as three buttons rather than a dropdown. One tap, and
+          all three answers are readable without opening anything -- a select
+          on a phone is a sheet over the room you are standing in. The state
+          it starts in is "not checked", which is neither of the three and is
+          drawn as none of them being on. */}
+      <div className="insp-verdict" role="group" aria-label={`${roomName(room)} status`}>
+        {ROOM_STATUS_ORDER.map((k) => (
+          <button key={k} type="button" disabled={locked || !!busy}
+            className={`insp-v v-${k} ${room.status === k ? "on" : ""}`}
+            aria-pressed={room.status === k}
+            onClick={() => run("status", () => onPatch(room.id, { status: k }))}>
+            {k === "ok" ? <CheckCircle2 size={13} /> : k === "follow_up" ? <AlertTriangle size={13} /> : <XCircle size={13} />}
+            {ROOM_STATUSES[k].label}
+          </button>
+        ))}
+      </div>
+
+      {locked
+        ? (room.note ? <p className="insp-note-ro">{room.note}</p> : null)
+        : (
+          <textarea className="insp-note" rows={2} maxLength={2000} value={note}
+            placeholder="What you saw — the more specific the better"
+            onChange={(e) => setNote(e.target.value)}
+            onBlur={() => note !== (room.note || "") && run("note", () => onPatch(room.id, { note }))} />
+        )}
+
+      {photos.length > 0 && (
+        <div className="ph-grid">
+          {photos.map((ph) => (
+            <div key={ph.id} className="ph-holder">
+              <ReportPhoto photo={ph} onLoaded={(id, u) => setShots((m) => ({ ...m, [id]: u }))}
+                load={() => api.inspectionPhotoBlob(inspectionId, ph.id)}
+                onOpen={() => setLightbox(photos.indexOf(ph))} />
+              {!locked && (
+                <button type="button" className="ph-x" disabled={!!busy}
+                  aria-label={`Remove ${ph.name}`}
+                  onClick={() => run("del", () => onRemovePhoto(room.id, ph.id))}><X size={12} /></button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {!locked && photos.length < MAX_ROOM_PHOTOS && (
+        <label className="ph-add">
+          <Camera size={14} /> {busy === "photo" ? "Uploading…" : "Add photos"}
+          <input type="file" accept="image/*" multiple hidden disabled={!!busy}
+            onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
+        </label>
+      )}
+      {err && <p className="cov-hint" role="alert">{err}</p>}
+      {lightbox !== null && (
+        <PhotoLightbox photos={photos} urls={shots} at={lightbox}
+          onAt={setLightbox} onClose={() => setLightbox(null)} />
+      )}
+    </div>
+  );
+}
+
+// One inspection, open.
+function InspectionDetail({ inspection, property, onReload, onClose, onRaise, onGoJobs, subs = [] }) {
+  const [adding, setAdding] = useState("");
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [raising, setRaising] = useState(false);
+  const rooms = inspection.rooms || [];
+  const tally = inspectionTally(rooms);
+  const locked = inspection.status === "finished";
+  const why = whyNotFinish(rooms);
+
+  const run = async (what, fn) => {
+    setBusy(what); setErr("");
+    try { await fn(); }
+    catch (e) {
+      console.error("[inspection]", e);
+      const code = e?.body?.error;
+      setErr(code === "rooms_unchecked"
+        ? `${e.body.unchecked} room${e.body.unchecked === 1 ? " has" : "s have"} not been marked yet.`
+        : code === "no_rooms" ? "Add at least one room first."
+        : code === "already_finished" ? "This inspection is finished, so it cannot be changed."
+        : code === "nothing_flagged" ? "Nothing was flagged, so there is no work to raise."
+        : code === "already_raised" ? "A job has already been raised from this one."
+        : code === "migration_needed" ? "SubSub needs a database update before this works. We've been told."
+        : "That didn't go through. Try again.");
+    } finally { setBusy(""); }
+  };
+
+  const patchRoom = (roomId, body) => api.patchInspectionRoom(inspection.id, roomId, body).then(onReload);
+
+  return (
+    <div className="insp-detail">
+      <div className="pd-head">
+        <div>
+          <h2>{INSPECTION_KINDS[inspection.kind]?.label || "Inspection"}
+            {inspection.unit ? ` — unit ${inspection.unit}` : ""}</h2>
+          <span className="prop-addr">
+            {property?.name || "A building"}
+            {inspection.tenantName ? ` · ${inspection.tenantName}` : ""}
+            {inspection.inspectedOn ? ` · ${niceDay(inspection.inspectedOn)}` : ""}
+          </span>
+        </div>
+        <span className={`tn-chip ${locked ? "ok" : "wait"}`}>{locked ? "Finished" : "Draft"}</span>
+      </div>
+
+      {/* WHERE IT HAS GOT TO, named rather than counted alone: "4 of 11" does
+          not say which seven, and which seven is the only thing worth knowing
+          while standing in the unit. */}
+      <div className="pd-stats">
+        <span><strong>{tally.rooms}</strong> room{tally.rooms === 1 ? "" : "s"}</span>
+        <span><strong>{tally.ok}</strong> OK</span>
+        <span className={tally.flagged ? "is-flagged" : ""}><strong>{tally.flagged}</strong> flagged</span>
+        {tally.unchecked > 0 && <span className="is-todo"><strong>{tally.unchecked}</strong> not checked</span>}
+        <span><strong>{tally.photos}</strong> photo{tally.photos === 1 ? "" : "s"}</span>
+      </div>
+
+      {/* The standard list, offered and never imposed: every building has a
+          room this list has not heard of, and a dropdown that cannot be typed
+          past is a form that argues. */}
+      <datalist id="insp-rooms">
+        {STANDARD_ROOMS.map((r) => <option key={r} value={r} />)}
+      </datalist>
+
+      <div className="insp-rooms">
+        {rooms.map((r) => (
+          <InspectionRoom key={r.id} inspectionId={inspection.id} room={r} locked={locked}
+            onPatch={patchRoom}
+            onRemove={(roomId) => api.removeInspectionRoom(inspection.id, roomId).then(onReload)}
+            onAddPhotos={(roomId, photos) => api.addInspectionPhotos(inspection.id, roomId, photos).then(onReload)}
+            onRemovePhoto={(roomId, photoId) =>
+              api.removeInspectionPhoto(inspection.id, roomId, photoId).then(onReload)} />
+        ))}
+        {rooms.length === 0 && (
+          <p className="prop-none">No rooms yet. Add the first one below — you can type any name,
+            or pick one from the list.</p>
+        )}
+      </div>
+
+      {!locked && (
+        <div className="insp-add">
+          <input value={adding} list="insp-rooms" placeholder="Room or area" maxLength={80}
+            onChange={(e) => setAdding(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && adding.trim()) {
+                e.preventDefault();
+                run("add", async () => { await api.addInspectionRoom(inspection.id, adding.trim()); setAdding(""); await onReload(); });
+              }
+            }} />
+          <button className="btn-ghost small" disabled={!adding.trim() || !!busy}
+            onClick={() => run("add", async () => {
+              await api.addInspectionRoom(inspection.id, adding.trim()); setAdding(""); await onReload();
+            })}>
+            <Plus size={14} /> {busy === "add" ? "Adding…" : "Add room"}
+          </button>
+        </div>
+      )}
+
+      {err && <p className="billing-err" role="alert">{err}</p>}
+
+      <div className="pd-acts">
+        <button className="btn-ghost small" onClick={onClose}>Close</button>
+        {!locked && (
+          <button className="btn-solid small" disabled={!!busy || !!why}
+            onClick={() => run("finish", async () => {
+              await api.patchInspection(inspection.id, { finish: true }); await onReload();
+            })}>
+            <Check size={14} /> {busy === "finish" ? "Finishing…" : "Finish inspection"}
+          </button>
+        )}
+        {/* THE WHOLE POINT OF THE WALK. Offered as soon as something is
+            flagged, finished or not: the leak does not wait for the paperwork,
+            and a manager standing in the unit with a flagged room is exactly
+            who should be raising it. */}
+        {tally.flagged > 0 && !inspection.jobId && (
+          <button className="btn-solid small" disabled={!!busy} onClick={() => setRaising(true)}>
+            <Hammer size={14} /> Raise a job — {tally.flagged} to put right
+          </button>
+        )}
+        {inspection.jobId && (
+          <button className="btn-ghost small" onClick={() => onGoJobs(inspection.jobId)}>
+            <ArrowRight size={13} /> Open the job raised from this
+          </button>
+        )}
+      </div>
+
+      {/* A disabled Finish with nothing beside it is indistinguishable from a
+          broken one, which this file has already paid for once. */}
+      {!locked && why && (
+        <p className="fld-note">
+          {why === "no_rooms" ? "Add a room before finishing."
+            : `${tally.unchecked} room${tally.unchecked === 1 ? "" : "s"} still to mark. A room nobody has walked and a room that was fine must not read the same, so an unmarked one stops this being finished.`}
+        </p>
+      )}
+
+      {raising && (
+        <RaiseFromInspection inspection={inspection} rooms={rooms} subs={subs}
+          onCancel={() => setRaising(false)}
+          onRaise={async (body) => { await onRaise(inspection.id, body); setRaising(false); }} />
+      )}
+    </div>
+  );
+}
+
+// Turning what was flagged into a job.
+//
+// It asks for the trades and a date and nothing else, because everything else
+// is already known: the building, the unit, and what is wrong in each room.
+// The scope is composed on the SERVER from the flagged rooms through the same
+// `inspectionJobScope` this previews with, so the preview cannot disagree with
+// what gets written.
+function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
+  const [trades, setTrades] = useState([]);
+  const [date, setDate] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const flagged = flaggedRooms(rooms);
+
+  const go = async () => {
+    setBusy(true); setErr("");
+    try { await onRaise({ trades, date: date || null }); }
+    catch (e) {
+      console.error("[inspection] raise failed:", e);
+      setErr(e?.body?.error === "already_raised" ? "A job has already been raised from this one."
+        : e?.body?.error === "trades_required" ? "Pick at least one trade."
+        : "That didn't go through. Try again.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal onClose={onCancel}>
+      <div className="form-pane">
+        <h2>Raise a job</h2>
+        <p className="panel-note">
+          {flagged.length} room{flagged.length === 1 ? "" : "s"} flagged on this inspection.
+          The job lands on your Jobs screen with these rooms as its scope —
+          nothing reaches a contractor until you assign one.
+        </p>
+        <ul className="insp-flagged">
+          {flagged.map((r) => (
+            <li key={r.id}>
+              <span className={`insp-dot d-${r.status}`} />
+              <b>{roomName(r)}</b>
+              {r.note ? <span> — {r.note}</span> : null}
+            </li>
+          ))}
+        </ul>
+        <div className="form-sec">Who it needs</div>
+        <div className="chips">
+          {TRADES.map((t) => (
+            <button key={t.id} type="button"
+              className={`chip ${trades.includes(t.id) ? "on" : ""}`}
+              onClick={() => setTrades((cur) =>
+                cur.includes(t.id) ? cur.filter((x) => x !== t.id) : [...cur, t.id])}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <label className="fld">When, if you know
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <span className="fld-note">Leave it empty and the job sits under “no date yet”.</span>
+        </label>
+        {err && <p className="billing-err" role="alert">{err}</p>}
+        <div className="form-actions">
+          <button className="btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button className="btn-solid" disabled={busy || !trades.length} onClick={go}>
+            <Check size={15} /> {busy ? "Raising…" : "Raise the job"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function InspectionsView({ inspections, properties, subs, onReload, onGoJobs, unitWord = "Unit" }) {
+  const [form, setForm] = useState(null);
+  const [open, setOpen] = useState(null);   // the loaded inspection
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const load = async (id) => {
+    setErr("");
+    try { setOpen(await api.getInspection(id)); }
+    catch (e) {
+      console.error("[inspection] load failed:", e);
+      setErr("Could not open that inspection.");
+    }
+  };
+
+  const raise = async (id, body) => {
+    const made = await api.raiseInspectionJob(id, body);
+    await load(id); await onReload();
+    onGoJobs(made.jobId);
+  };
+
+  if (open) {
+    return (
+      <main className="ss-main">
+        <div className="dash-hello">
+          <div><h2>Inspection</h2><p>{open.property || ""}</p></div>
+          <button className="btn-ghost small" onClick={() => { setOpen(null); onReload(); }}>
+            <ArrowRight size={14} style={{ transform: "rotate(180deg)" }} /> All inspections
+          </button>
+        </div>
+        {err && <p className="billing-err" role="alert">{err}</p>}
+        <InspectionDetail inspection={open} subs={subs}
+          property={properties.find((p) => p.id === open.propertyId)}
+          onReload={() => load(open.id)}
+          onRaise={raise}
+          onGoJobs={onGoJobs}
+          onClose={() => { setOpen(null); onReload(); }} />
+      </main>
+    );
+  }
+
+  return (
+    <main className="ss-main">
+      <div className="dash-hello">
+        <div>
+          <h2>Inspections</h2>
+          <p>{inspections.length === 0
+            ? "Walk a unit room by room when somebody moves in or out, and raise the work from what you find."
+            : `${inspections.length} inspection${inspections.length === 1 ? "" : "s"}`}</p>
+        </div>
+        {properties.length > 0 && (
+          <button className="add-btn small" onClick={() => setForm({ kind: "move_out" })}>
+            <Plus size={14} /> New inspection
+          </button>
+        )}
+      </div>
+
+      {properties.length === 0 && (
+        <div className="dash-empty"><Building2 size={24} />
+          <p>Add a building first — an inspection is of a unit in one.</p>
+        </div>
+      )}
+
+      {err && <p className="billing-err" role="alert">{err}</p>}
+
+      {inspections.length === 0 && properties.length > 0 && (
+        <div className="dash-empty"><ClipboardList size={24} />
+          <p>No inspections yet. The record of what a unit looked like on the day
+            is the only answer to “it was like that when I moved in”.</p>
+        </div>
+      )}
+
+      <div className="insp-list">
+        {inspections.map((i) => {
+          const p = properties.find((x) => x.id === i.propertyId);
+          return (
+            <button key={i.id} className="insp-row" onClick={() => load(i.id)}>
+              <div className="insp-row-main">
+                <div className="dr-title">
+                  {INSPECTION_KINDS[i.kind]?.label || "Inspection"}
+                  {i.unit ? ` — ${unitWord.toLowerCase()} ${i.unit}` : ""}
+                </div>
+                <span className="dr-meta">
+                  {p?.name || "A building"}
+                  {i.inspectedOn ? ` · ${niceDay(i.inspectedOn)}` : ""}
+                  {i.tenantName ? ` · ${i.tenantName}` : ""}
+                  {` · ${i.rooms} room${i.rooms === 1 ? "" : "s"}`}
+                </span>
+              </div>
+              {/* The two numbers worth seeing from a list: what still needs
+                  walking, and what needs work. */}
+              {i.unchecked > 0 && <span className="tn-chip wait">{i.unchecked} to mark</span>}
+              {i.flagged > 0 && <span className="tn-chip sos">{i.flagged} flagged</span>}
+              {i.status === "finished" && i.flagged === 0 && <span className="tn-chip ok">All clear</span>}
+              {i.jobId && <span className="tn-chip">Job raised</span>}
+              <ArrowRight size={15} className="seat-go" />
+            </button>
+          );
+        })}
+      </div>
+
+      {form && (
+        <Modal onClose={() => setForm(null)}>
+          <div className="form-pane">
+            <h2>New inspection</h2>
+            <div className="form-sec">Which walk</div>
+            <div className="chips">
+              {Object.entries(INSPECTION_KINDS).map(([k, v]) => (
+                <button key={k} type="button" className={`chip ${form.kind === k ? "on" : ""}`}
+                  onClick={() => setForm({ ...form, kind: k })}>{v.label}</button>
+              ))}
+            </div>
+            <label className="fld">Building
+              <select value={form.propertyId || ""}
+                onChange={(e) => setForm({ ...form, propertyId: e.target.value })}>
+                <option value="">Pick one</option>
+                {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
+            <label className="fld">{unitWord}
+              <input value={form.unit || ""} maxLength={40} placeholder="3B"
+                onChange={(e) => setForm({ ...form, unit: e.target.value })} />
+            </label>
+            <label className="fld">Who is {INSPECTION_KINDS[form.kind]?.verb || "moving"}
+              <input value={form.tenantName || ""} maxLength={120}
+                onChange={(e) => setForm({ ...form, tenantName: e.target.value })} />
+              {/* A NAME, not a tenant record. The person moving out may have
+                  had their seat removed already and the person moving in
+                  usually has none yet -- a picker would be empty at exactly
+                  the two moments this is for. */}
+              <span className="fld-note">Just the name — they do not need a login here.</span>
+            </label>
+            <label className="fld">Walked on
+              <input type="date" value={form.inspectedOn || ""}
+                onChange={(e) => setForm({ ...form, inspectedOn: e.target.value })} />
+            </label>
+            {err && <p className="billing-err" role="alert">{err}</p>}
+            <div className="form-actions">
+              <button className="btn-ghost" onClick={() => setForm(null)} disabled={busy}>Cancel</button>
+              <button className="btn-solid" disabled={busy || !form.propertyId}
+                onClick={async () => {
+                  setBusy(true); setErr("");
+                  try {
+                    const made = await api.createInspection(form);
+                    setForm(null); await onReload(); await load(made.id);
+                  } catch (e) {
+                    console.error("[inspection] create failed:", e);
+                    setErr(e?.body?.error === "migration_needed"
+                      ? "SubSub needs a database update before this works. We've been told."
+                      : "Could not start it. Try again.");
+                  } finally { setBusy(false); }
+                }}>
+                <Check size={15} /> {busy ? "Starting…" : "Start walking it"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </main>
+  );
+}
+
 // ---- Sub detail ----------------------------------------------------------
 // Auto-schedule, from the hiring side.
 //
@@ -28392,6 +28935,62 @@ p.fld-note{margin:6px 0 0}
 .auto-strip{display:flex;align-items:center;gap:8px;background:#fbf0dd;border:1px solid #ecd9b0;color:#8a5a12;
   font-size:12.5px;font-weight:600;padding:10px 13px;border-radius:10px;margin-bottom:18px}
 .dash-sec{margin-bottom:24px}
+
+/* ---- move-in / move-out inspections ----
+   Built thumb-first: this screen is used standing in an empty unit holding a
+   phone, so every control is a tap target and nothing opens a second layer to
+   change a verdict. No backticks anywhere in here -- the whole stylesheet is
+   one template literal and one in a comment closes it. */
+.insp-list{display:flex;flex-direction:column;gap:9px}
+.insp-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;cursor:pointer;
+  background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 14px;
+  font:inherit;box-shadow:var(--shadow)}
+.insp-row:hover{border-color:var(--brand)}
+.insp-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.insp-detail{display:flex;flex-direction:column;gap:14px}
+.insp-rooms{display:flex;flex-direction:column;gap:12px}
+/* The left edge carries the verdict, so a column of rooms can be read for
+   what needs doing without reading a word of it. A room nobody has walked is
+   deliberately PLAIN rather than tinted: "not got to this yet" is a to-do and
+   not a problem, the same distinction the never-added document dot makes by
+   being hollow. */
+.insp-room{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--line);
+  border-radius:12px;padding:13px 14px;display:flex;flex-direction:column;gap:9px}
+.insp-room.st-ok{border-left-color:var(--brand)}
+.insp-room.st-follow_up{border-left-color:var(--amber)}
+.insp-room.st-fail{border-left-color:var(--red)}
+.insp-room-head{display:flex;align-items:center;gap:8px}
+.insp-name{flex:1;min-width:0;font:700 15px Inter,sans-serif;color:var(--ink);
+  background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+strong.insp-name{background:none;border:0;padding:0}
+.insp-x{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;
+  border:1px solid var(--line);background:var(--card);border-radius:9px;color:var(--ink-soft);cursor:pointer}
+.insp-x:hover{color:var(--red);border-color:color-mix(in srgb,var(--red) 35%,var(--line))}
+/* Three buttons rather than a select: all three answers readable without
+   opening anything, and one tap to change one. They wrap on a narrow screen
+   rather than shrinking below a thumb. */
+.insp-verdict{display:flex;flex-wrap:wrap;gap:7px}
+.insp-v{display:inline-flex;align-items:center;gap:6px;flex:1 1 auto;justify-content:center;
+  min-height:40px;padding:0 12px;border:1px solid var(--line);background:var(--card);
+  border-radius:10px;font:700 13px Inter,sans-serif;color:var(--ink-soft);cursor:pointer}
+.insp-v:disabled{opacity:.6;cursor:default}
+.insp-v.on.v-ok{background:var(--brand);border-color:var(--brand);color:#fff}
+.insp-v.on.v-follow_up{background:var(--amber);border-color:var(--amber);color:#fff}
+.insp-v.on.v-fail{background:var(--red);border-color:var(--red);color:#fff}
+.insp-note{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;
+  font:inherit;font-size:13.5px;background:var(--paper);color:var(--ink);resize:vertical}
+.insp-note-ro{margin:0;font-size:13.5px;color:var(--ink)}
+.insp-add{display:flex;gap:8px;align-items:center}
+.insp-add input{flex:1;min-width:0;border:1px solid var(--line);border-radius:9px;padding:10px 12px;
+  font:inherit;font-size:14px;background:var(--card);color:var(--ink)}
+.insp-flagged{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:6px;
+  font-size:13px;color:var(--ink)}
+.insp-flagged li{display:flex;align-items:baseline;gap:8px}
+.insp-dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--line)}
+.insp-dot.d-follow_up{background:var(--amber)}
+.insp-dot.d-fail{background:var(--red)}
+.pd-stats .is-flagged strong{color:var(--amber)}
+.pd-stats .is-todo strong{color:var(--ink-soft)}
 /* A dash-sec that has been promoted into the top row.
    Beside the schedule panel it has to BE a panel: a run of bare rows next to
    a card reads as content that failed to land in one. The surface, radius and

@@ -1884,3 +1884,73 @@ CREATE TABLE IF NOT EXISTS agreement_terms (
   updated_at     TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_by     TEXT REFERENCES users(id)
 );
+
+-- ---------------------------------------------------------------------------
+-- Move-in and move-out unit inspections (055). Added here in the SAME change
+-- as the migration: schema.sql is what a FRESH database is built from and what
+-- every freshDb() test gets, so a table that lands in one and not the other is
+-- the drift that made CHECK.sql unrunnable for thirty-five migrations.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS inspections (
+  id            TEXT PRIMARY KEY,
+  account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  property_id   TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  -- Free text, like every other unit in this schema: a unit is "3B" in one
+  -- building and "Apt 12" in the next, and a managing agent types what is on
+  -- the door.
+  unit          TEXT,
+  -- 'move_in' or 'move_out'. Validated in the Worker against
+  -- shared/inspection.js rather than by a CHECK, the same trade 003 made for
+  -- accounts.kind: a CHECK on a table this young is a full rebuild the first
+  -- time a third kind is wanted.
+  kind          TEXT NOT NULL,
+  -- Who was moving. Not a tenant id: the person moving OUT may already have
+  -- had their seat removed, and the person moving IN very often has no seat
+  -- yet -- an inspection that could only name people with logins would be
+  -- unusable at exactly the two moments it is for.
+  tenant_name   TEXT,
+  -- The day it was WALKED, which is not the day the row was made. Somebody
+  -- types the inspection up that evening.
+  inspected_on  TEXT,
+  -- 'draft' until it is finished. A finished one is a document somebody may
+  -- be quoting back months later, so it stops being editable.
+  status        TEXT NOT NULL DEFAULT 'draft',
+  finished_at   TEXT,
+  -- The job raised from what was flagged, when one was. One per inspection:
+  -- raising a second would be two contractors asked for the same work.
+  job_id        TEXT REFERENCES jobs(id),
+  created_by    TEXT REFERENCES users(id),
+  created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_inspections_account ON inspections(account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inspections_property ON inspections(property_id);
+
+CREATE TABLE IF NOT EXISTS inspection_rooms (
+  id            TEXT PRIMARY KEY,
+  inspection_id TEXT NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
+  -- Free text. shared/inspection.js offers a standard list, and it is a
+  -- suggestion: every building has a room that list has not heard of.
+  name          TEXT NOT NULL,
+  -- 'unchecked' | 'ok' | 'follow_up' | 'fail'. Defaults to unchecked, which
+  -- is a real answer and not a missing one -- a room nobody has walked and a
+  -- room walked and found fine must not look the same.
+  status        TEXT NOT NULL DEFAULT 'unchecked',
+  note          TEXT,
+  position      INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_inspection_rooms ON inspection_rooms(inspection_id, position);
+
+CREATE TABLE IF NOT EXISTS inspection_photos (
+  id            TEXT PRIMARY KEY,
+  room_id       TEXT NOT NULL REFERENCES inspection_rooms(id) ON DELETE CASCADE,
+  -- The R2 key. Written by the Worker from the account id, never taken from
+  -- the browser -- the upload route hands back a key under this account's own
+  -- prefix and the attach route refuses anything else.
+  file_key      TEXT NOT NULL,
+  name          TEXT,
+  content_type  TEXT,
+  created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_inspection_photos ON inspection_photos(room_id, created_at);
+

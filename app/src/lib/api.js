@@ -291,6 +291,34 @@ export const api = {
     return URL.createObjectURL(await res.blob());
   },
 
+  // Move-in and move-out unit inspections. Every one of these resolves the
+  // inspection through one check on the server -- the account AND the seat's
+  // property scope -- so there is nothing to narrow here.
+  listInspections: () => request("/inspections"),
+  createInspection: (body) => request("/inspections", { method: "POST", body: JSON.stringify(body) }),
+  getInspection: (id) => request(`/inspections/${id}`),
+  patchInspection: (id, body) => request(`/inspections/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  removeInspection: (id) => request(`/inspections/${id}`, { method: "DELETE" }),
+  addInspectionRoom: (id, name) =>
+    request(`/inspections/${id}/rooms`, { method: "POST", body: JSON.stringify({ name }) }),
+  patchInspectionRoom: (id, roomId, body) =>
+    request(`/inspections/${id}/rooms/${roomId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  removeInspectionRoom: (id, roomId) =>
+    request(`/inspections/${id}/rooms/${roomId}`, { method: "DELETE" }),
+  // The bytes go up through the same checked upload kind a tenant's report
+  // photo uses -- one set of type and size limits, not two.
+  addInspectionPhotos: (id, roomId, photos) =>
+    request(`/inspections/${id}/rooms/${roomId}/photos`, { method: "POST", body: JSON.stringify({ photos }) }),
+  removeInspectionPhoto: (id, roomId, photoId) =>
+    request(`/inspections/${id}/rooms/${roomId}/photos/${photoId}`, { method: "DELETE" }),
+  inspectionPhotoBlob: async (id, photoId) => {
+    const res = await fetch(`${API_BASE}/inspections/${id}/photos/${photoId}`, { headers: await authHeaders() });
+    if (!res.ok) throw new Error(`photo_${res.status}`);
+    return URL.createObjectURL(await res.blob());
+  },
+  raiseInspectionJob: (id, body) =>
+    request(`/inspections/${id}/job`, { method: "POST", body: JSON.stringify(body) }),
+
   // Tenants. The first two need a signed-in manager; the last two are how
   // somebody holding a link becomes a tenant, before they have any account.
   listTenants: () => request("/tenants"),

@@ -254,4 +254,26 @@ SELECT
   -- role route are what stop more arriving.
   (SELECT COUNT(*) FROM membership_properties mp
      JOIN memberships m ON m.id = mp.membership_id
-    WHERE m.role NOT IN ('pm', 'owner', 'tenant'))                                              AS m054_inv_scoped_wrong_role;
+    WHERE m.role NOT IN ('pm', 'owner', 'tenant'))                                              AS m054_inv_scoped_wrong_role,
+
+  -- 055. Move-in and move-out unit inspections. Three tables; no rows is the
+  -- ordinary state of a fresh database, so what is checked is that they are
+  -- there and carry the columns the routes read.
+  (SELECT COUNT(*) FROM pragma_table_info('inspections')
+    WHERE name IN ('kind','status','property_id','unit','job_id','finished_at'))                AS m055_inspections,
+  (SELECT COUNT(*) FROM pragma_table_info('inspection_rooms')
+    WHERE name IN ('inspection_id','name','status','note','position'))                          AS m055_inspection_rooms,
+  (SELECT COUNT(*) FROM pragma_table_info('inspection_photos')
+    WHERE name IN ('room_id','file_key','content_type'))                                        AS m055_inspection_photos,
+  -- Invariant, must read ZERO: a room on an inspection that is not there.
+  -- The cascade covers a deleted inspection; this covers a row written
+  -- against an id that never existed, which is what a route taking an id from
+  -- the body without joining it back to the account produces.
+  (SELECT COUNT(*) FROM inspection_rooms r
+    WHERE NOT EXISTS (SELECT 1 FROM inspections i WHERE i.id = r.inspection_id))                 AS m055_inv_orphan_rooms,
+  -- And a finished inspection with a room nobody answered. `whyNotFinish`
+  -- refuses that, so a row here is a route that stopped asking it.
+  (SELECT COUNT(*) FROM inspections i
+    WHERE i.status = 'finished'
+      AND EXISTS (SELECT 1 FROM inspection_rooms r
+                   WHERE r.inspection_id = i.id AND r.status = 'unchecked'))                     AS m055_inv_finished_unchecked;

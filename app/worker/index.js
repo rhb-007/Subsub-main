@@ -45,6 +45,9 @@ import { hasPortal, canSet as canSetAuto, AUTO_DENY_TEXT } from "../shared/autos
 import { onRoster, onRosterSql, OFF_ROSTER } from "../shared/roster.js";
 import { JOB_SCOPED_ROLES, jobScopeFrom, maySeeJob as maySeeJobIds } from "../shared/jobscope.js";
 import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole } from "../shared/propscope.js";
+import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_ROOMS,
+  whyNotFinish, inspectionTally, flaggedRooms, inspectionJobTitle,
+  inspectionJobScope } from "../shared/inspection.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -10800,6 +10803,402 @@ app.post("/api/work-orders/:id/refund", requireRole("admin"), async (c) => {
   await woEvent(c, { workOrderId: wo.id, kind: "funding.refunded",
     payload: { amountCents: amount - left, parts: done } });
   return c.json({ ok: true, refunded: done, ...(await woMoney(c, wo.id)) });
+});
+
+
+// ---------------------------------------------------------------------------
+// Move-in and move-out unit inspections.
+//
+// A managing agent walks a unit when somebody moves in and again when they
+// move out, room by room, with photographs, and then raises the work. The
+// rules are in shared/inspection.js so the routes, the screen and the job
+// composed off the back of one cannot hold three opinions.
+//
+// WHO. `requireRole("admin", "pm")`, which is who walks units -- a scoped
+// project manager most of all, since the buildings they are narrowed to are
+// the buildings they inspect. NOT `canManage`: that is admin-only, and a
+// screen stricter than its route is the same lie as looser, which this file
+// has now paid for in both directions.
+//
+// WHOSE BUILDING. Every route resolves the inspection through
+// `inspectionFor`, which joins it back to the account AND applies the seat's
+// property scope -- one place rather than per route, because a scope added to
+// nine places is a scope missing from the tenth.
+// ---------------------------------------------------------------------------
+
+// The row shapes the browser reads. Nothing here is derived twice: the tally
+// and the flags come off shared/inspection.js wherever they are needed.
+const inspectionRowToJs = (r) => ({
+  id: r.id, propertyId: r.property_id, unit: r.unit || "", kind: r.kind,
+  tenantName: r.tenant_name || "", inspectedOn: r.inspected_on || null,
+  status: r.status, finishedAt: r.finished_at || null, jobId: r.job_id || null,
+  createdAt: r.created_at, createdBy: r.created_by || null,
+});
+const inspectionRoomToJs = (r, photos = []) => ({
+  id: r.id, name: r.name, status: r.status, note: r.note || "",
+  position: r.position,
+  // Ids and names only. The key is an R2 path and handing it to the browser
+  // invites somebody to ask for a different one -- the same rule the avatar
+  // and the report photo both follow.
+  photos: photos.map((p) => ({ id: p.id, name: p.name || "photo", type: p.content_type || "image/jpeg" })),
+});
+
+// The one resolver. Answers `not_found` for an inspection on another account
+// AND for one at a building this seat is not scoped to, deliberately the same
+// reply: a 403 over a real id confirms which ids exist, which is the oracle
+// the job-scope middleware already refuses to be.
+async function inspectionFor(c, auth, id) {
+  let row;
+  try {
+    row = await c.env.DB.prepare(
+      `SELECT * FROM inspections WHERE id = ? AND account_id = ?`
+    ).bind(id, auth.accountId).first();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return { error: "migration_needed", status: 503, migration: "055_inspections" };
+    throw err;
+  }
+  if (!row) return { error: "not_found", status: 404 };
+  if (!maySeeProperty(auth, row.property_id)) return { error: "not_found", status: 404 };
+  return { row };
+}
+
+async function inspectionRooms(db, inspectionId) {
+  const { results: rooms } = await db.prepare(
+    `SELECT * FROM inspection_rooms WHERE inspection_id = ? ORDER BY position, created_at`
+  ).bind(inspectionId).all();
+  const list = rooms || [];
+  if (!list.length) return [];
+  const { results: shots } = await db.prepare(
+    `SELECT p.* FROM inspection_photos p
+       JOIN inspection_rooms r ON r.id = p.room_id
+      WHERE r.inspection_id = ? ORDER BY p.created_at`
+  ).bind(inspectionId).all();
+  const byRoom = {};
+  for (const p of shots || []) (byRoom[p.room_id] ||= []).push(p);
+  return list.map((r) => inspectionRoomToJs(r, byRoom[r.id] || []));
+}
+
+app.get("/api/inspections", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  // The property scope, in the SQL rather than after it: a list filtered in
+  // the browser is a list the API sent.
+  const scope = scopeClause(auth, "property_id");
+  let results = [];
+  try {
+    ({ results } = await c.env.DB.prepare(
+      `SELECT i.*,
+              (SELECT COUNT(*) FROM inspection_rooms r WHERE r.inspection_id = i.id) AS n_rooms,
+              (SELECT COUNT(*) FROM inspection_rooms r WHERE r.inspection_id = i.id
+                 AND r.status IN ('follow_up','fail')) AS n_flagged,
+              (SELECT COUNT(*) FROM inspection_rooms r WHERE r.inspection_id = i.id
+                 AND r.status = 'unchecked') AS n_unchecked
+         FROM inspections i
+        WHERE i.account_id = ? ${scope.sql}
+        ORDER BY COALESCE(i.inspected_on, i.created_at) DESC, i.created_at DESC
+        LIMIT 200`
+    ).bind(auth.accountId, ...scope.vals).all());
+  } catch (err) {
+    // A database without 055 has no inspections rather than a broken screen.
+    if (!missingSchema(err)) throw err;
+    return c.json([]);
+  }
+  return c.json((results || []).map((r) => ({
+    ...inspectionRowToJs(r),
+    rooms: r.n_rooms, flagged: r.n_flagged, unchecked: r.n_unchecked,
+  })));
+});
+
+app.post("/api/inspections", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  if (!isInspectionKind(b.kind)) return c.json({ error: "bad_kind" }, 400);
+  // The building is the only thing that decides whose this is, and a id in
+  // the body is a claim: joining it back to the account is what makes it
+  // true. A building this seat is not scoped to answers identically to one
+  // that does not exist.
+  const prop = await c.env.DB.prepare(
+    `SELECT id FROM properties WHERE id = ? AND account_id = ?`
+  ).bind(String(b.propertyId || ""), auth.accountId).first();
+  if (!prop || !maySeeProperty(auth, prop.id)) return c.json({ error: "property_not_found" }, 404);
+
+  const id = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO inspections (id, account_id, property_id, unit, kind, tenant_name, inspected_on, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, auth.accountId, prop.id,
+      String(b.unit || "").trim().slice(0, 40) || null, String(b.kind),
+      String(b.tenantName || "").trim().slice(0, 120) || null,
+      String(b.inspectedOn || "").trim().slice(0, 10) || null, auth.userId).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration: "055_inspections" }, 503);
+    throw err;
+  }
+  await logActivity(c.env, auth.accountId, auth.userId, "inspection_started",
+    `Started a ${INSPECTION_KINDS[b.kind].label.toLowerCase()} inspection${b.unit ? ` of unit ${b.unit}` : ""}`);
+  const row = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(id).first();
+  return c.json({ ...inspectionRowToJs(row), rooms: [] }, 201);
+});
+
+app.get("/api/inspections/:id", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  return c.json({ ...inspectionRowToJs(row), rooms: await inspectionRooms(c.env.DB, row.id) });
+});
+
+// The header fields, and finishing.
+//
+// FINISHED IS A ONE-WAY DOOR, which is the point of it: an inspection is
+// evidence in a deposit argument months later, and a record that can be
+// edited after the fact is one the other side can say was edited after the
+// fact. Everything stays readable; nothing stays writable.
+app.patch("/api/inspections/:id", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  if (row.status === "finished") return c.json({ error: "already_finished" }, 409);
+  const b = await c.req.json().catch(() => ({}));
+  const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
+
+  if (b.finish === true) {
+    const rooms = await inspectionRooms(c.env.DB, row.id);
+    // The gate is the shared one, so the screen and the route cannot
+    // disagree about what a finished inspection is.
+    const why = whyNotFinish(rooms);
+    if (why) return c.json({ error: why, unchecked: inspectionTally(rooms).unchecked }, 409);
+    await c.env.DB.prepare(
+      `UPDATE inspections SET status = 'finished', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).bind(row.id).run();
+    await logActivity(c.env, auth.accountId, auth.userId, "inspection_finished",
+      `Finished a ${INSPECTION_KINDS[row.kind]?.label.toLowerCase() || ""} inspection${row.unit ? ` of unit ${row.unit}` : ""}`);
+    const after = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(row.id).first();
+    return c.json({ ...inspectionRowToJs(after), rooms });
+  }
+
+  // Only what was sent, the shape that deleted a W-9 through SubForm.
+  const sets = [], vals = [];
+  if (has("unit")) { sets.push("unit = ?"); vals.push(String(b.unit || "").trim().slice(0, 40) || null); }
+  if (has("tenantName")) { sets.push("tenant_name = ?"); vals.push(String(b.tenantName || "").trim().slice(0, 120) || null); }
+  if (has("inspectedOn")) { sets.push("inspected_on = ?"); vals.push(String(b.inspectedOn || "").trim().slice(0, 10) || null); }
+  if (has("kind")) {
+    if (!isInspectionKind(b.kind)) return c.json({ error: "bad_kind" }, 400);
+    sets.push("kind = ?"); vals.push(String(b.kind));
+  }
+  if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
+  await c.env.DB.prepare(`UPDATE inspections SET ${sets.join(", ")} WHERE id = ?`).bind(...vals, row.id).run();
+  const after = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(row.id).first();
+  return c.json({ ...inspectionRowToJs(after), rooms: await inspectionRooms(c.env.DB, row.id) });
+});
+
+app.delete("/api/inspections/:id", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  // A finished one is a record somebody may be relying on. A draft is
+  // somebody's half-written note and deleting it costs nothing.
+  if (row.status === "finished") return c.json({ error: "already_finished" }, 409);
+  await c.env.DB.prepare(`DELETE FROM inspections WHERE id = ?`).bind(row.id).run();
+  return c.json({ ok: true });
+});
+
+// A room. The name is free text with a suggested list on the screen; the
+// status starts `unchecked`, which is a real answer.
+app.post("/api/inspections/:id/rooms", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  if (row.status === "finished") return c.json({ error: "already_finished" }, 409);
+  const b = await c.req.json().catch(() => ({}));
+  const name = String(b.name || "").trim().slice(0, 80);
+  if (!name) return c.json({ error: "name_required" }, 400);
+  const n = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n, COALESCE(MAX(position), -1) AS last FROM inspection_rooms WHERE inspection_id = ?`
+  ).bind(row.id).first();
+  if (n.n >= MAX_ROOMS) return c.json({ error: "too_many_rooms", max: MAX_ROOMS }, 409);
+  const id = uid();
+  await c.env.DB.prepare(
+    `INSERT INTO inspection_rooms (id, inspection_id, name, status, note, position)
+     VALUES (?, ?, ?, 'unchecked', NULL, ?)`
+  ).bind(id, row.id, name, Number(n.last) + 1).run();
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) }, 201);
+});
+
+app.patch("/api/inspections/:id/rooms/:roomId", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  if (row.status === "finished") return c.json({ error: "already_finished" }, 409);
+  // Joined back to THIS inspection, so a room id from another one is a miss
+  // rather than a way to edit it.
+  const room = await c.env.DB.prepare(
+    `SELECT * FROM inspection_rooms WHERE id = ? AND inspection_id = ?`
+  ).bind(c.req.param("roomId"), row.id).first();
+  if (!room) return c.json({ error: "not_found" }, 404);
+  const b = await c.req.json().catch(() => ({}));
+  const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
+  const sets = [], vals = [];
+  if (has("name")) {
+    const name = String(b.name || "").trim().slice(0, 80);
+    if (!name) return c.json({ error: "name_required" }, 400);
+    sets.push("name = ?"); vals.push(name);
+  }
+  if (has("status")) {
+    if (!isRoomStatus(b.status)) return c.json({ error: "bad_status" }, 400);
+    sets.push("status = ?"); vals.push(String(b.status));
+  }
+  if (has("note")) { sets.push("note = ?"); vals.push(String(b.note || "").trim().slice(0, 2000) || null); }
+  if (has("position")) { sets.push("position = ?"); vals.push(Math.max(0, Math.min(999, Number(b.position) || 0))); }
+  if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
+  await c.env.DB.prepare(`UPDATE inspection_rooms SET ${sets.join(", ")} WHERE id = ?`)
+    .bind(...vals, room.id).run();
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) });
+});
+
+app.delete("/api/inspections/:id/rooms/:roomId", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  if (row.status === "finished") return c.json({ error: "already_finished" }, 409);
+  const res = await c.env.DB.prepare(
+    `DELETE FROM inspection_rooms WHERE id = ? AND inspection_id = ?`
+  ).bind(c.req.param("roomId"), row.id).run();
+  if (!res.meta?.changes) return c.json({ error: "not_found" }, 404);
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) });
+});
+
+// Photos, attached after the bytes are already in R2 through
+// /api/uploads/report-photo/... -- the same kind, deliberately, because it is
+// the one upload kind that checks the type and the size, and an inspection
+// photo is the same thing from the same phone. A second kind would be a
+// second set of limits to keep in step.
+app.post("/api/inspections/:id/rooms/:roomId/photos", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  if (row.status === "finished") return c.json({ error: "already_finished" }, 409);
+  const room = await c.env.DB.prepare(
+    `SELECT * FROM inspection_rooms WHERE id = ? AND inspection_id = ?`
+  ).bind(c.req.param("roomId"), row.id).first();
+  if (!room) return c.json({ error: "not_found" }, 404);
+  const have = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM inspection_photos WHERE room_id = ?`).bind(room.id).first();
+  if (have.n >= MAX_ROOM_PHOTOS) return c.json({ error: "too_many", max: MAX_ROOM_PHOTOS }, 409);
+
+  const b = await c.req.json().catch(() => ({}));
+  const stmts = [];
+  let added = 0;
+  for (const p of Array.isArray(b.photos) ? b.photos : []) {
+    const key = String(p?.key || "");
+    // THE KEY IS CHECKED, NEVER TRUSTED. It is a path into R2 and the caller
+    // names it, so without this a key under another account's prefix would be
+    // attached and then served back by the route below.
+    if (!key.startsWith(`${auth.accountId}/report-photo/`) || key.includes("..")) continue;
+    const type = String(p?.type || "").toLowerCase();
+    stmts.push(c.env.DB.prepare(
+      `INSERT INTO inspection_photos (id, room_id, file_key, name, content_type)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(uid(), room.id, key, String(p?.name || "photo").slice(0, 120),
+      PHOTO_TYPES.has(type) ? type : "image/jpeg"));
+    if (have.n + ++added >= MAX_ROOM_PHOTOS) break;
+  }
+  if (!stmts.length) return c.json({ error: "nothing_to_add" }, 400);
+  await c.env.DB.batch(stmts);
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) });
+});
+
+app.delete("/api/inspections/:id/rooms/:roomId/photos/:photoId", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  if (row.status === "finished") return c.json({ error: "already_finished" }, 409);
+  // Pinned three ways, like every other document route here: the token is the
+  // inspection, the inspection names the room, and the room names the photo.
+  const res = await c.env.DB.prepare(
+    `DELETE FROM inspection_photos WHERE id = ? AND room_id IN
+       (SELECT id FROM inspection_rooms WHERE id = ? AND inspection_id = ?)`
+  ).bind(c.req.param("photoId"), c.req.param("roomId"), row.id).run();
+  if (!res.meta?.changes) return c.json({ error: "not_found" }, 404);
+  // The object stays in R2. A photo taken off a room is still evidence of
+  // what was walked, and an accidental removal a minute after uploading is
+  // far the likelier event -- the same reasoning the report photo follows.
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id) });
+});
+
+// Serving one back. The caller names an inspection and a photo on it, never a
+// key: the key is read from the row after the same check every other route on
+// that inspection makes. An <img src> cannot carry an Authorization header,
+// so the browser fetches this like any other call and renders the blob.
+app.get("/api/inspections/:id/photos/:photoId", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  const photo = await c.env.DB.prepare(
+    `SELECT p.* FROM inspection_photos p
+       JOIN inspection_rooms r ON r.id = p.room_id
+      WHERE p.id = ? AND r.inspection_id = ?`
+  ).bind(c.req.param("photoId"), row.id).first();
+  if (!photo) return c.notFound();
+  const obj = await c.env.FILES.get(photo.file_key);
+  if (!obj) return c.notFound();
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": photo.content_type || "image/jpeg",
+      "Cache-Control": "private, max-age=3600",
+      "Content-Disposition": `inline; filename="${String(photo.name || "photo").replace(/[^\w.\- ]/g, "_")}"`,
+    },
+  });
+});
+
+// RAISING THE WORK, which is what the whole walk is for.
+//
+// It creates a JOB and stops there, deliberately. Composing the job from what
+// was flagged is bookkeeping; issuing a work order is a price and a date
+// committed to a company, and this product's own rule is that the side paying
+// cannot commit the side doing the work without them answering. So the job
+// lands unassigned with its trade slots open, and Assign, Ask for quotes and
+// Overflow are one tap away on it -- the same three doors every other job has,
+// with every gate they carry (cover, documents, roster status) intact.
+//
+// ONE JOB PER INSPECTION. Raising a second would be two contractors asked for
+// the same work, found out when both turn up.
+app.post("/api/inspections/:id/job", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  if (row.job_id) return c.json({ error: "already_raised", jobId: row.job_id }, 409);
+  const rooms = await inspectionRooms(c.env.DB, row.id);
+  const flagged = flaggedRooms(rooms);
+  // Nothing was wrong, so there is nothing to do. Said rather than creating
+  // an empty job somebody then has to find and close.
+  if (!flagged.length) return c.json({ error: "nothing_flagged" }, 409);
+
+  const b = await c.req.json().catch(() => ({}));
+  const trades = (Array.isArray(b.trades) ? b.trades : []).filter((t) => TRADE_IDS.has(t));
+  if (!trades.length) return c.json({ error: "trades_required" }, 400);
+
+  const prop = await c.env.DB.prepare(
+    `SELECT * FROM properties WHERE id = ? AND account_id = ?`
+  ).bind(row.property_id, auth.accountId).first();
+
+  const jobId = uid();
+  await c.env.DB.prepare(
+    `INSERT INTO jobs (id, account_id, title, address, area, zip, date, trades, scope,
+                       status, property_id, created_by, approved_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)`
+  ).bind(jobId, auth.accountId,
+    inspectionJobTitle(inspectionRowToJs(row)),
+    prop?.address || null, prop?.city || null, prop?.zip || null,
+    String(b.date || "").trim().slice(0, 10) || null,
+    JSON.stringify(trades),
+    inspectionJobScope(inspectionRowToJs(row), rooms),
+    row.property_id, auth.userId).run();
+  await c.env.DB.prepare(`UPDATE inspections SET job_id = ? WHERE id = ?`).bind(jobId, row.id).run();
+  await logActivity(c.env, auth.accountId, auth.userId, "inspection_job",
+    `Raised a job from the inspection${row.unit ? ` of unit ${row.unit}` : ""}: ${flagged.length} room${flagged.length === 1 ? "" : "s"} to put right`);
+  return c.json({ ok: true, jobId, flagged: flagged.length }, 201);
 });
 
 app.put("/api/uploads/:kind/:fileName", async (c) => {

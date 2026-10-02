@@ -302,10 +302,17 @@ try {
     // it.
     const defs = (APP.match(/function PhotoLightbox\(/g) || []).length;
     const uses = (APP.match(/<PhotoLightbox\b/g) || []).length;
-    const fed = (APP.match(/onLoaded=\{seeShot\}/g) || []).length;
+    const thumbs = (APP.match(/<ReportPhoto\b/g) || []).length;
+    const fed = (APP.match(/onLoaded=/g) || []).length;
     t.ck("one component", defs === 1, String(defs));
-    t.ck("mounted in both modals", uses === 2, String(uses));
-    t.ck("and every grid feeds it", fed === 3, String(fed));
+    // Three mounts: the tenant's own report, the manager's view of it, and a
+    // room on a unit inspection. A fourth place showing photographs should
+    // raise this number rather than grow a second lightbox.
+    t.ck("mounted wherever a set of photos is shown", uses === 3, String(uses));
+    // AND EVERY THUMBNAIL REPORTS WHAT IT LOADED, which is the property that
+    // matters: the lightbox draws from what the thumbnails fetched, so one
+    // that stays quiet leaves it with nothing to show and no way to know why.
+    t.ck("and every thumbnail feeds one", thumbs === fed, JSON.stringify({ thumbs, fed }));
     // The old shape is gone with it: a <button> wrapping an <img>, which
     // cannot carry the arrows because a button inside a button is not a thing.
     t.ck("and the old one-picture copy is gone",
