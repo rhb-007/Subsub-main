@@ -5059,6 +5059,62 @@ refactor.
   carries it; it asserts nothing about that section, so it passes, which is
   exactly why it is written down here.
 
+- **An invite with a letter wrong in the address could only be thrown away.**
+  The panel offered Copy link, Send again and Revoke — so the route from a
+  typo to a working invite was revoke, retype the company, the contact, the
+  email and the mobile, and start again, losing when it was first raised and
+  leaving the dashboard reading as though nobody had ever been asked.
+  Reported as *"make sub/contractors editable until they accept invite,
+  instead of just resending or emailing invite"*.
+
+  `PATCH /api/invites/:id`, and **the boundary is exactly where the report put
+  it**. Once `used_at` is set the record is their `companies` row and
+  `PATCH /api/subs/:companyId` is the door, with its own rule about whether
+  this account may write a row somebody else answers for — two doors onto one
+  record is how the two come to disagree. An invite raised **from a
+  contractor's card** is refused one step earlier for the same reason: it
+  carries `company_id`, so their name and address already live on a row the
+  roster edits. The panel draws no form there and **says where instead**,
+  because a missing button with no explanation is a dead end.
+
+  **REPLACING AN ADDRESS REISSUES THE TOKEN, AND THAT INVERTS THE RULE
+  BESIDE IT.** Resending deliberately reuses the token, because reissuing
+  would break the link already sitting in somebody's inbox. Here the whole
+  reason to change an address is that the link went to the **wrong person**,
+  and leaving their copy live hands a stranger a way onto this account's
+  roster. **Replaced or removed, never merely added**: a link made to hand
+  over in person has no address and was never sent by us, but may well have
+  been pasted into a message by hand, so adding an email to it must not kill
+  the link somebody is already holding.
+
+  Two things follow. `sent_at` is **cleared** on a reissue, or the status line
+  goes on claiming a send that has not happened — which is also what makes the
+  panel offer *Send again* rather than read as finished. And the screen
+  **warns before the press**, not after it: finding out that the link changed
+  once it already has is finding out too late to decide.
+
+  Only the keys sent are written, which is the shape that deleted a W-9
+  through `SubForm`. Same seats as creating and resending one; revoking stays
+  admin-only because it destroys a live credential, and correcting an address
+  does not — and a project manager chasing a contractor is exactly who notices
+  the typo.
+
+- **AND `relTime` IS A PAST-TENSE HELPER THAT ANSWERED A FUTURE DATE "just
+  now".** Every branch in it is a `<` against a positive bound and `ago` is
+  negative ahead of now, so the first one matched whatever the date was. The
+  invite panel renders `Expires {relTime(expiresAt)}`, so a link good for
+  another thirty days read **"Expires just now"** — on the one line that says
+  whether the link still works, which reads as already dead.
+
+  One helper rather than a second one beside it: a future time is the same
+  question asked the other way round, and two of these is how the two come to
+  round differently. Nothing that passes a past time moves, and anything that
+  was passing a future one was already wrong.
+
+  The general shape, which is new here: **a helper whose name does not say
+  which direction it reads will be handed the other one**, and it will answer
+  rather than refuse. The screen is the only place that shows it.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
