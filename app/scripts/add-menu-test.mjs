@@ -155,6 +155,74 @@ try {
     await ctx.close().catch(() => {});
   }
 
+  console.log("\n-- AN ADMIN CARRYING STRAY BUILDING ROWS STILL RUNS THE ACCOUNT --");
+  {
+    // THE REPORTED STATE, and the one that could not add a property at all.
+    //
+    // The console's role control promoted a scoped project manager and left
+    // their `membership_properties` rows on the new admin seat. The Worker
+    // ignores them -- `propertyScope` answers null for an admin -- but
+    // `/api/account-users` hands the stored rows to the browser so the user
+    // form can draw the picker, and `isScoped` read the LIST and never the
+    // ROLE. `runsTheAccount` then shut the account down around its own admin:
+    // both doors to adding a building are behind it, and so are Edit, Remove,
+    // the vendor list and the owners panel.
+    //
+    // Driven here rather than asserted statically because what was wrong was
+    // a predicate reading a field, and the only proof is the control being on
+    // the screen.
+    KIND = "property_manager"; ROLE = "admin"; SCOPE = ["prop_1"];
+    const { ctx, page } = await open();
+    const items = await openMenu(page);
+    t.ck("the header still offers Property", items.some((x) => /^property$/i.test(x)),
+      JSON.stringify(items));
+    t.ck("and the roster and the invite link with it",
+      items.some((x) => /contractor/i.test(x)) && items.some((x) => /invite link/i.test(x)),
+      JSON.stringify(items));
+
+    // The other door, on the screen itself -- and the header it sits under,
+    // which read "Your buildings" instead of "Properties" for the same
+    // reason.
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^propert/i.test((b.innerText || "").trim()))?.click());
+    await wait(1200);
+    const screen = await page.evaluate(() => ({
+      head: (document.querySelector(".dash-hello h2")?.innerText || "").trim(),
+      add: [...document.querySelectorAll(".dash-hello .add-btn")]
+        .map((b) => (b.innerText || "").replace(/\s+/g, " ").trim()),
+    }));
+    t.ck("the Properties screen calls itself Properties", /^properties$/i.test(screen.head),
+      JSON.stringify(screen));
+    t.ck("and carries New property", screen.add.some((x) => /new property/i.test(x)),
+      JSON.stringify(screen));
+    await ctx.close().catch(() => {});
+  }
+
+  console.log("\n-- and a scoped PROJECT MANAGER is still narrowed --");
+  {
+    // The fix must not widen the seat the scoping exists for. A pm with
+    // buildings runs those buildings, not the firm, so neither door is theirs.
+    KIND = "property_manager"; ROLE = "pm"; SCOPE = ["prop_1"];
+    const { ctx, page } = await open();
+    const h = await readHeader(page);
+    // Their only Add action is the job, which the dashboard already carries --
+    // so the header draws nothing there at all.
+    t.ck("the header offers no menu", h.isMenu === false, JSON.stringify(h));
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^propert|^your build/i.test((b.innerText || "").trim()))?.click());
+    await wait(1200);
+    const screen = await page.evaluate(() => ({
+      head: (document.querySelector(".dash-hello h2")?.innerText || "").trim(),
+      add: [...document.querySelectorAll(".dash-hello .add-btn")]
+        .map((b) => (b.innerText || "").replace(/\s+/g, " ").trim()),
+    }));
+    t.ck("and the screen is still theirs rather than the firm's",
+      /your buildings/i.test(screen.head), JSON.stringify(screen));
+    t.ck("with no New property on it", !screen.add.some((x) => /new property/i.test(x)),
+      JSON.stringify(screen));
+    await ctx.close().catch(() => {});
+  }
+
   console.log("\n-- nothing threw --");
   {
     KIND = "property_manager"; ROLE = "admin"; SCOPE = [];
