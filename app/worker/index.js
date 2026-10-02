@@ -2441,6 +2441,106 @@ app.post("/api/invites/:id/resend", requireRole("admin", "pm"), async (c) => {
   });
 });
 
+// CHANGE AN OUTSTANDING INVITE, which until now could only be revoked and
+// retyped.
+//
+// The commonest thing wrong with an invite is a letter in the address: it
+// went nowhere, nothing reports that it went nowhere, and the panel offered
+// Copy link, Send again and Revoke -- so the only route from a typo to a
+// working invite was to throw the record away and start again, losing when it
+// was first raised and leaving the dashboard reading as though nobody had
+// ever been asked.
+//
+// EDITABLE UNTIL THEY ACCEPT, and the boundary is exactly that. Once `used_at`
+// is set the record is their `companies` row and `PATCH /api/subs/:companyId`
+// is the door, with its own rule about whether this account may write a row
+// somebody else answers for. Two doors onto one record is how the two come to
+// disagree.
+//
+// An invite raised FROM a contractor's card is refused for the same reason
+// one step earlier: it carries `company_id`, so their name and address are
+// already on a row this account can edit from the roster, and writing the
+// invite's copy would leave two answers to one question. The panel says so
+// rather than offering a save the route will refuse.
+//
+// Same seats as creating and resending one. Revoking is admin-only because it
+// destroys a live credential; correcting an address does not.
+app.patch("/api/invites/:id", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const row = await c.env.DB.prepare(
+    `SELECT * FROM sub_invites WHERE id = ? AND account_id = ?`
+  ).bind(c.req.param("id"), accountId).first();
+  // Scoped by account, so an id from another account is a miss rather than a
+  // way to edit somebody else's invite -- the same answer resend gives.
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (row.used_at) return c.json({ error: "already_accepted" }, 409);
+  if (row.revoked_at) return c.json({ error: "revoked" }, 409);
+  if (row.company_id) return c.json({ error: "on_their_card", companyId: row.company_id }, 409);
+
+  // Only what was sent. A screen that edits four fields must not blank a
+  // fifth it has never heard of -- the shape that deleted a W-9 through
+  // SubForm.
+  const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
+  const next = {
+    company_name: has("companyName")
+      ? (String(b.companyName || "").trim().slice(0, 160) || null) : row.company_name,
+    contact: has("contact")
+      ? (String(b.contact || "").trim().slice(0, 120) || null) : row.contact,
+    label: has("label") ? (String(b.label || "").trim().slice(0, 120) || null) : row.label,
+    email: has("email") ? (String(b.email || "").trim().toLowerCase() || null) : row.email,
+    phone: has("phone") ? (normalizePhone(b.phone) || null) : row.phone,
+  };
+  if (next.email && !EMAIL_RE.test(next.email)) return c.json({ error: "bad_email" }, 400);
+  if (has("phone") && String(b.phone || "").trim() && !next.phone) {
+    return c.json({ error: "bad_phone" }, 400);
+  }
+
+  const changed = Object.keys(next).filter((k) => (next[k] || null) !== (row[k] || null));
+  if (!changed.length) return c.json({ error: "nothing_to_change" }, 400);
+
+  // AN ADDRESS THAT IS BEING REPLACED HAS A LIVE CREDENTIAL SITTING IN IT.
+  //
+  // Resending deliberately reuses the token, because reissuing would break
+  // the link already in somebody's inbox. That reasoning inverts here: the
+  // whole reason to change an address is that the link went to the wrong
+  // person, and leaving their copy working hands a stranger a way onto this
+  // account's roster.
+  //
+  // REPLACED or REMOVED, never merely ADDED. An invite made as a link to hand
+  // over has no address and was never sent by us -- but it may well have been
+  // pasted into a message by hand, so adding an email to it must not kill the
+  // link somebody is already holding.
+  const replaced = (was, now) => !!was && (now || null) !== was;
+  const reissue = replaced(row.email, next.email) || replaced(row.phone, next.phone);
+  const token = reissue ? newInviteToken() : row.token;
+  const expires = reissue
+    ? new Date(Date.now() + INVITE_TTL_DAYS * 86400_000).toISOString()
+    : row.expires_at;
+
+  await c.env.DB.prepare(
+    `UPDATE sub_invites SET company_name = ?, contact = ?, label = ?, email = ?, phone = ?,
+            token = ?, expires_at = ?, sent_at = ?
+      WHERE id = ? AND account_id = ?`
+  ).bind(next.company_name, next.contact, next.label, next.email, next.phone,
+    // Nothing has gone to the new address, so the status line must stop
+    // saying it has. That is also what makes the panel offer Send again
+    // rather than reading as finished.
+    token, expires, reissue ? null : row.sent_at, row.id, accountId).run();
+
+  await logActivity(c.env, accountId, userId, "invite_updated",
+    reissue
+      ? `Invite details changed and a new link issued${next.email ? ` for ${next.email}` : ""}`
+      : "Invite details changed");
+
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  const after = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(row.id).first();
+  // Said rather than inferred: the panel has to tell somebody the old link
+  // has stopped working, and a browser working that out from the url it can
+  // see would be a second implementation of this rule.
+  return c.json({ ...inviteRowToJs(after, account), reissued: reissue });
+});
+
 // Invite a contractor who is ALREADY on the roster to get a login.
 //
 // Being on a roster and being able to sign in are two different records, and

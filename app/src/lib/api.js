@@ -382,6 +382,13 @@ export const api = {
   // new invite. Reissuing would break the link already sitting in somebody's
   // inbox, which is the opposite of what pressing "Send again" means.
   resendInvite: (id) => request(`/invites/${id}/resend`, { method: "POST" }),
+  // Correct an invite that has not been accepted yet. Only the keys sent are
+  // written, so a form that knows four fields cannot blank a fifth. Replacing
+  // an address reissues the token -- the reply says so, because the old link
+  // is a live credential and whoever is holding it stops being able to use
+  // it.
+  updateInvite: (id, body) => request(`/invites/${id}`,
+    { method: "PATCH", body: JSON.stringify(body) }),
   // Invite a contractor who is already on the roster to get a login. Started
   // from their record rather than a blank form, so nothing is retyped -- and
   // the invite carries their company id, so redeeming it attaches the seat to

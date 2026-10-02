@@ -694,6 +694,26 @@ const relTime = (iso) => {
   const t = parseWhen(iso);
   if (!Number.isFinite(t)) return "";
   const ago = Date.now() - t;
+  // A PAST-TENSE HELPER HANDED A FUTURE TIME ANSWERED "just now", which is
+  // the worst of the available wrong answers. Every branch below is a `<`
+  // against a positive bound and `ago` is negative ahead of now, so the first
+  // one matched whatever the date was -- and the invite panel, reading
+  // `Expires {relTime(expiresAt)}` over a link good for another thirty days,
+  // drew "Expires just now". On the one line that says whether the link still
+  // works, that reads as already dead.
+  //
+  // One helper rather than a second one beside it: a future date is the same
+  // question asked the other way round, and two of these is how the two come
+  // to round differently. Nothing that passes a past time moves.
+  if (ago < -45 * 1000) {
+    const mins = Math.round(-ago / 60000);
+    if (mins < 60) return `in ${mins} min`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `in ${hrs} hour${hrs === 1 ? "" : "s"}`;
+    const days = Math.round(hrs / 24);
+    if (days < 30) return `in ${days} day${days === 1 ? "" : "s"}`;
+    return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
   if (ago < 90 * 1000) return "just now";
   const mins = Math.round(ago / 60000);
   if (mins < 60) return `${mins} min ago`;
@@ -13970,8 +13990,52 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
   const [note, setNote] = useState("");
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
+  // Editing an invite nobody has accepted yet. Null when the form is shut,
+  // which is most of the time -- this panel is opened to chase somebody far
+  // more often than to correct them.
+  const [edit, setEdit] = useState(null);
 
   const sendable = !!(invite.email || invite.phone);
+  // An invite raised from a contractor's CARD carries their company id, so
+  // their name and address already live on a row this account edits from the
+  // roster. Offering the form here would be offering a save the route
+  // refuses with on_their_card -- the screen-is-looser-than-the-route lie,
+  // which this file calls the same lie as stricter.
+  const editable = !invite.companyId && invite.status !== "accepted";
+
+  const startEdit = () => {
+    setErr(""); setNote("");
+    setEdit({
+      companyName: invite.companyName || "", contact: invite.contact || "",
+      email: invite.email || "", phone: invite.phone || "",
+    });
+  };
+
+  const save = async () => {
+    setBusy("save"); setErr(""); setNote("");
+    try {
+      const after = await api.updateInvite(invite.id, edit);
+      onChanged(after);
+      setEdit(null);
+      // SAID, because both halves are surprising and both matter. The old
+      // link has stopped working -- which is the point, since the reason to
+      // change an address is that the last one went to the wrong person --
+      // and nothing has gone to the new one, so this is not finished.
+      setNote(after.reissued
+        ? "Saved. The old link has stopped working, and nothing has gone to the new address yet — press Send again."
+        : "Saved.");
+    } catch (e) {
+      console.error("[invites] update failed:", e);
+      const code = e?.body?.error;
+      setErr(code === "bad_email" ? "That email address doesn’t look right."
+        : code === "bad_phone" ? "That mobile number doesn’t look right."
+        : code === "nothing_to_change" ? "Nothing changed."
+        : code === "already_accepted" ? "They’ve already accepted — their details are on their contractor card now."
+        : code === "revoked" ? "That invite was revoked."
+        : code === "on_their_card" ? "Their details live on their contractor card. Open them on the Contractors screen to change them."
+        : "Could not save that. Try once more.");
+    } finally { setBusy(""); }
+  };
 
   const copy = async () => {
     try { await navigator.clipboard.writeText(invite.url); setCopied(true); setTimeout(() => setCopied(false), 2000); }
@@ -14026,6 +14090,50 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
         rating arrive when they finish setting up their account.
       </p>
 
+      {edit ? (
+        /* The same four things the list above states, now as fields. In
+           place rather than a second modal: this panel IS the record, and a
+           modal over a modal would put the details being corrected behind
+           the form correcting them. */
+        <div className="inv-edit">
+          <label className="fld">Company
+            <input value={edit.companyName} maxLength={160}
+              onChange={(e) => setEdit({ ...edit, companyName: e.target.value })} />
+          </label>
+          <label className="fld">Who you are inviting
+            <input value={edit.contact} maxLength={120}
+              onChange={(e) => setEdit({ ...edit, contact: e.target.value })} />
+          </label>
+          <label className="fld">Email
+            <input type="email" value={edit.email} maxLength={160}
+              onChange={(e) => setEdit({ ...edit, email: e.target.value })} />
+          </label>
+          <label className="fld">Mobile
+            <input type="tel" value={edit.phone} maxLength={40}
+              onChange={(e) => setEdit({ ...edit, phone: e.target.value })} />
+          </label>
+          {/* Warned BEFORE the press, not reported after it. Somebody
+              correcting a typo has no reason to expect the link to change,
+              and finding out afterwards is finding out too late to decide. */}
+          {((invite.email && edit.email.trim().toLowerCase() !== invite.email)
+            || (invite.phone && edit.phone.trim() !== invite.phone)) && (
+            <p className="fld-note">
+              Changing an address this was already sent to issues a new link, and the
+              old one stops working — because the reason to change it is that the last
+              one went to the wrong person.
+            </p>
+          )}
+          {err && <p className="cov-hint" role="alert">{err}</p>}
+          <div className="invited-acts">
+            <button className="pick" disabled={!!busy}
+              onClick={() => { setEdit(null); setErr(""); }}>Cancel</button>
+            <button className="btn-solid small" disabled={!!busy} onClick={save}>
+              <Check size={13} /> {busy === "save" ? "Saving…" : "Save details"}
+            </button>
+          </div>
+        </div>
+      ) : (
+      <>
       <dl className="invited-facts">
         {invite.companyName && invite.contact && <><dt>Company</dt><dd>{invite.companyName}</dd></>}
         <dt>Invited</dt>
@@ -14046,6 +14154,12 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
       {err && <p className="cov-hint" role="alert">{err}</p>}
 
       <div className="invited-acts">
+        {/* First, because a wrong address is the commonest thing wrong with
+            an invite and every other control here acts on it: Copy and Send
+            again both carry whatever is in this record. */}
+        {editable && <button className="pick" disabled={!!busy} onClick={startEdit}>
+          <Pencil size={13} /> Edit details
+        </button>}
         <button className="pick" onClick={copy}><Copy size={13} /> {copied ? "Copied" : "Copy link"}</button>
         {sendable && <button className="pick" disabled={!!busy} onClick={resend}>
           <Send size={13} /> {busy === "resend" ? "Sending…" : "Send again"}
@@ -14054,6 +14168,16 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
           <Trash2 size={13} /> {busy === "revoke" ? "Revoking…" : "Revoke"}
         </button>}
       </div>
+      {/* The way on for the case the form is deliberately not offered for.
+          Without it this is a dead end wearing a missing button. */}
+      {invite.companyId && (
+        <p className="fld-note">
+          Their details live on their contractor card — open them on the
+          Contractors screen to change them.
+        </p>
+      )}
+      </>
+      )}
 
       <div className="panel-actions">
         <button className="btn-ghost" onClick={onClose}>Done</button>
@@ -27130,6 +27254,14 @@ body{background:var(--paper)}
 .cx-code-acts{display:flex;flex-wrap:wrap;gap:7px;margin-top:4px}
 .cx-code-acts .pick.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 35%,var(--line))}
 
+/* Correcting an invite, in place. Spaced like the facts list it replaces so
+   the panel does not jump height when the form opens over it, and the action
+   row below it is the same one -- there is one row of controls here, not a
+   second set for the form. No backticks in this block: the stylesheet is one
+   template literal. */
+.inv-edit{margin:14px 0 2px}
+.inv-edit .fld{margin-bottom:10px}
+.inv-edit .fld-note{margin-top:2px}
 .invited-acts{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
 .invited-acts .pick{display:flex;align-items:center;gap:5px}
 .invited-acts .pick.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 35%,var(--line))}
