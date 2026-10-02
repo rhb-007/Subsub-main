@@ -283,13 +283,54 @@ const hitsWord = (hay, word) => {
 // the same word and a note written in one run-on line still matches.
 const flatten = (s) => ` ${String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
 
+// A WORD THAT ONLY SAYS WHERE THE DAMAGE IS, IS NOT THE DAMAGED THING.
+//
+// "Scuff to the wall left of the door" is painting. Read whole-word it also
+// says `door`, so it called a glazier -- and this is not a rare phrasing,
+// it is the one the photo-draft prompt explicitly asks for ("where in the
+// frame it is, so somebody can find it again"). So a noun that arrives
+// behind a positional preposition is dropped before matching.
+//
+// Deliberately applied to the NOTE as well as the caption: a manager writes
+// the same sentence, and two rules for one fact is how the two come to
+// disagree about "beside the sink".
+const WHERE = /\b(?:(?:to |on |at )?the )?(?:left|right) of the \w+|\b(?:next to|beside|nearest|near|above|below|behind|under|underneath|opposite|by) the \w+/g;
+const dropWhere = (s) => String(s || "").replace(WHERE, " ");
+
+// WHAT A PHOTOGRAPH CONTRIBUTES, AND WHY IT COSTS NOTHING.
+//
+// This module was written reading the room name and the note, and recorded
+// the limit out loud: reading a picture needs a vision model, a key, a cost
+// per inspection, and the inside of a tenant's home leaving this origin.
+//
+// All four of those were then paid for by the photo drafts -- which turn
+// each picture into a sentence about its condition, written to the row. So
+// the pictures are **already words** by the time anybody raises a job, and
+// reading them here is free: no second call, no second charge, nothing new
+// leaving. A caption saying "hairline crack across the basin" names plumbing
+// exactly as a note saying it would.
+//
+// WHICH MEANS THE SUGGESTION IS ONLY AS GOOD AS WHAT HAS BEEN READ, and the
+// screen has to say so rather than implying the pictures were looked at.
+// `unread` counts photographs on flagged rooms that carry neither a caption
+// nor a draft, so the modal can offer the one press that fixes it instead of
+// quietly suggesting from half the evidence.
+const photoWords = (p) => `${p?.caption || ""} ${p?.draft || ""}`.trim();
+
 export function suggestTrades(rooms = []) {
   const flagged = (rooms || []).filter(isFlagged);
   const why = {};
-  const add = (trade, reason) => {
+  // Which reason words were read off a photograph rather than typed. The
+  // manager wrote the notes, so a word from one is their own; a word from a
+  // caption is second-hand and the screen says which -- the same rule that
+  // makes an unkept draft dashed rather than silently adopted.
+  const fromPhoto = new Set();
+  let unread = 0;
+  const add = (trade, reason, photo = false) => {
     if (!trade || !reason) return;
     (why[trade] ||= []);
     if (!why[trade].includes(reason)) why[trade].push(reason);
+    if (photo) fromPhoto.add(reason);
   };
 
   for (const r of flagged) {
@@ -299,12 +340,25 @@ export function suggestTrades(rooms = []) {
     // The note and the room name are read together: somebody writing
     // "Kitchen" in the name box and "tap drips" in the note has said both
     // halves, and only one of them is in either field.
-    const hay = flatten(`${name} ${r?.note || ""}`);
+    const hay = flatten(`${name} ${dropWhere(r?.note)}`);
     for (const [trade, words] of Object.entries(TRADE_HINTS)) {
       for (const w of words) {
         if (hitsWord(hay, w)) { add(trade, w); break; }
       }
     }
+    // THE PHOTOGRAPHS, through what was written about them. Read per photo
+    // rather than as one blob, so a caption is never joined to the next
+    // one's first word and matched across the seam.
+    for (const p of r?.photos || []) {
+      const text = photoWords(p);
+      if (!text) { unread += 1; continue; }
+      const shot = flatten(dropWhere(text));
+      for (const [trade, words] of Object.entries(TRADE_HINTS)) {
+        for (const w of words) {
+          if (hitsWord(shot, w)) { add(trade, w, true); break; }
+        }
+      }
+    }
   }
-  return { trades: Object.keys(why), why };
+  return { trades: Object.keys(why), why, fromPhoto, unread };
 }

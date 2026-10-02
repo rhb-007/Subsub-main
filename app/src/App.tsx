@@ -25792,15 +25792,38 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
             apologising for it. */}
         {suggested.trades.length > 0 && (
           <p className="insp-sugg">
-            <Sparkles size={13} /> Suggested from your notes:{" "}
+            {/* WHERE EACH WORD CAME FROM, because the two are not equally
+                theirs. A word in a note is one they typed; a word in a photo
+                caption was drafted for them, and may still be a draft nobody
+                has kept. Naming the source is what lets somebody check the
+                one they did not write -- the same reason an unkept draft is
+                drawn dashed rather than silently adopted. */}
+            <Sparkles size={13} /> Suggested from{" "}
+            {suggested.fromPhoto.size
+              ? (suggested.trades.some((id) => !suggested.fromPhoto.has(suggested.why[id][0]))
+                ? "your notes and photos" : "your photos")
+              : "your notes"}:{" "}
             {suggested.trades.map((id, n) => (
               <span key={id}>
                 {n > 0 ? ", " : ""}
                 <b>{TRADES.find((t) => t.id === id)?.label || id}</b>
-                {" "}(“{suggested.why[id][0]}”)
+                {" "}({suggested.fromPhoto.has(suggested.why[id][0]) ? "photo: " : ""}“{suggested.why[id][0]}”)
               </span>
             ))}
             . Change any of them.
+          </p>
+        )}
+        {/* THE SUGGESTION IS ONLY AS GOOD AS WHAT HAS BEEN READ. A
+            photograph with nothing written about it contributes nothing, and
+            a screen that said "suggested from your photos" over three unread
+            ones would be claiming the pictures were looked at. So it says
+            how many were not, and the way to fix it is the press that
+            already exists on the room rather than a second one here. */}
+        {suggested.unread > 0 && (
+          <p className="insp-unread">
+            {suggested.unread} photo{suggested.unread === 1 ? " has" : "s have"} no note yet, so
+            {suggested.unread === 1 ? " it is" : " they are"} not in this.
+            Close this and press <b>Draft notes</b> on the room to read {suggested.unread === 1 ? "it" : "them"}.
           </p>
         )}
         <div className="chips">
@@ -25821,7 +25844,7 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
         {suggested.trades.length > 0 && !sameAsSuggested && (
           <button type="button" className="btn-ghost small insp-reset"
             onClick={() => setTrades(suggested.trades)}>
-            Back to what the notes suggested
+            Back to what was suggested
           </button>
         )}
         <label className="fld">When, if you know
@@ -29727,6 +29750,14 @@ strong.insp-name{background:none;border:0;padding:0}
 .chip.sugg:not(.on){border-style:dashed;border-color:color-mix(in srgb,var(--brand) 45%,var(--line));color:var(--ink)}
 /* What was read, and the word it was read from. */
 .insp-sugg{display:block;margin:0 0 9px;font-size:12.5px;line-height:1.6;color:var(--ink-soft)}
+/* What the suggestion could NOT read. Amber rather than muted, because it is
+   the one line here that changes what somebody should do next -- a note in
+   the same grey as the suggestion above it reads as more of the same
+   sentence. */
+.insp-unread{display:block;margin:-4px 0 9px;font-size:12px;line-height:1.55;
+  color:var(--ink);background:color-mix(in srgb,var(--amber) 10%,var(--card));
+  border:1px solid color-mix(in srgb,var(--amber) 32%,var(--line));
+  border-radius:8px;padding:7px 10px}
 .insp-sugg svg{vertical-align:-2px;margin-right:4px;color:var(--brand)}
 .insp-sugg b{color:var(--ink);font-weight:700}
 .insp-reset{margin-top:9px}

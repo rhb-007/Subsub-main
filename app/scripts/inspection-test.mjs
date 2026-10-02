@@ -458,13 +458,72 @@ try {
   ck("every hint names a trade that exists", badHint.length === 0, JSON.stringify(badHint));
   ck("and so does every room mapping", badRoom.length === 0, JSON.stringify(badRoom));
 
-  // IT READS THE WORDS AND NOT THE PHOTOGRAPHS, said here rather than
-  // claimed: a room with pictures and nothing written suggests nothing, which
-  // is the honest limit of this and the thing a later pass must not assume
-  // was fixed.
-  ck("photographs are not read, and this says so",
+  // IT READS WHAT IS WRITTEN ABOUT A PHOTOGRAPH, NOT THE PHOTOGRAPH.
+  //
+  // This block used to pin the opposite -- "photographs are not read, and
+  // this says so" -- which was the honest limit when the only inputs were
+  // the room name and the note. The photo drafts removed it: a caption is a
+  // sentence about the picture's condition, written to the row, so the
+  // pictures reach this transitively and at no extra cost. The assertion is
+  // rewritten rather than deleted, because what survives is the real limit:
+  // a photograph nobody has written about still contributes nothing.
+  ck("a photograph with nothing written about it contributes nothing",
     of([{ name: "Hallway", status: "fail", note: "",
       photos: [{ id: "p1" }, { id: "p2" }] }]).length === 0);
+
+  // AND THE CAPTION IS READ, which is what "based on the photos" means here.
+  const shot = suggestTrades([{ name: "Bathroom 1", status: "fail", note: "",
+    photos: [{ id: "p1", caption: "Hairline crack across the basin." }] }]);
+  ck("a kept caption names the trade", shot.trades.includes("plumbing"), JSON.stringify(shot.trades));
+  // A DRAFT COUNTS TOO, and that is deliberate: it is the commonest state --
+  // the model has written it and nobody has pressed Keep yet. Suggesting
+  // from it is why the screen says which words came from a photograph.
+  const dr = suggestTrades([{ name: "Hall", status: "fail", note: "",
+    photos: [{ id: "p1", draft: "Scuff across the plasterboard." }] }]);
+  ck("so does an unkept draft", dr.trades.includes("drywall"), JSON.stringify(dr.trades));
+  // Every word it read off the picture, not a count of them: that caption
+  // names two trades, and asserting "one" was a fact about the fixture.
+  ck("and every word it read there is marked as second-hand",
+    dr.trades.every((t) => dr.why[t].some((w) => dr.fromPhoto.has(w))),
+    `${JSON.stringify(dr.why)} / ${[...dr.fromPhoto].join(",")}`);
+  // A word they TYPED is never marked, or the screen would call their own
+  // note a photo and they would go looking for a picture that says it.
+  const typed = suggestTrades([{ name: "Hall", status: "fail", note: "Scuff across the plasterboard.", photos: [] }]);
+  ck("a word they typed is not", typed.fromPhoto.size === 0, [...typed.fromPhoto].join(","));
+
+  // WHAT HAS NOT BEEN READ IS COUNTED, because a screen saying "suggested
+  // from your photos" over three unread ones is claiming the pictures were
+  // looked at.
+  const mixed = suggestTrades([{ name: "Bathroom 1", status: "fail", note: "",
+    photos: [{ id: "p1", caption: "Cracked basin." }, { id: "p2" }, { id: "p3" }] }]);
+  ck("photographs with no note are counted", mixed.unread === 2, String(mixed.unread));
+  ck("and a read one is not", suggestTrades([{ name: "Hall", status: "fail",
+    photos: [{ id: "p1", caption: "Cracked basin." }] }]).unread === 0);
+  // Only flagged rooms, the same rule the trades follow: an OK room's photos
+  // are not work anybody is being sent to do.
+  ck("an OK room's unread photos are not counted",
+    suggestTrades([{ name: "Hall", status: "ok", photos: [{ id: "p1" }] }]).unread === 0);
+
+  // A WORD THAT ONLY SAYS WHERE THE DAMAGE IS, IS NOT THE DAMAGED THING.
+  // "Scuff to the wall left of the door" is painting, and read whole-word it
+  // also says `door` -- which called a glazier. Not a rare phrasing either:
+  // it is the one the photo-draft prompt explicitly asks for.
+  const where = suggestTrades([{ name: "Hall", status: "fail", note: "",
+    photos: [{ id: "p1", draft: "Scuff to the wall left of the door." }] }]);
+  ck("the thing the damage is NEXT TO does not earn a trade",
+    !where.trades.includes("windows_doors"), JSON.stringify(where.trades));
+  ck("while the damage itself still does", where.trades.includes("painting"), JSON.stringify(where.trades));
+  // And the guard must not swallow the real case, which is the direction
+  // that would quietly stop a glazier ever being suggested.
+  ck("a door that IS the problem still counts",
+    of([{ name: "Hall", status: "fail", note: "Front door will not latch" }]).includes("windows_doors"));
+  ck("and so does one in a caption",
+    suggestTrades([{ name: "Hall", status: "fail",
+      photos: [{ id: "p1", caption: "Door frame split at the latch." }] }]).trades.includes("windows_doors"));
+  // The same rule on a note, because a manager writes the same sentence and
+  // two rules for one fact is how the two come to disagree.
+  ck("a typed note gets the same treatment",
+    !of([{ name: "Hall", status: "fail", note: "Scuff to the wall left of the door" }]).includes("windows_doors"));
 }
 
 console.log("\n-- sending the finished report to the building's owner --");

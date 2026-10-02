@@ -5692,17 +5692,49 @@ refactor.
   them. `suggestTrades` in `app/shared/inspection.js` reads the flagged rooms
   and ticks what the words name.
 
-  **IT READS THE WORDS AND NOT THE PHOTOGRAPHS, and that is a limit rather than
-  an oversight.** Reading a picture needs a vision model: an outbound call per
-  photo, a key, a cost on every inspection, and — the part that is a product
-  decision and not a build — **the inside of a tenant's home leaving this
-  origin**. This file already records that the weather lookup is server-side so
-  that nothing about who is looking at SubSub leaves us, and that what does
-  leave is a town and a state, *never a customer, a person or a building*. A
-  photograph of somebody's bathroom is several steps past that. The notes are
-  where the signal already is, this costs nothing and runs offline, and a test
-  pins that a room with photographs and no words suggests nothing — so the
-  limit is stated in the suite rather than assumed to have been fixed.
+  **IT READS WHAT IS WRITTEN ABOUT A PHOTOGRAPH, NOT THE PHOTOGRAPH — and
+  that stopped being a limit the day the drafts shipped.** This entry used to
+  record the opposite, and the reasoning is worth keeping because it is what
+  the answer turned out to be: reading a picture needs a vision model, an
+  outbound call per photo, a key, a cost on every inspection, and the inside
+  of a tenant's home leaving this origin. All four were then paid for by the
+  photo drafts — which turn each picture into a **sentence about its
+  condition, written to the row**. So by the time anybody raises a job the
+  pictures are already words, and reading them here is **free**: no second
+  call, no second charge, nothing new leaving. Asked for as "recommend trades
+  based on issues within the description and photos", and the cheap answer was
+  already sitting in the next column.
+
+  Which makes the suggestion **only as good as what has been read**, so the
+  screen says so: `unread` counts photographs on flagged rooms carrying
+  neither a caption nor a draft, and the modal names them and points at the
+  **Draft notes** press that already exists rather than growing a second one.
+  A screen reading *suggested from your photos* over three unread ones is
+  claiming the pictures were looked at. The surviving limit — **a photograph
+  nobody has written about contributes nothing** — is what the old assertion
+  was rewritten to pin, rather than deleted, because it is still true and is
+  the honest statement of the edge.
+
+  **WHERE EACH WORD CAME FROM IS CARRIED, because the two are not equally
+  theirs.** A word in a note is one the manager typed; a word in a caption was
+  drafted *for* them and may still be a draft nobody has kept. `fromPhoto`
+  marks the second kind and the chip line reads *Plumbing (photo: "cracked
+  basin")* — the same rule that makes an unkept draft dashed rather than
+  silently adopted.
+
+  **AND A WORD THAT ONLY SAYS WHERE THE DAMAGE IS, IS NOT THE DAMAGED
+  THING.** The first run of this suggested a glazier for *"scuff to the wall
+  left of the door"* — `door`, whole-word, in a sentence about paint. Not a
+  rare phrasing: it is the one the photo-draft prompt **explicitly asks
+  for** ("where in the frame it is, so somebody can find it again"), so the
+  feature that made captions useful is the same feature that made them
+  misread. A noun arriving behind a positional preposition is dropped before
+  matching, and it is applied to the **note as well**, because a manager
+  writes the same sentence and two rules for one fact is how the two come to
+  disagree about "beside the sink". Both directions are pinned — the door
+  somebody is standing next to earns nothing, the door that will not latch
+  still does — because a guard that swallows the real case would quietly stop
+  a glazier ever being suggested.
 
   **IT IS A SUGGESTION AND NEVER AN ANSWER**, and the screen is what makes that
   true. It names what it read and the word it read it from — *Finish Carpentry
