@@ -18659,6 +18659,79 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
     .sort((a, b) => (severityRank(a.severity) - severityRank(b.severity))
       || String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || "")));
 
+  // OWNER AND TENANT REQUESTS, ABOVE THE TILES RATHER THAN BELOW THEM.
+  //
+  // It sat under five KPI cards, which is the wrong place for the only thing
+  // on this page that is somebody waiting on an answer. Reported from a
+  // property manager's dashboard: "move the section of the issues sent to pm
+  // by the tenant or owner, this should go to the top and share scheduled
+  // jobs as it's the most important for a property manager to see right when
+  // they login."
+  //
+  // So it joins `dash-top` beside the schedule, which is the other question
+  // this page exists to answer -- what is happening and when, and who is
+  // waiting on me. Built here rather than written out twice: one implementation
+  // in one place, and the row below it is where it used to be.
+  //
+  // Not gated on the account kind. A general contractor has no owners and no
+  // tenants, so `awaitingApproval` is empty for them and the panel does not
+  // render at all -- a kind check would be a second record of a fact the data
+  // already carries.
+  //
+  // And it is already capped: `DashRows` shows three and offers the rest,
+  // which is what keeps a panel in a row from growing with the book.
+  const requestPanel = awaitingApproval.length === 0 ? null : (
+      <section className="dash-sec sec-top">
+        <h3><Building2 size={15} /> {isOwner ? "Waiting on approval" : "Asked for by owners and tenants"}
+          <span className="sec-count amber">{awaitingApproval.length}</span></h3>
+        <DashRows id="approvals">
+        {awaitingApproval.map((j) => {
+          const who = users.find((u) => u.id === j.requestedBy);
+          const where = props.find((p) => p.id === j.propertyId);
+          return (
+            <div key={j.id} className="dash-row">
+              {/* The row is the way in. Deciding on a headline was the
+                  only thing it ever allowed; everything they actually
+                  said is a tap away now. */}
+              <button className="dash-row-main dash-row-open" onClick={() => setOpenReq(j.id)}>
+                <div className="dr-title">{j.title}</div>
+                <span className="dr-meta">
+                  {where ? where.name : "A building"}
+                  {j.date ? ` · ${niceDay(j.date)}` : " · no date given"}
+                  {isOwner ? " · not approved yet"
+                    : ` · asked for by ${who ? who.name : "someone"}${
+                        who?.role === "tenant"
+                          ? ` (tenant${who.unit ? `, unit ${who.unit}` : ""})`
+                          : who?.role === "owner" ? " (owner)" : ""}`}
+                  {(j.photos?.length || 0) > 0
+                    ? ` · ${j.photos.length} photo${j.photos.length === 1 ? "" : "s"}` : ""}
+                </span>
+                <span className="dr-open">View details</span>
+              </button>
+              {!isOwner && declining !== j.id && (
+                <div className="dash-row-btns">
+                  <button className="btn-ghost sm" onClick={() => setDeclining(j.id)}>
+                    <X size={13} /> Decline</button>
+                  <button className="btn-solid dash-row-btn" onClick={() => onApproveJob(j.id)}>
+                    <Check size={14} /> Approve</button>
+                </div>
+              )}
+              {!isOwner && declining === j.id && (
+                <DeclineBox who={who} onCancel={() => setDeclining(null)}
+                  onDecline={async (note) => { await onDeclineJob(j.id, note); setDeclining(null); }} />
+              )}
+            </div>
+          );
+        })}
+        </DashRows>
+        {!isOwner && (
+          <p className="rollup-note">Approving turns a request into a job you can price and
+            assign. Nothing reaches a contractor until you do — and if you are not going to,
+            decline it, so it stops waiting and they are told why.</p>
+        )}
+      </section>
+  );
+
   return (
     <main className="ss-main">
       <div className="dash-hello">
@@ -18767,6 +18840,11 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         <ScheduleHero jobs={jobs} isOwner={isOwner} onGoJobs={onGoJobs}
           onOpenJob={onOpenJob} onGoCalendar={onGoCalendar} />
 
+        {/* Beside it, not under the tiles. Second in the row so it is the
+            thing read next to the schedule rather than after the checklist,
+            which is temporary by design and takes itself off the page. */}
+        {requestPanel}
+
         {runsAccount && <GettingStarted accountId={accountId} trades={trades} subs={subs} jobs={jobs}
           subLimit={subLimit} onGoAccount={onGoAccount} onInvite={onInvite}
           onAddSub={onAddSub} onNewJob={onNewJob} onGoContractors={onGoContractors} words={words}
@@ -18849,58 +18927,6 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
           <span className="dc-lab">Committed {words.one} spend</span>
         </button>
       </div>
-      )}
-
-      {awaitingApproval.length > 0 && (
-        <section className="dash-sec">
-          <h3><Building2 size={15} /> {isOwner ? "Waiting on approval" : "Asked for by owners and tenants"}
-            <span className="sec-count amber">{awaitingApproval.length}</span></h3>
-          <DashRows id="approvals">
-          {awaitingApproval.map((j) => {
-            const who = users.find((u) => u.id === j.requestedBy);
-            const where = props.find((p) => p.id === j.propertyId);
-            return (
-              <div key={j.id} className="dash-row">
-                {/* The row is the way in. Deciding on a headline was the
-                    only thing it ever allowed; everything they actually
-                    said is a tap away now. */}
-                <button className="dash-row-main dash-row-open" onClick={() => setOpenReq(j.id)}>
-                  <div className="dr-title">{j.title}</div>
-                  <span className="dr-meta">
-                    {where ? where.name : "A building"}
-                    {j.date ? ` · ${niceDay(j.date)}` : " · no date given"}
-                    {isOwner ? " · not approved yet"
-                      : ` · asked for by ${who ? who.name : "someone"}${
-                          who?.role === "tenant"
-                            ? ` (tenant${who.unit ? `, unit ${who.unit}` : ""})`
-                            : who?.role === "owner" ? " (owner)" : ""}`}
-                    {(j.photos?.length || 0) > 0
-                      ? ` · ${j.photos.length} photo${j.photos.length === 1 ? "" : "s"}` : ""}
-                  </span>
-                  <span className="dr-open">View details</span>
-                </button>
-                {!isOwner && declining !== j.id && (
-                  <div className="dash-row-btns">
-                    <button className="btn-ghost sm" onClick={() => setDeclining(j.id)}>
-                      <X size={13} /> Decline</button>
-                    <button className="btn-solid dash-row-btn" onClick={() => onApproveJob(j.id)}>
-                      <Check size={14} /> Approve</button>
-                  </div>
-                )}
-                {!isOwner && declining === j.id && (
-                  <DeclineBox who={who} onCancel={() => setDeclining(null)}
-                    onDecline={async (note) => { await onDeclineJob(j.id, note); setDeclining(null); }} />
-                )}
-              </div>
-            );
-          })}
-          </DashRows>
-          {!isOwner && (
-            <p className="rollup-note">Approving turns a request into a job you can price and
-              assign. Nothing reaches a contractor until you do — and if you are not going to,
-              decline it, so it stops waiting and they are told why.</p>
-          )}
-        </section>
       )}
 
       {!isOwner && timeDeclined.length > 0 && (
@@ -28229,6 +28255,33 @@ p.fld-note{margin:6px 0 0}
 .auto-strip{display:flex;align-items:center;gap:8px;background:#fbf0dd;border:1px solid #ecd9b0;color:#8a5a12;
   font-size:12.5px;font-weight:600;padding:10px 13px;border-radius:10px;margin-bottom:18px}
 .dash-sec{margin-bottom:24px}
+/* A dash-sec that has been promoted into the top row.
+   Beside the schedule panel it has to BE a panel: a run of bare rows next to
+   a card reads as content that failed to land in one. The surface, radius and
+   shadow are the schedule panel's, deliberately not a second set of values --
+   two cards side by side differing by a pixel is the almost-aligned failure
+   this file already records about a table column.
+
+   No backticks anywhere in here: the whole stylesheet is one template
+   literal, and a backtick in a comment closes it. Seventh time. */
+.dash-sec.sec-top{margin-bottom:0;background:var(--card);border:1px solid var(--line);
+  border-radius:16px;padding:16px 16px 14px;box-shadow:var(--shadow);
+  display:flex;flex-direction:column}
+/* The note takes the slack, so the two panels' feet line up when one has more
+   in it than the other -- the same rule, for the same reason, as the schedule
+   panel's own fortnight strip. auto on the top margin rather than a zero flex
+   basis, which would collapse the box on the days there is no slack to take. */
+.dash-sec.sec-top .rollup-note{margin:auto 0 0;padding-top:11px}
+/* Rows inside a card cannot be the card's own colour, or they disappear.
+   Same pairing the schedule panel's own rows use. */
+.dash-sec.sec-top .dash-row{background:var(--paper);flex-wrap:wrap}
+.dash-sec.sec-top .dash-row:last-of-type{margin-bottom:0}
+/* AND THE ROW CANNOT BE ONE LINE IN A 340px COLUMN. Decline and Approve are
+   about 170px of it, which leaves the title ellipsed to nothing, and the
+   decline box wants 320px of its own and does not fit at all. So it wraps and
+   the buttons take their own line under the thing they are about. */
+.dash-sec.sec-top .dash-row-main{flex:1 1 100%}
+.dash-sec.sec-top .dash-row-btns{margin-left:auto}
 
 /* ---- the schedule panel, at the top of the dashboard ------------------
    Raised out of the run of dash-sec blocks it used to sit at the bottom

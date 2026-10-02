@@ -84,6 +84,7 @@
     "test:schedrest": "node --no-warnings scripts/schedule-rest-test.mjs",
     "test:setupgaps": "node --no-warnings scripts/setup-gaps-test.mjs",
     "test:compare": "node --no-warnings scripts/compare-test.mjs",
+    "test:dashreq": "node --no-warnings scripts/dash-requests-test.mjs",
     "test:lightbox": "node --no-warnings scripts/photo-lightbox-test.mjs",
     "test:addmenu": "node --no-warnings scripts/add-menu-test.mjs",
     "test:jobclosed": "node --no-warnings scripts/job-closed-test.mjs",
