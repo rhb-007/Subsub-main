@@ -58,6 +58,7 @@ import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
 import { setupGaps, mayFinishSetup, firstGapStep } from "../shared/setup.js";
 import { jobIsClosed, jobClosure, completionEffects } from "../shared/jobstate.js";
 import { hasAdminSeat, isTeamSeat } from "../shared/seats.js";
+import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole, isPropertyScoped } from "../shared/propscope.js";
 import { agreementStateText, typedNameMatches, renderAgreement } from "../shared/agreement.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -631,11 +632,6 @@ const roleLabelIn = (kind, role) =>
   ((ACCOUNT_KINDS[kind] && ACCOUNT_KINDS[kind].roleLabels) || {})[role]
   || (ROLES[role] ? ROLES[role].label : role);
 
-// Roles that are always limited to named buildings, and for which an empty
-// list means nothing rather than everything. A property manager's list is
-// optional, so they are not here -- ask `isScoped` instead, which reads the
-// seat rather than the role.
-const ALWAYS_SCOPED_ROLES = ["owner", "tenant"];
 // A request an owner or a tenant has raised is not a job until somebody
 // running the account approves it. Until then it needs a decision, not a
 // contractor -- so it belongs under "waiting on approval" and nowhere that
@@ -732,8 +728,17 @@ const reportEditableFor = (j) => {
   return Math.max(0, REPORT_EDIT_WINDOW_MS - (Date.now() - t));
 };
 // Whether THIS seat is narrowed, which for a manager is a question about
-// their buildings and not about their job title.
-const isScoped = (m) => (m?.propertyIds || []).length > 0;
+// their buildings and not only about their job title -- but IS a question
+// about the role as well, and that half was missing.
+//
+// It read the raw `propertyIds` and asked nothing about who was carrying
+// them. `/api/account-users` hands back the stored `membership_properties`
+// rows for everybody, because the user form has to draw the picker with what
+// is actually there -- so an ADMIN with rows left behind read as scoped here
+// and as unscoped on the server, where `propertyScope` answers null for any
+// role but pm, owner and tenant. `runsTheAccount` then shut the account down
+// around somebody the API would let do anything. See shared/propscope.js.
+const isScoped = isPropertyScoped;
 // Roles that belong to the account itself, as opposed to somebody it let in.
 // The difference decides who may see money and who may run the place.
 const isStaffRole = (r) => r === "admin" || r === "pm";
@@ -3286,7 +3291,7 @@ export default function SubSub() {
         // does with them: a stale list sits there looking like it means
         // something.
         ? { ...m, role: u.role, companyId: u.subId ?? m.companyId,
-            propertyIds: (u.role === "pm" || ALWAYS_SCOPED_ROLES.includes(u.role))
+            propertyIds: isPropertyScopedRole(u.role)
               ? (u.propertyIds || []) : [],
             jobIds: u.role === "pm" ? (u.jobIds || []) : [] } : m));
     setUsers((us) => us.map((x) => (x.id === u.id ? { ...x, ...u } : x)));

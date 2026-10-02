@@ -44,6 +44,7 @@ import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
 import { hasPortal, canSet as canSetAuto, AUTO_DENY_TEXT } from "../shared/autoschedule.js";
 import { onRoster, onRosterSql, OFF_ROSTER } from "../shared/roster.js";
 import { JOB_SCOPED_ROLES, jobScopeFrom, maySeeJob as maySeeJobIds } from "../shared/jobscope.js";
+import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole } from "../shared/propscope.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -405,7 +406,6 @@ app.use("/api/*", async (c, next) => {
 // list means access to nothing. A property manager is deliberately not one of
 // them: theirs is optional, and empty means the whole account -- see
 // propertyScope, where that asymmetry lives.
-const ALWAYS_SCOPED_ROLES = ["owner", "tenant"];
 
 async function propertyScope(db, membership) {
   const role = membership.role;
@@ -413,7 +413,7 @@ async function propertyScope(db, membership) {
   // who see the whole book; a big one assigns each manager to named buildings
   // and wants them to see only those. Same role either way -- the buildings
   // are the difference, not the job.
-  if (role !== "pm" && !ALWAYS_SCOPED_ROLES.includes(role)) return null;
+  if (!isPropertyScopedRole(role)) return null;
 
   const { results } = await db.prepare(
     `SELECT property_id FROM membership_properties WHERE membership_id = ?`
@@ -3802,7 +3802,7 @@ async function setMembershipProperties(db, membershipId, accountId, role, proper
   // A manager with no list is unrestricted, so an empty list is a real state
   // to store rather than a reason to skip the write -- clearing one is how
   // somebody gets widened back to the whole account.
-  if (role === "pm" || ALWAYS_SCOPED_ROLES.includes(role)) {
+  if (isPropertyScopedRole(role)) {
     for (const pid of [...new Set(propertyIds || [])]) {
       stmts.push(db.prepare(
         `INSERT OR IGNORE INTO membership_properties (membership_id, property_id)
@@ -14503,7 +14503,7 @@ app.patch("/api/platform/accounts/:id/users/:userId", async (c) => {
   if (!["admin", "pm"].includes(role)) return c.json({ error: "bad_role" }, 400);
 
   const m = await c.env.DB.prepare(
-    `SELECT role FROM memberships WHERE account_id = ? AND user_id = ?`
+    `SELECT id, role FROM memberships WHERE account_id = ? AND user_id = ?`
   ).bind(accountId, userId).first();
   if (!m) return c.json({ error: "not_on_this_account" }, 404);
   // A SEAT THAT IS NOT A TEAM SEAT IS NOT CHANGEABLE HERE, and the first
@@ -14532,6 +14532,22 @@ app.patch("/api/platform/accounts/:id/users/:userId", async (c) => {
   await c.env.DB.prepare(
     `UPDATE memberships SET role = ? WHERE account_id = ? AND user_id = ?`
   ).bind(role, accountId, userId).run();
+  // AND THE SCOPES GO WITH THE ROLE, which this route did not do and the
+  // customer-side one has always done.
+  //
+  // Writing `memberships.role` alone left a promoted project manager's
+  // buildings and jobs behind. The Worker ignores them -- `propertyScope`
+  // answers null for an admin -- but `GET /api/account-users` hands the raw
+  // rows to the browser, where `isScoped` saw a list and `runsTheAccount`
+  // shut the account down around somebody the API would let do anything:
+  // "Your buildings" instead of Properties, no Edit, no Remove, no vendor
+  // list, no owners panel. Reported as exactly that, on an admin.
+  //
+  // Through the same two helpers the customer side uses, so what a role may
+  // carry is decided in one place. Passing an empty list is what clears them:
+  // each one deletes first and only writes back for a role that may hold one.
+  await setMembershipProperties(c.env.DB, m.id, accountId, role, []);
+  await setMembershipJobs(c.env.DB, m.id, accountId, role, []);
   const who = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(userId).first();
   await auditPlatform(c.env, staff, accountId, "user_role_changed",
     `${staff.name} changed ${who?.name || "a user"} from ${m.role} to ${role}`,

@@ -128,10 +128,19 @@ console.log("\n-- a scope survives the trip through state --");
   // saving any edit to a scoped PROPERTY manager blanked their buildings on
   // screen while the server kept them -- a disagreement that lasts until
   // somebody reloads, which is how a scope reads as lost.
-  ck("the server keeps a property list for a pm too",
-    /if \(role === "pm" \|\| ALWAYS_SCOPED_ROLES\.includes\(role\)\) \{/.test(WC));
-  ck("so the optimistic patch keeps one as well",
-    /propertyIds: \(u\.role === "pm" \|\| ALWAYS_SCOPED_ROLES\.includes\(u\.role\)\)/.test(APPC));
+  //
+  // Both sides now read ONE predicate out of shared/propscope.js rather than
+  // restating the list, because restating it is how they came to disagree a
+  // second time: `isScoped` in the browser read the raw propertyIds and asked
+  // nothing about the role at all, so an admin carrying rows left behind by a
+  // promotion read as narrowed on screen and unnarrowed on the server. So
+  // what is pinned is that neither side spells the rule out for itself.
+  ck("the server asks the shared predicate which roles carry a building list",
+    /if \(isPropertyScopedRole\(role\)\) \{/.test(WC));
+  ck("so does the optimistic patch",
+    /propertyIds: isPropertyScopedRole\(u\.role\)/.test(APPC));
+  ck("and neither restates it", !/role === "pm" \|\| ALWAYS_SCOPED_ROLES/.test(WC)
+    && !/u\.role === "pm" \|\| ALWAYS_SCOPED_ROLES/.test(APPC));
   ck("and a job list only for a pm, which is who has one",
     /jobIds: u\.role === "pm" \? \(u\.jobIds \|\| \[\]\) : \[\]/.test(APPC));
 }

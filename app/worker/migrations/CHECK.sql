@@ -238,4 +238,20 @@ SELECT
   (SELECT COUNT(*) FROM membership_jobs mj
      JOIN memberships m ON m.id = mj.membership_id
      JOIN jobs j ON j.id = mj.job_id
-    WHERE j.account_id <> m.account_id)                                                         AS m053_inv_scope_crosses_account;
+    WHERE j.account_id <> m.account_id)                                                         AS m053_inv_scope_crosses_account,
+
+  -- 054. The same shape one axis over, and the one that actually bit.
+  -- Invariant, must read ZERO: a BUILDING scope row against a seat that is
+  -- not narrowed by building at all. `propertyScope` answers null for
+  -- anything but a pm, an owner or a tenant, so the Worker ignores such a row
+  -- -- but `/api/account-users` hands the stored rows to the browser for the
+  -- picker, and `isScoped` there read the list and not the role. An admin
+  -- carrying rows left over from a promotion therefore read as narrowed on
+  -- screen and unnarrowed on the server, and `runsTheAccount` shut the
+  -- account down around them.
+  --
+  -- 054 clears what is already there; shared/propscope.js and the console's
+  -- role route are what stop more arriving.
+  (SELECT COUNT(*) FROM membership_properties mp
+     JOIN memberships m ON m.id = mp.membership_id
+    WHERE m.role NOT IN ('pm', 'owner', 'tenant'))                                              AS m054_inv_scoped_wrong_role;

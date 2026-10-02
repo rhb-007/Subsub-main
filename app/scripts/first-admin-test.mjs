@@ -52,6 +52,12 @@ CREATE TABLE accounts (id TEXT PRIMARY KEY, name TEXT, kind TEXT, plan TEXT, sub
 CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, email TEXT, phone TEXT, auth_id TEXT);
 CREATE TABLE companies (id TEXT PRIMARY KEY, company TEXT);
 CREATE TABLE memberships (id TEXT PRIMARY KEY, user_id TEXT, account_id TEXT, role TEXT, company_id TEXT);
+-- The role route clears the scopes a seat may no longer carry, so it reaches
+-- these. Both are real tables on every real database (014 and 053), which is
+-- what this hand-written base is for: it reported the reach rather than the
+-- route growing a catch to hide it.
+CREATE TABLE membership_properties (membership_id TEXT, property_id TEXT);
+CREATE TABLE membership_jobs (membership_id TEXT, job_id TEXT);
 CREATE TABLE superadmins (user_id TEXT PRIMARY KEY, role TEXT, finance INTEGER DEFAULT 0, impersonate INTEGER DEFAULT 0);
 CREATE TABLE activity (id TEXT PRIMARY KEY, account_id TEXT, at TEXT, user_id TEXT, kind TEXT, text TEXT, meta TEXT);
 CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT, actor_id TEXT, kind TEXT, subject_id TEXT, payload TEXT, at TEXT DEFAULT CURRENT_TIMESTAMP);
