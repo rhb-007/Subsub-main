@@ -377,4 +377,24 @@ SELECT
   -- validating against ACCESS_KINDS.
   (SELECT COUNT(*) FROM jobs
     WHERE access IS NOT NULL
-      AND access NOT IN ('tenant','manager','none'))                                            AS m060_inv_unknown_access;
+      AND access NOT IN ('tenant','manager','none'))                                            AS m060_inv_unknown_access,
+
+  -- 061. The contractor's half of an appointment.
+  (SELECT COUNT(*) FROM pragma_table_info('visits')
+    WHERE name = 'contractor_at')                                                               AS m061_visit_contractor_at,
+  (SELECT COUNT(*) FROM pragma_table_info('visits')
+    WHERE name = 'contractor_note')                                                             AS m061_visit_contractor_note,
+  -- Invariant, must read ZERO: a visit marked confirmed that somebody who had
+  -- to agree never answered. Scoped to visits on a job whose access answer
+  -- asks the tenant, because that is the only side this can be checked for
+  -- from SQL alone -- whether a contractor was owed an answer depends on a
+  -- live work order, and `visitParties` is where that is decided.
+  --
+  -- A confirmed window with a tick against it that nobody is attending is the
+  -- worst of the three states this can be in, because it reads as settled.
+  (SELECT COUNT(*) FROM visits v
+     JOIN jobs j ON j.id = v.job_id
+    WHERE v.status = 'confirmed'
+      AND v.responded_at IS NULL
+      AND j.access = 'tenant'
+      AND j.requested_by IS NOT NULL)                                                           AS m061_inv_confirmed_unanswered;

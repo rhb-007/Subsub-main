@@ -6837,6 +6837,150 @@ refactor.
   anyway would be worse than not having one. The picker says so by not offering
   it.
 
+
+- **THE SUBCONTRACTOR COULD NEITHER ACCEPT A TIME NOR SAY IT DOES NOT WORK.**
+  Reported as *"on this contractor — we need to allow it to be edited and [a]
+  new time [proposed] by [the] subcontractor, or the other way: the property
+  manager needs to send it to [the] subcontractor and tenant, or just [the]
+  subcontractor, to be confirmed."*
+
+  019 built a visit as manager-proposes, **tenant**-confirms, because somebody
+  has to be in. The party who physically drives to the address was never asked.
+  So a time could be agreed between a manager and a tenant for a morning the
+  crew was already on another roof, and the first anybody found out was nobody
+  turning up — and the contractor's own card offered **accept or decline the
+  work**, so the only thing they could do about a Tuesday that did not suit was
+  turn the job down.
+
+  Migration 061, `visits.contractor_at` / `.contractor_note`,
+  `app/shared/visitparty.js`.
+
+  **`status` IS THE COMBINED VERDICT AND `visitSettled` IS THE ONLY THING THAT
+  WRITES IT.** Proposed while anybody who must agree has not; confirmed once
+  everybody who must has. Two expressions of that rule is how the two sides
+  both draw *waiting on them* and an appointment stalls for ever — which is
+  why `waitingOn` is one function for an agreement, and the same reason here.
+  The propose route and the respond route both read it rather than deciding
+  for themselves.
+
+  **The "or just the subcontractor" half was already answered by 060, and that
+  is why no second switch was added.** Who has to be **in** decides whether the
+  tenant is asked at all, so a repair fixed from outside is now a one-party
+  appointment with the party being the crew. `visitParties` reads `accessFor`
+  and `canAskTenant` rather than restating either.
+
+  **ACCEPTED, not merely assigned.** Somebody who has not said yes to the
+  *job* cannot be waited on for the *time*, and counting a pending work order
+  as a party would leave every visit stuck behind an offer nobody has opened.
+  The discriminating fixture is a company holding an accepted work order on one
+  job and a pending one on another.
+
+  **THE DATE LANDS WHEN IT IS SETTLED, not when the tenant alone has been dealt
+  with.** The old route wrote `jobs.date` on `!needsTenant`, which answered one
+  side; a window the crew has not agreed to is not a booking either, and dating
+  it puts a job on a calendar nobody has committed to — the state this whole
+  change exists to stop reading as settled. Mutating the condition back to
+  `!needsTenant` fails one assertion and nothing else, which is why it has its
+  own.
+
+  **AND A JOB WITH NO PARTY AT ALL IS STILL BOOKED OUTRIGHT.** Without that,
+  work with nobody to let anybody in and nobody yet assigned would be
+  permanently unbookable — the permanently-amber failure `docs.js` exists to
+  prevent, on a calendar.
+
+  **PROPOSING IS AGREEING, for whoever proposed it.** A contractor who offers
+  Thursday has said they can come on Thursday, and asking them to confirm their
+  own suggestion is a round trip that answers nothing — the same rule that
+  makes the side who asks for a handover already a party to it. The mutation
+  that matters is the other direction: counting *every* proposal as the
+  contractor's yes puts the manager's own proposal in their column and books
+  the job, which fails nine assertions.
+
+  **A DECLINE FROM EITHER SIDE ENDS IT, and the two notes stay apart.** A time
+  one party cannot make is not a time, and carrying on collecting the other
+  side's answer would leave a window with a tick against it that nobody is
+  attending — the worst of the three states, because it reads as settled. The
+  reason is filed as whoever wrote it: *the tenant can't make it* over a
+  contractor who turned it down sends somebody to the wrong telephone.
+
+  **`responded_at` AND `tenant_note` STAY THE TENANT'S.** Giving either a
+  second meaning would make every row written before today ambiguous about who
+  it was that answered. Which uncovered one thing 019 did that had to stop:
+  it stamped `responded_at` on a visit **nobody had to confirm**, so the row
+  read as answered by a tenant who was never asked. That was harmless while
+  the column only ever meant "this is settled" and is exactly the ambiguity the
+  two columns exist to remove, so it is left NULL and the verdict comes from
+  `visitSettled`.
+
+  **A DATABASE WITHOUT 061 KEEPS THE TWO-PARTY SHAPE IT HAS, and the signal is
+  the column's ABSENCE.** `SELECT v.*` returns no key at all rather than null,
+  so the respond route can tell. Without that the tenant confirms, the
+  contractor is counted as a party who can never answer, and the window sits
+  proposed for ever — a repair that stops moving because of a migration nobody
+  has run, which is strictly worse than the gap it reports. The insert falls
+  back the same way, with a warning: losing the contractor's leg costs a
+  confirmation, refusing the insert costs anybody the ability to schedule a
+  repair at all. A contractor who does answer there gets
+  `migration_needed` by name, never a 500.
+
+  **AND `/api/my-work` NOW DEGRADES RATHER THAN BLANKING.** Its catch answers
+  `{work: []}` for any missing column — written for 020's `withdrawn_at` — and
+  an empty contractor portal over a roster of nine jobs is *precisely* the
+  report this route was last changed to fix. So the two newest columns are
+  interpolated into the SELECT and a 060-or-061 miss retries without them: a
+  database behind the code loses the access answer and the contractor's own
+  tick, never the work itself. Found by reading the catch rather than by a
+  failure, which is the only way it could have been found before a deploy.
+
+  **ONE PROPOSE FORM, used from both sides.** `VisitForm` came out of
+  `VisitBlock` rather than being copied into the contractor's modal: three
+  inputs, a window validation and four refusal sentences are not worth having
+  twice, and the half that rots is whichever side is used less often. A test
+  counts the mounts, because a bare search for the component finds whichever
+  one exists — the `.embed-code-btn` trap.
+
+  **AND 060's COPY WAS ALREADY A LIE BY THE TIME THIS SHIPPED.** *"Booked as
+  soon as you set a time. Nobody is asked to confirm"* was true the day it was
+  written and stopped being true one change later, because the contractor is
+  now asked on every job. Same for `WHEN_KINDS.confirmed`, which said *the
+  tenant confirmed this time* on a card where the tenant is often not a party
+  at all — it says whether it is **settled** now, and who actually agreed it is
+  decided per job. **A sentence naming one of two parties is a sentence that
+  goes stale the moment there are two**, and neither was caught by anything but
+  reading them.
+
+  **ONE THING 060 SHIPPED THAT NOTHING COULD SEE: the contractor's access line
+  was reading the RAW column.** `job.access` off `/api/jobs` is null on nearly
+  every job, so the one sentence telling somebody whether anybody will be there
+  to open the door rendered for almost nobody — and on the cross-account half
+  of the list the field was not carried at all. `myAccess`, beside `myVisits`,
+  off the same single source. The general shape, which this file keeps
+  recording: **the effective answer and the stored column are two different
+  values, and a screen reading the second is a screen answering a different
+  question.**
+
+  On the card the answer is **two buttons and a question**, not a bare pair:
+  *Can you make this?* over **Confirm this time** and **Propose a different
+  time**. Only while the window is open and only on a row at **this** account,
+  because answering is an account-scoped write — the same reason accept and
+  decline are withheld on a row from elsewhere. Once we have answered there is
+  nothing to press and the card says **who is still owed** instead, which by
+  construction is the tenant: if the crew were the only party their own yes
+  would have settled it.
+
+  Fifteen mutations fire, each on its own assertion, and two are worth naming
+  because they are shapes rather than slips. **Wiring Confirm to the modal**
+  passes every assertion about the buttons being there and quietly turns
+  agreeing a window into re-proposing it, which is a different act with a
+  different record — so the suite counts what reached the server and checks no
+  form opened. And **dropping the `when.mine` branch** leaves the markup
+  perfect and the button dead-ended, which only the drawn card can see.
+
+  **Still open, and unchanged by this: there is no way to withdraw a proposed
+  window.** Superseding it by proposing another is the only move, so a manager
+  who proposed Tuesday by mistake has to propose something else rather than
+  take it back. Same shape as the job that cannot be removed, one object down.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

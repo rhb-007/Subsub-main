@@ -36,8 +36,13 @@ export const isLiveVisit = (v) => LIVE_VISIT.includes(String(v?.status || ""));
 //              because a contractor accepting work with no date needs to know
 //              that is what they are accepting.
 export const WHEN_KINDS = {
+  // 061. NOT "the tenant confirmed", because the tenant is no longer the only
+  // party and on plenty of jobs they are not a party at all -- a repair fixed
+  // from outside needs nobody in. Who actually agreed it is decided per job by
+  // shared/visitparty.js; what every reader of this line needs is whether it
+  // is settled.
   confirmed: { id: "confirmed", tone: "ok", lead: "Confirmed",
-    note: "The tenant confirmed this time." },
+    note: "Agreed by everybody who has to be there." },
   proposed: { id: "proposed", tone: "wait", lead: "Proposed",
     note: "Proposed, not confirmed yet — don't travel on it until it is." },
   target: { id: "target", tone: "plain", lead: "Target date",
@@ -57,7 +62,11 @@ export function workWhen(row) {
   if (isLiveVisit(v)) {
     return { kind: v.status, date: v.date || null,
       startTime: v.startTime || null, endTime: v.endTime || null,
-      visitId: v.id || null, note: v.note || null };
+      visitId: v.id || null, note: v.note || null,
+      // 061. Whether the side reading this has already answered. A Confirm
+      // button on a window you confirmed an hour ago is a button that does
+      // nothing, and the honest thing to draw there is who is still owed.
+      mine: !!(v.contractorAt || v.contractor_at) };
   }
   const date = row?.date || null;
   if (date) {

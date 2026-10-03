@@ -807,7 +807,13 @@ CREATE TABLE IF NOT EXISTS visits (
   status        TEXT NOT NULL DEFAULT 'proposed',
   tenant_note   TEXT,                    -- why it doesn't work, when it doesn't
   created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
-  responded_at  TEXT
+  responded_at  TEXT,
+  -- 061. The contractor's half. `responded_at` and `tenant_note` stay the
+  -- TENANT's -- giving them a second meaning would make every row written
+  -- before 061 ambiguous about who it was that answered. `status` is the
+  -- COMBINED verdict: proposed while anybody who must agree has not.
+  contractor_at   TEXT,
+  contractor_note TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_visits_job ON visits(job_id);

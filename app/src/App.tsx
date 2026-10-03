@@ -75,6 +75,7 @@ import { handymanCapCheck, handymanCapText,
 import { workWhen, scheduledOn, WHEN_KINDS } from "../shared/schedule.js";
 import { ACCESS_KINDS, accessChoices, canAskTenant,
   mayChooseAccess } from "../shared/access.js";
+import { visitParties, waitingOn as visitWaitingOn } from "../shared/visitparty.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -2258,6 +2259,8 @@ export default function SubSub() {
   const [jobForm, setJobForm] = useState(null);           // { forSub? } create-job modal
   const [assigning, setAssigning] = useState(null);       // { job, trade } -> pick contractor
   const [viewWO, setViewWO] = useState(null);   // { job, trade, a }
+  // 061. The contractor offering a different window. { job, trade, a }
+  const [proposeWO, setProposeWO] = useState(null);
   // The switcher panel, and what is typed into its search box. Both reset
   // together: a query left behind from last time hides most of the list.
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -3199,11 +3202,26 @@ export default function SubSub() {
     return m;
   }, [myWork]);
 
+  // WHO LETS THEM IN, per job, from the same place. 060 put the effective
+  // answer on every /api/my-work row -- the raw column plus the rule, worked
+  // out where the reporter's seat role is known -- and the contractor's card
+  // was reading `job.access`, the RAW column off /api/jobs, which is null on
+  // nearly every job. So the one sentence telling somebody whether anybody
+  // will be there to open the door rendered for almost nobody.
+  const myAccess = useMemo(() => {
+    const m = {};
+    for (const w of myWork) if (w.access && !m[w.jobId]) m[w.jobId] = w.access;
+    return m;
+  }, [myWork]);
+
   // job slots assigned to me, for the contractor dashboard + tab badge
   const myAssignments = mySub ? jobs.flatMap((j) =>
     Object.entries(j.assignments || {})
       .filter(([, a]) => a.subId === mySub.id)
-      .map(([trade, a]) => ({ job: { ...j, visit: myVisits[j.id] || null }, trade, a }))) : [];
+      .map(([trade, a]) => ({
+        job: { ...j, visit: myVisits[j.id] || null,
+          access: myAccess[j.id] || j.accessEffective || null },
+        trade, a }))) : [];
 
   // The same thing at every OTHER client. /api/jobs is one account at a time,
   // so on its own the list above answers "does anybody need me" for exactly one
@@ -3224,6 +3242,9 @@ export default function SubSub() {
       // the same rule as one here. Without it the cross-account half of this
       // list would be the only place still reading "No date".
       visit: w.visit || null,
+      // 060, effective. Absent here and the door sentence renders on this
+      // account's rows and not on the other twenty-four clients'.
+      access: w.access || null,
       scope: w.tradeScope || null, propertyName: w.propertyName,
       // Absent on this shape rather than undefined: every card reads them and
       // the jobs list has white-screened on a missing one before.
@@ -3745,6 +3766,10 @@ export default function SubSub() {
     if (v.status === "confirmed") {
       setJobs((js) => js.map((j) => j.id === jobId ? { ...j, date: v.date, time: v.startTime || j.time } : j));
     }
+    // 061. A contractor may propose now, and their card reads the window off
+    // `myWork` rather than `visits` -- so without this they would offer a time
+    // and go on being shown the one they replaced.
+    if (role === "contractor") await refreshMyWork();
     return v;
   };
   // Saying no to a request. The reason goes to whoever asked.
@@ -3780,6 +3805,25 @@ export default function SubSub() {
     setVisits((vs) => vs.map((x) => x.id === id ? v : x));
     if (v.status === "confirmed") {
       setJobs((js) => js.map((j) => j.id === v.jobId ? { ...j, date: v.date, time: v.startTime || j.time } : j));
+    }
+    return v;
+  };
+  // 061. THE CONTRACTOR'S ANSWER, which is the other half of the same
+  // appointment and goes through the same route: one record of who agreed
+  // what, rather than a second endpoint that could disagree with it.
+  //
+  // It RE-READS the work instead of patching the row, because what the row
+  // becomes is the server's answer. Whether both sides have now agreed is a
+  // question only it can settle, and a locally invented "confirmed" over a
+  // window the tenant has not answered is precisely the tick-on-a-window-
+  // nobody-is-attending lie this whole change exists to stop.
+  const answerVisit = async (id, status, note) => {
+    const v = await api.respondVisit(id, { status, ...(note ? { note } : {}) });
+    setVisits((vs) => vs.map((x) => x.id === id ? { ...x, ...v } : x));
+    await refreshMyWork();
+    if (v.status === "confirmed") {
+      setJobs((js) => js.map((j) => j.id === v.jobId
+        ? { ...j, date: v.date, time: v.startTime || j.time } : j));
     }
     return v;
   };
@@ -6383,6 +6427,8 @@ export default function SubSub() {
             hostKind={kindOf(account)} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
             elsewhere={elsewhere}
             onGoClient={(accountId) => { setCurrentAccountId(accountId); setSelected(null); setPane("jobs"); }}
+            /* 061. Answering the time, from the side that drives to it. */
+            onAnswerVisit={answerVisit} onProposeVisit={setProposeWO}
             quotes={myQuotes}
             onAnswerQuote={async (inviteId, body) => {
               await api.answerQuote(inviteId, body);
@@ -6638,6 +6684,21 @@ export default function SubSub() {
             isMine={role === "contractor" && a.subId === membership.companyId}
             onChanged={() => hydrateAccount(account.id, currentUserId, { quiet: true })} />;
         })()}
+      </Modal>}
+      {/* 061. THE CONTRACTOR OFFERING A DIFFERENT WINDOW, which is the half
+          of this they had no way to say at all: the only answers on their card
+          were accept or decline the WORK, and a time that does not suit is not
+          a reason to turn a job down. It is the SAME form the manager proposes
+          from -- one component, because two copies of three inputs and a
+          window validation is two things to keep in step. */}
+      {proposeWO && <Modal onClose={() => setProposeWO(null)}>
+        <div className="form-sec">Propose a different time</div>
+        <p className="pw-job">{proposeWO.job.title}</p>
+        <VisitForm jobId={proposeWO.job.id} startDate={proposeWO.job.date || ""}
+          forWhom="the managing agent" replacing
+          placeholder="e.g. We can do Thursday morning instead"
+          onPropose={proposeVisit} onDone={() => setProposeWO(null)}
+          onCancel={() => setProposeWO(null)} />
       </Modal>}
       {notifying && <Modal onClose={() => setNotifying(null)} wide>
         <NotifyForm data={notifying} brand={brand} onClose={() => setNotifying(null)} /></Modal>}
@@ -12382,21 +12443,24 @@ function TenantVisitOutcome({ visit, brandName, onSay }) {
   );
 }
 
-// On the manager's side of the same thing: where the visit stands, and the
-// form to propose one (or the next one).
-function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, canSetAccess = false }) {
-  const [f, setF] = useState({ date: job.date || "", startTime: "09:00", endTime: "11:00", note: "" });
-  // Open by default whenever there is no live time to wait on: nothing
-  // proposed, a time refused, or one that came and went with nobody there.
-  const [open, setOpen] = useState(!visit || visit.status === "declined" || visit.status === "missed");
+// THE FORM THAT PROPOSES A TIME, and it is ONE form for both sides of the
+// appointment.
+//
+// 061 gave the contractor a way to counter-propose. Three inputs, a window
+// validation and four refusal sentences are not worth having twice: a second
+// copy is a second thing to keep in step, and the half that rots is whichever
+// side is used less often -- the same reason the apply form and the QR panel
+// are each one component with two ways in.
+function VisitForm({ jobId, startDate = "", forWhom, replacing = false, placeholder,
+  onPropose, onDone, onCancel, cancelLabel = "Cancel" }) {
+  const [f, setF] = useState({ date: startDate || "", startTime: "09:00", endTime: "11:00", note: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const name = who?.name || "the tenant";
   const send = async () => {
     if (!f.date) { setErr("Pick a date."); return; }
     if (f.startTime && f.endTime && f.endTime <= f.startTime) { setErr("The window ends before it starts."); return; }
     setBusy(true); setErr("");
-    try { await onPropose(job.id, f); setOpen(false); }
+    try { await onPropose(jobId, f); onDone?.(); }
     catch (e) {
       console.error("[visit] propose failed:", e);
       setErr(e?.body?.error === "migration_needed" ? `The database isn't migrated yet — run ${e.body.migration || "019_visits"}.sql and try again.`
@@ -12404,6 +12468,51 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, canSetA
         : "Couldn't propose that. Try again in a moment.");
     } finally { setBusy(false); }
   };
+  return (
+    <div className="visit-form">
+      <div className="fld-row">
+        <label className="fld">Date<input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
+        <label className="fld">From<input type="time" value={f.startTime} onChange={(e) => setF({ ...f, startTime: e.target.value })} /></label>
+        <label className="fld">To<input type="time" value={f.endTime} onChange={(e) => setF({ ...f, endTime: e.target.value })} /></label>
+      </div>
+      <label className="fld">Note for {forWhom} <span className="fld-note">optional</span>
+        <input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })}
+          placeholder={placeholder || "e.g. The plumber needs access to the unit below too"} />
+      </label>
+      {err && <p className="fld-err"><AlertTriangle size={12} /> {err}</p>}
+      <div className="form-actions">
+        {onCancel && <button className="btn-ghost" onClick={onCancel} disabled={busy}>{cancelLabel}</button>}
+        <button className="btn-solid" onClick={send} disabled={busy}>
+          <Calendar size={14} /> {busy ? "Proposing…" : replacing ? "Propose this time instead" : "Propose this time"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// On the manager's side of the same thing: where the visit stands, and the
+// form to propose one (or the next one).
+function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, canSetAccess = false }) {
+  // Open by default whenever there is no live time to wait on: nothing
+  // proposed, a time refused, or one that came and went with nobody there.
+  const [open, setOpen] = useState(!visit || visit.status === "declined" || visit.status === "missed");
+  const name = who?.name || "the tenant";
+  // 061. WHO HAS TO AGREE TO THIS ONE. Until now the answer was always "the
+  // tenant", and the party who physically drives to the address was never
+  // asked -- so a time agreed here could be a morning the crew was already on
+  // another roof. Read through the shared rule rather than restated, because
+  // the two sides both drawing "waiting on them" is how an appointment stalls
+  // for ever.
+  //
+  // `accessEffective` rather than the raw column, so this cannot disagree with
+  // the route that writes the row; and ACCEPTED rather than merely assigned,
+  // because somebody who has not said yes to the job cannot be waited on for
+  // the time.
+  const parties = visitParties({ ...job, access: job.accessEffective },
+    { hasContractor: someoneAccepted(job) });
+  const stillOwed = visit ? visitWaitingOn(visit, parties) : parties;
+  const owedText = stillOwed.map((pp) => pp === "tenant" ? name : "the contractor")
+    .join(" and ") || name;
   return (
     <div className="visit-block">
       <div className="form-sec">Visit</div>
@@ -12461,12 +12570,22 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, canSetA
         </div>
       )}
       {visit?.status === "proposed" && (
-        <p className="visit-state wait"><Clock size={14} /> Proposed <b>{visitWhen(visit)}</b> — waiting on {name} to confirm.</p>
+        <p className="visit-state wait"><Clock size={14} /> Proposed <b>{visitWhen(visit)}</b> — waiting on {owedText} to confirm.
+          {/* And who has ALREADY said yes, because "waiting on the
+              contractor" over a tenant who confirmed last week reads as
+              nothing having happened at all. */}
+          {visit.respondedAt && stillOwed.includes("contractor") && <em> {name} has confirmed.</em>}
+          {visit.contractorAt && stillOwed.includes("tenant") && <em> The contractor has confirmed.</em>}
+        </p>
       )}
       {visit?.status === "confirmed" && (
         visitPassed(visit)
           ? <p className="visit-state wait"><Clock size={14} /> <b>{visitWhen(visit)}</b> has been and gone. {name} hasn't said yet whether anybody came.</p>
-          : <p className="visit-state ok"><CheckCircle2 size={14} /> {name} confirmed <b>{visitWhen(visit)}</b>.</p>
+          : <p className="visit-state ok"><CheckCircle2 size={14} /> {parties.length > 1
+              ? <>{name} and the contractor both confirmed <b>{visitWhen(visit)}</b>.</>
+              : parties[0] === "contractor"
+                ? <>The contractor confirmed <b>{visitWhen(visit)}</b>.</>
+                : <>{name} confirmed <b>{visitWhen(visit)}</b>.</>}</p>
       )}
       {/* The two answers to that question. "Nobody came" is the one that
           needs something doing, so it reads as a problem and springs the
@@ -12478,27 +12597,20 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, canSetA
         <p className="visit-state ok"><CheckCircle2 size={14} /> {name} says a vendor showed up on <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."}</p>
       )}
       {visit?.status === "declined" && (
-        <p className="visit-state bad"><AlertTriangle size={14} /> {name} can't make <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."} Propose another.</p>
+        /* WHO said no. A decline from either side ends the window, and
+           "the tenant can't make it" over a contractor who turned it down
+           sends somebody to the wrong telephone. */
+        <p className="visit-state bad"><AlertTriangle size={14} /> {visit.contractorNote || (visit.contractorAt && !visit.respondedAt)
+          ? <>The contractor can't make <b>{visitWhen(visit)}</b>{visit.contractorNote ? <>: “{visit.contractorNote}”</> : "."}</>
+          : <>{name} can't make <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."}</>} Propose another.</p>
       )}
-      {!visit && <p className="visit-state">No time proposed yet. {name} has to confirm one before this reads as scheduled.</p>}
+      {!visit && <p className="visit-state">No time proposed yet.{parties.length
+        ? <> {owedText} {stillOwed.length > 1 ? "have" : "has"} to confirm one before this reads as scheduled.</>
+        : <> Nobody has to confirm it, so setting a time books it outright.</>}</p>}
       {open ? (
-        <div className="visit-form">
-          <div className="fld-row">
-            <label className="fld">Date<input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
-            <label className="fld">From<input type="time" value={f.startTime} onChange={(e) => setF({ ...f, startTime: e.target.value })} /></label>
-            <label className="fld">To<input type="time" value={f.endTime} onChange={(e) => setF({ ...f, endTime: e.target.value })} /></label>
-          </div>
-          <label className="fld">Note for {name} <span className="fld-note">optional</span>
-            <input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} placeholder="e.g. The plumber needs access to the unit below too" />
-          </label>
-          {err && <p className="fld-err"><AlertTriangle size={12} /> {err}</p>}
-          <div className="form-actions">
-            {visit && <button className="btn-ghost" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>}
-            <button className="btn-solid" onClick={send} disabled={busy}>
-              <Calendar size={14} /> {busy ? "Proposing…" : visit ? "Propose this time instead" : "Propose this time"}
-            </button>
-          </div>
-        </div>
+        <VisitForm jobId={job.id} startDate={job.date || ""} forWhom={name} replacing={!!visit}
+          onPropose={onPropose} onDone={() => setOpen(false)}
+          onCancel={visit ? () => setOpen(false) : null} />
       ) : (
         <button className="btn-ghost sm" onClick={() => setOpen(true)}>Propose a different time</button>
       )}
@@ -22365,7 +22477,8 @@ function MySchedule({ rows, onOpen }) {
 function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [], onGoClient, hostKind = null,
   quotes = [], onAnswerQuote, brand, me, orders, now,
   connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage,
-  overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow }) {
+  overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow,
+  onAnswerVisit, onProposeVisit }) {
   const [sub2, setSub2] = useState("trades");
   const caps = [...new Set(sub.categories.flatMap((c) => CAP_LIBRARY[c] || []))];
   const miss = missingDocs(sub);
@@ -22562,7 +22675,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           {pending.length > 0 && (
             <section className="dash-sec">
               <h3><Clock size={15} /> Job requests <span className="sec-count amber">{pending.length}</span></h3>
-              {pending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} showActions />)}
+              {pending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} showActions />)}
             </section>
           )}
 
@@ -22570,7 +22683,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
             <h3><Calendar size={15} /> Current &amp; upcoming {upcoming.length > 0 && <span className="sec-count">{upcoming.length}</span>}</h3>
             {upcoming.length === 0
               ? <div className="dash-empty"><ClipboardList size={24} /><p>No upcoming jobs booked.</p></div>
-              : upcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} />)}
+              : upcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} />)}
           </section>
 
           {/* What we already answered. A quote that vanishes the moment it is
@@ -22608,14 +22721,14 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           {past.length > 0 && (
             <section className="dash-sec">
               <h3><CheckCircle2 size={15} /> Completed <span className="sec-count">{past.length}</span></h3>
-              {past.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} past />)}
+              {past.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} past />)}
             </section>
           )}
 
           {declined.length > 0 && (
             <section className="dash-sec">
               <h3><XCircle size={15} /> Declined <span className="sec-count">{declined.length}</span></h3>
-              {declined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} />)}
+              {declined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} />)}
             </section>
           )}
         </>
@@ -23536,7 +23649,7 @@ function MyDocRow({ sub, kind, label, Icon, brandName, onUploadDoc, onDeleteDoc 
 }
 
 // ---- Contractor dashboard job card -------------------------------------
-function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO, now, changeOrders, onRequestChange, elsewhere, onGoClient }) {
+function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO, now, changeOrders, onRequestChange, elsewhere, onGoClient, onAnswerVisit, onProposeVisit }) {
   const M = catMeta(trade);
   const left = msLeft(a, now);
   const expired = isExpired(a, now);
@@ -23602,6 +23715,34 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
         <span><b>{W.lead}.</b> {W.note}</span>
       </p>
       {when.note && <p className="jr-whenmsg">“{when.note}”</p>}
+      {/* 061. ANSWERING THE TIME, from the side that drives to it.
+          A window was agreed between a manager and a tenant and this company
+          was never asked -- so a time could be set for a morning the crew was
+          already on another roof, and the first anybody found out was nobody
+          turning up.
+          Only on a row at THIS account: answering is an account-scoped write,
+          the same reason accept and decline are withheld on a row from
+          elsewhere. And only while it is still open -- a settled window is
+          answered, and a second Confirm on it would be a button that does
+          nothing. */}
+      {!away && !past && when.visitId && when.kind === "proposed" && onAnswerVisit && (
+        !when.mine ? (
+          <div className="jr-vis">
+            <span className="jr-vis-q">Can you make this?</span>
+            <button className="resp yes" onClick={() => onAnswerVisit(when.visitId, "confirmed")}>
+              <CheckCircle2 size={13} /> Confirm this time
+            </button>
+            <button className="resp" onClick={() => onProposeVisit({ job, trade, a })}>
+              <Calendar size={13} /> Propose a different time
+            </button>
+          </div>
+        ) : (
+          /* Agreed by us and still not booked, which means somebody else has
+             not answered. Said rather than drawn as settled -- a tick on a
+             window nobody is attending is the worst of the three states. */
+          <p className="jr-vis-wait"><Clock size={12} /> You confirmed this time. Waiting on the tenant.</p>
+        )
+      )}
       {/* WHO OPENS THE DOOR. The contractor is the one person who physically
           turns up, and "will anybody be there" is the question they ask on the
           way -- a wasted journey is the most expensive thing this screen can
@@ -31154,6 +31295,23 @@ strong.insp-name{background:none;border:0;padding:0}
 .va-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
 .va-pick{display:flex;flex-wrap:wrap;gap:6px}
 .va-pick .pick{padding:4px 10px;font-size:11.5px}
+/* 061. ANSWERING THE TIME, from the side that drives to it. A row, not a
+   block: Confirm and Propose are one decision with two answers, and stacking
+   them makes the second read as an afterthought when it is the one that keeps
+   a job alive. The question leads, because two bare buttons under a window do
+   not say what pressing either one means.
+   (No backticks in this stylesheet. It is a template literal, and one in a
+   comment closes it -- the ninth time this repository has paid for that.) */
+.jr-vis{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 0 0;
+  padding:9px 10px;border-radius:10px;background:#fbf0dd;border:1px solid #ecd9b0}
+.jr-vis-q{font-size:12.5px;font-weight:700;color:var(--amber-ink)}
+.jr-vis-wait{display:flex;align-items:center;gap:6px;margin:8px 0 0;
+  font-size:12.5px;font-weight:600;color:var(--ink-soft)}
+.jr-vis-wait > svg{flex:none}
+/* The counter-proposal modal. The job it is about, under the heading, because
+   a date form with no subject is a date form somebody fills in for the wrong
+   job. */
+.pw-job{margin:0 0 10px;font-size:13px;font-weight:600;color:var(--ink)}
 /* Who opens the door, on the card of the person who turns up. */
 .jr-access{display:flex;align-items:center;gap:6px;margin:6px 0 0;font-size:12.5px;
   font-weight:600;color:var(--ink-soft)}

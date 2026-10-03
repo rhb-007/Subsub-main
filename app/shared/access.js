@@ -26,17 +26,24 @@ export const ACCESS_KINDS = {
   // round trip. Somebody lives there and has to be in.
   tenant: { id: "tenant", label: "The tenant needs to be in",
     short: "Tenant lets them in",
-    note: "They confirm the time before it is booked.",
+    // 061. BOTH of them, now that the party who drives to the address is asked
+    // as well. The first version of this line said only "they", which was
+    // true the day it shipped and became the half-truth the next change made.
+    note: "The tenant and the contractor both confirm the time before it is booked.",
     // What the person turning up needs to know, which is a different sentence
     // from what the manager needs to decide.
     forContractor: "The tenant will let you in. The time is agreed with them." },
   manager: { id: "manager", label: "We'll let them in",
     short: "We let them in",
-    note: "Booked as soon as you set a time. Nobody is asked to confirm.",
+    // NOT "nobody is asked to confirm" any more. 061 asks the contractor on
+    // every job, because a time the crew cannot make is not a time whoever
+    // opens the door. Saying otherwise here would be the screen promising an
+    // outcome the route no longer produces.
+    note: "The contractor confirms the time. The tenant is not asked.",
     forContractor: "The managing agent will let you in — not the tenant." },
   none: { id: "none", label: "No access needed",
     short: "No access needed",
-    note: "Outside, a common area, or an empty unit. Booked as soon as you set a time.",
+    note: "Outside, a common area, or an empty unit. Only the contractor confirms the time.",
     forContractor: "No access needed — nobody has to be there to let you in." },
 };
 export const ACCESS_IDS = Object.keys(ACCESS_KINDS);

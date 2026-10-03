@@ -16,6 +16,16 @@
 //
 //   AND A JOB WITH NOTHING ANYWHERE STILL SAYS SO. Making a field optional
 //   makes every screen that prints it unconditionally a screen with a hole.
+////   061: THE WINDOW CAN BE ANSWERED FROM HERE. Confirm it, or offer another --
+//   the half the contractor had no way to say at all, since the only answers
+//   on their card were accept or decline the WORK, and a time that does not
+//   suit is not a reason to turn a job down. Driven rather than asserted
+//   statically, because the gate is on a value that only exists at runtime and
+//   a check that the component MENTIONS it passes with the button never wired.
+//
+//   AND ONCE WE HAVE ANSWERED THERE IS NO BUTTON, only who is still owed. A
+//   Confirm on a window you confirmed an hour ago is a button that does
+//   nothing.
 //
 //   node --no-warnings scripts/work-when-ui-test.mjs
 
@@ -79,6 +89,20 @@ const WORK = () => ({ work: [
     // fixture that can show which of the two the screen is reading.
     visit: { id: "v2", date: LATER, startTime: "14:00", endTime: "16:00",
       status: "confirmed", note: null } },
+  // 061. A window WE have already agreed and the tenant has not. The only row
+  // that can tell "offer a Confirm" apart from "say who is left", and without
+  // it a card that always drew the buttons would pass.
+  { woId: "wo_gate", wo: "WO-777", jobId: "job_gate", trade: "plumbing",
+    accountId: "acc_pm", accountName: "Sound Property Management",
+    accountSubdomain: "soundpm", accountKind: "property_manager", here: true,
+    status: "accepted", auto: false, responseWindow: null, respondBy: null, respondedAt: null,
+    title: "Unit 12 shower", address: "1620 Belmont Ave", area: "Seattle", zip: "98122",
+    propertyName: null, date: null, time: null, severity: null, jobStatus: "active",
+    completedAt: null, tradeScope: null, crewName: null, payKind: "fixed", value: "100",
+    rate: "", capHours: null, signedWO: null, issuedAt: null, updatedAtIso: null,
+    access: "tenant",
+    visit: { id: "v4", date: LATER, startTime: "08:00", endTime: "10:00",
+      status: "proposed", note: null, contractorAt: "2026-10-02T09:00:00.000Z" } },
   { woId: "wo_none", wo: "WO-111", jobId: "job_none", trade: "electrical",
     accountId: "acc_pm", accountName: "Sound Property Management",
     accountSubdomain: "soundpm", accountKind: "property_manager", here: true,
@@ -111,13 +135,36 @@ const job = (over) => ({
 });
 const JOBS = () => [
   job({ id: "job_brk", title: "Sparking breaker", trade: "electrical", wo: "WO-209115" }),
+  job({ id: "job_gate", title: "Unit 12 shower", trade: "plumbing", wo: "WO-777",
+    address: "1620 Belmont Ave" }),
   job({ id: "job_sink", title: "Press Apartments - leaking sink", trade: "plumbing",
     wo: "WO-745746", date: day(-9), time: "07:00", address: "1620 Belmont Ave" }),
   job({ id: "job_none", title: "Hallway light", trade: "electrical", wo: "WO-111" }),
 ];
 
+// 061. What actually reached the server. "A button is on screen" is not the
+// property under test -- it could render and the request never go, which is
+// the shape this project records about a modal that appears while the removal
+// fires anyway.
+const answers = [];
+const proposals = [];
+
 const web = serveApp({ dir: OUT, port: WEB });
-const api = serveApi({ port: API, routes: (path) => {
+const api = serveApi({ port: API, routes: (path, method, body) => {
+  if (/^\/api\/visits\/[^/]+\/respond$/.test(path) && method === "POST") {
+    answers.push({ id: path.split("/")[3], ...body });
+    return [200, { id: path.split("/")[3], jobId: "job_brk", date: SOON,
+      startTime: "11:00", endTime: "13:15", status: "proposed",
+      contractorAt: new Date().toISOString(), parties: ["tenant", "contractor"],
+      waitingOn: ["tenant"] }];
+  }
+  if (/^\/api\/jobs\/[^/]+\/visits$/.test(path) && method === "POST") {
+    proposals.push({ jobId: path.split("/")[3], ...body });
+    return [201, { id: "v9", jobId: path.split("/")[3], date: body.date,
+      startTime: body.startTime, endTime: body.endTime, status: "proposed",
+      contractorAt: new Date().toISOString(), parties: ["tenant", "contractor"],
+      waitingOn: ["tenant"] }];
+  }
   if (path.startsWith("/api/account-by-subdomain/")) return [200, PM];
   if (path === "/api/account") return [200, PM];
   if (path === "/api/subs") return [200, [SUB]];
@@ -151,6 +198,11 @@ const cards = (page) => page.evaluate(() => [...document.querySelectorAll(".jr-c
     note: (note?.innerText || "").replace(/\s+/g, " ").trim(),
     bg: cs ? cs.backgroundColor : null,
     msg: (el.querySelector(".jr-whenmsg")?.innerText || "").trim(),
+    // 061. What can be done about the time from here.
+    ask: (el.querySelector(".jr-vis-q")?.innerText || "").replace(/\s+/g, " ").trim(),
+    btns: [...el.querySelectorAll(".jr-vis button")].map((b) => b.innerText.trim()),
+    wait: (el.querySelector(".jr-vis-wait")?.innerText || "").replace(/\s+/g, " ").trim(),
+    access: (el.querySelector(".jr-access")?.innerText || "").replace(/\s+/g, " ").trim(),
   };
 }));
 
@@ -194,8 +246,11 @@ try {
   // says five days out. Reading the job column passes the assertion above.
   t.ck("a confirmed visit beats the job's own date",
     !!sink && /2 PM/.test(sink.when) && /4 PM/.test(sink.when), JSON.stringify(sink));
-  t.ck("and says the tenant confirmed it",
-    !!sink && /confirmed this time/i.test(sink.note), sink?.note);
+  // 061 changed this sentence deliberately: the tenant is no longer the only
+  // party and on plenty of jobs is not a party at all, so the line says
+  // whether it is SETTLED rather than naming one of the two sides.
+  t.ck("and says it is agreed by everybody who has to be there",
+    !!sink && /everybody who has to be there/i.test(sink.note), sink?.note);
 
   // Two states reading the same pixels is the bug this project already paid
   // for. Only the computed value can see it.
@@ -231,6 +286,81 @@ try {
   // panel can report to somebody trying to fill a week.
   t.ck("the job with no time at all is counted, not hidden",
     /1 job has no date/i.test(s.undated || ""), s.undated);
+
+  console.log("\n-- 061: and the window can be answered from here --");
+  {
+    const open = all.find((c) => /Sparking breaker/i.test(c.title));
+    const mine = all.find((c) => /Unit 12 shower/i.test(c.title));
+    const set = all.find((c) => /leaking sink/i.test(c.title));
+    const nodate = all.find((c) => /Hallway light/i.test(c.title));
+
+    // THE HALF THE CONTRACTOR HAD NO WAY TO SAY. Accept or decline the WORK
+    // was the whole of it, and a time that does not suit is not a reason to
+    // turn a job down.
+    t.ck("an open window asks whether we can make it",
+      /can you make this/i.test(open?.ask || ""), open?.ask);
+    t.ck("and offers to confirm it",
+      (open?.btns || []).some((b) => /Confirm this time/i.test(b)), JSON.stringify(open?.btns));
+    t.ck("or to offer another",
+      (open?.btns || []).some((b) => /Propose a different time/i.test(b)),
+      JSON.stringify(open?.btns));
+
+    // ONCE WE HAVE ANSWERED THERE IS NOTHING TO PRESS. A Confirm on a window
+    // you confirmed an hour ago is a button that does nothing, and the honest
+    // thing to draw is who is still owed.
+    t.ck("a window we already agreed offers no buttons",
+      (mine?.btns || []).length === 0 && !mine?.ask, JSON.stringify(mine?.btns));
+    t.ck("and says who it is waiting on",
+      /you confirmed this time/i.test(mine?.wait || "") && /tenant/i.test(mine?.wait || ""),
+      mine?.wait);
+    // 060's sentence, which was reading the RAW column off /api/jobs and so
+    // rendered for almost nobody.
+    t.ck("and who will open the door", /tenant will let you in/i.test(mine?.access || ""),
+      mine?.access);
+
+    // A SETTLED WINDOW IS NOT ASKED AGAIN, and a job with no window has
+    // nothing to answer -- asserting only the open row passes with the block
+    // drawn on every card.
+    t.ck("a confirmed window is not asked about", (set?.btns || []).length === 0,
+      JSON.stringify(set?.btns));
+    t.ck("nor a job with no time at all", (nodate?.btns || []).length === 0,
+      JSON.stringify(nodate?.btns));
+
+    // AND PRESSING IT REACHES THE SERVER. The button could render and the
+    // request never go.
+    t.ck("nothing has been answered yet", answers.length === 0, JSON.stringify(answers));
+    await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
+      .find((el) => /Sparking breaker/i.test(el.querySelector("h3")?.innerText || ""))
+      ?.querySelector(".jr-vis button")?.click());
+    await wait(900);
+    t.ck("confirming posts exactly one answer", answers.length === 1, JSON.stringify(answers));
+    t.ck("and it says confirmed", answers[0]?.status === "confirmed",
+      JSON.stringify(answers[0]));
+
+    // THE COUNTER-PROPOSAL IS THE SAME FORM THE MANAGER USES, in a modal,
+    // and it names the job -- a date form with no subject is a date form
+    // somebody fills in for the wrong job.
+    // AND CONFIRMING IS NOT A FORM. Wiring the first button to the modal
+    // would pass every assertion above and quietly make agreeing a window
+    // into re-proposing it, which is a different act with a different record.
+    t.ck("confirming did not open a form instead",
+      await page.evaluate(() => !document.querySelector(".modal .visit-form")));
+
+    await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
+      .find((el) => /Sparking breaker/i.test(el.querySelector("h3")?.innerText || ""))
+      ?.querySelectorAll(".jr-vis button")[1]?.click());
+    await wait(700);
+    const m2 = await page.evaluate(() => {
+      const el = document.querySelector(".modal .visit-form");
+      if (!el) return null;
+      return { dates: el.querySelectorAll("input[type=date]").length,
+        times: el.querySelectorAll("input[type=time]").length,
+        job: (document.querySelector(".modal .pw-job")?.innerText || "").trim() };
+    });
+    t.ck("offering another time opens the propose form", !!m2 && m2.dates === 1 && m2.times === 2,
+      JSON.stringify(m2));
+    t.ck("and it names the job", /Sparking breaker/i.test(m2?.job || ""), m2?.job);
+  }
 
   await ctx.close();
 } finally {
