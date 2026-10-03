@@ -1,0 +1,36 @@
+-- 064. THE HIRING SIDE'S OWN LEG OF AN APPOINTMENT, which is what makes the
+-- three parties a CHAIN rather than a broadcast.
+--
+-- Asked for as the order it should actually happen in: *"the job's date is
+-- what [the] hiring party starts with, sends it to contractor/handyman,
+-- contractor/handyman either confirms or rejects and proposes new day/time,
+-- hiring party agrees, scheduled job date/time is then sent to tenant saying
+-- this is when the contractor will be there to fix your sink, confirm this
+-- works for you, if not propose another time."*
+--
+-- 061 asked everybody AT ONCE. That treats the contractor and the tenant as
+-- symmetric and they are not: the contractor has a diary full of other jobs
+-- and is the constraint, while the tenant is one person who may book a morning
+-- off work. Asking the tenant to confirm a window the contractor has not
+-- committed to risks asking them twice -- and the second ask is the expensive
+-- one, because by then they have arranged to be home.
+--
+-- So the order is CONTRACTOR, then the hiring side, then the TENANT. The
+-- middle one needs a column: the hiring side agrees to its OWN proposal by
+-- making it, and has agreed to nothing when the contractor comes back with a
+-- different time. Without somewhere to record that, "hiring party agrees"
+-- could only be inferred from who proposed, which is a fact no column holds.
+--
+-- NULL IS THE 061 SHAPE, NOT A THIRD ANSWER. A row written before this has no
+-- value and no hiring-side leg, so it settles on exactly the parties it always
+-- did -- and `SELECT v.*` returns no key at all for a database that has not
+-- run this, which is how the route tells "not answered" from "this column does
+-- not exist". The same signal 061 uses, for the same reason: a column nobody
+-- has added must not leave every appointment waiting for ever on a party that
+-- cannot answer.
+--
+-- ONE `ALTER TABLE ... ADD COLUMN`, which is the one statement that cannot be
+-- run twice, so it is a paste of its own. If it answers "duplicate column
+-- name" it has already been run and there is nothing to do.
+
+ALTER TABLE visits ADD COLUMN manager_at TEXT;

@@ -26,13 +26,35 @@ import { accessFor, needsTenantConfirm, canAskTenant } from "./access.js";
 export const VISIT_PARTIES = {
   tenant: { id: "tenant", label: "the tenant", mine: "You" },
   contractor: { id: "contractor", label: "the contractor", mine: "You" },
+  // 064. The hiring side, which 061 left out because it had no leg of its own
+  // to answer with. They agree to their OWN proposal by making it; they have
+  // agreed to nothing when the contractor comes back with a different time.
+  manager: { id: "manager", label: "the hiring side", mine: "You" },
 };
+
+// AND THE ORDER THEY ARE ASKED IN, WHICH IS THE WHOLE OF 064.
+//
+// 061 asked everybody at once. That treats the contractor and the tenant as
+// symmetric and they are not: the contractor has a diary full of other jobs
+// and is the CONSTRAINT, while the tenant is one person who may book a morning
+// off work to be in. Asking the tenant to confirm a window the contractor has
+// not committed to risks asking them twice, and the second ask is the
+// expensive one -- by then they have arranged to be home for a time that has
+// just evaporated.
+//
+// So: the crew first, then the hiring side when the time is one they did not
+// choose, then the person who has to open the door. Asked for in exactly those
+// words, and the reasoning is why it is worth the extra hop.
+export const PARTY_ORDER = ["contractor", "manager", "tenant"];
 
 // Has this side answered yet? The tenant's answer has lived in `responded_at`
 // since 019 and keeps that meaning -- giving the column a second one would
 // make every row written before 061 ambiguous about who it was that replied.
 const tenantSaid = (v) => !!(v?.respondedAt || v?.responded_at);
 const contractorSaid = (v) => !!(v?.contractorAt || v?.contractor_at);
+const managerSaid = (v) => !!(v?.managerAt || v?.manager_at);
+const SAID = { tenant: tenantSaid, contractor: contractorSaid, manager: managerSaid };
+export const partySaid = (visit, party) => !!SAID[party]?.(visit);
 
 // WHO MUST AGREE TO THIS ONE.
 //
@@ -40,14 +62,27 @@ const contractorSaid = (v) => !!(v?.contractorAt || v?.contractor_at);
 // role and a live work order -- so they are passed in rather than guessed at.
 // A screen that derived either would be a second opinion about whose answer is
 // still outstanding.
-export function visitParties(job, { tenantReported = false, hasContractor = false } = {}) {
+export function visitParties(job, { tenantReported = false, hasContractor = false,
+  hasManagerLeg = true } = {}) {
   const access = accessFor(job, { tenantReported });
   const who = [];
+  if (hasContractor) who.push("contractor");
+  // THE HIRING SIDE IS ALWAYS A PARTY once there is a column to record it in.
+  // They are committing the money and are very often the one letting the crew
+  // in, so a time they have not agreed to is not a time -- and because they
+  // agree by proposing, the ordinary path costs them nothing: they drop out of
+  // what is outstanding the moment the row is written.
+  //
+  // `hasManagerLeg` is the 064 column's ABSENCE, not a preference. On a
+  // database that has not run it `manager_at` can never be set, so a party
+  // that can never answer would leave every appointment waiting for ever --
+  // which is strictly worse than the gap it reports. Same signal and same
+  // reason as 061's own guard.
+  if (hasManagerLeg) who.push("manager");
   // Whether to ask, and whether there is anybody to ask, are two questions --
   // see access.js. A job nobody reported has no tenant to confirm a window
   // with, whatever the column says.
   if (needsTenantConfirm(access) && canAskTenant(job)) who.push("tenant");
-  if (hasContractor) who.push("contractor");
   return who;
 }
 
@@ -56,9 +91,29 @@ export function visitParties(job, { tenantReported = false, hasContractor = fals
 // `confirmed`.
 export function waitingOn(visit, parties) {
   if (!visit) return [];
-  return (parties || []).filter((p) =>
-    p === "tenant" ? !tenantSaid(visit) : !contractorSaid(visit));
+  return (parties || []).filter((p) => !partySaid(visit, p));
 }
+
+// WHOSE TURN IT IS, WHICH IS NOT THE SAME AS WHO IS OUTSTANDING.
+//
+// `waitingOn` is everybody who has not answered; this is the ONE that may
+// answer now. That difference is the feature: a tenant who is third in the
+// chain is outstanding from the moment the window is proposed and must not be
+// asked until the crew has said they can come.
+//
+// Ordered by `PARTY_ORDER` rather than by the order `visitParties` happens to
+// build, so the chain cannot be reordered by an edit somewhere else.
+export function nextToAnswer(visit, parties) {
+  if (!visit) return null;
+  const left = waitingOn(visit, parties);
+  return PARTY_ORDER.find((p) => left.includes(p)) || null;
+}
+
+// May this side answer this window right now? Read by the route and by both
+// screens, so a button cannot offer what the server refuses and the server
+// cannot refuse what a screen was told to offer.
+export const mayAnswer = (visit, parties, party) =>
+  !!party && nextToAnswer(visit, parties) === party;
 
 // A DECLINE FROM EITHER SIDE ENDS IT, and that is deliberate rather than a
 // simplification. A time one party cannot make is not a time -- carrying on

@@ -435,4 +435,23 @@ SELECT
   -- either, and this counts the ones that got past.
   (SELECT COUNT(*) FROM inspection_summaries
     WHERE TRIM(COALESCE(summary, '')) = ''
-       OR TRIM(COALESCE(source, '')) = '')                                                      AS m063_inv_summary_empty;
+       OR TRIM(COALESCE(source, '')) = '')                                                      AS m063_inv_summary_empty,
+
+  -- 064. The hiring side's own leg of an appointment.
+  (SELECT COUNT(*) FROM pragma_table_info('visits')
+    WHERE name = 'manager_at')                                                                  AS m064_visit_manager_at;
+  -- NO INVARIANT, AND THE REASON IS WORTH STATING rather than leaving the
+  -- next person to wonder why 061 has one and this does not.
+  --
+  -- The obvious one -- a confirmed visit with no hiring-side agreement -- reads
+  -- NON-ZERO on every live database, because every row written before this
+  -- migration settled under the 061 rule and legitimately has none. An
+  -- invariant that ships knowing it reads non-zero is a bug report nobody can
+  -- action, which is this file's own rule about the untrimmed company names.
+  --
+  -- Scoping it to rows written after the column arrived would need a date this
+  -- schema does not hold, and scoping it to "rows that had a contractor leg"
+  -- catches exactly the 061-era rows it must not. The property is checked
+  -- where it can be: `visit-party-test.mjs` drives the chain end to end, and
+  -- whether a party is owed an answer at all depends on a live work order,
+  -- which is `visitParties`'s to decide and not SQL's.

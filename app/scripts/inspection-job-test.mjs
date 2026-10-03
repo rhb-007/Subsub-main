@@ -209,8 +209,10 @@ try {
 
     issue(db, b.jobId);
     const [, v] = await json(await propose(env, b.jobId));
-    ck("a time waits on them as well as on the crew",
-      (v.waitingOn || []).join() === "tenant,contractor", JSON.stringify(v.waitingOn));
+    // 064. The chain: the crew first because they are the constraint, the
+    // named tenant last because they are the one who has to be in.
+    ck("a time waits on the crew, then on them",
+      (v.waitingOn || []).join() === "contractor,tenant", JSON.stringify(v.waitingOn));
     // The job keeps the TARGET date the raise form typed; what it must not
     // take is the proposed window, because nobody has agreed to that yet.
     ck("so the job has not taken the proposed window",
@@ -219,11 +221,18 @@ try {
     // THE NAMED TENANT MAY ANSWER IT, which is what the column is for: before
     // 062 the respond route compared against `requested_by` and this job has
     // none, so every answer was a 403.
+    // Not before the crew, though -- 064 asks them last on purpose, so the
+    // window the chain reaches them with is one somebody is actually coming
+    // to. The 062 question is whether they may answer AT ALL, which is what
+    // the second press below settles.
+    const [sEarly] = await json(await call(env, `/api/visits/${v.id}/respond`,
+      { status: "confirmed" }, "u_t3b"));
+    ck("the named tenant is not asked before the crew", sEarly === 409, String(sEarly));
+    await call(env, `/api/visits/${v.id}/respond`, { status: "confirmed" }, "u_sub");
     const [s2, t] = await json(await call(env, `/api/visits/${v.id}/respond`,
       { status: "confirmed" }, "u_t3b"));
     ck("the named tenant may confirm it", s2 === 200, `${s2} ${JSON.stringify(t)}`);
-    ck("and that leaves only the crew", (t.waitingOn || []).join() === "contractor",
-      JSON.stringify(t.waitingOn));
+    ck("and that settles it", t.status === "confirmed", String(t.status));
     // AND NOBODY ELSE MAY. A tenant of the next flat along is a real tenant on
     // a real seat, which is the only fixture this can be checked against.
     const [s3] = await json(await call(env, `/api/visits/${v.id}/respond`,

@@ -40,7 +40,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { visitParties, waitingOn, visitSettled, waitingText,
-  VISIT_PARTIES } from "../shared/visitparty.js";
+  VISIT_PARTIES, PARTY_ORDER, nextToAnswer, mayAnswer } from "../shared/visitparty.js";
 
 const app = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -122,26 +122,38 @@ try {
     // this answer, and it is 060's column doing the work rather than a second
     // switch beside it.
     ck("a tenant who has to be in is a party",
-      visitParties({ access: "tenant", requestedBy: "u_ten" }, { hasContractor: false })
-        .join() === "tenant");
+      visitParties({ access: "tenant", requestedBy: "u_ten" },
+        { hasContractor: false, hasManagerLeg: false }).join() === "tenant");
     ck("and is not one when they do not",
-      visitParties({ access: "none", requestedBy: "u_ten" }, { hasContractor: false })
-        .join() === "");
+      visitParties({ access: "none", requestedBy: "u_ten" },
+        { hasContractor: false, hasManagerLeg: false }).join() === "");
     // A JOB NOBODY REPORTED HAS NOBODY TO ASK, whatever the column says --
     // 060's own rule, read here rather than restated.
     ck("nor when there is nobody to ask",
-      visitParties({ access: "tenant" }, { hasContractor: false }).join() === "");
+      visitParties({ access: "tenant" }, { hasContractor: false, hasManagerLeg: false })
+        .join() === "");
     ck("the contractor is a party once somebody holds it",
-      visitParties({ access: "none" }, { hasContractor: true }).join() === "contractor");
-    ck("and both can be",
+      visitParties({ access: "none" }, { hasContractor: true, hasManagerLeg: false })
+        .join() === "contractor");
+    // 064. THE HIRING SIDE IS ALWAYS A PARTY once there is a column to record
+    // it in, and the ORDER is the feature: the crew first, because they are
+    // the constraint, and the tenant last, because they are the one who books
+    // a morning off to be in.
+    ck("and all three can be",
       visitParties({ access: "tenant", requestedBy: "u_ten" }, { hasContractor: true })
-        .join() === "tenant,contractor");
+        .join() === "contractor,manager,tenant");
+    // The column's ABSENCE, not a preference: a party that can never answer
+    // would leave every appointment waiting for ever.
+    ck("and the hiring side drops out on a database without 064",
+      visitParties({ access: "tenant", requestedBy: "u_ten" },
+        { hasContractor: true, hasManagerLeg: false }).join() === "contractor,tenant");
     // NULL falls back to 019's rule, untouched -- the same asymmetry that
     // makes 060 and 061 safe against a live database.
     ck("an unanswered access column still reads the seat role",
-      visitParties({ requestedBy: "u_ten" }, { tenantReported: true, hasContractor: false })
-        .join() === "tenant"
-      && visitParties({ requestedBy: "u_ten" }, { tenantReported: false }).join() === "");
+      visitParties({ requestedBy: "u_ten" },
+        { tenantReported: true, hasContractor: false, hasManagerLeg: false }).join() === "tenant"
+      && visitParties({ requestedBy: "u_ten" },
+        { tenantReported: false, hasManagerLeg: false }).join() === "");
   }
   {
     // THE COMBINED VERDICT, from one function. Pinning only "confirmed when
@@ -170,7 +182,29 @@ try {
       waitingText(half, ["tenant", "contractor"], "contractor"));
     ck("and nothing is said when nobody is owed",
       waitingText({ respondedAt: "x", contractorAt: "y" }, ["tenant", "contractor"], "tenant") === null);
-    ck("both sides are named", Object.keys(VISIT_PARTIES).join() === "tenant,contractor");
+    ck("every side is named", Object.keys(VISIT_PARTIES).join() === "tenant,contractor,manager");
+    // AND THE ORDER IS ITS OWN RECORD, read by `nextToAnswer` rather than by
+    // the order `visitParties` happens to build -- so the chain cannot be
+    // reordered by an edit somewhere else.
+    ck("and the chain asks the crew first and the tenant last",
+      PARTY_ORDER.join() === "contractor,manager,tenant", PARTY_ORDER.join());
+    const all = ["contractor", "manager", "tenant"];
+    ck("nobody has answered, so it is the contractor's turn",
+      nextToAnswer({ status: "proposed" }, all) === "contractor");
+    ck("the hiring side is next once the crew has agreed",
+      nextToAnswer({ status: "proposed", contractorAt: "x" }, all) === "manager");
+    // THE TENANT IS OUTSTANDING THROUGHOUT AND ASKED ONLY AT THE END, which is
+    // the whole point: asking them about a window the crew has not committed
+    // to risks asking them twice, and the second ask is the expensive one.
+    ck("and the tenant only at the end",
+      nextToAnswer({ status: "proposed", contractorAt: "x", managerAt: "y" }, all) === "tenant");
+    ck("with nobody left once all three have",
+      nextToAnswer({ status: "proposed", contractorAt: "x", managerAt: "y", respondedAt: "z" }, all)
+        === null);
+    ck("and may-answer is that turn and no other",
+      mayAnswer({ status: "proposed" }, all, "contractor")
+      && !mayAnswer({ status: "proposed" }, all, "tenant")
+      && !mayAnswer({ status: "proposed" }, all, "manager"));
   }
 
   console.log("\n-- the job with nobody in it still has somebody turning up --");
@@ -231,37 +265,64 @@ try {
   {
     const { db, env } = seed();
     const [, b] = await json(await propose(env, "job_both"));
-    ck("a tenant's own report waits on both",
-      b.status === "proposed" && (b.waitingOn || []).join() === "tenant,contractor",
+    // 064. THE CHAIN, IN THE ORDER IT WAS ASKED FOR. The hiring side has
+    // already agreed by proposing, so what is outstanding is the crew and then
+    // the person who has to be in.
+    ck("a manager's proposal waits on the crew, then the tenant",
+      b.status === "proposed" && (b.waitingOn || []).join() === "contractor,tenant",
       `${b.status} ${JSON.stringify(b.waitingOn)}`);
+    ck("and the hiring side is not waited on for its own proposal",
+      !(b.waitingOn || []).includes("manager"), JSON.stringify(b.waitingOn));
 
-    const [, t] = await json(await respond(env, b.id, { status: "confirmed" }, "u_ten"));
-    // THE REGRESSION THIS PINS: 019 booked it here. A tenant agreeing a
-    // morning the crew is already on another roof is the whole reported bug.
-    ck("the tenant alone does not book it", t.status === "proposed", String(t.status));
-    ck("and it says who is left", (t.waitingOn || []).join() === "contractor",
-      JSON.stringify(t.waitingOn));
+    // THE TENANT IS NOT ASKED YET, which is the whole of 064. Asking them to
+    // confirm a window the crew has not committed to risks asking them twice,
+    // and the second ask is the one that costs their trust -- by then they
+    // have booked a morning off work to be in.
+    const [ts, tEarly] = await json(await respond(env, b.id, { status: "confirmed" }, "u_ten"));
+    ck("the tenant cannot answer before the crew has", ts === 409, String(ts));
+    ck("and is told whose turn it is", tEarly.turn === "contractor", String(tEarly.turn));
     ck("so the job still has no date", jobOf(db, "job_both").date === null,
       String(jobOf(db, "job_both").date));
 
     const [, c] = await json(await respond(env, b.id, { status: "confirmed" }, "u_sub"));
-    ck("the contractor's yes is what settles it", c.status === "confirmed", String(c.status));
+    // THE CREW'S YES DOES NOT SETTLE IT, because somebody still has to be in.
+    ck("the crew agreeing hands it to the tenant", c.status === "proposed", String(c.status));
+    ck("and it says so", (c.waitingOn || []).join() === "tenant", JSON.stringify(c.waitingOn));
+    ck("with no date yet", jobOf(db, "job_both").date === null,
+      String(jobOf(db, "job_both").date));
+
+    const [, t] = await json(await respond(env, b.id, { status: "confirmed" }, "u_ten"));
+    ck("the tenant is what settles it", t.status === "confirmed", String(t.status));
     ck("and only then does the date land", jobOf(db, "job_both").date === "2026-10-09",
       String(jobOf(db, "job_both").date));
     const row = visitOf(db, "job_both");
-    ck("with both answers kept apart", !!row.responded_at && !!row.contractor_at,
-      JSON.stringify(row));
+    ck("with all three answers kept apart",
+      !!row.responded_at && !!row.contractor_at && !!row.manager_at, JSON.stringify(row));
   }
   {
-    // THE OTHER ORDER. Asserting one ordering passes with the second answer
-    // overwriting the first rather than being added to it.
+    // THE COUNTER, WHICH IS THE ONE HOP THE HIRING SIDE IS PULLED BACK INTO.
+    // A crew that accepts the date costs them nothing -- they agreed by
+    // setting it. A crew that MOVES the time is proposing a slot they did not
+    // choose, and they may be the one letting the crew in, so they answer.
     const { db, env } = seed();
-    const [, b] = await json(await propose(env, "job_both"));
-    await respond(env, b.id, { status: "confirmed" }, "u_sub");
-    ck("the contractor first leaves it waiting on the tenant",
-      visitOf(db, "job_both").status === "proposed", visitOf(db, "job_both").status);
-    const [, t] = await json(await respond(env, b.id, { status: "confirmed" }, "u_ten"));
-    ck("and the tenant closes it", t.status === "confirmed", String(t.status));
+    const [, first] = await json(await propose(env, "job_both"));
+    const [cs, counter] = await json(await propose(env, "job_both", "u_sub"));
+    ck("the crew may counter", cs === 201, String(cs));
+    ck("their own counter is their agreement",
+      !!counter.contractorAt, String(counter.contractorAt));
+    ck("and it comes back to the hiring side first",
+      (counter.waitingOn || []).join() === "manager,tenant", JSON.stringify(counter.waitingOn));
+    // The tenant is still not asked -- the time is not settled upstream yet.
+    const [te] = await json(await respond(env, counter.id, { status: "confirmed" }, "u_ten"));
+    ck("the tenant is still not asked", te === 409, String(te));
+    const [, m] = await json(await respond(env, counter.id, { status: "confirmed" }, "u_mgr"));
+    ck("the hiring side agreeing hands it to the tenant",
+      m.status === "proposed" && (m.waitingOn || []).join() === "tenant",
+      `${m.status} ${JSON.stringify(m.waitingOn)}`);
+    const [, t2] = await json(await respond(env, counter.id, { status: "confirmed" }, "u_ten"));
+    ck("and the tenant closes it", t2.status === "confirmed", String(t2.status));
+    ck("the superseded first window is not still live",
+      visitOf(db, "job_both").id === counter.id, visitOf(db, "job_both").id + " vs " + first.id);
   }
 
   console.log("\n-- proposing is agreeing, for whoever proposed it --");
@@ -272,9 +333,12 @@ try {
     const { db, env } = seed();
     const [s, b] = await json(await propose(env, "job_both", "u_sub"));
     ck("a contractor may propose a different time", s === 201, `${s} ${JSON.stringify(b)}`);
-    ck("and is not asked to confirm their own", (b.waitingOn || []).join() === "tenant",
-      JSON.stringify(b.waitingOn));
+    ck("and is not asked to confirm their own",
+      !(b.waitingOn || []).includes("contractor"), JSON.stringify(b.waitingOn));
+    ck("the hiring side answers a time it did not choose",
+      (b.waitingOn || []).join() === "manager,tenant", JSON.stringify(b.waitingOn));
     ck("their answer is already recorded", !!visitOf(db, "job_both").contractor_at);
+    await respond(env, b.id, { status: "confirmed" }, "u_mgr");
     const [, t] = await json(await respond(env, b.id, { status: "confirmed" }, "u_ten"));
     ck("so the tenant agreeing books it", t.status === "confirmed", String(t.status));
   }
@@ -328,8 +392,11 @@ try {
     ck("another company on the same roster cannot", s1 === 403, String(s1));
     // The manager is the side that asked. Letting them answer would be one
     // party agreeing with itself.
-    const [s2] = await json(await respond(env, b.id, { status: "confirmed" }, "u_mgr"));
-    ck("nor the manager who proposed it", s2 === 403, String(s2));
+    // 064. THE MANAGER MAY ANSWER NOW -- but not this one, and not yet: they
+    // proposed it, so they have already agreed, and the turn is the crew's.
+    const [s2, b2] = await json(await respond(env, b.id, { status: "confirmed" }, "u_mgr"));
+    ck("nor the manager who proposed it, whose turn it is not", s2 === 409, String(s2));
+    ck("and the refusal says whose turn it is", b2.turn === "contractor", String(b2.turn));
     const [s3] = await json(await respond(env, b.id, { status: "maybe" }, "u_sub"));
     ck("and an answer that is neither is refused", s3 === 400, String(s3));
   }
@@ -342,9 +409,10 @@ try {
     // for ever -- a repair that stops moving because of a migration nobody
     // has run, which is strictly worse than the gap it reports.
     const base = SCHEMA.replace(
-      /  responded_at  TEXT,[\s\S]*?  contractor_at   TEXT,\n  contractor_note TEXT\n/,
+      /  responded_at  TEXT,[\s\S]*?  manager_at      TEXT\n/,
       "  responded_at  TEXT\n");
-    ck("the fixture really is missing them", !/contractor_at/.test(base));
+    ck("the fixture really is missing them",
+      !/contractor_at/.test(base) && !/manager_at/.test(base));
     const { db, env } = seed(base);
     const [s, b] = await json(await propose(env, "job_both"));
     ck("a time can still be proposed", s === 201 && b.status === "proposed", `${s} ${b.status}`);

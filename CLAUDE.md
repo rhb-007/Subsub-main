@@ -7580,6 +7580,86 @@ refactor.
   the 73 to audit.
 
 
+- **SCHEDULING IS A CHAIN, NOT A BROADCAST: THE CREW FIRST AND THE TENANT
+  LAST.** Asked for as the order it should actually happen in — *"the job's
+  date is what [the] hiring party starts with, sends it to
+  contractor/handyman, contractor/handyman either confirms or rejects and
+  proposes new day/time, hiring party agrees, scheduled job date/time is then
+  sent to tenant saying this is when the contractor will be there to fix your
+  sink, confirm this works for you, if not propose another time"* — with the
+  question *"tell me if this is the most efficient and optimized way of doing
+  this"*. It is, and 061 was wrong.
+
+  **061 ASKED EVERYBODY AT ONCE**, which treats the contractor and the tenant
+  as symmetric. They are not. The contractor has a diary full of other jobs
+  and is the **constraint**; the tenant is one person who may book a morning
+  off work to be in. Asking the tenant to confirm a window the crew has not
+  committed to risks asking them twice — and the second ask is the expensive
+  one, because by then they have arranged to be home for a time that has just
+  evaporated. Parallel saves a round trip and spends it on the party least
+  able to absorb a wasted one.
+
+  Migration 064, `visits.manager_at`, `PARTY_ORDER` and `nextToAnswer` in
+  `app/shared/visitparty.js`.
+
+  **THE HIRING SIDE ONLY COSTS A HOP WHEN THE TIME MOVES**, which is the one
+  refinement to the sequence as asked and it falls out of a rule already here:
+  *proposing is agreeing, for whoever proposed it.* A crew that accepts the
+  date costs the account nothing — they agreed by setting it, and the window
+  goes straight to the tenant. A crew that puts forward a **different** time is
+  proposing a slot the account did not choose and may not be able to let anybody
+  in for, so they answer. Best case stays two hops.
+
+  **`waitingOn` AND `nextToAnswer` ARE DIFFERENT QUESTIONS, and that difference
+  is the whole feature.** The first is everybody who has not answered; the
+  second is the one who may answer **now**. A tenant is outstanding from the
+  moment a window is proposed and must not be *asked* until the chain reaches
+  them.
+
+  **REFUSED ON THE SERVER, NOT MERELY NOT OFFERED.** `not_your_turn`, because a
+  screen is a convenience and this is the rule. **A decline is exempt**: *I
+  cannot make this* is true whenever it is said, and holding it until somebody's
+  turn would collect agreement to a window that is already dead.
+
+  **AND A SIDE WHOSE COLUMN IS NOT THERE IS TOLD WHICH MIGRATION**, rather than
+  that it is not their turn. Both are refusals and only one is actionable — the
+  first sends somebody to wait for a hand-off that can never come.
+
+  **`turn` IS WORKED OUT ON THE SERVER AND PUT ON THE ROW.** The tenant's screen
+  holds no work orders, so it cannot know whether the crew has agreed; a screen
+  deriving it would be a second opinion about whose answer is outstanding, which
+  is what this module exists to stop. Memoised per JOB rather than per visit,
+  because parties are a fact about the job.
+
+  **ONE FIELD NAME, ONE SHAPE.** The refusal first carried the party under
+  `waitingOn`, which is an **array** everywhere else on those routes — callers
+  parsing it as a list threw on `.join`, which two existing suites duly did. It
+  is `turn`.
+
+  **AND 062 LEFT A GAP THE CHAIN MADE MATTER.** `/api/visits` filtered a
+  tenant's own list on `j.requested_by`, so a tenant named on `access_user_id` —
+  every job raised from a move-in inspection — could not see the appointment
+  they are now asked to confirm **last**. The route that decides who may ANSWER
+  has read both since 062; the one that decides what they can SEE still read the
+  requester. Guarded on the column, because naming it on a database without 062
+  would answer `migration_needed` to every tenant rather than losing one row
+  shape.
+
+  **NO CHECK.sql INVARIANT, and the reason is recorded rather than left to be
+  wondered about.** The obvious one — a confirmed visit with no hiring-side
+  agreement — reads **non-zero on every live database**, because every row
+  written before 064 settled under the 061 rule and legitimately has none. An
+  invariant that ships knowing it reads non-zero is a bug report nobody can
+  action. Scoping it to "rows that had a contractor leg" catches exactly the
+  061-era rows it must not.
+
+  **The suites were updated to the new rule rather than loosened**, which is the
+  distinction that matters: *a test can pin the old answer as firmly as the
+  right one.* `test:visitparty` went from 65 to 83 and now walks the chain end
+  to end, including the counter — crew proposes, hiring side agrees, tenant
+  closes — and the superseded first window.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -77,7 +77,8 @@ import { handymanCapCheck, handymanCapText,
 import { workWhen, scheduledOn, WHEN_KINDS } from "../shared/schedule.js";
 import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
   mayChooseAccess, maySetAccess, accessTenant } from "../shared/access.js";
-import { visitParties, waitingOn as visitWaitingOn } from "../shared/visitparty.js";
+import { visitParties, waitingOn as visitWaitingOn,
+  mayAnswer as visitMayAnswer } from "../shared/visitparty.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -6415,6 +6416,9 @@ export default function SubSub() {
                         who={users.find((u) => u.id === accessTenant(j))} onPropose={proposeVisit}
                         canSetAccess={mayChooseAccess(kindOf(account)) && maySetAccess(role)}
                         onSetAccess={setJobAccess}
+                        /* 064. The hiring side's own leg, for the one case it
+                           is asked: a time the crew put forward. */
+                        onAnswerVisit={maySetAccess(role) ? answerVisit : null}
                         onAssign={() => {
                           const slot = j.trades.find((t) => !j.assignments[t]) || j.trades[0];
                           if (slot) setAssigning({ job: j, trade: slot });
@@ -12602,8 +12606,26 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
             {photos.length ? ` · ${photos.length} photo${photos.length === 1 ? "" : "s"}` : ""}
           </span>
         </button>
-        {stage.key === "confirm" && (
+        {/* 064. ONLY ONCE IT IS THEIRS TO ANSWER. The tenant is last in the
+            chain on purpose: asking them to confirm a window the crew has not
+            committed to risks asking them twice, and the second ask is the one
+            that costs their trust -- by then they have booked a morning off
+            work to be in for a time that has just evaporated.
+
+            `turn` comes off the server, because this screen holds no work
+            orders and so cannot know whether the crew has agreed. A screen
+            deriving it would be a second opinion about whose answer is
+            outstanding, which is what `visitparty.js` exists to stop. A row
+            from a database without the column has no `turn` at all, and the
+            old behaviour is what that falls back to. */}
+        {stage.key === "confirm" && (visit?.turn === undefined || visit?.turn === "tenant") && (
           <TenantVisitAsk visit={visit} brandName={brandName} onRespond={onRespondVisit} />
+        )}
+        {stage.key === "confirm" && visit?.turn && visit.turn !== "tenant" && (
+          <p className="tn-visit-wait">
+            <Clock size={12} /> {visitWhen(visit)} has been put forward. We'll ask you to confirm it
+            once the contractor has said they can come.
+          </p>
         )}
         {/* Only when somebody was actually sent. "Did somebody come?" is
             not a question a tenant can answer usefully about a job nobody
@@ -12764,7 +12786,8 @@ function VisitForm({ jobId, startDate = "", forWhom, replacing = false, placehol
 
 // On the manager's side of the same thing: where the visit stands, and the
 // form to propose one (or the next one).
-function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, canSetAccess = false }) {
+function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswerVisit,
+  canSetAccess = false }) {
   // Open by default whenever there is no live time to wait on: nothing
   // proposed, a time refused, or one that came and went with nobody there.
   const [open, setOpen] = useState(!visit || visit.status === "declined" || visit.status === "missed");
@@ -12859,7 +12882,27 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, canSetA
           </div>
         </div>
       )}
-      {visit?.status === "proposed" && (
+      {/* 064. AND WHEN THE TURN IS OURS, A WAY TO TAKE IT. The hiring side
+          agrees to its own proposal by making it, so this is drawn in exactly
+          one case: the crew came back with a different time. That is a slot
+          this account did not choose and may not be able to let anybody in
+          for, which is the one hop the chain pulls them back into. */}
+      {visit?.status === "proposed" && visitMayAnswer(visit, parties, "manager") && onAnswerVisit && (
+        <div className="visit-mine">
+          <p className="visit-state wait"><Clock size={14} /> The contractor has put
+            forward <b>{visitWhen(visit)}</b>. Agree it and {parties.includes("tenant")
+              ? <>{name} is asked to confirm.</> : <>the job is booked.</>}</p>
+          <div className="jr-vis-acts">
+            <button className="btn-solid sm" onClick={() => onAnswerVisit(visit.id, "confirmed")}>
+              <CheckCircle2 size={14} /> That works
+            </button>
+            <button className="btn-ghost sm" onClick={() => setOpen(true)}>
+              <Clock size={13} /> Propose another
+            </button>
+          </div>
+        </div>
+      )}
+      {visit?.status === "proposed" && !visitMayAnswer(visit, parties, "manager") && (
         <p className="visit-state wait"><Clock size={14} /> Proposed <b>{visitWhen(visit)}</b> — waiting on {owedText} to confirm.
           {/* And who has ALREADY said yes, because "waiting on the
               contractor" over a tenant who confirmed last week reads as
@@ -33268,6 +33311,15 @@ iframe.dv-frame{display:block}
 /* and on the manager's job */
 .visit-block{margin-top:14px}
 .visit-state{display:flex;align-items:center;gap:8px;margin:6px 0 10px;font-size:13.5px;color:var(--ink-soft)}
+/* 064. The hiring side's own turn, which it only gets when the crew moved the
+   time. A block rather than a bare row, because it carries a decision. */
+.visit-mine{margin:6px 0 10px;padding:10px 12px;border-radius:12px;background:var(--paper)}
+.visit-mine .visit-state{margin:0 0 9px}
+/* And what a tenant sees while the chain is still upstream of them. Quiet:
+   nothing is being asked of them yet, which is the whole point. */
+.tn-visit-wait{display:flex;align-items:flex-start;gap:6px;margin:8px 0 0;
+  font-size:12.5px;line-height:1.45;color:var(--ink-soft)}
+.tn-visit-wait > svg{flex:none;margin-top:2px}
 .visit-state.ok{color:var(--brand-dk)}
 .visit-state.wait{color:#8a5a12}
 .visit-state.bad{color:#b1391f}

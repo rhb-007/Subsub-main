@@ -820,7 +820,13 @@ CREATE TABLE IF NOT EXISTS visits (
   -- before 061 ambiguous about who it was that answered. `status` is the
   -- COMBINED verdict: proposed while anybody who must agree has not.
   contractor_at   TEXT,
-  contractor_note TEXT
+  contractor_note TEXT,
+  -- 064. The hiring side's own leg, which is what makes the three parties a
+  -- CHAIN rather than a broadcast. They agree to their own proposal by making
+  -- it, and have agreed to nothing when the contractor comes back with a
+  -- different time -- so this is the middle link, and NULL on a row written
+  -- before it means that row settles on exactly the parties it always did.
+  manager_at      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_visits_job ON visits(job_id);

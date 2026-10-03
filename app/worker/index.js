@@ -66,7 +66,7 @@ import { isAccess, accessFor, needsTenantConfirm, canAskTenant,
 // name in one file is how a later edit calls the wrong one about the wrong
 // two-party thing.
 import { visitParties, waitingOn as visitWaitingOn,
-  visitSettled } from "../shared/visitparty.js";
+  nextToAnswer, visitSettled } from "../shared/visitparty.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -6237,6 +6237,7 @@ export function missingSchema(err) {
   // produces for a missing column, and it is first because a later rule with a
   // broader pattern would otherwise claim it.
   if (/\binspection_summaries\b/i.test(m)) return "063_inspection_summary";
+  if (/\bmanager_at\b/i.test(m)) return "064_visit_manager";
   if (/contractor_(at|note)/i.test(m)) return "061_visit_contractor";
   if (/access_user_id/i.test(m)) return "062_job_access_user";
   if (/no such column: (jobs\.)?access\b|jobs has no column named access\b/i.test(m)) return "060_job_access";
@@ -7393,6 +7394,9 @@ const visitRowToJs = (v) => ({
   // carrying both answers would make every row written before 061 ambiguous
   // about which side it was that replied.
   contractorAt: v.contractor_at || null, contractorNote: v.contractor_note || null,
+  // 064. The hiring side's own leg, which is what makes the three parties a
+  // chain. They agree to their own proposal by making it.
+  managerAt: v.manager_at || null,
 });
 
 // WHO IS STILL OWED AN ANSWER ON THIS JOB. Both facts come off the database --
@@ -7416,14 +7420,50 @@ async function partiesFor(env, job) {
     `SELECT 1 AS yes FROM work_orders
       WHERE job_id = ? AND voided_at IS NULL AND status = 'accepted' LIMIT 1`
   ).bind(job.id).first().catch(() => null);
-  return visitParties(job, { tenantReported: seat?.role === "tenant", hasContractor: !!wo?.yes });
+  return visitParties(job, { tenantReported: seat?.role === "tenant", hasContractor: !!wo?.yes,
+    hasManagerLeg: await hasManagerLeg(env) });
+}
+
+// WHETHER 064 IS APPLIED, asked of the schema rather than assumed.
+//
+// Not cached: a stale `false` would keep every appointment on the 061 shape
+// for however long an isolate lives after the migration is pasted, and these
+// routes are not hot enough for the pragma to matter. Read by COLUMN rather
+// than by table name, which is the lesson 052 paid for against a live
+// database -- `sqlite_master` says a table is there and `pragma_table_info`
+// says it is the right one.
+async function hasAccessUser(env) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM pragma_table_info('jobs') WHERE name = 'access_user_id'`).first();
+    return !!r?.n;
+  } catch { return false; }
+}
+async function hasManagerLeg(env) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM pragma_table_info('visits') WHERE name = 'manager_at'`).first();
+    return !!r?.n;
+  } catch { return false; }
 }
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/, TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 app.get("/api/visits", async (c) => {
   const auth = c.get("auth");
   const scope = scopeClause(auth, "j.property_id");
-  const mine = auth.role === "tenant" ? " AND j.requested_by = ? " : "";
+  // 062 LEFT THIS BEHIND, and the chain is what made it matter. A tenant named
+  // on `access_user_id` -- which is every job raised from a move-in inspection
+  // -- was filtered out of their own appointments, so the window they are now
+  // asked to confirm last was one they could never see. The route that decides
+  // who may ANSWER has read both since 062; this one still read the requester.
+  // Guarded on the column, because a database without 062 has none and this
+  // SELECT is the tenant's whole appointment list: naming a column that is not
+  // there would answer `migration_needed` to every tenant rather than losing
+  // the one row shape they do not have yet.
+  const au = auth.role === "tenant" && await hasAccessUser(c.env);
+  const mine = auth.role === "tenant"
+    ? (au ? " AND (j.requested_by = ? OR j.access_user_id = ?) " : " AND j.requested_by = ? ")
+    : "";
   // A CONTRACTOR SEAT IS NARROWED BY ITS WORK ORDERS, the same way
   // /api/jobs is, and was not. `scopeClause` answers nothing for a contractor
   // -- it narrows by buildings and a contractor has none -- so this list was
@@ -7449,9 +7489,30 @@ app.get("/api/visits", async (c) => {
         -- visit a tenant is shown: newest wins, and rowid breaks the tie.
         ORDER BY v.created_at DESC, v.rowid DESC`
     ).bind(auth.accountId, ...scope.vals,
-      ...(auth.role === "tenant" ? [auth.userId] : []),
+      ...(auth.role === "tenant" ? (au ? [auth.userId, auth.userId] : [auth.userId]) : []),
       ...(asContractor ? [auth.companyId] : [])).all();
-    return c.json((results || []).map(visitRowToJs));
+    // 064. WHOSE TURN EACH ONE IS, worked out here rather than on the screen.
+    // The tenant is last in the chain and their screen holds no work orders,
+    // so it cannot know whether the crew has agreed -- and a screen guessing
+    // would be a second opinion about whose answer is outstanding, which is
+    // the thing `visitparty.js` exists to stop.
+    //
+    // Memoised per JOB rather than per visit: parties are a fact about the
+    // job, and a list of forty appointments across eight jobs is eight
+    // lookups.
+    const byJob = new Map();
+    const rows = [];
+    for (const r of results || []) {
+      if (!byJob.has(r.job_id)) {
+        const j = await c.env.DB.prepare(
+          `SELECT id, account_id, requested_by${await hasAccessUser(c.env) ? ", access, access_user_id" : ""}
+             FROM jobs WHERE id = ?`).bind(r.job_id).first().catch(() => null);
+        byJob.set(r.job_id, j ? await partiesFor(c.env, j) : []);
+      }
+      const parties = byJob.get(r.job_id);
+      rows.push({ ...visitRowToJs(r), parties, turn: nextToAnswer(visitRowToJs(r), parties) });
+    }
+    return c.json(rows);
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;
@@ -7525,7 +7586,14 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
   // Tuesday has said they can come on Tuesday, and asking them to confirm
   // their own suggestion is a round trip that answers nothing -- the same
   // reason the side that asks for a handover has already agreed by asking.
-  const mineNow = auth.role === "contractor" ? new Date().toISOString() : null;
+  // 064. AND WHICH LEG IS THEIRS. Every side agrees by proposing, so the only
+  // question is which column the stamp lands in. The hiring side gets one of
+  // its own now, which is what turns three parties asked at once into a chain
+  // that asks the crew first and the tenant last.
+  const nowIso = new Date().toISOString();
+  const myLeg = auth.role === "contractor" ? "contractor"
+    : auth.role === "tenant" ? "tenant" : "manager";
+  const mineNow = myLeg === "contractor" ? nowIso : null;
   const id = uid();
   try {
     await c.env.DB.prepare(
@@ -7546,28 +7614,48 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
     // that stamp is both redundant and untrue: the column is the TENANT's
     // answer, and on a job they are not a party to there was no answer to
     // record. Left NULL, so the row cannot claim one.
-    const seeded = { respondedAt: null, contractorAt: mineNow };
+    // A TENANT'S OWN COUNTER IS THEIR AGREEMENT TOO, which is what keeps the
+    // chain bounded: it re-enters at the contractor rather than asking the
+    // person who just proposed it to confirm their own suggestion.
+    const seeded = {
+      respondedAt: myLeg === "tenant" ? nowIso : null,
+      contractorAt: mineNow,
+      managerAt: myLeg === "manager" ? nowIso : null,
+    };
     const status = visitSettled({ ...seeded, status: "proposed" }, parties);
-    try {
-      await c.env.DB.prepare(
-        `INSERT INTO visits (id, account_id, job_id, proposed_by, date, start_time, end_time, note,
-           status, responded_at, contractor_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(id, auth.accountId, jobId, auth.userId, date, start, end, note,
-        status, seeded.respondedAt, mineNow).run();
-    } catch (err) {
-      // A database without 061 keeps the two-party shape it has always had:
-      // the tenant answers, the contractor is not asked. Losing the
-      // contractor's leg costs a confirmation; refusing the insert costs
-      // anybody the ability to schedule a repair at all.
-      if (missingSchema(err) !== "061_visit_contractor") throw err;
-      console.warn("[visits] 061_visit_contractor not applied - the contractor is not asked");
-      await c.env.DB.prepare(
-        `INSERT INTO visits (id, account_id, job_id, proposed_by, date, start_time, end_time, note, status, responded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(id, auth.accountId, jobId, auth.userId, date, start, end, note,
-        needsTenant ? "proposed" : "confirmed", seeded.respondedAt).run();
+    // NEWEST COLUMN FIRST, AND A DATABASE BEHIND THE CODE KEEPS THE SHAPE IT
+    // HAS. Losing a leg costs a confirmation; refusing the insert costs
+    // anybody the ability to schedule a repair at all -- which is the trade
+    // 061 already made one column along, and the reason the fallbacks compute
+    // their own status rather than carrying this one down.
+    const shapes = [
+      { cols: ", responded_at, contractor_at, manager_at",
+        vals: [seeded.respondedAt, seeded.contractorAt, seeded.managerAt], status },
+      { cols: ", responded_at, contractor_at",
+        vals: [seeded.respondedAt, seeded.contractorAt],
+        status: visitSettled({ ...seeded, managerAt: null, status: "proposed" },
+          parties.filter((pp) => pp !== "manager")) },
+      { cols: ", responded_at", vals: [seeded.respondedAt],
+        status: needsTenant ? "proposed" : "confirmed" },
+    ];
+    let wrote = false;
+    for (const sh of shapes) {
+      try {
+        await c.env.DB.prepare(
+          `INSERT INTO visits (id, account_id, job_id, proposed_by, date, start_time, end_time, note,
+             status${sh.cols})
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${sh.vals.map(() => ", ?").join("")})`
+        ).bind(id, auth.accountId, jobId, auth.userId, date, start, end, note,
+          sh.status, ...sh.vals).run();
+        wrote = true;
+        break;
+      } catch (err) {
+        const m = missingSchema(err);
+        if (m !== "064_visit_manager" && m !== "061_visit_contractor") throw err;
+        console.warn(`[visits] ${m} not applied - that side is not asked`);
+      }
     }
+    if (!wrote) throw new Error("no such column: visits");
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;
@@ -7603,7 +7691,11 @@ app.post("/api/visits/:id/respond", async (c) => {
   // contractor could neither accept a window nor say it does not work, so a
   // time agreed between a manager and a tenant could be a morning the crew was
   // already on another roof -- discovered by nobody turning up.
-  if (auth.role !== "tenant" && auth.role !== "contractor") return c.json({ error: "forbidden" }, 403);
+  // 064. THREE SIDES MAY ANSWER NOW. The hiring side joined because the order
+  // matters: they agree to their own proposal by making it, and have agreed to
+  // nothing when the contractor comes back with a different time.
+  const MAY_ANSWER = ["tenant", "contractor", "admin", "pm"];
+  if (!MAY_ANSWER.includes(auth.role)) return c.json({ error: "forbidden" }, 403);
   const b = await c.req.json().catch(() => ({}));
   const status = b.status === "confirmed" ? "confirmed" : b.status === "declined" ? "declined" : null;
   if (!status) return c.json({ error: "bad_status" }, 400);
@@ -7625,17 +7717,23 @@ app.post("/api/visits/:id/respond", async (c) => {
   // the reason it is the work order rather than the engagement is that holding
   // one is what says this job was given to them.
   const isTenant = auth.role === "tenant";
+  // Which leg this seat answers with. One word, read by the turn check, the
+  // column choice and the sentence in the trail, so the three cannot disagree
+  // about who it was that replied.
+  const myLeg = isTenant ? "tenant" : auth.role === "contractor" ? "contractor" : "manager";
   // 062. THE TENANT WHO HAS TO BE LET IN, which on a job raised from a move-in
   // inspection is not the requester -- there is no requester. One predicate,
   // so this cannot disagree with the propose route about who may answer.
   if (isTenant && accessTenant(v) !== auth.userId) return c.json({ error: "forbidden" }, 403);
-  if (!isTenant) {
+  if (myLeg === "contractor") {
     const wo = await c.env.DB.prepare(
       `SELECT 1 AS yes FROM work_orders
         WHERE job_id = ? AND company_id = ? AND voided_at IS NULL AND status = 'accepted' LIMIT 1`
     ).bind(v.job_id, auth.companyId).first();
     if (!wo?.yes) return c.json({ error: "forbidden" }, 403);
   }
+  // The hiring side answers for its own account, which the row lookup above
+  // already scoped -- so there is nothing further to check for them.
   if (v.status !== "proposed") return c.json({ error: "not_open", status: v.status }, 409);
   const note = String(b.note || "").trim().slice(0, 500) || null;
 
@@ -7650,26 +7748,60 @@ app.post("/api/visits/:id/respond", async (c) => {
   if (!Object.prototype.hasOwnProperty.call(v, "contractor_at")) {
     parties = parties.filter((pp) => pp !== "contractor");
   }
+  // And the same signal for 064's own column, for the same reason: a party
+  // that cannot answer is an appointment that never settles.
+  if (!Object.prototype.hasOwnProperty.call(v, "manager_at")) {
+    parties = parties.filter((pp) => pp !== "manager");
+  }
+  // ONLY IN TURN, WHICH IS THE WHOLE OF 064 ON THIS ROUTE. The tenant is
+  // outstanding from the moment a window is proposed and must not be ASKED
+  // until the crew has said they can come -- otherwise they book a morning off
+  // work for a time that then evaporates, and the second ask is the one that
+  // costs their trust. Refused rather than merely not offered, because a
+  // screen is a convenience and this is the rule.
+  //
+  // A DECLINE IS EXEMPT. "I cannot make this" is true whenever it is said, and
+  // holding it until somebody's turn would collect agreement to a window that
+  // is already dead.
+  // AND A SIDE WHOSE COLUMN IS NOT THERE IS TOLD WHICH MIGRATION, rather than
+  // that it is not their turn. Both are refusals and only one is actionable:
+  // "not your turn" sends somebody to wait for a hand-off that can never come,
+  // when what is actually wrong is a paste nobody has run.
+  const LEG_COL = { tenant: "responded_at", contractor: "contractor_at", manager: "manager_at" };
+  if (!Object.prototype.hasOwnProperty.call(v, LEG_COL[myLeg])) {
+    return c.json({ error: "migration_needed",
+      migration: myLeg === "manager" ? "064_visit_manager" : "061_visit_contractor" }, 503);
+  }
+  if (status !== "declined" && nextToAnswer(v, parties) !== myLeg) {
+    return c.json({ error: "not_your_turn", turn: nextToAnswer(v, parties) }, 409);
+  }
   const now = new Date().toISOString();
   // A DECLINE FROM EITHER SIDE ENDS IT. A time one party cannot make is not a
   // time, and carrying on collecting the other side's answer would leave a
   // window with a tick against it that nobody is attending -- the worst of the
   // three states, because it reads as settled.
   const after = status === "declined" ? { status: "declined" } : {
-    respondedAt: isTenant ? now : (v.responded_at || null),
-    contractorAt: isTenant ? (v.contractor_at || null) : now,
+    respondedAt: myLeg === "tenant" ? now : (v.responded_at || null),
+    contractorAt: myLeg === "contractor" ? now : (v.contractor_at || null),
+    managerAt: myLeg === "manager" ? now : (v.manager_at || null),
   };
   const nextStatus = status === "declined" ? "declined" : visitSettled(after, parties);
 
-  const cols = isTenant
+  const cols = myLeg === "tenant"
     ? `status = ?, tenant_note = ?, responded_at = ?`
-    : `status = ?, contractor_note = ?, contractor_at = ?`;
+    : myLeg === "contractor"
+      ? `status = ?, contractor_note = ?, contractor_at = ?`
+      // The hiring side's note rides in the contractor's column deliberately:
+      // it is a note about the WINDOW, and a fourth column for one more
+      // sentence is a column to keep in step for nothing. `manager_at` is
+      // what says who agreed.
+      : `status = ?, contractor_note = COALESCE(?, contractor_note), manager_at = ?`;
   try {
     await c.env.DB.prepare(`UPDATE visits SET ${cols} WHERE id = ?`)
       .bind(nextStatus, note, now, v.id).run();
   } catch (err) {
     if (!missingSchema(err) || isTenant) throw err;
-    return c.json({ error: "migration_needed", migration: "061_visit_contractor" }, 503);
+    return c.json({ error: "migration_needed", migration: missingSchema(err) }, 503);
   }
 
   const when = visitWhen(v);
@@ -7687,7 +7819,7 @@ app.post("/api/visits/:id/respond", async (c) => {
     // because "confirmed" on a half-answered window is exactly the lie this
     // change exists to stop.
     await logActivity(c.env, auth.accountId, auth.userId, "visit_part_confirmed",
-      `${isTenant ? "The tenant" : "The contractor"} agreed ${when} for "${v.title}" `
+      `${myLeg === "tenant" ? "The tenant" : myLeg === "contractor" ? "The contractor" : "The hiring side"} agreed ${when} for "${v.title}" `
       + `— still waiting on ${visitWaitingOn(after, parties).join(" and ")}`);
   }
   const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(v.id).first();
