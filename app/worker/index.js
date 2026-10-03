@@ -1137,7 +1137,8 @@ app.post("/api/signup", async (c) => {
 // public form at a customer's own subdomain, and a one-time link the
 // customer generated and sent themselves. Identical work either way -- only
 // how the applicant got here differs, which is what `note` records.
-async function createApplication(env, account, body, note, { boundCompanyId = null } = {}) {
+async function createApplication(env, account, body, note,
+  { boundCompanyId = null, engagedAs: wantAs = null } = {}) {
   const licenseKey = (body.license || "").trim().toUpperCase();
 
   let company = null;
@@ -1177,6 +1178,31 @@ async function createApplication(env, account, body, note, { boundCompanyId = nu
       `INSERT INTO engagements (id, account_id, company_id, status, categories, notes)
        VALUES (?, ?, ?, 'invited', ?, ?)`
     ).bind(engagementId, account.id, companyId, JSON.stringify(body.categories || []), note).run();
+    // 059. WHAT THE ACCOUNT SAID THEY WOULD BE, carried from the invite.
+    //
+    // Its own statement rather than a column on the insert, so a database
+    // without 058 still lets somebody redeem an invite -- which is the whole
+    // application, and losing it over a classification would be the worse
+    // half by far.
+    //
+    // ONLY ON A NEW ENGAGEMENT, never over an existing one: a company already
+    // on this roster has a relationship somebody set, and an invite raised
+    // afterwards must not silently reclassify it. Same rule the profile write
+    // below follows for a deduped company.
+    //
+    // And never trusted from the applicant. `wantAs` comes off the invite row
+    // the account created; `body` is typed by whoever opened the link, and a
+    // contractor naming themselves a handyman would be excusing their own
+    // insurance.
+    if (isHandyman(wantAs) && mayEngageHandyman(account.kind)) {
+      try {
+        await env.DB.prepare(`UPDATE engagements SET engaged_as = ? WHERE id = ?`)
+          .bind("handyman", engagementId).run();
+      } catch (err) {
+        if (!missingSchema(err)) throw err;
+        console.warn("[apply] 058_engaged_as not applied - joined as a subcontractor");
+      }
+    }
   }
 
   // Only for a genuinely new company — an existing (deduped) one keeps its
@@ -2305,6 +2331,11 @@ const inviteRowToJs = (r, account) => ({
   // "sent" are different facts and a list that conflates them is a list
   // that says a message went out when none did.
   sentAt: r.sent_at || null,
+  // 059. What they will be once they arrive. Normalised through the same
+  // helper the engagement reads, so a NULL column, a word nothing recognises
+  // and a database without 059 all answer "subcontractor" -- one rule, and
+  // the browser never derives a second.
+  engagedAs: engagedAs(r.engaged_as),
   url: inviteUrl(account, r.token),
   status: r.revoked_at ? "revoked"
     : r.used_at ? "accepted"
@@ -2377,6 +2408,26 @@ app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
   if (b.phone && String(b.phone).trim() && !toE164(phone)) return c.json({ error: "bad_phone" }, 400);
 
   const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+
+  // 059. WHAT THEY WILL BE TO YOU, decided here because this is where the
+  // relationship starts. The add-a-contractor form has asked since 058; this
+  // door never did, and it is the one used for the person who has no SubSub
+  // account -- which is exactly the person most likely to be a handyman. So
+  // inviting the man who changes tap washers produced a subcontractor, whose
+  // own portal then demanded a certificate of insurance and a surety bond he
+  // will never hold.
+  //
+  // Refused rather than defaulted on an account kind that may not engage one,
+  // the same answer the roster route gives: silence is only safe when nothing
+  // was asked, and here something was and it was not understood.
+  if (b.engagedAs !== undefined && !isEngagedAs(b.engagedAs)) {
+    return c.json({ error: "bad_engaged_as" }, 400);
+  }
+  const wantAs = engagedAs(b.engagedAs);
+  if (isHandyman(wantAs) && !mayEngageHandyman(account?.kind)) {
+    return c.json({ error: "not_a_handyman_account" }, 403);
+  }
+
   const id = uid(), token = newInviteToken();
   const expires = new Date(Date.now() + INVITE_TTL_DAYS * 86400_000).toISOString();
 
@@ -2397,6 +2448,28 @@ app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
       `INSERT INTO sub_invites (id, account_id, token, label, created_by, expires_at)
        VALUES (?, ?, ?, ?, ?, ?)`
     ).bind(id, accountId, token, label, userId, expires).run();
+  }
+
+  // A SEPARATE STATEMENT, and deliberately not a column on the insert above.
+  // That insert already carries a fallback for a database without 027, and
+  // folding this into it would mean a database with 027 and not 059 dropping
+  // the RECIPIENT as well -- losing the common case to record the rare one.
+  // Here the degradation lands where it belongs: the invite still goes, the
+  // address is still recorded, and only the relationship is lost, which is
+  // said rather than assumed.
+  //
+  // Skipped entirely for a subcontractor, because NULL already means that --
+  // so the ordinary invite touches no column 059 added and cannot fail on it.
+  let asRecorded = true;
+  if (isHandyman(wantAs)) {
+    try {
+      await c.env.DB.prepare(`UPDATE sub_invites SET engaged_as = ? WHERE id = ?`)
+        .bind(wantAs, id).run();
+    } catch (err) {
+      if (!missingSchema(err)) throw err;
+      console.warn("[invites] 059_invite_engaged_as not applied - invite made as a subcontractor");
+      asRecorded = false;
+    }
   }
 
   // Sent by SubSub, by both routes, because this trade answers a text and
@@ -2428,6 +2501,11 @@ app.post("/api/invites", requireRole("admin", "pm"), async (c) => {
     // text that could not go because texting is not switched on, is the
     // same class of lie as a booking page that confirms nothing.
     emailed, texted, emailError: sent.emailError, textError: sent.textError,
+    // Said rather than assumed, the same rule `recorded` follows above: a
+    // handyman invite that went out as a subcontractor is a thing the screen
+    // has to be able to report, because the only other symptom arrives weeks
+    // later as a maintenance worker being asked for a surety bond.
+    engagedAsRecorded: asRecorded,
   }, 201);
 });
 
@@ -2532,10 +2610,30 @@ app.patch("/api/invites/:id", requireRole("admin", "pm"), async (c) => {
     label: has("label") ? (String(b.label || "").trim().slice(0, 120) || null) : row.label,
     email: has("email") ? (String(b.email || "").trim().toLowerCase() || null) : row.email,
     phone: has("phone") ? (normalizePhone(b.phone) || null) : row.phone,
+    // 059. CORRECTABLE FOR THE SAME REASON THE ADDRESS IS: nothing has
+    // happened yet. The word is a held intention until somebody opens the
+    // link, and getting it wrong is the commonest thing to get wrong about a
+    // person you have met once on a job site. Stored NULL for a
+    // subcontractor, which is what NULL means -- so switching back writes the
+    // ordinary state rather than a second spelling of it.
+    engaged_as: has("engagedAs")
+      ? (isHandyman(b.engagedAs) ? "handyman" : null) : row.engaged_as,
   };
   if (next.email && !EMAIL_RE.test(next.email)) return c.json({ error: "bad_email" }, 400);
   if (has("phone") && String(b.phone || "").trim() && !next.phone) {
     return c.json({ error: "bad_phone" }, 400);
+  }
+  if (has("engagedAs") && !isEngagedAs(b.engagedAs)) {
+    return c.json({ error: "bad_engaged_as" }, 400);
+  }
+
+  // Read before the write rather than after it, because the handyman check
+  // needs the kind. The same refusal the create route gives, from the same
+  // predicate -- a screen that could set it here and not there would be two
+  // answers to one question.
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (next.engaged_as === "handyman" && !mayEngageHandyman(account?.kind)) {
+    return c.json({ error: "not_a_handyman_account" }, 403);
   }
 
   const changed = Object.keys(next).filter((k) => (next[k] || null) !== (row[k] || null));
@@ -2570,17 +2668,31 @@ app.patch("/api/invites/:id", requireRole("admin", "pm"), async (c) => {
     // rather than reading as finished.
     token, expires, reissue ? null : row.sent_at, row.id, accountId).run();
 
+  // Its own statement, for the reason the create route gives: a database
+  // without 059 must still be able to correct an address.
+  let asRecorded = true;
+  if ((next.engaged_as || null) !== (row.engaged_as || null)) {
+    try {
+      await c.env.DB.prepare(`UPDATE sub_invites SET engaged_as = ? WHERE id = ?`)
+        .bind(next.engaged_as, row.id).run();
+    } catch (err) {
+      if (!missingSchema(err)) throw err;
+      console.warn("[invites] 059_invite_engaged_as not applied - relationship not changed");
+      asRecorded = false;
+    }
+  }
+
   await logActivity(c.env, accountId, userId, "invite_updated",
     reissue
       ? `Invite details changed and a new link issued${next.email ? ` for ${next.email}` : ""}`
       : "Invite details changed");
 
-  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
   const after = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(row.id).first();
   // Said rather than inferred: the panel has to tell somebody the old link
   // has stopped working, and a browser working that out from the url it can
   // see would be a second implementation of this rule.
-  return c.json({ ...inviteRowToJs(after, account), reissued: reissue });
+  return c.json({ ...inviteRowToJs(after, account), reissued: reissue,
+    engagedAsRecorded: asRecorded });
 });
 
 // Invite a contractor who is ALREADY on the roster to get a login.
@@ -2715,8 +2827,15 @@ async function lookupInvite(env, token) {
   if (row.revoked_at) return { error: "revoked" };
   if (row.used_at) return { error: "used" };
   if (new Date(row.expires_at) < new Date()) return { error: "expired" };
+  // `kind` IS NAMED OR IT IS SILENTLY DROPPED, and the direction it fails in
+  // is the quiet one. `createApplication` re-asks `mayEngageHandyman` before
+  // applying the invite's relationship -- an account can change kind between
+  // being invited and being joined -- and with the column absent that answers
+  // false for every account, so a handyman invite redeemed correctly as a
+  // subcontractor and nothing anywhere said a word. The public route builds
+  // its own `account` object field by field, so this reaches nobody.
   const account = await env.DB.prepare(
-    `SELECT id, name, subdomain, theme, logo_key, use_default_mark FROM accounts WHERE id = ?`
+    `SELECT id, name, subdomain, kind, theme, logo_key, use_default_mark FROM accounts WHERE id = ?`
   ).bind(row.account_id).first();
   if (!account) return { error: "invalid" };
   return { invite: row, account };
@@ -2773,6 +2892,13 @@ app.get("/api/invite/:token", async (c) => {
     // counts as already filled in.
     known,
     knownEnough: inviteKnownEnough(known),
+    // 059. What the account said they would be, so the form can stop asking a
+    // maintenance worker for a contractor licence and stop offering him
+    // trades this account can never assign him -- `tradesAllowed` already
+    // refuses those at the work order, so a grid that offers them is a screen
+    // looser than the route. Answered for every invite, because "subcontractor"
+    // is what the form has always assumed.
+    engagedAs: engagedAs(invite.engaged_as),
     account: {
       name: account.name, subdomain: account.subdomain,
       theme: parseJson(account.theme),
@@ -2805,7 +2931,11 @@ app.post("/api/invite/:token", async (c) => {
       : "Applied through an invite link.",
     // Set when the invite was raised from a contractor already on the roster,
     // so the seat lands on that record rather than on a near-match of it.
-    { boundCompanyId: invite.company_id || null });
+    { boundCompanyId: invite.company_id || null,
+      // And what the account said they would be when they asked them in. The
+      // invite is the only place that word exists until this moment -- the
+      // engagement is created right here.
+      engagedAs: engagedAs(invite.engaged_as) });
 
   // Spent, and only now -- an application that failed halfway should leave
   // the link usable rather than stranding somebody with a dead one.

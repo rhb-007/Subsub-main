@@ -1,0 +1,39 @@
+-- 059. What they will be to you, decided when you invite them.
+--
+-- 058 put `engaged_as` on `engagements`, and the picker for it sits on the
+-- add-a-contractor form. That form is only one of the two doors. The other is
+-- the blank invite -- company, contact, email, mobile, send -- and it creates
+-- NO engagement at all: there is nothing but a `sub_invites` row until
+-- somebody opens the link, at which point `createApplication` writes the
+-- company, the engagement and the seat in one go.
+--
+-- So inviting the person who changes tap washers produced a SUBCONTRACTOR,
+-- every time, and nothing on the invite form said otherwise. What that costs
+-- is the exact failure 058 exists to prevent, arrived at through the door
+-- most likely to be used: a maintenance worker with no SubSub account is
+-- invited rather than typed in, lands on a roster as a subcontractor, and his
+-- own portal immediately demands a certificate of insurance and a surety bond
+-- he will never hold -- so he cannot be given a job until somebody notices
+-- and edits the card. Permanently amber, over a document nobody should have
+-- asked him for.
+--
+-- The word therefore rides on the INVITE and is applied to the engagement at
+-- redemption. It is a held intention and not a fact about anybody yet, which
+-- is why it can be corrected right up to the moment the link is used -- the
+-- same boundary `PATCH /api/invites/:id` already draws for the address.
+--
+-- NULL IS THE DEFAULT AND MEANS SUBCONTRACTOR, as it does on `engagements`,
+-- and for the same reason: every invite already out carries no value, and the
+-- direction that fails open is the one that stops asking for a certificate.
+-- `engagedAs()` in app/shared/engaged.js reads NULL and an unrecognised word
+-- identically, so one helper decides it for both tables.
+--
+-- No CHECK constraint, the same trade 003 made for `accounts.kind` and 058
+-- made for this value one table over: adding one to an existing table is a
+-- full rebuild, and the Worker validates against `ENGAGED_AS` on the way in.
+--
+-- ONE `ALTER TABLE ... ADD COLUMN`, so this is one paste and it is the
+-- statement that cannot be run twice. If it answers "duplicate column name",
+-- it has already been run and there is nothing to do.
+
+ALTER TABLE sub_invites ADD COLUMN engaged_as TEXT;

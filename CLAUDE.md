@@ -6436,6 +6436,127 @@ refactor.
   assertion — as it did before this change. The edit pins the same pair under
   the new name and is correct by construction; it has not been run.
 
+- **INVITING A HANDYMAN PRODUCED A SUBCONTRACTOR, BECAUSE THE PICKER WAS ON
+  ONE OF THE TWO DOORS.** Reported as *"when I go to signup a new user I don't
+  see any settings for a handyman"*. 058 put `engaged_as` on `engagements` and
+  the control for it on the add-a-contractor form. The other door is the blank
+  **Invite**, and it creates no engagement at all: there is nothing but a
+  `sub_invites` row until somebody opens the link, at which point
+  `createApplication` writes the company, the engagement and the seat in one
+  go — with no word to write.
+
+  So the door used for somebody who has **no SubSub account** could only ever
+  produce a subcontractor, and that is exactly the person most likely to be a
+  handyman: you do not type the man who changes tap washers into a roster, you
+  send him a link. He then landed as a subcontractor, his own portal demanded a
+  certificate of insurance and a surety bond he will never hold, and he could
+  not be given a job until somebody noticed and edited his card. The
+  permanently-amber failure `docs.js` exists to prevent, reached through the
+  commonest door. Twelfth time this file has recorded correct pieces with no
+  way in, and the first where the missing way in was *one of two*.
+
+  Migration 059, `sub_invites.engaged_as`.
+
+  **IT IS A HELD INTENTION, NOT A FACT ABOUT ANYBODY**, which is what decides
+  where it lives and when it can be changed. Nothing has happened until the
+  link is opened, so it rides on the invite and is applied to the engagement at
+  redemption — and it is **correctable right up to that moment**, the same
+  boundary `PATCH /api/invites/:id` already draws for the address. After that
+  the record is their `companies` row and the roster is the door; two doors
+  onto one record is how the two come to disagree.
+
+  **And changing it does NOT reissue the link, which inverts the rule beside
+  it.** Replacing an address reissues, because the reason to change an address
+  is that the link went to the wrong person and leaving their copy live hands a
+  stranger a way onto this roster. Here nothing went anywhere wrong — the form
+  they open simply asks them different questions — so killing a working link
+  would cost somebody their invitation to fix a classification.
+
+  **On BOTH buttons.** A link handed over in person writes the same engagement
+  when it is opened, so leaving the word off that one would make the
+  relationship depend on which button was pressed.
+
+  **NEVER OVER AN EXISTING ENGAGEMENT, and never from the applicant.** A
+  company already on this roster has a relationship somebody set, and an invite
+  raised afterwards — to give them the login they never got — must not silently
+  reclassify it. And the word comes off the invite row the *account* created,
+  never out of the body: whoever opens the link types that, and a contractor
+  naming themselves a handyman would be excusing their own insurance and bond.
+
+  **AND THE FORM THEY LAND ON FOLLOWS, or the screen is looser than the route
+  on the one page whose reader cannot find that out.** `GET /api/invite/:token`
+  carries the word, so the signup form stops asking a maintenance worker for a
+  WA L&I number over a line promising to check it against the state registry —
+  `needsLicense` has said he has none since 058 — and narrows the trade grid to
+  the thirteen `mayCover` will actually allow. It offered all twenty-nine, so
+  picking Roofing at signup produced a slot this account could never fill. Both
+  changes **say so** rather than silently asking for less, because a form that
+  quietly drops a field reads as one that is still loading.
+
+  **THE NEW MECHANISM, AND IT COST THE FIRST RUN OF THE SUITE: a column that
+  is not NAMED is silently absent, and here it failed in the quiet
+  direction.** `createApplication` re-asks `mayEngageHandyman` before applying
+  the word, because an account can change kind between being invited and being
+  joined. `lookupInvite` selected six columns of `accounts` and **`kind` was
+  not one of them** — so that check answered false for every account on earth,
+  and a handyman invite redeemed correctly, as a subcontractor, with nothing
+  anywhere saying a word. Same shape as `answersForItself` reaching `SubForm`
+  as `undefined` and `engaged_as` missing from `/api/subs`, with the twist that
+  the predicate it broke is a *defence-in-depth* one: it had no visible job, so
+  nothing but the end-to-end assertion could see it was dead. The discriminating
+  fixture is an account that has **become a general contractor since inviting**,
+  which is the only case either behaviour can be told apart on.
+
+  **The degradation is one statement, deliberately not a column on the
+  insert.** The invite INSERT already carries a fallback for a database without
+  027, and folding this into it would mean a database with 027 and not 059
+  dropping the **recipient** as well — losing the common case to record the
+  rare one. As a separate `UPDATE` the invite still goes, the address is still
+  recorded, and only the relationship is lost, which is **said** on the reply
+  (`engagedAsRecorded`) and on the screen rather than assumed. Skipped entirely
+  for a subcontractor, because NULL already means that — so the ordinary invite
+  never touches a column 059 added and cannot fail on it.
+
+  **NULL, never the word, when switching back.** Two spellings of the ordinary
+  state is `engagedAs()` reading one of them by luck.
+
+  **Two test traps, both already in this file and both paid for again.** The
+  browser suite read `s.btns[1].bg` and **threw on exactly the case it exists
+  to catch** — the picker being absent — which killed the run and took eleven
+  assertions with it: one real failure reported as a crash, the
+  read-through-`link?.` lesson for the fifth time. And the harness typed the
+  email address into the **company** box, because that field carries an inline
+  note reading *"SubSub is matched on the email, mobile or licence below"* and
+  a substring match for `Email` found it first; Send was then disabled, and the
+  suite reported the product as not posting the relationship. A label is
+  matched on its own text nodes now, not its `innerText` — splitting on the
+  newline was not enough either, since the note is a `<span>` and sits on the
+  same rendered line. Third assertion worth keeping: *the confirmation says
+  what they will join as* originally read the whole panel for the word
+  "handyman", which the picker's own explanatory copy contains — so it passed
+  whether or not the confirmation mentioned it.
+
+  Sixteen mutations fire, each on its own assertion. `test:inviteasui` drives
+  **both account kinds in the same place**, with the positive assertion ahead of
+  the negative one, because "there is no picker" passes loudest on a screen that
+  never opened — and the roster noun follows the account kind, so a harness
+  matching only `^Contractors` misses a general contractor's nav entirely,
+  which is a trap this file has already recorded against this exact navigation.
+
+  **Not verified here:** `test:invitedlist` and `test:subinvite` need the full
+  local stack (worker 8787, Supabase stub 8902) and this container runs none of
+  it, so both fail on `ECONNREFUSED` before reaching an assertion — as they did
+  before this change.
+
+  **Still open, and a product decision rather than a build: there is no handyman
+  account KIND, and that is deliberate.** `get-started.html` offers five kinds
+  and none of them is handyman, because the word is what somebody is *to an
+  account that engaged them* and the same company is one firm's handyman and
+  another's contractor — the whole reason 058 put it on `engagements`. A
+  maintenance business signing up for itself is the `subcontractor` kind, which
+  is the hireable one. Nothing in the product asks them to classify themselves,
+  and nothing should.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

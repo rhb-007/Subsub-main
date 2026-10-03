@@ -346,4 +346,24 @@ SELECT
   (SELECT COUNT(*) FROM engagements e
      JOIN accounts a ON a.id = e.account_id
     WHERE e.engaged_as = 'handyman'
-      AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager'))              AS m058_inv_handyman_wrong_kind;
+      AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager'))              AS m058_inv_handyman_wrong_kind,
+
+  -- 059. What they will be to you, carried on the invite until they arrive.
+  (SELECT COUNT(*) FROM pragma_table_info('sub_invites')
+    WHERE name = 'engaged_as')                                                                  AS m059_invite_engaged_as,
+  -- Invariant, must read ZERO: the same two faults 058 counts, one table
+  -- earlier. They are counted again rather than trusted to the engagement
+  -- check, because an invite is where the word is DECIDED and an engagement
+  -- is only where it ends up -- a bad value sitting on an unredeemed invite
+  -- shows up here today and on `engagements` the day somebody opens the link.
+  (SELECT COUNT(*) FROM sub_invites
+    WHERE engaged_as IS NOT NULL
+      AND engaged_as NOT IN ('subcontractor','handyman'))                                       AS m059_inv_unknown_engaged_as,
+  -- Invariant, must read ZERO: a handyman invite from an account with no
+  -- buildings to maintain. Counted on every invite, spent or not: a spent one
+  -- has already written the word onto an engagement, and an outstanding one
+  -- is about to.
+  (SELECT COUNT(*) FROM sub_invites i
+     JOIN accounts a ON a.id = i.account_id
+    WHERE i.engaged_as = 'handyman'
+      AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager'))              AS m059_inv_handyman_wrong_kind;

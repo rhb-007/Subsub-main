@@ -6680,6 +6680,7 @@ export default function SubSub() {
 
       {inviteOpen && <Modal onClose={() => setInviteOpen(false)}>
         <InviteLinks onSent={refreshInvites} subs={subs} invites={openInvites} words={rosterWords(account)}
+          canEngageHandyman={mayEngageHandyman(kindOf(account))}
           onOpenExisting={(m) => { setInviteOpen(false); openExistingContractor(m); }}
           onConnect={async (m) => {
             const made = await api.requestConnect({ companyId: m.companyId });
@@ -6691,6 +6692,7 @@ export default function SubSub() {
           onClose={() => setInviteOpen(false)} /></Modal>}
       {invitedOpen && <Modal onClose={() => setInvitedOpen(null)}>
         <InvitedPanel invite={invitedOpen} canRevoke={role === "admin"}
+          canEngageHandyman={mayEngageHandyman(kindOf(account))}
           onChanged={(after) => {
             setInvitedOpen(after);
             setInvites((cur) => (cur || []).map((i) => i.id === after.id ? { ...i, ...after } : i));
@@ -13551,6 +13553,25 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
   // read the email, and it is where an invite gets abandoned.
   const [correcting, setCorrecting] = useState(false);
   const shortPath = !!invite?.knownEnough && !correcting;
+
+  // 059. WHAT THE ACCOUNT SAID THEY WOULD BE, which changes what this form
+  // may ask. A handyman holds no contractor licence -- `needsLicense` has
+  // said so since 058 -- so a WA L&I box and a line promising we will check
+  // it against the state registry is an unanswerable question on the first
+  // screen of a signup, which is where a signup gets abandoned. And the trade
+  // grid offered all twenty-nine while `mayCover` refuses sixteen of them at
+  // the work order, so picking Roofing here produced a slot this account could
+  // never fill: the screen looser than the route, on the one form where
+  // whoever is filling it in has no way to find that out.
+  //
+  // Defaults to subcontractor for a cold application and for every invite
+  // raised before this shipped, which is what the form has always assumed.
+  const applyAs = engagedAs(invite?.engagedAs);
+  const applyHandyman = isHandyman(applyAs);
+  const applyTrades = useMemo(() => {
+    const allowed = new Set(tradesAllowed(applyAs));
+    return CATEGORIES.filter((c) => allowed.has(c.id));
+  }, [applyAs]);
   // On both paths now, invited or not. Applying already creates this person
   // a contractor membership on the account -- the password grants nothing
   // the application did not already grant, and offering it here is what
@@ -13733,15 +13754,25 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
                   onChange={(e) => set("phone", formatPhone(e.target.value))}
                   placeholder="(206)555-0100" /></label>
             </div>
-            <div className="wl-row">
-              <label className="wl-fld">WA L&amp;I license #
-                <input value={f.license} onChange={(e) => set("license", e.target.value.toUpperCase())}
-                  placeholder="ABCDEF123GH" /></label>
-              <label className="wl-fld">UBI
-                <input inputMode="numeric" value={f.ubi} onChange={(e) => set("ubi", e.target.value)} /></label>
-            </div>
-            <p className="wl-fine">We check your license against the state registry — it speeds
-              up approval.</p>
+            {!applyHandyman && (
+              <>
+                <div className="wl-row">
+                  <label className="wl-fld">WA L&amp;I license #
+                    <input value={f.license} onChange={(e) => set("license", e.target.value.toUpperCase())}
+                      placeholder="ABCDEF123GH" /></label>
+                  <label className="wl-fld">UBI
+                    <input inputMode="numeric" value={f.ubi} onChange={(e) => set("ubi", e.target.value)} /></label>
+                </div>
+                <p className="wl-fine">We check your license against the state registry — it speeds
+                  up approval.</p>
+              </>
+            )}
+            {/* SAID, not merely done. A form that silently asks for less than
+                somebody expected reads as a form that is still loading. */}
+            {applyHandyman && (
+              <p className="wl-fine">No contractor licence needed — {brand.name} has
+                asked you in for maintenance work.</p>
+            )}
           </>
         )}
 
@@ -13749,12 +13780,20 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
           <>
             <div className="wl-label">What trades do you cover?<Req /></div>
             <div className="wl-picks">
-              {CATEGORIES.map((c) => (
+              {applyTrades.map((c) => (
                 <button key={c.id} type="button"
                   className={`wl-pick ${f.categories.includes(c.id) ? "on" : ""}`}
                   onClick={() => toggleCat(c.id)}>{c.label}</button>
               ))}
             </div>
+            {/* Sixteen trades missing with no explanation reads as a screen
+                that has lost them, and somebody looking for Roofing needs to
+                know it is the relationship rather than a bug -- the same
+                sentence the roster form earned one screen along. */}
+            {applyHandyman && (
+              <p className="wl-fine">The lighter work {brand.name} asked you in for. If you
+                run a licensed trade as well, tell them and they can change it.</p>
+            )}
             <div className="wl-row" style={{ marginTop: 18 }}>
               <label className="wl-fld">City
                 <input value={f.city} onChange={(e) => set("city", e.target.value)} /></label>
@@ -14225,7 +14264,8 @@ function RequestedPanel({ request, onWithdrawn, onAskedAgain, onClose }) {
 // An invite, opened from the Contractors list. Deliberately small: until
 // somebody accepts, all that exists is a name, an address, a link and a
 // date, and a full-width panel of empty sections would imply otherwise.
-function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
+function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose,
+  canEngageHandyman = false }) {
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState("");
   const [err, setErr] = useState("");
@@ -14248,6 +14288,10 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
     setEdit({
       companyName: invite.companyName || "", contact: invite.contact || "",
       email: invite.email || "", phone: invite.phone || "",
+      // 059. A held intention until the link is opened, so this is the window
+      // in which it is still only a decision -- and the relationship is the
+      // commonest thing to get wrong about somebody met once on a job site.
+      engagedAs: engagedAs(invite.engagedAs),
     });
   };
 
@@ -14261,9 +14305,16 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
       // link has stopped working -- which is the point, since the reason to
       // change an address is that the last one went to the wrong person --
       // and nothing has gone to the new one, so this is not finished.
-      setNote(after.reissued
+      setNote((after.reissued
         ? "Saved. The old link has stopped working, and nothing has gone to the new address yet — press Send again."
-        : "Saved.");
+        : "Saved.")
+        // A database behind the code cannot store the relationship, and a
+        // "Saved" over a field that did not change is the save-that-reports-
+        // success shape on the one field that excuses an insurance
+        // certificate.
+        + (after.engagedAsRecorded === false
+          ? " SubSub couldn’t record the working relationship — set it on their card once they accept."
+          : ""));
     } catch (e) {
       console.error("[invites] update failed:", e);
       const code = e?.body?.error;
@@ -14273,6 +14324,7 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
         : code === "already_accepted" ? "They’ve already accepted — their details are on their contractor card now."
         : code === "revoked" ? "That invite was revoked."
         : code === "on_their_card" ? "Their details live on their contractor card. Open them on the Contractors screen to change them."
+        : code === "not_a_handyman_account" ? "This kind of account can only engage subcontractors."
         : "Could not save that. Try once more.");
     } finally { setBusy(""); }
   };
@@ -14352,6 +14404,22 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
             <input type="tel" value={edit.phone} maxLength={40}
               onChange={(e) => setEdit({ ...edit, phone: e.target.value })} />
           </label>
+          {/* Changing it does NOT reissue the link, unlike an address, and
+              that difference is the reason the warning below is scoped to the
+              two address fields: nothing was sent to the wrong person, the
+              form they open simply asks them different questions. */}
+          {canEngageHandyman && (
+            <div className="fld">What they will be to you
+              <div className="insp-kind seg" role="group" aria-label="Working relationship">
+                {Object.values(ENGAGED_AS).map((k) => (
+                  <button key={k.id} type="button" aria-pressed={edit.engagedAs === k.id}
+                    className={edit.engagedAs === k.id ? "on" : ""}
+                    onClick={() => setEdit({ ...edit, engagedAs: k.id })}>{k.label}</button>
+                ))}
+              </div>
+              <p className="fld-note">{ENGAGED_AS[edit.engagedAs]?.note}</p>
+            </div>
+          )}
           {/* Warned BEFORE the press, not reported after it. Somebody
               correcting a typo has no reason to expect the link to change,
               and finding out afterwards is finding out too late to decide. */}
@@ -14376,6 +14444,10 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose }) {
       <>
       <dl className="invited-facts">
         {invite.companyName && invite.contact && <><dt>Company</dt><dd>{invite.companyName}</dd></>}
+        {/* Only when it is not the default. "Subcontractor" on every row is
+            noise on the common case to label the rare one -- the same rule
+            the CRM rules list follows about an any-CRM rule. */}
+        {isHandyman(invite.engagedAs) && <><dt>Joining as</dt><dd>Handyman</dd></>}
         <dt>Invited</dt>
         <dd>{invite.email || invite.phone
           ? andList([invite.email, invite.phone].filter(Boolean))
@@ -14448,11 +14520,22 @@ const nameKey = (v) => String(v || "").toLowerCase()
   .trim();
 
 function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], invites = [],
+  canEngageHandyman = false,
   words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
   const [companyName, setCompanyName] = useState("");
   const [contact, setContact] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  // WHAT THEY WILL BE TO YOU. The add-a-contractor form has asked since 058
+  // and this one never did -- and this is the door used for somebody who has
+  // no SubSub account, which is exactly the person most likely to be a
+  // handyman. So the man who changes tap washers arrived as a subcontractor
+  // and his own portal then asked him for a certificate of insurance and a
+  // surety bond he will never hold.
+  //
+  // Default subcontractor, as everywhere: NULL means that, and the direction
+  // that fails open is the one that stops asking for a certificate.
+  const [relAs, setRelAs] = useState("subcontractor");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [sentNote, setSentNote] = useState("");
@@ -14531,9 +14614,14 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], in
     }
     setBusy(true); setErr(""); setSentNote(""); setMade(null); setCopied(false);
     try {
+      // On BOTH doors. A link handed over in person is the same invite -- it
+      // writes the same engagement when it is opened -- so leaving it off
+      // there would make the relationship depend on which button was pressed.
+      const relField = canEngageHandyman ? { engagedAs: relAs } : {};
       const made = await api.createInvite(link
-        ? { contact: contact.trim() || null, companyName: companyName.trim() || null }
+        ? { ...relField, contact: contact.trim() || null, companyName: companyName.trim() || null }
         : {
+          ...relField,
           contact: contact.trim() || null,
           // The API has taken this since the beginning and the invite email
           // reads "has invited <company> to join theirs" -- the form simply
@@ -14553,7 +14641,9 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], in
       // yet, is a message somebody waits on that never left.
       const went = [made.emailed && to, made.texted && mobile].filter(Boolean);
       if (went.length) {
-        setSentNote(`Invite sent to ${andList(went)}. They’re in your ${words.Many} list as Invited until they finish signing up.`);
+        setSentNote(`Invite sent to ${andList(went)}.`
+          + (isHandyman(relAs) ? " They'll join as a handyman." : "")
+          + ` They’re in your ${words.Many} list as Invited until they finish signing up.`);
         setContact(""); setEmail(""); setPhone("");
       }
       const failed = [];
@@ -14562,6 +14652,13 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], in
         failed.push(made.textError === "sms_not_configured"
           ? "texting isn't switched on yet, so no text was sent"
           : "the text didn't go");
+      }
+      // A database behind the code cannot store the relationship, and the
+      // only other symptom arrives weeks later as a maintenance worker being
+      // asked for a surety bond. So it is said here, where somebody can fix
+      // it on the card the moment they accept.
+      if (made.engagedAsRecorded === false) {
+        failed.push("SubSub couldn't record them as a handyman — set it on their card once they accept");
       }
       if (failed.length) {
         setErr(`${went.length ? "But " : "The invite was created, but "}${andList(failed)}.`
@@ -14572,6 +14669,8 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], in
       console.error("[invites] create failed:", e);
       setErr(e?.body?.error === "bad_email" ? "That email address doesn't look right."
         : e?.body?.error === "bad_phone" ? "That mobile number doesn't look right."
+        : e?.body?.error === "not_a_handyman_account"
+          ? "This kind of account can only engage subcontractors."
         : "Could not create the invite. Try again.");
     } finally { setBusy(false); }
   };
@@ -14668,6 +14767,36 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], in
               Not them — carry on
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ASKED FIRST, because it decides what the invite is for and what the
+          form they land on will ask them. Offered only on an account with
+          buildings, the same gate the roster form reads and the same one the
+          route enforces -- a picker anywhere else would be a control whose
+          save is refused.
+
+          A segmented pair rather than two chips: exactly one answer is true
+          and exactly one can be. */}
+      {canEngageHandyman && (
+        <div className="fld">What they will be to you
+          <div className="insp-kind seg" role="group" aria-label="Working relationship">
+            {Object.values(ENGAGED_AS).map((k) => (
+              <button key={k.id} type="button" aria-pressed={relAs === k.id}
+                className={relAs === k.id ? "on" : ""}
+                onClick={() => { setRelAs(k.id); setErr(""); }}>{k.label}</button>
+            ))}
+          </div>
+          <p className="fld-note">{ENGAGED_AS[relAs]?.note}</p>
+          {/* What it changes about the thing they are about to open, because
+              the invite is being sent now and the form is the next thing they
+              see. Not a warning -- a description. */}
+          {isHandyman(relAs) && (
+            <p className="fld-note">
+              Their signup form won't ask for a contractor licence, and it will
+              offer the lighter trades only. You can change this until they accept.
+            </p>
+          )}
         </div>
       )}
 

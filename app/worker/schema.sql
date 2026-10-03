@@ -625,7 +625,12 @@ CREATE TABLE sub_invites (
   -- list should be able to say "accepted", not just go quiet.
   used_at     TEXT,
   company_id  TEXT REFERENCES companies(id),
-  revoked_at  TEXT
+  revoked_at  TEXT,
+  -- 059. What they will be to this account once they arrive -- subcontractor
+  -- or handyman. A held intention rather than a fact about anybody, applied
+  -- to the engagement at redemption, correctable until then. NULL means
+  -- subcontractor, exactly as it does on `engagements`.
+  engaged_as  TEXT
 );
 CREATE INDEX idx_sub_invites_account ON sub_invites(account_id, created_at DESC);
 
