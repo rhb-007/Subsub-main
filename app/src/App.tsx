@@ -72,6 +72,7 @@ import { ENGAGED_AS, engagedAs, isHandyman, mayEngageHandyman, mayCover,
   tradesAllowed, requiredDocsFor, needsLicense, ENGAGED_REFUSALS } from "../shared/engaged.js";
 import { handymanCapCheck, handymanCapText,
   HANDYMAN_GLOBAL_RULES } from "../shared/handycap.js";
+import { workWhen, scheduledOn, WHEN_KINDS } from "../shared/schedule.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -3182,11 +3183,25 @@ export default function SubSub() {
   const saveNotes = (id, notes) =>
     patchSub(id, { notes });
 
+  // THE APPOINTMENT, PER JOB, FROM ONE SOURCE.
+  //
+  // The visit is the thing a contractor actually needs -- when to turn up --
+  // and it was reaching them from nowhere. `visits` state holds it for the
+  // account we are standing in; `myWork` now carries it for every account,
+  // this one included. Reading both would be two records of one fact, and the
+  // one that is wrong would be whichever account somebody happened to be in,
+  // so it is read off `myWork` alone.
+  const myVisits = useMemo(() => {
+    const m = {};
+    for (const w of myWork) if (w.visit && !m[w.jobId]) m[w.jobId] = w.visit;
+    return m;
+  }, [myWork]);
+
   // job slots assigned to me, for the contractor dashboard + tab badge
   const myAssignments = mySub ? jobs.flatMap((j) =>
     Object.entries(j.assignments || {})
       .filter(([, a]) => a.subId === mySub.id)
-      .map(([trade, a]) => ({ job: j, trade, a }))) : [];
+      .map(([trade, a]) => ({ job: { ...j, visit: myVisits[j.id] || null }, trade, a }))) : [];
 
   // The same thing at every OTHER client. /api/jobs is one account at a time,
   // so on its own the list above answers "does anybody need me" for exactly one
@@ -3203,6 +3218,10 @@ export default function SubSub() {
     job: {
       id: w.jobId, title: w.title, address: w.address, area: w.area, zip: w.zip,
       date: w.date, time: w.time, severity: w.severity, status: w.jobStatus,
+      // The live appointment, so a row at another client answers "when" with
+      // the same rule as one here. Without it the cross-account half of this
+      // list would be the only place still reading "No date".
+      visit: w.visit || null,
       scope: w.tradeScope || null, propertyName: w.propertyName,
       // Absent on this shape rather than undefined: every card reads them and
       // the jobs list has white-screened on a missing one before.
@@ -6039,8 +6058,19 @@ export default function SubSub() {
                                   </div>
                                 ) : (
                                   <div className="trade-actions">
+                                    {/* WHO. A bare "Accepted" on a job with
+                                        three trades on it says somebody
+                                        agreed and makes you read back up the
+                                        row to find out which company -- and
+                                        the whole point of this line is that a
+                                        named business has committed to the
+                                        work. The name is already on the row
+                                        above; saying it here is what makes
+                                        the chip a record rather than a tick. */}
                                     <span className={`job-final ${a.status}`}>
-                                      {a.status === "accepted" ? <><CheckCircle2 size={14} /> Accepted</> : <><XCircle size={14} /> Declined</>}
+                                      {a.status === "accepted"
+                                        ? <><CheckCircle2 size={14} /> Accepted{subName(subs, a.subId) ? ` by ${subName(subs, a.subId)}` : ""}</>
+                                        : <><XCircle size={14} /> Declined{subName(subs, a.subId) ? ` by ${subName(subs, a.subId)}` : ""}</>}
                                     </span>
                                     {!done && <button className="trade-swap" onClick={() => unassignTrade(j.id, t)}>Replace</button>}
                                   </div>
@@ -22012,6 +22042,140 @@ function SendDocPack({ company, anyOnFile }) {
   );
 }
 
+// Who a slot was given to, by name. One helper rather than
+// `subs.find(...)?.company` written at each call site, because the roster list
+// a screen happens to hold is not always `subs` -- the removed-contractor card
+// reads `allSubs`, and a row answering "Accepted" with a blank because the
+// company has since been taken off the roster is the silence this whole change
+// is about.
+const subName = (list, subId) =>
+  (list || []).find((x) => x.id === subId)?.company || "";
+
+// A SUBCONTRACTOR'S OWN SCHEDULE, which they did not have.
+//
+// Asked for in the same breath as the missing date: *"pacific apartment
+// maintenance needs to have a calendar of scheduled jobs on the dashboard"*.
+// The portal had "Current & upcoming" -- a list of cards ordered by date,
+// which answers *what have I got* and does not answer *am I on a roof on
+// Thursday*. The hiring side has had `ScheduleHero` for that since it was
+// written; the side that actually drives to the jobs had nothing.
+//
+// Not a reuse of `ScheduleHero`, and that is deliberate rather than lazy:
+// that one reads `j.trades` and `j.assignments` to draw a fill badge, which
+// is the hiring account's question (is this job covered). A contractor holds
+// one trade on one job and their question is the opposite one -- is the time
+// agreed. Feeding their rows through it would mean faking an assignments map
+// to get a badge that means nothing to them.
+//
+// It spans every client, like everything else on this screen: "where am I due
+// on Tuesday" is not a question about one general contractor.
+function MySchedule({ rows, onOpen }) {
+  const todayK = dayKey();
+  // Every row that has a day against it, confirmed or merely proposed.
+  // Proposed counts -- see shared/schedule.js: a contractor needs to know
+  // somebody has ASKED for Saturday as much as that Saturday is agreed, and
+  // each row says which.
+  const dated = rows
+    .map((m) => ({ m, when: workWhen(m.job) }))
+    .filter((x) => !!x.when.date)
+    .sort((a, b) => a.when.date.localeCompare(b.when.date)
+      || String(a.when.startTime || "").localeCompare(String(b.when.startTime || "")));
+  const late = dated.filter((x) => x.when.date < todayK);
+  const ahead = dated.filter((x) => x.when.date >= todayK);
+  const next = ahead[0] || null;
+  const REST = 4;
+  const rest = ahead.slice(1);
+  // THE ONES WITH NO DAY AT ALL, counted rather than hidden. A job nobody has
+  // put a time on is the single most useful thing this panel can report to
+  // somebody trying to fill a week, and it is the one thing a calendar can
+  // never show.
+  const undated = rows.length - dated.length;
+  const strip = Array.from({ length: 14 }, (_, i) => {
+    const d = addDays(dayFromKey(todayK), i);
+    const k = dayKey(d);
+    const on = dated.filter((x) => x.when.date === k);
+    return { k, d, n: on.length,
+      // A day holding nothing but unconfirmed times is drawn differently from
+      // one that is settled, or the strip says Thursday is spoken for when
+      // nobody has agreed to anything.
+      soft: on.length > 0 && on.every((x) => x.when.kind !== "confirmed") };
+  });
+  const row = (x, cls) => (
+    <button key={`${x.m.job.id}-${x.m.trade}`} className={cls}
+      onClick={() => onOpen?.(x.m)}>
+      <span className="mys-when">{relDay(x.when.date, todayK)}</span>
+      <span className="mys-title">{x.m.job.title}</span>
+      <span className={`mys-tag mysw-${WHEN_KINDS[x.when.kind]?.tone || "wait"}`}>
+        {x.when.kind === "confirmed" ? "Confirmed" : x.when.kind === "proposed" ? "Not confirmed" : "Target"}
+      </span>
+    </button>
+  );
+  return (
+    <section className="sched-hero my-sched">
+      <div className="sh-head">
+        <h3><Calendar size={16} /> Your schedule</h3>
+      </div>
+      {late.length > 0 && (
+        <div className="sh-late">
+          <span className="shl-lede">
+            <AlertTriangle size={14} />
+            {late.length === 1 ? "1 job is past its date" : `${late.length} jobs are past their date`}
+          </span>
+          <div className="shl-rows">{late.slice(0, 3).map((x) => row(x, "shl-row mys-row"))}</div>
+        </div>
+      )}
+      {next ? (
+        <button className="sh-next" onClick={() => onOpen?.(next.m)}>
+          <span className="shn-when">
+            <span className="shn-dow">{dayFromKey(next.when.date).toLocaleDateString(undefined, { weekday: "short" })}</span>
+            <span className="shn-day">{dayFromKey(next.when.date).getDate()}</span>
+            <span className="shn-mon">{dayFromKey(next.when.date).toLocaleDateString(undefined, { month: "short" })}</span>
+          </span>
+          <span className="shn-main">
+            <span className="shn-lede">{visitWhen(next.when)}</span>
+            <span className="shn-title">{next.m.job.title}</span>
+            <span className="shn-meta">
+              {[next.m.job.address, next.m.job.area].filter(Boolean).join(", ") || "No address"}
+              {" \u00b7 "}{catMeta(next.m.trade).label}
+            </span>
+          </span>
+          <span className={`shn-fill ${next.when.kind === "confirmed" ? "full" : ""}`}>
+            {next.when.kind === "confirmed" ? "Confirmed" : next.when.kind === "proposed" ? "Not confirmed" : "Target"}
+          </span>
+        </button>
+      ) : (
+        <div className="sh-none">
+          <ClipboardList size={22} />
+          <p>{late.length ? "Nothing else booked in." : "Nothing booked in yet."}</p>
+        </div>
+      )}
+      {next && (rest.length > 0
+        ? <div className="sh-rest">
+            {rest.slice(0, REST).map((x) => row(x, "shr-row mys-row"))}
+            {rest.length > REST && <p className="mys-more">and {rest.length - REST} more below.</p>}
+          </div>
+        : <p className="sh-only">Nothing else booked in.</p>)}
+      <div className="sh-strip" role="list">
+        {strip.map(({ k, d, n, soft }) => (
+          <div key={k} role="listitem"
+            className={`shs-day ${n ? "has" : ""} ${soft ? "soft" : ""} ${k === todayK ? "today" : ""}`}
+            title={n ? `${n} job${n === 1 ? "" : "s"} on ${niceDay(k)}` : `Nothing on ${niceDay(k)}`}>
+            <span className="shs-dow">{d.toLocaleDateString(undefined, { weekday: "narrow" })}</span>
+            <span className="shs-dom">{d.getDate()}</span>
+            <span className="shs-n">{n || ""}</span>
+          </div>
+        ))}
+      </div>
+      {undated > 0 && (
+        <p className="sh-undated">
+          {undated === 1 ? "1 job has no date on it yet" : `${undated} jobs have no date on them yet`}
+          {" \u2014 ask the office when they want you."}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [], onGoClient, hostKind = null,
   quotes = [], onAnswerQuote, brand, me, orders, now,
   connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage,
@@ -22180,6 +22344,17 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           {sub.autoSchedule && (
             <div className="auto-strip"><Zap size={14} /> Auto-schedule is on — jobs matching your availability are booked directly.</div>
           )}
+
+          {/* WHEN, before WHAT. Everything below this is a queue -- something
+              wants an answer -- and this is the question somebody actually
+              opens the app with: am I on a roof on Thursday.
+
+              Drawn off `upcoming` rather than every row, because a job this
+              company has not said yes to is not on their schedule. It is in
+              the Job requests box above, which is where it gets answered. */}
+          <MySchedule rows={upcoming} onOpen={(m) => (m.elsewhere
+            ? onGoClient?.(m.elsewhere.accountId)
+            : onViewWO({ job: m.job, trade: m.trade, a: m.a }))} />
 
           {/* Asked to price something, which is not the same as being offered
               it. Above job requests because it is the earlier conversation --
@@ -23187,6 +23362,14 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
   // says where the work is and takes them there, in one tap, instead of
   // pretending it can be answered from a company it does not belong to.
   const away = !!elsewhere;
+  // WHEN. The one thing this card could not say.
+  //
+  // It read `formatWhen(job.date, job.time) || "No date"`, which is the job's
+  // own target date -- so a job somebody had proposed Saturday 11am for drew
+  // "No date" on the screen where this company is asked to accept it. The
+  // appointment lives in `visits` and nothing here had ever heard of it.
+  const when = workWhen(job);
+  const W = WHEN_KINDS[when.kind] || WHEN_KINDS.none;
   return (
     <div className={`job-card jr-card ${past ? "past" : ""} ${away ? "jr-away" : ""}`}>
       {away && (
@@ -23204,7 +23387,15 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
         <div>
           <h3>{job.title}</h3>
           <div className="job-meta">
-            <span><Calendar size={12} /> {formatWhen(job.date, job.time) || job.date || "No date"}</span>
+            <span className={`jr-when jrw-${W.tone}`}><Calendar size={12} />
+              {when.date
+                /* `visitWhen` rather than a second formatter: `workWhen`
+                    returns the same {date,startTime,endTime} shape the tenant's
+                    own screen has formatted since 019, and two of these is how
+                    the two parties to one appointment come to read it
+                    differently. */
+                ? <>{visitWhen(when)}</>
+                : "No date yet"}</span>
             <span><MapPin size={12} /> {[job.address, job.area, job.zip].filter(Boolean).join(", ") || "No address"}</span>
             {job.sqft && <span><Ruler size={12} /> {Number(job.sqft).toLocaleString()} sq ft</span>}
             {a.value && <span className="job-val">
@@ -23216,6 +23407,15 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
         </div>
         <span className={`cat-badge cat-${trade}`}><M.icon size={12} /> {M.label}</span>
       </div>
+      {/* WHAT KIND OF TIME IT IS, said rather than left to the colour. A
+          confirmed window and one nobody has agreed to are the same pixels
+          otherwise, and the difference is whether you get in the van -- the
+          expired-versus-never-added distinction, pointed at a calendar. */}
+      <p className={`jr-whennote jrw-${W.tone}`}>
+        {W.tone === "ok" ? <CheckCircle2 size={12} /> : <Clock size={12} />}
+        <span><b>{W.lead}.</b> {W.note}</span>
+      </p>
+      {when.note && <p className="jr-whenmsg">“{when.note}”</p>}
       {(a.tradeScope || job.scope) && <p className="job-scope">{a.tradeScope || job.scope}</p>}
       {a.crewName && <p className="portal-crew"><Users size={12} /> Your crew: {a.crewName}</p>}
       {job.materialSource && <p className="portal-crew"><Layers size={12} /> Materials: {job.materialSource} ({job.materialsPaidBy})</p>}
@@ -30701,6 +30901,43 @@ strong.insp-name{background:none;border:0;padding:0}
 .sh-undated{margin:11px 0 0;font-size:12px;color:var(--ink-soft)}
 .sh-link{background:none;border:0;padding:0;cursor:pointer;font:700 12px Inter,sans-serif;color:var(--brand)}
 .sh-link:hover{text-decoration:underline}
+
+/* ---- a contractor's own schedule, and when a job actually is -----------
+   No backticks anywhere in here: this stylesheet is one template literal and
+   a backtick in a comment closes it. Tenth time.
+
+   THE WHOLE POINT OF THESE THREE TONES is that a confirmed window and one
+   nobody has agreed to must not read the same, because the difference is
+   whether somebody gets in the van. The markup carries the kind; without a
+   rule for it the class is a word nothing downstream reads, which is the
+   chip bug this project already paid for once. */
+.my-sched{margin:14px 0 4px}
+.my-sched .sh-head h3{margin:0}
+.mys-row{align-items:center}
+.mys-when{flex:none;font-size:11.5px;font-weight:700;color:var(--ink-soft);min-width:78px}
+.mys-title{flex:1;min-width:0;font-size:13.5px;font-weight:600;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mys-tag{flex:none;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px}
+.mysw-ok{background:#e6f0e9;color:var(--brand-dk)}
+.mysw-wait{background:#fbf0dd;color:var(--amber-ink)}
+.mysw-plain{background:var(--paper);color:var(--ink-soft)}
+.mys-more{margin:6px 0 0;padding:0 6px;font-size:12px;color:var(--ink-soft)}
+/* A day holding nothing but unconfirmed times is not a day that is spoken
+   for, so it is tinted rather than filled. */
+.shs-day.soft{background:#fdf7ec;border-color:#ecd9b0}
+
+/* The when line on a contractor's job card. It read "No date" over work
+   somebody had already proposed a Saturday morning for. */
+.jr-when{font-weight:700}
+.jr-when.jrw-ok{color:var(--brand-dk)}
+.jr-when.jrw-wait{color:var(--amber-ink)}
+.jr-whennote{display:flex;align-items:flex-start;gap:7px;margin:8px 0 0;
+  padding:7px 10px;border-radius:10px;font-size:12.5px;line-height:1.45}
+.jr-whennote > svg{flex:none;margin-top:2px}
+.jr-whennote.jrw-ok{background:#e6f0e9;color:var(--brand-dk)}
+.jr-whennote.jrw-wait{background:#fbf0dd;color:var(--amber-ink)}
+.jr-whennote.jrw-plain{background:var(--paper);color:var(--ink-soft)}
+.jr-whenmsg{margin:6px 0 0;font-size:12.5px;font-style:italic;color:var(--ink-soft)}
 
 /* ---- the month grid on the jobs tab ---------------------------------- */
 .jv-seg button{display:inline-flex;align-items:center;gap:6px}

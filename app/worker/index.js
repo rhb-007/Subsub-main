@@ -7313,16 +7313,33 @@ app.get("/api/visits", async (c) => {
   const auth = c.get("auth");
   const scope = scopeClause(auth, "j.property_id");
   const mine = auth.role === "tenant" ? " AND j.requested_by = ? " : "";
+  // A CONTRACTOR SEAT IS NARROWED BY ITS WORK ORDERS, the same way
+  // /api/jobs is, and was not. `scopeClause` answers nothing for a contractor
+  // -- it narrows by buildings and a contractor has none -- so this list was
+  // every appointment on the account: when a manager is due at every other
+  // building, for every job this company holds no work order on. The same
+  // leak /api/jobs already closed, one table along, and it got wider the
+  // moment anything started reading this list from the portal.
+  //
+  // By the WORK ORDER, never the job: holding one is the thing that says this
+  // job was given to them.
+  const asContractor = auth.role === "contractor" && auth.companyId;
+  const woScope = asContractor
+    ? ` AND EXISTS (SELECT 1 FROM work_orders w
+                      WHERE w.job_id = j.id AND w.company_id = ? AND w.voided_at IS NULL) `
+    : "";
   try {
     const { results } = await c.env.DB.prepare(
       `SELECT v.* FROM visits v JOIN jobs j ON j.id = v.job_id
-        WHERE v.account_id = ? ${scope.sql} ${mine} AND v.status != 'superseded'
+        WHERE v.account_id = ? ${scope.sql} ${mine} ${woScope} AND v.status != 'superseded'
         -- created_at is second-granular, so two visits written in the same
         -- second tie and the order becomes whatever the table felt like.
         -- The client takes the first row per job, so this decides which
         -- visit a tenant is shown: newest wins, and rowid breaks the tie.
         ORDER BY v.created_at DESC, v.rowid DESC`
-    ).bind(auth.accountId, ...scope.vals, ...(auth.role === "tenant" ? [auth.userId] : [])).all();
+    ).bind(auth.accountId, ...scope.vals,
+      ...(auth.role === "tenant" ? [auth.userId] : []),
+      ...(asContractor ? [auth.companyId] : [])).all();
     return c.json((results || []).map(visitRowToJs));
   } catch (err) {
     const migration = missingSchema(err);
@@ -9849,7 +9866,43 @@ app.get("/api/my-work", async (c) => {
               -- engaged directly by a building's manager is under no such
               -- thing. See shared/hires.js.
               a.kind AS account_kind,
-              p.name AS property_name
+              p.name AS property_name,
+              -- THE APPOINTMENT, which this route has never carried.
+              --
+              -- 019 built visits as a manager-to-tenant conversation: the
+              -- manager proposes a window, the tenant confirms it because
+              -- somebody has to be in. The one party who physically turns up
+              -- was told nothing -- their card read "No date" over a job
+              -- somebody had already proposed a Saturday morning for, and
+              -- they were being asked to accept it.
+              --
+              -- Correlated rather than joined: the visits table has no
+              -- unique index per job, and the list route beside it already
+              -- relies on created_at DESC, rowid DESC to pick which row is
+              -- current. A plain JOIN would multiply a work order by its
+              -- job's whole visit history.
+              --
+              -- (No backticks in here. This is a template literal, and a
+              -- backtick in a SQL comment closes it -- the tenth time this
+              -- repository has paid for that one.)
+              (SELECT v.id FROM visits v WHERE v.job_id = j.id
+                 AND v.status IN ('proposed','confirmed')
+                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_id,
+              (SELECT v.date FROM visits v WHERE v.job_id = j.id
+                 AND v.status IN ('proposed','confirmed')
+                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_date,
+              (SELECT v.start_time FROM visits v WHERE v.job_id = j.id
+                 AND v.status IN ('proposed','confirmed')
+                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_start,
+              (SELECT v.end_time FROM visits v WHERE v.job_id = j.id
+                 AND v.status IN ('proposed','confirmed')
+                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_end,
+              (SELECT v.status FROM visits v WHERE v.job_id = j.id
+                 AND v.status IN ('proposed','confirmed')
+                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_status,
+              (SELECT v.note FROM visits v WHERE v.job_id = j.id
+                 AND v.status IN ('proposed','confirmed')
+                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_note
          FROM work_orders w
          JOIN jobs j ON j.id = w.job_id
          JOIN accounts a ON a.id = j.account_id
@@ -9880,6 +9933,18 @@ app.get("/api/my-work", async (c) => {
       title: r.title, address: r.address || null, area: r.area || null, zip: r.zip || null,
       propertyName: r.property_name || null,
       date: r.date || null, time: r.time || null,
+      // The live appointment, or null. `shared/schedule.js` decides which of
+      // the two this row actually means -- a confirmed visit outranks the
+      // job's own date, because the visit is what the tenant agreed to.
+      // THE TENANT'S NOTE IS DELIBERATELY NOT HERE: why Tuesday does not work
+      // for somebody's flat is theirs, and the contractor needs the window
+      // rather than the reason. `note` is whoever PROPOSED it, which is the
+      // manager telling the contractor something about the visit.
+      visit: r.visit_id ? {
+        id: r.visit_id, date: r.visit_date || null,
+        startTime: r.visit_start || null, endTime: r.visit_end || null,
+        status: r.visit_status, note: r.visit_note || null,
+      } : null,
       severity: r.severity || null, jobStatus: r.job_status,
       completedAt: r.completed_at || null, tradeScope: r.trade_scope || null,
       crewName: r.crew_name || null,

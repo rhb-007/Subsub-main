@@ -6557,6 +6557,122 @@ refactor.
   is the hireable one. Nothing in the product asks them to classify themselves,
   and nothing should.
 
+- **THE TIME NEVER REACHED THE PERSON WHO HAS TO TURN UP.** Reported with two
+  screenshots of the same job a minute apart. Sound Property Management's Jobs
+  screen: *"Proposed Oct 4, 2026 - 11 AM-1:15 PM - waiting on John Smith to
+  confirm."* Pacific apartment maintenance's own portal, same job: **No date** —
+  on the card they are asked to accept or decline. *"We need to tighten up the
+  assigning and scheduling of jobs since this is the core of what the product
+  does."*
+
+  **TWO PLACES A TIME CAN LIVE, AND THE CONTRACTOR COULD SEE ONLY THE EMPTY
+  ONE.** `jobs.date` is the target date somebody typed when the job was raised.
+  A row in `visits` is the actual appointment. 019 built that as a
+  manager-to-tenant conversation — the manager proposes a window, the tenant
+  confirms it because somebody has to be in — and **`/api/my-work` never joined
+  it**. So the one party who physically drives to the address was the only
+  party not told when, and the product's central act, putting a named company
+  on a job at a time, was missing its third of the three facts.
+
+  `app/shared/schedule.js` is the one rule. `workWhen` answers which of the two
+  a row means and what it means; the screens format it with `visitWhen`, which
+  the tenant's side has used since 019, rather than a second formatter — two of
+  those is how the two parties to one appointment come to read it differently.
+
+  **A CONFIRMED VISIT OUTRANKS THE JOB'S OWN DATE, and getting that backwards
+  is the whole trap.** The job column is what somebody typed; the visit is what
+  the tenant agreed to, and it is the later fact. The tenant's screen has drawn
+  it that way since 019 — *"a date on the job is not a date with the tenant"* —
+  so reading the job column here would put two different dates in front of two
+  parties to one appointment. **Only a fixture where the two DISAGREE can tell
+  which is being read**, so the suite's row carries a job date nine days in the
+  past and a confirmed visit five days ahead.
+
+  **FOUR ANSWERS, NOT TWO, AND THE WORDS ARE THE POINT.** *Confirmed* is the
+  appointment. *Proposed* is a time somebody asked for that nobody has agreed
+  to — and the difference between those two is whether you get in the van, so
+  they are said in words and drawn in different pixels rather than one being
+  left to infer. *Target* is a job date with no appointment, which is still the
+  honest answer for work with nobody to let anybody in. *None* **says so**:
+  a contractor accepting work with no date needs to know that is what they are
+  accepting, and a blank reads as a screen that has not finished loading.
+
+  **A PROPOSED TIME STILL GOES ON THE CALENDAR**, which is a decision rather
+  than an oversight. A contractor needs to know somebody has **asked** for
+  Saturday as much as that Saturday is settled, and a strip that showed only
+  confirmed ones would be the same silence this change exists to end. Every row
+  says which it is and the day is tinted rather than filled, so nothing is
+  passed off as agreed.
+
+  **AND A DECLINED OR SUPERSEDED VISIT IS NOT AN APPOINTMENT.** Driving to a
+  time the tenant refused is worse than having no time at all. `LIVE_VISIT` is
+  `proposed` and `confirmed` and nothing else, and the route serves the
+  **newest** live one — a job collects superseded proposals behind it, and
+  serving the first row the table felt like handing back is a date nobody
+  agreed to drawn as the appointment.
+
+  **THE SUBCONTRACTOR HAS A SCHEDULE OF THEIR OWN NOW.** The portal had
+  *Current & upcoming* — cards ordered by date, which answers *what have I got*
+  and not *am I on a roof on Thursday*. `MySchedule` is the next appointment,
+  what is after it, a fortnight strip and the count of work with no time on it
+  at all. **Deliberately not a reuse of `ScheduleHero`**: that one draws a fill
+  badge off `j.trades` and `j.assignments`, which is the hiring account's
+  question (is this job covered). A contractor holds one trade on one job and
+  their question is the opposite one — is the time agreed — so feeding their
+  rows through it would mean faking an assignments map to get a badge that
+  means nothing to them. It spans every client, like everything else on that
+  screen.
+
+  **The box for what needs answering already existed** and the report was right
+  anyway: *Job requests* renders only when there is one, and the screenshot had
+  none, so there was nothing on screen to say where they would appear.
+
+  **AND `/api/visits` WAS HANDING A CONTRACTOR SEAT THE WHOLE ACCOUNT.**
+  `scopeClause` narrows by buildings and a contractor has none, so it
+  contributed nothing — the same hole `/api/jobs` already closed, one table
+  along, and it got wider the moment anything started reading that list from
+  the portal. Scoped by the **work order**, never the job, because holding one
+  is the thing that says this job was given to them. The discriminating fixture
+  is a visit on a job this company holds no work order on: without it a leak
+  and a clean list are the same list. **The admin branch is asserted in the
+  same place**, because narrowing everybody is a manager who can no longer see
+  their own buildings' appointments.
+
+  **AND THE TENANT'S NOTE IS DELIBERATELY NOT CARRIED.** Why Tuesday does not
+  work for somebody's flat is theirs; the contractor needs the window. What
+  does ride along is the **proposer's** note — a gate code, a dog, which
+  entrance — which is the manager telling the contractor something they cannot
+  do the job without, and nothing anywhere carried it.
+
+  **"Accepted" names the company.** On a job with three trades a bare tick
+  makes you read back up the row to find out who agreed, and the whole point of
+  that chip is that a named business has committed. `subName` is one helper
+  rather than `subs.find(...)?.company` at each call site, and it falls back to
+  the plain word rather than a blank, because the roster list a screen holds is
+  not always the whole one.
+
+  **Seven mutations fire on the browser suite and five on the server one**,
+  each on its own assertion — and **one of them did not fire on the first
+  attempt**, which is the lesson worth keeping: the patch reverting the card to
+  the bare job date silently matched nothing, because a comment had been added
+  between the condition and the branch. A green run under a mutation that never
+  applied is indistinguishable from a guarantee that holds. **Check the file
+  changed, not that the script exited.**
+
+  And the backtick trap for the **tenth** time, in a SQL comment inside the
+  `my-work` query — twice in one edit, once for the word *visits* and once for
+  a column name.
+
+  **Still open, and a product decision rather than a build: the contractor
+  cannot answer a proposed time.** They can see it now and they can propose one
+  (`POST /api/jobs/:id/visits` has taken a contractor since it was written),
+  but the confirm/decline pair belongs to the tenant, so a window that does not
+  suit the crew goes back through *Request a change to this work order* rather
+  than through the thing it is actually about. A three-party handshake —
+  manager proposes, tenant confirms it is convenient, contractor confirms they
+  can come — is the right shape and is a decision about who outranks whom when
+  two of the three disagree, not an endpoint.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
