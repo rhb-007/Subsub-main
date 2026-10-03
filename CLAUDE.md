@@ -7510,6 +7510,76 @@ refactor.
   trap, from the selector side rather than the markup side.
 
 
+- **THE PERSON WHO SIGNED UP AS A SUBCONTRACTOR COULD NOT SEE THE WORK THEY
+  HAD BEEN GIVEN.** Reported as *"on the contractor admin / Sound Property
+  Management My Jobs is not visible… Redirects to dashboard instead"*.
+
+  `can("portal")` is the `contractor` seat role and nothing else — a seat
+  somebody **else** invited onto **their** account. `ROLES.admin` does not have
+  it and neither does `ROLES.pm`. So the admin of a subcontractor account — the
+  person who owns the business the whole kind exists for — had no My Jobs, no
+  My calendar and no portal at all. Fifteenth instance of a rule already
+  written down here, and the file says it in so many words: **anything 031 made
+  true of an account-as-company has to have a home outside the contractor
+  portal, because the seat that runs an account never has one.** The connect
+  badge was this exact bug one nav entry along.
+
+  **THE SERVER WAS ALREADY RIGHT, WHICH IS WHY NOTHING SERVER-SIDE COULD HAVE
+  CAUGHT IT.** `seatCompany` has answered the account's own company for an
+  admin or a pm since it was written, so `/api/my-work` has been returning
+  their work the whole time and the browser has been fetching it on every
+  login. The rows arrived and nothing drew them.
+
+  **`ownSub` IS A SEPARATE VALUE AND NOT A WIDER `mySub`, and that is the part
+  worth keeping.** `mySub` drives a dozen writes through
+  `patchSub(mySub.id, …)` — notification preferences, the mailing address,
+  crews, coverage — and those go to `PATCH /api/subs/:companyId`, which is the
+  wrong route for an account's own row (`PATCH /api/my-company` is). Widening
+  `mySub` would have pointed every one of them at a route the server refuses,
+  silently, from screens that look identical to the ones that work.
+
+  **AND THERE IS NO ENGAGEMENT, so the half that needs one is absent rather
+  than invented.** A roster row is a company **and** an engagement; your own
+  company has nobody on the other side of it. `ownAccount` is what says so.
+  The sharpest consequence: `missingDocs` reads `docVerified`, which is a
+  *hiring account's* verdict — on your own row it answers false for ever, so
+  the nav would carry a red four over four documents already uploaded. Nobody
+  verifies their own paperwork, so the count is **presence**, which is the same
+  rule the compliance-pack badge already follows.
+
+  **Two of the entries, not the portal.** Compliance pack is already a tab in
+  Account for a hireable kind and two names for one object is how somebody
+  concludes there are two of them; My Crews and Job Settings are
+  engagement-shaped; Connect is on the dashboard, where it was moved for
+  exactly this reason.
+
+  **AND IT UNCOVERED A WORDING BUG THAT WAS ALREADY THERE.** The who-bar's
+  one-client line read `brand.name` — the account you are standing in. That is
+  right for a contractor seat whose work is on that account and wrong the
+  moment it is not, which for a subcontractor account's own team is *always*:
+  it said **"Working for Pacific apartment maintenance"** to Pacific. It names
+  the client off the work now, and the same was already true of a contractor
+  seat at one account holding work only at another.
+
+  **The temporal dead zone is a blank screen that `no-undef` cannot see, and
+  it cost a round here.** `ownSub` was first written beside `mySub`, seven
+  hundred lines above the `myCompany` state it reads — a `const` is in the TDZ
+  until its declaration, so the page threw `Cannot access 'jt' before
+  initialization` and rendered nothing. Lint was green throughout. The browser
+  suite caught it, and only because it reads **the page's own console**: the
+  harness's crash list stayed empty, so *"and the harness saw no crash"* passed
+  loudest at the moment the subject had disappeared.
+
+  **`no-use-before-define` is the rule that would catch the class, and turning
+  it on is its own piece of work rather than something to ride along with a
+  bug fix.** It reports 73 pre-existing sites, nearly all safe — a name
+  referenced inside a callback that runs long after initialisation is fine, and
+  ESLint cannot tell that from one evaluated during it. Setting it to `warn`
+  was refused: that is a guard reporting to nobody, which is the failure this
+  file has just finished recording about five red deploys. **Still open**, with
+  the 73 to audit.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

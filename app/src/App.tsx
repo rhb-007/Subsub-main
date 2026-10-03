@@ -3434,6 +3434,66 @@ export default function SubSub() {
   // rule this follows: presence, never verification -- whether some other
   // account has reviewed a certificate says nothing about whether there is one
   // to send.
+  // WHO THE CONTRACTOR PORTAL IS FOR, AND IT IS NOT A SEAT ROLE.
+  //
+  // `can("portal")` is the `contractor` role and nothing else -- a seat
+  // somebody ELSE invited onto THEIR account. So the person who signed up as
+  // a subcontractor, who is the admin of their own business, could not reach
+  // My Jobs, My calendar or any of it: they are an admin, and `ROLES.admin`
+  // has no "portal". Reported as *"My Jobs is not visible… redirects to
+  // dashboard"*.
+  //
+  // Fifteenth instance of a rule already written down here: anything 031 made
+  // true of an account-as-company has to have a home outside the contractor
+  // portal, because the seat that runs an account never has one. The connect
+  // badge was this exact bug, one nav entry along.
+  //
+  // THE SERVER WAS ALREADY RIGHT. `seatCompany` answers the account's own
+  // company for an admin or a pm, so `/api/my-work` has been returning their
+  // work the whole time and the browser has been fetching it. Only the gate
+  // was wrong -- correct pieces with no way in, again.
+  //
+  // IT IS A SEPARATE VALUE AND NOT A WIDER `mySub`, which is the part worth
+  // keeping. `mySub` drives a dozen writes through `patchSub(mySub.id, …)` --
+  // notification preferences, the mailing address, crews, coverage -- and
+  // those go to `PATCH /api/subs/:companyId`, which is the wrong route for an
+  // account's own row: `PATCH /api/my-company` is. Widening `mySub` would
+  // have pointed every one of them somewhere the server refuses, silently,
+  // from screens that look identical.
+  //
+  // AND THERE IS NO ENGAGEMENT. A roster row is a company AND an engagement;
+  // your own company has nobody on the other side of it. So the rating, the
+  // review verdicts and the auto-schedule flag are absent rather than
+  // invented -- `ownAccount` is what says so, and the portal reads it rather
+  // than guessing from a missing field.
+  const ownSub = useMemo(() => {
+    if (role === "contractor" || !isTeamSeat(role)) return null;
+    if (!isHireable(account) || !myCompany?.companyId) return null;
+    const docs = myCompany.docs || {};
+    return {
+      id: myCompany.companyId, companyId: myCompany.companyId,
+      company: myCompany.company || account.name, contact: myCompany.contact || "",
+      email: myCompany.email || "", phone: myCompany.phone || "",
+      license: myCompany.license || "", ubi: myCompany.ubi || "",
+      city: myCompany.city || "", state: myCompany.state || "",
+      zip: myCompany.zip || "", coverage: myCompany.coverage,
+      // The account's own trade chips. A company's trades live on the account
+      // for a hireable kind, which is where the signup form puts them.
+      categories: account.trades || [], caps: [], crews: [],
+      docs,
+      // NOBODY VERIFIES THEIR OWN PAPERWORK, which is why these are presence
+      // and not approval. `docVerified` reads a hiring account's verdict, so
+      // on your own row it answers false for ever -- a red badge that can
+      // never clear, which is how people learn to stop reading badges.
+      docReview: Object.fromEntries(DOC_KINDS.filter((k) => docs[k])
+        .map((k) => [k, { status: "verified" }])),
+      ...Object.fromEntries(DOC_KINDS.map((k) => [k, !!docs[k]])),
+      engagedAs: null, rating: null, autoSchedule: false,
+      hasPortal: true, answersForItself: true, ownAccount: true,
+    };
+  }, [role, account, myCompany]);
+  // What the portal is handed, whichever way in it was reached.
+  const portalSub = mySub || ownSub;
   const packSource = role === "contractor" ? mySub : myCompany?.docs;
   const packOnFile = !!packSource && PACK_KINDS.some((k) => packSource[k]);
   const canQuickSend = canShowQr && packOnFile;
@@ -5416,6 +5476,21 @@ export default function SubSub() {
                 <span className="count amber">{uniformOrders.filter((o) => o.status === "pending").length}</span>}
             </button>
           )}
+          {/* AND A HIREABLE ACCOUNT'S OWN TEAM GETS THE TWO THAT ARE ABOUT
+              WORK GIVEN TO THEM. Not the whole portal: Compliance pack is
+              already a tab in Account for them and two names for one object
+              is how somebody concludes there are two of them; My Crews and
+              Job Settings are engagement-shaped and there is no engagement
+              with yourself; Connect is on the dashboard, which is where it
+              was moved for exactly this reason. */}
+          {!can("portal") && ownSub && [["jobs", "My Jobs"], ["schedule", "My calendar"]]
+            .map(([id, label]) => (
+              <button key={id} className={tab === "portal" && pane === id ? "on" : ""}
+                onClick={() => { setPane(id); setTab("portal"); }}>
+                {label}
+                {id === "jobs" && pendingCount > 0 && <span className="count amber">{pendingCount}</span>}
+              </button>
+            ))}
           {can("portal") && [
             /* My calendar sits directly after My Jobs, because it is the same
                work asked a different way -- what have I got, and when am I
@@ -6489,9 +6564,14 @@ export default function SubSub() {
           onReport={(r) => createJob({ ...r, trades: r.trades || [] })} />
       )}
 
-      {can("portal") && tab !== "account" && (
-        mySub ? (
-          <ContractorPortal weather={weather} sub={mySub} jobs={jobs} pane={pane} mine={myAssignments} brand={brand} me={me}
+      {(can("portal") || ownSub) && tab !== "account" && (
+        portalSub ? (
+          <ContractorPortal weather={weather} sub={portalSub} jobs={jobs} pane={pane}
+            /* NOTHING FROM THIS ACCOUNT'S OWN JOB LIST when the seat IS the
+               account: those are jobs they hire OUT, not work they have been
+               given. Everything they are owed arrives through `myWork`, which
+               the server has been scoping by work order all along. */
+            mine={ownSub ? [] : myAssignments} brand={brand} me={me}
             /* The kind of the account this seat is IN, because the verb beside
                the client count follows who is hiring. Off `account` rather
                than `brand`: brand is what gets shown and is stripped on
@@ -22939,6 +23019,17 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
     ...elsewhere.map((m) => m.elsewhere.accountKind).filter(Boolean),
     ...(mine.length && hostKind ? [hostKind] : []),
   ];
+  // AND WHO THE ONE CLIENT IS, WHICH IS NOT ALWAYS THE ACCOUNT WE ARE
+  // STANDING IN. This read `brand.name` flat, which is right for a contractor
+  // seat whose work is on the account they are seated in -- and wrong the
+  // moment it is not. A subcontractor account's own team reads this on their
+  // OWN account, where every job is somebody else's: it said "Working for
+  // Pacific apartment maintenance" to Pacific, which is working for yourself.
+  // The same was already true of a contractor seat at one account holding
+  // work only at another.
+  const soleClient = mine.length
+    ? brand.name
+    : (elsewhere[0]?.elsewhere?.name || brand.name);
 
   // Still being asked. An answered one drops out of the list rather than
   // sitting there looking like it still needs something.
@@ -23039,7 +23130,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                 <span className="who-for">
                   {clientCount > 1
                     ? `${workingForVerb(clientKinds)} ${clientCount} companies`
-                    : `${workingForVerb(clientKinds)} ${brand.name}`}
+                    : `${workingForVerb(clientKinds)} ${soleClient}`}
                 </span>
               </div>
             </div>

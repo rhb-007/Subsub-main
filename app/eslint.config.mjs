@@ -36,6 +36,19 @@ export default [
     // rules stay off: turning them on is a separate piece of work with a
     // long tail, and this config is here for one bug.
     plugins: { "react-hooks": reactHooks, react },
+    // STILL OPEN, AND IT IS A REAL GAP: `no-undef` catches a name that was
+    // never declared and says nothing about one declared LOWER DOWN, which is
+    // in the temporal dead zone until then and throws the same blank screen on
+    // render. That shipped here once -- a useMemo reading a piece of state
+    // declared seven hundred lines below it -- with lint green.
+    //
+    // `no-use-before-define` is the rule, and turning it on reports 73
+    // pre-existing sites, nearly all of them safe: a name referenced inside a
+    // callback that runs long after initialisation is fine, and ESLint cannot
+    // tell that from one evaluated during it. Auditing those is its own piece
+    // of work rather than something to ride along with a bug fix, and setting
+    // it to "warn" would be a guard that reports to nobody -- which is the
+    // failure this file already records about a red deploy nobody read.
     rules: { "no-undef": "error", "react/jsx-no-undef": "error" },
   },
   // shared/ is imported by both the browser bundle and the Worker, and was

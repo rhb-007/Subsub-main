@@ -91,6 +91,7 @@
     "test:inspectjob": "node --no-warnings scripts/inspection-job-test.mjs",
     "test:inspectsummary": "node --no-warnings scripts/inspect-summary-test.mjs",
     "test:resched": "node --no-warnings scripts/reschedule-ui-test.mjs",
+    "test:ownportal": "node --no-warnings scripts/own-portal-ui-test.mjs",
     "test:visitparty": "node --no-warnings scripts/visit-party-test.mjs",
     "test:jobaccess": "node --no-warnings scripts/job-access-test.mjs",
     "test:workwhen": "node --no-warnings scripts/work-when-test.mjs",
