@@ -7112,6 +7112,126 @@ refactor.
   060-or-061 miss retries without them, so a database behind the code loses the
   access answer and the contractor's own tick, never the work itself.
 
+
+- **THE CONTRACTOR'S SCHEDULE ON ITS OWN PAGE, AND THE DOT ANSWERS THEIR
+  QUESTION RATHER THAN THE ACCOUNT'S.** Asked for as *"need to allow the
+  calendar to be expanded to its own page so easier to visualize for the actual
+  person [doing the] job"*.
+
+  `MySchedule` on their dashboard answers *what is next and what is after it* in
+  a panel that shares a row with something else, so it is the next appointment,
+  four more and a fortnight strip. A month is the thing somebody looks at to
+  decide whether they can take Thursday, and fourteen days cannot show it.
+
+  **IT REUSES `.jcal`, WHICH IS A DECISION ABOUT THE STYLESHEET AND NOT A
+  SHORTCUT.** The hiring side's month grid and this one are the same geometry —
+  seven columns, a padded first week, a day panel underneath — and two copies of
+  that is two things to keep in step the next time a cell changes size. What
+  differs is what a dot MEANS, which is the whole reason it is not the same
+  component: `JobCalendar` colours a day by how many trades are filled, and a
+  contractor holds one trade on one job, so that answer is always 1/1. Theirs is
+  the opposite question — **is the time agreed** — so the three classes that
+  stylesheet already defines are pointed at a different fact: agreed, waiting on
+  a yes, been and gone. The key says so in those words, and a test fails if it
+  goes back to naming trades.
+
+  **IT OPENS WHERE THE WORK IS, and the two halves of that rule each needed
+  their own fixture.** `aim` moves only when today's month is empty, and only
+  forward — the conservatism the hiring grid already records. **Both branches
+  passed vacuously at first and mutation caught each one.** With work in today's
+  month, *stay put* and *open on today* give the same answer; with the nearest
+  future job in today's month, *stay put* and *always follow the work* give the
+  same answer. So the suite drives three fixtures: work in this month, work only
+  two months out, and — the one that discriminates the second pair — **work in
+  this month that is entirely in the past** with the next appointment two months
+  out. That day is computed and floored at the 1st, and on the 1st of a month it
+  cannot exist, so the suite **says so out loud** rather than reporting a green
+  that means nothing.
+
+  **The day panel shows the WINDOW, through `visitWhen`.** One formatter, the
+  same one the tenant's screen and the contractor's card use, because two of
+  these is how the parties to one appointment come to read it differently. It
+  leads with the date and the panel's own heading already carries that, so the
+  day part is stripped at the separator rather than rebuilt — and the first
+  version passed it `start_time`, the Worker's spelling, which **silently
+  dropped the whole window and left the date**. A row that reads as having no
+  time on it, on the one screen whose subject is when.
+
+  **Fed `accepted`, not `upcoming`**, which is the one place it deliberately
+  differs from the dashboard panel: a calendar is also what you look back at —
+  *was I there on the Tuesday* is the question a dispute asks — while the panel
+  is only about what is coming.
+
+  **And the panel routes to it.** A panel that names the next job has to route
+  somewhere that can show it; that is the exact lie the hiring side's *Open the
+  calendar* told when it landed on an empty month. One `onGoPane`, so the nav
+  entry and every in-page pointer land on the same screen.
+
+  **And the backtick trap, for the TWELFTH time, two rules below a comment
+  saying not to.** The new CSS block's own comment named `.jcal` in backticks,
+  which closed the stylesheet's template literal — the whole app rendered
+  nothing behind one `.jcal is not a function`, and the suite reported sixteen
+  failures that were all one parse error. The guard that catches it is reading
+  the failure for what it is: a helper name in an error message that should
+  never have been a function.
+
+
+- **THE CHIP UNDER SOMEBODY'S OWN NAME WAS A CONSTANT, AND IT WAS WRONG TWICE
+  OVER.** Reported as *"I updated pacific to handyman, but it's still showing
+  contractor on [the] profile drop down"*, with the drawer header circled:
+  **Juan Soto / Contractor**.
+
+  `roleLabel` read `ROLES.contractor.label` flat — no account kind, no
+  engagement — so it was wrong in **two** directions at once, and only one of
+  them was reported. A handyman read *Contractor*, which is what was noticed.
+  And a general contractor's roofer also read *Contractor*, on an account whose
+  own roster, nav and Add menu all say **Subcontractor**, because `hiresLabel`
+  has decided that noun everywhere else since it was written. One screen in the
+  product telling somebody they are a thing the rest of the product does not
+  call them.
+
+  `engagedSeatLabel` **composes rather than replaces**: the hiring word is
+  whatever `rosterWords` already decided for that account kind, narrowed when
+  the engagement says handyman. The hiring word is passed in rather than
+  imported, so `engaged.js` does not take a dependency on `hires.js` to say one
+  word.
+
+  **THE ROLE ID IS UNTOUCHED**, which is the distinction this file already
+  records and a later pass must not collapse: `contractor` stays the seat
+  role — a person signing in to the portal rather than a company on a roster —
+  and the staff console goes on describing SubSub's own data model. What
+  changed is the word shown to that person about their seat **here**.
+
+  **It had to MOVE to be able to read the answer.** A contractor seat's word is
+  not a constant: it is what the account that engaged them calls them, which
+  needs the engagement row, and `allSubs` is declared two hundred lines below
+  where `roleLabel` was. The whole expression moved rather than the value being
+  plumbed up to it — every use of it is in JSX, so nothing in between reads it.
+
+  **Still as it was, and deliberately: the account switcher's rows.** Those are
+  seats in OTHER accounts, and this browser holds no engagement for them — only
+  `seatDescription`, which already takes the hirer's kind. Making those follow
+  the engagement would mean carrying every other account's roster row for a
+  label.
+
+- **AND THE SCHEDULE MOVED ABOVE THE FOUR NUMBERS, for the second time in this
+  file and the same reason.** *"Put the scheduled jobs box on top of
+  [the] dashboard"*. It sat under job requests, upcoming, crews and booked
+  value — a summary of a book — while the one thing on that page that is a
+  **commitment to be somewhere** was below them. That is the same shape as the
+  manager's work requests panel, which was under five KPI tiles for the same
+  reason and moved for the same reason.
+
+  Measured in the suite rather than read off the source, because **source order
+  is not screen order** and a static check that the JSX moved passes whether or
+  not the panel lands anywhere near the top.
+
+  **And both engagement branches are asserted in the same place.** On a property
+  manager the roster word is *Contractor*, which is also exactly what the broken
+  constant said — so a fixture driving only the handyman case cannot tell the
+  fix from the bug it replaced, and one driving only the subcontractor case
+  cannot see the fix at all. The suite flips the engagement and reloads.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

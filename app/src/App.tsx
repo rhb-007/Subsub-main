@@ -68,7 +68,7 @@ import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { agreementStateText, renderAgreement } from "../shared/agreement.js";
 import { typedNameMatches, typedNameHint } from "../shared/typedname.js";
-import { ENGAGED_AS, engagedAs, isHandyman, mayEngageHandyman, mayCover,
+import { ENGAGED_AS, engagedAs, isHandyman, engagedSeatLabel, mayEngageHandyman, mayCover,
   tradesAllowed, requiredDocsFor, needsLicense, ENGAGED_REFUSALS } from "../shared/engaged.js";
 import { handymanCapCheck, handymanCapText,
   HANDYMAN_GLOBAL_RULES } from "../shared/handycap.js";
@@ -2453,13 +2453,6 @@ export default function SubSub() {
   // And the account's type is often the same word as the role -- a property
   // manager working for a property manager -- which read as "Property manager
   // (property manager)". Said once in that case.
-  const roleLabel = (() => {
-    if (role === "contractor" || role === "tenant") return ROLES[role].label;
-    const kind = ACCOUNT_KINDS[kindOf(account)].label;
-    const seat = roleLabelIn(kindOf(account), role);
-    if (kind.toLowerCase() === seat.toLowerCase()) return seat;
-    return `${kind} (${seat.toLowerCase()})`;
-  })();
   const plan = account.plan;
   const billing = account.billing || "monthly";
   const setBilling = (c) => {
@@ -2674,6 +2667,28 @@ export default function SubSub() {
   const mySub = role === "contractor"
     ? allSubs.find((s) => s.id === membership.companyId)
     : null;
+  // WHAT THE CHIP UNDER SOMEBODY'S OWN NAME SAYS.
+  //
+  // Moved down here from above `allSubs` because a CONTRACTOR seat's word is
+  // not a constant: it is what the account that engaged them calls them, which
+  // needs the engagement row. Nothing between the two reads it -- every use is
+  // in JSX.
+  //
+  // Reported as *"I updated pacific to handyman, but it's still showing
+  // contractor on [the] profile drop down"*. It read `ROLES.contractor.label`
+  // flat, so it was wrong twice over: a handyman read Contractor, and a
+  // general contractor's roofer read Contractor on an account whose own roster
+  // says Subcontractor. `engagedSeatLabel` composes the two -- the hiring word
+  // this account already uses, narrowed when the engagement says handyman.
+  const roleLabel = (() => {
+    if (role === "contractor") return engagedSeatLabel(mySub?.engagedAs, rosterWords(account).One);
+    if (role === "tenant") return ROLES[role].label;
+    const kind = ACCOUNT_KINDS[kindOf(account)].label;
+    const seat = roleLabelIn(kindOf(account), role);
+    if (kind.toLowerCase() === seat.toLowerCase()) return seat;
+    return `${kind} (${seat.toLowerCase()})`;
+  })();
+
   // REMOVED CONTRACTORS COME OFF THE LIST, and are kept where they can be
   // put back. `engagements.status` has had `ended` since the schema was
   // written, eleven reads in the Worker guarded on it, and NOTHING EVER WROTE
@@ -5376,7 +5391,12 @@ export default function SubSub() {
             </button>
           )}
           {can("portal") && [
-            ["jobs", "My Jobs"], ["settings", "Job Settings"],
+            /* My calendar sits directly after My Jobs, because it is the same
+               work asked a different way -- what have I got, and when am I
+               due. Its own entry rather than a view switch inside My Jobs: a
+               month is a screen somebody opens on purpose, and burying it
+               behind a toggle on a page of cards is how it stays unfound. */
+            ["jobs", "My Jobs"], ["schedule", "My calendar"], ["settings", "Job Settings"],
             /* ONE NAME FOR ONE OBJECT. The account side has called this the
                compliance pack since Account was split into tabs, and the
                portal went on calling it "My Documents" -- two names for the
@@ -6425,6 +6445,9 @@ export default function SubSub() {
                than `brand`: brand is what gets shown and is stripped on
                Basic, account is what is true. */
             hostKind={kindOf(account)} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
+            /* One way to change pane, so the nav and every in-page pointer
+               land on the same screen. */
+            onGoPane={(id) => { setPane(id); setTab("portal"); }}
             elsewhere={elsewhere}
             onGoClient={(accountId) => { setCurrentAccountId(accountId); setSelected(null); setPane("jobs"); }}
             /* 061. Answering the time, from the side that drives to it. */
@@ -22475,7 +22498,213 @@ const subName = (list, subId) =>
 //
 // It spans every client, like everything else on this screen: "where am I due
 // on Tuesday" is not a question about one general contractor.
-function MySchedule({ rows, onOpen }) {
+// THE SAME SCHEDULE, A MONTH AT A TIME, ON ITS OWN PAGE.
+//
+// Asked for as: *"need to allow the calendar to be expanded to its own page so
+// easier to visualize for the actual person [doing the] job"*.
+//
+// `MySchedule` on the dashboard answers *what is next and what is after it* in
+// a panel that has to share a row with something else, so it is the next
+// appointment, four more, and a fortnight strip. A month is the thing somebody
+// looks at to decide whether they can take Thursday, and fourteen days cannot
+// show it.
+//
+// IT REUSES `.jcal`, WHICH IS A DECISION ABOUT THE STYLESHEET RATHER THAN A
+// SHORTCUT. The hiring side's month grid and this one are the same geometry --
+// seven columns, a padded first week, a day panel underneath -- and two copies
+// of that is two things to keep in step the next time a cell changes size. What
+// differs is what a dot MEANS, and that is the whole reason this is not the
+// same component.
+//
+// THE DOT ANSWERS THE CONTRACTOR'S QUESTION, NOT THE ACCOUNT'S. `JobCalendar`
+// colours a day by how many trades are filled, which is "is this job covered"
+// -- the hiring account's question, and a contractor holds one trade on one job
+// so the answer is always 1/1. Theirs is the opposite one: *is the time
+// agreed*. So confirmed is the settled tone, proposed is the one that still
+// needs answering, and a day that has been and gone is spent. Same three
+// classes the other grid already defines, pointed at a different fact.
+function MyCalendar({ rows, onOpen }) {
+  const todayK = dayKey();
+  const dated = rows
+    .map((m) => ({ m, when: workWhen(m.job) }))
+    .filter((x) => !!x.when.date);
+  const byDay = {};
+  dated.forEach((x) => { (byDay[x.when.date] ||= []).push(x); });
+  Object.values(byDay).forEach((list) => list.sort((a, b) =>
+    String(a.when.startTime || "").localeCompare(String(b.when.startTime || ""))));
+
+  // WHERE TO OPEN, which is the rule the hiring side's grid already paid for:
+  // a month with work in it is where somebody expects to land, so this only
+  // moves when today's month is empty, and only forward. Everything being in
+  // the past means nothing is coming, and today's empty month is the honest
+  // answer to that.
+  const aim = useMemo(() => {
+    const keys = dated.map((x) => x.when.date);
+    if (keys.some((k) => monthKey(k) === monthKey(todayK))) return todayK;
+    return keys.filter((k) => k >= todayK).sort()[0] || todayK;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, todayK]);
+  const nextAhead = dated.filter((x) => x.when.date >= todayK)
+    .map((x) => x.when.date).sort()[0] || "";
+  // null until somebody pages, derived rather than seeded: the work arrives
+  // after mount, and a cursor initialised from an empty list is a cursor stuck
+  // on the wrong month with nothing to say so.
+  const [cursor, setCursor] = useState(null);
+  const [selected, setSelected] = useState("");
+  const at = cursor || monthOf(selected && DATE_KEY_RE.test(selected) ? selected : aim);
+
+  const first = new Date(at.y, at.m, 1);
+  const days = new Date(at.y, at.m + 1, 0).getDate();
+  const cells = [
+    ...Array.from({ length: first.getDay() }, () => null),
+    ...Array.from({ length: days }, (_, i) => dayKey(new Date(at.y, at.m, i + 1))),
+  ];
+  while (cells.length % 7) cells.push(null);
+  const step = (n) => {
+    const d = new Date(at.y, at.m + n, 1);
+    setCursor({ y: d.getFullYear(), m: d.getMonth() });
+  };
+  const monthLabel = first.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const inMonth = dated.filter((x) => monthKey(x.when.date) === monthKey(dayKey(first))).length;
+  const undated = rows.length - dated.length;
+  const dayRows = selected && byDay[selected] ? byDay[selected] : [];
+  // One day's tone, from the strongest thing on it: a day holding one agreed
+  // visit and one nobody has answered still needs answering.
+  const tone = (list) => list.some((x) => x.when.kind === "proposed") ? "open"
+    : list.every((x) => x.when.date < todayK) ? "done" : "full";
+
+  return (
+    <div className="mycal">
+      <PageHead title="My calendar"
+        sub="Every job you have a work order on, across every client. A day is spoken for once the time is agreed." />
+      <div className="jcal">
+        <div className="jcal-top">
+          <button className="jcal-nav" onClick={() => step(-1)} aria-label="Previous month">
+            <ChevronLeft size={16} />
+          </button>
+          <div className="jcal-month">
+            <strong>{monthLabel}</strong>
+            <span>{inMonth === 0 ? "nothing booked"
+              : `${inMonth} ${inMonth === 1 ? "job" : "jobs"}`}</span>
+          </div>
+          <button className="jcal-nav" onClick={() => step(1)} aria-label="Next month">
+            <ChevronRight size={16} />
+          </button>
+          <button className="jcal-today" onClick={() => {
+            setCursor(monthOf(todayK)); setSelected(todayK);
+          }}>Today</button>
+        </div>
+        <div className="jcal-dows">
+          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <span key={d}>{d}</span>)}
+        </div>
+        <div className="jcal-grid">
+          {cells.map((k, i) => {
+            if (!k) return <span key={`pad${i}`} className="jcal-cell empty" />;
+            const list = byDay[k] || [];
+            return (
+              <button key={k}
+                className={`jcal-cell ${list.length ? "has" : ""} ${k === todayK ? "today" : ""} ${k === selected ? "on" : ""} ${k < todayK ? "past" : ""}`}
+                onClick={() => setSelected(k === selected ? "" : k)}
+                aria-pressed={k === selected}
+                title={list.length ? `${list.length} job${list.length === 1 ? "" : "s"} on ${niceDay(k)}` : niceDay(k)}>
+                <span className="jc-dom">{dayFromKey(k).getDate()}</span>
+                {list.length > 0 && (
+                  <span className="jc-marks">
+                    {list.slice(0, 3).map((x) => (
+                      <span key={`${x.m.job.id}-${x.m.trade}`}
+                        className={`jc-dot ${x.when.kind === "proposed" ? "open"
+                          : x.when.date < todayK ? "done" : "full"}`} />
+                    ))}
+                    {list.length > 3 && <span className="jc-plus">+{list.length - 3}</span>}
+                  </span>
+                )}
+                {/* Read out, because three coloured dots say nothing at all to
+                    a screen reader. */}
+                <span className="sr-only">{list.length
+                  ? `${list.length} job${list.length === 1 ? "" : "s"}, ${tone(list) === "open" ? "not all confirmed" : "confirmed"}`
+                  : "nothing booked"}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="jcal-key">
+          <span><i className="jc-dot full" /> Time agreed</span>
+          <span><i className="jc-dot open" /> Waiting on a yes</span>
+          <span><i className="jc-dot done" /> Been and gone</span>
+        </div>
+
+        {selected && (
+          <div className="jcal-day">
+            <div className="jcd-head">
+              <h4>{niceDay(selected)} <span className="jcd-rel">{relDay(selected, todayK)}</span></h4>
+              <button className="jcd-close" onClick={() => setSelected("")} aria-label="Close this day"><X size={14} /></button>
+            </div>
+            {dayRows.length === 0 ? (
+              <div className="dash-empty"><ClipboardList size={22} /><p>Nothing booked for this day.</p></div>
+            ) : dayRows.map((x) => (
+              <button key={`${x.m.job.id}-${x.m.trade}`} className="jcd-row"
+                onClick={() => onOpen?.(x.m)}>
+                {/* The WINDOW, not the job's own time: a confirmed visit
+                    outranks the column somebody typed, which is the rule
+                    shared/schedule.js exists to hold in one place. */}
+                {/* ONE FORMATTER, which is `visitWhen` -- the same one the
+                    tenant's screen and the contractor's card use, because two
+                    of these is how the parties to one appointment come to read
+                    it differently. It leads with the date, and the date is
+                    already in this panel's own heading, so the day part is
+                    stripped at the separator rather than rebuilt here.
+                    `startTime`, not `start_time`: it takes the browser's
+                    spelling, and the snake_case one silently dropped the whole
+                    window and left the date -- which read as a row with no
+                    time on it. */}
+                <span className="jcd-time">{x.when.startTime
+                  ? visitWhen(x.when).replace(/^[^·]*·\s*/, "")
+                  : "All day"}</span>
+                <span className="jcd-main">
+                  <span className="jcd-title">{x.m.job.title}</span>
+                  <span className="jcd-meta">
+                    {[catMeta(x.m.trade).label,
+                      x.m.elsewhere ? `for ${x.m.elsewhere.name}` : null,
+                      [x.m.job.address, x.m.job.area].filter(Boolean).join(", ") || null,
+                    ].filter(Boolean).join(" · ")}
+                  </span>
+                </span>
+                <span className={`mys-tag mysw-${WHEN_KINDS[x.when.kind]?.tone || "wait"}`}>
+                  {x.when.kind === "confirmed" ? "Confirmed"
+                    : x.when.kind === "proposed" ? "Not confirmed" : "Target"}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* An empty grid answers nothing, and somebody who pages into one has
+            no way of knowing whether the month is empty or the calendar is
+            broken. */}
+        {inMonth === 0 && nextAhead && monthKey(nextAhead) !== monthKey(dayKey(first)) && (
+          <p className="jcal-undated">
+            Nothing booked in {monthLabel}. Your next job is on {niceDay(nextAhead)}.{" "}
+            <button className="sh-link" onClick={() => { setCursor(monthOf(nextAhead)); setSelected(nextAhead); }}>
+              Show it
+            </button>
+          </p>
+        )}
+
+        {/* The one thing a calendar can never show, and the most useful thing
+            to report to somebody trying to fill a week. */}
+        {undated > 0 && (
+          <p className="jcal-undated">
+            {undated === 1 ? "1 job has no date on it yet" : `${undated} jobs have no date on them yet`},
+            {" "}so nothing here can show {undated === 1 ? "it" : "them"}. Ask the office when they want you.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MySchedule({ rows, onOpen, onOpenCalendar }) {
   const todayK = dayKey();
   // Every row that has a day against it, confirmed or merely proposed.
   // Proposed counts -- see shared/schedule.js: a contractor needs to know
@@ -22520,6 +22749,13 @@ function MySchedule({ rows, onOpen }) {
     <section className="sched-hero my-sched">
       <div className="sh-head">
         <h3><Calendar size={16} /> Your schedule</h3>
+        {/* A panel that names the next job has to route somewhere that can
+            show it -- the lie the hiring side's "Open the calendar" told when
+            it landed on an empty month, which is why `MyCalendar` aims at the
+            work rather than at today. */}
+        {onOpenCalendar && (
+          <button className="sh-link" onClick={onOpenCalendar}>Open the calendar</button>
+        )}
       </div>
       {late.length > 0 && (
         <div className="sh-late">
@@ -22586,7 +22822,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   quotes = [], onAnswerQuote, brand, me, orders, now,
   connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage,
   overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow,
-  onAnswerVisit, onProposeVisit }) {
+  onAnswerVisit, onProposeVisit, onGoPane }) {
   const [sub2, setSub2] = useState("trades");
   const caps = [...new Set(sub.categories.flatMap((c) => CAP_LIBRARY[c] || []))];
   const miss = missingDocs(sub);
@@ -22729,6 +22965,23 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
               </div>
             </div>
           </div>
+          {/* WHEN, FIRST, ABOVE THE NUMBERS. It sat under four tiles -- job
+              requests, upcoming, crews, booked value -- and reported as
+              wanting "the scheduled jobs box on top of [the] dashboard".
+              Those four are a summary of a book; this is the one thing on the
+              page that is a commitment to be somewhere, and it is the question
+              somebody actually opens the app with: am I on a roof on Thursday.
+              Same move, and the same reason, as the work requests panel on the
+              manager's dashboard.
+
+              Drawn off `upcoming` rather than every row, because a job this
+              company has not said yes to is not on their schedule. It is in
+              the Job requests box above, which is where it gets answered. */}
+          <MySchedule rows={upcoming} onOpen={(m) => (m.elsewhere
+            ? onGoClient?.(m.elsewhere.accountId)
+            : onViewWO({ job: m.job, trade: m.trade, a: m.a }))}
+            onOpenCalendar={onGoPane ? () => onGoPane("schedule") : null} />
+
           <div className="dash-grid">
             <div className="dash-card accent">
               <span className="dc-num">{pending.length}</span>
@@ -22752,16 +23005,6 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
             <div className="auto-strip"><Zap size={14} /> Auto-schedule is on — jobs matching your availability are booked directly.</div>
           )}
 
-          {/* WHEN, before WHAT. Everything below this is a queue -- something
-              wants an answer -- and this is the question somebody actually
-              opens the app with: am I on a roof on Thursday.
-
-              Drawn off `upcoming` rather than every row, because a job this
-              company has not said yes to is not on their schedule. It is in
-              the Job requests box above, which is where it gets answered. */}
-          <MySchedule rows={upcoming} onOpen={(m) => (m.elsewhere
-            ? onGoClient?.(m.elsewhere.accountId)
-            : onViewWO({ job: m.job, trade: m.trade, a: m.a }))} />
 
           {/* Asked to price something, which is not the same as being offered
               it. Above job requests because it is the earlier conversation --
@@ -22842,6 +23085,14 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
         </>
       )}
 
+      {/* THE MONTH, ON ITS OWN PAGE. Fed `accepted` rather than `upcoming`:
+          a calendar is also what you look back at -- "was I there on the
+          Tuesday" is the question a dispute asks -- and the dashboard panel
+          is the one that is deliberately only about what is coming. */}
+      {pane === "schedule" && <MyCalendar rows={accepted}
+        onOpen={(m) => (m.elsewhere
+          ? onGoClient?.(m.elsewhere.accountId)
+          : onViewWO({ job: m.job, trade: m.trade, a: m.a }))} />}
       {pane === "crews" && <MyCrews crews={sub.crews || []} onSave={onSetCrews} />}
 
       {pane === "connect" && (
@@ -31403,6 +31654,15 @@ strong.insp-name{background:none;border:0;padding:0}
 .va-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
 .va-pick{display:flex;flex-wrap:wrap;gap:6px}
 .va-pick .pick{padding:4px 10px;font-size:11.5px}
+/* The contractor's month, on its own page. The grid itself is .jcal, shared
+   with the hiring side -- two copies of seven columns and a padded first week
+   is two things to keep in step.
+   (NO BACKTICKS. This stylesheet is a template literal and one in a comment
+   closes it -- which is exactly what the first version of this rule did, for
+   the twelfth recorded time, two rules below a comment saying so.) */
+.mycal{max-width:860px}
+.sh-head .sh-link{margin-left:auto;font-size:12.5px}
+
 /* 062. What the inspection found, on the work order. Rooms stacked, each with
    its own photographs, because the unit was walked room by room and that is
    the order somebody works it in.

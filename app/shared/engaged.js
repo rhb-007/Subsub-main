@@ -38,6 +38,29 @@ export const isEngagedAs = (v) => Object.prototype.hasOwnProperty.call(ENGAGED_A
 export const engagedAs = (v) => (isEngagedAs(v) ? String(v) : "subcontractor");
 export const isHandyman = (v) => engagedAs(v) === "handyman";
 
+// WHAT A CONTRACTOR SEAT IS CALLED, on the account that engaged them.
+//
+// Reported as: *"I updated pacific to handyman, but it's still showing
+// contractor on [the] profile drop down"*. The chip under somebody's own name
+// read `ROLES.contractor.label` flat -- a constant, ignoring both the
+// engagement and the account kind -- so a handyman read Contractor, and a
+// general contractor's roofer read Contractor where that account's own roster
+// says Subcontractor.
+//
+// It composes rather than replaces: the hiring word is whatever
+// `hiresLabel`/`rosterWords` already decided for that account kind, and this
+// narrows it when the engagement says handyman. Passed in rather than imported,
+// so this module does not take a dependency on `hires.js` to say one word.
+//
+// THE ROLE ID IS UNTOUCHED, which is the distinction this project already
+// records: `contractor` stays the seat role -- a person signing in to the
+// portal rather than a company on a roster -- and the staff console keeps
+// describing SubSub's own data model. What changes is the word shown to that
+// person about their seat HERE.
+export const engagedSeatLabel = (engaged, hiringWord) =>
+  isHandyman(engaged) ? ENGAGED_AS.handyman.label
+    : (hiringWord || ENGAGED_AS.subcontractor.label);
+
 // WHICH ACCOUNTS HAVE HANDYMAN WORK: the ones with buildings.
 //
 // Asked for as "under property manager, portfolio manager, and building

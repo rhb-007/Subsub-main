@@ -86,6 +86,7 @@
     "test:compare": "node --no-warnings scripts/compare-test.mjs",
     "test:workwhenui": "node --no-warnings scripts/work-when-ui-test.mjs",
     "test:consoleas": "node --no-warnings scripts/console-engaged-test.mjs",
+    "test:mycal": "node --no-warnings scripts/my-calendar-ui-test.mjs",
     "test:woinsp": "node --no-warnings scripts/wo-inspection-ui-test.mjs",
     "test:inspectjob": "node --no-warnings scripts/inspection-job-test.mjs",
     "test:visitparty": "node --no-warnings scripts/visit-party-test.mjs",
