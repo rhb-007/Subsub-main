@@ -66,7 +66,17 @@ export function workWhen(row) {
       // 061. Whether the side reading this has already answered. A Confirm
       // button on a window you confirmed an hour ago is a button that does
       // nothing, and the honest thing to draw there is who is still owed.
-      mine: !!(v.contractorAt || v.contractor_at) };
+      mine: !!(v.contractorAt || v.contractor_at),
+      // 064. WHOSE TURN IT IS, and who is still owed, carried from the server
+      // rather than derived here. Whether the tenant is a party at all depends
+      // on the access answer and on there being a seat to ask, which a screen
+      // does not hold -- so a card deriving it would offer a Confirm button
+      // the route refuses with `not_your_turn`.
+      //
+      // Absent on a row from a route that does not carry it, which reads as
+      // "not known" rather than as "not your turn": the screens fall back to
+      // their own 061 question, which is whether THIS side has answered.
+      turn: v.turn || null, waitingOn: v.waitingOn || null };
   }
   const date = row?.date || null;
   if (date) {

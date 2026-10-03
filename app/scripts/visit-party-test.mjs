@@ -39,7 +39,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
-import { visitParties, waitingOn, visitSettled, waitingText,
+import { visitParties, waitingOn, visitSettled, waitingText, partyText, joinAnd,
   VISIT_PARTIES, PARTY_ORDER, nextToAnswer, mayAnswer } from "../shared/visitparty.js";
 
 const app = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -457,6 +457,49 @@ try {
     ck("and says they are one paste each", /one paste EACH/i.test(sql));
   }
 
+  console.log("\n-- the parties in words, read from the one list --");
+  {
+    // Reported as *"one of the times for a job says waiting on a contractor
+    // and a contractor to confirm"*. The manager's screen built that sentence
+    // with a two-branch ternary -- tenant, else "the contractor" -- which was
+    // complete when 061 shipped two parties and silently wrong the moment 064
+    // added a third: the hiring side came out wearing the contractor's label,
+    // beside the real contractor, in the same sentence.
+    //
+    // THE THREE-PARTY CASE IS THE ONLY ONE EITHER BEHAVIOUR CAN BE TOLD APART
+    // ON. With two parties a hand-written ternary and this helper agree.
+    const three = partyText(["contractor", "manager", "tenant"], { tenantName: "John Smith" });
+    ck("each party is named once", three.split("the contractor").length === 2, three);
+    ck("and the hiring side by its own label", /the hiring side/.test(three), three);
+    // AND THE TENANT CARRIES THEIR ROLE. Asked as *"who is John Smith? Juan
+    // Soto is the account holder"* -- a bare name is the one party a managing
+    // agent may never have spoken to, so it read as a stranger.
+    ck("the tenant is named with their role", /the tenant \(John Smith\)/.test(three), three);
+    ck("and keeps the plain label with no name",
+      partyText(["tenant"]) === "the tenant", partyText(["tenant"]));
+    // Order is PARTY_ORDER's, not the caller's: the chain cannot be reordered
+    // by an edit somewhere else.
+    ck("in the order they are asked",
+      partyText(["tenant", "contractor"]) === "the contractor and the tenant",
+      partyText(["tenant", "contractor"]));
+    // Three read as a stammer with join(" and ").
+    ck("three are comma-joined", /^the contractor, the hiring side and /.test(three), three);
+    ck("two are joined with and", joinAnd(["a", "b"]) === "a and b", joinAnd(["a", "b"]));
+    ck("one is itself", joinAnd(["a"]) === "a", joinAnd(["a"]));
+    ck("none is empty", joinAnd([]) === "", JSON.stringify(joinAnd([])));
+    // A party the list has never heard of is dropped rather than rendered as
+    // `undefined` in a sentence somebody reads.
+    ck("an unknown party is dropped", partyText(["nobody"]) === "", partyText(["nobody"]));
+    // EVERY PARTY HAS A LABEL, so a party added later cannot reach a screen
+    // nameless -- which is the whole class of bug this helper exists to close.
+    ck("every party in the order has a label",
+      PARTY_ORDER.every((pp) => !!VISIT_PARTIES[pp]?.label),
+      PARTY_ORDER.filter((pp) => !VISIT_PARTIES[pp]?.label).join() || "all");
+    ck("and the order covers every party",
+      Object.keys(VISIT_PARTIES).every((pp) => PARTY_ORDER.includes(pp)),
+      Object.keys(VISIT_PARTIES).filter((pp) => !PARTY_ORDER.includes(pp)).join() || "all");
+  }
+
   console.log("\n-- the screens read the one rule --");
   {
     const App = readFileSync(join(app, "src", "App.tsx"), "utf8");
@@ -466,19 +509,72 @@ try {
     ck("workWhen carries whether this side answered", /contractorAt \|\| v\.contractor_at/.test(sched));
     const card = App.slice(App.indexOf("function JobRequestCard("));
     const block = card.slice(0, card.indexOf("function ", 10));
-    ck("the card offers Confirm and a counter-proposal",
-      /Confirm this time/.test(block) && /Propose a different time/.test(block));
-    // Only while it is still open, and only on a row at THIS account:
-    // answering is an account-scoped write.
-    ck("only on an open window at this account",
-      /!away && !past && when\.visitId && when\.kind === "proposed"/.test(block), block.slice(0, 40));
+    // THE ANSWER MOVED OUT OF THE CARD AND INTO ITS OWN BLOCK, which is the
+    // point of that change rather than a detail of it: 061 drew it as a chip
+    // row and the person it is aimed at could not see it. So the three
+    // answers are asserted where they now live, and the card is asserted to
+    // mount it -- a check that only looked in `block` would pass with the
+    // panel built and never rendered.
+    const ans = App.slice(App.indexOf("function VisitAnswer("));
+    const panel = ans.slice(0, ans.indexOf("function ", 10));
+    ck("the panel offers all three answers",
+      /Yes, I'll be there/.test(panel) && /Propose another time/.test(panel)
+        && /Can't make it/.test(panel));
+    ck("and the card mounts it", /<VisitAnswer /.test(block));
+    // Only while it is still open, only when it is THIS side's turn, and only
+    // answerable on a row at this account: answering is an account-scoped
+    // write. `turn` comes off the server; where a route does not carry it the
+    // 061 question stands in, so an older reply cannot hide the button.
+    ck("only on an open window whose turn is ours",
+      /!past && when\.visitId && when\.kind === "proposed"/.test(block)
+        && /when\.turn === "contractor"/.test(block)
+        && /: !when\.mine/.test(block), block.slice(0, 40));
+    ck("and answerable only at this account", /canAnswer={!away}/.test(block));
     ck("and it says who is left once we have answered", /jr-vis-wait/.test(block));
+    // THE MANAGER'S BLOCK READS THE HELPER, not a ternary of its own. The bug
+    // was a two-branch map written at the call site, so what is pinned is the
+    // absence of one.
+    const vb = App.slice(App.indexOf("function VisitBlock("));
+    const vblock = vb.slice(0, vb.indexOf("\nfunction ", 10));
+    ck("the manager's block names parties through the helper",
+      /partyWords\(stillOwed/.test(vblock) && /partyWords\(parties/.test(vblock));
+    // STRIPPED OF COMMENTS FIRST. The note recording the bug QUOTES the
+    // expression it replaced, which reads to a substring check exactly like
+    // the expression still being there -- the fifth time this repository has
+    // paid for that, and the first version of this assertion duly failed on
+    // its own explanation.
+    const code = vblock
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+    ck("and has no label ternary of its own",
+      !/=== "tenant" \? name :/.test(code));
+    // The note goes to whoever ATTENDS, so the hiring side -- the people
+    // writing it -- is off it. It read "Note for the tenant" on a job with no
+    // tenant in the loop at all.
+    ck("the note is addressed to whoever attends",
+      /pp !== "manager"/.test(vblock));
     // ONE form for both sides. A second copy of three inputs and a window
     // validation is two things to keep in step.
     ck("there is one propose form, used twice",
       (App.match(/<VisitForm /g) || []).length === 2,
       String((App.match(/<VisitForm /g) || []).length));
     ck("and the contractor's door opens it", /onProposeVisit={setProposeWO}/.test(App));
+    // ONE DOOR INTO ANOTHER ACCOUNT. `onGoClient` -- the only route a
+    // subcontractor ACCOUNT's own admin has to a screen where they can answer
+    // a proposed time -- set `currentAccountId` and stopped: no `setAuth`, no
+    // `hydrateAccount`, no tab change, so pressing Open left every fetch
+    // pointed at the account just left. The identical bug CLAUDE.md records
+    // about the drawer, in a third door nobody had noticed was one.
+    ck("the client link goes through goToSeat", /onGoClient={goToSeat}/.test(App));
+    // AND NOTHING ELSE SWITCHES ACCOUNT BY HAND. Four copies of "set the id,
+    // re-auth, re-fetch, land on a screen this role has" is four places for
+    // one of them to be missing a step, which is how this happened twice. The
+    // remaining call sites are signing in, resuming and the staff seat --
+    // none of them a switch between two seats somebody already holds.
+    const switches = (App.match(/setCurrentAccountId\(/g) || []).length;
+    ck("and only the entry points set the account id by hand", switches <= 5,
+      String(switches));
     // The effective access answer, off /api/my-work, because the raw column
     // is null on nearly every job.
     ck("the card reads the effective access answer", /const myAccess = useMemo/.test(App));

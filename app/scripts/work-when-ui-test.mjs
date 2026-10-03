@@ -75,7 +75,10 @@ const WORK = () => ({ work: [
     rate: "", capHours: null, signedWO: null, issuedAt: null, updatedAtIso: null,
     // The reported case: no date on the job, a proposed window on the visit.
     visit: { id: "v1", date: SOON, startTime: "11:00", endTime: "13:15",
-      status: "proposed", note: "Gate code 4417" } },
+      status: "proposed", note: "Gate code 4417",
+      // 064. WHOSE TURN IT IS, as the server works it out. The crew is first
+      // in the chain, so this is the row the panel is drawn on.
+      turn: "contractor", waitingOn: ["contractor", "manager", "tenant"] } },
   { woId: "wo_sink", wo: "WO-745746", jobId: "job_sink", trade: "plumbing",
     accountId: "acc_pm", accountName: "Sound Property Management",
     accountSubdomain: "soundpm", accountKind: "property_manager", here: true,
@@ -102,7 +105,44 @@ const WORK = () => ({ work: [
     rate: "", capHours: null, signedWO: null, issuedAt: null, updatedAtIso: null,
     access: "tenant",
     visit: { id: "v4", date: LATER, startTime: "08:00", endTime: "10:00",
-      status: "proposed", note: null, contractorAt: "2026-10-02T09:00:00.000Z" } },
+      status: "proposed", note: null, contractorAt: "2026-10-02T09:00:00.000Z",
+      // TWO PARTIES STILL OWED, not one, and that is what makes the line
+      // discriminating: with only the tenant left, a hard-coded "the tenant"
+      // -- which is what 061 shipped -- gives the same answer as reading the
+      // row, so the fixture would be covering for the guard.
+      turn: "manager", waitingOn: ["manager", "tenant"] } },
+  // 064. A WINDOW WE HAVE NOT ANSWERED AND IT IS NOT OUR TURN, because the
+  // work order is still PENDING -- somebody who has not said yes to the JOB
+  // is not a party to the TIME. The only row that can tell the turn gate
+  // apart from 061's "have we answered": the old rule offers Confirm here,
+  // the route refuses it with `not_your_turn`, and nothing awaited the
+  // refusal.
+  { woId: "wo_wait", wo: "WO-888", jobId: "job_wait", trade: "electrical",
+    accountId: "acc_pm", accountName: "Sound Property Management",
+    accountSubdomain: "soundpm", accountKind: "property_manager", here: true,
+    status: "pending", auto: false, responseWindow: "24h",
+    respondBy: new Date(Date.now() + 36e5).toISOString(), respondedAt: null,
+    title: "Basement sump", address: "4915 North Highland ST", area: "Ruston", zip: "98407",
+    propertyName: null, date: null, time: null, severity: null, jobStatus: "active",
+    completedAt: null, tradeScope: null, crewName: null, payKind: "fixed", value: "100",
+    rate: "", capHours: null, signedWO: null, issuedAt: null, updatedAtIso: null,
+    visit: { id: "v5", date: LATER, startTime: "09:00", endTime: "10:00",
+      status: "proposed", note: null, turn: "manager", waitingOn: ["manager", "tenant"] } },
+  // AND A ROW AT ANOTHER CLIENT, with a time waiting on us. Answering is an
+  // account-scoped write so it cannot be done from here -- but the time still
+  // has to be answered, and a card that says so and offers nothing is a dead
+  // end on the one screen where it costs a missed appointment.
+  { woId: "wo_away", wo: "WO-999", jobId: "job_away", trade: "plumbing",
+    accountId: "acc_cas", accountName: "Cascade Management",
+    accountSubdomain: "cascade", accountKind: "property_manager", here: false,
+    status: "accepted", auto: false, responseWindow: null, respondBy: null, respondedAt: null,
+    title: "Elliott Court - stack leak", address: "90 Elliott Ave", area: "Seattle",
+    zip: "98121", propertyName: null, date: day(9), time: "08:00", severity: null,
+    jobStatus: "active", completedAt: null, tradeScope: null, crewName: null,
+    payKind: "fixed", value: "100", rate: "", capHours: null, signedWO: null,
+    issuedAt: null, updatedAtIso: null,
+    visit: { id: "v6", date: LATER, startTime: "13:00", endTime: "14:00",
+      status: "proposed", note: null, turn: "contractor", waitingOn: ["contractor"] } },
   { woId: "wo_none", wo: "WO-111", jobId: "job_none", trade: "electrical",
     accountId: "acc_pm", accountName: "Sound Property Management",
     accountSubdomain: "soundpm", accountKind: "property_manager", here: true,
@@ -140,6 +180,15 @@ const JOBS = () => [
   job({ id: "job_sink", title: "Press Apartments - leaking sink", trade: "plumbing",
     wo: "WO-745746", date: day(-9), time: "07:00", address: "1620 Belmont Ave" }),
   job({ id: "job_none", title: "Hallway light", trade: "electrical", wo: "WO-111" }),
+  // The pending-work-order row, which is where the turn gate is visible. Its
+  // assignment has to be pending HERE too, or the card is drawn from an
+  // accepted one and the fixture stops discriminating.
+  { ...job({ id: "job_wait", title: "Basement sump", trade: "electrical", wo: "WO-888" }),
+    assignments: { electrical: { id: "WO-888", wo: "WO-888", subId: "cmp_pac",
+      status: "pending", auto: false, responseWindow: "24h",
+      respondBy: new Date(Date.now() + 36e5).toISOString(), respondedAt: null,
+      value: "100", payKind: "fixed", rate: "", capHours: null, tradeScope: null,
+      crewName: null, signedWO: null, rating: null } } },
 ];
 
 // 061. What actually reached the server. "A button is on screen" is not the
@@ -197,10 +246,23 @@ const cards = (page) => page.evaluate(() => [...document.querySelectorAll(".jr-c
     when: (when?.innerText || "").replace(/\s+/g, " ").trim(),
     note: (note?.innerText || "").replace(/\s+/g, " ").trim(),
     bg: cs ? cs.backgroundColor : null,
-    msg: (el.querySelector(".jr-whenmsg")?.innerText || "").trim(),
-    // 061. What can be done about the time from here.
-    ask: (el.querySelector(".jr-vis-q")?.innerText || "").replace(/\s+/g, " ").trim(),
-    btns: [...el.querySelectorAll(".jr-vis button")].map((b) => b.innerText.trim()),
+    // The proposer's note. On a window waiting on us it rides inside the
+    // panel, beside the window it is about, rather than in the line under the
+    // card's status -- which is where it was when the status line was there.
+    msg: (el.querySelector(".jr-whenmsg")?.innerText
+      || el.querySelector(".vans-note")?.innerText || "").trim(),
+    // 061/064. What can be done about the time from here. The chip row became
+    // a block -- `.vans` -- because the person it is aimed at could not see
+    // it: a 12.5px question and two inline buttons in a card with five other
+    // rows of small bold text.
+    ask: (el.querySelector(".vans-q")?.innerText || "").replace(/\s+/g, " ").trim(),
+    lead: (el.querySelector(".vans-head")?.innerText || "").replace(/\s+/g, " ").trim(),
+    big: (el.querySelector(".vans-when")?.innerText || "").replace(/\s+/g, " ").trim(),
+    bigPx: el.querySelector(".vans-when")
+      ? parseFloat(getComputedStyle(el.querySelector(".vans-when")).fontSize) : null,
+    panelBg: el.querySelector(".vans")
+      ? getComputedStyle(el.querySelector(".vans")).backgroundColor : null,
+    btns: [...el.querySelectorAll(".vans-acts button")].map((b) => b.innerText.trim()),
     wait: (el.querySelector(".jr-vis-wait")?.innerText || "").replace(/\s+/g, " ").trim(),
     access: (el.querySelector(".jr-access")?.innerText || "").replace(/\s+/g, " ").trim(),
   };
@@ -237,9 +299,13 @@ try {
     JSON.stringify(brk));
   t.ck("and it is not drawn as having no date", !!brk && !/No date/i.test(brk.when), brk?.when);
   // Said, not left to the colour: the difference is whether you get in the van.
-  t.ck("it says the time is not confirmed yet",
-    !!brk && /not confirmed yet/i.test(brk.note), brk?.note);
-  // A gate code is exactly what a contractor needs and nothing else carried it.
+  // On a window waiting on US that sentence is the panel's, which leads the
+  // card -- the status line under it is off while the panel is up.
+  t.ck("it says a time has been proposed",
+    !!brk && /proposed/i.test(brk.lead), brk?.lead);
+  // A gate code is exactly what a contractor needs and nothing else carried
+  // it -- and it has to survive the move into the panel, which is the one
+  // place it is read on the way to the job.
   t.ck("the proposer's note rides along", !!brk && /4417/.test(brk.msg), brk?.msg);
 
   // THE DISCRIMINATING ROW: the job says nine days ago, the confirmed visit
@@ -254,9 +320,17 @@ try {
 
   // Two states reading the same pixels is the bug this project already paid
   // for. Only the computed value can see it.
-  t.ck("confirmed and proposed are drawn differently",
-    !!brk && !!sink && brk.bg && sink.bg && brk.bg !== sink.bg,
-    `${brk?.bg} vs ${sink?.bg}`);
+  //
+  // WHAT DRAWS THE DIFFERENCE MOVED. The proposed card's status LINE is off
+  // while the answer panel is up -- "Proposed, not confirmed yet" over a block
+  // saying the same thing in bigger type is the line that makes somebody stop
+  // reading both -- so the panel's own background is what carries it now, and
+  // the confirmed card has no panel at all.
+  t.ck("a proposed window is drawn as a panel, a confirmed one is not",
+    !!brk?.panelBg && !sink?.panelBg, `${brk?.panelBg} vs ${sink?.panelBg}`);
+  t.ck("and the confirmed card still says so in its own line",
+    !!sink?.bg && /everybody who has to be there/i.test(sink.note || ""),
+    `${sink?.bg} | ${sink?.note}`);
 
   // A hole where an optional field used to be interpolated is the shape this
   // project records about a dangling em dash.
@@ -287,36 +361,70 @@ try {
   t.ck("the job with no time at all is counted, not hidden",
     /1 job has no date/i.test(s.undated || ""), s.undated);
 
-  console.log("\n-- 061: and the window can be answered from here --");
+  console.log("\n-- 061/064: the window can be answered from here, loudly --");
   {
     const open = all.find((c) => /Sparking breaker/i.test(c.title));
     const mine = all.find((c) => /Unit 12 shower/i.test(c.title));
     const set = all.find((c) => /leaking sink/i.test(c.title));
     const nodate = all.find((c) => /Hallway light/i.test(c.title));
+    const notmine = all.find((c) => /Basement sump/i.test(c.title));
+    const away = all.find((c) => /stack leak/i.test(c.title));
 
     // THE HALF THE CONTRACTOR HAD NO WAY TO SAY. Accept or decline the WORK
     // was the whole of it, and a time that does not suit is not a reason to
     // turn a job down.
     t.ck("an open window asks whether we can make it",
-      /can you make this/i.test(open?.ask || ""), open?.ask);
-    t.ck("and offers to confirm it",
-      (open?.btns || []).some((b) => /Confirm this time/i.test(b)), JSON.stringify(open?.btns));
-    t.ck("or to offer another",
-      (open?.btns || []).some((b) => /Propose a different time/i.test(b)),
+      /can you make it/i.test(open?.ask || ""), open?.ask);
+    // AND IT IS THE LOUDEST THING ON THE CARD, which is the whole of this
+    // change: *"there should be big call to action on each one"*. 061 shipped
+    // the control as a 12.5px chip row in a card with five other rows of
+    // small bold text. Measured rather than described -- a static check that
+    // the panel exists passes over one drawn at 12px in the old place.
+    t.ck("the window is drawn at a size somebody reads at arm's length",
+      (open?.bigPx || 0) >= 16, String(open?.bigPx));
+    t.ck("and it carries the window itself", /11 AM/.test(open?.big || ""), open?.big);
+    t.ck("offering to confirm it",
+      (open?.btns || []).some((b) => /I'll be there/i.test(b)), JSON.stringify(open?.btns));
+    t.ck("to offer another",
+      (open?.btns || []).some((b) => /Propose another time/i.test(b)),
       JSON.stringify(open?.btns));
+    // DECLINE, which the request asked for and the route has always taken.
+    // Two answers out of three is a screen that makes somebody turn the JOB
+    // down to say no to a Tuesday.
+    t.ck("and to say they cannot make it",
+      (open?.btns || []).some((b) => /Can't make it/i.test(b)), JSON.stringify(open?.btns));
 
     // ONCE WE HAVE ANSWERED THERE IS NOTHING TO PRESS. A Confirm on a window
     // you confirmed an hour ago is a button that does nothing, and the honest
     // thing to draw is who is still owed.
     t.ck("a window we already agreed offers no buttons",
       (mine?.btns || []).length === 0 && !mine?.ask, JSON.stringify(mine?.btns));
+    // WHO, read off the row rather than named on the card: 061 said "the
+    // tenant" whatever the parties were.
     t.ck("and says who it is waiting on",
-      /you confirmed this time/i.test(mine?.wait || "") && /tenant/i.test(mine?.wait || ""),
+      /you confirmed this time/i.test(mine?.wait || "")
+        && /the hiring side/i.test(mine?.wait || "") && /the tenant/i.test(mine?.wait || ""),
       mine?.wait);
     // 060's sentence, which was reading the RAW column off /api/jobs and so
     // rendered for almost nobody.
     t.ck("and who will open the door", /tenant will let you in/i.test(mine?.access || ""),
       mine?.access);
+
+    // 064. NOT OUR TURN IS NOT THE SAME AS ALREADY ANSWERED. This row's work
+    // order is still pending, so this company is not a party to the time at
+    // all -- 061's gate ("have we answered") offers Confirm here, the route
+    // refuses it with `not_your_turn`, and nothing awaited the refusal. The
+    // only row either rule can be told apart on.
+    t.ck("a window whose turn is somebody else's offers nothing",
+      !notmine?.panelBg && (notmine?.btns || []).length === 0,
+      `${notmine?.panelBg} | ${JSON.stringify(notmine?.btns)}`);
+    // AND IT MUST NOT CLAIM WE CONFIRMED IT. `jr-vis-wait` is gated on our own
+    // leg, not merely on the panel being down.
+    t.ck("nor claims we confirmed it", !/you confirmed/i.test(notmine?.wait || ""),
+      notmine?.wait);
+    // The card is really there, or the two assertions above pass on a row
+    // that never rendered.
+    t.ck("and the card is really there", !!notmine, JSON.stringify(all.map((c) => c.title)));
 
     // A SETTLED WINDOW IS NOT ASKED AGAIN, and a job with no window has
     // nothing to answer -- asserting only the open row passes with the block
@@ -326,40 +434,76 @@ try {
     t.ck("nor a job with no time at all", (nodate?.btns || []).length === 0,
       JSON.stringify(nodate?.btns));
 
+    // A ROW AT ANOTHER CLIENT. Answering is an account-scoped write, so it
+    // cannot be answered here -- but being TOLD is the whole point, and a
+    // card that says so and offers nothing is a dead end on the one screen
+    // where it costs a missed appointment. For a subcontractor ACCOUNT's own
+    // admin every row arrives this way, which is why it matters.
+    t.ck("a row at another client still shows the time", !!away?.panelBg,
+      `${away?.panelBg} | ${away?.big}`);
+    t.ck("and names where it has to be answered",
+      /Cascade Management/.test(away?.ask || "") || /Cascade Management/.test((away?.btns || []).join(" ")),
+      `${away?.ask} | ${JSON.stringify(away?.btns)}`);
+    t.ck("rather than offering an answer it cannot post",
+      !(away?.btns || []).some((b) => /I'll be there|Can't make it/i.test(b)),
+      JSON.stringify(away?.btns));
+
+    // THE DECLINE PATH ASKS FOR A REASON FIRST, then posts it. A bare
+    // "declined" tells the manager a window is dead and nothing about why,
+    // which is a telephone call.
+    await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
+      .find((el) => /Sparking breaker/i.test(el.querySelector("h3")?.innerText || ""))
+      ?.querySelector(".vans-skip")?.click());
+    await wait(400);
+    const why = await page.evaluate(() => {
+      const card = [...document.querySelectorAll(".jr-card")]
+        .find((el) => /Sparking breaker/i.test(el.querySelector("h3")?.innerText || ""));
+      return !!card?.querySelector(".vans-why");
+    });
+    // Nothing is posted by opening it: a decline somebody backed out of is
+    // not a decline.
+    t.ck("saying no asks why first", why === true);
+    t.ck("and posts nothing until it is sent", answers.length === 0, JSON.stringify(answers));
+    // Back out of it, or the Confirm press below is looking for a button the
+    // decline pane has replaced -- which would read as the panel being gone.
+    await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
+      .find((el) => /Sparking breaker/i.test(el.querySelector("h3")?.innerText || ""))
+      ?.querySelector(".vans-acts .btn-ghost")?.click());
+    await wait(400);
+
     // AND PRESSING IT REACHES THE SERVER. The button could render and the
     // request never go.
     t.ck("nothing has been answered yet", answers.length === 0, JSON.stringify(answers));
     await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
       .find((el) => /Sparking breaker/i.test(el.querySelector("h3")?.innerText || ""))
-      ?.querySelector(".jr-vis button")?.click());
+      ?.querySelector(".vans-yes")?.click());
     await wait(900);
     t.ck("confirming posts exactly one answer", answers.length === 1, JSON.stringify(answers));
     t.ck("and it says confirmed", answers[0]?.status === "confirmed",
       JSON.stringify(answers[0]));
 
-    // THE COUNTER-PROPOSAL IS THE SAME FORM THE MANAGER USES, in a modal,
-    // and it names the job -- a date form with no subject is a date form
-    // somebody fills in for the wrong job.
-    // AND CONFIRMING IS NOT A FORM. Wiring the first button to the modal
-    // would pass every assertion above and quietly make agreeing a window
-    // into re-proposing it, which is a different act with a different record.
+    // AND CONFIRMING IS NOT A FORM. Wiring that button to the modal would
+    // pass every assertion above and quietly make agreeing a window into
+    // re-proposing it, which is a different act with a different record.
     t.ck("confirming did not open a form instead",
       await page.evaluate(() => !document.querySelector(".modal .visit-form")));
 
+    // THE COUNTER-PROPOSAL IS THE SAME FORM THE MANAGER USES, in a modal,
+    // and it names the job -- a date form with no subject is a date form
+    // somebody fills in for the wrong job.
     await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
-      .find((el) => /Sparking breaker/i.test(el.querySelector("h3")?.innerText || ""))
-      ?.querySelectorAll(".jr-vis button")[1]?.click());
-    await wait(700);
-    const m2 = await page.evaluate(() => {
-      const el = document.querySelector(".modal .visit-form");
-      if (!el) return null;
-      return { dates: el.querySelectorAll("input[type=date]").length,
-        times: el.querySelectorAll("input[type=time]").length,
-        job: (document.querySelector(".modal .pw-job")?.innerText || "").trim() };
-    });
-    t.ck("offering another time opens the propose form", !!m2 && m2.dates === 1 && m2.times === 2,
-      JSON.stringify(m2));
-    t.ck("and it names the job", /Sparking breaker/i.test(m2?.job || ""), m2?.job);
+      .find((el) => /stack leak/i.test(el.querySelector("h3")?.innerText || ""))
+      ?.querySelector(".vans-alt")?.click());
+    await wait(400);
+    t.ck("a row at another client cannot even open the form",
+      await page.evaluate(() => !document.querySelector(".modal .visit-form")));
+    await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
+      .find((el) => /Unit 12 shower/i.test(el.querySelector("h3")?.innerText || ""))
+      ?.querySelector(".vans-alt")?.click());
+    await wait(400);
+    t.ck("nor can a window we have already agreed",
+      await page.evaluate(() => !document.querySelector(".modal .visit-form")));
+
   }
 
   await ctx.close();

@@ -8184,13 +8184,101 @@ app.post("/api/jobs/:id/reopen", requireRole("admin", "pm"), async (c) => {
 });
 
 // Everything about a job that ISN'T a work order — notes, measurement docs.
+// EDITING A JOB THAT ALREADY EXISTS.
+//
+// Asked for as *"when you click on a job card it should open to edit, so the
+// entire job can be edited and saved"*. This route took four fields -- notes,
+// measurement docs, the property and 060's access answer -- so everything
+// somebody typed on the create form was typed once and frozen: a job name with
+// a street spelt wrong, a square footage, a trade nobody needed, the materials
+// line. The only way to correct any of it was to close the job out and raise
+// another one, which loses the work orders, the visit and the history. The
+// fourteenth no-way-in in this file, and the one on the object this product is
+// about.
+//
+// Only the keys sent are written, which is the shape that once deleted a W-9
+// through `SubForm`: a form that edits part of a record must not replace the
+// whole of it.
 app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
-  const { accountId } = c.get("auth");
+  const { accountId, userId } = c.get("auth");
   const id = c.req.param("id");
-  const b = await c.req.json(); // { notes?, measurementDocs?, propertyId? }
+  // 053's job scope, BEFORE anything is written. A scoped project manager must
+  // not be able to edit a job outside their list, and checking afterwards
+  // would answer 404 to a write that had already happened.
+  if (!maySeeJob(c.get("auth"), id)) return c.json({ error: "job_not_found" }, 404);
+  const b = await c.req.json();
   const sets = [], vals = [];
   if (b.notes !== undefined) { sets.push("notes = ?"); vals.push(b.notes); }
   if (b.measurementDocs !== undefined) { sets.push("measurement_docs = ?"); vals.push(JSON.stringify(b.measurementDocs)); }
+  // THE PLAIN TEXT OF THE JOB. Trimmed, and an emptied optional field is
+  // stored NULL rather than "": a column holding an empty string where it
+  // means "not given" is a lie a screen reads back, which is the same reason
+  // the Zapier app leaves `cleanInputData` at its default.
+  const TEXT = { title: "title", client: "client", address: "address", area: "area",
+    zip: "zip", scope: "scope", materialsPaidBy: "materials_paid_by" };
+  for (const [k, col] of Object.entries(TEXT)) {
+    if (b[k] === undefined) continue;
+    const v = String(b[k] ?? "").trim();
+    // A job with no name is a row nobody can find again, and `title` is NOT
+    // NULL. Refused rather than silently kept, because a save that reports
+    // success and writes nothing is how somebody re-types the same
+    // correction three times.
+    if (k === "title" && !v) return c.json({ error: "title_required" }, 400);
+    sets.push(`${col} = ?`); vals.push(v || null);
+  }
+  for (const k of ["sqft", "stories"]) {
+    if (b[k] === undefined) continue;
+    const n = Number(String(b[k] ?? "").replace(/[^0-9]/g, ""));
+    sets.push(`${k} = ?`); vals.push(Number.isFinite(n) && n > 0 ? n : null);
+  }
+  // THE DATE AND TIME SOMEBODY ASKED FOR. Validated in the shapes the visit
+  // routes validate, so one screen cannot store a date the other refuses.
+  //
+  // Deliberately NOT the appointment: a live window belongs to `visits` and is
+  // settled by everybody who has to be there, so writing this column does not
+  // move it and does not pretend to. Confirming a window is what writes both.
+  if (b.date !== undefined) {
+    const d = String(b.date || "").trim();
+    if (d && !DATE_RE.test(d)) return c.json({ error: "bad_date" }, 400);
+    sets.push("date = ?"); vals.push(d || null);
+  }
+  if (b.time !== undefined) {
+    const t = String(b.time || "").trim();
+    if (t && !TIME_RE.test(t)) return c.json({ error: "bad_time" }, 400);
+    sets.push("time = ?"); vals.push(t || null);
+  }
+  // THE MATERIALS LINE IS COMPOSED HERE AND NEVER TAKEN FROM THE REQUEST, the
+  // same rule the create route states: what a contractor reads on a work order
+  // should be something the shared supplier list produced.
+  if (b.materialSupplier !== undefined || b.materialSource !== undefined) {
+    const supplier = isSupplier(b.materialSupplier) ? b.materialSupplier : null;
+    const branch = supplier && supplier !== OTHER
+      ? (String(b.materialBranch || "").trim() || null) : null;
+    const line = (supplier
+      ? materialLine({ supplier, branch, other: b.materialOther })
+      : String(b.materialSource || "").trim()) || null;
+    sets.push("material_source = ?", "material_supplier = ?", "material_branch = ?");
+    vals.push(line, supplier, branch);
+  }
+  // WHICH TRADES, AND A TRADE SOMEBODY IS ALREADY BOOKED FOR CANNOT BE TAKEN
+  // OFF. Each trade is a slot and a slot can hold a live work order -- a
+  // price, a date and a company that has accepted it -- so dropping the trade
+  // would leave that work order pointing at a slot the job no longer has:
+  // invisible on every screen, and a contractor who still turns up. Refused by
+  // name so the form can say which, rather than quietly keeping it, which is
+  // the save-that-writes-nothing shape.
+  if (b.trades !== undefined) {
+    const want = (Array.isArray(b.trades) ? b.trades : []).filter((t) => TRADE_IDS.has(t));
+    if (!want.length) return c.json({ error: "trades_required" }, 400);
+    const { results: live } = await c.env.DB.prepare(
+      `SELECT DISTINCT w.trade FROM work_orders w JOIN jobs j ON j.id = w.job_id
+        WHERE w.job_id = ? AND j.account_id = ? AND w.voided_at IS NULL`
+    ).bind(id, accountId).all();
+    const kept = new Set(want);
+    const booked = (live || []).map((r) => r.trade).filter((t) => !kept.has(t));
+    if (booked.length) return c.json({ error: "trade_has_work_order", trades: booked }, 409);
+    sets.push("trades = ?"); vals.push(JSON.stringify([...new Set(want)]));
+  }
   if (b.propertyId !== undefined) {
     const pid = b.propertyId || null;
     if (pid) {
@@ -8210,8 +8298,19 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
     sets.push("access = ?"); vals.push(b.access || null);
   }
   if (!sets.length) return c.json({ ok: true });
+  // AND THE JOB FLOATS, because somebody just worked on it. 025 added this
+  // column so a job being worked on rises to the top of the list, and a route
+  // that changes the job and not the column leaves the edit somewhere nobody
+  // scrolls to.
+  sets.push("updated_at = ?"); vals.push(new Date().toISOString());
   vals.push(id, accountId);
-  await c.env.DB.prepare(`UPDATE jobs SET ${sets.join(", ")} WHERE id = ? AND account_id = ?`).bind(...vals).run();
+  const res = await c.env.DB.prepare(
+    `UPDATE jobs SET ${sets.join(", ")} WHERE id = ? AND account_id = ?`).bind(...vals).run();
+  // A job id that is not this account's wrote nothing, and answering ok to
+  // that is a save that reports success. `maySeeJob` as well, so a scoped
+  // project manager cannot edit a job outside their list.
+  if (!res.meta?.changes) return c.json({ error: "job_not_found" }, 404);
+  await logActivity(c.env, accountId, userId, "job_edited", "Edited the job details");
   return c.json({ ok: true });
 });
 
@@ -10274,14 +10373,21 @@ app.get("/api/my-work", async (c) => {
   // last changed to fix. So a database behind the code loses the access
   // answer and the contractor's own tick -- never the work itself. Same trade
   // the insert beside it makes, and `nu` is which half of the SELECT to draw.
-  const sql = (nu) => `SELECT w.id AS wo_id, w.wo_number, w.trade, w.status, w.auto_scheduled,
+  // `lv` is how much of the newest schema this attempt names:
+  //   2  everything -- 060's access, 062's access_user_id, 061's contractor
+  //      leg and 064's manager leg, which is what `turn` needs to be right.
+  //   1  060 and 061 only, which is what this route carried before.
+  //   0  neither, which is the shape /api/my-work has always answered on an
+  //      older database rather than blanking the portal.
+  const sql = (lv) => `SELECT w.id AS wo_id, w.wo_number, w.trade, w.status, w.auto_scheduled,
               w.response_window, w.respond_by, w.responded_at, w.crew_name,
               w.trade_scope, w.value_cents, w.pay_kind, w.rate_cents, w.cap_hours,
               w.issued_at, w.signed_file_key,
               j.id AS job_id, j.account_id, j.title, j.address, j.area, j.zip,
               j.date, j.time, j.severity, j.status AS job_status, j.completed_at,
               j.scope, j.updated_at, j.created_at, j.requested_by,
-              ${nu ? "j.access" : "NULL AS access"},
+              ${lv >= 1 ? "j.access" : "NULL AS access"},
+              ${lv >= 2 ? "j.access_user_id" : "NULL AS access_user_id"},
               a.name AS account_name, a.subdomain AS account_subdomain,
               -- The HIRER's kind, because what this company is to them follows
               -- it: a subcontract implies a prime contract, and a plumber
@@ -10333,7 +10439,16 @@ app.get("/api/my-work", async (c) => {
               -- 061. Whether THIS side has answered it yet, which is what
               -- decides whether their card offers a Confirm button or says
               -- who else it is waiting on.
-              ${nu ? "(SELECT v.contractor_at FROM visits v WHERE v.job_id = j.id AND v.status IN ('proposed','confirmed') ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)" : "NULL"} AS visit_cat
+              ${lv >= 1 ? "(SELECT v.contractor_at FROM visits v WHERE v.job_id = j.id AND v.status IN ('proposed','confirmed') ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)" : "NULL"} AS visit_cat,
+              -- 019's own column and 064's, because WHOSE TURN IT IS cannot be
+              -- worked out from the contractor's leg alone. Without them this
+              -- card could say "Confirm this time" on a window it is not this
+              -- side's turn to answer -- which the route refuses -- and could
+              -- not name who it is waiting on once they had.
+              (SELECT v.responded_at FROM visits v WHERE v.job_id = j.id
+                 AND v.status IN ('proposed','confirmed')
+                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_tat,
+              ${lv >= 2 ? "(SELECT v.manager_at FROM visits v WHERE v.job_id = j.id AND v.status IN ('proposed','confirmed') ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)" : "NULL"} AS visit_mat
          FROM work_orders w
          JOIN jobs j ON j.id = w.job_id
          JOIN accounts a ON a.id = j.account_id
@@ -10342,19 +10457,22 @@ app.get("/api/my-work", async (c) => {
         WHERE w.company_id = ? AND w.voided_at IS NULL AND j.withdrawn_at IS NULL
         ORDER BY COALESCE(j.updated_at, j.created_at) DESC
         LIMIT 200`;
-  try {
-    ({ results: rows } = await c.env.DB.prepare(sql(true)).bind(companyId).all());
-  } catch (err) {
-    // A database without 020's withdrawn_at, or 025's updated_at, behaves the
-    // way every other route does rather than 500-ing the portal.
-    const m = missingSchema(err);
-    if (!m) throw err;
-    if (m !== "060_job_access" && m !== "061_visit_contractor") return c.json({ work: [] });
+  // Newest first, falling back a level at a time. Only the four scheduling
+  // columns are optional: anything else missing is the older behaviour this
+  // route has always had, because an empty portal over a roster of nine jobs
+  // is exactly the report it was last changed to fix.
+  const OPTIONAL = ["060_job_access", "061_visit_contractor",
+    "062_job_access_user", "064_visit_manager"];
+  let level = 2;
+  for (;;) {
     try {
-      ({ results: rows } = await c.env.DB.prepare(sql(false)).bind(companyId).all());
-    } catch (e2) {
-      if (!missingSchema(e2)) throw e2;
-      return c.json({ work: [] });
+      ({ results: rows } = await c.env.DB.prepare(sql(level)).bind(companyId).all());
+      break;
+    } catch (err) {
+      const m = missingSchema(err);
+      if (!m) throw err;
+      if (level === 0 || !OPTIONAL.includes(m)) return c.json({ work: [] });
+      level -= 1;
     }
   }
   return c.json({
@@ -10388,6 +10506,31 @@ app.get("/api/my-work", async (c) => {
         startTime: r.visit_start || null, endTime: r.visit_end || null,
         status: r.visit_status, note: r.visit_note || null,
         contractorAt: r.visit_cat || null,
+        // 064. WHOSE TURN IT IS, worked out here and not on the card.
+        //
+        // The card cannot do it: whether the tenant is a party at all depends
+        // on the access answer AND on there being a seat to ask, and whether
+        // the hiring side is one depends on a column existing. A screen
+        // guessing would be a second opinion about whose answer is
+        // outstanding, which is what `visitparty.js` exists to stop -- and
+        // the cost of guessing wrong is a Confirm button the route refuses
+        // with `not_your_turn`, pressed by somebody who was told to press it.
+        //
+        // `hasContractor` is an ACCEPTED work order, which is this row's own
+        // status: somebody who has not said yes to the JOB cannot be waited
+        // on for the TIME.
+        ...(() => {
+          const v = { date: r.visit_date, status: r.visit_status,
+            respondedAt: r.visit_tat || null, contractorAt: r.visit_cat || null,
+            managerAt: r.visit_mat || null };
+          const parties = visitParties(
+            { requested_by: r.requested_by, access: r.access, access_user_id: r.access_user_id },
+            { tenantReported: r.requested_by_role === "tenant",
+              hasContractor: r.status === "accepted" || !!r.auto_scheduled,
+              hasManagerLeg: level >= 2 });
+          return { parties, turn: nextToAnswer(v, parties),
+            waitingOn: visitWaitingOn(v, parties) };
+        })(),
       } : null,
       severity: r.severity || null, jobStatus: r.job_status,
       completedAt: r.completed_at || null, tradeScope: r.trade_scope || null,

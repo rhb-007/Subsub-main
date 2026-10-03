@@ -47,6 +47,44 @@ export const VISIT_PARTIES = {
 // words, and the reasoning is why it is worth the extra hop.
 export const PARTY_ORDER = ["contractor", "manager", "tenant"];
 
+// A LIST OF PARTIES IN WORDS, read from VISIT_PARTIES rather than written out
+// where it is needed.
+//
+// Reported as *"one of the times for a job says waiting on a contractor and a
+// contractor to confirm"*. The manager's screen built that sentence with a
+// two-branch ternary -- tenant, else "the contractor" -- which was complete
+// when 061 shipped and stopped being complete the moment 064 added the hiring
+// side. So a three-party window read "waiting on the contractor and the
+// contractor and John Smith to confirm": the new party wearing the old one's
+// label, beside it, in the same sentence.
+//
+// The general shape, and it is why this lives here: **a list of parties
+// written at a call site is a list that cannot learn about a new party.**
+// Nothing in the source looked wrong, no static check could see it, and the
+// only reader who could tell is somebody looking at the sentence.
+export const joinAnd = (xs) =>
+  xs.length <= 1 ? (xs[0] || "")
+    : xs.length === 2 ? `${xs[0]} and ${xs[1]}`
+      : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+
+// AND THE TENANT IS NAMED WITH THEIR ROLE, not instead of it. Asked as *"who
+// is John Smith? Juan Soto is the account holder"* -- the screen printed a
+// name with nothing saying what that person is to this job, so the one party
+// a manager has never met read as a stranger who had wandered into the
+// sentence. "the tenant (John Smith)" answers both at once, and a tenant we
+// hold no name for keeps the plain label rather than a blank bracket.
+export function partyText(list, { tenantName } = {}) {
+  const words = PARTY_ORDER
+    .filter((p) => (list || []).includes(p))
+    .map((p) => {
+      const label = VISIT_PARTIES[p]?.label;
+      if (!label) return null;
+      return p === "tenant" && tenantName ? `${label} (${tenantName})` : label;
+    })
+    .filter(Boolean);
+  return joinAnd(words);
+}
+
 // Has this side answered yet? The tenant's answer has lived in `responded_at`
 // since 019 and keeps that meaning -- giving the column a second one would
 // make every row written before 061 ambiguous about who it was that replied.
@@ -134,6 +172,6 @@ export function waitingText(visit, parties, me) {
   const mine = left.includes(me);
   const others = left.filter((p) => p !== me).map((p) => VISIT_PARTIES[p]?.label).filter(Boolean);
   if (mine && !others.length) return "Waiting on you to confirm.";
-  if (mine) return `Waiting on you and ${others.join(" and ")}.`;
-  return `Waiting on ${others.join(" and ")} to confirm.`;
+  if (mine) return `Waiting on ${joinAnd(["you", ...others])}.`;
+  return `Waiting on ${joinAnd(others)} to confirm.`;
 }

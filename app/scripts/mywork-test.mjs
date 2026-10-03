@@ -170,9 +170,17 @@ console.log("\n-- what a row carries, and what it does not --");
   ck("no measurement docs", !("measurementDocs" in (row || {})));
   ck("no photos", !("photos" in (row || {})));
   ck("no notes", !("notes" in (row || {})));
-  ck("nothing about the account but its name and subdomain",
+  // AND `accountKind`, which `shared/hires.js` added and this assertion was
+  // never updated for -- so it has been red for a stale reason ever since,
+  // which is worse than being green: a suite nobody reads is a suite that
+  // cannot report the real thing underneath it. The kind is carried
+  // deliberately and for one purpose, because the verb beside the client
+  // count follows who is hiring (*"Subcontracting for"* implies a prime
+  // contract a managing agent does not hold).
+  ck("nothing about the account but its name, subdomain and kind",
     Object.keys(row || {}).filter((k) => k.startsWith("account")).sort().join(",")
-      === "accountId,accountName,accountSubdomain");
+      === "accountId,accountKind,accountName,accountSubdomain",
+    Object.keys(row || {}).filter((k) => k.startsWith("account")).sort().join(","));
 }
 
 console.log("\n-- nobody reads anybody else's --");

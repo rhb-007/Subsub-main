@@ -7746,6 +7746,207 @@ refactor.
   real scheduling problem rather than an endpoint.
 
 
+- **SIX THINGS ON THE JOBS SCREEN, AND FIVE OF THEM COULD ONLY BE SEEN
+  DRAWN.** Reported in one message with two screenshots. They are worth
+  keeping as a set because each is a different way for a correct-looking
+  source file to be wrong on screen.
+
+  **A BARE DATE IS NOT A TIMESTAMP, AND `new Date()` PARSES THE TWO BY
+  OPPOSITE RULES.** *"Trying to reschedule a job but I made it for October
+  6th, but it made it for October 5th instead."* `"2026-10-06"` is **UTC
+  midnight**; `"2026-10-06T12:00:00"` is local. `niceDay` was written for
+  Stripe's period end -- a full ISO timestamp, as its own comment says -- and
+  was then handed every plain date key in the product, so every one of them
+  came out **a day early for every reader west of Greenwich**. Not one screen:
+  `visitWhen`, every job date, both calendar grids, the day panel, an
+  inspection's date, a waiver chain's through-date, a cover date. The database
+  was right the whole time and the server never touched it.
+
+  Anchored at noon, which is the trick `formatDay`, `formatExpiry` and
+  `dayFromKey` all already use beside it and for the reason `dayFromKey`
+  states: a daylight-saving shift cannot move the date under it. **This was
+  the one date helper in the file that did not**, which is exactly why nothing
+  beside it was wrong and nothing anywhere reported it. The browser suite is
+  driven with the clock in **Los Angeles**, because in UTC the bug does not
+  reproduce at all -- a run without that is a run that passes whichever rule
+  is in force.
+
+  **A LIST OF PARTIES WRITTEN AT A CALL SITE IS A LIST THAT CANNOT LEARN
+  ABOUT A NEW PARTY.** *"One of the times for a job says waiting on a
+  contractor and a contractor to confirm."* `VisitBlock` built that sentence
+  with `pp === "tenant" ? name : "the contractor"`, which was complete when
+  061 shipped two parties and silently wrong the moment 064 added the hiring
+  side: the new party came out **wearing the old one's label, beside the real
+  contractor, in the same sentence**. `partyText` and `joinAnd` in
+  `shared/visitparty.js` read `VISIT_PARTIES` in `PARTY_ORDER`, and a party
+  the list has never heard of is dropped rather than rendered as `undefined`
+  in front of somebody. **The three-party case is the only one either
+  behaviour can be told apart on** -- with two, a hand-written ternary and the
+  helper agree -- and the same two-branch assumption was one branch along in
+  the confirmed sentence, which said "the tenant and the contractor" and left
+  out the side that had agreed it.
+
+  The negative assertion had to **strip comments first**: the note recording
+  the bug quotes the expression it replaced, which reads to a substring check
+  exactly like the expression still being there. Fifth time this file has paid
+  for that, and the first version duly failed on its own explanation.
+
+  **AND THE TENANT IS NAMED WITH THEIR ROLE.** *"Who is John Smith? Juan Soto
+  is the account holder."* Every sentence in that block printed a bare name,
+  and the tenant is the one party on a job a managing agent may never have
+  spoken to -- so the name read as a stranger who had wandered onto the
+  screen. *the tenant (John Smith)* answers both at once, from the same
+  helper, and a tenant we hold no name for keeps the plain label rather than
+  an empty bracket. The labels are written lower-case so they read correctly
+  mid-clause, so the two places that **start** a sentence with one go through
+  `cap1`.
+
+  **MOVING THE START MOVES THE END, and the screenshot is why that is a bug
+  rather than a convenience.** From 11:00 AM, To 11:00 AM, over a Propose
+  button refusing the window for ending before it starts: setting the start
+  had left a window that **cannot be sent**, with the only way out being to
+  notice the second box. It keeps the length somebody has already chosen -- a
+  2h15m window shifted from 11am to 1pm is still 2h15m, and overwriting that
+  would be the screen deciding something they had decided. **One hour is the
+  default**, which is where *"if the start time is 1pm the end time should
+  automatically adjust to an hour after"* comes from, and the old default was
+  two. Clamped to the end of the day, because a window past midnight is one
+  the server refuses and two dates in one row.
+
+  **THE CONTRACTOR'S ANSWER WAS A CHIP ROW, AND THE PERSON IT IS AIMED AT
+  COULD NOT SEE IT.** *"None of the jobs scheduled times have been updated on
+  the contractor side. There should be big call to action on each one that
+  says the time has changed and to accept or skip. This needs to be fixed asap
+  and very user friendly."* 061 shipped the control: a 12.5px question and two
+  inline buttons, between the scope and the work-order link, in a card that
+  already has five other rows of small bold text. What is being asked is
+  **whether somebody turns up on Tuesday**, which is the most consequential
+  question this product puts in front of anybody, and the whole scheduling
+  chain stalls on it going unanswered.
+
+  `VisitAnswer` leads the card, says the window at 19px, and carries **all
+  three** answers rather than two -- decline is what was asked for and the
+  route has always taken it, and a screen offering only confirm-or-repropose
+  makes somebody turn the **job** down to say no to a morning. The status line
+  under it goes **off** while the panel is up: *"Proposed, not confirmed yet"*
+  over a block saying the same thing in bigger type is the line that makes
+  somebody stop reading both. It **awaits** -- the old row fired
+  `onAnswerVisit` unawaited with no busy state and no error path, so
+  `not_your_turn`, `not_open` or a dropped connection left the card exactly as
+  it was: the save-that-reports-success shape, on the press that decides
+  whether a crew is expected.
+
+  **AND THE GATE IS WHOSE TURN IT IS, WHICH THE SERVER HAS TO ANSWER.** 061's
+  gate was *has this side answered*, which offers Confirm on a window the crew
+  is **third in line for** -- and a card cannot work the turn out for itself,
+  because whether the tenant is a party depends on the access answer AND on
+  there being a seat to ask. So `/api/my-work` carries `turn`, `parties` and
+  `waitingOn`, and `hasContractor` is an **accepted** work order rather than
+  merely an assigned one: somebody who has not said yes to the job cannot be
+  waited on for the time. Only a row with a **pending** work order can tell
+  the two rules apart. `turn` absent reads as *not known* and falls back to
+  061's question, never as *not your turn*, so an older reply cannot hide the
+  button altogether. And the *you confirmed this time* line is gated on our
+  own leg rather than merely on the panel being down, or it would say that to
+  somebody who has not accepted the job.
+
+  **A ROW AT ANOTHER CLIENT IS TOLD, AND OFFERED THE ONE TAP.** Answering is
+  an account-scoped write, so the panel draws with no answers and *Open
+  Cascade Management to answer* instead -- and that matters far more than it
+  looks, because **for a subcontractor ACCOUNT's own admin every row arrives
+  that way**: `mine` is deliberately empty for them, so `away` is true on all
+  of it. Which is most of what the report was about.
+
+  **AND THAT ONE TAP WAS BROKEN -- A THIRD DOOR DOING LESS WORK THAN THE OTHER
+  TWO.** `onGoClient` set `currentAccountId` and stopped: no `setAuth`, no
+  `hydrateAccount`, no tab change, so pressing Open left every fetch pointed
+  at the account just left -- the new client's name in the nav over the old
+  one's jobs, roster and visits. The **identical** bug this file already
+  records about the drawer, in a door nobody had noticed was one, and it is the
+  only route a subcontractor account's admin has to a screen where they can
+  answer a time. The header user menu was a **fourth** copy, correct but
+  inline; both go through `goToSeat` now, and the suite counts how many places
+  set the account id by hand, because *four copies of one gesture is four
+  places for one of them to be missing a step.*
+
+  **AND A JOB COULD BE CREATED AND NEVER CORRECTED.** *"When you click on a
+  job card it should open to edit, so the entire job can be edited and
+  saved."* `PATCH /api/jobs/:id` took four fields -- notes, measurement docs,
+  the property and 060's access answer -- so everything typed on the create
+  form was typed **once and frozen**: a street spelt wrong, a square footage,
+  a trade nobody needed, the materials line. The only way to correct any of it
+  was to close the job out and raise another, losing the work orders, the
+  visit and the history. Fourteenth no-way-in in this file, and the one on the
+  object this product is about.
+
+  **One form, not a second copy.** `JobForm` takes `existing` and seeds the
+  same fields the create path seeds from its presets -- two of the biggest
+  form in the product would be two things to keep in step with the trade grid,
+  the supplier chooser and the property picker. The title is the way in rather
+  than the whole tile, for the reason the property tile already records: a
+  button inside a button is not a thing, and this card is full of them.
+
+  **A TRADE SOMEBODY IS ALREADY BOOKED FOR CANNOT BE TAKEN OFF.** Each trade
+  is a slot and a slot can hold a live work order -- a price, a date and a
+  company that accepted it -- so dropping the trade would leave that order
+  pointing at a slot the job no longer has: invisible on every screen, and a
+  contractor who still turns up. Refused **by name**, so the form can say
+  which rather than quietly keeping it, which is the
+  save-that-writes-nothing shape. And a **voided** order is not a booking:
+  re-assigning voids the old row, so counting one would make a mis-assignment
+  permanent. The screen agrees rather than offering a chip whose removal the
+  save will reject, and says **why** beside the grid -- a control that refuses
+  a press and explains nothing is indistinguishable from a broken one.
+
+  **ONLY THE KEYS SENT ARE WRITTEN, on both sides.** The route writes only
+  what the body names and the browser sends only what the form holds, so the
+  photos, the report detail, the severity, who asked and the access answer all
+  survive a save -- the shape that once deleted a W-9 through `SubForm`. The
+  **materials line is composed by the server** and never taken from the
+  request, the same rule the create route states: what a contractor reads on a
+  work order should be something the shared supplier list produced. And the
+  job **floats**, because 025 added `updated_at` so a job somebody is working
+  on rises up the list, and a route that changes the job and not the column
+  leaves the edit somewhere nobody scrolls to.
+
+  **The access picker is deliberately NOT on the edit form.** Who lets them in
+  is asked beside the **time** on the card, which is where the question
+  actually arises and where the answer can say whether there is anybody to
+  ask -- so a second picker here would be two controls for one column and this
+  one's value is not in what the save sends. A control whose value is thrown
+  away is the screen-that-lies rule pointed at a widget.
+
+  **And the form says what editing does NOT do**, before anything is typed:
+  the work orders already issued keep their price and their contractor, and
+  changing the date here changes the date on the **job**, not the agreed
+  visit. A form that let somebody believe otherwise would have them edit a
+  date and expect a crew to know.
+
+  **`test:mywork` HAD BEEN RED FOR A STALE REASON**, which this file has
+  already called worse than being green: its whitelist of `account*` keys was
+  never updated when `shared/hires.js` started carrying `accountKind`, so a
+  suite nobody reads was sitting on top of whatever else it covers. Fixed with
+  the reason beside it -- the kind is carried deliberately and for one
+  purpose, because the verb beside the client count follows who is hiring.
+
+  Nine server mutations and fifteen browser ones fire, each on its own
+  assertion, and **one survived first time for the reason this file keeps
+  recording**: *waiting on the tenant* hard-coded gave the same answer as
+  reading the row, because the fixture had only the tenant left to answer. The
+  fixture now owes two parties, which is the only shape either behaviour can
+  be told apart on.
+
+  **The backtick trap, for the FOURTEENTH time**, in a CSS comment naming a
+  disabled attribute -- and caught by `npm run lint` rather than by a blank
+  page, which is the first time that guard has reported it at the gate.
+
+  **Not verified here:** `test:visits`, `test:visitafter`, `test:visitnobody`
+  and `test:scheduled` need the full local stack (worker 8787, Supabase stub
+  8902) and this container runs none of it, so all four fail on
+  `ECONNREFUSED` before reaching an assertion -- as they did before this
+  change.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
