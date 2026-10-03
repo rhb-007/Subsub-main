@@ -137,7 +137,11 @@ try {
       ["My Jobs", /good to see you/i],
       ["Job Settings", /^Job settings$/],
       ["My Crews", /^My crews$/],
-      ["My Documents", /^My documents$/],
+      // ONE NAME, so the nav and the head cannot drift. The account side has
+      // said "Compliance pack" since Account was split into tabs; this is the
+      // portal catching up, and it is what a general contractor says when
+      // they ask for the four documents.
+      ["Compliance pack", /^Compliance pack$/],
       ["Uniforms", /^Uniforms$/],
       ["Connect", /^Connect$/],
     ]) {

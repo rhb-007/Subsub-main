@@ -109,7 +109,7 @@ try {
     await wait(2800);
     // Their own documents screen.
     await page.evaluate(() => [...document.querySelectorAll("button")]
-      .find((b) => /^My Documents/.test(b.innerText.trim().split("\n")[0]))?.click());
+      .find((b) => /^Compliance pack/.test(b.innerText.trim().split("\n")[0]))?.click());
     await wait(1200);
 
     const panel = await page.evaluate(() => {

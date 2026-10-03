@@ -6392,6 +6392,50 @@ refactor.
   both have now been awaited one at a time. A sweep of the rest would be the
   right shape and is a bigger change than a bug fix.
 
+- **ONE NAME FOR THE FOUR DOCUMENTS, AND THE RENAME WAS HALF DONE ALREADY.**
+  The account side has said **Compliance pack** since Account was split into
+  tabs, and `sub-home-test` has pinned that the tab is *not* called "My
+  documents" ever since. The contractor portal went on calling the same four
+  documents **My Documents** in its nav and **My documents** on its page head —
+  two names for one object, which is how somebody concludes there are two of
+  them, and the exact trap already recorded here about a panel headed *Your
+  code* under a menu entry reading *My QR code*.
+
+  It is also what a general contractor actually says when they ask for it,
+  which is the whole reason the words matter: the pack exists to be asked for.
+
+  **And the send is `Quick send`**, which is what the component has been called
+  since it was written. *Send my documents* described the action and the menu
+  entry is now the name of the thing it opens, with the panel under it saying
+  in one sentence what goes — the certificate, the bond and the agreement as a
+  live page rather than an attachment that goes stale. It still sits beside
+  **My QR code**, because both are the same gesture: give somebody your details
+  without a conversation.
+
+  **The comments were moved too, and the two that are history were kept.**
+  `test:rosterword` already records that a comment naming a literal reads to a
+  substring check exactly like the literal still being there — and worse, a
+  comment describing current behaviour under a name that no longer exists is
+  how a later pass "fixes" the inconsistency by reverting it. The two that say
+  *until now the only nav item was "My Documents"* and *the portal went on
+  calling it "My Documents"* are the record of why the rename happened and stay
+  as they are.
+
+  Three suites keyed on the old words and each was updated rather than
+  loosened: `page-head-test` pins the nav label and the page head as **one
+  pair**, so they cannot drift; `doc-share-ui-test` navigates by the nav label;
+  `quicksend-ui-test` opens the menu entry. Reverting the nav label alone fails
+  `test:docshareui` — the rename is load-bearing rather than decorative.
+
+  `missingDocs` and the red count are untouched: *what is this engagement
+  judged on* is a different question from what the screen is called.
+
+  **Not verified here:** `test:pagehead` needs the full local stack (worker
+  8787, Supabase stub 8902, dists on 5191 and 5192) and this container runs
+  none of it, so it fails with `ERR_CONNECTION_REFUSED` before reaching an
+  assertion — as it did before this change. The edit pins the same pair under
+  the new name and is correct by construction; it has not been run.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

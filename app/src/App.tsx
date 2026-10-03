@@ -5293,7 +5293,15 @@ export default function SubSub() {
           )}
           {can("portal") && [
             ["jobs", "My Jobs"], ["settings", "Job Settings"],
-            ["crews", "My Crews"], ["docs", "My Documents"], ["uniforms", "Uniforms"],
+            /* ONE NAME FOR ONE OBJECT. The account side has called this the
+               compliance pack since Account was split into tabs, and the
+               portal went on calling it "My Documents" -- two names for the
+               same four documents, which is how somebody concludes there are
+               two of them. It is also what a general contractor says when
+               they ask for it, which is the whole reason the words matter
+               here. Same trap as a panel headed "Your code" under a menu
+               entry reading "My QR code". */
+            ["crews", "My Crews"], ["docs", "Compliance pack"], ["uniforms", "Uniforms"],
             ["connect", "Connect"],
           ].map(([id, label]) => (
             <button key={id} className={tab === "portal" && pane === id ? "on" : ""}
@@ -5368,7 +5376,7 @@ export default function SubSub() {
              pack -- the licence and the UBI as well as the four documents --
              because that is what the card is a summary OF. `focus` decides
              what arrives highlighted, so one panel serves three ways in. */
-          /* Manage lands on My documents, because the documents are the bulk of
+          /* Manage lands on Compliance pack, because the documents are the bulk of
              the pack and they now have a tab of their own. The licence and the
              UBI live on Company with the rest of the company record -- they
              have their own Add buttons on the card, which go there, so nothing
@@ -16942,9 +16950,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   //   Company        what this account is and how it hires
   //   Branding       what other people see -- sign-in page, and the form they
   //                  apply through, which is the same artifact
-  //   My documents   the paperwork, and sending it
+  //   Compliance pack  the paperwork, and sending it
   //
-  // My documents earns a tab of its own because it is referenced constantly:
+  // Compliance pack earns a tab of its own because it is referenced constantly:
   // it is the one screen a hireable account opens weekly, and it was the fifth
   // panel down inside another tab.
   const panes = [["profile", "Profile"]]
@@ -16966,11 +16974,11 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // plain value, so asking for the same pane twice opens it twice instead
   // of the second request doing nothing.
   useEffect(() => { if (openPane) setPane(openPane.pane); }, [openPane]);
-  // "My documents" in the nav opens THIS panel rather than a second copy of
+  // "Compliance pack" in the nav opens THIS panel rather than a second copy of
   // it, so it has to land on the right part of a long page. One
   // implementation, two ways in -- the same call the embed snippet makes,
   // because two copies would be two components holding the same upload state.
-  // "My documents" in the nav, and "Manage" on the pack card, open THIS panel
+  // "Compliance pack" in the nav, and "Manage" on the pack card, open THIS panel
   // rather than a second copy of it, so the request has to say which part of a
   // long page it is about. `focus` travels down to HireablePanel, which owns
   // both the documents and the state that says which of them are missing --
@@ -17243,7 +17251,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               It was the seventh panel down inside Company, under the account
               kind, the trades grid and the hireable profile -- and it is not a
               company setting, it is the thing you hold up on a job site. It
-              already sits beside "Send my documents" in the header menu for
+              already sits beside "Quick send" in the header menu for
               exactly that reason: both are give-somebody-your-details-without-
               a-conversation, and this is where somebody looks for their own.
 
@@ -22219,7 +22227,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
 
       {pane === "docs" && (
         <>
-        <PageHead title="My documents"
+        <PageHead title="Compliance pack"
           sub={miss.length === 0
             ? `All ${DOC_KINDS.length} on file`
             : `${DOC_KINDS.length - miss.length} of ${DOC_KINDS.length} on file`} />
@@ -24597,7 +24605,7 @@ function QuoteAskCard({ q, onAnswer }) {
 // Sending your compliance pack from the menu, with an email address and
 // nothing else.
 //
-// The full panel on My Documents is for managing what has been sent: the list,
+// The full panel on Compliance pack is for managing what has been sent: the list,
 // the view counts, revoking. This is the other half of the same act -- a
 // general contractor asks for your insurance while you are standing on their
 // site, and the answer should be six seconds long. So: one field, one button,
@@ -24819,7 +24827,11 @@ function QuickSend({ inline = false }) {
       {!inline && (
         <button className="um-qr" aria-expanded={open}
           onClick={() => { setOpen((o) => !o); setSentTo(""); setErr(""); }}>
-          <Send size={14} /> Send my documents
+          {/* "Quick send", because the menu entry is the name of the thing
+              it opens -- `QuickSend` -- and the panel under it says what
+              goes in one sentence. It sits beside My QR code for the reason
+              both exist: give somebody your details without a conversation. */}
+          <Send size={14} /> Quick send
           <ChevronDown size={13} className={`um-caret ${open ? "up" : ""}`} />
         </button>
       )}
