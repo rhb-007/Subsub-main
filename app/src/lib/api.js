@@ -331,6 +331,12 @@ export const api = {
       { method: "POST", body: JSON.stringify({ photos }) }),
   raiseInspectionJob: (id, body) =>
     request(`/inspections/${id}/job`, { method: "POST", body: JSON.stringify(body) }),
+  // REWRITING THE WORK ORDER'S SUMMARY. There is no call to write the first
+  // one: raising the job does that, because the ask was for it to happen
+  // automatically. This is the way out of the two states that leaves behind --
+  // a call that failed, and notes that have changed since.
+  summariseInspection: (id) =>
+    request(`/inspections/${id}/summary`, { method: "POST" }),
   // WHAT THE PERSON TURNING UP IS SHOWN. Keyed by the WORK ORDER, never by the
   // inspection: there is no route that takes an inspection id and describes it
   // to a contractor, so nothing here can be walked. The server answers the

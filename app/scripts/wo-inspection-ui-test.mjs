@@ -72,13 +72,25 @@ const job = (id, title, wo) => ({
 // runs. `jobs.address` really is nullable -- an API-ingested job or one raised
 // against a property that has none arrives exactly like this.
 const JOBS = () => [job("job_insp", "Move-out work - unit 3B", "WO-1"),
+  // Two more inspection-raised jobs, because the summary has three states and
+  // two of them cannot be seen on one fixture: one whose notes have moved on
+  // since the paragraph was written, and one that has no paragraph at all --
+  // which is every job on a database without 063 and every one whose
+  // automatic write failed.
+  job("job_stale", "Move-out work - unit 4A", "WO-2"),
+  job("job_nosum", "Move-out work - unit 9C", "WO-3"),
   { ...job("job_plain", "Repaint hallway", "WO-9"), address: "", area: "", zip: "" }];
 
 // What the route answers for the raised job. Flagged rooms only, captions and
 // no drafts -- the shape `contractorInspectionShape` builds, which the server
 // suite pins on its own.
+const PARA = "Repainting in the hallway and one cracked basin in the shower room.";
 const INSP = {
   kind: "move_out", unit: "3B", inspectedOn: "2026-10-01",
+  // THE ONE PARAGRAPH READ FIRST. `source` is deliberately absent, which is
+  // what the server answers: it is the notes, which the same reader has in
+  // full underneath, so carrying it would be the record sent twice.
+  summary: { text: PARA, model: "claude-haiku-4-5", writtenAt: "2026-10-02T09:00:00.000Z", stale: false },
   rooms: [
     { id: "r_bath", name: "Shower and bath", status: "fail",
       note: "Cracked basin, chip to the enamel",
@@ -110,6 +122,10 @@ const api = serveApi({ port: API, routes: (path) => {
   // Keyed by the WORK ORDER. WO-9's job was raised by nobody, so the route
   // answers 404 and the panel must draw nothing at all.
   if (path === "/api/work-orders/WO-1/inspection") return [200, INSP];
+  if (path === "/api/work-orders/WO-2/inspection")
+    return [200, { ...INSP, unit: "4A", summary: { ...INSP.summary, stale: true } }];
+  if (path === "/api/work-orders/WO-3/inspection")
+    return [200, { ...INSP, unit: "9C", summary: null }];
   if (path.startsWith("/api/work-orders/") && /\/inspection$/.test(path))
     return [404, { error: "not_found" }];
   if (/\/inspection\/photo\//.test(path))
@@ -142,11 +158,33 @@ const openWO = async (page, title) => {
     ?.querySelector(".wo-open-btn")?.click(), title);
   await wait(1400);
 };
+// Closing between work orders. Two presses because the modal offers two ways
+// out and which one is mounted has moved before; whichever lands, the next
+// `openWO` needs a clear screen.
+const closeModal = async (page) => {
+  await page.evaluate(() => document.querySelector(".modal-close, .modal-x")?.click());
+  await wait(400);
+  await page.evaluate(() => { const b = document.querySelector(".modal-backdrop"); if (b) b.click(); });
+  await wait(600);
+};
 const panel = (page) => page.evaluate(() => {
   const el = document.querySelector(".woi");
   if (!el) return null;
+  const sum = el.querySelector(".woi-sum");
+  const room = el.querySelector(".woi-room");
+  const cs = sum ? getComputedStyle(sum) : null;
   return {
     head: (el.querySelector(".woi-head")?.innerText || "").replace(/\s+/g, " ").trim(),
+    sum: sum ? {
+      text: (sum.querySelector(".woi-sumt")?.innerText || "").trim(),
+      why: (sum.querySelector(".woi-sumwhy")?.innerText || "").replace(/\s+/g, " ").trim(),
+      stale: sum.classList.contains("is-stale"),
+      rule: cs.borderLeftColor,
+      // SOURCE ORDER IS NOT SCREEN ORDER, and the whole claim is that this is
+      // read before the rooms. Measured rather than inferred from the JSX.
+      top: Math.round(sum.getBoundingClientRect().top),
+      roomTop: room ? Math.round(room.getBoundingClientRect().top) : null,
+    } : null,
     rooms: [...el.querySelectorAll(".woi-room")].map((r) => ({
       name: (r.querySelector("b")?.innerText || "").trim(),
       status: (r.querySelector(".woi-st")?.innerText || "").trim(),
@@ -217,6 +255,24 @@ try {
   t.ck("and says where in the whole set it is, not in the room",
     /2 of 2/.test(box || ""), String(box));
 
+  console.log("\n-- and the summary of all of it, read first --");
+  {
+    const sum = p1?.sum;
+    t.ck("the panel carries the summary", !!sum, String(sum));
+    t.ck("which is the paragraph the server wrote", sum?.text === PARA, sum?.text);
+    // IT SAYS IT WAS PUT TOGETHER AUTOMATICALLY, which is not modesty: the
+    // reader is about to price this, and a paragraph read as the hiring
+    // account's own instruction is one they will quote back.
+    t.ck("and says it was put together automatically",
+      /automatically/i.test(sum?.why || ""), sum?.why);
+    t.ck("and points at the rooms as the record", /record/i.test(sum?.why || ""), sum?.why);
+    // ABOVE THE ROOMS, measured. A summary printed under the list it
+    // summarises has saved nobody any reading.
+    t.ck("it sits above the room-by-room list",
+      sum && sum.roomTop !== null && sum.top < sum.roomTop, `${sum?.top} vs ${sum?.roomTop}`);
+    t.ck("and a current one is not marked stale", sum?.stale === false, String(sum?.stale));
+  }
+
   console.log("\n-- and the address has directions on it --");
   {
     const dir = await page.evaluate(() => {
@@ -240,11 +296,43 @@ try {
       dir?.target === "_blank" && /noopener/.test(dir?.rel || ""), JSON.stringify(dir));
   }
 
+  console.log("\n-- a summary the notes have moved past says so --");
+  {
+    await closeModal(page);
+    await openWO(page, "unit 4A");
+    const ps = await panel(page);
+    t.ck("the panel is there", !!ps?.sum, String(ps?.sum));
+    // A STALE PARAGRAPH IS SHOWN RATHER THAN HIDDEN, because the rooms below
+    // it are always live: what has to change is that it says it is behind.
+    t.ck("the paragraph is still drawn", ps?.sum?.text === PARA, ps?.sum?.text);
+    t.ck("and says the notes have changed since",
+      /have changed/i.test(ps?.sum?.why || ""), ps?.sum?.why);
+    t.ck("and points at the rooms as the current ones",
+      /current/i.test(ps?.sum?.why || ""), ps?.sum?.why);
+    // TWO STATES READING THE SAME PIXELS is the chip bug this project already
+    // paid for -- correct markup, nothing on screen. So the computed rule is
+    // read rather than the class alone.
+    t.ck("and is drawn differently from a current one",
+      !!ps?.sum?.rule && !!p1?.sum?.rule && ps.sum.rule !== p1.sum.rule,
+      `${ps?.sum?.rule} vs ${p1?.sum?.rule}`);
+  }
+
+  console.log("\n-- and one with no summary draws no empty box --");
+  {
+    await closeModal(page);
+    await openWO(page, "unit 9C");
+    const pn = await panel(page);
+    // THE POSITIVE HALF FIRST: an absence assertion passes loudest on a panel
+    // that never rendered at all.
+    t.ck("the rooms and photos still come through",
+      (pn?.rooms || []).length === 2, String((pn?.rooms || []).length));
+    // A blank box over the list would read as "nothing much wrong", which is
+    // the one thing a summary must never say by accident.
+    t.ck("and there is no summary block", pn?.sum === null, JSON.stringify(pn?.sum));
+  }
+
   console.log("\n-- and an ordinary job gets no panel at all --");
-  await page.evaluate(() => document.querySelector(".modal-close, .modal-x")?.click());
-  await wait(500);
-  await page.evaluate(() => { const b = document.querySelector(".modal-backdrop"); if (b) b.click(); });
-  await wait(600);
+  await closeModal(page);
   await openWO(page, "Repaint hallway");
   const p2 = await panel(page);
   // Asserted in the SAME place as the positive case. A fix that drew nothing

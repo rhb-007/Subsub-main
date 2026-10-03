@@ -414,4 +414,25 @@ SELECT
       AND NOT EXISTS (SELECT 1 FROM memberships m
                        WHERE m.user_id = j.access_user_id
                          AND m.account_id = j.account_id
-                         AND m.role = 'tenant'))                                                AS m062_inv_access_not_a_tenant;
+                         AND m.role = 'tenant'))                                                AS m062_inv_access_not_a_tenant,
+
+  -- 063. The summary the work order carries.
+  --
+  -- Counted by its COLUMNS and not by the table name, which is the lesson 052
+  -- paid for against a live database: `sqlite_master` tells you a table is
+  -- there and `pragma_table_info` tells you it is the right one. Must read 5.
+  (SELECT COUNT(*) FROM pragma_table_info('inspection_summaries')
+    WHERE name IN ('summary','source','model','written_at','written_by'))                       AS m063_inspection_summary,
+  -- Invariant, must read ZERO: a summary row that says nothing, or one that
+  -- does not record what it was written from.
+  --
+  -- Both are the same fault wearing two hats. An empty paragraph draws a
+  -- summary box over a list of rooms with a blank in it, and a blank there
+  -- reads as "nothing much wrong" -- which is the one thing a summary must
+  -- never say by accident. An empty `source` is worse: staleness is a
+  -- comparison against it, so a row with none can never be known to be out of
+  -- date and the paragraph becomes unfalsifiable. The route refuses to write
+  -- either, and this counts the ones that got past.
+  (SELECT COUNT(*) FROM inspection_summaries
+    WHERE TRIM(COALESCE(summary, '')) = ''
+       OR TRIM(COALESCE(source, '')) = '')                                                      AS m063_inv_summary_empty;

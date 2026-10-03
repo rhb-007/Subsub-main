@@ -2014,3 +2014,20 @@ CREATE TABLE IF NOT EXISTS inspection_photo_notes (
   updated_at    TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+
+-- 063. The summary the work order carries, written from the comments on the
+-- flagged rooms. A SUMMARY IS NOT THE RECORD -- the same line 057 draws
+-- between a caption and a draft -- so it is its own table: the rooms, notes
+-- and captions stay the thing a deposit argument is run from, and this is a
+-- derived paragraph marked as derived wherever it is drawn. `source` is
+-- exactly what was summarised, stored verbatim, because a job can be raised
+-- from an unfinished inspection and the notes can move on afterwards; keeping
+-- it makes a stale summary a comparison rather than a guess.
+CREATE TABLE IF NOT EXISTS inspection_summaries (
+  inspection_id TEXT PRIMARY KEY REFERENCES inspections(id) ON DELETE CASCADE,
+  summary       TEXT NOT NULL,
+  source        TEXT NOT NULL,
+  model         TEXT,
+  written_at    TEXT,
+  written_by    TEXT REFERENCES users(id)
+);

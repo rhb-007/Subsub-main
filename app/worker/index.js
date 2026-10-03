@@ -52,6 +52,9 @@ import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_
   INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
+import { SUMMARY_MODEL, SUMMARY_SCHEMA, countComments, readSummary,
+  summaryShape, summarySource, summarySystem, summaryThinking, summaryUser,
+  whyNotSummary } from "../shared/inspectsummary.js";
 import { aiConfigured, claudeCall, replyJson } from "./ai.js";
 import { typedNameMatches } from "../shared/typedname.js";
 import { ENGAGED_AS, isEngagedAs, engagedAs, isHandyman, mayEngageHandyman,
@@ -6233,6 +6236,7 @@ export function missingSchema(err) {
   // loosely -- so it is matched only in the two shapes SQLite actually
   // produces for a missing column, and it is first because a later rule with a
   // broader pattern would otherwise claim it.
+  if (/\binspection_summaries\b/i.test(m)) return "063_inspection_summary";
   if (/contractor_(at|note)/i.test(m)) return "061_visit_contractor";
   if (/access_user_id/i.test(m)) return "062_job_access_user";
   if (/no such column: (jobs\.)?access\b|jobs has no column named access\b/i.test(m)) return "060_job_access";
@@ -11714,7 +11718,17 @@ app.get("/api/inspections/:id", requireRole(...INSPECTION_READ_ROLES), async (c)
   // On the payload rather than derived in the browser, because only the
   // Worker knows whether there is a key: the same reason
   // `mail_not_configured` is reported rather than guessed.
-  return c.json({ ...base, aiDrafts: aiConfigured(c.env), ...(await inspectionAudience(c.env.DB, row)) });
+  // THE SUMMARY THE WORK ORDER CARRIES, on the team's copy only. An owner
+  // reading their own report gets the rooms, the notes and the captions and
+  // deliberately not this: the report is what a deposit argument is run from,
+  // and a model's paragraph in it would read as a finding somebody made. The
+  // manager sees it because they are answerable for what their work order
+  // says. `aiDrafts` is read for this too -- it means "SubSub has a model
+  // key", which is one fact, and a second field with the same value in it is
+  // two records of one.
+  return c.json({ ...base, aiDrafts: aiConfigured(c.env),
+    summary: summaryShape(await inspectionSummaryRow(c.env.DB, row.id), inspectionRowToJs(row), base.rooms),
+    ...(await inspectionAudience(c.env.DB, row)) });
 });
 
 // SENDING THE REPORT TO THE BUILDING'S OWNER.
@@ -12162,6 +12176,169 @@ app.post("/api/inspections/:id/rooms/:roomId/drafts", requireRole(...INSPECTION_
     rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 
+// ---------------------------------------------------------------------------
+// THE SUMMARY A WORK ORDER CARRIES
+// ---------------------------------------------------------------------------
+//
+// Asked for as: *"A work order should also carry a summary of all of the
+// comments from the follow up or flagged item to give as a summary for the
+// subcontractor. Combine the comments and summarize automatically."*
+//
+// 062 carries the flagged rooms, their notes and their photographs to whoever
+// is going to do the work, which is the record. What a list of rooms cannot
+// say about itself is what the job IS, taken together -- that eleven lines
+// about scuffing are one repaint across four rooms plus one tap -- and that is
+// the first thing somebody pricing it wants. So the comments are combined
+// once, at the top.
+//
+// EVERY RULE ABOUT THE REQUEST IS IN `shared/inspectsummary.js`: the model,
+// the prompt, the schema, what gets summarised and the caps. The route calls
+// out and stores; what to ask is that module's business.
+
+// WHICH MIGRATIONS CAN BE BEHIND THIS, answered without failing. A database
+// without 063 has no summaries, which is a work order drawn without one
+// rather than a modal that will not open -- the same degradation
+// `inspectionRooms` makes for 057's captions one table along.
+async function inspectionSummaryRow(db, inspectionId) {
+  try {
+    return await db.prepare(
+      `SELECT summary, source, model, written_at FROM inspection_summaries WHERE inspection_id = ?`
+    ).bind(inspectionId).first();
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return null;
+  }
+}
+
+// The statuses the refusals answer with. A table rather than a chain of
+// ternaries, because the reasons live in the shared module and a reason added
+// there must arrive here with a status rather than falling through to 502 --
+// which would tell somebody to try again over a gate that will never open.
+const SUMMARY_STATUS = {
+  ai_not_configured: 503,
+  migration_needed: 503,
+  nothing_flagged: 409,
+  no_comments: 409,
+  rate_limited: 429,
+  ai_unavailable: 502,
+};
+
+// THE ONE WRITER, used by both doors -- the automatic one at raise time and
+// the rewrite -- so they cannot disagree about what gets asked, what gets
+// stored, or what the activity trail says. Two copies of an outbound call
+// this specific is two places for the prompt to rot.
+//
+// IT ANSWERS RATHER THAN THROWING, because one of its two callers has already
+// created a job by the time it runs and must not fail on account of a
+// paragraph.
+async function writeInspectionSummary(c, auth, row, rooms) {
+  const insp = inspectionRowToJs(row);
+  const flagged = flaggedRooms(rooms).length;
+  // The same predicate the button reads, so the screen cannot offer what this
+  // refuses. `no_comments` is the one that matters: with nothing written on
+  // any flagged room there is nothing to combine, and a model handed two room
+  // names and a status will write a confident sentence about what is wrong
+  // with them. An invented fault on a document somebody is about to quote
+  // reads exactly like a real one.
+  const why = whyNotSummary({
+    configured: aiConfigured(c.env),
+    flagged,
+    comments: countComments(insp, rooms),
+  });
+  if (why) return { error: why };
+
+  // PER ACCOUNT, because every call spends real money and the one thing a
+  // limit has to stop is a loop. Lower than the drafts' forty: a summary is
+  // one per inspection rather than one per room.
+  const rl = await rateLimit(c.env, "inspection-summary", auth.accountId, { limit: 30, windowMinutes: 60 });
+  if (!rl.ok) return { error: "rate_limited" };
+
+  // WHAT IS BEING SUMMARISED, HELD RATHER THAN RE-DERIVED AFTERWARDS. This
+  // exact text is both what the model is given and what gets stored, so the
+  // staleness comparison is against the thing it actually read -- the rule
+  // `agreements` follows by hashing what the signer was shown.
+  const source = summarySource(insp, rooms);
+  let text;
+  try {
+    const msg = await claudeCall(c.env, {
+      model: SUMMARY_MODEL,
+      // Two to four sentences and no more. A cap that allowed an essay would
+      // invite one, and a summary longer than the list beneath it has stopped
+      // being a summary.
+      max_tokens: 500,
+      system: summarySystem({ kindLabel: INSPECTION_KINDS[row.kind]?.label || "Move-out" }),
+      messages: [{ role: "user", content: summaryUser(insp, rooms) }],
+      // Thinking off, and the spelling comes off the model rather than being
+      // written here -- the models disagree about how to say it, so a hard
+      // coded setting beside a model constant is a 400 on the first press
+      // after a swap. `summaryThinking` is the drafts' own table, read rather
+      // than copied, because the pairing is one fact.
+      ...(summaryThinking() ? { thinking: summaryThinking() } : {}),
+      output_config: { format: { type: "json_schema", schema: SUMMARY_SCHEMA } },
+    });
+    text = readSummary(replyJson(msg));
+  } catch (err) {
+    // Nothing was written, so "try again" is always true and is what the
+    // screen says. What is NOT done is swallow it: somebody is waiting.
+    console.warn("[inspection-summary] not written:", err?.code || "", err?.message || err);
+    return { error: err?.message === "ai_not_configured" ? "ai_not_configured" : "ai_unavailable" };
+  }
+  // An empty paragraph is a failure and not a summary. A row with one in it
+  // would draw an empty box over the list of rooms, and a blank there reads as
+  // "nothing much wrong" -- which is the one thing this must never say by
+  // accident, and what CHECK.sql's own invariant counts.
+  if (!text) return { error: "ai_unavailable" };
+
+  const now = new Date().toISOString();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO inspection_summaries (inspection_id, summary, source, model, written_at, written_by)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(inspection_id) DO UPDATE SET
+         summary = excluded.summary, source = excluded.source, model = excluded.model,
+         written_at = excluded.written_at, written_by = excluded.written_by`
+    ).bind(row.id, text, source, SUMMARY_MODEL, now, auth.userId).run();
+  } catch (err) {
+    if (missingSchema(err)) return { error: "migration_needed", migration: "063_inspection_summary" };
+    throw err;
+  }
+  // Logged here rather than at each door, so both record it and neither can
+  // forget. Asking a third party to read a tenant's condition notes is the
+  // sort of thing that gets asked about later -- the same reason the photo
+  // drafts log their own press.
+  await logActivity(c.env, auth.accountId, auth.userId, "inspection_summary",
+    `Wrote the work-order summary from ${flagged} flagged room${flagged === 1 ? "" : "s"}`);
+  return { ok: true,
+    summary: summaryShape({ summary: text, source, model: SUMMARY_MODEL, written_at: now }, insp, rooms) };
+}
+
+// REWRITING IT, which is the way out of the two states the automatic one
+// leaves behind: a call that failed, and notes that have moved on since.
+//
+// NOT GATED ON FINISHED, deliberately, and that is the opposite answer to the
+// drafting route. Drafting writes to the inspection, which is a document
+// somebody quotes back, so finishing shuts it. This writes a derived
+// paragraph in its own table and touches nothing in the record -- and the
+// moment it is most wanted is after the job has been raised, which is very
+// often after finishing. Gating it would leave a finished inspection whose
+// automatic summary failed with no way ever to get one.
+app.post("/api/inspections/:id/summary", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  // `drafts: false` is belt and braces rather than the guarantee: the source
+  // is built through `contractorInspectionShape`, which drops them. Said twice
+  // because a model's unkept sentence reaching a summary the contractor reads
+  // is the one way this feature could put a working note on a work order.
+  const rooms = await inspectionRooms(c.env.DB, row.id, { drafts: false });
+  const made = await writeInspectionSummary(c, auth, row, rooms);
+  if (made.error) {
+    return c.json({ error: made.error, migration: made.migration || null },
+      SUMMARY_STATUS[made.error] || 502);
+  }
+  return c.json({ ok: true, summary: made.summary });
+});
+
 // Serving one back. The caller names an inspection and a photo on it, never a
 // key: the key is read from the row after the same check every other route on
 // that inspection makes. An <img src> cannot carry an Authorization header,
@@ -12253,7 +12430,13 @@ app.get("/api/work-orders/:id/inspection", requireRole("admin", "pm", "contracto
   // working note, and handing it to the company doing the work would make it
   // read as a finding somebody made.
   const rooms = await inspectionRooms(c.env.DB, insp.id, { drafts: false });
-  return c.json(contractorInspectionShape(inspectionRowToJs(insp), rooms));
+  // AND THE SUMMARY OF ALL OF IT, which is the half a list of rooms cannot
+  // give. `stale` comes back with it rather than being hidden: the notes can
+  // change after a job is raised, and a paragraph written from the old ones
+  // drawn as current is worse than none -- the rooms beneath it are always
+  // live, so saying so is what keeps the two readable together.
+  return c.json({ ...contractorInspectionShape(inspectionRowToJs(insp), rooms),
+    summary: summaryShape(await inspectionSummaryRow(c.env.DB, insp.id), inspectionRowToJs(insp), rooms) });
 });
 
 // The bytes. Pinned three ways, the same three the pack file route is: the
@@ -12386,12 +12569,38 @@ app.post("/api/inspections/:id/job", requireRole(...INSPECTION_WRITE_ROLES), asy
   await c.env.DB.prepare(`UPDATE inspections SET job_id = ? WHERE id = ?`).bind(jobId, row.id).run();
   await logActivity(c.env, auth.accountId, auth.userId, "inspection_job",
     `Raised a job from the inspection${row.unit ? ` of unit ${row.unit}` : ""}: ${flagged.length} room${flagged.length === 1 ? "" : "s"} to put right`);
+
+  // THE SUMMARY, WRITTEN AUTOMATICALLY, AND NEVER ALLOWED TO BLOCK THE RAISE.
+  // *"Combine the comments and summarize automatically"* -- so there is no
+  // button for the ordinary case: raising the job is the press.
+  //
+  // IT RUNS HERE RATHER THAN ON THE CONTRACTOR'S FIRST READ, which is the
+  // obvious alternative and is wrong three ways over: it would spend this
+  // account's money on a press they did not make, it would fail at the one
+  // moment the person needs it with nothing written to fall back on, and
+  // three companies on one job would pay for three answers to one question.
+  //
+  // THE CATCH IS WIDE ON PURPOSE, which this project normally refuses. By the
+  // time this runs the job exists and the inspection points at it, so a throw
+  // here would answer 500 to a raise that already happened -- the screen
+  // would say it failed over work that is on the Jobs screen, which is
+  // strictly worse than a work order with no summary on it. Logged rather
+  // than swallowed, and the reply says which it was.
+  const made = await writeInspectionSummary(c, auth, row, rooms).catch((err) => {
+    console.warn("[inspection-summary] threw while raising:", err?.message || err);
+    return { error: "ai_unavailable" };
+  });
   // Said rather than assumed, the same way the invite route reports whether
   // 059 landed: a screen that cannot tell "the tenant will be asked" from
   // "there was nobody to ask" is a screen that promises a confirmation step
   // that is never going to happen.
+  // `summaryError` is said rather than left to be inferred from a null, for
+  // the reason `engagedAsRecorded` is: a screen that cannot tell "there was
+  // nothing to summarise" from "the call failed" cannot offer the one of those
+  // that is worth a second press.
   return c.json({ ok: true, jobId, flagged: flagged.length,
-    access: access || null, accessUserId: accessUser }, 201);
+    access: access || null, accessUserId: accessUser,
+    summary: made.ok ? made.summary : null, summaryError: made.error || null }, 201);
 });
 
 app.put("/api/uploads/:kind/:fileName", async (c) => {

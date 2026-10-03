@@ -7304,11 +7304,175 @@ refactor.
   that shape: a whole screen's worth of assertions failing at once, with the
   first one being something that has worked for months.
 
+- **A LIST OF ELEVEN ROOMS CANNOT SAY WHAT THE JOB IS, so the comments are
+  combined once at the top.** Asked for as *"A work order should also carry a
+  summary of all of the comments from the follow up or flagged item to give as
+  a summary for the subcontractor. Combine the comments and summarize
+  automatically."*
+
+  062 already carries the flagged rooms, their notes and their photographs to
+  whoever drives to the job, which is the record. What a list cannot say about
+  itself is the thing somebody pricing it wants first: that eleven lines about
+  scuffing are one repaint across four rooms plus a tap. Migration 063,
+  `app/shared/inspectsummary.js`.
+
+  **A SUMMARY IS NOT THE RECORD**, which is the same line 057 draws between a
+  caption and a draft and the reason this is its own table rather than a column
+  on `inspections`. The rooms stay underneath in full and stay the thing a
+  deposit argument is run from; deleting every row in `inspection_summaries`
+  would lose nothing but convenience. On the screen it says it was *put
+  together automatically* for the same reason an unkept photo draft is drawn
+  dashed: the reader is about to put a price on this, and a paragraph read as
+  the hiring account's own instruction is a paragraph they will quote back.
+
+  **IT IS A SUMMARY OF WHAT THE CONTRACTOR CAN ALREADY READ, which is the
+  design rather than a convenience.** `summarySource` is built *through*
+  `contractorInspectionShape` — the redaction the work order already applies —
+  so the model is handed flagged rooms only, the captions somebody kept and
+  never the model's own unkept drafts, and no tenant name. Two things follow: a
+  summary cannot contain anything its reader is not also shown, and a field
+  added to that shape later cannot leak through a second path that forgot about
+  it. The discriminating fixture is a photograph carrying a **draft and no
+  caption** — the only row either behaviour can be told apart on — plus a room
+  that was **fine with a note on it**, and both are asserted on the request
+  that actually goes out.
+
+  **IT RUNS AT RAISE TIME AND NEVER BLOCKS THE RAISE.** The obvious
+  alternative is the contractor's first read, and it is wrong three ways: it
+  spends the account's money on a press they did not make, it fails at the one
+  moment the person needs it with nothing written to fall back on, and three
+  companies on one job pay for three answers to one question. So raising the
+  job is the press — there is no button for the ordinary case, which is what
+  *automatically* means. **The catch around it is deliberately wide**, which
+  this file normally refuses: by the time it runs the job exists and the
+  inspection points at it, so a throw would answer 500 to a raise that already
+  happened, and a screen reporting failure over work that is on the Jobs
+  screen is strictly worse than a work order with no paragraph on it. The reply
+  carries `summaryError` by name rather than a bare null, for the reason
+  `engagedAsRecorded` does: a screen that cannot tell *there was nothing to
+  summarise* from *the call failed* cannot offer the one of those worth a
+  second press.
+
+  **NOTHING TO COMBINE IS A REFUSAL, NOT A PROMPT.** A model handed *Bathroom 1
+  — Fail, Kitchen — Follow-up* will write a confident sentence about what is
+  wrong with them, and an invented fault on a document somebody is about to
+  quote reads exactly like a real one — the `unclear` rule from the photo
+  drafts arriving from the other direction. `no_comments` answers 409 with no
+  call made at all, and the fixture for it is a **real flagged room with no
+  note and no caption** rather than a hand-made argument object.
+
+  **STALENESS IS A COMPARISON, WHICH IS WHY `source` IS STORED VERBATIM.** A
+  job can be raised from an **unfinished** inspection — deliberately, because
+  the leak does not wait for the paperwork — so the notes can move on and a
+  paragraph from the old ones would read as current. Same rule `agreements`
+  follows by hashing what the signer was shown rather than re-rendering later;
+  stored rather than hashed because it is a kilobyte either way and a hash
+  cannot be read back by anybody wondering what the model was actually given.
+  A stale summary is **said, never quietly rewritten**: re-asking on every read
+  would spend money on a press nobody made and change a document somebody may
+  already have quoted from, so the panel says it is behind and the rooms under
+  it are always live. `source` itself never travels to anybody — it is the
+  notes, which the same reader has in full underneath.
+
+  **FINISHED IS DELIBERATELY NOT A GATE, and that is the opposite answer to
+  `whyNotDraft` beside it.** Drafting writes to the inspection, which is a
+  document somebody quotes back, so finishing shuts it. This writes a derived
+  paragraph in its own table and touches nothing in the record — and the moment
+  it is most wanted is after the job has been raised, which is very often after
+  finishing. Gating it would leave a finished inspection whose automatic
+  summary failed with no way ever to get one.
+
+  **THE MODEL IS THE DRAFTS' MODEL, with no second constant.** How you turn
+  thinking off is validated as a **combination** with the model rather than as
+  a field of its own, which is the whole lesson `DRAFT_THINKING` records — so a
+  second model constant here would be a second place for that pairing to be got
+  wrong, and the one that was wrong would be the one nobody pressed this week.
+  A test pins that the two are the same id and that `knowsThinking` has heard
+  of it.
+
+  **THE OWNER'S COPY DOES NOT CARRY IT.** The report is what a deposit argument
+  is run from, and a model's paragraph in it would read as a finding somebody
+  made. The manager sees it because they are answerable for what their work
+  order says — and `aiDrafts` is read for both buttons, because it means *SubSub
+  has a model key*, which is one fact.
+
+  **AND THE INVARIANT IS RUN AGAINST A REAL ROW**, which is the lesson 057 paid
+  for: every invariant reads zero on an empty database, so one that is subtly
+  wrong passes for ever. `m063_inv_summary_empty` counts a row that says
+  nothing or cannot say what it summarised — the first draws a blank box over
+  the list of rooms, and a blank there reads as *nothing much wrong*; the second
+  makes the paragraph unfalsifiable, since staleness is a comparison against it.
+  Seeded both ways. And the column check counts **five named columns** rather
+  than the table name, which is what the broken 052 cost once already.
+
+  One paste, no `ALTER TABLE`, for the reason 048 and 057 both chose a table:
+  four `ADD COLUMN`s is four pastes and an operator who has to get the order
+  right.
+
+
+- **FIVE DEPLOYS IN A ROW FAILED ON LINT AND NOBODY NOTICED, WHICH IS WORSE
+  THAN THE BUG THEY WERE STOPPING.** Reported as a white screen on a job:
+  *"Can't find variable: canManage"*, with the way back out a broken Cloudflare
+  page.
+
+  The line is `canSetAccess={mayChooseAccess(kindOf(account)) && canManage}`.
+  **`canManage` is a PROP NAME on six components in `App.tsx` and is not a
+  variable in the scope that line sits in** — so opening an approved,
+  tenant-requested job threw on render and took the Jobs view with it. Reading
+  it back it looks exactly right, which is the whole trouble: the name is real,
+  it is spelt correctly, and it means something three hundred lines away.
+
+  **THE GUARD ALREADY EXISTED AND ALREADY CAUGHT IT.** `eslint.config.mjs`
+  turns on `no-undef` for precisely this, and its own comment records the last
+  time this class shipped — `needsEmail`, `email` and `setEmail` read by the
+  tenant sign-up page and never declared, every tenant following their invite
+  getting a blank screen. `npm run lint` names this one in a second, and all
+  three deploy workflows run it before they build.
+
+  So the deploy **refused, correctly, five times**: 989cf5d, 41072bf, ab3f657,
+  040cf45 and 61a6fc5 all went red at the Lint step and nothing was published.
+  The customer app and the console both stayed on 4c544c6 all day. Which means
+  a day of work was not live, the person using it was looking at an older
+  build, and **nothing anywhere said so** — a red tick in a tab nobody opens is
+  not a report. Every commit message said what shipped; none of it had.
+
+  **The general form, and it is new here: a guard that runs where nobody is
+  looking is a guard that reports to nobody.** The lesson this project keeps
+  writing down is about assertions that cannot fail. This is its opposite — an
+  assertion that fired every time, correctly, into silence.
+
+  So the rule is in `## Working here`: **run `npm run lint` before any commit
+  that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
+  runs it and a failure there is not a failed test, it is a release that did
+  not happen. And when work is pushed, **check the run went green** rather than
+  assuming the push was the end of it.
+
+  `maySetAccess` in `app/shared/access.js` is the fix, and where it lives is
+  the point. It is `requireRole("admin", "pm")` on `PATCH /api/jobs/:id`, so it
+  is those two and no more — named beside `mayChooseAccess`, which already
+  answers the account-kind half, because the two together are one question and
+  a role list written at a call site is a role list that drifts from its route.
+  **The capability vocabulary is deliberately not used**: `can("jobs")`
+  includes an OWNER, who is a guest on somebody else's account and whom that
+  route refuses, so gating on it would have been looser than the server rather
+  than merely undefined.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
   `app/worker/index.js` (Hono on Cloudflare Workers + D1 + R2), and the
   marketing site is at the repo root.
+- **RUN `npm run lint` BEFORE COMMITTING ANYTHING UNDER `app/`, and check the
+  run went green after pushing.** All three deploy workflows run it before they
+  build, so a lint error is not a failing test — it is a release that does not
+  happen, silently from the outside. Five commits in a row once went red at that
+  step over one undefined variable while every commit message said what had
+  shipped; the person using the product was on a build from that morning and
+  nothing told either of us. `eslint.config.mjs` is there for exactly one class
+  of bug — a name used and never declared, which esbuild does not check and
+  which white-screens the app on render.
+
 - **Three things deploy, and each one is a button in the Actions tab.**
   `deploy-api.yml` is the `subsub-api` Worker, `deploy-admin.yml` is the
   `subsub-admin` Worker, and `deploy-app.yml` is the Cloudflare Pages project

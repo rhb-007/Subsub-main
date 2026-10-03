@@ -27,6 +27,7 @@ const acct = (kind) => ({
 const USERS = (role) => [{ id: "usr_r", name: "Christopher Lane", email: "chris@x.test", phone: null,
   role, subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }];
 
+const PARA = "Nail-hole repair and paint through the walls and floors.";
 let KIND = "property_manager";
 let ROLE = "admin";
 // One draft, mid-walk: a room marked OK, one flagged, one nobody has got to.
@@ -53,6 +54,14 @@ const LIST = () => [{ id: "insp_1", propertyId: "prop_1", unit: "3B", kind: "mov
 // -- who else was told is the account's own record and not an owner's to
 // collect -- so the stub has to be able to withhold them the way the route
 // does.
+// Whether there is a model key at all. Held apart from DETAIL so the suite
+// can drive the no-key branch, where the button must not be drawn: a press
+// that answers 503 is a dead end with no explanation on it.
+let AI = true;
+// A rewrite the server refuses, with the key still in place. Held apart from
+// AI because no key means no button at all, so it cannot produce the state
+// this is for: the paragraph still up with the reason on it.
+let SUMFAIL = false;
 let RECIPIENTS = [
   { id: "u_own", name: "Marion Oakes", email: "marion@oakes.test" },
   { id: "u_own2", name: "Rhys Vance", email: "rhys@vance.test" },
@@ -65,8 +74,11 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/inspections" && method === "GET") return [200, LIST()];
   if (path === "/api/inspections/insp_1" && method === "GET") {
     // The route gives an owner the inspection and nothing about the audience.
+    // `aiDrafts` is "SubSub has a model key", which is one fact and is read by
+    // the summary button as well as the drafting one. A second field with the
+    // same value in it would be two records of one.
     return [200, ROLE === "owner" ? DETAIL
-      : { ...DETAIL, recipients: RECIPIENTS, sends: SENDS }];
+      : { ...DETAIL, recipients: RECIPIENTS, sends: SENDS, aiDrafts: AI }];
   }
   if (path === "/api/inspections/insp_1/send" && method === "POST") {
     sent.push({ path, body });
@@ -95,8 +107,21 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   }
   if (path === "/api/inspections/insp_1/job" && method === "POST") {
     sent.push({ path, body });
+    // The raise writes the summary itself -- *"combine the comments and
+    // summarize automatically"* -- so there is no press for the first one.
+    // Driven as a FAILED write here, because that is the state the panel
+    // exists for and the state the suite can then press out of.
     DETAIL = { ...DETAIL, jobId: "job_new" };
-    return [201, { ok: true, jobId: "job_new", flagged: 1 }];
+    return [201, { ok: true, jobId: "job_new", flagged: 1,
+      summary: null, summaryError: "ai_unavailable" }];
+  }
+  if (path === "/api/inspections/insp_1/summary" && method === "POST") {
+    sent.push({ path, body });
+    if (!AI) return [503, { error: "ai_not_configured" }];
+    if (SUMFAIL) return [502, { error: "ai_unavailable" }];
+    DETAIL = { ...DETAIL, summary: { text: PARA, model: "claude-haiku-4-5",
+      writtenAt: "2026-10-02T09:00:00.000Z", stale: false } };
+    return [200, { ok: true, summary: DETAIL.summary }];
   }
   if (path.startsWith("/api/account-by-subdomain/")) return [200, acct(KIND)];
   if (path === "/api/account") return [200, acct(KIND)];
@@ -446,6 +471,156 @@ try {
         && /jobs/i.test(document.querySelector("nav button.on")?.innerText || "")),
       await page.evaluate(() => document.querySelector("nav button.on")?.innerText));
     await ctx.close().catch(() => {});
+  }
+
+  console.log("\n-- the summary the work order carries, and the way out of a failed one --");
+  {
+    // THE PANEL IS NOT DRAWN BEFORE THERE IS A JOB TO CARRY IT. Asserted in
+    // the SAME place as the positive case: raising the job writes the
+    // summary, so a Write-one button beforehand would be a control for a
+    // document that does not exist yet -- and a check written only after the
+    // raise cannot tell that from a panel drawn always.
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
+    const read = (page) => page.evaluate(() => {
+      const el = document.querySelector(".insp-sum");
+      if (!el) return null;
+      const btn = [...el.querySelectorAll("button")].map((b) => b.innerText.trim());
+      const tone = (sel) => {
+        const n = el.querySelector(sel);
+        return n ? getComputedStyle(n).color : null;
+      };
+      return {
+        text: (el.querySelector(".insp-sumt")?.innerText || "").trim(),
+        none: (el.querySelector(".prop-none")?.innerText || "").replace(/\s+/g, " ").trim(),
+        // SCOPED. `.fld-note` is the generic hint class and other blocks on
+        // this screen are read by it, so a bare selector here finds whichever
+        // exists -- the trap this project keeps paying for. A mutation run
+        // showed this panel's blurb satisfying an assertion about the Finish
+        // hint the moment the panel appeared where it should not.
+        notes: [...el.querySelectorAll(".insp-sumnote")].map((n) => n.innerText.replace(/\s+/g, " ").trim()),
+        // ITS OWN CLASS AND ITS OWN COLOUR. `fld-err` is red and means "this
+        // did not work", which the save error below uses; a paragraph that is
+        // only behind the notes is amber.
+        stale: (el.querySelector(".insp-sumstale")?.innerText || "").replace(/\s+/g, " ").trim(),
+        staleTone: tone(".insp-sumstale"),
+        err: (el.querySelector(".fld-err")?.innerText || "").replace(/\s+/g, " ").trim(),
+        errTone: tone(".fld-err"),
+        btn,
+      };
+    });
+    {
+      const { ctx, page } = await openOne();
+      t.ck("the inspection really opened",
+        await page.evaluate(() => !!document.querySelector(".insp-detail")));
+      t.ck("and with no job raised there is no summary panel",
+        (await read(page)) === null, JSON.stringify(await read(page)));
+      await ctx.close().catch(() => {});
+    }
+
+    // THE FAILED WRITE, which is the state the panel exists for: the raise
+    // answered `summaryError`, so the work order carries the rooms and no
+    // paragraph, and without a way back it would stay that way for ever.
+    DETAIL = { ...JSON.parse(JSON.stringify(FIXTURE)), jobId: "job_new" };
+    {
+      const { ctx, page } = await openOne();
+      sent.length = 0;
+      const before = await read(page);
+      t.ck("a raised job with no summary draws the panel", !!before, JSON.stringify(before));
+      t.ck("saying none was written rather than leaving a blank",
+        /No summary was written/i.test(before?.none || ""), before?.none);
+      t.ck("and what the paragraph is for", 
+        (before?.notes || []).some((n) => /before the room-by-room list/i.test(n)),
+        JSON.stringify(before?.notes));
+      // THE GUARANTEE THAT KEEPS A MODEL'S WORKING NOTE OFF A WORK ORDER,
+      // said on the screen of the person who is answerable for it.
+      t.ck("and that a draft nobody kept is never in it",
+        (before?.notes || []).some((n) => /never from a draft nobody kept/i.test(n)),
+        JSON.stringify(before?.notes));
+      t.ck("with one press to write it", (before?.btn || []).join() === "Write one",
+        JSON.stringify(before?.btn));
+
+      await page.evaluate(() => [...document.querySelectorAll(".insp-sum button")]
+        .find((b) => /write one/i.test(b.innerText))?.click());
+      await wait(900);
+      t.ck("pressing it asks the server once",
+        sent.filter((x) => /\/summary$/.test(x.path)).length === 1, JSON.stringify(sent));
+      const after = await read(page);
+      t.ck("and the paragraph is drawn", after?.text === PARA, after?.text);
+      t.ck("with the press now offering a rewrite rather than a write",
+        (after?.btn || []).join() === "Rewrite it", JSON.stringify(after?.btn));
+      await ctx.close().catch(() => {});
+    }
+
+    // STALE IS SAID, NOT QUIETLY REWRITTEN. A job can be raised from an
+    // unfinished inspection, so the notes move on; re-asking on every read
+    // would spend money on a press nobody made and change a document somebody
+    // may already have quoted from.
+    DETAIL = { ...JSON.parse(JSON.stringify(FIXTURE)), jobId: "job_new",
+      summary: { text: PARA, model: "claude-haiku-4-5",
+        writtenAt: "2026-10-02T09:00:00.000Z", stale: true } };
+    {
+      const { ctx, page } = await openOne();
+      const v = await read(page);
+      t.ck("a stale summary is still shown", v?.text === PARA, v?.text);
+      t.ck("and says the notes have changed since it was written",
+        /notes have changed/i.test(v?.stale || ""), v?.stale);
+      t.ck("and which of the two is current",
+        /rooms are current/i.test(v?.stale || ""), v?.stale);
+      t.ck("with the press offering a rewrite", (v?.btn || []).join() === "Rewrite it",
+        JSON.stringify(v?.btn));
+
+      // A REFUSED REWRITE LEAVES THE PARAGRAPH UP WITH THE REASON ON IT.
+      // Closing on a failure, or blanking what is there, would read as a
+      // success -- the rule `ConfirmRemove` follows.
+      SUMFAIL = true;
+      await page.evaluate(() => [...document.querySelectorAll(".insp-sum button")]
+        .find((b) => /rewrite/i.test(b.innerText))?.click());
+      await wait(900);
+      const bad = await read(page);
+      t.ck("a refused rewrite keeps the paragraph that is there", bad?.text === PARA, bad?.text);
+      t.ck("and says why, in SubSub's own words",
+        /Couldn't reach the summarising service/i.test(bad?.err || ""), bad?.err);
+      // AND THE TWO MESSAGES ARE NOT ONE COLOUR. Both are on screen here, so
+      // this is the only state either can be compared against the other in --
+      // a check with one of them absent passes whatever the colours are.
+      t.ck("and a stale paragraph is not drawn as a failure",
+        !!bad?.staleTone && !!bad?.errTone && bad.staleTone !== bad.errTone,
+        `${bad?.staleTone} vs ${bad?.errTone}`);
+      SUMFAIL = false;
+      await ctx.close().catch(() => {});
+    }
+
+    // NO KEY, NO BUTTON. A press that answers 503 is a dead end with no
+    // explanation on it -- and withholding one that would have worked is the
+    // same lie, which is why both branches are driven here.
+    AI = false;
+    {
+      const { ctx, page } = await openOne();
+      const v = await read(page);
+      t.ck("with no model key the panel is still drawn", !!v, JSON.stringify(v));
+      t.ck("but offers no press at all", (v?.btn || []).length === 0, JSON.stringify(v?.btn));
+      t.ck("and says why instead",
+        (v?.notes || []).some((n) => /isn't switched on/i.test(n)), JSON.stringify(v?.notes));
+      await ctx.close().catch(() => {});
+    }
+    AI = true;
+
+    // NOTHING TO COMBINE is the ordinary state of a half-walked inspection
+    // rather than a problem, so it is named rather than drawn as a dead
+    // button -- a disabled control with nothing beside it is
+    // indistinguishable from a broken one, which this project has paid for.
+    DETAIL = { ...JSON.parse(JSON.stringify(FIXTURE)), jobId: "job_new",
+      rooms: [{ id: "r1", name: "Kitchen", status: "fail", note: "", position: 0, photos: [] }] };
+    {
+      const { ctx, page } = await openOne();
+      const v = await read(page);
+      t.ck("a flagged room with nothing written on it offers no press",
+        !!v && (v.btn || []).length === 0, JSON.stringify(v));
+      t.ck("and says what to write first",
+        (v?.notes || []).some((n) => /nothing to combine yet/i.test(n)), JSON.stringify(v?.notes));
+      await ctx.close().catch(() => {});
+    }
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
   }
 
   console.log("\n-- a finished one is readable and not writable --");

@@ -67,6 +67,7 @@ import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   suggestTrades, inspectionStep } from "../shared/inspection.js";
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
+import { SUMMARY_REFUSALS, countComments, whyNotSummary } from "../shared/inspectsummary.js";
 import { agreementStateText, renderAgreement } from "../shared/agreement.js";
 import { typedNameMatches, typedNameHint } from "../shared/typedname.js";
 import { ENGAGED_AS, engagedAs, isHandyman, engagedSeatLabel, mayEngageHandyman, mayCover,
@@ -75,7 +76,7 @@ import { handymanCapCheck, handymanCapText,
   HANDYMAN_GLOBAL_RULES } from "../shared/handycap.js";
 import { workWhen, scheduledOn, WHEN_KINDS } from "../shared/schedule.js";
 import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
-  mayChooseAccess } from "../shared/access.js";
+  mayChooseAccess, maySetAccess } from "../shared/access.js";
 import { visitParties, waitingOn as visitWaitingOn } from "../shared/visitparty.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -6311,7 +6312,7 @@ export default function SubSub() {
                     {j.requestedBy && j.approvedAt && !isClosed(j) && (
                       <VisitBlock job={j} visit={visits.find((v) => v.jobId === j.id) || null}
                         who={users.find((u) => u.id === j.requestedBy)} onPropose={proposeVisit}
-                        canSetAccess={mayChooseAccess(kindOf(account)) && canManage}
+                        canSetAccess={mayChooseAccess(kindOf(account)) && maySetAccess(role)}
                         onSetAccess={setJobAccess}
                         onAssign={() => {
                           const slot = j.trades.find((t) => !j.assignments[t]) || j.trades[0];
@@ -12090,6 +12091,28 @@ function JobInspection({ woId }) {
         <span>{K ? K.label : "Inspection"}{data.unit ? ` — unit ${data.unit}` : ""}
           {data.inspectedOn ? ` · walked ${data.inspectedOn}` : ""}</span>
       </p>
+      {/* WHAT THE JOB IS, TAKEN TOGETHER. The rooms below are the record and
+          this is the one thing a list cannot say about itself: that eleven
+          lines about scuffing are one repaint across four rooms plus a tap.
+
+          IT SAYS IT WAS PUT TOGETHER AUTOMATICALLY, which is not modesty. The
+          reader is about to price this, and a paragraph read as the hiring
+          account's own instruction is a paragraph they will quote back --
+          the same reason an unkept photo draft is drawn dashed rather than
+          silently adopted. And when the notes have moved on since it was
+          written it says THAT, because a stale summary drawn as current over
+          a list that is live is worse than no summary. */}
+      {data.summary && (
+        <div className={`woi-sum${data.summary.stale ? " is-stale" : ""}`}>
+          <p className="woi-sumt">{data.summary.text}</p>
+          <p className="woi-sumwhy">
+            <Sparkles size={11} />
+            {data.summary.stale
+              ? "Put together automatically from the notes. They have changed since — the rooms below are the current ones."
+              : "Put together automatically from the notes below, which are the record."}
+          </p>
+        </div>
+      )}
       {data.rooms.map((r) => (
         <div key={r.id} className="woi-room">
           <div className="woi-rhead">
@@ -26750,6 +26773,106 @@ function InspectionWalk({ step, busy, onPoint, onRaise, onFinish, onGoJob, first
   );
 }
 
+// THE ONE PARAGRAPH WHOEVER DOES THE WORK READS FIRST, and the manager's view
+// of it.
+//
+// There is no button for the ordinary case -- raising the job writes it, which
+// is what *"combine the comments and summarize automatically"* asks for. This
+// panel exists for the two states that leaves behind, and both are real:
+//
+//   the call failed      -- no key, an overloaded model, a dropped request.
+//                           Without a way back the work order carries no
+//                           summary for ever, which is a dead end nobody can
+//                           see from the Jobs screen.
+//   the notes moved on   -- a job can be raised from an UNFINISHED
+//                           inspection, deliberately, because the leak does
+//                           not wait for the paperwork. So a paragraph can go
+//                           out of date while the rooms under it stay live.
+//
+// `stale` IS SHOWN RATHER THAN QUIETLY REWRITTEN. Re-asking on every read
+// would spend money on a press nobody made and would change a document
+// somebody may already have quoted from; saying it is behind and offering the
+// press is the same shape the pack card uses for an expiring certificate.
+//
+// IT READS ONE PREDICATE WITH THE ROUTE. `whyNotSummary` decides both, so
+// there is no button here that answers 409 and none withheld that would have
+// worked -- which this project calls the same lie in both directions.
+function InspectionSummaryPanel({ inspection, rooms = [], onReload }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const sum = inspection.summary || null;
+  const why = whyNotSummary({
+    // Off the inspection rather than assumed: only the Worker knows whether
+    // there is a key, and a button that cannot work must not be drawn. The
+    // same field the drafting button reads, because it is the same fact.
+    configured: !!inspection.aiDrafts,
+    flagged: flaggedRooms(rooms).length,
+    comments: countComments(inspection, rooms),
+  });
+  const write = async () => {
+    setBusy(true); setErr("");
+    try {
+      await api.summariseInspection(inspection.id);
+      await onReload();
+    } catch (e) {
+      // `SUMMARY_REFUSALS` first, because that is where the reasons and their
+      // words live together -- a reason added to the module arrives with its
+      // sentence rather than falling through to "that didn't work".
+      setErr(SUMMARY_REFUSALS[e?.body?.error] || "That didn't work. Try again.");
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="insp-sum">
+      <div className="form-sec">Summary on the work order</div>
+      {/* WHAT IT IS AND WHAT IT IS NOT, said here because the manager is
+          answerable for what their work order says. "Never from a draft
+          nobody kept" is the half worth stating: it is the guarantee that
+          keeps a model's working note off a document going to a third
+          party. */}
+      <p className="fld-note insp-sumnote">
+        The paragraph whoever does the work reads before the room-by-room list.
+        Combined from your notes and the captions you kept — never from a draft
+        nobody kept.
+      </p>
+      {sum ? (
+        <>
+          <p className="insp-sumt">{sum.text}</p>
+          {/* AMBER, NOT RED. The refusal below this and the save error under
+              it are both `fld-err`, which means "this did not work" -- and a
+              paragraph that is merely behind the notes is a warning about a
+              document rather than a failure. Two different messages in one
+              colour is the trap this project already records about a success
+              drawn in an error box. */}
+          {sum.stale && (
+            <p className="insp-sumstale">
+              <AlertTriangle size={12} /> The notes have changed since this was
+              written. The rooms are current; this paragraph is not.
+            </p>
+          )}
+        </>
+      ) : (
+        <p className="prop-none">
+          {inspection.jobId
+            ? "No summary was written. The work order carries the rooms, the notes and the photos as usual."
+            : "One gets written when you raise the job."}
+        </p>
+      )}
+      {/* Offered only when the route would take it. `nothing_flagged` and
+          `no_comments` are the ordinary state of a half-walked inspection
+          rather than a problem, so they are named rather than drawn as a dead
+          button -- and a disabled control with nothing beside it is
+          indistinguishable from a broken one. */}
+      {why ? <p className="fld-note insp-sumnote">{SUMMARY_REFUSALS[why]}</p> : (
+        <button className="btn-ghost small" disabled={busy} onClick={write}>
+          <Sparkles size={13} />
+          {busy ? "Writing…" : sum ? "Rewrite it" : "Write one"}
+        </button>
+      )}
+      {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
+    </div>
+  );
+}
+
 function InspectionDetail({ inspection, property, onReload, onClose, onRaise, onGoJobs,
   subs = [], unitWord = "Unit", canEdit = true, onAddOwner }) {
   const [adding, setAdding] = useState("");
@@ -27075,6 +27198,20 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
       )}
 
       {err && <p className="billing-err" role="alert">{err}</p>}
+
+      {/* THE SUMMARY THE WORK ORDER CARRIES.
+          Drawn once there is something for it to ride on -- a job raised, or a
+          summary already written. Before that there is nothing to show and
+          nothing to fix: raising the job writes one, which is what "summarise
+          automatically" means, so a Write-one button beforehand would be a
+          control for a document that does not exist yet.
+
+          A WRITE, so it is the team's. An owner reads the report and this is
+          not in it: the report is what a deposit argument is run from, and a
+          model's paragraph in it would read as a finding somebody made. */}
+      {canEdit && (inspection.jobId || inspection.summary) && (
+        <InspectionSummaryPanel inspection={inspection} rooms={rooms} onReload={onReload} />
+      )}
 
       {/* SENDING IT TO THE BUILDING'S OWNER, once it is finished.
           Only the owners who hold a seat on this building are offered, and
@@ -31772,6 +31909,28 @@ strong.insp-name{background:none;border:0;padding:0}
 .woi-note{margin:0 0 8px;font-size:12.5px;line-height:1.45;color:var(--ink)}
 .woi-shot{margin:0}
 .woi-shot figcaption{margin-top:4px;font-size:11.5px;line-height:1.35;color:var(--ink-soft)}
+/* 063. THE SUMMARY, ABOVE THE ROOMS IT SUMMARISES. A left rule in the brand
+   colour rather than a tinted box: amber and red both mean something on this
+   screen already (follow-up and fail), and a third tint beside two statuses
+   would read as a fourth status. A stale one goes amber, which is the one
+   place that colour is right here -- it is the warn tone everywhere else in
+   this product and the thing it is warning about is a paragraph that is
+   behind the list under it. */
+.woi-sum{margin:0 0 14px;padding:2px 0 2px 11px;border-left:3px solid var(--brand)}
+.woi-sum.is-stale{border-left-color:var(--amber)}
+.woi-sumt{margin:0;font-size:13.5px;line-height:1.55;color:var(--ink)}
+.woi-sumwhy{display:flex;align-items:flex-start;gap:5px;margin:6px 0 0;
+  font-size:11px;line-height:1.45;color:var(--ink-soft)}
+.woi-sumwhy > svg{flex:none;margin-top:2px}
+/* The manager's own view of it. Quoted on a plain surface, because it is a
+   paragraph somebody else is going to read and the point of showing it here
+   is reading it as they will. */
+.insp-sum{margin:16px 0 0}
+.insp-sumt{margin:8px 0 10px;padding:10px 12px;border-radius:12px;background:var(--paper);
+  font-size:13px;line-height:1.55;color:var(--ink)}
+.insp-sumstale{display:flex;align-items:flex-start;gap:6px;margin:0 0 10px;
+  font-size:12px;line-height:1.45;color:var(--amber-ink)}
+.insp-sumstale > svg{flex:none;margin-top:2px}
 /* Nobody to ask, said where the answer is set. */
 .va-nobody{display:flex;align-items:flex-start;gap:6px;font-size:12px;line-height:1.4;
   color:var(--amber-ink)}

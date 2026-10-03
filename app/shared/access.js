@@ -119,3 +119,24 @@ export const accessChoices = (job) =>
 export const ACCESS_ACCOUNT_KINDS = ["property_manager", "building_owner", "portfolio_manager"];
 export const mayChooseAccess = (accountKind) =>
   ACCESS_ACCOUNT_KINDS.includes(String(accountKind || ""));
+
+// AND WHICH SEAT, which is the other half and shipped as a crash.
+//
+// The picker's gate read a bare `canManage`, which is a PROP NAME on half a
+// dozen components in `App.tsx` and is not a variable in the scope that line
+// sits in. So opening an approved, tenant-requested job threw
+// `Can't find variable: canManage` and white-screened the Jobs view -- live,
+// for every account, on the one screen this product exists for.
+//
+// It is `requireRole("admin", "pm")` on `PATCH /api/jobs/:id`, so it is those
+// two and no more. Named here beside `mayChooseAccess` rather than written at
+// the call site, because the account-kind half already lives here and the two
+// together are one question: may this screen offer the picker. A role list
+// written at a call site is a role list that drifts from its route -- which
+// this project calls the same lie in both directions.
+//
+// The capability vocabulary is deliberately not used. `can("jobs")` includes
+// an OWNER, who is a guest on somebody else's account and whom that route
+// refuses, so gating on it would be looser than the server.
+export const ACCESS_WRITE_ROLES = ["admin", "pm"];
+export const maySetAccess = (role) => ACCESS_WRITE_ROLES.includes(String(role || ""));
