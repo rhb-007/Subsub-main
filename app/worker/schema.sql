@@ -232,7 +232,14 @@ CREATE TABLE jobs (
   -- NULL means not answered, and `accessFor` falls back to the rule 019 has
   -- been running (a tenant's own report waits on that tenant, anything else is
   -- booked straight away). Only 'tenant' costs a round trip.
-  access         TEXT
+  access         TEXT,
+  -- 062. WHICH tenant has to be let in, when it is not the person who asked.
+  -- Deliberately not `requested_by`: that column means who asked for the work
+  -- and is what the Work requests panel reads, so writing a tenant into it
+  -- would put a sentence on a dashboard saying they asked for something they
+  -- never asked for. NULL keeps 019's rule -- the only person who can confirm
+  -- a window is whoever reported the repair.
+  access_user_id TEXT REFERENCES users(id)
 );
 CREATE INDEX idx_jobs_account_status ON jobs(account_id, status);
 

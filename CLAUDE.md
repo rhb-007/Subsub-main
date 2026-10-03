@@ -6981,6 +6981,137 @@ refactor.
   who proposed Tuesday by mistake has to propose something else rather than
   take it back. Same shape as the job that cannot be removed, one object down.
 
+
+- **A MOVE-OUT NEEDS NO TENANT IN THE SCHEDULING LOOP AND A MOVE-IN DOES, AND
+  THE SECOND HALF IS THE CORRECTION THAT MATTERS.** Asked for as *"for
+  scheduling jobs for move out or move in, obviously those do not include any
+  tenant input"*, then corrected in the same breath: *"move in would need to
+  coordinate with a tenant since they are moving in, they will be in the unit
+  when the job is done"*.
+
+  So the two kinds answer differently and **neither answer is 019's default**.
+  A move-out unit is being handed back, so the agent opens the door and nobody
+  waits on a tenant to agree a morning. A move-in unit has somebody moving into
+  it, and a time nobody checked with them is a time they are not in for.
+  `accessForInspection` in `app/shared/inspection.js` returns an `access` value
+  rather than a boolean, so there is still one vocabulary — `ACCESS_KINDS` —
+  and the inspection does not grow a second way of saying the same thing.
+
+  **AND IT CLOSES THE HALF 060 RECORDED AS STILL OPEN, in the one place the
+  missing fact exists.** That entry's own words: *"a manager cannot put a tenant
+  INTO a job the tenant did not report. The reverse direction needs a way to say
+  WHICH tenant — a job carries a property, a property carries many tenancies,
+  and `memberships.unit` is the only thing that narrows it."* **An inspection
+  carries a unit.** Migration 062, `jobs.access_user_id`, and the raise route
+  resolves the tenant seat from the unit it walked.
+
+  Matched case-insensitively on trimmed text, because a unit is "3B" in one
+  building and "Apt 12" in the next and a managing agent types what is on the
+  door — the stored seat in the fixture is `' 3b '` for that reason. Only when
+  the inspection **has** a unit: a whole-building walk has no one tenant, and
+  taking the first tenant on the property would name somebody at random. **The
+  fixture is what makes that checkable** — two tenants in two units on one
+  building, with the WRONG one inserted first, so matching the building rather
+  than the unit answers `u_t4a` and the mutation fires. Without that ordering
+  both rules give the same id and the assertion cannot tell them apart.
+
+  **IT IS DELIBERATELY NOT `requested_by`, and that is the whole shape.** That
+  column means *who asked for this work*: it is what the manager's Work requests
+  panel reads and what the feed names. Writing a tenant into it to make them
+  answerable would put a sentence on a dashboard saying they asked for something
+  they never asked for, and invite somebody to approve or decline a job their own
+  account raised. Two facts, two columns — and `accessTenant` in
+  `shared/access.js` is the one predicate that reads both, so `canAskTenant`,
+  `notifyTenant`, `partiesFor` and the respond route cannot disagree about who
+  may answer. Before it, the respond route compared against `requested_by` and a
+  job raised from an inspection has none, so **every answer was a 403**.
+
+  **THE COMMON MOVE-IN HAS NOBODY TO ASK, and the screen says so.** The
+  inspection schema already says it in its own words — *"the person moving IN
+  very often has no seat yet"* — so the ordinary case stores `access = 'tenant'`,
+  because they genuinely do have to be in, and names nobody. 060's rule then
+  books the window outright: whether to ask is the override, whether there is
+  anybody to ask is still a fact. A screen that drew *the tenant needs to be in*
+  and said nothing about that would promise a confirmation step that is never
+  going to happen, so the visit block names it and points at Account → Tenants.
+  **Still open, and honestly a dead end wearing instructions:** there is no
+  control there to add them from, because an inspection carries a tenant's NAME
+  and no address, and an invite needs one.
+
+  **AND THE WORK ORDER FINALLY CARRIES THE PHOTOGRAPHS.** Asked for as *"in the
+  work orders when they are passed over to subcontractors the images should be
+  passed along in the full report so they can visually see what they are fixing
+  prior"*. 055 has composed the WORDS into the job since it shipped — a bulleted
+  line per flagged room in `jobs.scope` — and a paragraph about a cracked basin
+  is not a photograph of it. The one reader who needs the picture is the person
+  who prices the work, loads a van and then stands in the room, and they were
+  **the one reader who could not reach it**: every inspection route is
+  `INSPECTION_READ_ROLES`, so a contractor asking for the photo got a 403 about a
+  job they hold the work order on. Twelfth time this file records a correct piece
+  with no way in for the party it is about.
+
+  **KEYED BY THE WORK ORDER, NEVER THE INSPECTION**, which is what makes it safe
+  rather than a second door into the Inspections tab: there is no route that
+  takes an inspection id and describes it, so nothing can be walked. A company
+  holding no live work order on that job gets `not_found`, never `forbidden` —
+  the same refusal the quote request uses to be a key to one job rather than to
+  the list. A **voided** work order is not a key either: reissuing voids the old
+  row, and somebody taken off the job keeps no view of the unit they were going
+  to walk into.
+
+  **FLAGGED ROOMS, THE KEPT CAPTIONS, AND NEITHER THE DRAFTS NOR WHO WAS
+  MOVING.** `contractorInspectionShape` is the redaction, named once. Flagged
+  only, which is the same line `inspectionJobScope` draws and for the same
+  reason — an inspection is a record of the whole unit and a job is a list of
+  things to do, so handing over the rooms that were fine would turn a work order
+  into a document to read. `drafts: false`, the rule this file already applies to
+  an owner's copy: a sentence a model wrote and nobody kept is the team's working
+  note and would read here as a finding somebody made. And `tenant_name` is
+  absent, because who was moving out is not a contractor's business.
+
+  **A TENANT IS ON THE ACCOUNT TOO, which is why the route is not scoped by
+  account id alone.** An inspection is explicitly not shown to the tenant it is
+  about — a recorded product decision about what a deposit conversation looks
+  like — and a route reading only `j.account_id = ?` would have undone it by a
+  different door. **The two guards cover for each other and mutation is what
+  showed it:** deleting the role gate changed no outcome, because `TENANT_ALLOWED`
+  refuses any path it does not list. That direction is deliberate — the
+  allowlist's own comment says a new route should fail closed — so the role gate
+  is pinned **statically** as well, exactly as 056 pins the allowlist's methods.
+  The first version of that static check read only as far as the first comma, so
+  every role after `"admin"` went unchecked: this suite's own could-not-fail
+  shape, on the assertion about the one role that must not be there.
+
+  **The panel is driven in a browser, and the first run did not render at all.**
+  A static check that `JobInspection` is mounted passes over a modal that throws,
+  and `WorkOrderProgress` reads `plan.milestones.filter(...)` unguarded — so the
+  stub's default empty array threw inside the modal, which left **no modal** and
+  read exactly like a button that does nothing. The fixture lesson this file
+  already records about a missing `accountId`, paid again. Worse, **the harness's
+  own `crashes` stayed empty through it**, so *nothing crashed* passed loudest
+  exactly when the subject had disappeared; the suite reads the page's console as
+  well now, filtering the deliberate 404 that is itself under test.
+
+  Six browser mutations and fifteen server ones fire, and two of each needed the
+  assertion rewritten first. **Tapping the FIRST photograph cannot tell a
+  computed index from a hard-coded zero**, so the suite taps the second room's
+  and requires *2 of 2* — the lightbox holds the whole unit, because a set of
+  photographs is one piece of evidence read in order.
+
+  **One guard is deliberately unasserted and the suite says so.** `partiesFor`
+  looks the seat role up by `accessTenant` rather than by `requested_by`, and
+  mutating that back changes no outcome today: the lookup only decides anything
+  on a job with a NULL access answer, and nothing writes `access_user_id` on one
+  of those. Pinning it would need a row the product never produces, which is a
+  test of its own fixture.
+
+  **`/api/my-work` also stopped blanking.** Its catch answers `{work: []}` for
+  any missing column — written for 020's `withdrawn_at` — and an empty contractor
+  portal over a roster of nine jobs is *precisely* the report that route was last
+  changed to fix. The newest columns are interpolated into the SELECT and a
+  060-or-061 miss retries without them, so a database behind the code loses the
+  access answer and the contractor's own tick, never the work itself.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

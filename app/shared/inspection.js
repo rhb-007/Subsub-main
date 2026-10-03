@@ -127,6 +127,63 @@ export function inspectionJobScope(inspection = {}, rooms = []) {
   return [head, ...lines].join("\n");
 }
 
+// WHO HAS TO BE THERE, WHICH FOLLOWS WHICH KIND OF WALK IT WAS.
+//
+// Asked for as *"for scheduling jobs for move out or move in, obviously those
+// do not include any tenant input"*, and corrected in the same breath:
+// *"move in would need to coordinate with a tenant since they are moving in,
+// they will be in the unit when the job is done"*. So the two kinds answer
+// differently, and neither answer is 019's default:
+//
+//   move_out  the unit is being handed back, so the agent opens the door and
+//             nobody is waiting on a tenant to agree a morning.
+//   move_in   somebody is moving into it. They will be there, and a time
+//             nobody checked with them is a time they are not in for.
+//
+// Returned as an `access` value rather than a boolean, so there is still one
+// vocabulary -- `ACCESS_KINDS` -- and the inspection does not grow a second
+// way of saying the same thing. An unrecognised kind answers null, which
+// leaves 019's rule in force rather than guessing.
+export function accessForInspection(kind) {
+  if (kind === "move_in") return "tenant";
+  if (kind === "move_out") return "manager";
+  return null;
+}
+
+// WHAT THE PERSON TURNING UP IS SHOWN, which is not the report.
+//
+// Asked for as *"in the work orders when they are passed over to
+// subcontractors… the images should be passed along in the full report so they
+// can visually see what they are fixing prior"*. `inspectionJobScope` already
+// composes the words into the job, and a paragraph is not a photograph: the
+// one thing a condition record has that a scope line cannot carry is the
+// picture of the mark.
+//
+// FLAGGED ROOMS AND NOTHING ELSE, which is the same line the scope draws and
+// for the same reason: an inspection is a record of the whole unit and a job
+// is a list of things to do. Handing over the rooms that were fine would turn
+// a work order into a document to read.
+//
+// AND THE CAPTION ONLY, NEVER THE DRAFT. A sentence a model wrote and nobody
+// kept is the team's working note, not something this account has said about
+// the building -- the same line that keeps drafts off an owner's copy, which
+// this file already records. `tenant_name` is absent too: who was moving out
+// is not a contractor's business, and the unit is what they need to find.
+export function contractorInspectionShape(inspection = {}, rooms = []) {
+  return {
+    kind: inspection.kind || null,
+    unit: String(inspection.unit || "").trim(),
+    inspectedOn: inspection.inspectedOn || null,
+    rooms: flaggedRooms(rooms).map((r) => ({
+      id: r.id, name: roomName(r), status: r.status, note: String(r.note || "").trim(),
+      photos: (r.photos || []).map((p) => ({
+        id: p.id, name: p.name || "photo", type: p.type || "image/jpeg",
+        caption: String(p.caption || "").trim(),
+      })),
+    })),
+  };
+}
+
 // WHO MAY BE SENT ONE, AND WHEN.
 //
 // Only a FINISHED inspection goes anywhere. A draft is half a walk, and the

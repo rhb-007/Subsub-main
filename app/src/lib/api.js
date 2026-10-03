@@ -331,6 +331,18 @@ export const api = {
       { method: "POST", body: JSON.stringify({ photos }) }),
   raiseInspectionJob: (id, body) =>
     request(`/inspections/${id}/job`, { method: "POST", body: JSON.stringify(body) }),
+  // WHAT THE PERSON TURNING UP IS SHOWN. Keyed by the WORK ORDER, never by the
+  // inspection: there is no route that takes an inspection id and describes it
+  // to a contractor, so nothing here can be walked. The server answers the
+  // flagged rooms, their notes, the kept captions and the photo ids, and
+  // refuses a work order this company does not hold.
+  woInspection: (woId) => request(`/work-orders/${woId}/inspection`),
+  woInspectionPhotoBlob: async (woId, photoId) => {
+    const res = await fetch(`${API_BASE}/work-orders/${woId}/inspection/photo/${photoId}`,
+      { headers: await authHeaders() });
+    if (!res.ok) throw new Error(`photo_${res.status}`);
+    return URL.createObjectURL(await res.blob());
+  },
   // To the building's owners, by seat id. The server intersects them with the
   // owners of that building, so an id here is a request rather than a
   // recipient.

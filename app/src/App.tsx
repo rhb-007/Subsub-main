@@ -73,7 +73,7 @@ import { ENGAGED_AS, engagedAs, isHandyman, mayEngageHandyman, mayCover,
 import { handymanCapCheck, handymanCapText,
   HANDYMAN_GLOBAL_RULES } from "../shared/handycap.js";
 import { workWhen, scheduledOn, WHEN_KINDS } from "../shared/schedule.js";
-import { ACCESS_KINDS, accessChoices, canAskTenant,
+import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
   mayChooseAccess } from "../shared/access.js";
 import { visitParties, waitingOn as visitWaitingOn } from "../shared/visitparty.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
@@ -6667,6 +6667,16 @@ export default function SubSub() {
           canUpload={role !== "contractor"} brand={brand}
           onUploadSigned={(file) => uploadSignedWO(viewWO.job.id, viewWO.trade, file)}
           onClose={() => setViewWO(null)} />
+        {/* WHAT THE INSPECTION FOUND, with the photographs, for whoever is
+            about to drive to it. Keyed on the work order rather than the job,
+            because that is what the route is keyed on -- and it renders
+            nothing at all on a job no inspection raised, which is most of
+            them. Both sides of the modal get it: the hiring account because
+            the inspection is theirs, the holder because the work is. */}
+        {(() => {
+          const a = (jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a;
+          return a?.id ? <JobInspection woId={a.id} /> : null;
+        })()}
         {/* Below the document, not inside it: the work order is a thing you
             print and this is a thing you work. Both sides open the same
             panel and are offered different buttons, which is the two-party
@@ -11977,6 +11987,91 @@ function ReportPhoto({ jobId, photo, onOpen, onLoaded, load }) {
   );
 }
 
+// WHAT THEY ARE ACTUALLY FIXING, WITH THE PICTURES, on the work order.
+//
+// Asked for as: *"in the work orders when they are passed over to
+// subcontractors the images should be passed along in the full report so they
+// can visually see what they are fixing prior"*.
+//
+// 055 has composed the WORDS into the job since it shipped -- a bulleted line
+// per flagged room in `jobs.scope` -- and a paragraph about a cracked basin is
+// not a photograph of it. The one reader who needs the picture is the person
+// who prices the work, loads a van and then stands in the room, and they were
+// the one reader who could not reach it: every inspection route is admin, pm
+// or owner, so a contractor asking for the photo got a 403 about a job they
+// hold the work order on.
+//
+// IT RENDERS NOTHING ON AN ORDINARY JOB. The route answers 404 for a job no
+// inspection raised, which is most of them, so the panel is absent rather than
+// drawn empty -- a heading over "no photos" on every work order in the product
+// is noise that teaches people to stop reading the modal.
+//
+// FLAGGED ROOMS ONLY, and the server is what decides that: an inspection is a
+// record of the whole unit and a job is a list of things to do, which is the
+// same line `inspectionJobScope` draws. The captions come too and the model's
+// unkept drafts do not -- a sentence nobody kept is the team's working note
+// and would read here as a finding somebody made.
+function JobInspection({ woId }) {
+  // undefined is still arriving, null is "there is no inspection behind this
+  // work order", which is the common case and draws nothing. Two states rather
+  // than one, because a spinner that never resolves and a job with no
+  // inspection look identical from a single falsy value.
+  const [data, setData] = useState(undefined);
+  const [shots, setShots] = useState({});
+  const [lightbox, setLightbox] = useState(null);
+  useEffect(() => {
+    let live = true;
+    setData(undefined); setShots({});
+    api.woInspection(woId)
+      .then((d) => { if (live) setData(d && (d.rooms || []).length ? d : null); })
+      .catch((e) => { if (live) { if (e?.status !== 404) console.warn("[wo-inspection]", e); setData(null); } });
+    return () => { live = false; };
+  }, [woId]);
+  if (!data) return null;
+  // One flat set across every room, so the lightbox walks the whole unit in
+  // the order it was walked rather than stopping at the end of a room -- the
+  // rule this file already records about a set of photographs being one piece
+  // of evidence.
+  const photos = data.rooms.flatMap((r) => (r.photos || []).map((p) => ({ ...p, room: r.name })));
+  const K = INSPECTION_KINDS[data.kind];
+  return (
+    <div className="woi">
+      <div className="form-sec">What the inspection found</div>
+      <p className="woi-head">
+        <ClipboardList size={13} />
+        <span>{K ? K.label : "Inspection"}{data.unit ? ` — unit ${data.unit}` : ""}
+          {data.inspectedOn ? ` · walked ${data.inspectedOn}` : ""}</span>
+      </p>
+      {data.rooms.map((r) => (
+        <div key={r.id} className="woi-room">
+          <div className="woi-rhead">
+            <b>{r.name}</b>
+            <span className={`woi-st woi-${r.status}`}>{ROOM_STATUSES[r.status]?.label || "Flagged"}</span>
+          </div>
+          {r.note && <p className="woi-note">{r.note}</p>}
+          {(r.photos || []).length > 0 && (
+            <div className="ph-grid">
+              {r.photos.map((ph) => (
+                <figure key={ph.id} className="woi-shot">
+                  <ReportPhoto jobId={woId} photo={ph}
+                    load={() => api.woInspectionPhotoBlob(woId, ph.id)}
+                    onLoaded={(id, url) => setShots((m) => ({ ...m, [id]: url }))}
+                    onOpen={() => setLightbox(photos.findIndex((x) => x.id === ph.id))} />
+                  {ph.caption && <figcaption>{ph.caption}</figcaption>}
+                </figure>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+      {lightbox !== null && (
+        <PhotoLightbox photos={photos} urls={shots} at={lightbox}
+          onAt={setLightbox} onClose={() => setLightbox(null)} />
+      )}
+    </div>
+  );
+}
+
 // ONE LIGHTBOX, AND IT HOLDS THE SET RATHER THAN ONE PICTURE.
 //
 // There were two copies of this -- the tenant's own report and the manager's
@@ -12557,6 +12652,19 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, canSetA
                 job"*. What a repair turns out to need is usually only clear
                 once somebody has looked at it, so the answer belongs beside
                 the time rather than only on the form that created the job. */}
+            {/* 062. AND WHETHER THERE IS ANYBODY TO ASK, which is not the
+                same question as whether to ask. A job raised from a move-in
+                inspection says the tenant has to be in -- because they do --
+                and the person moving in very often has no seat yet, which the
+                inspection schema says in so many words. `canAskTenant` is the
+                fact, so the route books the window outright; a screen that
+                drew the sentence and said nothing about that would promise a
+                confirmation step that is never going to happen. */}
+            {needsTenantConfirm(job.accessEffective) && !canAskTenant(job) && (
+              <span className="va-nobody"><AlertTriangle size={12} /> Nobody on this unit has a
+                login yet, so setting a time books it. Add them under
+                Account{" "}&rarr; Tenants and they can confirm the next one.</span>
+            )}
             {canSetAccess && (
               <div className="va-pick">
                 {accessChoices(job).map((k) => (
@@ -31295,6 +31403,29 @@ strong.insp-name{background:none;border:0;padding:0}
 .va-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
 .va-pick{display:flex;flex-wrap:wrap;gap:6px}
 .va-pick .pick{padding:4px 10px;font-size:11.5px}
+/* 062. What the inspection found, on the work order. Rooms stacked, each with
+   its own photographs, because the unit was walked room by room and that is
+   the order somebody works it in.
+   (No backticks in this stylesheet. It is a template literal, and one in a
+   comment closes it.) */
+.woi{margin:14px 0 0}
+.woi-head{display:flex;align-items:center;gap:6px;margin:0 0 10px;font-size:12.5px;
+  font-weight:600;color:var(--ink-soft)}
+.woi-head > svg{flex:none}
+.woi-room{margin:0 0 12px;padding:10px 12px;border-radius:12px;background:var(--paper)}
+.woi-rhead{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  font-size:13px;margin-bottom:6px}
+.woi-st{flex:none;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
+.woi-st.woi-fail{background:#fae3e1;color:var(--red)}
+.woi-st.woi-follow_up{background:#fbf0dd;color:var(--amber-ink)}
+.woi-note{margin:0 0 8px;font-size:12.5px;line-height:1.45;color:var(--ink)}
+.woi-shot{margin:0}
+.woi-shot figcaption{margin-top:4px;font-size:11.5px;line-height:1.35;color:var(--ink-soft)}
+/* Nobody to ask, said where the answer is set. */
+.va-nobody{display:flex;align-items:flex-start;gap:6px;font-size:12px;line-height:1.4;
+  color:var(--amber-ink)}
+.va-nobody > svg{flex:none;margin-top:2px}
+
 /* 061. ANSWERING THE TIME, from the side that drives to it. A row, not a
    block: Confirm and Propose are one decision with two answers, and stacking
    them makes the second read as an afterthought when it is the one that keeps

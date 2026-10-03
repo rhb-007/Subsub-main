@@ -397,4 +397,21 @@ SELECT
     WHERE v.status = 'confirmed'
       AND v.responded_at IS NULL
       AND j.access = 'tenant'
-      AND j.requested_by IS NOT NULL)                                                           AS m061_inv_confirmed_unanswered;
+      AND j.requested_by IS NOT NULL)                                                           AS m061_inv_confirmed_unanswered,
+
+  -- 062. Which tenant has to be let in, when it is not the person who asked.
+  (SELECT COUNT(*) FROM pragma_table_info('jobs')
+    WHERE name = 'access_user_id')                                                              AS m062_job_access_user,
+  -- Invariant, must read ZERO: a job naming somebody who is not a tenant on
+  -- that job's own account. NULL is the ordinary state and means "the only
+  -- person who can confirm a window is whoever reported the repair", so this
+  -- counts only a row a route actually wrote -- and the whole point of the
+  -- column is that the named person can answer a visit, which an id with no
+  -- tenant seat behind it cannot. It would be a confirmation step waiting on
+  -- nobody, which is the failure 060 refused to ship.
+  (SELECT COUNT(*) FROM jobs j
+    WHERE j.access_user_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM memberships m
+                       WHERE m.user_id = j.access_user_id
+                         AND m.account_id = j.account_id
+                         AND m.role = 'tenant'))                                                AS m062_inv_access_not_a_tenant;

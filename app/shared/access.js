@@ -78,7 +78,22 @@ export const needsTenantConfirm = (access) => access === "tenant";
 //
 // So the answer is offered only where it means something, and the override
 // decides whether to ask rather than whether there is anybody there.
-export const canAskTenant = (job) => !!job?.requestedBy || !!job?.requested_by;
+// 062. WHICH tenant, and it is two columns rather than one. `requested_by` is
+// who asked for the work; `access_user_id` is who has to be let in. A job
+// raised from a move-in inspection has the second and not the first -- nobody
+// asked for it, and the person who will be standing in the unit is the tenant
+// of that unit. Writing them into `requested_by` to make them answerable would
+// put a sentence on the manager's Work requests panel saying they asked for
+// something they never asked for, and invite somebody to approve or decline a
+// job their own account raised.
+//
+// Both spellings, because the browser holds one and a raw row holds the other
+// -- and a missed conversion here reads as "nobody to ask", which is the
+// direction that silently drops the confirmation step.
+export const accessTenant = (job) =>
+  job?.accessUserId || job?.access_user_id || job?.requestedBy || job?.requested_by || null;
+
+export const canAskTenant = (job) => !!accessTenant(job);
 
 // What a screen may actually offer for this job, which is not always all
 // three. The picker reads this rather than ACCESS_KINDS, because a control

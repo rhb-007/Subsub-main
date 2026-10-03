@@ -47,7 +47,8 @@ import { JOB_SCOPED_ROLES, jobScopeFrom, maySeeJob as maySeeJobIds } from "../sh
 import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole } from "../shared/propscope.js";
 import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_ROOMS,
   whyNotFinish, inspectionTally, flaggedRooms, inspectionJobTitle,
-  inspectionJobScope, whyNotSend, mayWriteInspection,
+  inspectionJobScope, whyNotSend, mayWriteInspection, accessForInspection,
+  contractorInspectionShape, isFlagged,
   INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
@@ -56,7 +57,8 @@ import { typedNameMatches } from "../shared/typedname.js";
 import { ENGAGED_AS, isEngagedAs, engagedAs, isHandyman, mayEngageHandyman,
   mayCover, requiredDocsFor, needsLicense } from "../shared/engaged.js";
 import { handymanCapCheck, handymanCapText } from "../shared/handycap.js";
-import { isAccess, accessFor, needsTenantConfirm, canAskTenant } from "../shared/access.js";
+import { isAccess, accessFor, needsTenantConfirm, canAskTenant,
+  accessTenant } from "../shared/access.js";
 // Aliased: `waitingOn` is already the AGREEMENT's, and two functions of one
 // name in one file is how a later edit calls the wrong one about the wrong
 // two-party thing.
@@ -6232,6 +6234,7 @@ export function missingSchema(err) {
   // produces for a missing column, and it is first because a later rule with a
   // broader pattern would otherwise claim it.
   if (/contractor_(at|note)/i.test(m)) return "061_visit_contractor";
+  if (/access_user_id/i.test(m)) return "062_job_access_user";
   if (/no such column: (jobs\.)?access\b|jobs has no column named access\b/i.test(m)) return "060_job_access";
   if (/\bagreements?\b|\bagreement_terms\b|countersigned_(at|by)/i.test(m)) return "052_agreements";
   if (/\bwo_(funding|transfers)\b/i.test(m)) return "051_escrow";
@@ -6945,6 +6948,12 @@ function jobRowToJs(j, workOrders) {
     // effective one so nothing has to derive it. The effective value needs the
     // reporter's seat role, which only the server has.
     access: j.access || null,
+    // 062. Who has to be let in, when it is not the person who asked. The
+    // screen needs it to answer "is there anybody to ask" -- a job marked
+    // "the tenant needs to be in" with nobody behind it books outright, and
+    // the panel has to say so rather than drawing a confirmation step that
+    // will never happen.
+    accessUserId: j.access_user_id || null,
     accessEffective: accessFor(j, { tenantReported: j.requested_by_role === "tenant" }),
     status: j.status, completedAt: j.completed_at, notes: j.notes, createdAt: j.created_at?.slice(0, 10), assignments,
     // The column has been on jobs since the beginning and was cleared when a
@@ -7242,13 +7251,26 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
 // they have a dashboard for this; a tenant has an inbox.
 async function notifyTenant(c, jobId, stage, detail = null) {
   try {
-    const job = await c.env.DB.prepare(
-      `SELECT id, title, account_id, requested_by, withdrawn_at FROM jobs WHERE id = ?`).bind(jobId).first();
-    if (!job?.requested_by || job.withdrawn_at) return;
+    // 062. `access_user_id` as well, because the tenant who has to be let in
+    // is not always the one who asked -- a job raised from a move-in
+    // inspection has nobody who asked for it. Optional: a database without
+    // 062 keeps the requester, which is what this has always read.
+    const job = await (async () => {
+      for (const cols of [", access_user_id", ""]) {
+        try {
+          return await c.env.DB.prepare(
+            `SELECT id, title, account_id, requested_by, withdrawn_at${cols} FROM jobs WHERE id = ?`
+          ).bind(jobId).first();
+        } catch (err) { if (!missingSchema(err)) throw err; }
+      }
+      return null;
+    })();
+    const who = accessTenant(job);
+    if (!who || job.withdrawn_at) return;
     const [user, seat, account] = await Promise.all([
-      c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(job.requested_by).first(),
+      c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(who).first(),
       c.env.DB.prepare(`SELECT role FROM memberships WHERE user_id = ? AND account_id = ?`)
-        .bind(job.requested_by, job.account_id).first(),
+        .bind(who, job.account_id).first(),
       c.env.DB.prepare(`SELECT id, name, subdomain, hostname_status FROM accounts WHERE id = ?`)
         .bind(job.account_id).first(),
     ]);
@@ -7375,9 +7397,13 @@ const visitRowToJs = (v) => ({
 // outstanding, and the two sides disagreeing is how both draw "waiting on
 // them" and nothing moves.
 async function partiesFor(env, job) {
-  const seat = job.requested_by ? await env.DB.prepare(
+  // 062. WHICH tenant, which is not always the requester. A job raised from a
+  // move-in inspection has nobody who asked for it and a named tenant who will
+  // be standing in the unit, so the seat looked up here is theirs.
+  const who = accessTenant(job);
+  const seat = who ? await env.DB.prepare(
     `SELECT role FROM memberships WHERE user_id = ? AND account_id = ?`)
-    .bind(job.requested_by, job.account_id).first().catch(() => null) : null;
+    .bind(who, job.account_id).first().catch(() => null) : null;
   // A window proposed before anybody is assigned has nobody to ask. ACCEPTED
   // rather than any live work order: somebody who has not said yes to the JOB
   // cannot be waited on for the time, and treating a pending offer as a party
@@ -7435,17 +7461,23 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
   const auth = c.get("auth");
   const jobId = c.req.param("id");
   const b = await c.req.json().catch(() => ({}));
-  const job = await c.env.DB.prepare(
-    `SELECT id, title, requested_by, approved_at, access FROM jobs WHERE id = ? AND account_id = ?`
-  ).bind(jobId, auth.accountId).first().catch(async (err) => {
-    // A database without 060 keeps the rule 019 has been running, which is
-    // what `accessFor` falls back to anyway -- one missing column must not
-    // stop anybody scheduling a repair.
-    if (!missingSchema(err)) throw err;
-    return c.env.DB.prepare(
-      `SELECT id, title, requested_by, approved_at FROM jobs WHERE id = ? AND account_id = ?`
-    ).bind(jobId, auth.accountId).first();
-  });
+  // THE TWO SCHEDULING COLUMNS ARE OPTIONAL, newest first. A database behind
+  // the code keeps the rule 019 has been running -- which is what `accessFor`
+  // falls back to anyway -- because one missing column must not stop anybody
+  // scheduling a repair. Written as a cascade rather than nested catches: 060
+  // and 062 can be missing together or one at a time, and three hand-written
+  // catches is the shape that goes wrong on the fourth column.
+  const job = await (async () => {
+    for (const cols of ["access, access_user_id", "access", ""]) {
+      try {
+        return await c.env.DB.prepare(
+          `SELECT id, title, requested_by, approved_at${cols ? ", " + cols : ""}
+             FROM jobs WHERE id = ? AND account_id = ?`
+        ).bind(jobId, auth.accountId).first();
+      } catch (err) { if (!missingSchema(err)) throw err; }
+    }
+    return null;
+  })();
   if (!job || !maySeeJob(c.get("auth"), jobId)) return c.json({ error: "job_not_found" }, 404);
   if (job.requested_by && !job.approved_at) return c.json({ error: "not_approved" }, 409);
   if (auth.role === "contractor") {
@@ -7571,17 +7603,17 @@ app.post("/api/visits/:id/respond", async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const status = b.status === "confirmed" ? "confirmed" : b.status === "declined" ? "declined" : null;
   if (!status) return c.json({ error: "bad_status" }, 400);
-  const v = await c.env.DB.prepare(
-    `SELECT v.*, j.id AS jid, j.account_id AS jacct, j.requested_by, j.title, j.access
-       FROM visits v JOIN jobs j ON j.id = v.job_id
-      WHERE v.id = ? AND v.account_id = ?`).bind(c.req.param("id"), auth.accountId).first()
-    .catch(async (err) => {
-      if (!missingSchema(err)) throw err;
-      return c.env.DB.prepare(
-        `SELECT v.*, j.id AS jid, j.account_id AS jacct, j.requested_by, j.title
-           FROM visits v JOIN jobs j ON j.id = v.job_id
-          WHERE v.id = ? AND v.account_id = ?`).bind(c.req.param("id"), auth.accountId).first();
-    });
+  const v = await (async () => {
+    for (const cols of [", j.access, j.access_user_id", ", j.access", ""]) {
+      try {
+        return await c.env.DB.prepare(
+          `SELECT v.*, j.id AS jid, j.account_id AS jacct, j.requested_by, j.title${cols}
+             FROM visits v JOIN jobs j ON j.id = v.job_id
+            WHERE v.id = ? AND v.account_id = ?`).bind(c.req.param("id"), auth.accountId).first();
+      } catch (err) { if (!missingSchema(err)) throw err; }
+    }
+    return null;
+  })();
   if (!v) return c.json({ error: "not_found" }, 404);
   // WHOSE ANSWER THIS IS, checked on the row rather than taken from the body.
   // A tenant answers their own report; a contractor answers only where they
@@ -7589,7 +7621,10 @@ app.post("/api/visits/:id/respond", async (c) => {
   // the reason it is the work order rather than the engagement is that holding
   // one is what says this job was given to them.
   const isTenant = auth.role === "tenant";
-  if (isTenant && v.requested_by !== auth.userId) return c.json({ error: "forbidden" }, 403);
+  // 062. THE TENANT WHO HAS TO BE LET IN, which on a job raised from a move-in
+  // inspection is not the requester -- there is no requester. One predicate,
+  // so this cannot disagree with the propose route about who may answer.
+  if (isTenant && accessTenant(v) !== auth.userId) return c.json({ error: "forbidden" }, 403);
   if (!isTenant) {
     const wo = await c.env.DB.prepare(
       `SELECT 1 AS yes FROM work_orders
@@ -7601,7 +7636,7 @@ app.post("/api/visits/:id/respond", async (c) => {
   const note = String(b.note || "").trim().slice(0, 500) || null;
 
   let parties = await partiesFor(c.env, { id: v.job_id, account_id: auth.accountId,
-    requested_by: v.requested_by, access: v.access });
+    requested_by: v.requested_by, access: v.access, access_user_id: v.access_user_id });
   // A DATABASE WITHOUT 061 HAS NO CONTRACTOR LEG, and `SELECT v.*` is what
   // says so: the key is absent rather than null. Without this the tenant
   // confirms, the contractor is counted as a party who can never answer, and
@@ -12152,6 +12187,103 @@ app.get("/api/inspections/:id/photos/:photoId", requireRole(...INSPECTION_READ_R
   });
 });
 
+// WHAT THE PERSON TURNING UP IS SHOWN, which is the half the scope line
+// cannot carry.
+//
+// Asked for as: *"in the work orders when they are passed over to
+// subcontractors the images should be passed along in the full report so they
+// can visually see what they are fixing prior"*.
+//
+// `inspectionJobScope` has composed the WORDS into the job since 055 -- a
+// bulleted line per flagged room -- and a paragraph about a cracked basin is
+// not a photograph of it. Somebody pricing the work, loading a van and then
+// standing in the room is the one reader who needs the picture, and they were
+// the one reader who could not reach it: every inspection route is
+// `INSPECTION_READ_ROLES`, which is admin, pm and owner, so a contractor
+// asking for the photo got a 403 about a job they hold a work order on.
+//
+// KEYED BY THE WORK ORDER, NEVER THE INSPECTION. That is what makes this safe
+// rather than a second door into the Inspections tab: there is no route here
+// that takes an inspection id and describes it, so nothing can be walked. The
+// work order names the job, the job names the inspection, and a company that
+// holds no live work order on that job gets `not_found` -- the same shape, and
+// the same refusal, the quote request uses to be a key to one job rather than
+// to the list.
+//
+// A VOIDED WORK ORDER IS NOT A KEY. Reissuing voids the old row, and a
+// contractor who was taken off the job keeps no view of the unit they were
+// going to walk into.
+async function woInspection(c, woId) {
+  const auth = c.get("auth");
+  // Either side of the work order may read it: the hiring account because the
+  // inspection is theirs, the holder because the work is. Scoped by company
+  // for a contractor seat and by account for everybody else, which is the
+  // split `/api/my-work` and `/api/jobs` already draw.
+  const mine = auth.role === "contractor" && auth.companyId
+    ? { sql: " AND w.company_id = ? ", val: auth.companyId }
+    : { sql: " AND j.account_id = ? ", val: auth.accountId };
+  const wo = await c.env.DB.prepare(
+    `SELECT w.id, w.job_id, i.id AS insp_id
+       FROM work_orders w
+       JOIN jobs j ON j.id = w.job_id
+       JOIN inspections i ON i.job_id = j.id
+      WHERE w.id = ? AND w.voided_at IS NULL ${mine.sql} LIMIT 1`
+  ).bind(woId, mine.val).first().catch((err) => {
+    if (!missingSchema(err)) throw err;
+    return null;
+  });
+  return wo?.insp_id ? { inspectionId: wo.insp_id, jobId: wo.job_id } : null;
+}
+
+// ADMIN, PM AND THE COMPANY HOLDING IT -- deliberately not every seat on the
+// account. A TENANT is on the account too, and an inspection is explicitly not
+// shown to the tenant it is about: that is a recorded product decision about
+// what a deposit conversation looks like, and a route scoped only by account
+// id would undo it by a different door. An OWNER reads inspections through
+// their own route, which applies their building scope; this one does not have
+// one to apply.
+app.get("/api/work-orders/:id/inspection", requireRole("admin", "pm", "contractor"), async (c) => {
+  const found = await woInspection(c, c.req.param("id"));
+  if (!found) return c.json({ error: "not_found" }, 404);
+  const insp = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`)
+    .bind(found.inspectionId).first();
+  if (!insp) return c.json({ error: "not_found" }, 404);
+  // `drafts: false`, which is the rule this project already applies to an
+  // owner's copy: a sentence a model wrote and nobody kept is the team's
+  // working note, and handing it to the company doing the work would make it
+  // read as a finding somebody made.
+  const rooms = await inspectionRooms(c.env.DB, insp.id, { drafts: false });
+  return c.json(contractorInspectionShape(inspectionRowToJs(insp), rooms));
+});
+
+// The bytes. Pinned three ways, the same three the pack file route is: the
+// work order names the inspection, the photo must belong to a room OF that
+// inspection, and the room must be one the job is actually about -- a
+// contractor reading a photograph of the room that was fine is reading the
+// report rather than the work.
+app.get("/api/work-orders/:id/inspection/photo/:photoId", requireRole("admin", "pm", "contractor"), async (c) => {
+  const found = await woInspection(c, c.req.param("id"));
+  if (!found) return c.notFound();
+  const photo = await c.env.DB.prepare(
+    `SELECT p.*, r.status AS room_status FROM inspection_photos p
+       JOIN inspection_rooms r ON r.id = p.room_id
+      WHERE p.id = ? AND r.inspection_id = ?`
+  ).bind(c.req.param("photoId"), found.inspectionId).first();
+  // `isFlagged` rather than a comparison written here: one rule for what
+  // counts as something to put right, so this cannot start disagreeing with
+  // the shape above it about which rooms the job is.
+  if (!photo || !isFlagged({ status: photo.room_status })) return c.notFound();
+  const obj = await c.env.FILES.get(photo.file_key);
+  if (!obj) return c.notFound();
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": photo.content_type || "image/jpeg",
+      "Cache-Control": "private, max-age=3600",
+      "Content-Disposition": `inline; filename="${String(photo.name || "photo").replace(/[^\w.\- ]/g, "_")}"`,
+    },
+  });
+});
+
 // RAISING THE WORK, which is what the whole walk is for.
 //
 // It creates a JOB and stops there, deliberately. Composing the job from what
@@ -12183,22 +12315,76 @@ app.post("/api/inspections/:id/job", requireRole(...INSPECTION_WRITE_ROLES), asy
     `SELECT * FROM properties WHERE id = ? AND account_id = ?`
   ).bind(row.property_id, auth.accountId).first();
 
+  // 062. WHO HAS TO BE THERE FOLLOWS WHICH WALK THIS WAS, and it is the one
+  // place in the product that can answer it without guessing: a move-out unit
+  // is being handed back, so the agent opens the door; a move-in unit has
+  // somebody moving into it, and a time nobody checked with them is a time
+  // they are not in for.
+  const access = accessForInspection(row.kind);
+  // AND WHICH TENANT, resolved from the UNIT. This is the half 060 recorded as
+  // still open -- a job carries a property and a property carries many
+  // tenancies, so a manager-raised job had no way to name one. An inspection
+  // carries the unit, which is exactly the narrowing that was missing.
+  //
+  // Matched case-insensitively on trimmed text, because a unit is "3B" in one
+  // building and "Apt 12" in the next and a managing agent types what is on
+  // the door. Only when the inspection HAS a unit: a whole-building walk has
+  // no one tenant, and picking the first on the property would name somebody
+  // at random.
+  //
+  // One row. Two tenants in one flat is an ordinary shape and one of them
+  // confirming a window is enough -- the same single answer `notifyTenant` has
+  // always written to.
+  let accessUser = null;
+  if (needsTenantConfirm(access) && String(row.unit || "").trim()) {
+    accessUser = (await c.env.DB.prepare(
+      `SELECT m.user_id FROM memberships m
+         JOIN membership_properties mp ON mp.membership_id = m.id
+        WHERE m.account_id = ? AND m.role = 'tenant' AND mp.property_id = ?
+          AND LOWER(TRIM(COALESCE(m.unit, ''))) = LOWER(TRIM(?))
+        LIMIT 1`
+    ).bind(auth.accountId, row.property_id, String(row.unit).trim()).first()
+      .catch(() => null))?.user_id || null;
+  }
+
   const jobId = uid();
-  await c.env.DB.prepare(
-    `INSERT INTO jobs (id, account_id, title, address, area, zip, date, trades, scope,
-                       status, property_id, created_by, approved_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)`
-  ).bind(jobId, auth.accountId,
-    inspectionJobTitle(inspectionRowToJs(row)),
-    prop?.address || null, prop?.city || null, prop?.zip || null,
-    String(b.date || "").trim().slice(0, 10) || null,
-    JSON.stringify(trades),
-    inspectionJobScope(inspectionRowToJs(row), rooms),
-    row.property_id, auth.userId).run();
+  // The two scheduling columns are EXTRAS on the insert, newest first, for the
+  // reason 060's was: losing the access answer costs a round trip with a
+  // tenant: refusing the insert costs the repair. Same cascade the propose
+  // route reads them with.
+  const extras = [
+    { cols: ", access, access_user_id", vals: [access, accessUser] },
+    { cols: ", access", vals: [access] },
+    { cols: "", vals: [] },
+  ];
+  let wrote = false;
+  for (const e of extras) {
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO jobs (id, account_id, title, address, area, zip, date, trades, scope,
+                           status, property_id, created_by, approved_at${e.cols})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP${e.vals.map(() => ", ?").join("")})`
+      ).bind(jobId, auth.accountId,
+        inspectionJobTitle(inspectionRowToJs(row)),
+        prop?.address || null, prop?.city || null, prop?.zip || null,
+        String(b.date || "").trim().slice(0, 10) || null,
+        JSON.stringify(trades),
+        inspectionJobScope(inspectionRowToJs(row), rooms),
+        row.property_id, auth.userId, ...e.vals).run();
+      wrote = true;
+      break;
+    } catch (err) { if (!missingSchema(err)) throw err; }
+  }
+  if (!wrote) return c.json({ error: "migration_needed", migration: "055_inspections" }, 503);
   await c.env.DB.prepare(`UPDATE inspections SET job_id = ? WHERE id = ?`).bind(jobId, row.id).run();
   await logActivity(c.env, auth.accountId, auth.userId, "inspection_job",
     `Raised a job from the inspection${row.unit ? ` of unit ${row.unit}` : ""}: ${flagged.length} room${flagged.length === 1 ? "" : "s"} to put right`);
-  return c.json({ ok: true, jobId, flagged: flagged.length }, 201);
+  // Said rather than assumed, the same way the invite route reports whether
+  // 059 landed: a screen that cannot tell "the tenant will be asked" from
+  // "there was nobody to ask" is a screen that promises a confirmation step
+  // that is never going to happen.
+  return c.json({ ok: true, jobId, flagged: flagged.length,
+    access: access || null, accessUserId: accessUser }, 201);
 });
 
 app.put("/api/uploads/:kind/:fileName", async (c) => {

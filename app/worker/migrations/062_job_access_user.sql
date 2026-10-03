@@ -1,0 +1,38 @@
+-- 062. WHO HAS TO BE LET IN, when it is not the person who asked.
+--
+-- 060 gave a job an access answer and recorded what it could not do, in its
+-- own words: *"a manager cannot put a tenant INTO a job the tenant did not
+-- report. The reverse direction needs a way to say WHICH tenant -- a job
+-- carries a property, a property carries many tenancies, and
+-- `memberships.unit` is the only thing that narrows it."*
+--
+-- An inspection is exactly where that narrowing exists. It carries a unit, so
+-- a job raised from one can name the tenant of that unit rather than guessing
+-- at the building's.
+--
+-- Asked for as: *"for scheduling jobs for move out or move in, obviously those
+-- do not include any tenant input"*, then corrected in the same breath --
+-- *"move in would need to coordinate with a tenant since they are moving in,
+-- they will be in the unit when the job is done"*. So the two kinds answer
+-- differently and neither answer is the 019 default:
+--
+--   move_out  the unit is being handed back. The agent opens the door.
+--   move_in   somebody is moving into it. They will be there.
+--
+-- WHY THIS IS NOT `requested_by`. That column means *who asked for this work*,
+-- and it is what the manager's Work requests panel reads and what the feed
+-- names. Writing a tenant into it to make them answerable would put a sentence
+-- on a dashboard saying they asked for something they never asked for -- and
+-- the panel would then invite somebody to approve or decline a job their own
+-- account raised. Two facts, two columns.
+--
+-- NULL means what it has always meant: the only person who can confirm a
+-- window is whoever reported the repair. Every job that exists today reads
+-- exactly as it did, which is what makes this safe with no backfill -- the
+-- same asymmetry 060, 059 and 053 use.
+--
+-- ONE `ALTER TABLE ... ADD COLUMN`, which is the one statement that cannot be
+-- run twice, so it is a paste of its own. If it answers "duplicate column
+-- name" it has already been run and there is nothing to do.
+
+ALTER TABLE jobs ADD COLUMN access_user_id TEXT;
