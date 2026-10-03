@@ -76,7 +76,7 @@ import { handymanCapCheck, handymanCapText,
   HANDYMAN_GLOBAL_RULES } from "../shared/handycap.js";
 import { workWhen, scheduledOn, WHEN_KINDS } from "../shared/schedule.js";
 import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
-  mayChooseAccess, maySetAccess } from "../shared/access.js";
+  mayChooseAccess, maySetAccess, accessTenant } from "../shared/access.js";
 import { visitParties, waitingOn as visitWaitingOn } from "../shared/visitparty.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
@@ -6309,9 +6309,35 @@ export default function SubSub() {
                           ))}
                       </div>
                     )}
-                    {j.requestedBy && j.approvedAt && !isClosed(j) && (
+                    {/* ANY OPEN JOB CAN BE GIVEN A TIME, OR GIVEN A NEW ONE.
+                        This read `j.requestedBy && …`, so the whole scheduling
+                        block existed only on a job a TENANT OR OWNER had asked
+                        for -- and a job the account raised itself, which is
+                        most of them, had no way to set a date, no way to move
+                        one, and nothing on the card about when anybody was
+                        coming. Reported as a job past its date that could not
+                        be opened or edited.
+
+                        061 already does the half that matters: proposing
+                        supersedes the live window and makes the contractor a
+                        party who has to confirm, so a new time goes back out
+                        to them for approval rather than being imposed. What
+                        was missing was the way in -- the no-way-in failure
+                        this file keeps recording, on the product's own
+                        central act.
+
+                        `approvedAt` stays, because an unapproved REQUEST is
+                        not a job yet and scheduling one would book work
+                        nobody has agreed to do. */}
+                    {j.approvedAt && !isClosed(j) && (
                       <VisitBlock job={j} visit={visits.find((v) => v.jobId === j.id) || null}
-                        who={users.find((u) => u.id === j.requestedBy)} onPropose={proposeVisit}
+                        /* WHO HAS TO BE LET IN, which since 062 is not the
+                           same person as who asked: a job raised from an
+                           inspection names the tenant of the unit and has no
+                           requester at all. Read through `accessTenant` so
+                           this cannot disagree with the route that decides
+                           who may answer. */
+                        who={users.find((u) => u.id === accessTenant(j))} onPropose={proposeVisit}
                         canSetAccess={mayChooseAccess(kindOf(account)) && maySetAccess(role)}
                         onSetAccess={setJobAccess}
                         onAssign={() => {
@@ -12677,8 +12703,13 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, canSetA
   const parties = visitParties({ ...job, access: job.accessEffective },
     { hasContractor: someoneAccepted(job) });
   const stillOwed = visit ? visitWaitingOn(visit, parties) : parties;
-  const owedText = stillOwed.map((pp) => pp === "tenant" ? name : "the contractor")
-    .join(" and ") || name;
+  const partyText = (list) => list.map((pp) => pp === "tenant" ? name : "the contractor").join(" and ");
+  const owedText = partyText(stillOwed) || name;
+  // WHO THE NOTE TRAVELS TO, which is every party rather than the ones still
+  // owed an answer -- a gate code or which entrance is for whoever attends.
+  // It read "Note for the tenant" on a job with no tenant in the loop at all,
+  // which is the wrong word on the one field that tells a crew how to get in.
+  const noteTo = partyText(parties) || "whoever attends";
   return (
     <div className="visit-block">
       <div className="form-sec">Visit</div>
@@ -12787,7 +12818,7 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, canSetA
         ? <> {owedText} {stillOwed.length > 1 ? "have" : "has"} to confirm one before this reads as scheduled.</>
         : <> Nobody has to confirm it, so setting a time books it outright.</>}</p>}
       {open ? (
-        <VisitForm jobId={job.id} startDate={job.date || ""} forWhom={name} replacing={!!visit}
+        <VisitForm jobId={job.id} startDate={job.date || ""} forWhom={noteTo} replacing={!!visit}
           onPropose={onPropose} onDone={() => setOpen(false)}
           onCancel={visit ? () => setOpen(false) : null} />
       ) : (

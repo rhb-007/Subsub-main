@@ -7458,6 +7458,58 @@ refactor.
   than merely undefined.
 
 
+- **A JOB PAST ITS DATE COULD NOT BE GIVEN A NEW ONE, BECAUSE THE WHOLE
+  SCHEDULING BLOCK WAS GATED ON SOMEBODY ELSE HAVING ASKED FOR IT.** Reported
+  with the dashboard's own warning in a red box — *"1 job is past its date —
+  Press Apartments — leaking sink"* — and *"rescheduling this past appointment
+  is still an issue, can't edit it… need to be able to simply open and edit
+  this and have it resend out to contractor or handyman to be approved and
+  scheduled."*
+
+  **EVERY PIECE OF WHAT WAS ASKED FOR ALREADY EXISTED.** 061 made proposing a
+  time supersede the live window and made the contractor a party who has to
+  confirm, so a new time already goes back out for approval rather than being
+  imposed. What was missing was the way in: the block read
+  `{j.requestedBy && j.approvedAt && !isClosed(j) && …}`, so it drew only on a
+  job a **tenant or an owner** had requested. A job the account raised itself
+  — which is most of them, and every job that arrives from an inspection, the
+  API or a CRM — had no way to set a date, no way to move one, and nothing on
+  the card saying when anybody was coming. Fourteenth time this file has
+  recorded correct pieces with no way in, and the first on the product's own
+  central act.
+
+  `approvedAt` stays, and that is the half of the gate that was doing real
+  work: an unapproved **request** is not a job yet, and scheduling one would
+  book work nobody has agreed to do.
+
+  **AND IT NAMED THE WRONG PERSON, which 062 had already made possible.**
+  `who` was `users.find((u) => u.id === j.requestedBy)`, and a job raised from
+  an inspection has no requester at all — the tenant of the unit is on
+  `accessUserId`. So the one screen that says who has to be let in named
+  nobody and fell back to the words "the tenant". It reads `accessTenant`
+  now, which is the same predicate the route uses to decide who may answer.
+
+  **"Note for the tenant" ON A JOB WITH NO TENANT IN THE LOOP.** `forWhom` was
+  the tenant's name whatever the parties were, so the one field that carries a
+  gate code, a dog or which entrance was addressed to somebody who was never
+  going to read it. It is `partyText(parties)` now — every party rather than
+  the ones still owed an answer, because a note about getting in is for
+  whoever attends.
+
+  **BOTH BRANCHES ARE DRIVEN IN THE SAME PLACE**, because a fix that drew the
+  block on every job and a fix that drew it on none both pass a suite written
+  against one of them — the diagonal coverage that left `hiresLabel`
+  half-wired. `test:resched` carries four jobs that cannot be told apart on
+  each other: one the account raised, one a tenant requested, one raised from
+  an inspection (no requester, a named tenant), and one unapproved request.
+
+  One harness trap worth keeping, and it is this project's own: **`.jr-card` is
+  the CONTRACTOR's request card and `.job-card` is the manager's.** The first
+  version matched the wrong one, found nothing, and reported the feature as
+  missing on a screen that had rendered perfectly — the whichever-one-exists
+  trap, from the selector side rather than the markup side.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
