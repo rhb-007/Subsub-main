@@ -4852,6 +4852,14 @@ export default function SubSub() {
             await platformWrite(() => api.platform.deleteCompany(id, confirmName),
               "Could not delete that company.");
           }}
+          // What a company is to ONE account. The engagement id, never the
+          // company id -- a control that took the company would say the word
+          // for every account that hires them, which is the thing 058 put it
+          // on `engagements` to prevent.
+          onSetEngagedAs={async (engagementId, engagedAs) => {
+            await platformWrite(() => api.platform.setEngagedAs(engagementId, engagedAs),
+              "Could not change that working relationship.");
+          }}
           // Takes the id itself rather than an object to pick a field out of.
           // It used to take the row and read `u.id`, but the row it is handed
           // carries `userId` -- so every reset asked the server for a user
@@ -7878,6 +7886,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   accounts, users, memberships, companies, engagements,
   jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onSetUserRole, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
+  onSetEngagedAs,
   onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck }) {
   const [screen, setScreen] = useState("dashboard");
   const [openId, setOpenId] = useState(null);
@@ -7891,6 +7900,26 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   const [newAccount, setNewAccount] = useState(null);   // form data while open
   const [newCompany, setNewCompany] = useState(null);
   const [editCompanyId, setEditCompanyId] = useState(null);
+  // THE FORM OPENED WHERE NOBODY COULD SEE IT. It renders after the whole
+  // company grid, so on ten companies at an iPad's width the pencil scrolled
+  // nothing, drew nothing in view, and read as a button that does not work --
+  // which is half of what "won't let me edit" described.
+  //
+  // Scrolls AND rings, the rule the compliance pack already paid for: landing
+  // somewhere is not the same as pointing at something, and a panel that
+  // arrives silently at the foot of a long page has not been pointed at. A
+  // box-shadow rather than a border, because a border that thickens moves
+  // everything beside it by a pixel.
+  const editPanelRef = useRef(null);
+  useEffect(() => {
+    if (!editCompanyId) return;
+    const el = editPanelRef.current;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("pfe-ring");
+    const t = setTimeout(() => el.classList.remove("pfe-ring"), 1600);
+    return () => clearTimeout(t);
+  }, [editCompanyId]);
   const [expandedCompanyId, setExpandedCompanyId] = useState(null);
   const [expandedAccountId, setExpandedAccountId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null); // { kind: "account"|"company", id, name }
@@ -7957,6 +7986,11 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   const compRows = companies.map((c) => {
     const engs = engagements.filter((e) => e.companyId === c.id);
     const accts = engs.map((e) => accounts.find((a) => a.id === e.accountId)).filter(Boolean);
+    // The engagements THEMSELVES, paired with whose they are. `accts` throws
+    // the row away, and the row is where the working relationship lives --
+    // so a card built from `accts` alone can name who hires them and never
+    // what they are to each one.
+    const engRows = engs.map((e) => ({ e, acct: accounts.find((a) => a.id === e.accountId) }));
     const lic = c.licenseCheck;
     // Who can actually answer for this company.
     //
@@ -7974,7 +8008,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
         acct: accounts.find((a) => a.id === m.accountId),
       }))
       .filter((x) => x.u && x.acct);
-    return { c, accts, seats, lic, licOk: !lic || String(lic.status).toLowerCase() === "active",
+    return { c, accts, engs: engRows, seats, lic, licOk: !lic || String(lic.status).toLowerCase() === "active",
       dup: companies.filter((x) => x.license && x.license.toUpperCase().trim() === (c.license || "").toUpperCase().trim()).length > 1 };
   });
 
@@ -9069,6 +9103,46 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                             </span>}
                           </span>
                         </div>
+                        {/* WHAT THEY ARE TO EACH ACCOUNT. One row per
+                            engagement, because that is where 058 put the word
+                            and why: one account's handyman is another
+                            account's contractor, and a single control on the
+                            company row would say it for both.
+
+                            Offered only on an account kind that may engage
+                            one -- the same predicate the route enforces and
+                            the roster form reads, so the console cannot
+                            invite a save the server refuses. A general
+                            contractor's engagement says what it is and gives
+                            no control, because there is no second answer. */}
+                        {isSuper && r.engs.length > 0 && (
+                          <div className="pfc-row pfc-engaged">
+                            <span>Working as</span>
+                            <span>
+                              {r.engs.map(({ e, acct }) => (
+                                <span key={e.id} className="pfc-eng">
+                                  <b>{acct?.name || "Unknown account"}</b>
+                                  {mayEngageHandyman(acct?.kind) ? (
+                                    <span className="insp-kind seg pfc-seg" role="group"
+                                      aria-label={`Working relationship on ${acct?.name || ""}`}>
+                                      {Object.values(ENGAGED_AS).map((k) => (
+                                        <button key={k.id} type="button"
+                                          aria-pressed={engagedAs(e.engagedAs) === k.id}
+                                          className={engagedAs(e.engagedAs) === k.id ? "on" : ""}
+                                          onClick={() => onSetEngagedAs(e.id, k.id)}>{k.label}</button>
+                                      ))}
+                                    </span>
+                                  ) : (
+                                    <span className="pf-sub">
+                                      {" "}{ENGAGED_AS[engagedAs(e.engagedAs)]?.label}
+                                      {" \u00b7 this kind of account only engages subcontractors"}
+                                    </span>
+                                  )}
+                                </span>
+                              ))}
+                            </span>
+                          </div>
+                        )}
                         {isSuper && (
                           <div className="pfc-row">
                             <span>Account status</span>
@@ -9089,7 +9163,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               const co = companies.find((c) => c.id === editCompanyId);
               if (!co) return null;
               return (
-                <div className="pf-panel pf-newform">
+                <div className="pf-panel pf-newform pfe-open" ref={editPanelRef}>
                   <div className="pf-panel-hd">
                     <h3>Edit {co.company}</h3>
                     {isSuper && (
@@ -10041,9 +10115,24 @@ function CompPanel({ account, onSave }) {
 }
 
 function CompanyEditFields({ co, onSave, onCancel }) {
-  const [f, setF] = useState({ company: co.company, contact: co.contact, email: co.email || "",
-    phone: co.phone || "", license: co.license || "", ubi: co.ubi || "", city: co.city || "", zip: co.zip || "" });
+  const [f, setF] = useState({ company: co.company || "", contact: co.contact || "",
+    email: co.email || "", phone: co.phone || "", license: co.license || "",
+    ubi: co.ubi || "", city: co.city || "", zip: co.zip || "" });
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  // SAVE WAS DEAD ON ANY COMPANY WITH NO LICENCE NUMBER, which is most of
+  // them: it read `!f.company.trim() || !f.license.trim()`, so a record
+  // somebody typed off a business card could be opened, edited and never
+  // saved. Reported as "won't let me edit the subcontractor at all", which is
+  // exactly what it did.
+  //
+  // And it contradicted a decision this product took twice: several states
+  // have no state contractor licence at all, so signing up never requires one
+  // and neither does being on a roster. The one screen that demanded one was
+  // the console, about companies the product deliberately allows to have none.
+  //
+  // What is genuinely required is a name, because every screen draws it and a
+  // blank one is a row nobody can find again.
+  const problem = !f.company.trim() ? "A company needs a name." : "";
   return (
     <>
       <div className="pf-adduser pf-adduser-grid">
@@ -10056,9 +10145,15 @@ function CompanyEditFields({ co, onSave, onCancel }) {
         <input placeholder="City" value={f.city} onChange={(e) => set("city", e.target.value)} />
         <input placeholder="ZIP" value={f.zip} onChange={(e) => set("zip", e.target.value)} />
       </div>
+      {/* A disabled control with no reason beside it is indistinguishable
+          from a broken one -- written down here already, and paid for again
+          on this exact button. Silent while the box is untouched: a form that
+          tells somebody off before they have started is one they stop
+          reading. */}
+      {problem && <p className="pf-note pfe-why">{problem}</p>}
       <div className="form-actions">
         <button className="btn-ghost" onClick={onCancel}>Cancel</button>
-        <button className="btn-solid" disabled={!f.company.trim() || !f.license.trim()} onClick={() => onSave(f)}>Save changes</button>
+        <button className="btn-solid" disabled={!!problem} onClick={() => onSave(f)}>Save changes</button>
       </div>
     </>
   );
@@ -30898,6 +30993,21 @@ strong.insp-name{background:none;border:0;padding:0}
 .shs-day.today{border-color:var(--brand);box-shadow:inset 0 0 0 1px var(--brand)}
 .shs-day.is-next{background:var(--brand);border-color:var(--brand)}
 .shs-day.is-next .shs-dow,.shs-day.is-next .shs-dom,.shs-day.is-next .shs-n{color:#fff}
+/* ---- the console's company edit, and what a company is to an account ----
+   No backticks anywhere in here: this stylesheet is one template literal and
+   a backtick in a comment closes it.
+
+   The ring is what makes opening the form visible on a long page. A
+   box-shadow rather than a border, because a border that thickens moves
+   everything beside it by a pixel and the whole page appears to twitch. */
+.pfe-open{scroll-margin-top:72px}
+.pfe-ring{box-shadow:0 0 0 3px var(--brand);transition:box-shadow .2s}
+.pfe-why{margin:8px 0 0;color:var(--amber-ink)}
+.pfc-engaged > span:last-child{display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+.pfc-eng{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.pfc-seg{display:inline-flex}
+.pfc-seg button{padding:4px 10px;font-size:12px}
+
 .sh-undated{margin:11px 0 0;font-size:12px;color:var(--ink-soft)}
 .sh-link{background:none;border:0;padding:0;cursor:pointer;font:700 12px Inter,sans-serif;color:var(--brand)}
 .sh-link:hover{text-decoration:underline}

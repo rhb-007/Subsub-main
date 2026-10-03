@@ -6673,6 +6673,81 @@ refactor.
   can come — is the right shape and is a decision about who outranks whom when
   two of the three disagree, not an endpoint.
 
+- **"WON'T LET ME EDIT THE SUBCONTRACTOR AT ALL" WAS TWO BUGS AND A MISSING
+  CONTROL**, reported from the staff console's Companies screen with the pencil
+  tapped and nothing apparently happening.
+
+  **SAVE WAS DEAD ON ANY COMPANY WITH NO LICENCE NUMBER.** `CompanyEditFields`
+  read `disabled={!f.company.trim() || !f.license.trim()}`, so a record
+  somebody typed off a business card — which is five of the ten rows on that
+  screen — could be opened, edited and never saved. **With nothing beside the
+  button saying why**, which this file has already called indistinguishable
+  from a broken one, on the console, for the second time.
+
+  And it contradicted a decision this product took twice: *several states have
+  no state contractor licence at all*, so signing up never requires one and
+  neither does being on a roster. The one screen in SubSub demanding a licence
+  was the staff console, about companies the product deliberately allows to
+  have none. The route had always accepted the save — **it was only ever the
+  button**, which is why nothing server-side could have caught it.
+
+  **AND THE FORM OPENED BELOW THE FOLD.** It renders after the whole company
+  grid, so at an iPad's width with ten companies on it the pencil scrolled
+  nothing and drew nothing in view. It scrolls **and rings** now, the rule the
+  compliance pack already paid for — *landing somewhere is not the same as
+  pointing at something*, and a panel arriving silently at the foot of a long
+  page has not been pointed at. A `box-shadow`, because a border that thickens
+  moves everything beside it by a pixel.
+
+  **AND THE WORKING RELATIONSHIP COULD BE READ NOWHERE AND CHANGED NOWHERE.**
+  058 put it on `engagements` and the picker on the roster form, which is
+  right — but the console, which exists to answer what a customer cannot,
+  carried it in neither direction.
+
+  `PATCH /api/platform/engagements/:id`, and **keyed by the engagement, never
+  the company**, which is the whole shape of 058 and is why it is not a field
+  on the company edit panel three functions up. One account's handyman is
+  another account's contractor; a control on the shared company row would say
+  it for both. The card carries **one per account that engages them**, and the
+  mutation that proves it writes by `company_id` and changes the other
+  roster's answer too.
+
+  **SUPERADMIN, unlike the company edit beside it.** This is the entry that
+  excuses somebody their insurance and their licence on a roster — closer to
+  the delete button than to correcting a phone number.
+
+  **AND STAFF GET THE SAME PREDICATE, NOT AN EXEMPTION FROM IT.** A general
+  contractor's engagement refuses `handyman` here exactly as it does on the
+  customer side, because `CHECK.sql` counts that row as a fault and writing one
+  from the screen that exists to *fix* faults is the worst place to put it.
+  Being staff is a reason to reach another account's record, never a reason for
+  that record to be wrong.
+
+  **The console bootstrap had to name the column**, or it comes back
+  `undefined`, which `engagedAs()` reads as `subcontractor` — a console
+  quietly disagreeing with the roster it is meant to explain. Same silent drop
+  as `/api/subs` and `answersForItself`, now the third instance. It falls back
+  to the old shape on a database without 058 rather than blanking the whole
+  console, because one missing column must not cost staff every screen.
+
+  **Recorded as its own event naming both sides and the DIRECTION.** "Staff
+  changed a relationship" is not answerable afterwards; *which company, on
+  whose roster, from what to what* is — and this is the edit that decides
+  whether a certificate of insurance is ever asked for again. `events.payload`
+  carries from/to and `activity.text` carries the sentence, which is the split
+  that already exists: the machine half and the readable one.
+
+  **Eight mutations fire, and the eighth needed the assertion rewritten
+  first.** *The edit panel is scrolled to and rung* was `/scrollIntoView/`
+  over the whole of `App.tsx` — which finds the compliance pack's focus ring
+  and the inspection walkthrough's, and **passed with this panel doing
+  nothing at all**. The `.embed-code-btn` trap, for the fourth time. It reads
+  the effect's own block now, keyed on `editCompanyId`.
+
+  **Deliberately unchanged: the customer side already works.** The roster
+  form's own picker has been on step 2 since 058 and is driven in a browser by
+  `test:inspectstep`. This adds the staff door, not a second customer one.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

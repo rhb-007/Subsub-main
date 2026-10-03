@@ -14824,7 +14824,21 @@ app.get("/api/platform/bootstrap", async (c) => {
       // doc_review was missing, and the console computes "docs pending
       // review" from it -- so that number was structurally zero on every
       // account and every screen that showed it was reporting nothing.
-      c.env.DB.prepare(`SELECT id, account_id, company_id, status, categories, rating, rated_jobs, doc_review FROM engagements`).all(),
+      // engaged_as (058) too, because the console's company card is where
+      // staff answer "what is this company to that account" -- and a column
+      // named in the row shape and not in the SELECT comes back undefined,
+      // which reads as `subcontractor` and quietly disagrees with the roster
+      // it is meant to explain. That is the same drop this repository already
+      // paid for on /api/subs.
+      c.env.DB.prepare(`SELECT id, account_id, company_id, status, categories, rating, rated_jobs,
+        doc_review, engaged_as FROM engagements`).all()
+        // A database behind the code must not blank the whole console. 058 is
+        // the one thing this falls back for, and it falls back to the shape
+        // the console had before it, which reads as subcontractor everywhere.
+        .catch((err) => { if (!missingSchema(err)) throw err;
+          console.warn("[platform] 058_engaged_as not applied - relationships read as subcontractor");
+          return c.env.DB.prepare(`SELECT id, account_id, company_id, status, categories, rating,
+            rated_jobs, doc_review FROM engagements`).all(); }),
       c.env.DB.prepare(`SELECT id, account_id, title, status, date, completed_at, created_at FROM jobs`).all(),
       c.env.DB.prepare(`SELECT * FROM subscription_events ORDER BY at`).all(),
       c.env.DB.prepare(
@@ -14885,6 +14899,11 @@ app.get("/api/platform/bootstrap", async (c) => {
       id: e.id, accountId: e.account_id, companyId: e.company_id, status: e.status,
       categories: parseJson(e.categories, []), rating: e.rating, ratedJobs: e.rated_jobs,
       docReview: parseJson(e.doc_review, {}),
+      // What this company is to THAT account. Named here or it is silently
+      // dropped -- the same whitelist shape that returned `subcontractor` for
+      // a handyman on /api/subs, which is a console that quietly disagrees
+      // with the roster it is meant to answer questions about.
+      engagedAs: engagedAs(e.engaged_as),
     })),
     jobs: jobs.results.map((j) => ({
       id: j.id, accountId: j.account_id, title: j.title, status: j.status,
@@ -15377,6 +15396,76 @@ app.patch("/api/platform/companies/:id", async (c) => {
   await auditPlatform(c.env, staff, null, "company_edited",
     `${staff.name} edited ${co.company}`, { companyId: id, fields: Object.keys(b) });
   return c.json({ ok: true });
+});
+
+// WHAT A COMPANY IS TO ONE ACCOUNT, changed from the console.
+//
+// Reported as *"we'd [need] to be able to [edit] as well as change their type
+// from contractor or subcontractor to handyman"*. 058 put that word on
+// `engagements` and the picker on the roster form, which is the right place --
+// but support standing in a console looking at a company card could read the
+// relationship nowhere and change it nowhere.
+//
+// ON THE ENGAGEMENT AND NEVER ON THE COMPANY, which is the whole shape of 058
+// and is why this is not a field on the company edit panel three functions up.
+// One account's handyman is another account's contractor; a control on the
+// company row would say it for both. So the console card carries one of these
+// per account that engages them, and this route names the engagement.
+//
+// SUPERADMIN, unlike the company edit beside it. This is the entry that
+// excuses somebody their insurance and their licence on a roster -- it is
+// closer to the delete button than to correcting a phone number.
+app.patch("/api/platform/engagements/:id", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+
+  const b = await c.req.json().catch(() => ({}));
+  if (!isEngagedAs(b.engagedAs)) return c.json({ error: "bad_engaged_as" }, 400);
+
+  const row = await c.env.DB.prepare(
+    `SELECT e.id, e.account_id, e.company_id, e.engaged_as,
+            a.name AS account_name, a.kind AS account_kind, co.company
+       FROM engagements e
+       JOIN accounts a ON a.id = e.account_id
+       JOIN companies co ON co.id = e.company_id
+      WHERE e.id = ?`
+  ).bind(c.req.param("id")).first().catch((err) => {
+    if (!missingSchema(err)) throw err;
+    return null;
+  });
+  if (!row) return c.json({ error: "not_found" }, 404);
+
+  // THE SAME PREDICATE THE CUSTOMER SIDE READS, not a staff exemption from it.
+  // A handyman is a maintenance worker for a building, and an account with no
+  // buildings has nothing for one to do -- so letting staff write the word
+  // onto a general contractor's roster would put a row in the database that
+  // CHECK.sql counts as a fault, from the one screen that exists to fix
+  // faults. Being staff is a reason to reach another account's record, not a
+  // reason for that record to be wrong.
+  const want = engagedAs(b.engagedAs);
+  if (isHandyman(want) && !mayEngageHandyman(row.account_kind)) {
+    return c.json({ error: "not_a_handyman_account", accountKind: row.account_kind }, 409);
+  }
+  // NULL for a subcontractor, never the word: that is what every existing row
+  // holds, and two spellings of the ordinary state is `engagedAs()` reading
+  // one of them by luck.
+  const store = isHandyman(want) ? "handyman" : null;
+  if ((row.engaged_as || null) === store) return c.json({ error: "nothing_to_change" }, 400);
+
+  await c.env.DB.prepare(`UPDATE engagements SET engaged_as = ? WHERE id = ?`)
+    .bind(store, row.id).run();
+
+  // Its own event, naming BOTH sides. "Staff changed a relationship" is not
+  // answerable afterwards; which company, on whose roster, from what to what,
+  // is -- and this is the edit that decides whether a certificate of insurance
+  // is ever asked for again.
+  await auditPlatform(c.env, staff, row.account_id, "engagement_relationship_changed",
+    `${staff.name} set ${row.company} to ${want} on ${row.account_name}`,
+    { engagementId: row.id, companyId: row.company_id,
+      from: engagedAs(row.engaged_as), to: want });
+  return c.json({ ok: true, engagedAs: want });
 });
 
 app.delete("/api/platform/companies/:id", async (c) => {

@@ -727,6 +727,14 @@ export const api = {
       request(`/platform/companies/${encodeURIComponent(id)}`,
         { method: "DELETE", body: JSON.stringify({ confirmName }) }),
 
+    // What a company is to ONE account -- subcontractor or handyman. Keyed by
+    // the ENGAGEMENT, never the company: the company row is shared, so a
+    // company-keyed write would say the word for every account that hires
+    // them, which is exactly what putting it on `engagements` prevents.
+    setEngagedAs: (engagementId, engagedAs) =>
+      request(`/platform/engagements/${encodeURIComponent(engagementId)}`,
+        { method: "PATCH", body: JSON.stringify({ engagedAs }) }),
+
     // Which settings the Worker actually has. Names only, never values.
     setupCheck: () => request("/platform/setup-check"),
 
