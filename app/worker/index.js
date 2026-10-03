@@ -66,7 +66,7 @@ import { jobIsClosed, jobClosure } from "../shared/jobstate.js";
 import { pickSeat, hasAdminSeat, isTeamSeat, staffStandsIn,
   staffMayWriteShared } from "../shared/seats.js";
 import { WEATHER_TTL_MIN, weatherLabel } from "../shared/greeting.js";
-import { DOC_KINDS, EXPIRING_KINDS, companyDocStatus, coversJob, dueReminder,
+import { DOC_KINDS, EXPIRING_KINDS, ASSIGN_KINDS, companyDocStatus, coversJob, dueReminder,
   addDaysIso, CHASE_AT } from "../shared/docs.js";
 import { eligible as overflowEligible, canBroadcast, overflowSplit, postClosed,
   postWindowHours, OVERFLOW_FEE_BPS, ELIGIBILITY } from "../shared/overflow.js";
@@ -7748,9 +7748,26 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   ).bind(companyId).first();
   const docReview = parseJson(engagement.doc_review, {});
   const verified = (k) => docReview[k]?.status === "verified";
-  const mustHave = requiredDocsFor(engagement.engaged_as, ["insurance", "bond", "contract"]);
-  if (mustHave.some((k) => !verified(k))) {
-    return c.json({ error: "documents_incomplete", missing: mustHave.filter((k) => !verified(k)) }, 409);
+  //
+  // `ASSIGN_KINDS` rather than a list written out here: the contractor's own
+  // banner says what stops them being assigned, and two copies of that answer
+  // is how it came to name the W-9, which this route has never checked.
+  const mustHave = requiredDocsFor(engagement.engaged_as, ASSIGN_KINDS);
+  const short = mustHave.filter((k) => !verified(k));
+  if (short.length) {
+    // WHICH WAY it is short, because the two need opposite actions and the
+    // screen said the wrong one. Nothing uploaded is the contractor's to fix
+    // and the hiring account can only ask; uploaded and not yet verified is
+    // THIS account's own review sitting undone, which nobody else can clear.
+    // Telling somebody to chase a certificate that is already on file is how
+    // a work order waits a week on the person who was never the blocker --
+    // the expired-versus-never-added distinction, one screen along.
+    return c.json({
+      error: "documents_incomplete",
+      missing: short,
+      absent: short.filter((k) => !company?.[k]),
+      unreviewed: short.filter((k) => !!company?.[k]),
+    }, 409);
   }
 
   // Verified is not the same as in force. A review is a verdict somebody

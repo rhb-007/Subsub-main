@@ -54,7 +54,7 @@ import { INSURANCE_LINES, OPTIONAL_LINES, BOND_MIN, INSURANCE_MIN, checkItems, f
   problemsIn, allConfirmed, reviewProgress, outcomeWords } from "../shared/doccheck.js";
 import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/autoschedule.js";
 import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
-  isOptionalDoc, docStatus as docStatusOf,
+  ASSIGN_KINDS, PAY_ONLY_KINDS, isOptionalDoc, docStatus as docStatusOf,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso, DOC_LABELS } from "../shared/docs.js";
 import { setupGaps, mayFinishSetup, firstGapStep } from "../shared/setup.js";
 import { jobIsClosed, jobClosure, completionEffects } from "../shared/jobstate.js";
@@ -1396,6 +1396,16 @@ const complianceGaps = (s) => [
   ...missingDocs(s).map((k) => DOC_LABELS[k]),
   ...(!needsLicense(s?.engagedAs) || licenseOk(s) ? [] : ["Active WA contractor registration"]),
 ];
+// WHAT ACTUALLY STOPS A WORK ORDER, which is not the same question as
+// `missingDocs`. That one is "what is this engagement judged on" and counts
+// all four; the assign route refuses on three, because a W-9 is not cover --
+// it is what makes the payment reportable. Asking the two questions with one
+// answer is what put "you can't be assigned jobs until you upload ... IRS
+// Form W-9" in front of a subcontractor over a document no route checks.
+const assignBlockers = (s) =>
+  requiredDocsFor(s?.engagedAs, ASSIGN_KINDS).filter((k) => !docVerified(s, k));
+const payBlockers = (s) =>
+  requiredDocsFor(s?.engagedAs, PAY_ONLY_KINDS).filter((k) => !docVerified(s, k));
 const unverifiedDocs = (s) => DOC_KINDS.filter((k) => s[k] && !docVerified(s, k));
 const pendingReviewDocs = (s) => DOC_KINDS.filter((k) => docStatus(s, k) === "pending");
 const docsComplete = (s) =>
@@ -2841,28 +2851,81 @@ export default function SubSub() {
 
   // Assigning a contractor ISSUES a work order for that trade. The WO is never
   // authored separately — it is derived from the job plus these trade details.
-  const assignContractor = (jobId, trade, sub, details = {}) => {
+  // ISSUING IS AWAITED, AND NOTHING IS DRAWN UNTIL THE SERVER TOOK IT.
+  //
+  // This used to fire the calls and then patch the job and write the feed
+  // entry SYNCHRONOUSLY, outside the promise -- so a refusal drew the trade
+  // as assigned, with a work order number on it, and logged "Issued a work
+  // order" about one that does not exist. The only sign was a note that
+  // arrived afterwards and read as a remark about an issued work order
+  // rather than as a refusal, and a reload made the whole lot vanish.
+  //
+  // Reported as a roster of jobs assigned to a contractor whose own portal
+  // showed none: it was right and this screen was not. The route refuses an
+  // assignment whose documents are not complete, and it had refused every
+  // one of them. Third time this file has recorded a save that reports
+  // success and writes nothing -- `updateSub`, `completeJob`, and now the
+  // single most consequential press in the product.
+  const assignContractor = async (jobId, trade, sub, details = {}) => {
     // One work order per trade, each with its OWN scope and value. Nothing
     // is bundled implicitly — the admin ticked each trade on the form.
     const wanted = (details.trades && details.trades.length)
       ? details.trades
       : [{ trade, tradeScope: details.tradeScope || "", value: details.value || "" }];
+    let made;
+    try {
+      made = await Promise.all(wanted.map((ln) => api.assign(jobId, {
+        trade: ln.trade, companyId: sub.id, tradeScope: ln.tradeScope, value: ln.value,
+        payKind: ln.payKind || "fixed", rate: ln.rate || "", capHours: ln.capHours ?? null,
+        crewName: details.crewName, responseWindow: details.responseWindow,
+      })));
+    } catch (err) {
+      console.error("[persist] assign failed:", err);
+      // Name the reason. "Try again" is the wrong instruction for a refusal
+      // that will refuse identically every time, and every one of these is
+      // something somebody can actually go and fix.
+      const e = err?.body?.error;
+      const names = (ks) => (ks || []).map((k) => DOC_LABELS[k] || k).join(", ");
+      // WHICH WAY the documents are short, because the two are opposite jobs.
+      // Nothing uploaded is the contractor's and all this account can do is
+      // ask; on file and unverified is THIS account's own review, which the
+      // contractor cannot clear however many times they are chased.
+      const absent = err?.body?.absent || [];
+      const unreviewed = err?.body?.unreviewed || [];
+      setBillingNote(
+        e === "documents_lapse_before_job"
+          ? `No work order was issued. ${sub.company} is not covered for this job's date. `
+            + `${err.body.detail || ""} Ask them for the renewal, then assign it again.`
+        : e === "documents_incomplete"
+          ? (absent.length && unreviewed.length
+              ? `No work order was issued. ${sub.company} has not uploaded ${names(absent)}, `
+                + `and ${names(unreviewed)} is on file waiting on your review.`
+            : unreviewed.length
+              ? `No work order was issued. ${names(unreviewed)} is on file and waiting on `
+                + `your review — approve it on their card, then assign again.`
+              : `No work order was issued. ${sub.company} has not uploaded ${names(absent)} `
+                + `yet — ask them for it, then assign again.`)
+        : e === "trade_not_handyman"
+          ? `No work order was issued. ${sub.company} is on your roster as a handyman. `
+            + ENGAGED_REFUSALS.trade_not_handyman
+        : e === "not_approved"
+          ? "No work order was issued. This job is still a request nobody has approved."
+        : "Could not issue that work order. It has not been sent — try again.");
+      setAssigning(null);
+      setAssignSub(null);
+      return;
+    }
+
     // Whether the contractor was actually told. This used to be thrown
     // away: a bounced address, a number that could not be texted, or a
     // contractor record with no address at all all looked, on this screen,
     // exactly like a work order delivered -- and the person who pressed
     // Assign is the only one who can fix any of them.
-    Promise.all(wanted.map((ln) => api.assign(jobId, {
-      trade: ln.trade, companyId: sub.id, tradeScope: ln.tradeScope, value: ln.value,
-      payKind: ln.payKind || "fixed", rate: ln.rate || "", capHours: ln.capHours ?? null,
-      crewName: details.crewName, responseWindow: details.responseWindow,
-    }))).then((made) => {
-      const told = made.filter((m) => m?.notified?.emailed || m?.notified?.texted);
-      if (told.length === made.length) {
-        const where = told[0]?.notified?.to;
-        setBillingNote(`Work order sent to ${sub.company}${where ? ` — ${where}` : ""}.`);
-        return;
-      }
+    const told = made.filter((m) => m?.notified?.emailed || m?.notified?.texted);
+    if (told.length === made.length) {
+      const where = told[0]?.notified?.to;
+      setBillingNote(`Work order sent to ${sub.company}${where ? ` — ${where}` : ""}.`);
+    } else {
       const why = made.map((m) => m?.notified?.emailError || m?.notified?.textError).find(Boolean);
       setBillingNote(
         why === "no_contact"
@@ -2873,24 +2936,8 @@ export default function SubSub() {
             + "The work order is issued — turn email or SMS on for them and send it again."
         : `The work order is issued, but ${sub.company} could not be reached. `
           + "Check their email and mobile, then reissue it.");
-    }).catch((err) => {
-      console.error("[persist] assign failed:", err);
-      // Name the reason. "Try again" is the wrong instruction for a refusal
-      // that will refuse identically every time, and a lapsed certificate is
-      // the one case here somebody can actually go and fix.
-      const e = err?.body?.error;
-      setBillingNote(
-        e === "documents_lapse_before_job"
-          ? `${sub.company} is not covered for this job's date. ${err.body.detail || ""} `
-            + "Ask them for the renewal, then assign it again."
-        : e === "documents_incomplete"
-          ? `${sub.company} has documents still waiting on review, so no work order can be issued yet.`
-        : e === "trade_not_handyman"
-          ? `${sub.company} is on your roster as a handyman. ${ENGAGED_REFUSALS.trade_not_handyman}`
-        : e === "not_approved"
-          ? "This job is still a request nobody has approved, so no work order can be issued against it."
-        : "Could not issue that work order. It has not been sent — try again.");
-    });
+    }
+
     { const jb = allJobs.find((j) => j.id === jobId);
       const n = (details.trades && details.trades.length) || 1;
       if (jb) logEvent("wo_issued", `Issued ${n > 1 ? n + " work orders" : "a work order"} to ${sub.company} on ${jb.title}`); }
@@ -21835,6 +21882,10 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   const [sub2, setSub2] = useState("trades");
   const caps = [...new Set(sub.categories.flatMap((c) => CAP_LIBRARY[c] || []))];
   const miss = missingDocs(sub);
+  // Two questions, two answers: what stops a work order, and what stops the
+  // money. `miss` stays the count the Upload button and the nav badge use.
+  const blockAssign = assignBlockers(sub);
+  const blockPay = payBlockers(sub);
 
   const first = (me?.name || sub.contact || sub.company).split(" ")[0];
   // One list, every client. `mine` is this account's jobs and `elsewhere` is
@@ -21877,7 +21928,23 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
       {miss.length > 0 && pane !== "docs" && (
         <div className="doc-block with-cta">
           <AlertTriangle size={15} />
-          <div><strong>Action needed.</strong> You can't be assigned jobs until you upload: {miss.map((k) => DOC_LABELS[k]).join(", ")}.</div>
+          {/* THE SENTENCE NAMES WHAT ACTUALLY BLOCKS, and the W-9 is a
+              separate clause rather than a fourth item in the list. It does
+              not stop a work order -- `ASSIGN_KINDS` is what the route
+              refuses on -- and saying it does sends somebody looking for a
+              tax form to unblock work that is waiting on a certificate. It
+              still has to be said, because it stops the money. */}
+          <div>
+            <strong>Action needed.</strong>{" "}
+            {blockAssign.length > 0 && (
+              <>You can't be assigned jobs until you upload: {blockAssign.map((k) => DOC_LABELS[k]).join(", ")}.{" "}</>
+            )}
+            {blockPay.length > 0 && (
+              <>Your {blockPay.map((k) => DOC_LABELS[k]).join(" and ")}{" "}
+                {blockAssign.length > 0 ? "is separate — it does not hold up job requests, but" : "does not hold up job requests, but"}{" "}
+                you can't be paid without it.</>
+            )}
+          </div>
           <button className="btn-notify" onClick={onGoDocs}>
             <Upload size={14} /> Upload {miss.length === 1 ? "document" : "documents"}
           </button>

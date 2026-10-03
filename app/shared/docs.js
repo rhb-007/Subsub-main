@@ -51,6 +51,30 @@ export const EXPIRING_KINDS = ["insurance", "bond"];
 // This is about the SUBCONTRACTOR'S own view of their paperwork. A hiring
 // account still tracks all four on its roster, because whether they require an
 // agreement is their call and not ours to answer for them.
+// WHICH DOCUMENTS STOP A WORK ORDER BEING ISSUED, which is NOT all four.
+//
+// The assign route has always refused on insurance, a bond and a signed
+// agreement, and deliberately not on the W-9 -- because a W-9 is not cover.
+// It is the ability to REPORT the payment, which is why `paygate.js` reads it
+// before money moves and why the document-request mail says payment cannot be
+// issued without it. Nothing about a missing W-9 makes the work uninsured, so
+// it must not stand between a contractor and a job they could safely do.
+//
+// It is named here because the route and the contractor's own banner are two
+// records of one fact: the route listed these three inline and the banner
+// counted `missingDocs`, which is all four -- so a subcontractor was told
+// "you can't be assigned jobs until you upload ... IRS Form W-9" over a
+// document the route never checks. The screen stricter than the route, which
+// is the same lie as looser, pointed at the one sentence a subcontractor acts
+// on first.
+//
+// `requiredDocsFor` still narrows this per engagement, so a handyman is not
+// asked for insurance or a bond here either.
+export const ASSIGN_KINDS = ["insurance", "bond", "contract"];
+// And the one that is not about being assigned at all. Named so a screen
+// saying why can tell the two apart rather than lumping them.
+export const PAY_ONLY_KINDS = DOC_KINDS.filter((k) => !ASSIGN_KINDS.includes(k));
+
 export const OPTIONAL_KINDS = ["contract"];
 export const isOptionalDoc = (kind) => OPTIONAL_KINDS.includes(kind);
 export const REQUIRED_KINDS = DOC_KINDS.filter((k) => !isOptionalDoc(k));

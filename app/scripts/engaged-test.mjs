@@ -280,6 +280,30 @@ console.log("\n-- what they may be sent to --");
     s === 409 && out.error === "documents_incomplete", `${s} ${out.error}`);
   ck("and the refusal names what is missing",
     (out.missing || []).includes("insurance"), JSON.stringify(out.missing));
+  // WHICH WAY IT IS SHORT, because the two need opposite actions and the
+  // screen told people the wrong one. `cmp_roof` has its files on the row with
+  // the review undone, so this is the account's own queue rather than
+  // something to chase the contractor for.
+  ck("and says the documents are on file awaiting review, not absent",
+    (out.unreviewed || []).includes("insurance") && !(out.absent || []).includes("insurance"),
+    JSON.stringify({ absent: out.absent, unreviewed: out.unreviewed }));
+}
+{
+  // A W-9 DOES NOT STOP A WORK ORDER, and the contractor's own banner used to
+  // say it did. It is not cover -- it is what makes the payment reportable,
+  // which is why `paygate.js` reads it before money moves. Refusing a job over
+  // it would hold up work that is fully insured for want of a tax form.
+  //
+  // The fixture verifies the three that DO block and leaves the W-9 both
+  // unverified and absent, which is the only shape that can tell the two sets
+  // apart: with `w9` in the gate this answers 409.
+  const { db, env } = seed();
+  db.exec(`UPDATE companies SET w9 = 0, doc_files = '{"insurance":"coi.pdf","bond":"bond.pdf","contract":"agr.pdf"}' WHERE id = 'cmp_roof'`);
+  db.exec(`UPDATE engagements SET doc_review = '{"insurance":{"status":"verified"},"bond":{"status":"verified"},"contract":{"status":"verified"}}' WHERE id = 'en_roof'`);
+  const [s, out] = await json(await call(env, "/api/jobs/j_tap/assign",
+    { method: "POST", body: { trade: "plumbing", companyId: "cmp_roof", value: 180 } }));
+  ck("a missing W-9 alone does not refuse the work order",
+    s !== 409 || out.error !== "documents_incomplete", `${s} ${out.error || ""}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

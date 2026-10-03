@@ -6306,6 +6306,92 @@ refactor.
   none has been run against a row. Seeding each one needs a fixture from the
   feature that owns it, which is where it belongs rather than in the drift test.
 
+- **A ROSTER OF JOBS ASSIGNED TO A CONTRACTOR WHOSE OWN PORTAL SHOWED NONE OF
+  THEM — AND THE PORTAL WAS RIGHT.** Reported as *"I just assigned a bunch of
+  new jobs to pacific apartment maintenance, but there is nothing in their
+  dashboard… where is all of that!??"*, with a screenshot of the contractor's
+  own screen reading **0 job requests, 0 upcoming, no upcoming jobs booked** —
+  under an amber banner saying *you can't be assigned jobs until you upload*
+  four documents.
+
+  Everything the report asked for already existed and was rendering: the
+  schedule, the pending requests with their countdowns, the document reminder,
+  the booked value, aggregated across every client. The jobs were the thing
+  that was not real. `POST /api/jobs/:jobId/assign` had refused **every one**
+  with `documents_incomplete`, and this screen drew them anyway.
+
+  **THE PATCH AND THE FEED ENTRY RAN OUTSIDE THE PROMISE.**
+  `assignContractor` fired `Promise.all(...).then(...).catch(...)` and then,
+  **synchronously**, wrote `logEvent("wo_issued", …)` and
+  `setJobs(... issueWO ...)`. So a refusal drew the trade as assigned with a
+  work order number on it, recorded *Issued a work order* in the activity feed
+  about one that does not exist, and left a note that arrived afterwards and
+  read as a remark about an issued work order rather than as a refusal. A
+  reload made the lot vanish. Third instance of the save-that-reports-success
+  shape — `updateSub`, `completeJob`, and now **the single most consequential
+  press in the product**, the one that ends with somebody driving to a job.
+
+  **No static check could see it.** `setJobs((js) => … issueWO(…))` is exactly
+  the right code; the bug is only that it runs whether or not the server
+  agreed. So `test:assignref` drives the form against a stubbed 409 and reads
+  the Jobs screen back: the trade must still be unassigned and the contractor
+  must not be named against it. Reinstating the fall-through fails seven
+  assertions. **And the success branch is asserted in the same place**, because
+  a "fix" that simply stopped drawing would pass every refusal assertion and
+  break the product — the diagonal coverage that left `hiresLabel` half-wired.
+
+  **One assertion in the first version could not fail and was replaced rather
+  than kept.** *Nothing claims a work order was issued* looked for the feed
+  line, which the Jobs screen does not render and the stub cannot serve — it
+  survived the mutation untouched. What the suite can see is the trade row, so
+  that is what it reads; the feed entry is guarded by the same early return and
+  the suite **says out loud** that it has no assertion of its own.
+
+  **AND THE REFUSAL TOLD PEOPLE THE WRONG THING TO DO.** It read *"has
+  documents still waiting on review"* for every case, including the one in the
+  report, where nothing had been uploaded at all. Those need opposite actions:
+  nothing on file is the contractor's and this account can only ask; on file
+  and unverified is **this account's own review sitting undone**, which the
+  contractor cannot clear however many times they are chased. The route now
+  answers `absent` and `unreviewed` beside `missing` — it already selected the
+  company's document columns and simply did not say — and each sentence names
+  the one action that works. The same expired-versus-never-added distinction
+  `docs.js` draws in colour, one screen along.
+
+  **AND THE CONTRACTOR'S BANNER NAMED A DOCUMENT THAT BLOCKS NOTHING.** It said
+  *you can't be assigned jobs until you upload: … IRS Form W-9*, counting
+  `missingDocs`, which is all four kinds. The route has always refused on
+  **three**: a W-9 is not cover, it is what makes the payment reportable, which
+  is why `paygate.js` reads it before money moves and the document-request mail
+  says payment cannot be issued without it. So a subcontractor was sent looking
+  for a tax form to unblock work that was waiting on a certificate — the screen
+  **stricter** than the route, which this file has called the same lie as
+  looser, pointed at the first sentence a subcontractor acts on.
+
+  `ASSIGN_KINDS` in `app/shared/docs.js` is the one list, read by the route and
+  by the banner, with `PAY_ONLY_KINDS` derived from it so the W-9 gets its own
+  clause — *it does not hold up job requests, but you can't be paid without
+  it* — rather than being a fourth item in a sentence about assignment. The
+  route had the three written out inline and the banner counted a different
+  set: two records of one fact, and the copy people read was the wrong one.
+  `missingDocs` is unchanged and still drives the badge and the Upload button,
+  because *what is this engagement judged on* is a different question from
+  *what stops a work order*.
+
+  **The fixture is a contractor who looks assignable from here.** The roster row
+  carries four verified documents, because the refusal under test is the
+  **server's** — a row the screen already knew was short would never reach the
+  button, and a suite driving that case could not tell a guarded patch from a
+  hidden one. Five mutations fire, each on its own assertion: the fall-through,
+  the W-9 back in the gate, the refusal flattening `absent` and `unreviewed`
+  into one, and both halves of the message.
+
+  **Still open, and worth a decision rather than a guess:** every other write on
+  this screen is optimistic in the same way, and most of them are recoverable by
+  reloading. This one was not, and neither is completing a job — which is why
+  both have now been awaited one at a time. A sweep of the rest would be the
+  right shape and is a bigger change than a bug fix.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
