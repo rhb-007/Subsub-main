@@ -66,8 +66,13 @@ const job = (id, title, wo) => ({
 });
 // Two jobs: one an inspection raised, one not. The second is what makes the
 // absence assertion mean anything.
+// The second job has NO address at all, which is the only fixture the
+// null branch can be seen on: a Directions button that opens an empty map is
+// worse than no button, and with an address on every row that guard never
+// runs. `jobs.address` really is nullable -- an API-ingested job or one raised
+// against a property that has none arrives exactly like this.
 const JOBS = () => [job("job_insp", "Move-out work - unit 3B", "WO-1"),
-  job("job_plain", "Repaint hallway", "WO-9")];
+  { ...job("job_plain", "Repaint hallway", "WO-9"), address: "", area: "", zip: "" }];
 
 // What the route answers for the raised job. Flagged rooms only, captions and
 // no drafts -- the shape `contractorInspectionShape` builds, which the server
@@ -212,6 +217,29 @@ try {
   t.ck("and says where in the whole set it is, not in the room",
     /2 of 2/.test(box || ""), String(box));
 
+  console.log("\n-- and the address has directions on it --");
+  {
+    const dir = await page.evaluate(() => {
+      const a = document.querySelector(".modal .wd-dir");
+      return a ? { href: a.getAttribute("href"), target: a.getAttribute("target"),
+        rel: a.getAttribute("rel"), text: a.innerText.trim() } : null;
+    });
+    t.ck("the work order offers directions", !!dir, String(dir));
+    // The documented universal form: no key, opens the Maps app where there
+    // is one, and the ORIGIN IS OMITTED -- which is what makes it "from where
+    // you are" rather than from an office somebody guessed at.
+    t.ck("to Google's universal directions URL",
+      /^https:\/\/www\.google\.com\/maps\/dir\/\?api=1&destination=/.test(dir?.href || ""),
+      dir?.href);
+    t.ck("carrying the job's own address",
+      /1620%20Belmont%20Ave/.test(dir?.href || ""), dir?.href);
+    t.ck("and naming no origin", !/[?&]origin=/.test(dir?.href || ""), dir?.href);
+    // A new tab, because this leaves the app -- and `noopener` because the
+    // page it opens must not get a handle on ours.
+    t.ck("it opens away from the work order",
+      dir?.target === "_blank" && /noopener/.test(dir?.rel || ""), JSON.stringify(dir));
+  }
+
   console.log("\n-- and an ordinary job gets no panel at all --");
   await page.evaluate(() => document.querySelector(".modal-close, .modal-x")?.click());
   await wait(500);
@@ -223,6 +251,11 @@ try {
   // anywhere would pass this on its own.
   t.ck("the modal opened", await page.evaluate(() => !!document.querySelector(".wo-doc, .modal")));
   t.ck("and there is no inspection panel on it", p2 === null, JSON.stringify(p2));
+  // AND NO DIRECTIONS EITHER, because there is nowhere to go. Asserted in the
+  // same place as the positive case: a link rendered unconditionally passes
+  // every assertion above and opens an empty map here.
+  t.ck("nor a directions link with no address to go to",
+    await page.evaluate(() => !document.querySelector(".modal .wd-dir")));
 
   // READ OFF THE PAGE'S OWN CONSOLE, not off the harness. A real TypeError in
   // the modal's subtree left `crashes` empty while the modal never rendered,

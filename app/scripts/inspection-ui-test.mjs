@@ -431,6 +431,15 @@ try {
       sent.filter((x) => /\/job$/.test(x.path)).length === 1, JSON.stringify(sent));
     t.ck("carrying the trade", sent.find((x) => /\/job$/.test(x.path))?.body?.trades?.includes("plumbing"),
       JSON.stringify(sent.find((x) => /\/job$/.test(x.path))));
+    // 062, SECOND PASS. *"A move in doesn't necessarily need a tenant in the
+    // unit, only if required"* -- so the walk pre-answers who has to be there
+    // and this form settles it. Asserted on the BODY, because the picker can
+    // draw perfectly and the answer never leave the screen, which is the
+    // whole shape of the bug this suite exists to catch one field along.
+    t.ck("and the access answer the form settled",
+      ["tenant", "manager", "none"].includes(
+        sent.find((x) => /\/job$/.test(x.path))?.body?.access),
+      JSON.stringify(sent.find((x) => /\/job$/.test(x.path))?.body));
     // It lands on the Jobs screen, which is where the work now is.
     t.ck("and it lands on Jobs",
       await page.evaluate(() => !!document.querySelector(".ss-main")

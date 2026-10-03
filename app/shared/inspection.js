@@ -140,11 +140,19 @@ export function inspectionJobScope(inspection = {}, rooms = []) {
 //   move_in   somebody is moving into it. They will be there, and a time
 //             nobody checked with them is a time they are not in for.
 //
+// IT IS A SUGGESTION AND NOT A RULE, which is the second correction and the
+// one the name now carries. *"A move in doesn't necessarily need a tenant in
+// the unit, only if required."* A unit being turned round between tenancies is
+// often empty on the day the work is done, and forcing a confirmation step
+// onto every move-in job would be the product deciding something the manager
+// is standing in the flat to decide. So the kind pre-answers the question and
+// the person raising the job settles it.
+//
 // Returned as an `access` value rather than a boolean, so there is still one
 // vocabulary -- `ACCESS_KINDS` -- and the inspection does not grow a second
 // way of saying the same thing. An unrecognised kind answers null, which
 // leaves 019's rule in force rather than guessing.
-export function accessForInspection(kind) {
+export function suggestedAccessForInspection(kind) {
   if (kind === "move_in") return "tenant";
   if (kind === "move_out") return "manager";
   return null;

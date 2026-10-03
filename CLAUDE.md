@@ -7232,6 +7232,78 @@ refactor.
   fix from the bug it replaced, and one driving only the subcontractor case
   cannot see the fix at all. The suite flips the engagement and reloads.
 
+
+- **AND WHO HAS TO BE THERE IS A SUGGESTION, NOT A RULE — which is the second
+  correction in two messages and the one the function name now carries.** *"A
+  move in doesn't necessarily need a tenant in the unit, only if required."*
+
+  The first pass had the inspection kind **decide**: move-out booked outright,
+  move-in waited on the tenant. That is wrong about the commonest move-in there
+  is — a unit being turned round between tenancies is usually empty on the day
+  the work is done, and the person moving in has not moved in yet. Forcing a
+  confirmation step onto every one of them is the product deciding something
+  the manager is standing in the flat to decide.
+
+  So `suggestedAccessForInspection` pre-answers it and the **Raise a job** form
+  settles it, the same shape as the trade chips directly above it: the
+  suggestion is named, says which walk produced it, and every other answer is
+  one tap away. `POST /api/inspections/:id/job` takes `access` from the body
+  and falls back to the suggestion, **validated against `ACCESS_KINDS`** so a
+  word the picker never offered cannot reach the column the CHECK.sql invariant
+  counts one table along.
+
+  **Both directions are asserted in the same place**, because a move-in told
+  *we let them in* and a move-out told *the tenant needs to be in* are the two
+  halves, and pinning one passes with the body ignored for whichever kind
+  already agreed with it.
+
+  **Two shipped bugs, both from a second control wearing the first one's
+  name, and both caught by a suite that was already there.** The picker started
+  in a `.chips` container, which is how `test:inspectionui` finds the trade
+  grid — so *We let them in* appeared in the list of trades it had ticked. And
+  its suggestion line wore `.insp-sugg`, which is how the same suite asks
+  whether the trades claimed a reading they did not do — so that assertion
+  failed on a screen where the trades genuinely suggested nothing. The
+  `.embed-code-btn` trap, twice in one change, from the markup side rather than
+  the test side.
+
+- **DIRECTIONS, ON THE ADDRESS THEY ARE ABOUT.** Asked for by the people who
+  actually drive to these: *"on the job address when [the] modal is open… add a
+  call to action link that will open directions from current location on Google
+  Maps"*. An address on a work order is a string somebody retypes into a phone
+  at the kerb, and retyping is where a digit goes missing.
+
+  `/maps/dir/?api=1&destination=…` is Google's documented universal form, and
+  why it is that one rather than a coordinate or a place id: no key, it opens
+  the Maps **app** on iOS and Android where one is installed and the web map
+  where not, and **the origin is deliberately omitted** — omitted means *from
+  where you are*, which is the whole request. Naming an origin we had guessed
+  at would route somebody from the office, and a test asserts the parameter is
+  absent rather than merely that the URL is Google's.
+
+  **It answers null rather than a link to nowhere.** `jobs.address` is nullable
+  — an API-ingested job, or one raised against a property that has none — and a
+  Directions button that opens an empty map is worse than no button, which is
+  the screen-that-lies rule pointed at a kerb. **Only a fixture job with no
+  address at all can see that guard**, and the first version of the suite had
+  one on every row, so the mutation removing it survived.
+
+  **Shown to every seat that can open the document**, not only the company
+  holding it. The request named handymen and subcontractors; a manager visiting
+  the site drives to the same address, and gating a link to a public map by
+  role would be a screen inventing a rule the thing behind it does not have.
+
+  `target="_blank"` with `rel="noopener noreferrer"`, because this leaves the
+  app and the page it opens must not get a handle on ours.
+
+  **And the backtick trap for the THIRTEENTH time, two days after the
+  twelfth.** A CSS comment explaining which class carries the chip look named
+  it in backticks, closed the stylesheet's template literal, and took the whole
+  app down — reported by an existing suite as *"Inspections is in the nav —
+  []"*, which reads as a missing feature rather than a parse error. The tell is
+  that shape: a whole screen's worth of assertions failing at once, with the
+  first one being something that has worked for months.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

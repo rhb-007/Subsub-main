@@ -60,6 +60,7 @@ import { setupGaps, mayFinishSetup, firstGapStep } from "../shared/setup.js";
 import { jobIsClosed, jobClosure, completionEffects } from "../shared/jobstate.js";
 import { hasAdminSeat, isTeamSeat, staffMayWriteShared } from "../shared/seats.js";
 import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole, isPropertyScoped } from "../shared/propscope.js";
+import { suggestedAccessForInspection } from "../shared/inspection.js";
 import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   MAX_ROOM_PHOTOS, roomName, inspectionTally, flaggedRooms,
   whyNotFinish, canSendInspection, mayWriteInspection,
@@ -1698,6 +1699,30 @@ function niceTime(hhmm) {
   return `${((h + 11) % 12) + 1}${m ? ":" + String(m).padStart(2, "0") : ""} ${h >= 12 ? "PM" : "AM"}`;
 }
 // "Thu, Oct 2 · 9 AM–11 AM"
+// DIRECTIONS TO AN ADDRESS, from wherever the reader is standing.
+//
+// Asked for by the people who actually drive to these: *"on the job address
+// when [the] modal is open… add a call to action link that will open
+// directions from current location on Google Maps"*. An address on a work
+// order is a string somebody retypes into a phone at the kerb, and retyping
+// is where a digit goes missing.
+//
+// `/maps/dir/?api=1&destination=…` is Google's documented universal form and
+// the reason it is this one rather than a coordinate or a place id: it needs
+// no key, it opens the Maps APP on iOS and Android when one is installed and
+// the web map when not, and **the origin is deliberately left out** -- omitted
+// means "from where you are", which is the whole request. Naming an origin we
+// had guessed at would route somebody from the office.
+//
+// It answers NULL rather than a link to nowhere when there is no address: a
+// Directions button that opens an empty map is worse than no button, which is
+// the screen-that-lies rule pointed at a kerb.
+function directionsUrl(...parts) {
+  const to = parts.filter(Boolean).join(", ").trim();
+  if (!to) return null;
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(to)}`;
+}
+
 function visitWhen(v) {
   if (!v?.date) return "";
   const win = v.startTime ? ` · ${niceTime(v.startTime)}${v.endTime ? `–${niceTime(v.endTime)}` : ""}` : "";
@@ -25294,7 +25319,21 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
       <div className="wo-doc-grid">
         <div className="wd-row"><span>Job</span><strong>{job.title}</strong></div>
         {job.client && <div className="wd-row"><span>Client</span><strong>{job.client}</strong></div>}
-        <div className="wd-row"><span>Address</span><strong>{[job.address, job.area, job.zip].filter(Boolean).join(", ") || "—"}</strong></div>
+        <div className="wd-row"><span>Address</span>
+          <strong>{[job.address, job.area, job.zip].filter(Boolean).join(", ") || "—"}
+            {/* Shown to EVERY seat that can open this document, not only the
+                company holding it. A manager visiting the site drives to the
+                same address, and gating a link to a public map by role would
+                be a screen inventing a rule the thing behind it does not
+                have. */}
+            {directionsUrl(job.address, job.area, job.zip) && (
+              <a className="wd-dir" href={directionsUrl(job.address, job.area, job.zip)}
+                target="_blank" rel="noopener noreferrer">
+                <MapPin size={12} /> Directions
+              </a>
+            )}
+          </strong>
+        </div>
         {job.sqft && <div className="wd-row"><span>Square footage</span><strong>{Number(job.sqft).toLocaleString()} sq ft</strong></div>}
         {job.stories && <div className="wd-row"><span>Stories</span><strong>{job.stories}</strong></div>}
         <div className="wd-row"><span>Start</span><strong>{formatWhen(job.date, job.time) || "TBD"}</strong></div>
@@ -27122,6 +27161,13 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
   // somebody is removing.
   const suggested = useMemo(() => suggestTrades(rooms), [rooms]);
   const [trades, setTrades] = useState(suggested.trades);
+  // WHO HAS TO BE THERE, PRE-ANSWERED BY THE WALK AND SETTLED HERE.
+  // *"A move in doesn't necessarily need a tenant in the unit, only if
+  // required."* A unit being turned round between tenancies is often empty on
+  // the day the work is done, so the kind suggests and the person standing in
+  // the flat decides.
+  const suggestedAccess = suggestedAccessForInspection(inspection?.kind);
+  const [access, setAccess] = useState(suggestedAccess || "");
   const [date, setDate] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -27131,7 +27177,7 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
 
   const go = async () => {
     setBusy(true); setErr("");
-    try { await onRaise({ trades, date: date || null }); }
+    try { await onRaise({ trades, date: date || null, access: access || null }); }
     catch (e) {
       console.error("[inspection] raise failed:", e);
       setErr(e?.body?.error === "already_raised" ? "A job has already been raised from this one."
@@ -27222,6 +27268,32 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
             onClick={() => setTrades(suggested.trades)}>
             Back to what was suggested
           </button>
+        )}
+        <div className="form-sec">Who has to be there</div>
+        {/* THE WALK PRE-ANSWERS IT AND THE READER SETTLES IT. The same shape
+            as the trade chips above: the suggestion is named, says where it
+            came from, and every other answer is one tap away. Only "the tenant
+            needs to be in" costs a round trip, which is why it is the one
+            worth getting right before the job exists rather than after a time
+            has been proposed on it. */}
+        {suggestedAccess && (
+          <p className="insp-accsugg">
+            <Sparkles size={13} /> Suggested from{" "}
+            <b>{(INSPECTION_KINDS[inspection?.kind]?.label || "this").toLowerCase()}</b>{" "}
+            walk: <b>{ACCESS_KINDS[suggestedAccess]?.short}</b>. Change it if it is wrong.
+          </p>
+        )}
+        <div className="acc-grid insp-acc">
+          {Object.values(ACCESS_KINDS).map((k) => (
+            <button key={k.id} type="button" aria-pressed={access === k.id}
+              className={`chip ${access === k.id ? "on" : ""} ${k.id === suggestedAccess ? "sugg" : ""}`}
+              onClick={() => setAccess(k.id)}>
+              {access === k.id ? <Check size={13} /> : null} {k.short}
+            </button>
+          ))}
+        </div>
+        {ACCESS_KINDS[access] && (
+          <p className="fld-note insp-accnote">{ACCESS_KINDS[access].note}</p>
         )}
         <label className="fld">When, if you know
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
@@ -31371,7 +31443,8 @@ strong.insp-name{background:none;border:0;padding:0}
    the answer. */
 .chip.sugg:not(.on){border-style:dashed;border-color:color-mix(in srgb,var(--brand) 45%,var(--line));color:var(--ink)}
 /* What was read, and the word it was read from. */
-.insp-sugg{display:block;margin:0 0 9px;font-size:12.5px;line-height:1.6;color:var(--ink-soft)}
+.insp-sugg,
+.insp-accsugg{display:block;margin:0 0 9px;font-size:12.5px;line-height:1.6;color:var(--ink-soft)}
 /* What the suggestion could NOT read. Amber rather than muted, because it is
    the one line here that changes what somebody should do next -- a note in
    the same grey as the suggestion above it reads as more of the same
@@ -31654,6 +31727,24 @@ strong.insp-name{background:none;border:0;padding:0}
 .va-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
 .va-pick{display:flex;flex-wrap:wrap;gap:6px}
 .va-pick .pick{padding:4px 10px;font-size:11.5px}
+/* Directions, on the address it is about. Inline with the address rather than
+   a button of its own: it is a way to READ that line, not a second action on
+   the work order, and a full-width button here would outrank Accept. */
+.wd-dir{display:inline-flex;align-items:center;gap:4px;margin-left:8px;
+  font:700 11.5px Inter,sans-serif;color:var(--brand);text-decoration:none;
+  white-space:nowrap;vertical-align:middle}
+.wd-dir:hover{text-decoration:underline}
+.wd-dir > svg{flex:none}
+/* WHO HAS TO BE THERE, on the raise-a-job form. Its own container rather than
+   the .chips class: that is how the trade grid above it is found, and sharing
+   it put an access answer into the list of trades -- a second control wearing
+   the first one's name. The chip LOOK comes from the .chip class on the
+   buttons, which does not depend on the wrapper.
+   (NO BACKTICKS. This stylesheet is a template literal and one in a comment
+   closes it. Thirteenth recorded time, and the second in two days.) */
+.insp-acc{display:flex;flex-wrap:wrap;gap:7px}
+.insp-accnote{margin:6px 0 0}
+
 /* The contractor's month, on its own page. The grid itself is .jcal, shared
    with the hiring side -- two copies of seven columns and a padded first week
    is two things to keep in step.

@@ -33,7 +33,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
-import { accessForInspection, contractorInspectionShape } from "../shared/inspection.js";
+import { suggestedAccessForInspection, contractorInspectionShape } from "../shared/inspection.js";
 import { accessTenant, canAskTenant, accessFor } from "../shared/access.js";
 
 const app = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -130,8 +130,9 @@ const call = (env, path, body, who = "u_mgr", method = "POST") => worker.fetch(
 const get = (env, path, who) => call(env, path, undefined, who, "GET");
 const json = async (r) => [r.status, await r.json().catch(() => ({}))];
 const jobOf = (db, id) => db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(id);
-const raise = (env, inspId, who = "u_mgr") =>
-  call(env, `/api/inspections/${inspId}/job`, { trades: ["plumbing"], date: "2026-10-09" }, who);
+const raise = (env, inspId, who = "u_mgr", extra = {}) =>
+  call(env, `/api/inspections/${inspId}/job`,
+    { trades: ["plumbing"], date: "2026-10-09", ...extra }, who);
 const visitOf = (db, jobId) => db.prepare(
   `SELECT * FROM visits WHERE job_id = ? AND status != 'superseded' ORDER BY created_at DESC`).get(jobId);
 const propose = (env, jobId, who = "u_mgr") => call(env, `/api/jobs/${jobId}/visits`,
@@ -144,13 +145,13 @@ const issue = (db, jobId, wo = "WO-1", company = "cmp_pac", en = "en_pac", statu
 try {
   console.log("\n-- which walk it was decides who has to be there --");
   {
-    ck("a move-out needs no tenant in the loop", accessForInspection("move_out") === "manager",
-      String(accessForInspection("move_out")));
+    ck("a move-out suggests nobody in the loop", suggestedAccessForInspection("move_out") === "manager",
+      String(suggestedAccessForInspection("move_out")));
     // The correction, in its own assertion: move-in is the one that does.
-    ck("a move-in does", accessForInspection("move_in") === "tenant",
-      String(accessForInspection("move_in")));
+    ck("a move-in suggests the tenant", suggestedAccessForInspection("move_in") === "tenant",
+      String(suggestedAccessForInspection("move_in")));
     // An unrecognised kind leaves 019's rule in force rather than guessing.
-    ck("and an unknown kind answers nothing", accessForInspection("x") === null);
+    ck("and an unknown kind answers nothing", suggestedAccessForInspection("x") === null);
     // 062's predicate: two columns, two facts.
     ck("the access tenant is not only the requester",
       accessTenant({ access_user_id: "u_t3b" }) === "u_t3b"
@@ -255,6 +256,42 @@ try {
     ck("which the screen is told by the effective answer",
       accessFor({ access: "tenant" }) === "tenant"
       && canAskTenant({ access: "tenant" }) === false);
+  }
+
+  console.log("\n-- but the kind only SUGGESTS it, and the raiser settles it --");
+  {
+    // THE SECOND CORRECTION: *"a move in doesn't necessarily need a tenant in
+    // the unit, only if required."* A unit being turned round between
+    // tenancies is often empty on the day the work is done, so the kind
+    // pre-answers and the person standing in the flat decides.
+    const { db, env } = seed();
+    const [, b] = await json(await raise(env, "ins_in", "u_mgr", { access: "manager" }));
+    ck("the body outranks the suggestion", b.access === "manager", String(b.access));
+    ck("and nobody is named when nobody is being asked",
+      jobOf(db, b.jobId).access_user_id === null, String(jobOf(db, b.jobId).access_user_id));
+    issue(db, b.jobId);
+    const [, v] = await json(await propose(env, b.jobId));
+    ck("so the time waits on the crew alone",
+      (v.waitingOn || []).join() === "contractor", JSON.stringify(v.waitingOn));
+  }
+  {
+    // AND THE OTHER DIRECTION, in the same place: a move-OUT the manager says
+    // the tenant has to be in for. Asserting one alone passes with the body
+    // ignored for the kind that already agreed with it.
+    const { db, env } = seed();
+    const [, b] = await json(await raise(env, "ins_out", "u_mgr", { access: "tenant" }));
+    ck("a move-out can be told the tenant has to be in", b.access === "tenant", String(b.access));
+    ck("and the tenant of that unit is named", b.accessUserId === "u_t3b", String(b.accessUserId));
+  }
+  {
+    // A word the picker never offered must not reach the column -- the
+    // invariant CHECK.sql counts one table along.
+    const { db, env } = seed();
+    const [, b] = await json(await raise(env, "ins_in", "u_mgr", { access: "whenever" }));
+    ck("an unrecognised answer falls back to the suggestion",
+      b.access === "tenant", String(b.access));
+    ck("and nothing unknown is stored",
+      jobOf(db, b.jobId).access === "tenant", String(jobOf(db, b.jobId).access));
   }
 
   console.log("\n-- the work order carries what was found --");

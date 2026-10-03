@@ -47,8 +47,8 @@ import { JOB_SCOPED_ROLES, jobScopeFrom, maySeeJob as maySeeJobIds } from "../sh
 import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole } from "../shared/propscope.js";
 import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_ROOMS,
   whyNotFinish, inspectionTally, flaggedRooms, inspectionJobTitle,
-  inspectionJobScope, whyNotSend, mayWriteInspection, accessForInspection,
-  contractorInspectionShape, isFlagged,
+  inspectionJobScope, whyNotSend, mayWriteInspection,
+  contractorInspectionShape, isFlagged, suggestedAccessForInspection,
   INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
@@ -12315,12 +12315,19 @@ app.post("/api/inspections/:id/job", requireRole(...INSPECTION_WRITE_ROLES), asy
     `SELECT * FROM properties WHERE id = ? AND account_id = ?`
   ).bind(row.property_id, auth.accountId).first();
 
-  // 062. WHO HAS TO BE THERE FOLLOWS WHICH WALK THIS WAS, and it is the one
-  // place in the product that can answer it without guessing: a move-out unit
-  // is being handed back, so the agent opens the door; a move-in unit has
+  // 062. WHO HAS TO BE THERE, PRE-ANSWERED BY WHICH WALK THIS WAS. A move-out
+  // unit is being handed back, so the agent opens the door; a move-in unit has
   // somebody moving into it, and a time nobody checked with them is a time
   // they are not in for.
-  const access = accessForInspection(row.kind);
+  //
+  // THE PERSON RAISING IT SETTLES IT, and the kind only pre-answers.
+  // *"A move in doesn't necessarily need a tenant in the unit, only if
+  // required"* -- a unit being turned round is often empty on the day the work
+  // is done, so forcing a confirmation step onto every move-in job would be
+  // the product deciding something the manager is standing in the flat to
+  // decide. Validated against ACCESS_KINDS, so a word the picker never offered
+  // cannot reach the column.
+  const access = isAccess(b.access) ? String(b.access) : suggestedAccessForInspection(row.kind);
   // AND WHICH TENANT, resolved from the UNIT. This is the half 060 recorded as
   // still open -- a job carries a property and a property carries many
   // tenancies, so a manager-raised job had no way to name one. An inspection
