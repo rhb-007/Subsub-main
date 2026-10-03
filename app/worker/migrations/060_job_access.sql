@@ -1,0 +1,33 @@
+-- 060. Who has to be there to let somebody in.
+--
+-- Scheduling a repair has waited on the tenant since 019, and the rule for
+-- whether it should was derived entirely from who raised the job: a report a
+-- TENANT made waits on that tenant to confirm the window, anything else is
+-- booked the moment a time is set. Good default, no override.
+--
+-- So a tenant reporting a leaking roof -- fixed from outside, nobody needed
+-- indoors -- still sat waiting on them to agree a morning they did not have to
+-- be home for, and the repair did not move until they did. The reverse is just
+-- as wrong: a manager raising work inside an occupied flat got no confirmation
+-- step at all, and the first the tenant heard was somebody at the door.
+--
+-- Three answers: the tenant lets them in, we let them in, or nobody needs to be
+-- there. Only the first costs a round trip; the rules are in
+-- app/shared/access.js.
+--
+-- NULL IS THE DEFAULT AND MEANS NOT ANSWERED, never "no access needed" --
+-- `accessFor` falls back to exactly the rule 019 has been running, so this
+-- changes nothing about any job that already exists. The same shape as
+-- `companies.open_to_hire` and `properties.owner_declared_at`: something
+-- somebody says out loud, rather than an absence nobody recorded.
+--
+-- No CHECK constraint, the same trade 003 made for `accounts.kind` and 058
+-- made for `engagements.engaged_as`: adding one to an existing table is a full
+-- rebuild, and the Worker validates the value against ACCESS_KINDS on the way
+-- in. CHECK.sql counts a value the product does not produce.
+--
+-- ONE `ALTER TABLE ... ADD COLUMN`, so this is one paste and it is the
+-- statement that cannot be run twice. If it answers "duplicate column name",
+-- it has already been run and there is nothing to do.
+
+ALTER TABLE jobs ADD COLUMN access TEXT;

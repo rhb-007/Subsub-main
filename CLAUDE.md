@@ -6748,6 +6748,95 @@ refactor.
   form's own picker has been on step 2 since 058 and is driven in a browser by
   `test:inspectstep`. This adds the staff door, not a second customer one.
 
+- **THE TENANT DOES NOT ALWAYS HAVE TO BE IN, AND NOBODY COULD SAY SO.** Asked
+  for as *"a tenant does not always need to be available and in the unit [for
+  a] job. Sometimes you need to be there. Allow the property manager to adjust
+  that when scheduling the job, because that's one process that does not need
+  to happen."*
+
+  **THE RULE ALREADY EXISTED AND HAD NO OVERRIDE.** `POST /api/jobs/:id/visits`
+  has read `seat?.role === "tenant"` since 019: a repair a **tenant** reported
+  waits on that tenant to confirm the window, anything else is confirmed the
+  moment a time is proposed. That is a good default and it is derived entirely
+  from who happened to raise the job — so a tenant reporting a **leaking roof**,
+  fixed from outside with nobody needed indoors, still sat waiting on them to
+  agree a morning they did not have to be home for, and the repair did not move
+  until they answered. Thirteenth time this file has recorded a correct rule
+  with no way to say otherwise about it.
+
+  Migration 060, `jobs.access`, `app/shared/access.js`.
+
+  **NULL IS THE 019 RULE, NOT A THIRD ANSWER.** `accessFor` takes the stored
+  word when there is one and otherwise falls back to exactly what the route has
+  always done, so every job that already exists behaves as it did — the same
+  asymmetry `jobScopeFrom` and `engagedAs` use, and what makes it safe against
+  a live database with no backfill. Only a fixture carrying jobs on **both**
+  sides of that fallback can tell it from a blanket change, which is why the
+  suite drives a tenant's report left alone as well as one overridden.
+
+  **THREE ANSWERS, AND ONLY ONE OF THEM COSTS ANYTHING.** *The tenant needs to
+  be in* is the round trip. *We'll let them in* and *no access needed* both
+  book outright. The second and third are mechanically identical and are
+  deliberately not merged, because **they are different sentences to the person
+  who turns up** — "the managing agent will meet you" and "nobody has to be
+  there" are different journeys, and that is the audience this product keeps
+  forgetting has to be told anything at all. Every kind carries words for the
+  manager deciding and words for the contractor arriving, and they are not the
+  same words.
+
+  **AND THE ANSWER IS CHANGED AT SCHEDULING, which is what was actually
+  asked.** What a repair turns out to need is usually only clear once somebody
+  has looked at it, so the picker sits in the visit block beside the time as
+  well as on the create form. `PATCH /api/jobs/:id` takes it.
+
+  **A JOB NOBODY REPORTED HAS NOBODY TO ASK, whatever the column says — and the
+  test is what found that.** The first version let a manager mark their own job
+  *the tenant needs to be in*, which would have left a visit proposed for ever
+  with no one able to answer it: `notifyTenant` writes to `jobs.requested_by`,
+  and a manager-raised job has none. That is the
+  waiting-on-somebody-who-cannot-reply failure this file records about a
+  handshake behind a capability its answering role lacks, and it was two
+  assertions in the same suite contradicting each other that exposed it.
+
+  So **the override decides whether to ask; whether there is anybody to ask is
+  still a fact.** `canAskTenant` is that fact, read by the route *and* by
+  `accessChoices`, so the picker drops the answer rather than offering a
+  control the server quietly ignores. It reads **both spellings** —
+  `requestedBy` in the browser, `requested_by` on a raw row — because
+  normalising at each call site is a conversion to forget, and a missed one
+  here reads as *nobody to ask*, which is the direction that silently drops the
+  confirmation step.
+
+  **A TENANT DOES NOT GET TO ANSWER IT.** They are the side being let in;
+  taking the word off their own request would let them book themselves out of
+  their own confirmation step. `POST /api/jobs` drops it for any requester.
+
+  **Nothing is preselected on the form**, because leaving it alone *is* the
+  019 rule and a preselected answer would read as the account's choice rather
+  than as the default — the preselection-mistaken-for-a-choice lesson the trade
+  suggestions already paid for, where the blank is the truth.
+
+  **The column is an EXTRA on the insert, not a base one**, so a database
+  without 060 still creates jobs: losing the access answer costs a round trip
+  with a tenant that was not needed, and refusing the job costs the repair.
+  The same trade `material_supplier` already makes one column along. And
+  `missingSchema` matches `access` only in the two shapes SQLite actually
+  produces for a missing column, because it is far too ordinary a word to match
+  loosely — a broad rule there would claim errors belonging to half the other
+  migrations.
+
+  Seven mutations fire, each on its own assertion. And the backtick trap for
+  the **eleventh** time, in a SQL comment naming `requested_by`.
+
+  **Still open, and it is the half this deliberately does not ship: a manager
+  cannot put a tenant INTO a job the tenant did not report.** The reverse
+  direction needs a way to say *which* tenant — a job carries a property, a
+  property carries many tenancies, and `memberships.unit` is the only thing
+  that narrows it. That is per-unit tenancy on a job, which is a real design
+  question rather than an endpoint, and shipping a control that silently books
+  anyway would be worse than not having one. The picker says so by not offering
+  it.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

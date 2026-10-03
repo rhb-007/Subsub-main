@@ -86,6 +86,7 @@
     "test:compare": "node --no-warnings scripts/compare-test.mjs",
     "test:workwhenui": "node --no-warnings scripts/work-when-ui-test.mjs",
     "test:consoleas": "node --no-warnings scripts/console-engaged-test.mjs",
+    "test:jobaccess": "node --no-warnings scripts/job-access-test.mjs",
     "test:workwhen": "node --no-warnings scripts/work-when-test.mjs",
     "test:inviteas": "node --no-warnings scripts/invite-engaged-test.mjs",
     "test:inviteasui": "node --no-warnings scripts/invite-engaged-ui-test.mjs",

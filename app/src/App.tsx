@@ -73,6 +73,8 @@ import { ENGAGED_AS, engagedAs, isHandyman, mayEngageHandyman, mayCover,
 import { handymanCapCheck, handymanCapText,
   HANDYMAN_GLOBAL_RULES } from "../shared/handycap.js";
 import { workWhen, scheduledOn, WHEN_KINDS } from "../shared/schedule.js";
+import { ACCESS_KINDS, accessChoices, canAskTenant,
+  mayChooseAccess } from "../shared/access.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -3726,6 +3728,17 @@ export default function SubSub() {
   // Sub confirms (or proposes a different date) from their portal.
   // Propose a time for a repair. The API decides whether it needs the tenant
   // (then it is "proposed") or stands at once (then the job gets its date).
+  // 060. Who has to be there, changed at scheduling time -- which is when it
+  // is usually known. AWAITED before the row is patched: a refusal that drew
+  // the new answer anyway is the save-that-reports-success shape this file
+  // records about `updateSub`, `completeJob` and `assignContractor`, and here
+  // it would tell a manager the tenant is out of the loop when the server
+  // still thinks they are in it.
+  const setJobAccess = async (jobId, access) => {
+    await api.patchJob(jobId, { access });
+    setJobs((js) => js.map((j) => j.id === jobId
+      ? { ...j, access, accessEffective: access } : j));
+  };
   const proposeVisit = async (jobId, body) => {
     const v = await api.proposeVisit(jobId, body);
     setVisits((vs) => [v, ...vs.filter((x) => x.jobId !== jobId)]);
@@ -6209,6 +6222,8 @@ export default function SubSub() {
                     {j.requestedBy && j.approvedAt && !isClosed(j) && (
                       <VisitBlock job={j} visit={visits.find((v) => v.jobId === j.id) || null}
                         who={users.find((u) => u.id === j.requestedBy)} onPropose={proposeVisit}
+                        canSetAccess={mayChooseAccess(kindOf(account)) && canManage}
+                        onSetAccess={setJobAccess}
                         onAssign={() => {
                           const slot = j.trades.find((t) => !j.assignments[t]) || j.trades[0];
                           if (slot) setAssigning({ job: j, trade: slot });
@@ -6469,6 +6484,10 @@ export default function SubSub() {
       {jobForm && <Modal onClose={() => setJobForm(null)} wide>
         <JobForm allJobs={allJobs} accountId={account.id} accountName={account.name}
           rosterWord={rosterWords(account).One} properties={accountProperties} forProperty={jobForm.forProperty} forSub={jobForm.forSub} forDate={jobForm.forDate} jobs={jobs} asOwner={role === "owner"}
+          /* Who lets them in is a question about a building, so it is asked by
+             the kinds that have buildings -- the same predicate the module
+             exports rather than a second list written here. */
+          canSetAccess={mayChooseAccess(kindOf(account))}
           onSubmit={(job) => createJob(job, jobForm.forSub)}
           onCancel={() => setJobForm(null)} /></Modal>}
       {assigning && <Modal onClose={() => setAssigning(null)} wide>
@@ -12365,7 +12384,7 @@ function TenantVisitOutcome({ visit, brandName, onSay }) {
 
 // On the manager's side of the same thing: where the visit stands, and the
 // form to propose one (or the next one).
-function VisitBlock({ job, visit, who, onPropose, onAssign }) {
+function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, canSetAccess = false }) {
   const [f, setF] = useState({ date: job.date || "", startTime: "09:00", endTime: "11:00", note: "" });
   // Open by default whenever there is no live time to wait on: nothing
   // proposed, a time refused, or one that came and went with nobody there.
@@ -12410,6 +12429,35 @@ function VisitBlock({ job, visit, who, onPropose, onAssign }) {
               <Plus size={13} /> Assign a contractor
             </button>
           )}
+        </div>
+      )}
+      {/* WHAT PRESSING SEND WILL DO, before it is pressed. With the tenant in
+          the loop a time is a proposal and the repair does not move until they
+          answer; without them it is booked outright. Those are different acts
+          and the screen said nothing about which one it was about to perform.
+
+          Said from the job's effective answer, so it cannot disagree with the
+          route that writes the row. */}
+      {ACCESS_KINDS[job.accessEffective] && (
+        <div className="visit-access">
+          <Key size={14} />
+          <div className="va-main">
+            <span><b>{ACCESS_KINDS[job.accessEffective].short}.</b> {ACCESS_KINDS[job.accessEffective].note}</span>
+            {/* AND IT IS CHANGED HERE, which is what was actually asked for:
+                *"allow the property manager to adjust that when scheduling the
+                job"*. What a repair turns out to need is usually only clear
+                once somebody has looked at it, so the answer belongs beside
+                the time rather than only on the form that created the job. */}
+            {canSetAccess && (
+              <div className="va-pick">
+                {accessChoices(job).map((k) => (
+                  <button key={k.id} type="button"
+                    className={`pick ${job.accessEffective === k.id ? "on" : ""}`}
+                    onClick={() => onSetAccess?.(job.id, k.id)}>{k.short}</button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
       {visit?.status === "proposed" && (
@@ -19950,7 +19998,7 @@ function MaterialSource({ value, onChange }) {
 
 // ---- Create job ----------------------------------------------------------
 // The job holds every project fact. Work orders are derived from it on assign.
-function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, accountName, rosterWord = "Subcontractor", properties, forProperty, forDate, asOwner = false }) {
+function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, accountName, rosterWord = "Subcontractor", properties, forProperty, forDate, asOwner = false, canSetAccess = false }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
   // An owner with one building never has a choice to make, so it is made for
@@ -19978,6 +20026,12 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     // customer's name, shipped as the default answer to who pays for
     // materials and as one of the two options in the picker below.
     materialsPaidBy: accountName || "",
+    // 060. Who has to be there to let somebody in. Empty means not answered,
+    // which the server reads as the rule it has always run -- so leaving it
+    // alone changes nothing, and that is why there is no preselected answer.
+    // A guess here would be a preselection mistaken for a choice, which this
+    // project has already paid for on the trade grid.
+    access: "",
     measurementDocs: [],
   });
   // Picking a property fills the address, so it isn't retyped per job.
@@ -20086,6 +20140,43 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
           </div>
         );
       })()}
+
+      {/* WHO HAS TO BE THERE, which is a scheduling question and sits in the
+          scheduling section -- it decides whether booking a time costs a round
+          trip with somebody who lives there.
+
+          Offered only on an account with buildings. A general contractor works
+          on a site it controls and has no tenant to ask, so two of the three
+          answers would mean the same thing: a screen asking a question it
+          already knows the answer to.
+
+          NOTHING IS PRESELECTED. Leaving it alone keeps exactly the rule that
+          has run since 019 -- a tenant's own report waits on that tenant,
+          anything else is booked straight away -- and a preselected answer
+          here would be read as the account's choice rather than as the
+          default, which is the mistake the trade suggestions already record. */}
+      {canSetAccess && !asOwner && (
+        <div className="fld">Who lets them in?
+          <span className="fld-note">optional — decides whether the tenant is asked to confirm the time</span>
+          <div className="pick-grid acc-grid">
+            {/* A job a manager is creating has no reporter, so there is nobody
+                to confirm a window with and "the tenant needs to be in" is not
+                on offer -- it would be a control the server ignores. On a
+                TENANT'S report it is, and that picker is beside the time on
+                the job card, which is where the question actually arises. */}
+            {accessChoices({}).map((k) => (
+              <button key={k.id} type="button"
+                className={`pick ${f.access === k.id ? "on" : ""}`}
+                onClick={() => set("access", f.access === k.id ? "" : k.id)}>{k.label}</button>
+            ))}
+          </div>
+          <p className="cov-hint">
+            {f.access
+              ? ACCESS_KINDS[f.access].note
+              : "Not set — a tenant's own report waits on them to confirm; anything else is booked as soon as you set a time."}
+          </p>
+        </div>
+      )}
 
       <div className="form-sec">3 · Trades needed</div>
       <div className="fld">
@@ -23511,6 +23602,15 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
         <span><b>{W.lead}.</b> {W.note}</span>
       </p>
       {when.note && <p className="jr-whenmsg">“{when.note}”</p>}
+      {/* WHO OPENS THE DOOR. The contractor is the one person who physically
+          turns up, and "will anybody be there" is the question they ask on the
+          way -- a wasted journey is the most expensive thing this screen can
+          fail to prevent. The words are the contractor's own, not the
+          manager's: what a manager decides and what somebody arriving needs to
+          know are different sentences. */}
+      {ACCESS_KINDS[job.access] && (
+        <p className="jr-access"><Key size={12} /> {ACCESS_KINDS[job.access].forContractor}</p>
+      )}
       {(a.tradeScope || job.scope) && <p className="job-scope">{a.tradeScope || job.scope}</p>}
       {a.crewName && <p className="portal-crew"><Users size={12} /> Your crew: {a.crewName}</p>}
       {job.materialSource && <p className="portal-crew"><Layers size={12} /> Materials: {job.materialSource} ({job.materialsPaidBy})</p>}
@@ -31048,6 +31148,19 @@ strong.insp-name{background:none;border:0;padding:0}
 .jr-whennote.jrw-wait{background:#fbf0dd;color:var(--amber-ink)}
 .jr-whennote.jrw-plain{background:var(--paper);color:var(--ink-soft)}
 .jr-whenmsg{margin:6px 0 0;font-size:12.5px;font-style:italic;color:var(--ink-soft)}
+.visit-access{display:flex;align-items:flex-start;gap:7px;margin:0 0 8px;padding:8px 10px;
+  border-radius:10px;background:var(--paper);font-size:12.5px;line-height:1.45;color:var(--ink-soft)}
+.visit-access > svg{flex:none;margin-top:2px}
+.va-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
+.va-pick{display:flex;flex-wrap:wrap;gap:6px}
+.va-pick .pick{padding:4px 10px;font-size:11.5px}
+/* Who opens the door, on the card of the person who turns up. */
+.jr-access{display:flex;align-items:center;gap:6px;margin:6px 0 0;font-size:12.5px;
+  font-weight:600;color:var(--ink-soft)}
+.jr-access > svg{flex:none}
+/* Three answers side by side rather than a dropdown: the sentences are long
+   enough that a picker would hide two thirds of the decision. */
+.acc-grid{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
 
 /* ---- the month grid on the jobs tab ---------------------------------- */
 .jv-seg button{display:inline-flex;align-items:center;gap:6px}

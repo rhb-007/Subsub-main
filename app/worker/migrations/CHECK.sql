@@ -366,4 +366,15 @@ SELECT
   (SELECT COUNT(*) FROM sub_invites i
      JOIN accounts a ON a.id = i.account_id
     WHERE i.engaged_as = 'handyman'
-      AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager'))              AS m059_inv_handyman_wrong_kind;
+      AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager'))              AS m059_inv_handyman_wrong_kind,
+
+  -- 060. Who has to be there to let somebody in.
+  (SELECT COUNT(*) FROM pragma_table_info('jobs')
+    WHERE name = 'access')                                                                      AS m060_job_access,
+  -- Invariant, must read ZERO: a value the product does not produce. NULL is
+  -- the ordinary state and means "not answered", so this counts only a job
+  -- carrying a word that is none of the three -- which is a route that stopped
+  -- validating against ACCESS_KINDS.
+  (SELECT COUNT(*) FROM jobs
+    WHERE access IS NOT NULL
+      AND access NOT IN ('tenant','manager','none'))                                            AS m060_inv_unknown_access;

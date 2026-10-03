@@ -227,7 +227,12 @@ CREATE TABLE jobs (
   -- 025. Last activity, so a job somebody is working on floats. Deliberately
   -- not completed_at, which holds a date with no time.
   updated_at          TEXT,
-  created_at          TEXT DEFAULT CURRENT_TIMESTAMP
+  created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+  -- 060. Who has to be there to let somebody in: tenant | manager | none.
+  -- NULL means not answered, and `accessFor` falls back to the rule 019 has
+  -- been running (a tenant's own report waits on that tenant, anything else is
+  -- booked straight away). Only 'tenant' costs a round trip.
+  access         TEXT
 );
 CREATE INDEX idx_jobs_account_status ON jobs(account_id, status);
 

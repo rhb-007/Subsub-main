@@ -56,6 +56,7 @@ import { typedNameMatches } from "../shared/typedname.js";
 import { ENGAGED_AS, isEngagedAs, engagedAs, isHandyman, mayEngageHandyman,
   mayCover, requiredDocsFor, needsLicense } from "../shared/engaged.js";
 import { handymanCapCheck, handymanCapText } from "../shared/handycap.js";
+import { isAccess, accessFor, needsTenantConfirm, canAskTenant } from "../shared/access.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -6221,6 +6222,11 @@ export function missingSchema(err) {
   // `agreement_terms` both start with a word the older `\bcontract\b` rules
   // would not claim, but a column named `terms` is exactly the sort of thing
   // a later rule could, so the distinctive ones are named.
+  // 060's column is called `access`, which is far too ordinary a word to match
+  // loosely -- so it is matched only in the two shapes SQLite actually
+  // produces for a missing column, and it is first because a later rule with a
+  // broader pattern would otherwise claim it.
+  if (/no such column: (jobs\.)?access\b|jobs has no column named access\b/i.test(m)) return "060_job_access";
   if (/\bagreements?\b|\bagreement_terms\b|countersigned_(at|by)/i.test(m)) return "052_agreements";
   if (/\bwo_(funding|transfers)\b/i.test(m)) return "051_escrow";
   if (/\bpayout_accounts\b/i.test(m)) return "050_payout_accounts";
@@ -6685,8 +6691,17 @@ app.get("/api/jobs", async (c) => {
     // another account is not a member of this one, so the account's own users
     // list will never contain them -- and a request reading "somebody asked for
     // work" is not something a manager can act on.
-    `SELECT j.*, ru.name AS requested_by_name FROM jobs j
+    `SELECT j.*, ru.name AS requested_by_name,
+            -- 060. Whether the person who raised it is somebody who has to
+            -- be IN. The requested_by column alone cannot answer that: an
+            -- OWNER can raise a request too, and an owner is not a tenant. The
+            -- effective access answer is computed from this on the way out, so
+            -- no screen has to derive a second one.
+            -- (No backticks: this is a template literal. Eleventh time.)
+            rm.role AS requested_by_role
+       FROM jobs j
        LEFT JOIN users ru ON ru.id = j.requested_by
+       LEFT JOIN memberships rm ON rm.user_id = j.requested_by AND rm.account_id = j.account_id
       WHERE j.account_id = ? ${scope.sql.replace(/\bproperty_id\b/g, "j.property_id")}
         ${jscope.sql.replace(/ id IN/g, " j.id IN")}
         ${mine.replace(/\brequested_by\b/g, "j.requested_by")}
@@ -6919,6 +6934,12 @@ function jobRowToJs(j, workOrders) {
     // "911" or "urgent", or null for the great majority. Decided from what
     // they picked -- see shared/emergency.js.
     severity: j.severity || null,
+    // 060. Who has to be there to let somebody in. BOTH halves: the raw
+    // column so a screen can tell "not answered" from an answer, and the
+    // effective one so nothing has to derive it. The effective value needs the
+    // reporter's seat role, which only the server has.
+    access: j.access || null,
+    accessEffective: accessFor(j, { tenantReported: j.requested_by_role === "tenant" }),
     status: j.status, completedAt: j.completed_at, notes: j.notes, createdAt: j.created_at?.slice(0, 10), assignments,
     // The column has been on jobs since the beginning and was cleared when a
     // property was deleted, but nothing ever wrote it and nothing ever read
@@ -7081,6 +7102,18 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
     ? materialLine({ supplier, branch, other: b.materialOther })
     : String(b.materialSource || "").trim()) || null;
 
+  // 060. Who has to be there, when the person creating it already knows.
+  // Refused rather than defaulted on an unrecognised word; NULL when nothing
+  // was said, which `accessFor` reads as the rule 019 has always run.
+  if (b.access !== undefined && b.access !== null && !isAccess(b.access)) {
+    return c.json({ error: "bad_access" }, 400);
+  }
+  // A TENANT OR AN OWNER DOES NOT GET TO ANSWER IT. They are the side being
+  // let in or the side asking for the work -- whether somebody has to be home
+  // is the managing side's call, and taking it from the request would let a
+  // tenant book themselves out of their own confirmation step.
+  const access = requestedBy ? null : (b.access || null);
+
   const cols = ["id", "account_id", "title", "client", "address", "area", "zip", "sqft", "stories",
     "date", "time", "trades", "scope", "material_source", "materials_paid_by", "measurement_docs",
     "created_by", "property_id", "requested_by", "photos", "report_detail", "severity"];
@@ -7089,6 +7122,14 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
     JSON.stringify(b.trades || []), scope, materialSource, b.materialsPaidBy || null,
     JSON.stringify(b.measurementDocs || []), userId, propertyId, requestedBy,
     photos.length ? JSON.stringify(photos) : null, detail ? JSON.stringify(detail) : null, severity];
+
+  // AN EXTRA COLUMN, and only when there is something to say. NULL is the
+  // default and reads as the rule 019 has always run, so a job nobody answered
+  // the question for never touches a column 060 added -- which is what keeps a
+  // database behind the code able to create one at all. The same reason
+  // `material_supplier` is an extra rather than a base column.
+  const accessCols = access ? ["access"] : [];
+  const accessVals = access ? [access] : [];
 
   const insertJob = (extraCols, extraVals) => {
     const all = [...cols, ...extraCols];
@@ -7099,16 +7140,26 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
 
   try {
     try {
-      await insertJob(["material_supplier", "material_branch"], [supplier, branch]);
+      await insertJob(["material_supplier", "material_branch", ...accessCols],
+        [supplier, branch, ...accessVals]);
     } catch (err) {
       // 026 only adds the counting. The line a person reads is already in
       // material_source, so a database that has not had it yet must still
       // be able to take a job -- refusing to create one over a column that
       // exists for reporting would be a far worse failure than the one it
       // is guarding.
-      if (missingSchema(err) !== "026_material_supplier") throw err;
-      console.warn("[jobs] 026_material_supplier not applied - saving without the supplier columns");
-      await insertJob([], []);
+      //
+      // 060 is the same trade one column along: losing the access answer
+      // costs a round trip with the tenant that was not needed, and refusing
+      // the job entirely costs the repair.
+      const which = missingSchema(err);
+      if (which === "060_job_access") {
+        console.warn("[jobs] 060_job_access not applied - saving without who lets them in");
+        await insertJob(["material_supplier", "material_branch"], [supplier, branch]);
+      } else if (which === "026_material_supplier") {
+        console.warn("[jobs] 026_material_supplier not applied - saving without the supplier columns");
+        await insertJob(accessCols, accessVals);
+      } else throw err;
     }
   } catch (err) {
     const migration = missingSchema(err);
@@ -7355,8 +7406,16 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
   const jobId = c.req.param("id");
   const b = await c.req.json().catch(() => ({}));
   const job = await c.env.DB.prepare(
-    `SELECT id, title, requested_by, approved_at FROM jobs WHERE id = ? AND account_id = ?`
-  ).bind(jobId, auth.accountId).first();
+    `SELECT id, title, requested_by, approved_at, access FROM jobs WHERE id = ? AND account_id = ?`
+  ).bind(jobId, auth.accountId).first().catch(async (err) => {
+    // A database without 060 keeps the rule 019 has been running, which is
+    // what `accessFor` falls back to anyway -- one missing column must not
+    // stop anybody scheduling a repair.
+    if (!missingSchema(err)) throw err;
+    return c.env.DB.prepare(
+      `SELECT id, title, requested_by, approved_at FROM jobs WHERE id = ? AND account_id = ?`
+    ).bind(jobId, auth.accountId).first();
+  });
   if (!job || !maySeeJob(c.get("auth"), jobId)) return c.json({ error: "job_not_found" }, 404);
   if (job.requested_by && !job.approved_at) return c.json({ error: "not_approved" }, 409);
   if (auth.role === "contractor") {
@@ -7373,11 +7432,26 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
   if (start && end && end <= start) return c.json({ error: "bad_window" }, 400);
   const note = String(b.note || "").trim().slice(0, 500) || null;
 
-  // Who has to agree. A tenant's repair needs the tenant; anything else has
-  // nobody to ask, so the proposal stands.
+  // WHO HAS TO AGREE, and until 060 this was derived and nothing could
+  // override it: a tenant's repair waited on that tenant, anything else was
+  // booked straight away. Good default, no way out -- so a tenant reporting a
+  // leaking roof, which is fixed from outside, sat waiting on them to agree a
+  // morning they did not need to be home for.
+  //
+  // `accessFor` takes the stored answer when there is one and falls back to
+  // exactly that rule when there is not, so a job raised before this existed
+  // behaves as it always did.
   const seat = job.requested_by ? await c.env.DB.prepare(
     `SELECT role FROM memberships WHERE user_id = ? AND account_id = ?`).bind(job.requested_by, auth.accountId).first() : null;
-  const needsTenant = seat?.role === "tenant";
+  const access = accessFor(job, { tenantReported: seat?.role === "tenant" });
+  // AND A JOB NOBODY REPORTED HAS NOBODY TO ASK, whatever the column says. A
+  // manager can mark a job "the tenant needs to be in" on a building with no
+  // tenant seat on it at all, and then the visit would sit proposed for ever
+  // with nobody able to answer it -- the waiting-on-somebody-who-cannot-reply
+  // failure this file records about a handshake behind a capability nobody
+  // has. The override decides whether to ask; whether there is anybody to ask
+  // is still a fact.
+  const needsTenant = needsTenantConfirm(access) && canAskTenant(job);
   const id = uid();
   try {
     await c.env.DB.prepare(
@@ -7799,6 +7873,15 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
       if (!owned) return c.json({ error: "property_not_found" }, 404);
     }
     sets.push("property_id = ?"); vals.push(pid);
+  }
+  // 060. Changing it AFTER the job exists is most of the point: what a repair
+  // turns out to need is often only clear once somebody has looked at it, and
+  // "sometimes you need to be there" is a judgement made at scheduling time
+  // rather than at creation. Refused rather than defaulted on a word nothing
+  // recognises -- silence is only safe when nothing was asked.
+  if (b.access !== undefined) {
+    if (b.access !== null && !isAccess(b.access)) return c.json({ error: "bad_access" }, 400);
+    sets.push("access = ?"); vals.push(b.access || null);
   }
   if (!sets.length) return c.json({ ok: true });
   vals.push(id, accountId);
@@ -9859,7 +9942,7 @@ app.get("/api/my-work", async (c) => {
               w.issued_at, w.signed_file_key,
               j.id AS job_id, j.account_id, j.title, j.address, j.area, j.zip,
               j.date, j.time, j.severity, j.status AS job_status, j.completed_at,
-              j.scope, j.updated_at, j.created_at,
+              j.scope, j.updated_at, j.created_at, j.access, j.requested_by,
               a.name AS account_name, a.subdomain AS account_subdomain,
               -- The HIRER's kind, because what this company is to them follows
               -- it: a subcontract implies a prime contract, and a plumber
@@ -9867,6 +9950,11 @@ app.get("/api/my-work", async (c) => {
               -- thing. See shared/hires.js.
               a.kind AS account_kind,
               p.name AS property_name,
+              -- Who opens the door. The contractor is the one person who
+              -- turns up, and nothing told them whether anybody would be
+              -- there -- which is the same silence the appointment itself was
+              -- in until this route started carrying it.
+              rm.role AS requested_by_role,
               -- THE APPOINTMENT, which this route has never carried.
               --
               -- 019 built visits as a manager-to-tenant conversation: the
@@ -9907,6 +9995,7 @@ app.get("/api/my-work", async (c) => {
          JOIN jobs j ON j.id = w.job_id
          JOIN accounts a ON a.id = j.account_id
          LEFT JOIN properties p ON p.id = j.property_id
+         LEFT JOIN memberships rm ON rm.user_id = j.requested_by AND rm.account_id = j.account_id
         WHERE w.company_id = ? AND w.voided_at IS NULL AND j.withdrawn_at IS NULL
         ORDER BY COALESCE(j.updated_at, j.created_at) DESC
         LIMIT 200`
@@ -9940,6 +10029,9 @@ app.get("/api/my-work", async (c) => {
       // for somebody's flat is theirs, and the contractor needs the window
       // rather than the reason. `note` is whoever PROPOSED it, which is the
       // manager telling the contractor something about the visit.
+      // 060. Who lets them in, effective -- the raw column plus the rule, in
+      // the one place that knows the reporter's seat role.
+      access: accessFor(r, { tenantReported: r.requested_by_role === "tenant" }),
       visit: r.visit_id ? {
         id: r.visit_id, date: r.visit_date || null,
         startTime: r.visit_start || null, endTime: r.visit_end || null,
