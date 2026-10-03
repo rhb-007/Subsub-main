@@ -1,0 +1,34 @@
+-- 065. AUTO-SCHEDULING A TURNAROUND, as an account's own standing choice.
+--
+-- Asked for as: *"I want the property manager to also be able to select in
+-- their settings auto-schedule for jobs meaning that upon approval by them of
+-- the move-in, move-out job (these jobs only) it will auto schedule and assign
+-- the job to the most optimized qualified tradesman and the best possible time
+-- and then automate back and forth with tenant and tradesman until it's
+-- booked."*
+--
+-- A TURNAROUND IS THE ONE KIND OF JOB WHERE THIS IS SAFE, and the reason is
+-- what makes the whole feature defensible rather than merely convenient: a
+-- unit between tenancies is EMPTY, the scope came off a walk somebody has
+-- already done, and the date is driven by the next tenancy rather than by how
+-- bad a leak is. None of that is true of a repair, which is why the column is
+-- about turnarounds and not about jobs.
+--
+-- NULL AND 0 ARE BOTH OFF, which is what makes this safe against a live
+-- database with no backfill: every account that exists today keeps assigning
+-- by hand until somebody ticks the box. The same asymmetry 064, 062, 060 and
+-- 053 all use.
+--
+-- WHAT IT DOES NOT DO, recorded here because a later pass will be tempted:
+-- it does not let the hiring side book a contractor's calendar. Auto-schedule
+-- -- the per-engagement flag that writes work as ACCEPTED with no response
+-- window -- is the subcontractor's to grant and `autoschedule.js` explains at
+-- length why the side paying cannot hand it to itself. This column turns on
+-- the CHOOSING and the ASKING; whether the answer is a booking or an offer is
+-- still the crew's call.
+--
+-- ONE `ALTER TABLE ... ADD COLUMN`, which is the one statement that cannot be
+-- run twice, so it is a paste of its own. If it answers "duplicate column
+-- name" it has already been run and there is nothing to do.
+
+ALTER TABLE accounts ADD COLUMN auto_turnaround INTEGER;

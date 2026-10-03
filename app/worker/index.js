@@ -67,6 +67,8 @@ import { isAccess, accessFor, needsTenantConfirm, canAskTenant,
 // two-party thing.
 import { visitParties, waitingOn as visitWaitingOn,
   nextToAnswer, visitSettled } from "../shared/visitparty.js";
+import { AUTO_TRIES, AUTO_START, AUTO_END, autoPickText, isTurnaroundKind,
+  rankCandidates, slotFor, whyNotAuto } from "../shared/autopick.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -4416,6 +4418,10 @@ app.get("/api/account", async (c) => {
     // Who an urgent report goes straight to. Null means nothing dispatches
     // itself, which is how every account starts.
     emergencyCompanyId: a.emergency_company_id || null,
+    // 065. Whether a move-in or move-out job schedules itself once it is
+    // raised. NULL and 0 are both off, read as one answer here so the screen
+    // does not have to know there are two.
+    autoTurnaround: !!a.auto_turnaround,
     user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone, notify: notifyOf(user) } : null,
   });
 });
@@ -5096,6 +5102,13 @@ app.patch("/api/account", requireRole("admin"), async (c) => {
   // this is the one setting that lets a tenant's tap commit the account to
   // a contractor, so it has to name somebody the account actually works
   // with. Clearing it turns automatic dispatch off, which is the default.
+  // 065. Auto-scheduling a turnaround. A plain yes or no with nothing to
+  // validate against -- unlike the emergency contractor below, which names
+  // somebody and so has to be checked. The choosing is done at the moment a
+  // job is raised, against the roster as it stands then.
+  if (b.autoTurnaround !== undefined) {
+    sets.push("auto_turnaround = ?"); vals.push(b.autoTurnaround ? 1 : 0);
+  }
   if (b.emergencyCompanyId !== undefined) {
     const want = b.emergencyCompanyId || null;
     if (want) {
@@ -6237,6 +6250,7 @@ export function missingSchema(err) {
   // produces for a missing column, and it is first because a later rule with a
   // broader pattern would otherwise claim it.
   if (/\binspection_summaries\b/i.test(m)) return "063_inspection_summary";
+  if (/\bauto_turnaround\b/i.test(m)) return "065_auto_turnaround";
   if (/\bmanager_at\b/i.test(m)) return "064_visit_manager";
   if (/contractor_(at|note)/i.test(m)) return "061_visit_contractor";
   if (/access_user_id/i.test(m)) return "062_job_access_user";
@@ -7814,6 +7828,12 @@ app.post("/api/visits/:id/respond", async (c) => {
   } else if (nextStatus === "declined") {
     await logActivity(c.env, auth.accountId, auth.userId, "visit_declined",
       `Can't make the ${who} for "${v.title}" (${when})${note ? `: ${note}` : ""}`);
+    // 065. AND THE NEXT DAY GOES FORWARD BY ITSELF, which is the half that
+    // makes this "automate the back and forth until it's booked". Bounded, and
+    // never allowed to fail the decline: somebody said they cannot make it and
+    // that answer has to land whatever happens next.
+    await autoRepropose(c, v).catch((err) =>
+      console.warn("[auto-turnaround] re-propose failed:", err?.message || err));
   } else {
     // Agreed by one side and still waiting on the other. Said out loud,
     // because "confirmed" on a half-answered window is exactly the lie this
@@ -8677,6 +8697,14 @@ app.post("/api/work-orders/:id/respond", async (c) => {
   await logEvent(c.env, accountId, userId, `wo.${status}`, id, {});
   await touchJob(c.env, wo.job_id);
   if (status === "accepted") await notifyTenant(c, wo.job_id, "booked");
+  // 065. AND ON AN AUTO-SCHEDULED TURNAROUND, TAKING THE JOB IS WHAT STARTS
+  // THE CLOCK. Until they accept they are not a party to the time, so a window
+  // put forward earlier would settle without them -- booked, with the crew
+  // never asked. This is where the chain actually begins.
+  if (status === "accepted") {
+    await autoProposeOnAccept(c, wo).catch((err) =>
+      console.warn("[auto-turnaround] propose on accept failed:", err?.message || err));
+  }
   return c.json({ ok: true });
 });
 
@@ -12599,6 +12627,250 @@ app.get("/api/work-orders/:id/inspection/photo/:photoId", requireRole("admin", "
   });
 });
 
+// ---------------------------------------------------------------------------
+// AUTO-SCHEDULING A TURNAROUND
+// ---------------------------------------------------------------------------
+//
+// Asked for as: *"upon approval by them of the move-in, move-out job (these
+// jobs only) it will auto schedule and assign the job to the most optimized
+// qualified tradesman and the best possible time and then automate back and
+// forth with tenant and tradesman until it's booked."*
+//
+// IT CALLS THE REAL ROUTES RATHER THAN REIMPLEMENTING THEM, which is the
+// decision the rest of this hangs off. Assigning carries about a dozen gates
+// -- roster status, the handyman trade list, documents, cover on the job date,
+// the value ceiling, a closed job -- and an automatic path with its own copy
+// would be a second set of rules to keep in step. The one that drifted would
+// be the one nobody watches, because nobody is standing in front of it.
+//
+// So the machine does what a person would do: it POSTs to
+// `/api/jobs/:id/assign` and `/api/jobs/:id/visits` with the manager's own
+// headers. Anything those refuse, this is refused too, in the same words.
+//
+// WHAT IT DELIBERATELY DOES NOT DO: book a crew's calendar. Auto-schedule --
+// the per-engagement flag that writes work as ACCEPTED with no response window
+// -- is the subcontractor's to grant, and `autoschedule.js` explains at length
+// why the side paying cannot hand it to itself. Where they have granted it the
+// assign route books outright, as it always has; where they have not, the work
+// order goes out as an offer and the chain runs itself from there. Either way
+// the manager does nothing, which is the request.
+
+// The manager's own credentials, forwarded. Built fresh rather than passing
+// `c.req.raw.headers` through: that carries the original Content-Length, and a
+// body of a different size behind it is a request that cannot be read.
+const relayHeaders = (c) => {
+  const h = new Headers({ "Content-Type": "application/json" });
+  for (const k of ["authorization", "cookie", "x-user-id", "x-account-id",
+    "x-impersonated-by", "x-staff-user-id"]) {
+    const v = c.req.header(k);
+    if (v) h.set(k, v);
+  }
+  return h;
+};
+const asSelf = async (c, path, body) => {
+  // `executionCtx` throws rather than answering undefined when there is none
+  // -- which is every test, and any call that did not arrive through the
+  // fetch handler. Reading it through a catch is what lets this be driven at
+  // all, and a self-call does not need to wait on anything after it anyway.
+  let ctx;
+  try { ctx = c.executionCtx; } catch { ctx = undefined; }
+  const res = await app.fetch(
+    new Request(new URL(path, c.req.url), {
+      method: "POST", headers: relayHeaders(c), body: JSON.stringify(body),
+    }), c.env, ctx);
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+};
+
+// WHO COULD TAKE IT. The roster, with the three facts the ranking needs that
+// are not on the engagement: what they already have on, the days they have
+// marked themselves out, and whether their documents are in order.
+async function autoCandidates(env, accountId, trade, companyState) {
+  const { results } = await env.DB.prepare(
+    `SELECT e.company_id, e.categories, e.engaged_as, e.rating, e.doc_review,
+            c.company, c.insurance, c.bond, c.contract, c.w9, c.unavailable_days
+       FROM engagements e JOIN companies c ON c.id = e.company_id
+      WHERE e.account_id = ? AND ${onRosterSql("e.status")}`
+  ).bind(accountId).all().catch(() => ({ results: [] }));
+
+  const out = [];
+  for (const r of results || []) {
+    // The documents question the assign route asks, asked here so a candidate
+    // is not put forward only to be refused.
+    const review = parseJson(r.doc_review, {});
+    const shape = { engagedAs: r.engaged_as, docReview: review,
+      insurance: !!r.insurance, bond: !!r.bond, contract: !!r.contract, w9: !!r.w9 };
+    const blockers = requiredDocsFor(r.engaged_as, ASSIGN_KINDS)
+      .filter((k) => review[k]?.status !== "verified");
+    // What they already have on, this account's half of it. SubSub cannot see
+    // the other four accounts' diaries, which is why the window is an OFFER
+    // and the chain is what settles it.
+    const { results: busy } = await env.DB.prepare(
+      `SELECT DISTINCT v.date FROM visits v
+         JOIN work_orders w ON w.job_id = v.job_id
+        WHERE w.company_id = ? AND w.voided_at IS NULL
+          AND v.status IN ('proposed', 'confirmed')`
+    ).bind(r.company_id).all().catch(() => ({ results: [] }));
+    const { results: open } = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM work_orders w JOIN jobs j ON j.id = w.job_id
+        WHERE w.company_id = ? AND w.voided_at IS NULL AND j.status = 'active'`
+    ).bind(r.company_id).all().catch(() => ({ results: [{ n: 0 }] }));
+    out.push({
+      companyId: r.company_id, company: r.company,
+      categories: parseJson(r.categories, []), engagedAs: r.engaged_as,
+      rating: r.rating, blockers, shape,
+      busy: (busy || []).map((x) => x.date),
+      unavailable: parseJson(r.unavailable_days, []),
+      openJobs: (open || [])[0]?.n || 0,
+    });
+  }
+  return out;
+}
+
+// THE WHOLE RUN, from an approved turnaround to a window on somebody's
+// calendar. Answers rather than throwing: by the time this runs the job
+// exists, so a failure here must leave a raised job and a reason -- never a
+// 500 over work that is already on the Jobs screen.
+async function autoTurnaround(c, { jobId, kind, trades, job }) {
+  const auth = c.get("auth");
+  const acct = await c.env.DB.prepare(
+    `SELECT auto_turnaround FROM accounts WHERE id = ?`).bind(auth.accountId).first()
+    .catch((err) => { if (missingSchema(err)) return null; throw err; });
+  const why = whyNotAuto({
+    on: !!acct?.auto_turnaround, kind, trades,
+    assigned: 0,
+  });
+  if (why) return { skipped: why };
+
+  // The target date the raise form typed is where the search starts: the
+  // turnaround is driven by the next tenancy, so the window wants to be on or
+  // after it rather than at the first gap in the diary.
+  const from = (job?.date || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const trade = trades[0];
+  const cands = await autoCandidates(c.env, auth.accountId, trade);
+  const { picked, skipped } = rankCandidates(cands, { trade, from });
+  if (!picked) {
+    await logActivity(c.env, auth.accountId, auth.userId, "auto_turnaround",
+      `Nobody on the roster could take the ${trade} turnaround — assign it by hand.`);
+    return { skipped: "no_candidate", considered: cands.length };
+  }
+
+  const got = await asSelf(c, `/api/jobs/${jobId}/assign`, {
+    trade, companyId: picked.companyId, payKind: "fixed", value: "",
+    responseWindow: "24h",
+  });
+  if (got.status >= 300) {
+    await logActivity(c.env, auth.accountId, auth.userId, "auto_turnaround",
+      `Could not put ${picked.company} on the ${trade} turnaround (${got.body?.error || got.status}).`);
+    return { skipped: "assign_refused", error: got.body?.error || null };
+  }
+
+  // THE WINDOW WAITS UNTIL THEY HAVE TAKEN THE JOB, and getting this wrong is
+  // the thing that nearly shipped. A work order sits PENDING until the crew
+  // accepts it, and `visitParties` counts a contractor only once they have --
+  // deliberately, because somebody who has not said yes to the JOB cannot be
+  // waited on for the TIME. So proposing a window straight after assigning
+  // settles it on the hiring side alone: booked, with the crew never asked,
+  // which is the exact state 061 and 064 exist to stop.
+  //
+  // Where the crew HAS granted auto-schedule the work order is accepted on
+  // issue, so they are a party now and the window goes out now. Where they
+  // have not, `autoProposeOnAccept` picks it up the moment they say yes.
+  const live = await c.env.DB.prepare(
+    `SELECT status FROM work_orders WHERE job_id = ? AND voided_at IS NULL
+      ORDER BY issued_at DESC LIMIT 1`).bind(jobId).first().catch(() => null);
+  const put = live?.status === "accepted"
+    ? await asSelf(c, `/api/jobs/${jobId}/visits`,
+      { date: picked.day, startTime: AUTO_START, endTime: AUTO_END })
+    : null;
+  await logActivity(c.env, auth.accountId, auth.userId, "auto_turnaround",
+    `Auto-scheduled: ${autoPickText(picked, { trade, skipped })}`
+    + (put ? "" : " A time goes out as soon as they accept."));
+  return {
+    ok: true, companyId: picked.companyId, company: picked.company,
+    trade, date: picked.day, proposed: !!put,
+    booked: put?.body?.status === "confirmed",
+    considered: cands.length, skipped,
+  };
+}
+
+// THE FIRST WINDOW, ONCE THE CREW HAS TAKEN THE JOB. Only on a turnaround the
+// account auto-schedules, only when nothing is already proposed, and only for
+// the company that just accepted -- so a second trade accepting later does not
+// put a second window on a job that already has one.
+async function autoProposeOnAccept(c, wo) {
+  const job = await c.env.DB.prepare(
+    `SELECT id, date, account_id FROM jobs WHERE id = ?`).bind(wo.job_id).first().catch(() => null);
+  if (!job) return null;
+  const acct = await c.env.DB.prepare(
+    `SELECT auto_turnaround FROM accounts WHERE id = ?`).bind(job.account_id).first()
+    .catch((err) => { if (missingSchema(err)) return null; throw err; });
+  if (!acct?.auto_turnaround) return null;
+  const insp = await c.env.DB.prepare(
+    `SELECT kind FROM inspections WHERE job_id = ?`).bind(job.id).first().catch(() => null);
+  if (!isTurnaroundKind(insp?.kind)) return null;
+  const already = await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM visits WHERE job_id = ? AND status IN ('proposed','confirmed') LIMIT 1`)
+    .bind(job.id).first().catch(() => null);
+  if (already?.yes) return null;
+
+  const cands = await autoCandidates(c.env, job.account_id, null);
+  const mine = cands.find((x) => x.companyId === wo.company_id);
+  const from = (job.date || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const day = slotFor({ from, busy: mine?.busy, unavailable: mine?.unavailable });
+  if (!day) return { stopped: "no_slot" };
+  const put = await asSelf(c, `/api/jobs/${job.id}/visits`,
+    { date: day, startTime: AUTO_START, endTime: AUTO_END });
+  return { ok: put.status < 300, date: day };
+}
+
+// AND THE BACK AND FORTH, WHICH IS THE HALF THAT MAKES IT "FULLY AUTOMATED".
+// A decline on an auto-scheduled turnaround puts the next free day forward by
+// itself, up to `AUTO_TRIES` windows. Bounded, because "until it's booked"
+// cannot mean for ever: two people who keep saying no are telling us something
+// a fourth date will not fix, and that is where a person has to look at it.
+async function autoRepropose(c, visit) {
+  const auth = c.get("auth");
+  const job = await c.env.DB.prepare(
+    `SELECT j.id, j.date, j.title, j.account_id FROM jobs j WHERE j.id = ?`)
+    .bind(visit.job_id).first().catch(() => null);
+  if (!job) return null;
+  const acct = await c.env.DB.prepare(
+    `SELECT auto_turnaround FROM accounts WHERE id = ?`).bind(job.account_id).first()
+    .catch((err) => { if (missingSchema(err)) return null; throw err; });
+  if (!acct?.auto_turnaround) return null;
+  const insp = await c.env.DB.prepare(
+    `SELECT kind FROM inspections WHERE job_id = ?`).bind(job.id).first().catch(() => null);
+  if (!isTurnaroundKind(insp?.kind)) return null;
+
+  // How many windows have already been put forward on this job. Counted from
+  // the rows rather than held in a column: every proposal is one, which is
+  // exactly what the budget is about.
+  const seen = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM visits WHERE job_id = ?`).bind(job.id).first().catch(() => null);
+  const tries = Number(seen?.n || 0);
+  if (tries >= AUTO_TRIES) {
+    await logActivity(c.env, job.account_id, auth.userId, "auto_turnaround",
+      `${AUTO_TRIES} times nobody could make it for "${job.title}" — pick a time by hand.`);
+    return { stopped: "out_of_tries" };
+  }
+  const wo = await c.env.DB.prepare(
+    `SELECT company_id FROM work_orders WHERE job_id = ? AND voided_at IS NULL LIMIT 1`)
+    .bind(job.id).first().catch(() => null);
+  if (!wo?.company_id) return null;
+  const cands = await autoCandidates(c.env, job.account_id, null);
+  const mine = cands.find((x) => x.companyId === wo.company_id);
+  // The day that was just refused is on the row, so the search starts from it
+  // rather than from the job's target -- otherwise the next try offers the
+  // same week again.
+  const day = slotFor({ from: visit.date, busy: mine?.busy, unavailable: mine?.unavailable });
+  if (!day) return { stopped: "no_slot" };
+  const put = await asSelf(c, `/api/jobs/${job.id}/visits`,
+    { date: day, startTime: AUTO_START, endTime: AUTO_END });
+  await logActivity(c.env, job.account_id, auth.userId, "auto_turnaround",
+    `That did not work, so ${day} has gone forward instead (try ${tries + 1} of ${AUTO_TRIES}).`);
+  return { ok: put.status < 300, date: day, tries: tries + 1 };
+}
+
 // RAISING THE WORK, which is what the whole walk is for.
 //
 // It creates a JOB and stops there, deliberately. Composing the job from what
@@ -12726,13 +12998,34 @@ app.post("/api/inspections/:id/job", requireRole(...INSPECTION_WRITE_ROLES), asy
   // 059 landed: a screen that cannot tell "the tenant will be asked" from
   // "there was nobody to ask" is a screen that promises a confirmation step
   // that is never going to happen.
+  // 065. AND IF THE ACCOUNT HAS ASKED FOR IT, THE REST HAPPENS BY ITSELF.
+  //
+  // "Upon approval by them" is this moment: a job raised from an inspection is
+  // created already approved, so there is no second press to wait for.
+  //
+  // THE CATCH IS WIDE FOR THE SAME REASON THE SUMMARY'S IS. The job exists by
+  // the time this runs, so a throw here would answer 500 to a raise that
+  // already happened -- a screen reporting failure over work that is on the
+  // Jobs screen, which is worse than a turnaround nobody auto-assigned.
+  const auto = await autoTurnaround(c, {
+    jobId, kind: row.kind, trades,
+    job: { date: String(b.date || "").trim().slice(0, 10) || null },
+  }).catch((err) => {
+    console.warn("[auto-turnaround] threw while raising:", err?.message || err);
+    return { skipped: "threw" };
+  });
+
   // `summaryError` is said rather than left to be inferred from a null, for
   // the reason `engagedAsRecorded` is: a screen that cannot tell "there was
   // nothing to summarise" from "the call failed" cannot offer the one of those
   // that is worth a second press.
   return c.json({ ok: true, jobId, flagged: flagged.length,
     access: access || null, accessUserId: accessUser,
-    summary: made.ok ? made.summary : null, summaryError: made.error || null }, 201);
+    summary: made.ok ? made.summary : null, summaryError: made.error || null,
+    // Said rather than left to be inferred: a screen that cannot tell "the
+    // account has not switched this on" from "nobody on the roster could take
+    // it" cannot offer the one of those that is worth doing something about.
+    auto }, 201);
 });
 
 app.put("/api/uploads/:kind/:fileName", async (c) => {

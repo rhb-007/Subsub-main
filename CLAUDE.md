@@ -7660,6 +7660,92 @@ refactor.
   closes — and the superseded first window.
 
 
+- **A TURNAROUND SCHEDULES ITSELF, AND THE ONE THING IT WILL NOT DO IS BOOK
+  SOMEBODY ELSE'S CALENDAR.** Asked for as a setting: *"upon approval by them
+  of the move-in, move-out job (these jobs only) it will auto schedule and
+  assign the job to the most optimized qualified tradesman and the best
+  possible time and then automate back and forth with tenant and tradesman
+  until it's booked."* Migration 065, `app/shared/autopick.js`.
+
+  **A TURNAROUND IS THE ONE KIND OF JOB WHERE THIS IS SAFE**, and that is why
+  the request named it rather than jobs in general. A unit between tenancies is
+  **empty**, the scope came off a walk somebody already did, and the date is
+  driven by the next tenancy. None of that holds for a repair, which is
+  somebody's home with somebody in it and a date that follows how bad the leak
+  is.
+
+  **IT CALLS THE REAL ROUTES RATHER THAN REIMPLEMENTING THEM**, which is the
+  decision everything else hangs off. Assigning carries about a dozen gates —
+  roster status, the handyman trade list, documents, cover on the job date, the
+  value ceiling, a closed job — and an automatic path with its own copy would
+  be a second set of rules to keep in step, with the one that drifted being the
+  one nobody watches because nobody is standing in front of it. So the machine
+  does what a person does: it POSTs to `/api/jobs/:id/assign` and
+  `/api/jobs/:id/visits` with the manager's own headers. The mutation that
+  proves it deletes the roster filter from the candidate query — and the
+  fixture's paused company is rated top, has nothing on and is **named to sort
+  first**, so the only thing keeping it out is the roster. Without that naming
+  the mutation survived: the fixture was covering for the guard.
+
+  **AND IT DOES NOT HAND THE HIRING SIDE WHAT `autoschedule.js` REFUSES THEM.**
+  That module explains at length why the side paying cannot switch on
+  auto-schedule for the side doing the work: it writes the job to their
+  calendar as accepted, with nothing to press. So this setting turns on the
+  **choosing** and the **asking**. Where a crew has granted auto-schedule the
+  work order is accepted on issue and the window goes out at once; where they
+  have not it is an offer, and the chain runs itself from there. Either way the
+  manager does nothing, which is the request.
+
+  **THE WINDOW WAITS UNTIL THE CREW HAS TAKEN THE JOB, and getting that wrong
+  nearly shipped.** The first version assigned and proposed in the same breath.
+  A work order sits **pending** until it is accepted, and `visitParties` counts
+  a contractor only once they have — deliberately, because somebody who has not
+  said yes to the JOB cannot be waited on for the TIME. So the window settled on
+  the hiring side alone: **confirmed, with the crew never asked**, which is the
+  exact state 061 and 064 exist to stop. The suite caught it, and the mutation
+  that reproduces it reads `["2026-10-06:confirmed"]`. Accepting the work order
+  is what starts the clock.
+
+  **THE RANKING IS EXPLAINABLE AND DETERMINISTIC, in that order of priority.**
+  Soonest free day, because "the best possible time" is the request and an empty
+  unit costs money every day; then the better rating, because among crews free
+  the same day that is the right answer and it is the only quality signal the
+  product holds; then fewer open jobs, which spreads the work and makes the slot
+  likelier to survive; then the **name**, because a tie broken at random is a
+  feature nobody can test and nobody can explain to the person whose turnaround
+  it was. Each tier has its own fixture, since a check that only drives the
+  first passes whatever the rest do.
+
+  **Deliberately NOT ranked on whether they granted auto-schedule**, which would
+  quietly steer every turnaround to the crews who gave up their accept/decline.
+  That is paying for consent with work.
+
+  **WHAT IT CAN HONESTLY MEAN BY "THE BEST POSSIBLE TIME"** is the next working
+  day this account has not already booked them on and they have not marked
+  themselves out of. SubSub sees this account's bookings; it does not see the
+  other four accounts' diaries. So the slot is an **offer** and the chain is
+  what settles it — pretending otherwise would be the confident-and-wrong answer
+  this file refuses everywhere.
+
+  **AND THE BACK AND FORTH IS BOUNDED AT `AUTO_TRIES`.** "Until it's booked"
+  cannot mean for ever: two people who keep declining are telling us something a
+  fourth date will not fix, and a machine that keeps proposing is one they
+  switch off. The budget is counted from the visit rows rather than held in a
+  column — every proposal is one, which is exactly what the budget is about.
+  Past it, it stops and says so.
+
+  **EVERY OUTCOME IS NAMED, because a manager who switched this on and heard
+  nothing would assume it worked.** `not_switched_on`, `not_a_turnaround`,
+  `already_assigned`, `no_candidate`, `assign_refused` — on the reply and in the
+  feed, with the choice and the reason for it in words.
+
+  **Still open, and worth saying: the trade is the first one on the job.** A
+  turnaround with three trades gets one contractor auto-assigned and the other
+  two slots left for a person. Doing all three means three rankings, three
+  windows and a question about whether they should be the same day — which is a
+  real scheduling problem rather than an endpoint.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

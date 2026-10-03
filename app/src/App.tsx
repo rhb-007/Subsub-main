@@ -68,6 +68,7 @@ import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { SUMMARY_REFUSALS, countComments, whyNotSummary } from "../shared/inspectsummary.js";
+import { AUTO_TRIES } from "../shared/autopick.js";
 import { agreementStateText, renderAgreement } from "../shared/agreement.js";
 import { typedNameMatches, typedNameHint } from "../shared/typedname.js";
 import { ENGAGED_AS, engagedAs, isHandyman, engagedSeatLabel, mayEngageHandyman, mayCover,
@@ -6495,6 +6496,11 @@ export default function SubSub() {
           accountKind={kindOf(account)} onSetAccountKind={setAccountKind} roleLabel={roleLabel}
           accountTrades={account.trades} onSetAccountTrades={setAccountTrades}
           emergencyCompanyId={account.emergencyCompanyId || null}
+          autoTurnaround={!!account.autoTurnaround}
+          onSetAutoTurnaround={async (v) => {
+            await api.patchAccount({ autoTurnaround: v });
+            setAccounts((as) => as.map((a) => a.id === account.id ? { ...a, autoTurnaround: v } : a));
+          }}
           onSetEmergencyContractor={setEmergencyContractor}
           incomingConnects={connectIn || []}
           onReloadConnects={refreshConnects}
@@ -17668,6 +17674,68 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
   );
 }
 
+// AUTO-SCHEDULING A TURNAROUND.
+//
+// Asked for as a setting: *"upon approval by them of the move-in, move-out job
+// (these jobs only) it will auto schedule and assign the job… and then
+// automate back and forth with tenant and tradesman until it's booked."*
+//
+// WHAT IT SAYS IS THE WHOLE PANEL. Handing a decision to a machine is a thing
+// somebody should do with their eyes open, so this names what it will choose
+// on, in order, and names the one thing it will not do -- book a crew's
+// calendar, which is theirs to grant and not this account's to take. A switch
+// that said "auto-schedule jobs" and nothing else would be asking for consent
+// to something nobody had described.
+function AutoTurnaroundPanel({ on, onSave }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const set = async (v) => {
+    setBusy(true); setErr("");
+    try { await onSave(v); }
+    catch { setErr("That didn't save. Try again."); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="portal-panel settings-panel">
+      <h4>Auto-schedule turnarounds</h4>
+      <p className="panel-note">
+        When you raise a job from a move-in or move-out inspection, SubSub puts
+        somebody on it and gets a time agreed without you. <b>Move-in and
+        move-out only</b> — a repair is somebody's home with somebody in it, and
+        the date follows how bad it is rather than a tenancy.
+      </p>
+      <div className="picks">
+        <button type="button" className={`pick ${on ? "" : "on"}`} disabled={busy}
+          onClick={() => set(false)}>Off</button>
+        <button type="button" className={`pick ${on ? "on" : ""}`} disabled={busy}
+          onClick={() => set(true)}>On</button>
+      </div>
+      {on && (
+        <>
+          <p className="cov-hint">
+            It picks from your own roster: engaged for the trade, documents in
+            order, soonest free day, then the better rating, then whoever has
+            least on. It never picks somebody paused or removed.
+          </p>
+          {/* THE ONE THING IT WILL NOT DO, said here rather than discovered. */}
+          <p className="cov-hint">
+            It asks — it does not book their calendar. A time goes out when they
+            take the job, and they confirm it or put another forward. Booking
+            straight onto a crew's calendar is theirs to switch on, from their
+            own account.
+          </p>
+          <p className="cov-hint">
+            If nobody can make it after {AUTO_TRIES} tries it stops and tells you,
+            rather than putting a fourth date to two people who have said no
+            three times.
+          </p>
+        </>
+      )}
+      {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
+    </div>
+  );
+}
+
 function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySub, seatCount, atSeatLimit,
   applySubdomain,
   jobsThisMonth, canBrand, billing, onSetBilling, accountKind, onSetAccountKind,
@@ -17678,6 +17746,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   onPatchSub, onRequestDocs, onSeatLimit, onSaveNotify,
   hostnameStatus, onRefreshHostname, properties = [], roleLabel,
   emergencyCompanyId = null, onSetEmergencyContractor,
+  autoTurnaround = false, onSetAutoTurnaround,
   incomingConnects = [], onRespondConnect, onReloadConnects, onSetMyAvatar,
   added = null, onDismissAdded, openPane = null,
   payoutsLanded = false, onPayoutsHandled }) {
@@ -18109,6 +18178,13 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {pane === "company" && canManage && (
         <EmergencyContractorPanel subs={subs} current={emergencyCompanyId}
           onSave={onSetEmergencyContractor} />
+      )}
+
+      {/* 065. AUTO-SCHEDULING A TURNAROUND. Only where there are buildings to
+          turn around, which is the same list the Properties tab follows: a
+          general contractor has no tenancies ending. */}
+      {pane === "company" && canManage && ACCOUNT_KINDS[accountKind]?.properties && (
+        <AutoTurnaroundPanel on={autoTurnaround} onSave={onSetAutoTurnaround} />
       )}
 
       {/* Only a general contractor. The other three kinds hire and are not

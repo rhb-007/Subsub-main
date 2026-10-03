@@ -75,6 +75,13 @@ CREATE TABLE accounts (
   -- and m031_others_with are the invariant: every hireable kind has one, and no
   -- other kind does.
   company_id        TEXT REFERENCES companies(id),
+  -- 065. Auto-schedule a turnaround. NULL and 0 are both off, so every account
+  -- that exists keeps assigning by hand until somebody ticks it. A unit
+  -- between tenancies is empty and its scope came off a walk somebody already
+  -- did, which is why this is about turnarounds and not about jobs -- and why
+  -- it turns on the CHOOSING and the ASKING rather than the booking, which is
+  -- still the crew's to grant.
+  auto_turnaround   INTEGER,
   created_at        TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
