@@ -194,35 +194,30 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
   ck("and the console will return it", width > 0 && width <= D1_MAX_COLUMNS,
     `${width} columns, D1 allows ${D1_MAX_COLUMNS}`);
 
-  // AND IT IS SHORT ENOUGH FOR THE OTHER LIMIT, which is the one the fix for
-  // the first one walked straight into -- twice. D1 refused 110 UNION ALL
-  // terms with `too many terms in compound SELECT`, so the did-I-run-it half
-  // became a DATA list costing no terms at all; it then refused the 31 that
-  // were left, which the note calling 31 safe had asserted on no evidence.
+  // AND NO PART OF IT IS A COMPOUND SELECT, which is the other limit -- the one
+  // the fix for the first one walked into three times. D1 refused 110 UNION ALL
+  // terms, then 31, then SEVEN, so the did-I-run-it half became a data list and
+  // then the invariants did too. Every bound anybody guessed at was wrong: 60
+  // was "generous" until the paste that failed at 31, and 10 until the one that
+  // failed at 7.
   //
-  // So the real ceiling is below 31 and only the console can say where. The
-  // bound here is deliberately far under the smallest number ever refused --
-  // a generous bound is only generous against a limit somebody has measured,
-  // and 60 was generous right up to the paste that failed.
+  // So the assertion is that the count is ZERO rather than under some number.
+  // A limit nobody has measured cannot be respected by arithmetic, and the one
+  // shape D1 has actually been seen to accept is a `||`-built JSON array read
+  // back through json_each -- at 79 entries, in statement 1.
   const terms = checkStatements().map((st) =>
-    st.replace(/^\s*--.*$/gm, "").split(/\bUNION\s+ALL\b/i).length);
-  ck("no statement is a long compound SELECT", Math.max(...terms) <= D1_MAX_COMPOUND,
-    `terms per statement: ${JSON.stringify(terms)}`);
-  // The half that grows costs nothing: 79 checks, one term.
-  ck("and the did-I-run-it half costs one term however many there are",
-    terms[0] === 1 && parts[0].length > 50,
-    `${terms[0]} term(s) for ${parts[0]?.length} checks`);
+    st.replace(/^\s*--.*$/gm, "").split(/\bUNION\s+ALL\b/i).length - 1);
+  ck("no statement uses a compound SELECT at all", Math.max(...terms) <= D1_MAX_COMPOUND,
+    `UNION ALLs per statement: ${JSON.stringify(terms)}`);
 
-  // AND THE SPLIT IS THE ONLY THING DIVIDING THE INVARIANT STATEMENTS. Each
-  // carries its own copy of the verdict CASE, which is five records of one
-  // rule -- the shape this repository keeps paying for. A statement whose
-  // wrapper drifted would report a healthy database as broken, or a broken one
-  // as healthy, for whichever handful of invariants happened to land in it.
-  const wrappers = new Set(checkStatements().slice(1).map((st) =>
-    st.slice(0, st.indexOf("FROM (")).replace(/^\s*--.*$/gm, "").replace(/\s+/g, " ").trim()));
-  ck("and every invariant statement carries the same verdict rule",
-    checkStatements().length > 2 && wrappers.size === 1,
-    `${wrappers.size} distinct wrappers across ${checkStatements().length - 1} statements`);
+  // AND BOTH HALVES GROW FOR FREE, which is the property that stops this coming
+  // back a fourth time: a migration adds a line to statement 1's list and an
+  // invariant adds a piece to statement 2's, and neither adds a term anywhere.
+  // Asserted on the row counts, because a statement with nothing in it would
+  // satisfy the term check trivially.
+  ck("and both halves carry their entries as data",
+    parts.length === 2 && parts[0].length > 50 && parts[1].length > 20,
+    `${parts[0]?.length} checks and ${parts[1]?.length} invariants in ${parts.length} statements`);
 
   // AND WHAT `npm run paste check` PRINTS IS THE SAME QUERY. That is the form
   // somebody actually pastes -- comment-stripped, because forty lines is

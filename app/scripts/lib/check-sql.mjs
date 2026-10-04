@@ -19,14 +19,13 @@ import { readFileSync } from "node:fs";
 export const checkSql = () =>
   readFileSync(new URL("../../worker/migrations/CHECK.sql", import.meta.url), "utf8");
 
-// THE FILE IS SIX STATEMENTS NOW, so splitting it is part of reading it.
+// THE FILE IS TWO STATEMENTS, so splitting it is part of reading it.
 //
-// D1 refused one row of 110 columns, then refused 110 rows via UNION ALL --
-// every term in a compound SELECT is capped too, which the note claiming rows
-// "have no ceiling" simply had wrong -- and then refused 31 of them, which the
-// note claiming 31 "accepts this" had wrong in exactly the same way. So the
-// half that grows is a data list costing no terms at all, and the invariants
-// are split across five statements of seven terms and under.
+// D1 refused one row of 110 columns, then 110 rows via UNION ALL, then 31, then
+// SEVEN. Every term in a compound SELECT is capped and the cap is below seven,
+// so the only safe number of terms is NONE: both statements build a JSON array
+// with `||` and read it back through `json_each`, which is the one shape D1 has
+// ever been seen to accept -- at 79 entries, in statement 1.
 //
 // Split on a semicolon at depth zero, skipping strings and comments, for the
 // same reason `checkExpr` does: a comment in this file carries a semicolon,
@@ -102,18 +101,18 @@ export const pasteForm = (sql) => sql
 // count of entries, because the entries are meant to grow without limit.
 export const D1_MAX_COLUMNS = 100;
 
-// AND THE SECOND LIMIT, which the fix for the first one walked into: D1
-// refused 110 UNION ALL terms with `too many terms in compound SELECT`, and
-// then refused 31. So the real ceiling is somewhere BELOW 31 and nobody here
-// knows where -- the console is the only place it can be measured, and each
-// measurement costs a round trip to the person holding the iPad.
+// AND THE SECOND LIMIT, which the fix for the first one walked into three
+// times: D1 refused 110 UNION ALL terms with `too many terms in compound
+// SELECT`, then 31, then SEVEN. Nobody here has measured where it actually
+// sits -- the console is the only place it can be, and each measurement costs
+// a round trip to the person holding the iPad.
 //
-// This is therefore a bound no statement should approach rather than a figure
-// read off a spec: ten is comfortably under the smallest number ever refused,
-// and the file sits at seven. It was 60 while 31 was believed to be fine,
-// which is exactly how 31 shipped unchecked -- a generous bound is only
-// generous against a limit somebody has measured.
-export const D1_MAX_COMPOUND = 10;
+// So this is ZERO, which is not a bound somebody tuned: it is the statement
+// that no part of this file may use a compound SELECT at all. Every number
+// above zero has been a guess, and two of the three were wrong. 60 was
+// "generous" right up to the paste that failed at 31, and 10 right up to the
+// one that failed at 7.
+export const D1_MAX_COMPOUND = 0;
 
 // ONE entry's expression, by name.
 //
@@ -122,16 +121,17 @@ export const D1_MAX_COMPOUND = 10;
 // `sub-signup-test` runs 046's tri-state probe against three hand-written
 // `accounts` DDLs, neither of which is a migrated database the whole file
 // could be run against. Both used to find it with a regex ending in `AS
-// m054_...`, so the row rewrite broke them: the alias is `AS value` now and
-// the name is a string literal. That is two more records of this file's shape,
-// which is what this module exists to stop, so it is one function.
+// m054_...`, which the row rewrite broke, and then with `SELECT '<name>' AS
+// name,`, which the json rewrite broke. That is three records of this file's
+// shape living in a test, which is what this module exists to stop, so it is
+// one function and a rewrite costs one edit here.
 //
-// The scan skips strings and comments for the reason the converter had to: a
-// comment in this file carries a comma AND a semicolon, and
+// The scan skips strings and comments for the reason every scanner over this
+// file has to: a comment in it carries a comma AND a semicolon, and
 // `m046_kind_check`'s own literal carries an unmatched paren.
 export function checkExpr(name) {
   const sql = checkSql();
-  const head = `SELECT '${name}' AS name,`;
+  const head = `json_array('${name}', `;
   const at = sql.indexOf(head);
   if (at === -1) throw new Error(`no check named ${name} in CHECK.sql`);
   let i = at + head.length, depth = 0;
@@ -151,8 +151,8 @@ export function checkExpr(name) {
       i = (nl === -1 ? sql.length : nl) - 1; continue;
     }
     if (c === "(") { depth++; continue; }
-    if (c === ")") { depth--; continue; }
-    if (depth === 0 && sql.startsWith("AS value", i)) break;
+    // The close paren of `json_array(` itself, which is where the value ends.
+    if (c === ")") { if (depth === 0) break; depth--; }
   }
   return sql.slice(at + head.length, i).trim();
 }

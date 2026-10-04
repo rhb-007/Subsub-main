@@ -9561,3 +9561,63 @@ refactor.
   parses, that the answers are right and that the shape stays small — and
   cannot prove D1 will take it. If a statement is refused again, **split it
   smaller; the limit is lower than anybody here has guessed, twice.**
+
+- **AND A FOURTH TIME, AT SEVEN TERMS — SO THE ANSWER IS NO TERMS AT ALL.** The
+  entry above split the 31 invariants into five statements of seven and under,
+  on the reasoning that *far* under the number that failed is safe without
+  measuring. D1 refused the first of them. `too many terms in compound SELECT`
+  at **seven**.
+
+  **THREE GUESSES, THREE REFUSALS, AND EACH ONE WAS WRITTEN DOWN HERE AS
+  SOUND.** "Rows have no ceiling." "31 accepts this." "Seven is far enough
+  under 31." Every one of those was reasoning rather than evidence, and the
+  file recorded the reasoning each time as though recording it made it hold. So
+  the lesson is not a smaller number: **a limit nobody has measured cannot be
+  respected by arithmetic.** Any number above zero is the same bet again, and
+  the only one that cannot lose is zero.
+
+  **BOTH STATEMENTS NOW BUILD A JSON ARRAY WITH `||` AND READ IT BACK THROUGH
+  `json_each`**, which is not a fourth guess: it is the one shape D1 has
+  actually been seen to accept — **79 entries of it, in statement 1, which ran
+  cleanly on the same iPad in the same minute that everything else was being
+  refused.** Each invariant is `json_array(name, (SELECT …))`, the pairs are
+  concatenated, and a JSON array of pairs becomes 31 rows. Zero compound terms,
+  two statements, two pastes.
+
+  **`json_object` IS THE TIDIER SPELLING AND IS STILL REFUSED**, for exactly the
+  reason the entry above refused it: it needs two arguments per entry, D1 caps
+  arguments per function far below SQLite's own default, and the thing that
+  grows would point straight at the next ceiling. `json_array(name, value)` is
+  **two arguments per call** however long the list gets. That distinction is
+  the whole of why this is not the trade that failed three times — the previous
+  entry rejected the json route on the 62-argument form and never noticed that
+  per-pair calls do not have the problem.
+
+  **I SAID I WOULD SPLIT RATHER THAN REDESIGN, AND THEN REDESIGNED.** Worth
+  recording plainly. The promise was made when splitting looked like it
+  converged; at seven terms it does not — the remaining honest split is one
+  invariant per statement, which is thirty-one pastes. **A commitment made on a
+  premise that turns out false is not kept by honouring it anyway**, and the
+  cost of pretending otherwise would have been paid by the person pasting.
+
+  **`D1_MAX_COMPOUND` IS NOW 0, which is a rule rather than a bound.** The
+  drift test asserts the count of `UNION ALL`s is zero rather than under some
+  figure, because a figure is what was wrong three times. Beside it, the
+  property that stops this returning: **both halves carry their entries as
+  data**, so a migration adds a line and an invariant adds a piece and neither
+  adds a term anywhere. Asserted on the row counts too — an emptied statement
+  satisfies a term check trivially, which is the mutation that proves it.
+
+  **AND `checkExpr` HAS NOW BEEN BROKEN BY THREE REWRITES OF THIS FILE**, which
+  is the argument for it existing. It matched `AS m054_…`, then
+  `SELECT '<name>' AS name,`, now `json_array('<name>', `; two suites
+  (`propscope`, `sub-signup`) run a single check against a hand-built database
+  and would each have carried their own copy of the shape. One function, one
+  edit per rewrite, and the mutation that drops its paren guard crashes both.
+
+  **Still open, and now the only thing left worth measuring: nobody knows D1's
+  compound limit.** It is below seven. Four refusals, all four found by a person
+  pasting on an iPad; local SQLite allows 500, so nothing here can see it. It no
+  longer matters for this file, which uses none — but any **other** query in
+  this repository that grows a `UNION` chain is in exactly the position this one
+  was in, and the number it may not reach is smaller than anybody would guess.

@@ -1,10 +1,9 @@
 -- Which migrations has this database actually had?
 --
--- Paste this into the D1 console ONE STATEMENT AT A TIME, in order, reading
--- each answer before the next. There are six, separated by blank lines and
--- marked `===== STATEMENT n of 6`. Statement 1 answers "did I run that one?"
--- and statements 2 to 6 answer "is anything wrong?" -- see WHY IT IS SIX,
--- below, because the count is forced rather than chosen.
+-- Paste this into the D1 console ONE STATEMENT AT A TIME: statement 1, read it,
+-- then statement 2. They are separated by a blank line and marked
+-- `===== STATEMENT n of 2`. The first answers "did I run that one?" and the
+-- second "is anything wrong?".
 --
 -- READ THE FIRST COLUMN AND NOTHING ELSE. `verdict` is 'ok', or it names what
 -- to do, and the rows that are not ok sort to the TOP. If the first row of a
@@ -21,10 +20,10 @@
 -- rather than silent -- which is the difference between a column like this and
 -- a check query that quietly answers a different question.
 --
--- WHY IT IS SIX STATEMENTS, AND WHY THE FIRST ONE IS A LIST RATHER THAN SQL.
+-- WHY NEITHER STATEMENT CONTAINS A SINGLE `UNION ALL`.
 --
--- D1 has refused this file three times, for two different limits, and the
--- second refusal was caused by the fix for the first:
+-- D1 has refused this file four times, and three of those refusals were caused
+-- by the fix for the one before:
 --
 --   ONE ROW OF 110 COLUMNS -> `too many columns in result set`. D1 refuses a
 --   result set wider than 100. Unrunnable from migration 063, which took it
@@ -33,35 +32,31 @@
 --
 --   110 ROWS VIA UNION ALL -> `too many terms in compound SELECT`. The note
 --   written at the time said rows "have no ceiling" and "can never run the
---   file into a limit again". That was simply wrong: every UNION ALL is a term
---   and terms are capped too. A fix that trades one ceiling for another is not
---   a fix, it is the same bug wearing the next limit along.
+--   file into a limit again". Simply wrong: every UNION ALL is a term and
+--   terms are capped too.
 --
---   AND THEN 31 ROWS VIA UNION ALL -> the same error again. The note written
---   at THAT point said 31 terms "accepts this", on no evidence beyond 110
---   having been refused. D1's compound limit is somewhere below 31 and nobody
---   here knows where: the console is the only place it can be measured, and
---   measuring it costs a round trip to the person holding the iPad.
+--   31 TERMS -> the same error. That note had said 31 "accepts this", on no
+--   evidence beyond 110 having been refused.
 --
--- So the half that GROWS -- one did-I-run-it check per migration -- is DATA
--- rather than SQL. Seventy-nine checks are one list inside statement 1 and
--- cost ZERO compound terms between them, so adding a migration can never move
--- this file toward either limit again.
+--   SEVEN TERMS -> the same error again. That one had been split deliberately
+--   far under the number that failed, on the reasoning that far-under is safe.
 --
--- What is left as SQL is the invariants, which are arbitrary queries that
--- cannot be expressed as data. There are 31, and they are SPLIT ACROSS FIVE
--- STATEMENTS of seven terms and under -- not because seven is a figure read
--- off a spec, but because a number far below the one that was refused is the
--- only kind that can be trusted without a measurement. The previous note's
--- own instruction when this happened was "split it, do not re-describe it",
--- and that is what this is: the same thirty-one expressions, the same verdict
--- wrapper on each, in smaller pieces. A third redesign would have been a
--- third unverified ceiling.
+-- Three guesses, three refusals. **A limit nobody has measured cannot be
+-- respected by arithmetic**, so the answer is not a smaller number: it is no
+-- compound SELECT anywhere. Both statements build a JSON array by
+-- concatenating pieces with `||` and read it back through `json_each`, which is
+-- the one shape D1 has ever been seen to accept -- 79 entries of it, in
+-- statement 1, which ran cleanly when everything else was being refused.
 --
--- Adding an INVARIANT is a term, so a new one goes in whichever statement has
--- room; past seven, add a statement rather than lengthening one. Adding a
--- did-I-run-it check is ONE LINE in statement 1's list, and the comment above
--- it sits between the concatenated pieces, so each entry keeps the record of
+-- `json_object` would have been the tidier spelling and is refused: it needs
+-- two arguments per entry and D1 caps arguments per function far below
+-- SQLite's own default, so the thing that grows would point straight at the
+-- next ceiling along. `json_array(name, value)` is two arguments per call
+-- whatever the list does.
+--
+-- ADDING EITHER KIND OF CHECK IS NOW ONE LINE and costs no term, so this file
+-- cannot run into either limit again however long it gets. The comment above
+-- each entry sits between the concatenated pieces, so each keeps the record of
 -- why it exists.
 --
 -- It exists because "did I run that one?" came up after nearly every round,
@@ -69,7 +64,7 @@
 -- as you like: it reads nothing but the table definitions and changes
 -- nothing.
 
--- ===== STATEMENT 1 of 6 -- did I run that one? =====================
+-- ===== STATEMENT 1 of 2 -- did I run that one? =====================
 --
 -- A few rows count SEVERAL columns at once, so they answer with how many they
 -- found rather than 1. That is why the list carries a column NAME LIST rather
@@ -241,20 +236,26 @@ FROM (
 -- always in the same order as another's.
 ORDER BY verdict = 'ok', name;
 
--- ===== STATEMENTS 2 TO 6 -- is anything WRONG? =====================
+-- ===== STATEMENT 2 of 2 -- is anything WRONG? ======================
 --
 -- These are not migrations. Every one counts BROKEN ROWS, so 0 is the good
 -- answer and anything above 0 is a bug report about a route rather than a
--- missing paste. They are SQL and not data because each asks its own question.
+-- missing paste.
 --
--- FIVE STATEMENTS RATHER THAN ONE, and the split is the only thing dividing
--- them: the verdict wrapper below is repeated verbatim on each, every
--- expression is unchanged, and which invariant landed in which statement means
--- nothing at all. Run them in order and read the first row of each.
+-- ONE STATEMENT AND NOT ONE TERM OF COMPOUND SELECT, for the reason the
+-- header gives: D1 refused 110 UNION ALL terms, then 31, then SEVEN. The
+-- limit is below seven and nobody here has measured it, so the only safe
+-- number of terms is none. Each invariant is a json_array(name, (SELECT …))
+-- pair, the pairs are joined with || into one JSON array, and json_each turns
+-- that array back into rows -- which is exactly the shape statement 1 uses and
+-- the only shape D1 has ever been seen to accept, at 79 entries.
 --
--- m031_hireable_without, m031_others_with and m039_unowned predate the
--- `_inv_` marker and are named here for that reason; nothing new should join
--- them without it.
+-- Adding one is ONE PIECE in the list below, and it costs no term, so this
+-- cannot run into either limit again however many arrive. Two arguments per
+-- json_array call, never a 62-argument json_object, because D1 caps arguments
+-- per function far below SQLite's own default and that would be the next
+-- ceiling along.
+--
 -- THESE ARE NOT ALL INVARIANTS, which is why the verdict keeps the full rule.
 -- Two of the rows are did-I-run-it checks that could not be written as data:
 -- `m046_kind_check` is a tri-state read off the table's own DDL, and
@@ -262,20 +263,11 @@ ORDER BY verdict = 'ok', name;
 -- schema.sql gets its uniqueness from an inline UNIQUE whose autoindex has no
 -- name to look up. Reading either as "0 is good" would report a healthy
 -- database as broken.
-
--- ----- STATEMENT 2 of 6 -- invariants 1-7 of 31 -----
-SELECT
-  CASE
-    WHEN instr(name, '_inv_') > 0
-      OR name IN ('m031_hireable_without', 'm031_others_with', 'm039_unowned')
-      THEN CASE WHEN value = 0 THEN 'ok' ELSE 'BROKEN ROWS' END
-    WHEN name = 'm046_kind_check'
-      THEN CASE WHEN value = 1 THEN 'RUN 046' ELSE 'ok' END
-    ELSE CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END
-  END AS verdict,
-  name,
-  value
-FROM (
+--
+-- m031_hireable_without, m031_others_with and m039_unowned predate the
+-- `_inv_` marker and are named in the verdict for that reason; nothing new
+-- should join them without it.
+WITH inv(j) AS (SELECT '['
   -- Not a column check: the point of 031 is that every account that can BE
   -- HIRED has one, and no other kind does. It read `general_contractor` alone
   -- until `subcontractor` was added -- at which point the invariant would have
@@ -283,18 +275,15 @@ FROM (
   -- silently allowing one with no company to be hired as. The list here has to
   -- stay in step with HIREABLE_KINDS in worker/index.js; nothing enforces that
   -- but this comment and the migration-gap test.
-  SELECT 'm031_hireable_without' AS name, (SELECT COUNT(*) FROM accounts
+  || json_array('m031_hireable_without', (SELECT COUNT(*) FROM accounts
     WHERE kind IN ('general_contractor','subcontractor')
-      AND company_id IS NULL) AS value
-UNION ALL
-  SELECT 'm031_others_with' AS name, (SELECT COUNT(*) FROM accounts
+      AND company_id IS NULL))
+  || ',' || json_array('m031_others_with', (SELECT COUNT(*) FROM accounts
     WHERE kind NOT IN ('general_contractor','subcontractor')
-      AND company_id IS NOT NULL) AS value
-UNION ALL
+      AND company_id IS NOT NULL))
   -- Not a column check: 039's backfill must have left every building owned by
   -- whoever holds it, or an unclaimed property can never be handed over.
-  SELECT 'm039_unowned' AS name, (SELECT COUNT(*) FROM properties WHERE owner_account_id IS NULL) AS value
-UNION ALL
+  || ',' || json_array('m039_unowned', (SELECT COUNT(*) FROM properties WHERE owner_account_id IS NULL))
   -- 046 is the one migration here that MOST DATABASES MUST NOT RUN, so this
   -- reads the shape rather than asking whether a column arrived.
   --
@@ -304,13 +293,12 @@ UNION ALL
   --      REFUSES 'subcontractor', and a subcontractor signing up gets a 409
   --      and no account. Run 046's rebuild.
   --   2  already widened. Nothing to do.
-  SELECT 'm046_kind_check' AS name, (SELECT CASE
+  || ',' || json_array('m046_kind_check', (SELECT CASE
      WHEN (SELECT sql FROM sqlite_master WHERE type='table' AND name='accounts')
             NOT LIKE '%CHECK (kind IN%' THEN 0
      WHEN (SELECT sql FROM sqlite_master WHERE type='table' AND name='accounts')
             LIKE '%''subcontractor''%' THEN 2
-     ELSE 1 END) AS value
-UNION ALL
+     ELSE 1 END))
   -- And the uniqueness 046's rebuild has to put back, because
   -- CREATE TABLE AS SELECT keeps the rows and drops everything else. Every
   -- branded page load looks an account up by subdomain, and two accounts
@@ -322,11 +310,10 @@ UNION ALL
   -- as sqlite_autoindex_accounts_N with a NULL sql -- invisible to a name or
   -- LIKE test, so that version read 0 on a perfectly good database and would
   -- have told somebody their rebuild had failed.
-  SELECT 'm046_subdomain_unique' AS name, (SELECT COUNT(*) FROM pragma_index_list('accounts') il
+  || ',' || json_array('m046_subdomain_unique', (SELECT COUNT(*) FROM pragma_index_list('accounts') il
     WHERE il."unique" = 1
       AND EXISTS (SELECT 1 FROM pragma_index_info(il.name) ii
-                   WHERE ii.name = 'subdomain')) AS value
-UNION ALL
+                   WHERE ii.name = 'subdomain')))
   -- And an invariant, which must read ZERO: a row saying verified while
   -- Stripe says money cannot move is a roster reading payable over an
   -- account that is not.
@@ -339,10 +326,9 @@ UNION ALL
   -- migration. The three older invariants keep their names because CLAUDE.md
   -- names them and they are run by hand; anything added from here marks
   -- itself.
-  SELECT 'm050_inv_verified_but_stuck' AS name, (SELECT COUNT(*) FROM payout_accounts
+  || ',' || json_array('m050_inv_verified_but_stuck', (SELECT COUNT(*) FROM payout_accounts
     WHERE kyc_status = 'verified'
-      AND (payouts_enabled = 0 OR transfers_active = 0)) AS value
-UNION ALL
+      AND (payouts_enabled = 0 OR transfers_active = 0)))
   -- Invariants, both of which must read ZERO.
   --
   -- A release marked paid with no transfer behind it is the ORIGINAL bug in a
@@ -350,66 +336,45 @@ UNION ALL
   -- Scoped to Stripe-settled releases, because a cheque legitimately has no
   -- transfer row -- `method` is the seam and 'manual' still means what it
   -- always meant.
-  SELECT 'm051_inv_paid_without_transfer' AS name, (SELECT COUNT(*) FROM wo_releases r
+  || ',' || json_array('m051_inv_paid_without_transfer', (SELECT COUNT(*) FROM wo_releases r
     WHERE r.status = 'paid' AND r.method = 'stripe'
       AND NOT EXISTS (SELECT 1 FROM wo_transfers t
-                       WHERE t.release_id = r.id AND t.status IN ('paid','pending'))) AS value
-)
-ORDER BY verdict = 'ok', name;
-
--- ----- STATEMENT 3 of 6 -- invariants 8-13 of 31 -----
-SELECT
-  CASE
-    WHEN instr(name, '_inv_') > 0
-      OR name IN ('m031_hireable_without', 'm031_others_with', 'm039_unowned')
-      THEN CASE WHEN value = 0 THEN 'ok' ELSE 'BROKEN ROWS' END
-    WHEN name = 'm046_kind_check'
-      THEN CASE WHEN value = 1 THEN 'RUN 046' ELSE 'ok' END
-    ELSE CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END
-  END AS verdict,
-  name,
-  value
-FROM (
+                       WHERE t.release_id = r.id AND t.status IN ('paid','pending'))))
   -- And the reverse, which is worse: money that left against a release
   -- nothing says was paid. That is a transfer nobody can reconcile.
-  SELECT 'm051_inv_transfer_without_paid' AS name, (SELECT COUNT(*) FROM wo_transfers t
+  || ',' || json_array('m051_inv_transfer_without_paid', (SELECT COUNT(*) FROM wo_transfers t
     JOIN wo_releases r ON r.id = t.release_id
-    WHERE t.status = 'paid' AND r.status <> 'paid') AS value
-UNION ALL
+    WHERE t.status = 'paid' AND r.status <> 'paid'))
   -- Invariants, both of which must read ZERO.
   --
   -- In force means BOTH signed. A row saying countersigned with either
   -- signature missing is a contract the product would enforce -- gating
   -- compliance, and soon payment -- on a document nobody can show was agreed.
-  SELECT 'm052_inv_countersigned_unsigned' AS name, (SELECT COUNT(*) FROM agreements
+  || ',' || json_array('m052_inv_countersigned_unsigned', (SELECT COUNT(*) FROM agreements
     WHERE status = 'countersigned'
-      AND (signed_at IS NULL OR countersigned_at IS NULL)) AS value
-UNION ALL
+      AND (signed_at IS NULL OR countersigned_at IS NULL)))
   -- And a signature with no record of WHAT was signed. The hash is the whole
   -- difference between proving somebody signed something and proving what;
   -- an uploaded agreement is excused only until it has been uploaded, so this
   -- counts the ones that carry neither a hash nor a file.
-  SELECT 'm052_inv_signed_without_doc' AS name, (SELECT COUNT(*) FROM agreements
+  || ',' || json_array('m052_inv_signed_without_doc', (SELECT COUNT(*) FROM agreements
     WHERE signed_at IS NOT NULL
-      AND COALESCE(doc_sha256, '') = '' AND COALESCE(file_name, '') = '') AS value
-UNION ALL
+      AND COALESCE(doc_sha256, '') = '' AND COALESCE(file_name, '') = ''))
   -- Invariant, must read ZERO: a scope row against a seat that is not scoped
   -- by job at all. `jobScopeFrom` ignores those, so such a row is a list
   -- somebody built that narrows nobody -- and it would start narrowing them
   -- the day that role joined JOB_SCOPED_ROLES, silently.
-  SELECT 'm053_inv_scoped_wrong_role' AS name, (SELECT COUNT(*) FROM membership_jobs mj
+  || ',' || json_array('m053_inv_scoped_wrong_role', (SELECT COUNT(*) FROM membership_jobs mj
      JOIN memberships m ON m.id = mj.membership_id
-    WHERE m.role <> 'pm') AS value
-UNION ALL
+    WHERE m.role <> 'pm'))
   -- And a scope row pointing at a job on a different account from the seat.
   -- The cascade cannot catch this one: both rows are real, and the pair is
   -- what is wrong. A seat narrowed to somebody else's job either sees nothing
   -- or sees across accounts, and which one it is depends on a JOIN elsewhere.
-  SELECT 'm053_inv_scope_crosses_account' AS name, (SELECT COUNT(*) FROM membership_jobs mj
+  || ',' || json_array('m053_inv_scope_crosses_account', (SELECT COUNT(*) FROM membership_jobs mj
      JOIN memberships m ON m.id = mj.membership_id
      JOIN jobs j ON j.id = mj.job_id
-    WHERE j.account_id <> m.account_id) AS value
-UNION ALL
+    WHERE j.account_id <> m.account_id))
   -- 054. The same shape one axis over, and the one that actually bit.
   -- Invariant, must read ZERO: a BUILDING scope row against a seat that is
   -- not narrowed by building at all. `propertyScope` answers null for
@@ -422,54 +387,34 @@ UNION ALL
   --
   -- 054 clears what is already there; shared/propscope.js and the console's
   -- role route are what stop more arriving.
-  SELECT 'm054_inv_scoped_wrong_role' AS name, (SELECT COUNT(*) FROM membership_properties mp
+  || ',' || json_array('m054_inv_scoped_wrong_role', (SELECT COUNT(*) FROM membership_properties mp
      JOIN memberships m ON m.id = mp.membership_id
-    WHERE m.role NOT IN ('pm', 'owner', 'tenant')) AS value
-)
-ORDER BY verdict = 'ok', name;
-
--- ----- STATEMENT 4 of 6 -- invariants 14-19 of 31 -----
-SELECT
-  CASE
-    WHEN instr(name, '_inv_') > 0
-      OR name IN ('m031_hireable_without', 'm031_others_with', 'm039_unowned')
-      THEN CASE WHEN value = 0 THEN 'ok' ELSE 'BROKEN ROWS' END
-    WHEN name = 'm046_kind_check'
-      THEN CASE WHEN value = 1 THEN 'RUN 046' ELSE 'ok' END
-    ELSE CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END
-  END AS verdict,
-  name,
-  value
-FROM (
+    WHERE m.role NOT IN ('pm', 'owner', 'tenant')))
   -- Invariant, must read ZERO: a room on an inspection that is not there.
   -- The cascade covers a deleted inspection; this covers a row written
   -- against an id that never existed, which is what a route taking an id from
   -- the body without joining it back to the account produces.
-  SELECT 'm055_inv_orphan_rooms' AS name, (SELECT COUNT(*) FROM inspection_rooms r
-    WHERE NOT EXISTS (SELECT 1 FROM inspections i WHERE i.id = r.inspection_id)) AS value
-UNION ALL
+  || ',' || json_array('m055_inv_orphan_rooms', (SELECT COUNT(*) FROM inspection_rooms r
+    WHERE NOT EXISTS (SELECT 1 FROM inspections i WHERE i.id = r.inspection_id)))
   -- And a finished inspection with a room nobody answered. `whyNotFinish`
   -- refuses that, so a row here is a route that stopped asking it.
-  SELECT 'm055_inv_finished_unchecked' AS name, (SELECT COUNT(*) FROM inspections i
+  || ',' || json_array('m055_inv_finished_unchecked', (SELECT COUNT(*) FROM inspections i
     WHERE i.status = 'finished'
       AND EXISTS (SELECT 1 FROM inspection_rooms r
-                   WHERE r.inspection_id = i.id AND r.status = 'unchecked')) AS value
-UNION ALL
+                   WHERE r.inspection_id = i.id AND r.status = 'unchecked')))
   -- Invariant, must read ZERO: a report sent from an inspection that is not
   -- finished. `canSendInspection` refuses it, because a half-walked document
   -- says nothing while looking like it says everything -- a row here is a
   -- route that stopped asking.
-  SELECT 'm056_inv_sent_unfinished' AS name, (SELECT COUNT(*) FROM inspection_sends s
+  || ',' || json_array('m056_inv_sent_unfinished', (SELECT COUNT(*) FROM inspection_sends s
      JOIN inspections i ON i.id = s.inspection_id
-    WHERE i.status <> 'finished') AS value
-UNION ALL
+    WHERE i.status <> 'finished'))
   -- Invariant, must read ZERO: a note against a photograph that is not
   -- there. The foreign key says it cannot happen and this is here because
   -- m055_inv_orphan_rooms is -- a route that takes an id from the body
   -- without joining it back is what produces one.
-  SELECT 'm057_inv_orphan_notes' AS name, (SELECT COUNT(*) FROM inspection_photo_notes n
-    WHERE NOT EXISTS (SELECT 1 FROM inspection_photos p WHERE p.id = n.photo_id)) AS value
-UNION ALL
+  || ',' || json_array('m057_inv_orphan_notes', (SELECT COUNT(*) FROM inspection_photo_notes n
+    WHERE NOT EXISTS (SELECT 1 FROM inspection_photos p WHERE p.id = n.photo_id)))
   -- Invariant, must read ZERO: a draft written after the inspection was
   -- finished. Drafting is a write, and finishing is a one-way door --
   -- `whyNotDraft` refuses it, so a row here is a route that stopped asking.
@@ -490,73 +435,52 @@ UNION ALL
   -- a malformed date would drop out of this count rather than be reported by
   -- it. That is the direction that hides a real error, which is the one this
   -- file refuses everywhere else.
-  SELECT 'm057_inv_drafted_after_finish' AS name, (SELECT COUNT(*) FROM inspection_photo_notes n
+  || ',' || json_array('m057_inv_drafted_after_finish', (SELECT COUNT(*) FROM inspection_photo_notes n
      JOIN inspection_photos p ON p.id = n.photo_id
      JOIN inspection_rooms r  ON r.id = p.room_id
      JOIN inspections i       ON i.id = r.inspection_id
     WHERE n.drafted_at IS NOT NULL AND i.finished_at IS NOT NULL
       AND (datetime(n.drafted_at) IS NULL
         OR datetime(i.finished_at) IS NULL
-        OR datetime(n.drafted_at) > datetime(i.finished_at))) AS value
-UNION ALL
+        OR datetime(n.drafted_at) > datetime(i.finished_at))))
   -- Invariant, must read ZERO: a value the product does not produce. NULL is
   -- the ordinary state and reads as subcontractor, so this counts only rows
   -- carrying a word that is neither -- which is a route that stopped
   -- validating against ENGAGED_AS.
-  SELECT 'm058_inv_unknown_engaged_as' AS name, (SELECT COUNT(*) FROM engagements
+  || ',' || json_array('m058_inv_unknown_engaged_as', (SELECT COUNT(*) FROM engagements
     WHERE engaged_as IS NOT NULL
-      AND engaged_as NOT IN ('subcontractor','handyman')) AS value
-)
-ORDER BY verdict = 'ok', name;
-
--- ----- STATEMENT 5 of 6 -- invariants 20-25 of 31 -----
-SELECT
-  CASE
-    WHEN instr(name, '_inv_') > 0
-      OR name IN ('m031_hireable_without', 'm031_others_with', 'm039_unowned')
-      THEN CASE WHEN value = 0 THEN 'ok' ELSE 'BROKEN ROWS' END
-    WHEN name = 'm046_kind_check'
-      THEN CASE WHEN value = 1 THEN 'RUN 046' ELSE 'ok' END
-    ELSE CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END
-  END AS verdict,
-  name,
-  value
-FROM (
+      AND engaged_as NOT IN ('subcontractor','handyman')))
   -- Invariant, must read ZERO: a handyman on an account that has no buildings
   -- to maintain. `mayEngageHandyman` refuses it, so a row here is a route
   -- that stopped asking -- and it would be a maintenance worker excused their
   -- insurance on a general contractor's roster.
-  SELECT 'm058_inv_handyman_wrong_kind' AS name, (SELECT COUNT(*) FROM engagements e
+  || ',' || json_array('m058_inv_handyman_wrong_kind', (SELECT COUNT(*) FROM engagements e
      JOIN accounts a ON a.id = e.account_id
     WHERE e.engaged_as = 'handyman'
-      AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager')) AS value
-UNION ALL
+      AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager')))
   -- Invariant, must read ZERO: the same two faults 058 counts, one table
   -- earlier. They are counted again rather than trusted to the engagement
   -- check, because an invite is where the word is DECIDED and an engagement
   -- is only where it ends up -- a bad value sitting on an unredeemed invite
   -- shows up here today and on `engagements` the day somebody opens the link.
-  SELECT 'm059_inv_unknown_engaged_as' AS name, (SELECT COUNT(*) FROM sub_invites
+  || ',' || json_array('m059_inv_unknown_engaged_as', (SELECT COUNT(*) FROM sub_invites
     WHERE engaged_as IS NOT NULL
-      AND engaged_as NOT IN ('subcontractor','handyman')) AS value
-UNION ALL
+      AND engaged_as NOT IN ('subcontractor','handyman')))
   -- Invariant, must read ZERO: a handyman invite from an account with no
   -- buildings to maintain. Counted on every invite, spent or not: a spent one
   -- has already written the word onto an engagement, and an outstanding one
   -- is about to.
-  SELECT 'm059_inv_handyman_wrong_kind' AS name, (SELECT COUNT(*) FROM sub_invites i
+  || ',' || json_array('m059_inv_handyman_wrong_kind', (SELECT COUNT(*) FROM sub_invites i
      JOIN accounts a ON a.id = i.account_id
     WHERE i.engaged_as = 'handyman'
-      AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager')) AS value
-UNION ALL
+      AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager')))
   -- Invariant, must read ZERO: a value the product does not produce. NULL is
   -- the ordinary state and means "not answered", so this counts only a job
   -- carrying a word that is none of the three -- which is a route that stopped
   -- validating against ACCESS_KINDS.
-  SELECT 'm060_inv_unknown_access' AS name, (SELECT COUNT(*) FROM jobs
+  || ',' || json_array('m060_inv_unknown_access', (SELECT COUNT(*) FROM jobs
     WHERE access IS NOT NULL
-      AND access NOT IN ('tenant','manager','none')) AS value
-UNION ALL
+      AND access NOT IN ('tenant','manager','none')))
   -- Invariant, must read ZERO: a visit marked confirmed that somebody who had
   -- to agree never answered. Scoped to visits on a job whose access answer
   -- asks the tenant, because that is the only side this can be checked for
@@ -565,13 +489,12 @@ UNION ALL
   --
   -- A confirmed window with a tick against it that nobody is attending is the
   -- worst of the three states this can be in, because it reads as settled.
-  SELECT 'm061_inv_confirmed_unanswered' AS name, (SELECT COUNT(*) FROM visits v
+  || ',' || json_array('m061_inv_confirmed_unanswered', (SELECT COUNT(*) FROM visits v
      JOIN jobs j ON j.id = v.job_id
     WHERE v.status = 'confirmed'
       AND v.responded_at IS NULL
       AND j.access = 'tenant'
-      AND j.requested_by IS NOT NULL) AS value
-UNION ALL
+      AND j.requested_by IS NOT NULL))
   -- Invariant, must read ZERO: a job naming somebody who is not a tenant on
   -- that job's own account. NULL is the ordinary state and means "the only
   -- person who can confirm a window is whoever reported the repair", so this
@@ -579,28 +502,12 @@ UNION ALL
   -- column is that the named person can answer a visit, which an id with no
   -- tenant seat behind it cannot. It would be a confirmation step waiting on
   -- nobody, which is the failure 060 refused to ship.
-  SELECT 'm062_inv_access_not_a_tenant' AS name, (SELECT COUNT(*) FROM jobs j
+  || ',' || json_array('m062_inv_access_not_a_tenant', (SELECT COUNT(*) FROM jobs j
     WHERE j.access_user_id IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM memberships m
                        WHERE m.user_id = j.access_user_id
                          AND m.account_id = j.account_id
-                         AND m.role = 'tenant')) AS value
-)
-ORDER BY verdict = 'ok', name;
-
--- ----- STATEMENT 6 of 6 -- invariants 26-31 of 31 -----
-SELECT
-  CASE
-    WHEN instr(name, '_inv_') > 0
-      OR name IN ('m031_hireable_without', 'm031_others_with', 'm039_unowned')
-      THEN CASE WHEN value = 0 THEN 'ok' ELSE 'BROKEN ROWS' END
-    WHEN name = 'm046_kind_check'
-      THEN CASE WHEN value = 1 THEN 'RUN 046' ELSE 'ok' END
-    ELSE CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END
-  END AS verdict,
-  name,
-  value
-FROM (
+                         AND m.role = 'tenant')))
   -- Invariant, must read ZERO: a summary row that says nothing, or one that
   -- does not record what it was written from.
   --
@@ -611,10 +518,9 @@ FROM (
   -- comparison against it, so a row with none can never be known to be out of
   -- date and the paragraph becomes unfalsifiable. The route refuses to write
   -- either, and this counts the ones that got past.
-  SELECT 'm063_inv_summary_empty' AS name, (SELECT COUNT(*) FROM inspection_summaries
+  || ',' || json_array('m063_inv_summary_empty', (SELECT COUNT(*) FROM inspection_summaries
     WHERE TRIM(COALESCE(summary, '')) = ''
-       OR TRIM(COALESCE(source, '')) = '') AS value
-UNION ALL
+       OR TRIM(COALESCE(source, '')) = ''))
   -- Invariant, must read ZERO: an ending whose kind is not one of the four.
   --
   -- The column is plain TEXT on purpose -- a CHECK on a table this young is a
@@ -622,9 +528,8 @@ UNION ALL
   -- trade -- so this is what stands in for one. A row nothing recognises reads
   -- as "not ended" to `jobEnding`, which is the direction that draws a
   -- cancelled job as live work.
-  SELECT 'm066_inv_bad_kind' AS name, (SELECT COUNT(*) FROM job_endings
-    WHERE kind NOT IN ('cancelled', 'deferred', 'no_work', 'resumed')) AS value
-UNION ALL
+  || ',' || json_array('m066_inv_bad_kind', (SELECT COUNT(*) FROM job_endings
+    WHERE kind NOT IN ('cancelled', 'deferred', 'no_work', 'resumed')))
   -- Invariant, must read ZERO: a cancelled or closed-out job with a work order
   -- nobody voided.
   --
@@ -633,11 +538,10 @@ UNION ALL
   -- who still has a price, a date and no idea the work is off. Scoped to the
   -- NEWEST ending per job, because a job deferred in January, resumed in
   -- March and running again legitimately has live orders.
-  SELECT 'm066_inv_live_wo_on_ended' AS name, (SELECT COUNT(*) FROM work_orders w
+  || ',' || json_array('m066_inv_live_wo_on_ended', (SELECT COUNT(*) FROM work_orders w
     WHERE w.voided_at IS NULL
       AND (SELECT e.kind FROM job_endings e WHERE e.job_id = w.job_id
-            ORDER BY e.at DESC, e.rowid DESC LIMIT 1) IN ('cancelled', 'no_work')) AS value
-UNION ALL
+            ORDER BY e.at DESC, e.rowid DESC LIMIT 1) IN ('cancelled', 'no_work')))
   -- Invariant, must read ZERO: money settled against a job that was cancelled
   -- or closed with nothing done.
   --
@@ -646,12 +550,11 @@ UNION ALL
   -- `jobEndingBlocksPay` it would be the most payable a job ever gets. A row
   -- here is a payment made for work nobody did, which is the one mistake in
   -- this schema that a word cannot undo.
-  SELECT 'm066_inv_paid_on_ended' AS name, (SELECT COUNT(*) FROM wo_releases r
+  || ',' || json_array('m066_inv_paid_on_ended', (SELECT COUNT(*) FROM wo_releases r
     JOIN work_orders w ON w.id = r.work_order_id
     WHERE r.status = 'paid'
       AND (SELECT e.kind FROM job_endings e WHERE e.job_id = w.job_id
-            ORDER BY e.at DESC, e.rowid DESC LIMIT 1) IN ('cancelled', 'no_work')) AS value
-UNION ALL
+            ORDER BY e.at DESC, e.rowid DESC LIMIT 1) IN ('cancelled', 'no_work')))
   -- Invariant, must read ZERO: a `resumed` row against a job whose newest
   -- OTHER ending was never a deferral.
   --
@@ -667,13 +570,12 @@ UNION ALL
   -- nothing, reads the hold as absent, and counts an ORDINARY deferral as a
   -- fault. An invariant that fires on the common case is a bug report nobody
   -- can action. `(at, rowid)` is the same ordering every read above uses.
-  SELECT 'm066_inv_resume_without_hold' AS name, (SELECT COUNT(*) FROM job_endings r
+  || ',' || json_array('m066_inv_resume_without_hold', (SELECT COUNT(*) FROM job_endings r
     WHERE r.kind = 'resumed'
       AND COALESCE((SELECT e.kind FROM job_endings e
                      WHERE e.job_id = r.job_id
                        AND (e.at < r.at OR (e.at = r.at AND e.rowid < r.rowid))
-                     ORDER BY e.at DESC, e.rowid DESC LIMIT 1), 'none') <> 'deferred') AS value
-UNION ALL
+                     ORDER BY e.at DESC, e.rowid DESC LIMIT 1), 'none') <> 'deferred'))
   -- 067. Invariant, must read ZERO: a live window the HIRING SIDE proposed
   -- with no record that they agreed to it.
   --
@@ -690,13 +592,29 @@ UNION ALL
   -- those. A contractor's or a tenant's own proposal is NOT counted -- those
   -- legitimately leave the hiring side outstanding, which is the whole of what
   -- 064 added.
-  SELECT 'm067_inv_manager_unstamped' AS name, (SELECT COUNT(*) FROM visits v
+  || ',' || json_array('m067_inv_manager_unstamped', (SELECT COUNT(*) FROM visits v
     WHERE v.manager_at IS NULL
       AND v.status IN ('proposed', 'confirmed')
       AND v.proposed_by IS NOT NULL
       AND EXISTS (SELECT 1 FROM memberships m
                    WHERE m.user_id = v.proposed_by
                      AND m.account_id = v.account_id
-                     AND m.role IN ('admin', 'pm'))) AS value
+                     AND m.role IN ('admin', 'pm'))))
+  || ']'),
+found(name, value) AS (
+  SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')
+    FROM inv, json_each(inv.j)
 )
+SELECT
+  CASE
+    WHEN instr(name, '_inv_') > 0
+      OR name IN ('m031_hireable_without', 'm031_others_with', 'm039_unowned')
+      THEN CASE WHEN value = 0 THEN 'ok' ELSE 'BROKEN ROWS' END
+    WHEN name = 'm046_kind_check'
+      THEN CASE WHEN value = 1 THEN 'RUN 046' ELSE 'ok' END
+    ELSE CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END
+  END AS verdict,
+  name,
+  value
+FROM found
 ORDER BY verdict = 'ok', name;
