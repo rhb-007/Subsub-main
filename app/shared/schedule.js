@@ -101,3 +101,49 @@ export const scheduledOn = (row) => workWhen(row).date;
 export function whenIsPast(when, todayKey) {
   return !!when?.date && String(when.date) < String(todayKey);
 }
+
+// HOW LONG A PROPOSED WINDOW IS, which was written inside the propose form
+// and is now needed on the server too.
+//
+// Reported as *"it should have showed an accept or decline option when I
+// updated it from the property manager side"*: changing a job's date on the
+// edit form wrote `jobs.date` and told nobody, so the crew's card read
+// "Target date. No visit time has been agreed" over a date the manager had
+// already moved. The fix makes that edit propose a window, which means the
+// server has to know how long one is -- and a second copy of this arithmetic
+// is two records of one fact, with the one that drifts being whichever door
+// is used less.
+export const WINDOW_MINS = 60;
+const mins = (hhmm) => {
+  const [h, m] = String(hhmm || "").split(":").map(Number);
+  return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
+};
+// KEEPS THE LENGTH SOMEBODY ALREADY CHOSE. A 2h15m window moved from 11am to
+// 1pm is still 2h15m, and overwriting that would be the screen deciding
+// something they had decided. One hour when there is nothing to keep, and
+// clamped to the end of the day, because a window past midnight is one the
+// route refuses and two dates in one row.
+export function windowEnd(start, wasStart, wasEnd) {
+  const from = mins(start);
+  if (from === null) return null;
+  const a = mins(wasStart), b = mins(wasEnd);
+  const len = a !== null && b !== null && b > a ? b - a : WINDOW_MINS;
+  const to = Math.min(from + len, 23 * 60 + 59);
+  return `${String(Math.floor(to / 60)).padStart(2, "0")}:${String(to % 60).padStart(2, "0")}`;
+}
+
+// IS THERE ANYBODY BUT US TO PUT A NEW DATE TO?
+//
+// `visitParties` always carries the hiring side on a 064 database, because
+// proposing is agreeing for whoever proposed it -- so a list of just
+// `manager` settles the moment it is written and tells nobody. Proposing one
+// of those would turn a target date into a card reading "Confirmed. Agreed by
+// everybody who has to be there" over a job with no crew on it, which is the
+// screen-that-lies rule pointed at the one line a contractor reads to decide
+// whether to get in the van.
+//
+// So a date change asks somebody only when there IS somebody: a crew who has
+// accepted, or a tenant who has to be in. Otherwise `jobs.date` is a target
+// and saying so is the honest answer, which is what it has always done.
+export const othersMustAgree = (parties) =>
+  (parties || []).some((p) => p !== "manager");

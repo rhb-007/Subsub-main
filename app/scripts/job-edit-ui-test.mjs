@@ -106,6 +106,11 @@ const VISITS = () => [{
 }];
 
 const patched = [];
+// Every read of the appointment list, so the suite can tell a browser that
+// RE-READ it after a reschedule from one that kept the window it just
+// superseded. The server's answer is what decides a visit's status, so a
+// locally invented one disagrees the moment a crew is or is not a party.
+const visitReads = [];
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, PM];
@@ -113,10 +118,15 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/subs") return [200, [SUB]];
   if (path === "/api/account-users") return [200, USERS];
   if (path === "/api/jobs") return [200, JOBS()];
-  if (path === "/api/visits") return [200, VISITS()];
+  if (path === "/api/visits") { visitReads.push(1); return [200, VISITS()]; }
   if (/^\/api\/jobs\/[^/]+$/.test(path) && method === "PATCH") {
     patched.push({ path, body });
-    return [200, { ok: true }];
+    // WHAT THE ROUTE ANSWERS WHEN MOVING THE DATE ASKED SOMEBODY. The edit
+    // form's date field reaches past this form now: on a job a crew has
+    // accepted, changing it proposes that window through the real propose
+    // route, and the reply says who was asked. A browser that ignores this
+    // keeps drawing the window it superseded.
+    return [200, { ok: true, rescheduled: { asked: ["contractor"], status: "proposed" } }];
   }
   if (/^\/api\/work-orders\/[^/]+\/plan$/.test(path))
     return [200, { valueCents: 40000, milestones: [], releases: [], retainageBps: 0 }];
@@ -283,11 +293,25 @@ try {
     t.ck("the time", form.time === "11:00", String(form.time));
     t.ck("and both trades ticked",
       form.on.includes("Plumbing") && form.on.includes("Roofing"), JSON.stringify(form.on));
-    // WHAT EDITING DOES NOT DO, said before anything is typed.
+    // WHAT EDITING DOES AND DOES NOT DO, said before anything is typed.
     t.ck("it says the work orders keep their price",
       /keep their price/i.test(form.sub), form.sub);
-    t.ck("and that moving an agreed visit is done on the card",
-      /propose a new time/i.test(form.sub), form.sub);
+    // UPDATED TO THE NEW RULE RATHER THAN LOOSENED. This read *"and that
+    // moving an agreed visit is done on the card"*, matching the sentence
+    // *"changing the date here changes the date on the job -- to move an
+    // agreed visit, propose a new time on the card."* That was an accurate
+    // description of what the route did, and the route was wrong: a manager
+    // who moved the date told nobody, and the crew's own card went on reading
+    // "Target date. No visit time has been agreed". So the assertion was
+    // pinning the bug as firmly as it would have pinned the fix, which is the
+    // shape this project already records about `RefreshAuthError`.
+    t.ck("and that moving the date asks whoever agreed to a time",
+      /changing the date asks them again/i.test(form.sub), form.sub);
+    // AND NOT THE OLD PROMISE, which is the half that catches a revert: the
+    // two sentences are not mutually exclusive on a page, so a later pass
+    // restoring the old one would pass the check above.
+    t.ck("rather than sending them to the card to do it",
+      !/propose a new time/i.test(form.sub), form.sub);
     t.ck("the button says Save changes",
       form.save.some((x) => /Save changes/.test(x)), JSON.stringify(form.save));
     t.ck("and there is no second access picker", form.access === 0, String(form.access));
@@ -317,6 +341,7 @@ try {
   console.log("\n-- and saving sends what was typed --");
   {
     patched.length = 0;
+    visitReads.length = 0;
     await page.evaluate(() => {
       const m = document.querySelector(".modal");
       const l = [...m.querySelectorAll("label")].find((x) =>
@@ -344,6 +369,16 @@ try {
     t.ck("nor the photos", body.photos === undefined, JSON.stringify(body.photos));
     t.ck("nor the severity", body.severity === undefined, JSON.stringify(body.severity));
     t.ck("nor who asked", body.requestedBy === undefined, JSON.stringify(body.requestedBy));
+    // AND A SAVE THAT RESCHEDULED RE-READS THE APPOINTMENT.
+    //
+    // The visit a card draws lives in its own list, so without this the
+    // manager's own screen keeps the window the propose just superseded --
+    // the stale-snapshot shape, on the one row that says when somebody is
+    // coming. A static check that `editJob` mentions `rescheduled` passes
+    // with the value read and never used, which is why this counts what
+    // reached the server instead.
+    t.ck("the appointment list is re-read after a reschedule",
+      visitReads.length >= 1, String(visitReads.length));
     // AWAITED, so a refusal cannot be hidden -- and the modal closes only on
     // a save that went through.
     t.ck("and the modal closed on success",

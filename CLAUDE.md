@@ -8305,6 +8305,117 @@ refactor.
   the company row instead of the engagement, the stand-down sentence back to
   the constant, and `jobHiresWord` answering handyman for everybody.
 
+- **THE DATE MOVED AND THE CREW WAS NEVER TOLD, BECAUSE `PATCH /api/jobs/:id`
+  WROTE TWO COLUMNS AND STOPPED.** Reported with the handyman's own portal on
+  screen: *"This same job issue is not resolved. I resolved it from the
+  property manager side, but on the handyman side (pacific) it's showing
+  this… it should have showed an accept or decline option when I updated it
+  from the property manager side."* The card read **Oct 7, 2026 · 11:30 AM —
+  Target date. The date on the job. No visit time has been agreed**, over a
+  date the manager had already changed.
+
+  **THE CARD WAS READING THE ROW CORRECTLY.** `jobs.date` is the target and a
+  row in `visits` is the appointment, and the edit form wrote the first and
+  created nothing. So there genuinely was no live visit, `workWhen` answered
+  `target`, and the one party who physically drives to the address was told
+  about a date nobody had asked them to agree to. Which is the same silence
+  061 and 064 exist to end, arriving through a door neither of them covered.
+
+  **AND THE FORM CARRIED A SENTENCE SAYING SO**, which is why it survived:
+  *"Changing the date here changes the date on the job — to move an agreed
+  visit, propose a new time on the card."* That was an accurate description of
+  what the route did, and the route was wrong. **The screen and the server
+  agreed with each other about a behaviour nobody wanted**, so every static
+  check passed, the suite passed, and the only reader who could tell was
+  somebody holding both screens. That is a new shape for this file: not a
+  screen stricter than its route, nor looser — the two in step and both
+  wrong, which no assertion comparing them can see.
+
+  The browser suite had duly pinned it. `test:jobeditui` asserted *"and that
+  moving an agreed visit is done on the card"*, so the bug was held as firmly
+  as the fix would have been — **a test can pin the wrong answer as firmly as
+  the right one**, for the third time in this file, and the assertion was
+  rewritten to the new rule rather than loosened.
+
+  **NOBODY EDITS THE DATE ON A JOB A CREW HAS ACCEPTED "JUST AS A TARGET".**
+  There is no third meaning: the crew is booked and moving the date moves
+  them. So a date or time change now proposes that window.
+
+  **THROUGH THE REAL ROUTE, never a second insert beside it**, which is
+  065's recorded decision applied again: proposing carries the approval
+  check, `partiesFor`, the chain's turn order, the supersede and three schema
+  fallbacks, and a copy here would be a second set of rules with the one that
+  drifted being whichever door is used less. `asSelf` is the same relay the
+  auto-scheduler uses, and the test proves the gates came with it — an
+  unapproved request still gets nothing.
+
+  **ONLY WHEN THERE IS SOMEBODY BUT US TO ASK, which is a predicate rather
+  than a crew check.** `visitParties` always carries the hiring side on a 064
+  database, because proposing is agreeing for whoever proposed it — so a list
+  of just `manager` settles the moment it is written and tells nobody.
+  Proposing one of those would draw **"Confirmed. Agreed by everybody who has
+  to be there"** over a job with no crew on it, which is the screen-that-lies
+  rule pointed at the one line a contractor reads to decide whether to get in
+  the van. `othersMustAgree` is that question, and the discriminating row is a
+  **tenant's own report with nobody assigned**: a rule written as "has a crew"
+  asks nobody there and passes every other assertion.
+
+  **ACCEPTED, NOT MERELY ASSIGNED**, which `partiesFor` already says and which
+  only a fixture holding a **pending** work order can check — that row is the
+  whole reason it is in the seed.
+
+  **AND ONLY WHEN IT MOVED.** A save that resends the date it already had is
+  not a reschedule, and asking a crew to re-confirm a day they agreed to is
+  precisely the round trip 064 ordered the chain to avoid. The route had no
+  idea what the row said before, so it reads it first — through the same
+  column cascade the propose route uses, because a database behind the code
+  must lose the ask and never the edit. Two fixtures tell the rule from
+  "always propose": one that re-sends the stored date, and one that edits the
+  title alone.
+
+  **THE WINDOW SOMEBODY AGREED TO KEEPS ITS LENGTH.** A 2h15m slot moved to
+  the morning is still 2h15m, and an hour's default would quietly shorten
+  every appointment anybody reschedules. That arithmetic was written inside
+  `VisitForm` and is now `windowEnd` in `shared/schedule.js`, because the
+  server needs it too and two copies is two records of one fact.
+
+  **AND IT IS SAID ON THE REPLY RATHER THAN ASSUMED.** `rescheduled` carries
+  who was asked, or the refusal — the `engagedAsRecorded` rule: a screen that
+  cannot tell *nobody needed telling* from *the ask did not go* cannot offer
+  the one of those worth a second press. The edit itself stands either way,
+  because refusing it now would be a save that reports failure over a write
+  that happened. The browser then **re-reads the appointment list**, or the
+  manager's own card keeps the window the propose just superseded — the
+  stale-snapshot shape, on the one row that says when somebody is coming.
+
+  **AND UNDERNEATH IT, A PROPOSE THAT FAILED TOOK THE APPOINTMENT WITH IT.**
+  `POST /api/jobs/:id/visits` superseded every live visit **first** and then
+  inserted the new one, and the two are not a transaction. So an insert that
+  failed for any reason left the job with **no live visit at all**: the
+  appointment gone, and a refusal on screen that reads as nothing having
+  happened — which is exactly what the reported card looked like.
+
+  Reversed, the worst case is a stale row nothing reads: every reader takes
+  the newest live visit by `created_at DESC, rowid DESC`, and the new one is
+  the newest by construction. **A vanished appointment is a crew nobody told;
+  a superseded row that did not get the word is invisible.** Driven with a
+  trigger that refuses every INSERT on `visits` and leaves UPDATE alone, which
+  is the one way to make the second statement fail deterministically without a
+  broken schema.
+
+  Nine mutations fire, each on its own assertion — and **one of them did not
+  apply on the first attempt**, which is the lesson worth repeating: the patch
+  script that moved the supersede back above the insert threw on its own
+  anchor and the suite ran green against unmodified source. *Check the file
+  changed, not that the script exited*, for the second time in two changes.
+
+  **Still open, and the honest limit of this: `jobs.date` and the visit can
+  still disagree**, because the propose can refuse (an unapproved request) or
+  a party can decline, and the target date has already moved by then. That is
+  reported rather than hidden, and reconciling the two would mean deciding
+  which outranks the other — a product decision about what a target date is
+  for, not a patch.
+
 
 ## Working here
 

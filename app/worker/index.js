@@ -67,6 +67,10 @@ import { isAccess, accessFor, needsTenantConfirm, canAskTenant,
 // two-party thing.
 import { visitParties, waitingOn as visitWaitingOn,
   nextToAnswer, visitSettled } from "../shared/visitparty.js";
+// How long a proposed window is, and whether a date change has anybody to be
+// put to. Both live beside `workWhen` because the browser's propose form uses
+// the first and two copies of that arithmetic is two records of one fact.
+import { windowEnd, othersMustAgree } from "../shared/schedule.js";
 import { AUTO_TRIES, AUTO_START, AUTO_END, autoPickText, isTurnaroundKind,
   rankCandidates, slotFor, whyNotAuto } from "../shared/autopick.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
@@ -7706,16 +7710,6 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
   const mineNow = myLeg === "contractor" ? nowIso : null;
   const id = uid();
   try {
-    await c.env.DB.prepare(
-      // Including 'confirmed'. "Propose a different time" is exactly that:
-      // the time that was agreed is no longer the time, so leaving it live
-      // gave the job two current visits at once -- and the client takes
-      // whichever sorts first, so a tenant could be shown either the old
-      // agreed morning or the new proposal depending on the order two rows
-      // written in the same second came back in.
-      `UPDATE visits SET status = 'superseded'
-        WHERE job_id = ? AND status IN ('proposed', 'confirmed', 'declined', 'missed', 'happened')`
-    ).bind(jobId).run();
     // The combined verdict from one rule, rather than a second expression of
     // it written here: `visitSettled` is what every screen reads, so the row
     // and the screens cannot disagree about whether this is booked.
@@ -7766,6 +7760,26 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
       }
     }
     if (!wrote) throw new Error("no such column: visits");
+    // AND THE OLD ONE COMES DOWN ONLY NOW THAT THE NEW ONE IS THERE.
+    //
+    // This ran FIRST, and the two statements are not a transaction -- so an
+    // insert that failed for any reason left the job with NO live visit at
+    // all: the appointment gone, and a refusal on screen that reads as
+    // nothing having happened. Which is exactly what a contractor's card
+    // showing "Target date. No visit time has been agreed" looks like over a
+    // job that had a window on it an hour earlier.
+    //
+    // Reversed, the worst case is a stale row nothing reads: every reader
+    // takes the newest live visit by `created_at DESC, rowid DESC`, and the
+    // new one is the newest by construction. A vanished appointment is a
+    // crew nobody told; a superseded row that did not get the word is
+    // invisible. Including 'confirmed', because "propose a different time" is
+    // exactly that -- the time that was agreed is no longer the time.
+    await c.env.DB.prepare(
+      `UPDATE visits SET status = 'superseded'
+        WHERE job_id = ? AND id <> ?
+          AND status IN ('proposed', 'confirmed', 'declined', 'missed', 'happened')`
+    ).bind(jobId, id).run();
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;
@@ -8547,6 +8561,22 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
   // would answer 404 to a write that had already happened.
   if (!maySeeJob(c.get("auth"), id)) return c.json({ error: "job_not_found" }, 404);
   const b = await c.req.json();
+  // WHAT IT SAYS NOW, because a reschedule is a CHANGE and this route cannot
+  // tell one from a save that happened to resend the same date. Read through
+  // the same cascade the propose route uses, newest column first: a database
+  // behind the code loses the ability to work out who has to agree, which
+  // costs the ask -- it must not cost the edit.
+  const before = await (async () => {
+    for (const cols of ["access, access_user_id", "access", ""]) {
+      try {
+        return await c.env.DB.prepare(
+          `SELECT id, account_id, date, time, requested_by${cols ? ", " + cols : ""}
+             FROM jobs WHERE id = ? AND account_id = ?`
+        ).bind(id, accountId).first();
+      } catch (err) { if (!missingSchema(err)) throw err; }
+    }
+    return null;
+  })();
   const sets = [], vals = [];
   if (b.notes !== undefined) { sets.push("notes = ?"); vals.push(b.notes); }
   if (b.measurementDocs !== undefined) { sets.push("measurement_docs = ?"); vals.push(JSON.stringify(b.measurementDocs)); }
@@ -8574,9 +8604,16 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
   // THE DATE AND TIME SOMEBODY ASKED FOR. Validated in the shapes the visit
   // routes validate, so one screen cannot store a date the other refuses.
   //
-  // Deliberately NOT the appointment: a live window belongs to `visits` and is
-  // settled by everybody who has to be there, so writing this column does not
-  // move it and does not pretend to. Confirming a window is what writes both.
+  // AND MOVING IT IS A RESCHEDULE, which is the correction this route needed.
+  // It wrote these two columns and stopped -- so a manager who opened a job
+  // and changed its date moved the target and told NOBODY, and the crew's own
+  // card went on reading "Target date. No visit time has been agreed" over a
+  // date that had already moved. Reported with a screenshot of exactly that,
+  // and the form used to carry a sentence explaining the behaviour, which
+  // described the bug accurately rather than excusing it.
+  //
+  // Nobody edits the date on a job a crew has accepted "just as a target".
+  // See after the UPDATE for what is actually done about it.
   if (b.date !== undefined) {
     const d = String(b.date || "").trim();
     if (d && !DATE_RE.test(d)) return c.json({ error: "bad_date" }, 400);
@@ -8651,7 +8688,57 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
   // project manager cannot edit a job outside their list.
   if (!res.meta?.changes) return c.json({ error: "job_not_found" }, 404);
   await logActivity(c.env, accountId, userId, "job_edited", "Edited the job details");
-  return c.json({ ok: true });
+  // AND THE PEOPLE WHO HAVE TO BE THERE ARE ASKED AGAIN.
+  //
+  // THROUGH THE REAL ROUTE, never a second insert beside it, which is the
+  // decision 065's auto-scheduler already records: proposing carries the
+  // approval check, the parties, the chain's turn order, the supersede and
+  // three schema fallbacks, and a copy here would be a second set of rules
+  // with the one that drifted being whichever door is used less.
+  //
+  // ONLY WHEN THERE IS SOMEBODY BUT US TO ASK. `othersMustAgree` is that
+  // question: a crew who has accepted, or a tenant who has to be in. With
+  // nobody on the job the date is a target and saying so is the honest
+  // answer -- proposing one would draw "Confirmed. Agreed by everybody who
+  // has to be there" over work nobody is booked for.
+  //
+  // AND ONLY WHEN IT MOVED. A save that resends the same date is not a
+  // reschedule, and asking a crew to re-confirm a day they already agreed to
+  // is the round trip this whole chain is ordered to avoid.
+  const moved = (b.date !== undefined || b.time !== undefined)
+    && String(b.date ?? before?.date ?? "").trim()
+    && (String(b.date ?? before?.date ?? "").trim() !== String(before?.date || "")
+      || String(b.time ?? before?.time ?? "").trim() !== String(before?.time || ""));
+  let rescheduled = null;
+  if (moved && before) {
+    const parties = await partiesFor(c.env, before);
+    if (othersMustAgree(parties)) {
+      const date = String(b.date ?? before.date ?? "").trim();
+      const start = String(b.time ?? before.time ?? "").trim() || null;
+      // The window somebody already agreed to, so its LENGTH survives the
+      // move -- a 2h15m slot shifted to the afternoon is still 2h15m. Read
+      // off the live visit rather than reinvented, and `windowEnd` is the one
+      // rule the propose form uses for the same arithmetic.
+      const live = await c.env.DB.prepare(
+        `SELECT start_time, end_time FROM visits
+          WHERE job_id = ? AND status IN ('proposed','confirmed')
+          ORDER BY created_at DESC, rowid DESC LIMIT 1`).bind(id).first().catch(() => null);
+      const got = await asSelf(c, `/api/jobs/${id}/visits`, {
+        date, startTime: start,
+        endTime: start ? windowEnd(start, live?.start_time, live?.end_time) : null,
+      });
+      // SAID ON THE REPLY RATHER THAN ASSUMED, the rule `engagedAsRecorded`
+      // already follows: a screen that cannot tell "nobody needed telling"
+      // from "the ask did not go" cannot offer the one of those worth a
+      // second press. The edit itself stands either way -- the job really was
+      // saved, and refusing it now would be a save that reports failure over
+      // a write that happened.
+      rescheduled = got.status < 300
+        ? { asked: parties.filter((pp) => pp !== "manager"), status: got.body?.visit?.status || null }
+        : { error: got.body?.error || "propose_failed" };
+    }
+  }
+  return c.json({ ok: true, rescheduled });
 });
 
 // ---------------------------------------------------------------------------

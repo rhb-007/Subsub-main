@@ -78,7 +78,7 @@ import { ENGAGED_AS, engagedAs, isHandyman, engagedSeatLabel, jobHiresWord,
   ENGAGED_REFUSALS } from "../shared/engaged.js";
 import { handymanCapCheck, handymanCapText,
   HANDYMAN_GLOBAL_RULES } from "../shared/handycap.js";
-import { workWhen, scheduledOn, WHEN_KINDS } from "../shared/schedule.js";
+import { workWhen, scheduledOn, WHEN_KINDS, windowEnd } from "../shared/schedule.js";
 import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
   mayChooseAccess, maySetAccess, accessTenant } from "../shared/access.js";
 import { visitParties, waitingOn as visitWaitingOn, partyText as partyWords,
@@ -2904,7 +2904,7 @@ export default function SubSub() {
       materialOther: f.materialOther || "", materialsPaidBy: f.materialsPaidBy,
       measurementDocs: f.measurementDocs,
     };
-    await api.patchJob(id, body);
+    const out = await api.patchJob(id, body);
     setJobs((js) => js.map((j) => j.id !== id ? j : {
       ...j, ...body,
       // The line a contractor reads is composed by the SERVER from the
@@ -2914,6 +2914,30 @@ export default function SubSub() {
       materialSource: j.materialSource,
       updatedAt: new Date().toISOString() }));
     logEvent("job_edited", `Edited ${f.title}`);
+    // AND IF MOVING THE DATE ASKED ANYBODY, RE-READ THE APPOINTMENT.
+    //
+    // The visit the card draws lives in its own list, so without this the
+    // manager's own screen keeps the window they just superseded -- the
+    // stale-snapshot shape, on the one row that says when somebody is coming.
+    // Re-read rather than patched in, because the status is the chain's
+    // answer (`visitSettled` over the parties) and a locally invented one
+    // disagrees the moment a crew is or is not a party.
+    const rs = out?.rescheduled;
+    if (rs && !rs.error) {
+      const vs = await api.listVisits().catch(() => null);
+      if (Array.isArray(vs)) setVisits(vs);
+      // Named in the feed, because "we moved it and asked the crew" is a
+      // different event from "we corrected a postcode" and only one of them
+      // leaves somebody waiting on an answer.
+      logEvent("visit_proposed",
+        `Moved ${f.title} to ${niceDay(f.date)} — asked ${partyWords(rs.asked) || "everybody who has to be there"} to confirm`);
+    } else if (rs?.error) {
+      // SAID, NOT SWALLOWED. The edit landed; the ask did not. Somebody who
+      // is not told that believes a crew has been asked about a date they
+      // have never seen, which is worse than the save having failed outright.
+      logEvent("job_edited",
+        `Saved ${f.title}, but couldn't ask anybody to confirm the new date — propose a time on the card`);
+    }
     setEditingJob(null);
   };
 
@@ -13212,17 +13236,12 @@ function VisitForm({ jobId, startDate = "", forWhom, replacing = false, placehol
   //
   // Clamped to the end of the day, because a window running past midnight is
   // a window the server refuses and two dates in one row.
+  // Through `windowEnd`, because the server works a window out too now -- a
+  // date change on the edit form proposes one -- and two copies of this
+  // arithmetic is two records of one fact.
   const setStart = (startTime) => setF((st) => {
-    const mins = (hhmm) => {
-      const [h, m] = String(hhmm || "").split(":").map(Number);
-      return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
-    };
-    const from = mins(startTime), was = mins(st.startTime), had = mins(st.endTime);
-    if (from === null) return { ...st, startTime };
-    const len = was !== null && had !== null && had > was ? had - was : 60;
-    const to = Math.min(from + len, 23 * 60 + 59);
-    const hhmm = `${String(Math.floor(to / 60)).padStart(2, "0")}:${String(to % 60).padStart(2, "0")}`;
-    return { ...st, startTime, endTime: hhmm };
+    const to = windowEnd(startTime, st.startTime, st.endTime);
+    return to === null ? { ...st, startTime } : { ...st, startTime, endTime: to };
   });
   const send = async () => {
     if (!f.date) { setErr("Pick a date."); return; }
@@ -21138,13 +21157,27 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     <div className="form">
       <h2>{edit ? "Edit job" : asking ? "Request work" : "Create job"}</h2>
       <p className="form-sub">{edit
-        /* WHAT EDITING DOES NOT DO, said before anything is typed. The work
-           orders already issued keep their price and their company, and the
-           appointment is settled by everybody who has to be there -- so
-           changing the date here is changing what was ASKED for, not moving
-           the booking. A form that let somebody believe otherwise would have
-           them edit a date and expect a crew to know. */
-        ? "Work orders already issued keep their price and their contractor. Changing the date here changes the date on the job — to move an agreed visit, propose a new time on the card."
+        /* WHAT EDITING DOES AND DOES NOT DO, said before anything is typed.
+           The work orders keep their price and their company -- and the date
+           is the one field that reaches past this form, because moving it on
+           a job somebody has accepted asks them again.
+
+           The previous sentence here said the opposite, in so many words:
+           *"changing the date here changes the date on the job -- to move an
+           agreed visit, propose a new time on the card."* It was an accurate
+           description of what the route did and the route was wrong, which is
+           why it went unnoticed: the screen and the server agreed with each
+           other about a behaviour nobody wanted. Reported with a screenshot
+           of a crew's card reading "Target date. No visit time has been
+           agreed" over a date the manager had already moved.
+
+           CONDITIONAL RATHER THAN PREDICTED. Whether anybody is asked depends
+           on an accepted work order and on whether a tenant has to be in,
+           which is `partiesFor` on the server -- so this says what is true
+           either way and the confirmation after the save says which happened.
+           A screen deriving it would be a second opinion that goes wrong in
+           whichever direction nobody tested. */
+        ? "Work orders already issued keep their price and their contractor. If anybody has agreed to a time for this job, changing the date asks them again."
         : asking
           ? `This goes to ${picked?.managedBy || "whoever manages the building"}. They price it and arrange the contractors — nothing is booked until they approve it.`
           : "Enter the project once. Work orders are generated per trade when you assign contractors."}</p>
