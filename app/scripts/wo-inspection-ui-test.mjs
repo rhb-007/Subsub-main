@@ -109,7 +109,14 @@ const PNG = Buffer.from(
   "hex");
 
 const web = serveApp({ dir: OUT, port: WEB });
+// EVERY ASK FOR THE INSPECTION, counted. The paragraph is drawn in one place
+// and the rooms in another, so the thing that could go wrong without anything
+// looking wrong is two components asking for one record -- two requests, two
+// chances to disagree, and the duplicate-state trap this project already
+// refuses for the compliance pack panel. Only the wire can see it.
+const asks = [];
 const api = serveApi({ port: API, routes: (path) => {
+  if (/^\/api\/work-orders\/[^/]+\/inspection$/.test(path)) asks.push(path);
   if (path.startsWith("/api/account-by-subdomain/")) return [200, PM];
   if (path === "/api/account") return [200, PM];
   if (path === "/api/subs") return [200, [SUB]];
@@ -170,19 +177,31 @@ const closeModal = async (page) => {
 const panel = (page) => page.evaluate(() => {
   const el = document.querySelector(".woi");
   if (!el) return null;
-  const sum = el.querySelector(".woi-sum");
+  // THE SUMMARY IS NO LONGER INSIDE THE ROOMS BLOCK. It leads the modal,
+  // above the work order document, which is what *"summary should be at the
+  // top of the page / pictures of the work order"* asked for -- so it is
+  // looked for at modal level and its position is measured against the
+  // DOCUMENT as well as against the rooms.
+  const sum = document.querySelector(".modal .woi-lede");
+  const doc = document.querySelector(".modal .wo-doc");
   const room = el.querySelector(".woi-room");
   const cs = sum ? getComputedStyle(sum) : null;
   return {
     head: (el.querySelector(".woi-head")?.innerText || "").replace(/\s+/g, " ").trim(),
+    // There must be exactly one of it on screen: two copies of one paragraph
+    // is how somebody concludes there are two of them, and the one further
+    // down is the one that goes stale.
+    sums: document.querySelectorAll(".modal .woi-sumt").length,
     sum: sum ? {
       text: (sum.querySelector(".woi-sumt")?.innerText || "").trim(),
       why: (sum.querySelector(".woi-sumwhy")?.innerText || "").replace(/\s+/g, " ").trim(),
+      lede: (sum.querySelector(".woi-ledeh")?.innerText || "").replace(/\s+/g, " ").trim(),
       stale: sum.classList.contains("is-stale"),
       rule: cs.borderLeftColor,
       // SOURCE ORDER IS NOT SCREEN ORDER, and the whole claim is that this is
-      // read before the rooms. Measured rather than inferred from the JSX.
+      // read first. Measured rather than inferred from the JSX.
       top: Math.round(sum.getBoundingClientRect().top),
+      docTop: doc ? Math.round(doc.getBoundingClientRect().top) : null,
       roomTop: room ? Math.round(room.getBoundingClientRect().top) : null,
     } : null,
     rooms: [...el.querySelectorAll(".woi-room")].map((r) => ({
@@ -270,6 +289,24 @@ try {
     // summarises has saved nobody any reading.
     t.ck("it sits above the room-by-room list",
       sum && sum.roomTop !== null && sum.top < sum.roomTop, `${sum?.top} vs ${sum?.roomTop}`);
+    // AND ABOVE THE DOCUMENT ITSELF, which is the half that changed. Somebody
+    // opening a work order is about to put a price on it, and what the work
+    // IS belongs before the paperwork -- *"summary should be at the top of
+    // the page"*. Only the drawn rectangle can see this: the JSX moving is
+    // not the same as the paragraph landing above anything.
+    t.ck("and above the work order document, at the top of the page",
+      sum && sum.docTop !== null && sum.top < sum.docTop, `${sum?.top} vs ${sum?.docTop}`);
+    // ONE COPY. It used to sit inside the rooms block; moving it without
+    // removing it there would print the same paragraph twice on one screen.
+    t.ck("and there is exactly one of it on screen", p1?.sums === 1, String(p1?.sums));
+    // AND IT WAS ASKED FOR ONCE. Two mounts of one component would be two
+    // fetches of one thing; the owner of the data is the modal and both
+    // pieces read it.
+    t.ck("the inspection was fetched once for the modal, not once per piece",
+      asks.filter((a) => a.includes("WO-1")).length === 1, JSON.stringify(asks));
+    // A bare paragraph as the first thing in a modal reads as a note somebody
+    // left rather than as what the work is, so it carries its own title.
+    t.ck("it says what it is", /inspection found/i.test(sum?.lede || ""), sum?.lede);
     t.ck("and a current one is not marked stale", sum?.stale === false, String(sum?.stale));
   }
 

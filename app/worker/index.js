@@ -9075,9 +9075,68 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
     `Issued ${woNumber} to ${await companyName(c.env.DB, companyId)} · ${trade}`);
   await touchJob(c.env, jobId);
   await notifyTenant(c, jobId, autoScheduled ? "booked" : "arranging");
+  const summarised = await summariseForWorkOrder(c, { jobId, accountId, userId });
   return c.json({ id, woNumber, status: autoScheduled ? "accepted" : "pending",
-    notified, capWarning }, 201);
+    notified, capWarning, summarised }, 201);
 });
+
+// THE SUMMARY THE WORK ORDER CARRIES, WRITTEN WHEN THE WORK ORDER IS ISSUED.
+//
+// Asked for as *"when an inspection follow up creates a job and the job turns
+// into a work order, the summary creation should happen automatically when
+// added to the work order with all of the other details"*.
+//
+// 063 writes it when the JOB is raised, which is the right moment and is not
+// the only one: a raise whose call failed, a job raised before 063 shipped, a
+// job raised from an unfinished inspection that had nothing to combine yet --
+// every one of those reaches a contractor with the rooms and no paragraph, and
+// nothing retried. The person who has to read it is the one who cannot ask for
+// it, so the gap was permanent from their side.
+//
+// ISSUING IS A PRESS THE ACCOUNT MAKES, which is what makes this allowed where
+// 063 refuses the contractor's first read. That entry's three objections were:
+// it spends the account's money on a press they did not make, it fails at the
+// moment somebody needs it with nothing to fall back on, and three companies
+// on one job pay for three answers. Issuing answers all three -- a person
+// pressed Assign, there is a fallback (the rooms, which are the record), and
+// it writes only when there is nothing there, so the second and third work
+// orders on one job cost nothing.
+//
+// A STALE ONE IS NEVER REWRITTEN, which is 063's rule kept rather than
+// weakened: the notes can move on after a job is raised, and a paragraph
+// another company may already be pricing from must not change under them. The
+// screen says it is behind and the rooms beneath it are always live. Only an
+// ABSENT summary is written here.
+//
+// IT NEVER BLOCKS THE ISSUE, for the reason the raise does not: by the time
+// this runs the work order exists, the contractor has been told, and a 500
+// over a paragraph would report failure for a job that is on somebody's
+// screen. Said on the reply rather than inferred from a null, so a caller can
+// tell "there was nothing to summarise" from "the call failed".
+async function summariseForWorkOrder(c, { jobId, accountId, userId }) {
+  try {
+    const insp = await c.env.DB.prepare(
+      `SELECT * FROM inspections WHERE job_id = ? AND account_id = ? LIMIT 1`
+    ).bind(jobId, accountId).first();
+    if (!insp) return null;
+    const had = await inspectionSummaryRow(c.env.DB, insp.id);
+    if (had) return { wrote: false, reason: "already" };
+    // `drafts: false`, which is not a choice about what the model reads --
+    // `summarySource` and `countComments` both go through
+    // `contractorInspectionShape`, which drops them either way. It says that
+    // this path never reads one: the paragraph it writes is for a contractor,
+    // and a sentence nobody kept is the team's working note.
+    const rooms = await inspectionRooms(c.env.DB, insp.id, { drafts: false });
+    const made = await writeInspectionSummary(c, { accountId, userId }, insp, rooms);
+    return made.ok ? { wrote: true } : { wrote: false, reason: made.error || "failed" };
+  } catch (err) {
+    // Deliberately wide, and for the reason 063 states about the raise: the
+    // work order already exists and the contractor has already been told, so
+    // a throw here would answer 500 to something that has happened.
+    console.warn("[wo-summary] not written:", err?.message || err);
+    return { wrote: false, reason: "failed" };
+  }
+}
 
 // Sending somebody out, without waiting for a manager to wake up.
 //

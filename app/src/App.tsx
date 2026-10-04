@@ -2740,6 +2740,18 @@ export default function SubSub() {
     () => allJobs.filter((j) => j.accountId === account.id || j.atOwnedProperty || j.inherited),
     [allJobs, account.id]);
 
+  // THE INSPECTION BEHIND THE WORK ORDER ON SCREEN, fetched once here because
+  // it is drawn in two places: the summary leads the modal and the rooms sit
+  // below the document. Hoisted rather than mounted twice -- two components
+  // asking for one thing is two requests and two chances for them to
+  // disagree, which is the trap this file already refuses for the compliance
+  // pack. Called unconditionally with a null id when no work order is open,
+  // because a hook inside a branch is not a hook.
+  const viewWOAssign = viewWO
+    ? (jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a
+    : null;
+  const woInspection = useWoInspection(viewWOAssign?.id || null);
+
   // Users visible in THIS account, with their role in it.
   const accountUsers = useMemo(() => memberships
     .filter((m) => m.accountId === account.id)
@@ -7146,8 +7158,16 @@ export default function SubSub() {
         </Modal>
       )}
       {viewWO && <Modal onClose={() => setViewWO(null)} wide>
+        {/* THE SUMMARY LEADS, above the document. Asked for as *"summary
+            should be at the top of the page / pictures of the work order"*:
+            it is the one thing a list of eleven rooms cannot say about
+            itself, and the person opening this is about to put a price on
+            it. The rooms and the photographs stay below the document --
+            they are the record, and a unit's worth of pictures above it
+            would bury the work order itself. */}
+        <WoInspectionSummary data={woInspection} />
         <WorkOrderDoc job={viewWO.job} trade={viewWO.trade} cos={cosFor(changeOrders, viewWO.job.id, viewWO.trade)}
-          a={(jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a}
+          a={viewWOAssign}
           canUpload={role !== "contractor"} brand={brand}
           onUploadSigned={(file) => uploadSignedWO(viewWO.job.id, viewWO.trade, file)}
           onClose={() => setViewWO(null)} />
@@ -7157,10 +7177,9 @@ export default function SubSub() {
             nothing at all on a job no inspection raised, which is most of
             them. Both sides of the modal get it: the hiring account because
             the inspection is theirs, the holder because the work is. */}
-        {(() => {
-          const a = (jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a;
-          return a?.id ? <JobInspection woId={a.id} /> : null;
-        })()}
+        {viewWOAssign?.id
+          ? <JobInspection woId={viewWOAssign.id} data={woInspection} />
+          : null}
         {/* Below the document, not inside it: the work order is a thing you
             print and this is a thing you work. Both sides open the same
             panel and are offered different buttons, which is the two-party
@@ -12679,22 +12698,73 @@ function ReportPhoto({ jobId, photo, onOpen, onLoaded, load }) {
 // same line `inspectionJobScope` draws. The captions come too and the model's
 // unkept drafts do not -- a sentence nobody kept is the team's working note
 // and would read here as a finding somebody made.
-function JobInspection({ woId }) {
+// THE FETCH, HOISTED, BECAUSE THE ANSWER IS DRAWN IN TWO PLACES AND MUST NOT
+// BE ASKED FOR TWICE.
+//
+// Asked for as *"summary should be at the top of the page / pictures of the
+// work order"*. The paragraph is the one thing a list of eleven rooms cannot
+// say about itself, so it leads the document; the rooms and the photographs
+// are the record and stay beneath it, because putting them above would bury
+// the work order under a unit's worth of pictures.
+//
+// Two mounts of one component would be two fetches of one thing -- the
+// duplicate-state trap this project already refuses for the compliance pack
+// panel -- so the owner of the data is the modal and both pieces read it.
+function useWoInspection(woId) {
   // undefined is still arriving, null is "there is no inspection behind this
   // work order", which is the common case and draws nothing. Two states rather
   // than one, because a spinner that never resolves and a job with no
   // inspection look identical from a single falsy value.
   const [data, setData] = useState(undefined);
-  const [shots, setShots] = useState({});
-  const [lightbox, setLightbox] = useState(null);
   useEffect(() => {
+    if (!woId) { setData(null); return undefined; }
     let live = true;
-    setData(undefined); setShots({});
+    setData(undefined);
     api.woInspection(woId)
       .then((d) => { if (live) setData(d && (d.rooms || []).length ? d : null); })
       .catch((e) => { if (live) { if (e?.status !== 404) console.warn("[wo-inspection]", e); setData(null); } });
     return () => { live = false; };
   }, [woId]);
+  return data;
+}
+
+// WHAT THE JOB IS, TAKEN TOGETHER -- above the document, because somebody
+// about to price this reads what the work is before the paperwork.
+//
+// IT SAYS IT WAS PUT TOGETHER AUTOMATICALLY, which is not modesty. The reader
+// is about to put a number on it, and a paragraph read as the hiring
+// account's own instruction is a paragraph they will quote back -- the same
+// reason an unkept photo draft is drawn dashed rather than silently adopted.
+// And when the notes have moved on since it was written it says THAT, because
+// a stale summary drawn as current over a list that is live is worse than no
+// summary at all.
+function WoInspectionSummary({ data }) {
+  if (!data?.summary) return null;
+  const K = INSPECTION_KINDS[data.kind];
+  return (
+    <div className={`woi-lede${data.summary.stale ? " is-stale" : ""}`}>
+      <p className="woi-ledeh">
+        <ClipboardList size={13} />
+        <span>What the inspection found{K ? ` · ${K.label.toLowerCase()}` : ""}
+          {data.unit ? ` · unit ${data.unit}` : ""}</span>
+      </p>
+      <p className="woi-sumt">{data.summary.text}</p>
+      <p className="woi-sumwhy">
+        <Sparkles size={11} />
+        {data.summary.stale
+          ? "Put together automatically from the notes. They have changed since — the rooms below are the current ones."
+          : "Put together automatically from the notes below, which are the record."}
+      </p>
+    </div>
+  );
+}
+
+function JobInspection({ woId, data }) {
+  const [shots, setShots] = useState({});
+  const [lightbox, setLightbox] = useState(null);
+  // The photo state is keyed on the work order, so a different one opened
+  // into the same modal must not draw the last one's pictures.
+  useEffect(() => { setShots({}); setLightbox(null); }, [woId]);
   if (!data) return null;
   // One flat set across every room, so the lightbox walks the whole unit in
   // the order it was walked rather than stopping at the end of a room -- the
@@ -12710,28 +12780,10 @@ function JobInspection({ woId }) {
         <span>{K ? K.label : "Inspection"}{data.unit ? ` — unit ${data.unit}` : ""}
           {data.inspectedOn ? ` · walked ${data.inspectedOn}` : ""}</span>
       </p>
-      {/* WHAT THE JOB IS, TAKEN TOGETHER. The rooms below are the record and
-          this is the one thing a list cannot say about itself: that eleven
-          lines about scuffing are one repaint across four rooms plus a tap.
-
-          IT SAYS IT WAS PUT TOGETHER AUTOMATICALLY, which is not modesty. The
-          reader is about to price this, and a paragraph read as the hiring
-          account's own instruction is a paragraph they will quote back --
-          the same reason an unkept photo draft is drawn dashed rather than
-          silently adopted. And when the notes have moved on since it was
-          written it says THAT, because a stale summary drawn as current over
-          a list that is live is worse than no summary. */}
-      {data.summary && (
-        <div className={`woi-sum${data.summary.stale ? " is-stale" : ""}`}>
-          <p className="woi-sumt">{data.summary.text}</p>
-          <p className="woi-sumwhy">
-            <Sparkles size={11} />
-            {data.summary.stale
-              ? "Put together automatically from the notes. They have changed since — the rooms below are the current ones."
-              : "Put together automatically from the notes below, which are the record."}
-          </p>
-        </div>
-      )}
+      {/* The summary is NOT drawn again here. It leads the modal, above the
+          document -- `WoInspectionSummary`, off the same fetch. Two copies of
+          one paragraph on one screen is how somebody concludes there are two
+          of them, and the one further down is the one that goes stale. */}
       {data.rooms.map((r) => (
         <div key={r.id} className="woi-room">
           <div className="woi-rhead">
@@ -33098,6 +33150,18 @@ strong.insp-name{background:none;border:0;padding:0}
    behind the list under it. */
 .woi-sum{margin:0 0 14px;padding:2px 0 2px 11px;border-left:3px solid var(--brand)}
 .woi-sum.is-stale{border-left-color:var(--amber)}
+/* AND AT THE TOP OF THE MODAL, which is where it is now drawn: above the
+   document rather than above the rooms. It leads a page rather than a list,
+   so it gets a surface of its own and the title line the rooms block used to
+   carry -- a bare paragraph as the first thing in a modal reads as a note
+   somebody left rather than as what the work is. */
+.woi-lede{margin:0 0 16px;padding:12px 14px;border-radius:12px;background:var(--paper);
+  border-left:3px solid var(--brand)}
+.woi-lede.is-stale{border-left-color:var(--amber)}
+.woi-ledeh{display:flex;align-items:center;gap:6px;margin:0 0 7px;font-size:11.5px;
+  font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft)}
+.woi-ledeh > svg{flex:none}
+.woi-lede .woi-sumt{font-size:14.5px}
 .woi-sumt{margin:0;font-size:13.5px;line-height:1.55;color:var(--ink)}
 .woi-sumwhy{display:flex;align-items:flex-start;gap:5px;margin:6px 0 0;
   font-size:11px;line-height:1.45;color:var(--ink-soft)}

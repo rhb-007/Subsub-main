@@ -88,10 +88,15 @@ const seed = () => {
       ('u_mgr','Chris Lane','chris@soundpm.test'),
       ('u_own','Marion Oakes','marion@oakes.test'),
       ('u_sub','Juan Soto','juan@pacific.test');
-    INSERT INTO companies(id,company,contact,email,state) VALUES
-      ('cmp_pac','Pacific apartment maintenance','Juan Soto','juan@pacific.test','WA');
-    INSERT INTO engagements(id,account_id,company_id,status,categories) VALUES
-      ('en_pac','acc_pm','cmp_pac','active','["plumbing","painting"]');
+    -- Documents on file and verified, which is what the assign route gates
+    -- on. Without them the issue answers documents_incomplete and the summary
+    -- block below would be testing the document gate instead.
+    -- (No backticks in here: this seed is a template literal.)
+    INSERT INTO companies(id,company,contact,email,state,insurance,bond,contract,w9) VALUES
+      ('cmp_pac','Pacific apartment maintenance','Juan Soto','juan@pacific.test','WA',1,1,1,1);
+    INSERT INTO engagements(id,account_id,company_id,status,categories,doc_review) VALUES
+      ('en_pac','acc_pm','cmp_pac','active','["plumbing","painting","roofing"]',
+        '{"insurance":{"status":"verified"},"bond":{"status":"verified"},"contract":{"status":"verified"},"w9":{"status":"verified"}}');
     INSERT INTO properties(id,account_id,name,address,city,state,zip,owner_account_id) VALUES
       ('prop_1','acc_pm','Press Apartments','1620 Belmont','Seattle','WA','98122','acc_pm');
     INSERT INTO memberships(id,user_id,account_id,role,company_id,unit) VALUES
@@ -273,6 +278,131 @@ try {
 
     const act = db.prepare(`SELECT * FROM activity WHERE kind = 'inspection_summary'`).get();
     ck("the trail records it", !!act && /2 flagged room/.test(act.text), String(act?.text));
+  }
+
+  console.log("\n-- and issuing the work order writes one if the raise did not --");
+  {
+    // THE GAP THIS CLOSES. 063 writes the paragraph when the JOB is raised,
+    // which is the right moment and is not the only one: a raise whose call
+    // failed, a job raised before 063 shipped, a job raised from a walk that
+    // had nothing to combine yet -- every one of those reaches a contractor
+    // with the rooms and no paragraph, and nothing retried. The person who
+    // has to read it is the one who cannot ask for it.
+    const { db, env } = seed();
+    // A raise that produced nothing, which is the state the fix is for.
+    resetStub(() => new Response(JSON.stringify({ error: { type: "overloaded_error", message: "slow" } }),
+      { status: 529, headers: { "Content-Type": "application/json" } }));
+    const [, raised] = await json(await raise(env));
+    ck("the raise wrote nothing", !stored(db) && raised.summaryError === "ai_unavailable",
+      JSON.stringify(raised.summaryError));
+
+    resetStub();
+    const [s, b] = await json(await call(env, `/api/jobs/${raised.jobId}/assign`,
+      { trade: "painting", companyId: "cmp_pac", value: "400" }));
+    ck("the work order is issued", s === 201 && !!b.woNumber, `${s} ${JSON.stringify(b).slice(0, 140)}`);
+    ck("and the summary was written on the way", b.summarised?.wrote === true,
+      JSON.stringify(b.summarised));
+    ck("exactly one call went out", sent.length === 1, String(sent.length));
+    const row = stored(db);
+    ck("it is stored against the inspection", row?.summary === PARA, String(row?.summary));
+    // THE SAME REDACTION, on this door too. The shape is where the rule
+    // lives, and a second door that reached past it would be a way round it.
+    // Read through, because this block exists to catch the call NOT going
+    // out -- and indexing into an empty list throws on exactly that case,
+    // taking the assertions after it down with it.
+    const asked = JSON.stringify(sent[0]?.body?.messages || []);
+    ck("the drafts were not sent", !asked.includes("Scuffing to the painted wall"), "");
+    ck("nor the tenant's name", !asked.includes("Threeby"), "");
+  }
+  {
+    // A SECOND WORK ORDER COSTS NOTHING. 063's third objection to writing this
+    // on a read was that three companies on one job would pay for three
+    // answers to one question -- so this writes only when there is nothing
+    // there, and the second issue spends no money at all.
+    const { db, env } = seed();
+    resetStub();
+    const [, raised] = await json(await raise(env));
+    ck("the raise wrote one", !!stored(db) && sent.length === 1, String(sent.length));
+    const before = stored(db)?.written_at;
+    await call(env, `/api/jobs/${raised.jobId}/assign`,
+      { trade: "painting", companyId: "cmp_pac", value: "400" });
+    const [, second] = await json(await call(env, `/api/jobs/${raised.jobId}/assign`,
+      { trade: "plumbing", companyId: "cmp_pac", value: "300" }));
+    ck("neither issue asked again", sent.length === 1, String(sent.length));
+    ck("and says why it did not", second.summarised?.reason === "already",
+      JSON.stringify(second.summarised));
+    // A STALE ONE IS NEVER REWRITTEN EITHER, which is 063's rule kept rather
+    // than weakened: another company may already be pricing from it, and the
+    // screen says it is behind. The notes move on, and the stored paragraph
+    // does not.
+    db.prepare(`UPDATE inspection_rooms SET note = 'Now something else entirely' WHERE id = 'r_bath'`).run();
+    const [, third] = await json(await call(env, `/api/jobs/${raised.jobId}/assign`,
+      { trade: "roofing", companyId: "cmp_pac", value: "200" }));
+    ck("a stale summary is left alone", sent.length === 1 && third.summarised?.reason === "already",
+      `${sent.length} ${JSON.stringify(third.summarised)}`);
+    ck("and the stored one is untouched", stored(db)?.written_at === before, String(stored(db)?.written_at));
+  }
+  {
+    // AND IT NEVER BLOCKS THE ISSUE, for the reason the raise does not: by
+    // the time it runs the work order exists and the contractor has been
+    // told, so a 500 over a paragraph reports failure for work that is on
+    // somebody's screen.
+    const { db, env } = seed();
+    resetStub(() => new Response(JSON.stringify({ error: { type: "overloaded_error", message: "slow" } }),
+      { status: 529, headers: { "Content-Type": "application/json" } }));
+    const [, raised] = await json(await raise(env));
+    const [s, b] = await json(await call(env, `/api/jobs/${raised.jobId}/assign`,
+      { trade: "painting", companyId: "cmp_pac", value: "400" }));
+    ck("the work order is still issued", s === 201 && !!b.woNumber, `${s} ${b.woNumber}`);
+    ck("the row is really there",
+      !!db.prepare(`SELECT 1 FROM work_orders WHERE job_id = ?`).get(String(raised.jobId || "-")));
+    ck("and the failure is named rather than claimed as a write",
+      b.summarised?.wrote === false && b.summarised?.reason === "ai_unavailable",
+      JSON.stringify(b.summarised));
+  }
+  {
+    // AND A THROW IS CAUGHT TOO, which the branch above cannot reach:
+    // `writeInspectionSummary` answers a refused provider call with an error
+    // rather than by throwing, so every failure it reports comes back the
+    // tidy way. What gets past it is the database -- a read or a write that
+    // is not a missing table -- and only a seed that breaks one can tell the
+    // outer catch from no catch at all.
+    const { db, env } = seed();
+    resetStub();
+    const [, raised] = await json(await raise(env, "ins_bare",
+      { trades: ["painting"], date: "2026-10-09" }));
+    // `ins_bare` has a flagged room with nothing written on it, so the raise
+    // refuses with `no_comments` and leaves nothing stored -- the state this
+    // whole block is about, arrived at honestly.
+    ck("the bare walk raised a job and no summary", !!raised.jobId && !stored(db, "ins_bare"),
+      `${raised.jobId} ${raised.summaryError}`);
+    // Now make the summary table itself unwritable in a way `missingSchema`
+    // does not recognise: a column the INSERT names, with a type it cannot
+    // take. Dropping the table would be caught and reported as a migration.
+    db.exec(`DROP TABLE inspection_summaries;
+      CREATE TABLE inspection_summaries (
+        inspection_id TEXT PRIMARY KEY,
+        summary TEXT NOT NULL CHECK (summary = 'nothing will ever equal this'),
+        source TEXT NOT NULL, model TEXT, written_at TEXT, written_by TEXT)`);
+    db.prepare(`UPDATE inspection_rooms SET note = 'Cracked tile by the door' WHERE id = 'r_bare'`).run();
+    const [s2, b2] = await json(await call(env, `/api/jobs/${raised.jobId}/assign`,
+      { trade: "painting", companyId: "cmp_pac", value: "400" }));
+    ck("a throw under it still issues the work order", s2 === 201 && !!b2.woNumber,
+      `${s2} ${JSON.stringify(b2).slice(0, 120)}`);
+    ck("and is reported rather than swallowed as a write",
+      b2.summarised?.wrote === false, JSON.stringify(b2.summarised));
+  }
+  {
+    // A JOB WITH NO INSPECTION BEHIND IT ASKS NOTHING, which is most jobs.
+    const { db, env } = seed();
+    db.exec(`INSERT INTO jobs(id,account_id,property_id,title,status,trades,approved_at)
+      VALUES ('j_plain','acc_pm','prop_1','Ordinary repair','active','["painting"]','2026-01-01')`);
+    resetStub();
+    const [s, b] = await json(await call(env, "/api/jobs/j_plain/assign",
+      { trade: "painting", companyId: "cmp_pac", value: "400" }));
+    ck("it issues", s === 201, String(s));
+    ck("nothing was asked", sent.length === 0, String(sent.length));
+    ck("and the reply says nothing about a summary", b.summarised === null, JSON.stringify(b.summarised));
   }
 
   console.log("\n-- and never blocks the raise --");

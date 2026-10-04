@@ -8700,6 +8700,84 @@ refactor.
   stylesheet's template literal. Caught by `npm run lint` and by `test:css`,
   which now runs its static half anywhere, one change after that was fixed.
 
+- **THE SUMMARY IS WRITTEN WHEN THE WORK ORDER IS ISSUED TOO, AND IT LEADS THE
+  PAGE RATHER THAN THE LIST.** Asked for as *"when an inspection follow up
+  creates a job and the job turns into a work order, the summary creation
+  should happen automatically when added to the work order with all of the
+  other details. Summary should be at the top of the page / pictures of the
+  work order."*
+
+  **063 WRITES IT AT RAISE TIME, WHICH IS THE RIGHT MOMENT AND IS NOT THE ONLY
+  ONE.** A raise whose call failed, a job raised before 063 shipped, a job
+  raised from a walk that had nothing to combine yet — every one of those
+  reaches a contractor with the rooms and no paragraph, and **nothing
+  retried**. The person who has to read it is the one person who cannot ask
+  for it, so from their side the gap was permanent.
+
+  **ISSUING IS A PRESS THE ACCOUNT MAKES, which is what makes this allowed
+  where 063 refuses the contractor's first read.** That entry's three
+  objections were: it spends the account's money on a press they did not make,
+  it fails at the moment somebody needs it with nothing to fall back on, and
+  three companies on one job pay for three answers. Issuing answers all three
+  — a person pressed Assign, the rooms are the fallback and are the record,
+  and it writes **only when there is nothing there**, so the second and third
+  work orders on one job cost nothing. The mutation that proves the last one
+  rewrites on every issue and fires four assertions.
+
+  **A STALE ONE IS NEVER REWRITTEN, which is 063's rule kept rather than
+  weakened.** The notes can move on after a job is raised, and a paragraph
+  another company may already be pricing from must not change under them. The
+  screen says it is behind and the rooms beneath it are always live.
+
+  **IT NEVER BLOCKS THE ISSUE**, for the reason the raise does not: by the
+  time it runs the work order exists and the contractor has been told, so a
+  500 over a paragraph reports failure for work that is already on somebody's
+  screen. Said on the reply rather than inferred from a null, so a caller can
+  tell *there was nothing to summarise* from *the call failed*.
+
+  **AND THE CATCH NEEDED ITS OWN SEED, because the obvious fixture cannot
+  reach it.** `writeInspectionSummary` answers a refused provider call with an
+  error rather than by throwing, so every failure it reports comes back the
+  tidy way and the outer catch changes nothing — it survived deletion. What
+  gets past it is the **database**, so the fixture breaks the summary table
+  with a CHECK no row can satisfy, which `missingSchema` does not recognise
+  and which therefore throws. Without that seed the catch is a guard nothing
+  can tell from no guard at all.
+
+  **AND THE PARAGRAPH MOVED TO THE TOP OF THE MODAL, above the document.**
+  It already sat above the rooms it summarises — what it did not do is lead
+  the page. Somebody opening a work order is about to put a price on it, and
+  what the work **is** belongs before the paperwork. The rooms and the
+  photographs stay below the document: they are the record, and a unit's worth
+  of pictures above it would bury the work order itself.
+
+  **ONE FETCH, TWO PLACES, WHICH IS THE PART THAT WOULD HAVE GONE WRONG
+  QUIETLY.** Two mounts of one component is two requests for one record —
+  the duplicate-state trap this file already refuses for the compliance pack
+  panel — so the fetch is hoisted into the modal as `useWoInspection` and both
+  pieces read it. Only the wire can see that: the suite counts the asks for
+  `/api/work-orders/:id/inspection`, and the mutation that gives the summary
+  its own hook fires exactly that one assertion while every other check stays
+  green.
+
+  **And the existing suite was updated to the new rule rather than loosened.**
+  It asserted the summary sits above the ROOMS, which is still true and is no
+  longer the claim — *a test can pin the old answer as firmly as the right
+  one*, for the fourth time. It now measures against the **document** as well,
+  reads the lede's own title line, and pins that there is exactly **one** copy
+  on screen, because moving a paragraph without removing it from where it was
+  prints it twice.
+
+  **The backtick trap, for the SEVENTEENTH time**, in a SQL comment inside a
+  test fixture's template literal — this one naming `documents_incomplete`.
+  The failure reads as `SyntaxError: missing ) after argument list` at the
+  `db.exec(` line, which is the tell.
+
+  One fixture fault worth keeping, and it is this project's own: the new block
+  read `sent[0].body` to assert what the request carried, and **threw on
+  exactly the case it exists to catch** — the call not going out. The
+  read-through-`link?.` lesson, for the seventh time.
+
 
 ## Working here
 
