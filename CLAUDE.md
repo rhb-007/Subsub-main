@@ -9320,3 +9320,96 @@ refactor.
   entry's `AS value` at depth 0 where the scan expects it. Had it tracked depth
   from the top of the file, every one of its 110 entries would have become
   unfindable in one edit.
+
+- **NINE TRADES, NINE EMPTY SCOPE BOXES, AND A QUOTE REQUEST THAT SENT
+  EVERYBODY THE WHOLE WALK.** Reported with a move-out job on screen carrying
+  nine trades and the job's own scope above them — *"From the move-out
+  inspection of unit 10B: • Toilet — Follow-up • Living room — Follow-up •
+  Bedroom 1 — Follow-up"* — with three red boxes: the work order line's **Scope
+  for plumbing**, blank; and the **Ask for quotes** modal, whose *What they are
+  pricing* was seeded with that same whole-job text. Asked for as *"auto-populate
+  the content for each jobs scope ... and reduce the work of filling each out for
+  the property manager"*.
+
+  **THE ANSWER WAS ALREADY COMPUTED AND SPENT ON TICKING CHIPS.** `suggestTrades`
+  reads each flagged room and decides which trades it names — that is why the
+  plumbing chip is ticked when the toilet is flagged. The room that produced the
+  trade **is** that trade's scope, and nothing was reading it that way, so the
+  product knew the answer to nine questions and asked the manager all nine.
+
+  **ONE MATCHING RULE, FACTORED OUT RATHER THAN COPIED.** `roomTrades(room)` is
+  now its own function, read by `suggestTrades` for the grid and by
+  `inspectionTradeScopes` for the text. Two copies would let a chip be ticked
+  while the scope under it listed different rooms — and **the contractor reads
+  the second one**, so that is the copy that would be wrong where it costs.
+  `scopeFrom` is likewise shared with `inspectionJobScope`, so the job's scope
+  and a trade's slice cannot word one walk two ways.
+
+  **A TRADE NOTHING MATCHED GETS NOTHING, never a header with no rooms under
+  it.** *From the move-out inspection of unit 10B:* on its own reads as a scope
+  saying there is nothing to do, on the document somebody is about to put a price
+  on — strictly worse than the blank box it replaces, because a blank box is
+  visibly unanswered. The screen falls back to its own placeholder. The mutation
+  that emits a header per known trade fails five assertions.
+
+  **COMPOSED ON READ, NOT STAMPED, AND SO NO MIGRATION.** `jobs.scope` is written
+  once at raise time and that is right for the job's own record. This is a **seed
+  for a form**: photo drafts can be written after a job is raised, and a seed
+  taken from the walk as it was would quietly hand over less than the inspection
+  knows. Nothing reads it back, so there is nothing to store — which also keeps
+  it off the paste backlog.
+
+  **ONLY THE SERVER CAN ANSWER IT.** The browser has always held a job's `scope`
+  as one string and has never held the rooms behind it, so a screen splitting
+  that text per trade would be parsing our own rendered prose — the second
+  implementation this file refuses everywhere. `GET /api/jobs/:id/trade-scope`,
+  **admin or pm**: it answers a slice of the inspection, so it takes the
+  Inspections tab's gate rather than the job's — a TENANT is on this account and
+  an inspection is explicitly not shown to the tenant it is about, and a
+  CONTRACTOR reads the walk through the work-order route, scoped to work they
+  actually hold.
+
+  **A JOB NOBODY WALKED ANSWERS AN EMPTY MAP, NOT A 404.** Most jobs were typed
+  or arrived from a CRM. A refusal on the common case is a modal that has to
+  decide whether a missing answer is a fault, so `{}` is the ordinary state and
+  every caller reads one shape — including when the call fails.
+
+  **DRAFTS DO NOT DECIDE WHAT A CONTRACTOR IS ASKED TO PRICE**, the same line the
+  work-order shape and the owner's copy both draw: a sentence a model wrote and
+  nobody kept is the team's working note. **The consequence is real and is
+  recorded rather than hidden:** the inspection screen's chip grid *does* read
+  drafts — it says *(photo: "cracked basin")* and marks the word as second-hand —
+  so a trade ticked off a draft alone gets no seeded scope and the manager types
+  that one. Two audiences, two answers, and the fallback is exactly the behaviour
+  that existed before this.
+
+  **ONE FETCH FOR BOTH MODALS.** `useJobTradeScope` is hoisted into the Jobs
+  screen and handed to Assign and to Ask for quotes, because only one is ever
+  open and two mounts of one record is two requests for it — the duplicate-state
+  trap this file already refuses for the compliance pack panel.
+
+  **SEEDED, NEVER FORCED.** It fills an untouched box and leaves a typed one
+  alone, which is the rule the photo drafts already follow: a preselection
+  somebody mistakes for their own words is worse than a blank. Each site guards
+  on **its own flag** rather than on the box being empty, because a manager who
+  clears the box has also made a choice, and the note says where the text came
+  from while it is still untouched.
+
+  **AND ONE ASSERTION COULD NOT FAIL, caught by the mutation written to prove
+  it.** *The work order line leaves a typed scope alone* searched the whole of
+  `App.tsx` for the flag — which the onChange sets and the note reads — so
+  deleting the guard **from the effect** changed no outcome. Each check now reads
+  its **own effect block**. Seven mutations fire, each on its own assertion.
+
+  **Said rather than claimed: no browser suite drives this.** The effect runs on
+  an answer that arrives after the modal opens, so the only real proof that the
+  box fills is a drawn modal, and the static checks above are the class and not
+  the behaviour.
+
+  **Still open, and it is the other half of what was asked:** *"sending any
+  relevant pictures to the contractor or handyman so they can give an appropriate
+  price"*. 062 already does that for the company that **won** —
+  `GET /api/work-orders/:id/inspection` — but a quote request is pre-award and
+  there is no work order yet, so the people being asked to **price** the work
+  still cannot see the photographs. That needs a route keyed by the quote invite
+  with the same redaction, and it is its own piece.

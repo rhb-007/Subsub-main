@@ -2395,6 +2395,11 @@ export default function SubSub() {
   const [quoteReqs, setQuoteReqs] = useState([]);
   const [myQuotes, setMyQuotes] = useState([]);
   const [askQuotes, setAskQuotes] = useState(null);      // { job, trade }
+  // The inspection's per-trade scope for whichever of those two is open. One
+  // call for both, because only one is ever on screen and they seed from the
+  // same answer -- Assign fills the work order line, Ask for quotes fills what
+  // everybody is pricing.
+  const tradeScopes = useJobTradeScope(assigning?.job?.id || askQuotes?.job?.id || null);
   const [quotePanel, setQuotePanel] = useState(null);    // { job, trade }
   const [addMenu, setAddMenu] = useState(false);
   const [editing, setEditing] = useState(null); // sub being edited
@@ -7020,6 +7025,7 @@ export default function SubSub() {
           onCancel={() => setEditingJob(null)} /></Modal>}
       {assigning && <Modal onClose={() => setAssigning(null)} wide>
         <PickContractor allJobs={allJobs} accountId={account.id} words={rosterWords(account)} job={assigning.job} trade={assigning.trade}
+          tradeScopes={tradeScopes}
           replacing={assigning.replacing} subs={subs} jobs={jobs}
           /* WHERE THE WORK IS, for the handyman licence ceiling. The building's
              state, because licensing follows the property rather than the
@@ -7082,6 +7088,7 @@ export default function SubSub() {
         return (
           <Modal onClose={() => setAskQuotes(null)}>
             <AskQuotes job={askQuotes.job} trade={askQuotes.trade} subs={eligible}
+              tradeScopes={tradeScopes}
               onCancel={() => setAskQuotes(null)}
               onSend={async (body) => {
                 await api.askForQuotes(askQuotes.job.id, { trade: askQuotes.trade, ...body });
@@ -12726,6 +12733,30 @@ function useWoInspection(woId) {
     return () => { live = false; };
   }, [woId]);
   return data;
+}
+
+// WHAT EACH TRADE ON THIS JOB IS BEING ASKED TO PRICE.
+//
+// Hoisted into the Jobs screen rather than fetched inside each modal, because
+// BOTH of them seed from it -- Assign and Ask for quotes -- and two mounts of
+// one record is two requests for it, which is the duplicate-state trap this
+// project already refuses for the compliance pack panel.
+//
+// `{}` is the ordinary answer and not a failure: most jobs were typed or
+// arrived from a CRM and have no walk behind them. So a refusal lands on the
+// same value as a job with no inspection, and every caller reads one shape.
+function useJobTradeScope(jobId) {
+  const [scopes, setScopes] = useState({});
+  useEffect(() => {
+    if (!jobId) { setScopes({}); return undefined; }
+    let live = true;
+    setScopes({});
+    api.jobTradeScope(jobId)
+      .then((d) => { if (live) setScopes(d?.scopes || {}); })
+      .catch((e) => { if (live) { console.warn("[trade-scope]", e); setScopes({}); } });
+    return () => { live = false; };
+  }, [jobId]);
+  return scopes;
 }
 
 // WHAT THE JOB IS, TAKEN TOGETHER -- above the document, because somebody
@@ -21508,7 +21539,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
 }
 // ---- Pick a contractor for one trade slot --------------------------------
 function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing, onPick, onNotify, onAddSub, onCancel,
-  workState = null,
+  workState = null, tradeScopes = {},
   words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
   // When re-matching after an expiry, the sub who didn't reply drops off the list.
   const pool = replacing ? subs.filter((x) => x.id !== replacing) : subs;
@@ -21520,6 +21551,30 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
   const [crewPick, setCrewPick] = useState("");
   const [respWindow, setRespWindow] = useState(DEFAULT_WINDOW);
   const setLine = (t, patch) => setLines((l) => ({ ...l, [t]: { ...l[t], ...patch } }));
+  // THE ROOMS THAT NAMED THIS TRADE, typed for them.
+  //
+  // Reported with a nine-trade move-out job on screen: every one of these
+  // opened blank, so issuing the lot meant writing nine scopes by hand off a
+  // walk that had already recorded all nine. The inspection knows which rooms
+  // suggested plumbing -- it is why the plumbing chip is ticked -- so those
+  // rooms are what plumbing is being asked to price.
+  //
+  // SEEDED, NEVER FORCED. It fills an untouched box and leaves a typed one
+  // alone, which is the rule the photo drafts already follow: a preselection
+  // somebody mistakes for their own words is worse than a blank, so what goes
+  // on the work order is whatever is in the box when they press.
+  const typed = useRef({});
+  useEffect(() => {
+    setLines((l) => {
+      let next = l, changed = false;
+      for (const [t, text] of Object.entries(tradeScopes || {})) {
+        if (!text || typed.current[t] || (l[t]?.scope || "").trim()) continue;
+        if (!changed) { next = { ...l }; changed = true; }
+        next[t] = { ...next[t], scope: text };
+      }
+      return changed ? next : l;
+    });
+  }, [tradeScopes]);
   // Trades on this job still unassigned that the chosen sub also covers.
   const bundleable = (sb) => (job.trades || []).filter((t) =>
     t !== trade && !job.assignments?.[t] && sb.categories.includes(t));
@@ -21694,9 +21749,13 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
               {on && (
                 <div className="wol-body">
                   <label className="fld">Scope for {TM.label.toLowerCase()}
-                    <textarea rows={2} value={lines[t]?.scope || ""}
-                      onChange={(e) => setLine(t, { scope: e.target.value })}
+                    <textarea rows={tradeScopes[t] ? 4 : 2} value={lines[t]?.scope || ""}
+                      onChange={(e) => { typed.current[t] = true; setLine(t, { scope: e.target.value }); }}
                       placeholder={`${TM.label} work included in this work order…`} />
+                    {tradeScopes[t] && !typed.current[t] && (
+                      <em className="fld-note">Filled in from the {TM.label.toLowerCase()} rooms
+                        on the inspection. Edit it if you want.</em>
+                    )}
                   </label>
                   {/* Fixed, or by the hour with a ceiling. The work nobody
                       can price in advance -- a leak somebody has to open a
@@ -26605,10 +26664,28 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
 //
 // The list is the roster for that trade and nothing else. There is nothing to
 // search here, because there is nobody here they do not already work with.
-function AskQuotes({ job, trade, subs, onSend, onCancel }) {
+function AskQuotes({ job, trade, subs, onSend, onCancel, tradeScopes = {} }) {
   const M = catMeta(trade);
   const [picked, setPicked] = useState([]);
-  const [scope, setScope] = useState(job.scope || "");
+  // THE ROOMS THAT NAMED THIS TRADE, not the whole walk.
+  //
+  // It seeded `job.scope`, which on a move-out is every flagged room in the
+  // unit -- so a plumber being asked for a number on the toilet was handed
+  // eleven rooms and left to work out which line was theirs. A scope somebody
+  // has to filter before they can price it is a scope that comes back as a
+  // telephone call.
+  //
+  // The job's own scope is still the fallback, because a job nobody walked has
+  // no per-trade answer and the whole scope is then the honest one.
+  const seeded = tradeScopes[trade] || "";
+  const [scope, setScope] = useState(seeded || job.scope || "");
+  // The answer arrives after the modal opens, so the box takes it when it
+  // lands -- but never over typing somebody has already done, which is the
+  // rule the photo drafts follow about not overwriting a kept caption.
+  const touched = useRef(false);
+  useEffect(() => {
+    if (seeded && !touched.current) setScope(seeded);
+  }, [seeded]);
   const [dueAt, setDueAt] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -26658,10 +26735,15 @@ function AskQuotes({ job, trade, subs, onSend, onCancel }) {
 
           <label className="fld">
             <span>What they are pricing</span>
-            <textarea rows={3} value={scope} onChange={(e) => setScope(e.target.value)}
+            <textarea rows={3} value={scope}
+              onChange={(e) => { touched.current = true; setScope(e.target.value); }}
               placeholder="Strip and re-cover, 400sqm. Skip hire included." />
-            <em className="fld-note">Everybody asked reads this same text &mdash; a scope that
-              differs per contractor is not a comparison.</em>
+            <em className="fld-note">
+              {seeded && !touched.current
+                ? <>Filled in from the {M.label.toLowerCase()} rooms on the inspection. Edit it if you want.</>
+                : <>Everybody asked reads this same text &mdash; a scope that
+                  differs per contractor is not a comparison.</>}
+            </em>
           </label>
           <label className="fld">
             <span>Quotes wanted by <em className="opt">(optional)</em></span>

@@ -206,7 +206,8 @@
     "test:jobeditui": "node --no-warnings scripts/job-edit-ui-test.mjs",
     "test:resched2": "node --no-warnings scripts/job-reschedule-test.mjs",
     "test:jobend": "node --no-warnings scripts/job-end-test.mjs",
-    "test:jobendui": "node --no-warnings scripts/job-end-ui-test.mjs"
+    "test:jobendui": "node --no-warnings scripts/job-end-ui-test.mjs",
+    "test:tradescope": "node --no-warnings scripts/trade-scope-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

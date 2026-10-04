@@ -49,6 +49,7 @@ import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_
   whyNotFinish, inspectionTally, flaggedRooms, inspectionJobTitle,
   inspectionJobScope, whyNotSend, mayWriteInspection,
   contractorInspectionShape, isFlagged, suggestedAccessForInspection,
+  inspectionTradeScopes,
   INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
@@ -13378,6 +13379,52 @@ async function woInspection(c, woId) {
 // id would undo it by a different door. An OWNER reads inspections through
 // their own route, which applies their building scope; this one does not have
 // one to apply.
+// WHAT EACH TRADE ON THIS JOB IS BEING ASKED TO PRICE.
+//
+// Reported with a nine-trade move-out job on screen: every work order line
+// opened with an empty "Scope for plumbing", and the quote request seeded the
+// WHOLE walk. So filling nine of them in is nine pieces of typing the
+// inspection already answered, and the lazy way out -- sending everybody the
+// entire scope -- asks a plumber to find the toilet in eleven rooms.
+//
+// ONLY THE SERVER CAN ANSWER IT. The browser holds a job's `scope` as one
+// string and has never held the rooms behind it, so a screen splitting that
+// text per trade would be parsing our own rendered prose -- the second
+// implementation this project refuses everywhere. The rooms are here, and the
+// rule that maps one to a trade is in `shared/inspection.js` where the chip
+// grid already reads it.
+//
+// KEYED BY THE JOB, and admin or pm only. It answers a slice of the
+// inspection, so it is the Inspections tab's own gate rather than the job's:
+// a TENANT is on this account and an inspection is explicitly not shown to the
+// tenant it is about, and a CONTRACTOR reads the walk through the work-order
+// route, which is scoped to work they actually hold.
+//
+// A job with no inspection answers an EMPTY MAP rather than a 404. Most jobs
+// have no walk behind them -- they were typed, or arrived from a CRM -- and a
+// 404 on the common case is a modal that has to decide whether a missing
+// answer is a fault. Nothing to seed is the ordinary state, not an error.
+app.get("/api/jobs/:id/trade-scope", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  let insp = null;
+  try {
+    insp = await c.env.DB.prepare(
+      `SELECT * FROM inspections WHERE job_id = ? AND account_id = ? LIMIT 1`
+    ).bind(c.req.param("id"), auth.accountId).first();
+  } catch (err) {
+    // A database behind the code costs the seed and never the modal: the
+    // manager types the scope as they did before this existed.
+    if (!missingSchema(err)) throw err;
+    return c.json({ scopes: {} });
+  }
+  if (!insp) return c.json({ scopes: {} });
+  // `drafts: false`, the same rule the work-order route and the summary both
+  // follow: a sentence a model wrote and nobody kept is the team's working
+  // note, and this text is pasted onto a document a contractor prices from.
+  const rooms = await inspectionRooms(c.env.DB, insp.id, { drafts: false });
+  return c.json({ scopes: inspectionTradeScopes(inspectionRowToJs(insp), rooms) });
+});
+
 app.get("/api/work-orders/:id/inspection", requireRole("admin", "pm", "contractor"), async (c) => {
   const found = await woInspection(c, c.req.param("id"));
   if (!found) return c.json({ error: "not_found" }, 404);

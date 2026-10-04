@@ -114,8 +114,11 @@ export function inspectionJobTitle(inspection = {}) {
   return `${kind} work${unit ? ` — unit ${unit}` : ""}`.slice(0, 140);
 }
 
-export function inspectionJobScope(inspection = {}, rooms = []) {
-  const flagged = flaggedRooms(rooms);
+// The header and one line per room. Factored out because the PER-TRADE scope
+// below renders the same shape from a subset of the same rooms, and two
+// composers would be two documents -- a contractor reading the job's scope and
+// the one on their own work order would find the same walk worded differently.
+function scopeFrom(inspection, flagged) {
   const head = `From the ${(INSPECTION_KINDS[inspection.kind]?.label || "inspection").toLowerCase()} inspection`
     + (inspection.unit ? ` of unit ${inspection.unit}` : "")
     + (inspection.inspectedOn ? ` on ${inspection.inspectedOn}` : "") + ":";
@@ -125,6 +128,10 @@ export function inspectionJobScope(inspection = {}, rooms = []) {
     return `• ${roomName(r)} — ${status}${note ? `: ${note}` : ""}`;
   });
   return [head, ...lines].join("\n");
+}
+
+export function inspectionJobScope(inspection = {}, rooms = []) {
+  return scopeFrom(inspection, flaggedRooms(rooms));
 }
 
 // WHO HAS TO BE THERE, WHICH FOLLOWS WHICH KIND OF WALK IT WAS.
@@ -465,48 +472,103 @@ const dropWhere = (s) => String(s || "").replace(WHERE, " ");
 // quietly suggesting from half the evidence.
 const photoWords = (p) => `${p?.caption || ""} ${p?.draft || ""}`.trim();
 
-export function suggestTrades(rooms = []) {
-  const flagged = (rooms || []).filter(isFlagged);
-  const why = {};
-  // Which reason words were read off a photograph rather than typed. The
-  // manager wrote the notes, so a word from one is their own; a word from a
-  // caption is second-hand and the screen says which -- the same rule that
-  // makes an unkept draft dashed rather than silently adopted.
-  const fromPhoto = new Set();
+// WHICH TRADES ONE ROOM NAMES, which is the whole of the matching and is
+// deliberately its own function now.
+//
+// `suggestTrades` ticks the chips with it and `inspectionTradeScopes` splits
+// the scope with it. Two copies would let a trade be ticked on the grid while
+// the scope under it listed different rooms -- and the contractor reads the
+// second one, so that is the copy that would be wrong where it costs.
+//
+// Answers a map of trade to the words that earned it, so the caller can say
+// WHY, and a set of the words that came off a photograph rather than a note.
+function roomTrades(r) {
+  const hits = {};
+  const photo = new Set();
   let unread = 0;
-  const add = (trade, reason, photo = false) => {
+  const add = (trade, reason, fromPhoto = false) => {
     if (!trade || !reason) return;
-    (why[trade] ||= []);
-    if (!why[trade].includes(reason)) why[trade].push(reason);
-    if (photo) fromPhoto.add(reason);
+    (hits[trade] ||= []);
+    if (!hits[trade].includes(reason)) hits[trade].push(reason);
+    if (fromPhoto) photo.add(reason);
   };
-
-  for (const r of flagged) {
-    const name = String(r?.name || "").trim();
-    const roomTrade = ROOM_TRADES[name.toLowerCase()];
-    if (roomTrade) add(roomTrade, name);
-    // The note and the room name are read together: somebody writing
-    // "Kitchen" in the name box and "tap drips" in the note has said both
-    // halves, and only one of them is in either field.
-    const hay = flatten(`${name} ${dropWhere(r?.note)}`);
+  const name = String(r?.name || "").trim();
+  const roomTrade = ROOM_TRADES[name.toLowerCase()];
+  if (roomTrade) add(roomTrade, name);
+  // The note and the room name are read together: somebody writing "Kitchen"
+  // in the name box and "tap drips" in the note has said both halves, and
+  // only one of them is in either field.
+  const hay = flatten(`${name} ${dropWhere(r?.note)}`);
+  for (const [trade, words] of Object.entries(TRADE_HINTS)) {
+    for (const w of words) {
+      if (hitsWord(hay, w)) { add(trade, w); break; }
+    }
+  }
+  // THE PHOTOGRAPHS, through what was written about them. Read per photo
+  // rather than as one blob, so a caption is never joined to the next one's
+  // first word and matched across the seam.
+  for (const pic of r?.photos || []) {
+    const text = photoWords(pic);
+    if (!text) { unread += 1; continue; }
+    const shot = flatten(dropWhere(text));
     for (const [trade, words] of Object.entries(TRADE_HINTS)) {
       for (const w of words) {
-        if (hitsWord(hay, w)) { add(trade, w); break; }
-      }
-    }
-    // THE PHOTOGRAPHS, through what was written about them. Read per photo
-    // rather than as one blob, so a caption is never joined to the next
-    // one's first word and matched across the seam.
-    for (const p of r?.photos || []) {
-      const text = photoWords(p);
-      if (!text) { unread += 1; continue; }
-      const shot = flatten(dropWhere(text));
-      for (const [trade, words] of Object.entries(TRADE_HINTS)) {
-        for (const w of words) {
-          if (hitsWord(shot, w)) { add(trade, w, true); break; }
-        }
+        if (hitsWord(shot, w)) { add(trade, w, true); break; }
       }
     }
   }
+  return { hits, photo, unread };
+}
+
+export function suggestTrades(rooms = []) {
+  const why = {};
+  const fromPhoto = new Set();
+  let unread = 0;
+  for (const r of (rooms || []).filter(isFlagged)) {
+    const got = roomTrades(r);
+    unread += got.unread;
+    for (const w of got.photo) fromPhoto.add(w);
+    for (const [trade, words] of Object.entries(got.hits)) {
+      (why[trade] ||= []);
+      for (const w of words) if (!why[trade].includes(w)) why[trade].push(w);
+    }
+  }
   return { trades: Object.keys(why), why, fromPhoto, unread };
+}
+
+// WHAT ONE TRADE IS BEING ASKED TO PRICE.
+//
+// Reported looking at a move-out job with nine trades on it: the work order
+// line's "Scope for plumbing" opened BLANK, and the quote request seeded the
+// whole job's scope -- eleven rooms, of which one is the toilet. So the
+// manager either types nine scopes by hand or sends every contractor the
+// entire walk and lets them work out which bits are theirs. Asked for as
+// *"auto-populate the content for each jobs scope ... and reduce the work of
+// filling each out for the property manager"*.
+//
+// THE ROOMS THAT SUGGESTED THE TRADE ARE THE TRADE'S SCOPE, which is why this
+// reads `roomTrades` rather than inventing a second rule: the grid has ticked
+// plumbing BECAUSE the toilet is flagged, so the toilet is what plumbing is
+// pricing. Anything else would have the chip and the text disagree about the
+// same walk.
+//
+// A TRADE NOTHING MATCHED GETS NOTHING, never a header with no rooms under
+// it. "From the move-out inspection of unit 10B:" alone reads as a scope that
+// says there is nothing to do, on the document somebody is about to put a
+// price on -- worse than the blank box it replaced, because a blank box is
+// visibly unanswered. The screen falls back to its own placeholder there.
+//
+// COMPOSED ON READ, NOT STAMPED. `jobs.scope` is written once at raise time
+// and that is right for the job's own record, but this is a SEED for a form:
+// photo drafts can be written after the job is raised, and a seed seeded from
+// the walk as it was would quietly hand over less than the inspection knows.
+// It also means no column and no migration for something nobody reads back.
+export function inspectionTradeScopes(inspection = {}, rooms = []) {
+  const byTrade = {};
+  for (const r of flaggedRooms(rooms)) {
+    for (const trade of Object.keys(roomTrades(r).hits)) (byTrade[trade] ||= []).push(r);
+  }
+  const out = {};
+  for (const [trade, rs] of Object.entries(byTrade)) out[trade] = scopeFrom(inspection, rs);
+  return out;
 }
