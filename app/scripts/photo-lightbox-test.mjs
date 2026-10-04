@@ -305,10 +305,13 @@ try {
     const thumbs = (APP.match(/<ReportPhoto\b/g) || []).length;
     const fed = (APP.match(/onLoaded=/g) || []).length;
     t.ck("one component", defs === 1, String(defs));
-    // Three mounts: the tenant's own report, the manager's view of it, and a
-    // room on a unit inspection. A fourth place showing photographs should
-    // raise this number rather than grow a second lightbox.
-    t.ck("mounted wherever a set of photos is shown", uses === 3, String(uses));
+    // FOUR mounts: the tenant's own report, the manager's view of it, a room
+    // on a unit inspection, and the inspection panel on a work order -- which
+    // is the one the contractor reads, and which arrived without this number
+    // being raised, so the suite sat red for a release with its one real
+    // assertion underneath. A fifth place showing photographs should raise it
+    // again rather than grow a second lightbox.
+    t.ck("mounted wherever a set of photos is shown", uses === 4, String(uses));
     // AND EVERY THUMBNAIL REPORTS WHAT IT LOADED, which is the property that
     // matters: the lightbox draws from what the thumbnails fetched, so one
     // that stays quiet leaves it with nothing to show and no way to know why.

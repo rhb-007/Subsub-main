@@ -5138,6 +5138,14 @@ app.patch("/api/account", requireRole("admin"), async (c) => {
       if (movedFrom && /UNIQUE|constraint/i.test(String(err?.message || err))) {
         return c.json({ error: "subdomain_taken" }, 409);
       }
+      // A COLUMN A MIGRATION HAS NOT ADDED YET IS ALREADY NAMED, by
+      // `app.onError`, which turns one into a 503 `migration_needed` with the
+      // file to run on it -- for every route rather than this one. A local
+      // copy here would be a second record of one fact, so this rethrows and
+      // lets it answer. What was actually wrong was one layer up: the screen
+      // read every failure as *"That didn't save. Try again"*, which is false
+      // on a database behind the code and told the one person who could fix
+      // it nothing.
       throw err;
     }
   }
@@ -9119,6 +9127,24 @@ async function summariseForWorkOrder(c, { jobId, accountId, userId }) {
       `SELECT * FROM inspections WHERE job_id = ? AND account_id = ? LIMIT 1`
     ).bind(jobId, accountId).first();
     if (!insp) return null;
+    return await summariseInspection(c, { inspection: insp, accountId, userId });
+  } catch (err) {
+    // This guards ONE statement -- the lookup above. Everything after it is
+    // inside `summariseInspection`, which has its own. Named for the function
+    // it is in, because a prefix that belongs to the other one sends whoever
+    // is reading the log to the wrong catch, which is how a mutation on this
+    // pair quietly changed nothing.
+    console.warn("[wo-summary] no inspection read:", err?.message || err);
+    return { wrote: false, reason: "failed" };
+  }
+}
+
+// The write itself, shared by all three doors -- finishing the walk, raising
+// the job, issuing the work order -- so there is one rule about when a
+// paragraph may be written and when it may not, rather than three that drift.
+async function summariseInspection(c, { inspection: insp, accountId, userId }) {
+  try {
+    if (!insp) return null;
     const had = await inspectionSummaryRow(c.env.DB, insp.id);
     if (had) return { wrote: false, reason: "already" };
     // `drafts: false`, which is not a choice about what the model reads --
@@ -9133,7 +9159,7 @@ async function summariseForWorkOrder(c, { jobId, accountId, userId }) {
     // Deliberately wide, and for the reason 063 states about the raise: the
     // work order already exists and the contractor has already been told, so
     // a throw here would answer 500 to something that has happened.
-    console.warn("[wo-summary] not written:", err?.message || err);
+    console.warn("[summary] not written:", err?.message || err);
     return { wrote: false, reason: "failed" };
   }
 }
@@ -12746,8 +12772,25 @@ app.patch("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async 
     ).bind(row.id).run();
     await logActivity(c.env, auth.accountId, auth.userId, "inspection_finished",
       `Finished a ${INSPECTION_KINDS[row.kind]?.label.toLowerCase() || ""} inspection${row.unit ? ` of unit ${row.unit}` : ""}`);
+    // THE SUMMARY, WRITTEN WHEN THE WALK IS DONE.
+    //
+    // Asked for as *"write a summary automatically when inspection is done"*,
+    // and it is the earliest honest moment there is. Finishing is the one-way
+    // door: every room is marked, every note is typed, every caption somebody
+    // meant to keep is kept, and nothing about the record can change again.
+    // Before that the notes are still moving, which is exactly what makes a
+    // paragraph go stale.
+    //
+    // It joins the two doors that already write one -- raising the job, and
+    // issuing a work order -- through the same guarded helper, so there are
+    // three moments and ONE rule. Writes only when there is nothing there, so
+    // a walk finished after the job was raised costs nothing; never blocks,
+    // for the reason neither of the others does; and says which it was on the
+    // reply rather than leaving a null to be read two ways.
+    const summarised = await summariseInspection(c,
+      { inspection: row, accountId: auth.accountId, userId: auth.userId });
     const after = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(row.id).first();
-    return c.json({ ...inspectionRowToJs(after), rooms });
+    return c.json({ ...inspectionRowToJs(after), rooms, summarised });
   }
 
   // Only what was sent, the shape that deleted a W-9 through SubForm.

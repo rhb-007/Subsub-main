@@ -280,6 +280,94 @@ try {
     ck("the trail records it", !!act && /2 flagged room/.test(act.text), String(act?.text));
   }
 
+  console.log("\n-- finishing the walk writes one, which is the earliest honest moment --");
+  {
+    // Asked for as *"write a summary automatically when inspection is done"*,
+    // and finishing is the earliest moment it can be true: it is the one-way
+    // door, so every room is marked, every note typed and every caption kept,
+    // and nothing about the record can move again. Before that the notes are
+    // still changing, which is exactly what makes a paragraph go stale.
+    const { db, env } = seed();
+    // The seeded move-out is already finished, so this drives the walk that
+    // is not -- and gives its flagged room something to combine, since a
+    // flagged room with nothing written on it is a refusal rather than a
+    // prompt and would be testing `no_comments` instead.
+    db.prepare(`UPDATE inspection_rooms SET note = 'Cracked tile by the door' WHERE id = 'r_bare'`).run();
+    resetStub();
+    ck("nothing is stored before it is finished", !stored(db, "ins_bare"));
+    const [s, b] = await json(await call(env, "/api/inspections/ins_bare",
+      { finish: true }, "u_mgr", "PATCH"));
+    ck("the inspection finishes", s === 200 && b.status === "finished", `${s} ${b.status}`);
+    ck("and a summary was written on the way", b.summarised?.wrote === true,
+      JSON.stringify(b.summarised));
+    ck("one call went out", sent.length === 1, String(sent.length));
+    ck("it is stored against the inspection", stored(db, "ins_bare")?.summary === PARA,
+      String(stored(db, "ins_bare")?.summary));
+    // THE SAME REDACTION ON THIS DOOR TOO. Three doors write this paragraph
+    // and the shape is where the rule lives, so a door that reached past it
+    // would be a way round it rather than a third way to it.
+    const asked = JSON.stringify(sent[0]?.body?.messages || []);
+    ck("the drafts were not sent", !asked.includes("Scuffing to the painted wall"), "");
+  }
+  {
+    // AND FINISHING AFTER THE JOB WAS RAISED COSTS NOTHING. Same rule as the
+    // second work order: it writes only when there is nothing there, so the
+    // three doors between them ask once.
+    const { db, env } = seed();
+    resetStub();
+    await raise(env);
+    ck("the raise wrote one", sent.length === 1, String(sent.length));
+    // `ins_out` is already finished in the seed, so finishing is driven on a
+    // copy of the same walk that is still a draft.
+    db.exec(`UPDATE inspections SET status = 'draft', finished_at = NULL WHERE id = 'ins_out'`);
+    const [s, b] = await json(await call(env, "/api/inspections/ins_out",
+      { finish: true }, "u_mgr", "PATCH"));
+    ck("it still finishes", s === 200, String(s));
+    ck("and asks nothing", sent.length === 1, String(sent.length));
+    ck("saying why it did not", b.summarised?.reason === "already", JSON.stringify(b.summarised));
+  }
+  {
+    // AND A FAILURE NEVER BLOCKS THE FINISH. Finishing is the one-way door
+    // and the record is what it is about; a 500 over a paragraph would leave
+    // somebody unable to close a walk they have finished walking.
+    const { db, env } = seed();
+    db.prepare(`UPDATE inspection_rooms SET note = 'Cracked tile by the door' WHERE id = 'r_bare'`).run();
+    resetStub(() => new Response(JSON.stringify({ error: { type: "overloaded_error", message: "slow" } }),
+      { status: 529, headers: { "Content-Type": "application/json" } }));
+    const [s, b] = await json(await call(env, "/api/inspections/ins_bare",
+      { finish: true }, "u_mgr", "PATCH"));
+    ck("the inspection is still finished", s === 200 && b.status === "finished", `${s} ${b.status}`);
+    ck("the row really says so",
+      db.prepare(`SELECT status FROM inspections WHERE id = 'ins_bare'`).get()?.status === "finished");
+    ck("and the failure is named rather than claimed as a write",
+      b.summarised?.wrote === false && b.summarised?.reason === "ai_unavailable",
+      JSON.stringify(b.summarised));
+  }
+  {
+    // AND A THROW IS CAUGHT ON THIS DOOR TOO, which the branch above cannot
+    // reach: `writeInspectionSummary` answers a refused provider call with an
+    // error rather than by throwing, so every failure it reports comes back
+    // the tidy way and the catch changes nothing. What gets past it is the
+    // database -- and finishing is the one-way door somebody has to be able
+    // to close, so a 500 over a paragraph would leave a walked unit stuck
+    // open. Same seed as the work-order door: a table the write cannot
+    // satisfy, which `missingSchema` does not recognise.
+    const { db, env } = seed();
+    db.prepare(`UPDATE inspection_rooms SET note = 'Cracked tile by the door' WHERE id = 'r_bare'`).run();
+    db.exec(`DROP TABLE inspection_summaries;
+      CREATE TABLE inspection_summaries (
+        inspection_id TEXT PRIMARY KEY,
+        summary TEXT NOT NULL CHECK (summary = 'nothing will ever equal this'),
+        source TEXT NOT NULL, model TEXT, written_at TEXT, written_by TEXT)`);
+    resetStub();
+    const [s, b] = await json(await call(env, "/api/inspections/ins_bare",
+      { finish: true }, "u_mgr", "PATCH"));
+    ck("a throw under it still finishes the walk", s === 200 && b.status === "finished",
+      `${s} ${b.status}`);
+    ck("and is reported rather than swallowed as a write",
+      b.summarised?.wrote === false, JSON.stringify(b.summarised));
+  }
+
   console.log("\n-- and issuing the work order writes one if the raise did not --");
   {
     // THE GAP THIS CLOSES. 063 writes the paragraph when the JOB is raised,

@@ -8778,6 +8778,95 @@ refactor.
   exactly the case it exists to catch** — the call not going out. The
   read-through-`link?.` lesson, for the seventh time.
 
+- **THE SUMMARY IS WRITTEN WHEN THE INSPECTION IS FINISHED, AND THE COPY ABOVE
+  IT EXPLAINED ITSELF INSTEAD OF SAYING ANYTHING.** Asked for in one message:
+  *"Write a summary automatically when inspection is done, remove this language
+  which doesn't make any sense"*, quoting the blurb — *the paragraph whoever
+  does the work reads before the room-by-room list. Combined from your notes
+  and the captions you kept — never from a draft nobody kept* — and the empty
+  state under it.
+
+  **THREE DOORS NOW WRITE IT AND THERE IS ONE WRITE.** 063 shipped the
+  paragraph at raise time and the release before this one added it at issue, so
+  a third call site was the moment this stopped being safe as three copies: the
+  redaction, the already-written check, the staleness comparison and the
+  deliberately-wide catch are four rules, and the one that drifted would be on
+  whichever door is pressed least. `summariseInspection` is the write;
+  `summariseForWorkOrder` is now the job→inspection lookup and nothing else.
+
+  **FINISHING IS WHEN IT IS WANTED AND NOT WHEN IT IS CHEAPEST.** A job raised
+  from an unfinished walk gets the paragraph at raise time, which is right —
+  the leak does not wait for the paperwork. But most inspections are finished
+  before anybody raises anything, and until now those had no paragraph at all
+  unless somebody pressed a button they had no reason to know about. **The
+  press that said *I am done walking this unit* is the press that knows the
+  notes are final**, which is also the only moment the staleness comparison can
+  be satisfied by construction.
+
+  **AND IT NEVER BLOCKS THE FINISH, which is the same trade 063 recorded about
+  the raise.** Finishing is a one-way door and the paragraph is derived, so a
+  throw there would answer 500 to a finish that already happened — a screen
+  reporting failure over an inspection that is shut. The reply carries
+  `summarised: {wrote, reason}` rather than a bare null, the
+  `engagedAsRecorded` rule: a screen that cannot tell *there was nothing to
+  summarise* from *the call failed* cannot offer the one of those worth a
+  second press.
+
+  **THE BLURB WAS A DESIGN NOTE WEARING A PARAGRAPH'S CLOTHES.** *Never from a
+  draft nobody kept* is a true and load-bearing fact about the redaction, and
+  it is **this file's** to hold, not the screen's — the reader is a managing
+  agent looking for the summary, and a sentence arguing the implementation at
+  them is the stops-the-send shape the agreement preview already paid for. The
+  rule is unchanged and only its recital is gone.
+
+  And the empty state said what the work order *still* carries, which answers a
+  worry nobody had, and said nothing about the one thing somebody standing
+  there wants to know: whether one is coming. It names the door instead — *one
+  gets written when you finish the inspection* on a draft, *write one when you
+  are ready* on a finished one.
+
+  **AND THE AUTO-TURNAROUND SWITCH HAD NEVER BEEN DRAWN IN A BROWSER.** Asked
+  in the same session: *"is the auto schedule movein moveout inspection jobs
+  in? Can't see it - where is it?"* It was: route, migration, panel, gate and
+  fifty-seven server assertions, all green — and **not one test had ever
+  rendered it**, which is exactly the state `roleLocked` was in when a general
+  contractor could not scope a project manager to jobs. `test:autoturnui`
+  drives Account → Company and reads the switch back, on **both** account kinds
+  in the same place, because a panel checked on one branch is the diagonal
+  coverage that left `hiresLabel` half-wired.
+
+  **AND MY FIRST DIAGNOSIS OF WHY IT WOULD REFUSE WAS HALF WRONG, which is
+  worth recording because the half I got wrong is the half this file keeps
+  insisting on.** I said pressing On would answer an unexplained failure
+  because 065 is unpasted. The **server was already right**: `app.onError`
+  has answered `migration_needed` with the migration's name for every route
+  since it was written, so a per-route catch is two records of one fact and
+  the one I added was duly reverted. What was wrong was the **browser**, which
+  printed *That didn't save. Try again.* over a 503 naming the file to paste —
+  the catch-wide-enough-to-hide-a-real-error shape, in the one place that
+  turns an actionable answer into a dead end. It reads `e.body.migration` now,
+  and `test:autoturn` drops the column to prove the server names it.
+
+  **AND `test:lightbox` HAD BEEN RED FOR A WHOLE RELEASE FOR A STALE REASON.**
+  It counts the mounts rather than looking for one — deliberately, so a fix
+  applied to one of two copies cannot pass — and its own comment says *a fourth
+  place showing photographs should raise this number*. The work order's
+  inspection panel was that fourth place and nobody raised it, so the suite sat
+  at 28/1 with its one real assertion underneath: **a suite that is red for a
+  stale reason is a suite nobody reads**, which this file already records about
+  `test:subedit`, found again in the test written to catch the trap it fell
+  into. Raised to four, with the fourth named, and the mutation still fires.
+
+  One harness fault from the new suite, and it is this project's own: a
+  degradation block read `.find` on a body that is a 503 object rather than an
+  array, so it threw on exactly the case it exists to catch. Guarded with
+  `Array.isArray(rows) ? … : null`.
+
+  **Not verified here:** rebuilding `accounts` in the fixture with a subset of
+  its columns answers 403 rather than 503, because the session lookup loses the
+  columns it reads — `ALTER TABLE accounts DROP COLUMN auto_turnaround` is what
+  reproduces an unmigrated database without taking the sign-in with it.
+
 
 ## Working here
 

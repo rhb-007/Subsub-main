@@ -526,15 +526,35 @@ try {
       sent.length = 0;
       const before = await read(page);
       t.ck("a raised job with no summary draws the panel", !!before, JSON.stringify(before));
-      t.ck("saying none was written rather than leaving a blank",
-        /No summary was written/i.test(before?.none || ""), before?.none);
-      t.ck("and what the paragraph is for", 
-        (before?.notes || []).some((n) => /before the room-by-room list/i.test(n)),
+      // SAYING WHEN ONE ARRIVES RATHER THAN REPORTING AN ABSENCE. The old
+      // copy read *"No summary was written. The work order carries the
+      // rooms, the notes and the photos as usual"* and came off on request:
+      // it is an explanation of a non-event, and it was wrong besides, since
+      // one is written when the WALK is finished now and not only when a job
+      // is raised.
+      t.ck("the empty state does not report a non-event",
+        !/No summary was written/i.test(before?.none || ""), before?.none);
+      // It names the next thing instead. This fixture is still a DRAFT, so
+      // the honest answer is that finishing writes one -- which is the half
+      // the old copy had wrong as well: it said a summary arrives when a job
+      // is raised, and the walk being finished is the earlier moment.
+      t.ck("it names when one arrives", /finish the inspection/i.test(before?.none || ""),
+        before?.none);
+      // AND THE BLURB IS GONE, on request: *"remove this language which
+      // doesn't make any sense"*. Three clauses of mechanism in front of
+      // somebody who can see the paragraph itself directly below it.
+      //
+      // Both halves are pinned, because a later pass reading the guarantee in
+      // the second one would want to restore it. The guarantee is REAL and is
+      // kept where it is checkable -- `contractorInspectionShape` drops the
+      // drafts and `test:inspectsummary` asserts they never reach the wire,
+      // on all three doors that write a paragraph. A screen does not owe the
+      // reader an account of how a thing was made.
+      t.ck("no blurb explains what the paragraph is for",
+        !(before?.notes || []).some((n) => /before the room-by-room list/i.test(n)),
         JSON.stringify(before?.notes));
-      // THE GUARANTEE THAT KEEPS A MODEL'S WORKING NOTE OFF A WORK ORDER,
-      // said on the screen of the person who is answerable for it.
-      t.ck("and that a draft nobody kept is never in it",
-        (before?.notes || []).some((n) => /never from a draft nobody kept/i.test(n)),
+      t.ck("nor recites the drafts guarantee at them",
+        !(before?.notes || []).some((n) => /never from a draft nobody kept/i.test(n)),
         JSON.stringify(before?.notes));
       t.ck("with one press to write it", (before?.btn || []).join() === "Write one",
         JSON.stringify(before?.btn));

@@ -374,6 +374,30 @@ try {
       `SELECT * FROM activity WHERE kind = 'auto_turnaround' AND text LIKE '%by hand%'`).get();
     ck("and tells the manager to pick one by hand", !!gave, String(gave?.text));
   }
+
+  console.log("\n-- and a database without 065 is told which migration --");
+  {
+    // THE SWITCH IS THE ONLY WAY INTO ANY OF THE ABOVE, and on a database
+    // behind the code it threw: the route answered 500 and the panel said
+    // *"That didn't save. Try again"*, which is false -- the column is not
+    // coming back on the next press, and the one person who could fix it was
+    // the one person told nothing. A control that refuses for ever with no
+    // reason beside it is indistinguishable from a broken one.
+    //
+    // Only a database actually missing the column can see this, so the table
+    // is rebuilt without it rather than the error being faked.
+    const { db, env } = seed();
+    // Drop the one column 065 adds and nothing else: a rebuild that kept only
+    // the columns this block cares about would take the session lookup's with
+    // it, and the route would answer 403 long before it reached the write.
+    db.exec(`ALTER TABLE accounts DROP COLUMN auto_turnaround`);
+    const [s, b] = await json(await call(env, "/api/account",
+      { autoTurnaround: true }, "u_mgr", "PATCH"));
+    ck("switching it on is refused rather than crashing", s === 503, String(s));
+    ck("and the refusal names the migration to run",
+      b.error === "migration_needed" && b.migration === "065_auto_turnaround",
+      JSON.stringify(b));
+  }
 } catch (err) {
   fail += 1;
   console.log("FAIL  threw:", err?.stack || err);

@@ -18334,7 +18334,15 @@ function AutoTurnaroundPanel({ on, onSave }) {
   const set = async (v) => {
     setBusy(true); setErr("");
     try { await onSave(v); }
-    catch { setErr("That didn't save. Try again."); }
+    catch (e) {
+      // A DATABASE BEHIND THE CODE IS NAMED, because "try again" is false
+      // there: the column 065 adds is not coming back on the next press, and
+      // the one person who can fix it was the one person told nothing. Same
+      // sentence shape every other migration-gated screen here uses.
+      setErr(e?.body?.error === "migration_needed"
+        ? `The database isn't migrated yet — run ${e.body.migration}.sql, then try again.`
+        : "That didn't save. Try again.");
+    }
     finally { setBusy(false); }
   };
   return (
@@ -27988,16 +27996,16 @@ function InspectionSummaryPanel({ inspection, rooms = [], onReload }) {
   return (
     <div className="insp-sum">
       <div className="form-sec">Summary on the work order</div>
-      {/* WHAT IT IS AND WHAT IT IS NOT, said here because the manager is
-          answerable for what their work order says. "Never from a draft
-          nobody kept" is the half worth stating: it is the guarantee that
-          keeps a model's working note off a document going to a third
-          party. */}
-      <p className="fld-note insp-sumnote">
-        The paragraph whoever does the work reads before the room-by-room list.
-        Combined from your notes and the captions you kept — never from a draft
-        nobody kept.
-      </p>
+      {/* THE BLURB IS GONE, on request: *"remove this language which doesn't
+          make any sense"*. It read *"the paragraph whoever does the work
+          reads before the room-by-room list. Combined from your notes and the
+          captions you kept — never from a draft nobody kept"*, which is three
+          clauses of mechanism in front of somebody who can see the paragraph
+          itself directly below. The two guarantees in it are real and are
+          kept where they are checkable rather than announced: the drafts are
+          dropped by `contractorInspectionShape` and the suite asserts they
+          never reach the wire. A heading says what a block IS; it does not
+          owe the reader an account of how it was made. */}
       {sum ? (
         <>
           <p className="insp-sumt">{sum.text}</p>
@@ -28015,10 +28023,16 @@ function InspectionSummaryPanel({ inspection, rooms = [], onReload }) {
           )}
         </>
       ) : (
+        /* AND THE EMPTY STATE SAYS WHEN ONE ARRIVES, rather than reporting an
+           absence. *"No summary was written. The work order carries the
+           rooms, the notes and the photos as usual"* came off for the same
+           reason as the blurb above: it is an explanation of a non-event,
+           and it was wrong besides -- one is written when the walk is
+           finished now, not only when a job is raised. */
         <p className="prop-none">
-          {inspection.jobId
-            ? "No summary was written. The work order carries the rooms, the notes and the photos as usual."
-            : "One gets written when you raise the job."}
+          {inspection.status === "finished"
+            ? "Nothing to summarize yet. Write one when you are ready."
+            : "One gets written when you finish the inspection."}
         </p>
       )}
       {/* Offered only when the route would take it. `nothing_flagged` and
