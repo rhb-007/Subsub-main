@@ -9527,6 +9527,34 @@ refactor.
   is added, **which is the same thing as not checking it** — proved by moving
   the entry to the last statement, where `find` passes and `parts[1]` fails.
 
+  **AND `npm run paste check` PRINTS IT PASTEABLE, which the file had always
+  needed and which only the split made safe to write.** That script's own note
+  recorded why there was no `check` sub-command: pulling ONE migration's entries
+  out meant splitting the list on top-level commas, and `m046_kind_check`'s
+  `'%CHECK (kind IN%'` sends a paren count off by one for the rest of the file.
+  **That objection was to a SUBSET, not to printing the thing.** The file is now
+  six statements and `checkStatements` already splits them for nine suites, so
+  the whole of it comes out comment-stripped: about forty lines a statement
+  instead of a hundred and fifteen, which is the difference between pasteable on
+  an iPad and not.
+
+  `pasteForm` therefore lives in the reader module and **both** the printer and
+  the test read it, because `schema-drift-test` can only prove the printed query
+  answers what the file answers about the strip it actually uses. A whole-line
+  strip that ever ate a line of SQL would print a check that is subtly wrong,
+  which is the shape that reported 1,1,1,0,0 over an `agreements` table missing
+  fourteen columns — **the thing that gets used being the thing nothing tests.**
+
+  **And a mutation that applied and proved nothing is worth recording, because
+  it is the inverse of the usual trap.** The first attempt at that guard
+  rewrote `!l.trim().startsWith("--")` into
+  `!l.trim().startsWith("--") || l.includes("UNION")`, which parses as *keep it
+  if it is not a comment, OR if it contains UNION* — the same set of lines, a
+  no-op wearing a diff. The suite stayed green and the conclusion looked like
+  "the assertion cannot fail". **`!` binds to the call, not to the clause**, so
+  checking the file changed is not enough: check the file changed *and that the
+  change means something.*
+
   **Still open, and unchanged by any of this: nothing here runs this against
   D1.** Three refusals, all three found by a person pasting it. Local SQLite
   allows 2000 columns and 500 compound terms, so this suite can prove the file

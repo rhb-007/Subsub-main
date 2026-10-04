@@ -76,6 +76,27 @@ export function runCheck(db) {
   return out;
 }
 
+// THE FORM SOMEBODY ACTUALLY PASTES: comment-stripped, which is forty lines a
+// statement instead of a hundred and fifteen. The comments are the record of
+// why each check exists and belong in the file; they are dead weight in a
+// console on an iPad.
+//
+// It lives here rather than in `paste-migration.mjs` so the thing that gets
+// pasted and the thing `schema-drift-test` proves answers identically are one
+// function. Two copies would let the printed query drift from the checked one,
+// which is the shape that reported 1,1,1,0,0 over an `agreements` table
+// missing fourteen columns.
+//
+// Whole lines only. Nothing in CHECK.sql carries a trailing comment, and a
+// naive strip would eat the `--` inside a string literal if one ever did.
+export const pasteForm = (sql) => sql
+  .split("\n")
+  .filter((l) => !l.trim().startsWith("--"))
+  .map((l) => l.trimEnd())
+  .join("\n")
+  .replace(/\n{3,}/g, "\n\n")
+  .trim();
+
 // What the console would have refused. D1's ceiling is 100 columns in a result
 // set; this file is two, and the assertion is on the SHAPE rather than on a
 // count of entries, because the entries are meant to grow without limit.

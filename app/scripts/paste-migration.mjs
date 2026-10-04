@@ -15,7 +15,7 @@
 //
 //   npm run paste 053          one migration
 //   npm run paste 052 053      several, in order
-//   npm run paste check 052    the did-I-run-it query for one or more
+//   npm run paste check        every statement of CHECK.sql, numbered
 //
 // Comments are stripped whole-line only. Nothing here carries a trailing one,
 // and a naive strip would eat the `--` inside a string if one ever did.
@@ -23,16 +23,14 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { checkStatements, pasteForm } from "./lib/check-sql.mjs";
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "worker", "migrations");
 
-const strip = (sql) => sql
-  .split("\n")
-  .filter((l) => !l.trim().startsWith("--"))
-  .map((l) => l.trimEnd())
-  .join("\n")
-  .replace(/\n{3,}/g, "\n\n")
-  .trim();
+// One strip, shared with the reader module, because `schema-drift-test` proves
+// that what this prints answers the same thing the file does -- and it can only
+// prove that about the strip this actually uses.
+const strip = pasteForm;
 
 const fileFor = (n) => {
   const want = String(n).padStart(3, "0");
@@ -46,25 +44,45 @@ const fileFor = (n) => {
 
 const args = process.argv.slice(2);
 if (!args.length) {
-  console.error("Usage: npm run paste <number> [number...]   |   npm run paste check <number> [number...]");
+  console.error("Usage: npm run paste <number> [number...]   |   npm run paste check");
   process.exit(1);
 }
 
-// The check query lives in CHECK.sql, which is the one record of what to run
-// afterwards. Pulled out by the migration number its lines are named for, so
-// it cannot drift from the invariants that file actually carries.
-// NO `check` SUB-COMMAND, and the attempt at one is worth recording. Pulling
-// a migration's entries out of CHECK.sql means splitting on top-level commas,
-// which means tracking paren depth -- and `m046_kind_check` compares against
-// the string '%CHECK (kind IN%', whose unmatched bracket sends the depth
-// count off by one for the rest of the file. The result was one giant entry
-// that printed every migration's check and answered "nothing found" for the
-// one actually asked for.
+// `check` PRINTS THE WHOLE FILE, NEVER ONE MIGRATION'S ENTRIES, and the
+// difference is the one that was got wrong once. Pulling a single migration's
+// check out means splitting the list on top-level commas, which means tracking
+// paren depth -- and `m046_kind_check` compares against the string
+// '%CHECK (kind IN%', whose unmatched bracket sends the count off by one for
+// the rest of the file. The result printed every migration's check as one
+// entry and answered "nothing found" for the one asked for. A check query that
+// is subtly wrong is worse than none: it is the shape that reported 1,1,1,0,0
+// over an `agreements` table missing fourteen columns.
 //
-// A check query that is subtly wrong is worse than none: it is the shape that
-// reported 1,1,1,0,0 over an `agreements` table missing fourteen columns. So
-// run the whole of CHECK.sql, which verifies every migration rather than one
-// and is the single record of what to look for.
+// Running the whole file verifies every migration rather than one and is the
+// single record of what to look for. What this adds is only that it comes out
+// PASTEABLE: D1 refused the file three times on two different limits, so it is
+// six statements run one at a time, and comment-stripped they are about forty
+// lines each instead of a hundred and fifteen. Split by `checkStatements`,
+// which is the reader every suite uses, so this cannot disagree with them
+// about where one statement ends.
+const printCheck = () => {
+  const parts = checkStatements();
+  parts.forEach((st, i) => {
+    console.log(`-- ===== STATEMENT ${i + 1} of ${parts.length} -- run this on its own =====`);
+    console.log(strip(st));
+    console.log("");
+  });
+  console.log(`-- Read the first row of each. 'ok' means nothing to do.`);
+};
+
+if (args[0] === "check") {
+  if (args.length > 1) {
+    console.error("`npm run paste check` takes no number -- it prints the whole file.");
+    process.exit(1);
+  }
+  printCheck();
+  process.exit(0);
+}
 
 for (const n of args) {
   if (args.length > 1) console.log(`-- ===== ${fileFor(n)} =====`);

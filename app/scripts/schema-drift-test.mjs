@@ -37,7 +37,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runCheck, checkSql, checkRows, checkStatements, D1_MAX_COLUMNS, D1_MAX_COMPOUND } from "./lib/check-sql.mjs";
+import { runCheck, checkSql, checkRows, checkStatements, pasteForm, D1_MAX_COLUMNS, D1_MAX_COMPOUND } from "./lib/check-sql.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const M = join(app, "worker", "migrations");
@@ -223,6 +223,25 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
   ck("and every invariant statement carries the same verdict rule",
     checkStatements().length > 2 && wrappers.size === 1,
     `${wrappers.size} distinct wrappers across ${checkStatements().length - 1} statements`);
+
+  // AND WHAT `npm run paste check` PRINTS IS THE SAME QUERY. That is the form
+  // somebody actually pastes -- comment-stripped, because forty lines is
+  // pasteable on an iPad and a hundred and fifteen is not -- and nothing
+  // checked it. A whole-line strip that ever ate a line of SQL would print a
+  // check that is subtly wrong, which is the exact shape that once reported
+  // 1,1,1,0,0 over an `agreements` table missing fourteen columns: the thing
+  // that gets used being the thing nothing tests.
+  {
+    const bare = {};
+    let err = "";
+    try {
+      for (const st of checkStatements())
+        for (const r of fresh.prepare(pasteForm(st)).all()) bare[r.name] = r.value;
+    } catch (e) { err = String(e.message); }
+    ck("and the paste-ready form answers identically",
+      !!row && JSON.stringify(bare) === JSON.stringify(row),
+      err || `${Object.keys(bare).length} rows vs ${Object.keys(row || {}).length}`);
+  }
 
   // AND THE VERDICT COLUMN AGREES WITH THE NUMBERS, which is the half a
   // reader cannot check for themselves. CHECK.sql computes 'ok' / 'NOT RUN' /
