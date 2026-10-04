@@ -457,6 +457,94 @@ try {
     ck("and says they are one paste each", /one paste EACH/i.test(sql));
   }
 
+  console.log("\n-- 067: a window the hiring side proposed carries their agreement --");
+  {
+    // Reported from a manager's own Jobs screen: *"Proposed Oct 16, 2026 ·
+    // 9 AM-10 AM -- waiting on the contractor and the hiring side to
+    // confirm"*, on a job they had set the time for themselves, with no
+    // button anywhere to answer it. They are told they are waiting on
+    // themselves, and the chain cannot resolve it: the crew is asked FIRST,
+    // so until they answer it is never the manager's turn.
+    //
+    // Nothing is wrong with the screen. These are rows written before 064 --
+    // under 061 a manager proposing stamped nothing, because the hiring side
+    // had no leg -- so `manager_at` is NULL and 064 counts them as a party
+    // who has not answered.
+    const db = freshDb({ base: SCHEMA, migrations: [] });
+    db.exec(`
+      INSERT INTO accounts(id,name,kind,subdomain,plan) VALUES
+        ('acc_pm','Sound PM','property_manager','soundpm','scale'),
+        ('acc_b','Cascade','property_manager','cascade','basic');
+      INSERT INTO users(id,name,email) VALUES
+        ('u_mgr','Chris','c@t.test'), ('u_pm','Dev','d@t.test'),
+        ('u_sub','Juan','j@t.test'), ('u_ten','John','t@t.test');
+      INSERT INTO memberships(id,user_id,account_id,role) VALUES
+        ('m1','u_mgr','acc_pm','admin'), ('m2','u_pm','acc_pm','pm'),
+        ('m3','u_sub','acc_pm','contractor'), ('m4','u_ten','acc_pm','tenant'),
+        -- THE SAME PERSON, ADMIN SOMEWHERE ELSE. The membership has to be
+        -- matched on the visit's own account or a contractor seat here would
+        -- be backfilled as the hiring side because of a seat over there.
+        ('m5','u_sub','acc_b','admin');
+      INSERT INTO jobs(id,account_id,title,trades,status,created_at) VALUES
+        ('j1','acc_pm','A','["plumbing"]','active','2026-09-01');
+      INSERT INTO visits(id,account_id,job_id,proposed_by,date,start_time,end_time,status,created_at) VALUES
+        -- Proposed by an admin, pre-064: nothing stamped.
+        ('v_admin','acc_pm','j1','u_mgr','2026-10-16','09:00','10:00','proposed','2026-09-20 10:00:00'),
+        -- And by a project manager, who is equally the hiring side.
+        ('v_pm','acc_pm','j1','u_pm','2026-10-17','09:00','10:00','proposed','2026-09-20 11:00:00'),
+        -- THE DISCRIMINATING ROW: proposed by the CONTRACTOR. Their agreement,
+        -- not the manager's -- so the hiring side must go on waiting, which is
+        -- the whole of what 064 added. A backfill that caught this one would
+        -- settle windows nobody on the team has seen.
+        ('v_sub','acc_pm','j1','u_sub','2026-10-18','09:00','10:00','proposed','2026-09-20 12:00:00'),
+        -- A tenant's own counter, for the same reason.
+        ('v_ten','acc_pm','j1','u_ten','2026-10-19','09:00','10:00','proposed','2026-09-20 13:00:00'),
+        -- FINISHED BUSINESS. Nothing reads its legs, and a backfill that
+        -- reaches one row too far is worse than one that reaches none.
+        ('v_old','acc_pm','j1','u_mgr','2026-09-02','09:00','10:00','superseded','2026-09-01 10:00:00'),
+        -- Already stamped. Running the file twice must change nothing.
+        ('v_done','acc_pm','j1','u_mgr','2026-10-20','09:00','10:00','proposed','2026-09-20 14:00:00');
+      UPDATE visits SET manager_at = '2026-09-20T14:00:00.000Z' WHERE id = 'v_done';
+    `);
+    const CHECKSQL = readFileSync(join(app, "worker", "migrations", "CHECK.sql"), "utf8")
+      .replace(/;\s*$/, "");
+    const unstamped = () => db.prepare(CHECKSQL).get().m067_inv_manager_unstamped;
+    const legOf = (id) => db.prepare(`SELECT manager_at FROM visits WHERE id = ?`).get(id).manager_at;
+
+    // THE INVARIANT IS RUN AGAINST REAL ROWS, which is 057's lesson: every
+    // invariant reads zero on an empty database, so one that is subtly wrong
+    // passes for ever.
+    ck("the invariant sees the rows before the backfill", unstamped() === 2,
+      String(unstamped()));
+
+    const SQL = readFileSync(join(app, "worker", "migrations", "067_visit_manager_backfill.sql"), "utf8");
+    db.exec(SQL);
+    ck("and reads zero after it", unstamped() === 0, String(unstamped()));
+    // Set to the row's own created_at -- what the route would have written had
+    // the column existed: the moment they proposed it.
+    ck("the admin's window is stamped at the moment it was proposed",
+      legOf("v_admin") === "2026-09-20 10:00:00", String(legOf("v_admin")));
+    ck("and the project manager's too", !!legOf("v_pm"), String(legOf("v_pm")));
+    // BOTH DIRECTIONS, because a backfill that stamped everything passes every
+    // assertion above on its own.
+    ck("the contractor's own proposal is left alone", legOf("v_sub") === null,
+      String(legOf("v_sub")));
+    ck("and the tenant's", legOf("v_ten") === null, String(legOf("v_ten")));
+    ck("a superseded window is not touched", legOf("v_old") === null, String(legOf("v_old")));
+    ck("and one already stamped keeps its own value",
+      legOf("v_done") === "2026-09-20T14:00:00.000Z", String(legOf("v_done")));
+    // Idempotent: it is a paste an operator may run twice.
+    db.exec(SQL);
+    ck("running it twice changes nothing",
+      legOf("v_admin") === "2026-09-20 10:00:00" && legOf("v_sub") === null,
+      `${legOf("v_admin")} / ${legOf("v_sub")}`);
+    // STATUS IS DELIBERATELY NOT TOUCHED, and that is safe rather than an
+    // omission: the rows this matches had NO leg stamped, so the contractor is
+    // still outstanding and `proposed` remains the correct verdict.
+    ck("and the window is still proposed, not settled",
+      db.prepare(`SELECT status FROM visits WHERE id = 'v_admin'`).get().status === "proposed");
+  }
+
   console.log("\n-- the parties in words, read from the one list --");
   {
     // Reported as *"one of the times for a job says waiting on a contractor

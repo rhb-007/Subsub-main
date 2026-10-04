@@ -34,6 +34,7 @@ import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { AUTO_TRIES, TURNAROUND_KINDS, isTurnaroundKind, rankCandidates,
   slotFor, whyNotAuto, autoPickText } from "../shared/autopick.js";
+import { nextToAnswer } from "../shared/visitparty.js";
 
 const app = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -41,6 +42,11 @@ const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok 
 
 const { default: worker } = await import("../worker/index.js");
 const SCHEMA = readFileSync(join(app, "worker", "schema.sql"), "utf8");
+// Read out of the real CHECK.sql by column name, so the assertion cannot
+// drift from the file an operator pastes.
+const CHECK = readFileSync(join(app, "worker", "migrations", "CHECK.sql"), "utf8")
+  .replace(/;\s*$/, "");
+const inv = (db, name) => db.prepare(CHECK).get()[name];
 
 // A 2026 Monday, so the weekday arithmetic is readable in the assertions.
 const MON = "2026-10-05";
@@ -74,9 +80,18 @@ const seed = ({ auto = 1, docs = true } = {}) => {
         '{"insurance":{"status":"verified"},"bond":{"status":"verified"},"contract":{"status":"verified"},"w9":{"status":"verified"}}');
     INSERT INTO properties(id,account_id,name,address,city,state,zip) VALUES
       ('prop_1','acc_pm','Press Apartments','1620 Belmont','Seattle','WA','98122');
+    -- THE TENANT SEAT IS INSERTED FIRST, DELIBERATELY. The automation acts as
+    -- a TEAM seat, and taking whichever row came back first would speak for
+    -- the account as a guest -- scoped to named buildings, somebody else's
+    -- client. With the admin inserted first the two rules give the same
+    -- answer and the fixture covers for the guard, which is what the first
+    -- version of this seed did: mutating the team-seat filter to "take the
+    -- first row" changed no outcome.
+    -- (No backticks in here. This is a template literal, and one in a comment
+    -- closes it -- the fifteenth time this repository has paid for that.)
     INSERT INTO memberships(id,user_id,account_id,role,unit) VALUES
-      ('m_mgr','u_mgr','acc_pm','admin',NULL),
-      ('m_t3b','u_t3b','acc_pm','tenant','3B');
+      ('m_t3b','u_t3b','acc_pm','tenant','3B'),
+      ('m_mgr','u_mgr','acc_pm','admin',NULL);
     INSERT INTO membership_properties(membership_id,property_id) VALUES ('m_t3b','prop_1');
     INSERT INTO inspections(id,account_id,property_id,unit,kind,status,finished_at)
       VALUES ('ins_out','acc_pm','prop_1','3B','move_out','finished','2026-10-01 12:00:00');
@@ -248,6 +263,42 @@ try {
     // AND IT IS NOT SETTLED: the crew is a party now, so they are asked.
     ck("waiting on the crew rather than booked for them",
       vs[0]?.status === "proposed", String(vs[0]?.status));
+    // 067. AND THE HIRING SIDE HAS ALREADY AGREED, because they switched this
+    // on -- the automation proposing on their behalf IS their agreement, which
+    // is 064's own rule applied to the side that delegated the choice.
+    //
+    // This runs inside the CONTRACTOR'S accept, and `asSelf` relayed their
+    // headers -- so the propose route read `auth.role === "contractor"` and
+    // recorded the window as the crew's own agreement instead. Every
+    // auto-scheduled job then stopped dead waiting for a manager to tick a
+    // time a machine had chosen for them, which is the opposite of *"this
+    // should be fully automated"*.
+    ck("the hiring side's leg is stamped", !!vs[0]?.manager_at, String(vs[0]?.manager_at));
+    // AND NOT THE CREW'S. They are the party being ASKED here -- stamping
+    // theirs would settle the window without anybody having answered, which is
+    // the booked-with-the-crew-never-asked failure 065 exists to prevent.
+    ck("and the crew's is not", !vs[0]?.contractor_at, String(vs[0]?.contractor_at));
+    // THE WHOLE POINT OF THE PAIR: with the hiring side already in, the chain
+    // is down to the one party who has to answer.
+    ck("so the turn is the crew's", nextToAnswer(
+      { respondedAt: vs[0]?.responded_at, contractorAt: vs[0]?.contractor_at,
+        managerAt: vs[0]?.manager_at },
+      ["contractor", "manager"]) === "contractor",
+      `${vs[0]?.contractor_at} / ${vs[0]?.manager_at}`);
+    // AND IT IS NOT ATTRIBUTED TO THE CONTRACTOR, which is what `proposed_by`
+    // said before -- a window the crew never put forward, on their record.
+    // AND BY A TEAM SEAT, not whichever row came back first -- a guest seat
+    // speaking for the account is the widening `staffStandsIn` already
+    // refuses, from a new direction.
+    ck("the window is proposed by the account, not the crew",
+      vs[0]?.proposed_by !== "u_g", String(vs[0]?.proposed_by));
+    ck("and by a team seat rather than a tenant's",
+      vs[0]?.proposed_by === "u_mgr", String(vs[0]?.proposed_by));
+    // The invariant that keeps it true, run against a real row rather than an
+    // empty database.
+    ck("and CHECK.sql counts no unstamped hiring side",
+      inv(db, "m067_inv_manager_unstamped") === 0,
+      String(inv(db, "m067_inv_manager_unstamped")));
     ck("and the reply says what it did", b.auto?.ok === true && b.auto?.company === "Good Crew",
       JSON.stringify(b.auto));
     const act = db.prepare(`SELECT * FROM activity WHERE kind = 'auto_turnaround'`).get();

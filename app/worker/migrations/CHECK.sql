@@ -508,7 +508,32 @@ SELECT
       AND COALESCE((SELECT e.kind FROM job_endings e
                      WHERE e.job_id = r.job_id
                        AND (e.at < r.at OR (e.at = r.at AND e.rowid < r.rowid))
-                     ORDER BY e.at DESC, e.rowid DESC LIMIT 1), 'none') <> 'deferred')          AS m066_inv_resume_without_hold;
+                     ORDER BY e.at DESC, e.rowid DESC LIMIT 1), 'none') <> 'deferred')          AS m066_inv_resume_without_hold,
+
+  -- 067. Invariant, must read ZERO: a live window the HIRING SIDE proposed
+  -- with no record that they agreed to it.
+  --
+  -- There is no column for 067 to check -- it is a backfill, not a schema
+  -- change -- so this is both the did-I-run-it and the stays-true. 064's rule
+  -- is that proposing is agreeing, so a window somebody on the team put
+  -- forward carries their agreement by definition; a row here is one where it
+  -- was not recorded, and the cost is the chain waiting on a side that agreed
+  -- weeks ago with no button anywhere to say so. Reported from a manager's own
+  -- Jobs screen exactly that way.
+  --
+  -- It stays zero by itself: the propose route stamps the leg at write time,
+  -- so only rows written before 064 shipped could be in here, and 067 clears
+  -- those. A contractor's or a tenant's own proposal is NOT counted -- those
+  -- legitimately leave the hiring side outstanding, which is the whole of what
+  -- 064 added.
+  (SELECT COUNT(*) FROM visits v
+    WHERE v.manager_at IS NULL
+      AND v.status IN ('proposed', 'confirmed')
+      AND v.proposed_by IS NOT NULL
+      AND EXISTS (SELECT 1 FROM memberships m
+                   WHERE m.user_id = v.proposed_by
+                     AND m.account_id = v.account_id
+                     AND m.role IN ('admin', 'pm')))                                            AS m067_inv_manager_unstamped;
   -- NO INVARIANT, AND THE REASON IS WORTH STATING rather than leaving the
   -- next person to wonder why 061 has one and this does not.
   --

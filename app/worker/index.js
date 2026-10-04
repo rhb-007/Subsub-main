@@ -13192,16 +13192,57 @@ app.get("/api/work-orders/:id/inspection/photo/:photoId", requireRole("admin", "
 // The manager's own credentials, forwarded. Built fresh rather than passing
 // `c.req.raw.headers` through: that carries the original Content-Length, and a
 // body of a different size behind it is a request that cannot be read.
-const relayHeaders = (c) => {
+const relayHeaders = (c, as = null) => {
   const h = new Headers({ "Content-Type": "application/json" });
   for (const k of ["authorization", "cookie", "x-user-id", "x-account-id",
     "x-impersonated-by", "x-staff-user-id"]) {
     const v = c.req.header(k);
     if (v) h.set(k, v);
   }
+  // 067. OR AS THE ACCOUNT ITSELF, which is what an auto-scheduled window
+  // actually is. See `accountSeat` below; `authorization` comes off because a
+  // bearer token naming the caller would outrank the headers.
+  if (as?.userId) {
+    h.set("x-user-id", as.userId);
+    h.set("x-account-id", as.accountId);
+    h.delete("authorization");
+    h.delete("cookie");
+  }
   return h;
 };
-const asSelf = async (c, path, body) => {
+
+// 067. A TEAM SEAT ON THE ACCOUNT, for the automation to act as.
+//
+// `autoProposeOnAccept` fires inside the CONTRACTOR's request -- accepting a
+// work order is what starts the clock -- and `asSelf` relayed their headers,
+// so the propose route read `auth.role === "contractor"` and stamped the
+// window as the contractor's own agreement. The hiring side's leg was left
+// NULL, so every auto-scheduled job then stopped dead waiting for a manager
+// to tick a time a machine had chosen on their behalf.
+//
+// WHICH IS THE OPPOSITE OF WHAT WAS ASKED FOR: *"automate back and forth with
+// tenant and tradesman... until it's booked - this should be fully
+// automated"*. The hiring side is deliberately not in that back and forth.
+// They agreed by switching it on, and the automation proposing on their behalf
+// IS that agreement -- the same rule 064 states, applied to the side that
+// delegated the choice.
+//
+// `pickSeat` rather than the first row back: it prefers an admin, then a pm,
+// and an unrecognised role sorts LAST, so a guest seat can never end up
+// speaking for the account. Null when there is nobody -- the caller falls back
+// to relaying, because an account with no team seat must still be able to
+// schedule a repair.
+async function accountSeat(env, accountId) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT user_id AS userId, role FROM memberships WHERE account_id = ?`
+    ).bind(accountId).all();
+    const seat = pickSeat((results || []).filter((r) => isTeamSeat(r.role)));
+    return seat?.userId ? { userId: seat.userId, accountId } : null;
+  } catch { return null; }
+}
+
+const asSelf = async (c, path, body, as = null) => {
   // `executionCtx` throws rather than answering undefined when there is none
   // -- which is every test, and any call that did not arrive through the
   // fetch handler. Reading it through a catch is what lets this be driven at
@@ -13210,7 +13251,7 @@ const asSelf = async (c, path, body) => {
   try { ctx = c.executionCtx; } catch { ctx = undefined; }
   const res = await app.fetch(
     new Request(new URL(path, c.req.url), {
-      method: "POST", headers: relayHeaders(c), body: JSON.stringify(body),
+      method: "POST", headers: relayHeaders(c, as), body: JSON.stringify(body),
     }), c.env, ctx);
   return { status: res.status, body: await res.json().catch(() => ({})) };
 };
@@ -13352,8 +13393,14 @@ async function autoProposeOnAccept(c, wo) {
   const from = (job.date || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
   const day = slotFor({ from, busy: mine?.busy, unavailable: mine?.unavailable });
   if (!day) return { stopped: "no_slot" };
+  // AS THE ACCOUNT, NOT AS THE CONTRACTOR WHOSE PRESS GOT US HERE. This runs
+  // inside their accept, so relaying their headers made the propose route read
+  // `auth.role === "contractor"` and record the window as THEIR agreement --
+  // leaving the hiring side outstanding on a time the machine chose for them,
+  // which stalls every auto-scheduled job on a manual tick.
   const put = await asSelf(c, `/api/jobs/${job.id}/visits`,
-    { date: day, startTime: AUTO_START, endTime: AUTO_END });
+    { date: day, startTime: AUTO_START, endTime: AUTO_END },
+    await accountSeat(c.env, job.account_id));
   return { ok: put.status < 300, date: day };
 }
 
@@ -13408,8 +13455,14 @@ async function autoRepropose(c, visit) {
   // same week again.
   const day = slotFor({ from: visit.date, busy: mine?.busy, unavailable: mine?.unavailable });
   if (!day) return { stopped: "no_slot" };
+  // AS THE ACCOUNT, for the reason `autoProposeOnAccept` is: this runs inside
+  // the DECLINE of whoever could not make the last window -- a tenant or a
+  // contractor -- so relaying their headers would record the replacement as
+  // their own agreement to a day they have not seen, and leave the hiring side
+  // outstanding on every one of them.
   const put = await asSelf(c, `/api/jobs/${job.id}/visits`,
-    { date: day, startTime: AUTO_START, endTime: AUTO_END });
+    { date: day, startTime: AUTO_START, endTime: AUTO_END },
+    await accountSeat(c.env, job.account_id));
   await logActivity(c.env, job.account_id, auth.userId, "auto_turnaround",
     `That did not work, so ${day} has gone forward instead (try ${tries + 1} of ${AUTO_TRIES}).`);
   return { ok: put.status < 300, date: day, tries: tries + 1 };

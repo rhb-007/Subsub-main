@@ -8142,6 +8142,101 @@ refactor.
   cancellation is a product decision rather than a patch.
 
 
+- **"WAITING ON THE CONTRACTOR AND THE HIRING SIDE TO CONFIRM", ON A SCREEN
+  BELONGING TO THE HIRING SIDE.** Reported with a screenshot of a property
+  manager's own Jobs card and the question *"shouldn't this say tenant?"* — and
+  the answer to that is **no**, because the access answer three lines above it
+  is *No access needed*, which is 060 taking the tenant out of the loop
+  deliberately. What the screenshot actually caught is that **the manager is
+  being told they are waiting on themselves**, with no button anywhere to
+  answer it.
+
+  **NOTHING WAS WRONG WITH THE SCREEN.** The line is `waitingOn` read
+  correctly off a row where the hiring side's leg is NULL. Two separate causes
+  put it there, and the second one is live rather than historical.
+
+  **ONE: ROWS WRITTEN BEFORE 064 EXISTED.** 064's rule is *proposing is
+  agreeing, for whoever proposed it*, and the propose route has stamped
+  `manager_at` since the day it shipped. Under 061 a manager proposing stamped
+  **nothing at all**, because the hiring side had no leg — so every window
+  proposed before that deploy reads as a party who has not answered. And it
+  cannot resolve itself: the chain asks the crew **first**, so until the
+  contractor answers it is never the manager's turn and no button is drawn.
+  The appointment sits with both sides apparently outstanding and neither able
+  to be wrong about it.
+
+  Migration 067 is the backfill, and `proposed_by` is what makes it a fact
+  rather than a guess: the column has recorded who put the window forward
+  since 019, and joining it to their seat says whether that was the hiring
+  side. `manager_at` is set to the row's own `created_at` — exactly what the
+  route would have written had the column existed.
+
+  **Scoped three ways, because a backfill that reaches one row too far is
+  worse than one that reaches none.** Live windows only. `manager_at IS NULL`
+  only, so it is idempotent and a stamped row is untouched. And the proposer
+  must hold an **admin or pm seat on that visit's own account** — a window a
+  *contractor* proposed is their agreement and not the manager's, so those
+  must go on waiting, which is the whole of what 064 added. Matched on the
+  account rather than globally, because the same person can be an admin of one
+  account and a contractor seat on another; the fixture puts exactly that
+  person in, so a global match fails.
+
+  **`status` is deliberately not touched, and that is safe rather than an
+  omission.** The rows this matches had no leg stamped at all, so the
+  contractor is still outstanding and `proposed` remains correct. A row where
+  the contractor *had* answered was proposed by the contractor, which the
+  WHERE clause excludes.
+
+  **TWO, AND THIS ONE IS LIVE: THE AUTOMATION PROPOSED IN THE CONTRACTOR'S
+  NAME.** `autoProposeOnAccept` fires inside the crew's own request — accepting
+  a work order is what starts the clock — and `asSelf` relayed their headers,
+  so the propose route read `auth.role === "contractor"` and recorded the
+  window as **their** agreement. `proposed_by` named them for a time they had
+  never put forward, and the hiring side's leg was left NULL. Every
+  auto-scheduled job then stopped dead waiting for a manager to tick a slot a
+  machine had chosen on their behalf.
+
+  **Which is the opposite of what was asked for**: *"automate back and forth
+  with tenant and tradesman... until it's booked - this should be fully
+  automated"*. The hiring side is explicitly not in that back and forth. They
+  agreed by **switching it on**, and the automation proposing for them IS that
+  agreement — 064's own rule applied to the side that delegated the choice.
+
+  `asSelf` takes an optional seat to act as, and `accountSeat` finds one.
+  **`pickSeat` over the TEAM seats**, not whichever row came back first: a
+  guest seat — an owner or a tenant, scoped to named buildings and somebody
+  else's client — speaking for the account is the widening `staffStandsIn`
+  already refuses, arrived at from a new direction. An unrecognised role sorts
+  last there, so a role added later cannot silently become the account's voice.
+  Null when there is nobody, and the caller falls back to relaying: an account
+  with no team seat must still be able to schedule a repair.
+
+  `autoRepropose` takes it too, and for a sharper reason — that one runs inside
+  the **decline** of whoever could not make the last window, so relaying would
+  record the replacement as the tenant's or the contractor's agreement to a day
+  they have not seen.
+
+  **AND THE FIXTURE COVERED FOR THE GUARD FIRST TIME ROUND.** Mutating
+  `pickSeat` over team seats to "take the first row" changed **no outcome**,
+  because the seed inserted the admin before the tenant and the two rules gave
+  the same answer. The tenant seat is inserted first now, which is the only
+  order either can be told apart on — and the mutation then fails five
+  assertions. The two-guards-covering-for-each-other shape, in its fixture
+  form, for the seventh time.
+
+  **The invariant is both halves at once.** 067 is a backfill, so there is no
+  column for a did-I-run-it check — `m067_inv_manager_unstamped` counts a live
+  window the hiring side proposed with no record that they agreed, which is
+  non-zero before the paste and zero after, and **stays** zero because the
+  propose route stamps at write time. Run against real rows in two suites
+  rather than left to the drift test, which is 057's lesson.
+
+  **And the backtick trap, for the FIFTEENTH time**, in a SQL comment written
+  into a test fixture's template literal — this one naming a function in
+  backticks inside the seed. Caught by the suite failing to parse, with the
+  one-line guard now beside it.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
