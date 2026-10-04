@@ -502,7 +502,7 @@ try {
     t.ck("offering to confirm it",
       (open?.btns || []).some((b) => /I'll be there/i.test(b)), JSON.stringify(open?.btns));
     t.ck("to offer another",
-      (open?.btns || []).some((b) => /Propose another time/i.test(b)),
+      (open?.btns || []).some((b) => /Propose a different time/i.test(b)),
       JSON.stringify(open?.btns));
     // DECLINE, which the request asked for and the route has always taken.
     // Two answers out of three is a screen that makes somebody turn the JOB

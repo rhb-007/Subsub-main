@@ -45,16 +45,50 @@ for (const line of block) {
 }
 ck("it defines a plausible number of classes", defined.size > 300, `${defined.size}`);
 
-const browser = await puppeteer.launch({
-  executablePath: process.env.CHROME_PATH || "/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell",
-  headless: true,
-  args: ["--no-sandbox", "--disable-gpu", "--host-resolver-rules=MAP *.subsub.work 127.0.0.1"],
-});
+// THE STATIC HALF IS DONE, AND IT RUNS ANYWHERE.
+//
+// Everything above reads a file. Everything below needs a browser, a built
+// bundle and a server on 5191 -- and because the two were one script, a
+// container without that stack could not run EITHER. So the one-second check
+// that catches the backtick sat behind a stack that was not up, and the trap
+// landed another nine times with this guard in the repository the whole time.
+// A guard that runs where nobody is looking is a guard that reports to
+// nobody, which is the lesson the five red deploys already taught.
+//
+// It is reported and skipped rather than failed: no stack is not a fault in
+// the stylesheet, and a red run for a missing server is a red run people
+// learn to ignore -- which is how this one got ignored.
+const liveBanner = () => console.log("\n-- and what the browser ended up with --");
+let browser = null;
 try {
-  console.log("\n-- and what the browser ended up with --");
+  browser = await puppeteer.launch({
+    executablePath: process.env.CHROME_PATH || "/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell",
+    headless: true,
+    args: ["--no-sandbox", "--disable-gpu", "--host-resolver-rules=MAP *.subsub.work 127.0.0.1"],
+  });
+} catch (e) {
+  liveBanner();
+  console.log(`  --  no browser here, so the live half did not run: ${String(e).slice(0, 90)}`);
+}
+if (!browser) {
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+}
+try {
+  liveBanner();
   const page = await browser.newPage();
-  await page.goto(`http://${HOST}:${PORT}/`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("style", { timeout: 15000 });
+  try {
+    await page.goto(`http://${HOST}:${PORT}/`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("style", { timeout: 15000 });
+  } catch (e) {
+    // The app is not being served here. Said rather than failed, for the
+    // reason above -- and said loudly enough that nobody reads a green run as
+    // "the live half passed".
+    console.log(`  --  nothing serving on ${PORT}, so the live half did not run: ${String(e).slice(0, 70)}`);
+    await browser.close();
+    console.log(`\n${pass} passed, ${fail} failed`);
+    process.exit(fail ? 1 : 0);
+  }
 
   await wait(1500);
   const live = await page.evaluate(() => {

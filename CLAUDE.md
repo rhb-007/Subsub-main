@@ -8473,6 +8473,78 @@ refactor.
   finds the wrong thing, which is the `.embed-code-btn` trap before it has a
   chance to happen.
 
+- **A SENTENCE LAID OUT AS A ROW OF FLEX ITEMS, AND A PERIOD ORPHANED AT THE
+  START OF A LINE.** Reported with the hiring side's own answer panel circled:
+  *"Reformat this, better design of the information and use proper American
+  English."* It drew as three columns —
+
+      The contractor has put    Oct 7, 2026 · 9 AM–11    . Agree it and the
+      forward                   AM                       tenant (John Smith)…
+
+  **`.visit-state` WAS `display:flex` WITH A GAP**, so the icon, every run of
+  text AND the `<b>` holding the date each became its own flex item, sized to
+  its own content and wrapping on its own. The gap is the space in front of
+  that period. **All nine of these lines have that shape** — an icon, a
+  sentence, a bold date in the middle — so every one of them was one wrap away
+  from the same thing. The `.dash-row-open` lesson this file already records,
+  inside a single paragraph.
+
+  The icon goes inline and the text flows. Which needed one guard: the one
+  block that really IS a row, `.visit-nobody` (a sentence and a button), is
+  declared **above** `.visit-state`, so a later `display:block` would have
+  beaten it. Raised to `.visit-state.visit-nobody` rather than moved, because
+  ordering is what decides two equal selectors and this one must not be
+  decided by where it sits.
+
+  **THREE LINES IN THE ORDER SOMEBODY READS THEM: what happened, when, and
+  what yes does.** Even laid out correctly, the date was mid-clause — and it
+  is the one value on that panel somebody has to find before they can answer,
+  so it gets a line of its own at 16px. The panel is amber-edged rather than
+  sharing the flat paper tone of the access note directly above it: two tinted
+  blocks stacked said nothing about which was the statement and which was the
+  question.
+
+  **"AGREE IT" AND "HAS PUT FORWARD" ARE BRITISH.** So was *"has been and
+  gone"* one branch along. Approve, proposed, has passed. This is a product
+  sold in the United States and the voice should not wander.
+
+  **AND TWO BUTTONS DID ONE THING, ONE DIRECTLY ABOVE THE OTHER.** *Propose
+  another* inside the panel and *Propose a different time* under it, both
+  opening the same form — two names for one object, which is how somebody
+  concludes there are two of them, and here they were four pixels apart. One
+  name, and the standalone one is withheld while the panel is up, so there is
+  one of it on screen as well. `myTurn` is read once and both the panel and
+  the suppression hang off it, so they cannot disagree.
+
+  The contractor's own panel said *"Propose another time"* for the same act on
+  the same object, read by the other party to the same appointment, so it
+  matches now. The **service call** flow keeps *"Propose another date"*
+  deliberately: a return date is not a window, and matching the wording there
+  would name the wrong thing.
+
+  **THE BACKTICK TRAP, TWICE IN ONE CHANGE — THE SIXTEENTH AND SEVENTEENTH
+  TIMES — AND THE GUARD FOR IT HAS EXISTED SINCE THE FIRST.** `test:css`
+  reads the stylesheet literal and asserts there is no backtick in it. It
+  never ran: its first three assertions need nothing but a file, and they sat
+  behind a browser, a built bundle and a server on 5191 — so a container
+  without that stack could not run *either* half, and the one-second check
+  that catches this landed nine more incidents with the guard in the
+  repository the whole time.
+
+  **A guard that runs where nobody is looking is a guard that reports to
+  nobody**, which is the lesson the five red deploys already taught, found
+  again in the one place that was supposed to have learned it. The static half
+  runs first and on its own now; the live half says it did not run rather than
+  failing, because no stack is not a fault in the stylesheet and a red run for
+  a missing server is a red run people learn to ignore — which is exactly how
+  this one got ignored. It names the offending line.
+
+  And one harness fault worth keeping, because it is this project's own: a
+  blanket rename in the test to clear a shadowed binding rewrote the SELECTOR
+  string as well, so the probe looked for a class that does not exist and
+  reported the panel as missing on a screen that had rendered perfectly.
+  **The selector was wrong, not the product** — for the third time.
+
 
 ## Working here
 

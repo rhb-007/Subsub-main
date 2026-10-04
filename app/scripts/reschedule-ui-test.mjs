@@ -108,6 +108,11 @@ const JOBS = () => [
   // is identical, so the only thing the sentences can differ by is the
   // engagement.
   job("handy", "Ballard - tap washer", {}, "cmp_hdy"),
+  // THE CREW CAME BACK WITH A DIFFERENT TIME, which is the one state that
+  // puts the hiring side's own answer panel on screen. 064 asks the crew
+  // first, so without a visit they have already answered this block is never
+  // drawn and nothing about it can be checked.
+  job("ours", "Unit 53 - no water pressure"),
 ];
 
 // A live window on the reported job, so the propose form is a REPLACEMENT
@@ -117,6 +122,14 @@ const VISITS = () => [{
   startTime: "09:00", endTime: "11:00", note: "", tenantNote: null,
   respondedAt: null, contractorAt: null, contractorNote: null,
   proposedBy: "u_mgr", createdAt: "2026-09-25",
+}, {
+  // Proposed BY the crew and stamped as theirs, with the hiring side's leg
+  // empty -- so `nextToAnswer` reaches the manager and the panel draws.
+  id: "v2", jobId: "ours", status: "proposed", date: "2026-10-07",
+  startTime: "09:00", endTime: "11:00", note: "", tenantNote: null,
+  respondedAt: null, contractorAt: "2026-10-03T12:00:00.000Z", contractorNote: null,
+  managerAt: null, turn: "manager", waitingOn: ["manager"],
+  proposedBy: "u_sub", createdAt: "2026-10-03",
 }];
 
 const sent = [];
@@ -296,6 +309,81 @@ try {
     /the contractor/i.test(stillSub?.state || ""), stillSub?.state);
   t.ck("and is not called a handyman",
     !/handyman/i.test(stillSub?.state || ""), stillSub?.state);
+
+  console.log("\n-- our own turn reads as three lines, in American English --");
+  await openCard(page, "no water pressure");
+  await wait(600);
+  const ours = await page.evaluate(() => {
+    const card = [...document.querySelectorAll(".job-card")]
+      .find((el) => /no water pressure/i.test(el.querySelector("h3")?.innerText || ""));
+    const el = card?.querySelector(".visit-mine");
+    if (!el) return { missing: true };
+    const txt = (q) => (el.querySelector(q)?.innerText || "").replace(/\s+/g, " ").trim();
+    return {
+      lede: txt(".vm-lede"), when: txt(".vm-when"), note: txt(".vm-note"),
+      btns: [...el.querySelectorAll("button")].map((b) => b.innerText.trim()),
+      // Every propose control on the WHOLE card, which is the duplicate the
+      // report was about -- one inside this panel and one under it.
+      proposers: [...card.querySelectorAll("button")]
+        .map((b) => b.innerText.trim()).filter((t) => /propose/i.test(t)),
+      // The flex fault, read anywhere on the page one of these lines exists:
+      // with the sentence split into items, the date sat in a column of its
+      // own and the clause after it began with an orphaned period. The
+      // computed display is the only witness -- the drawn words read the same
+      // either way.
+      states: [...document.querySelectorAll(".visit-state:not(.visit-nobody)")]
+        .map((e) => getComputedStyle(e).display),
+      card: (card?.innerText || "").replace(/\s+/g, " "),
+    };
+  });
+  t.ck("the hiring side's own answer panel is drawn", ours.missing !== true, JSON.stringify(ours));
+  // WHAT HAPPENED, WHEN, AND WHAT YES DOES -- three lines rather than one
+  // sentence with the date bolded in the middle of it.
+  t.ck("it says what happened", /proposed a new time/i.test(ours.lede || ""), ours.lede);
+  t.ck("the date is a line of its own",
+    /Oct 7, 2026/.test(ours.when || "") && /9 AM/.test(ours.when || ""), ours.when);
+  t.ck("and the note says what approving does",
+    /approve it/i.test(ours.note || ""), ours.note);
+  // AMERICAN ENGLISH. "Agree it" and "has put forward" are not.
+  t.ck("no British phrasing survives",
+    !/agree it|put forward/i.test(ours.card || ""), ours.card?.slice(0, 160));
+  t.ck("the primary button approves", (ours.btns || []).some((b) => /Approve this time/i.test(b)),
+    JSON.stringify(ours.btns));
+  t.ck("rather than \"That works\"", !(ours.btns || []).some((b) => /that works/i.test(b)),
+    JSON.stringify(ours.btns));
+  // ONE NAME FOR ONE ACTION, AND ONE OF IT ON SCREEN. This drew "Propose
+  // another" inside the panel directly above "Propose a different time" under
+  // it -- two controls opening the same form, named differently, so the
+  // second read as a second thing to do.
+  t.ck("there is exactly one way to propose another time",
+    (ours.proposers || []).length === 1, JSON.stringify(ours.proposers));
+  t.ck("and it is called the same thing it is called elsewhere",
+    /^Propose a different time$/.test(ours.proposers?.[0] || ""), JSON.stringify(ours.proposers));
+  // The sentence is text now, not a row of flex items each sized to its own
+  // content. A check on the drawn words cannot see this.
+  t.ck("every status sentence is a text block, not a flex row",
+    (ours.states || []).length > 0 && ours.states.every((d) => d === "block"),
+    JSON.stringify(ours.states));
+
+  console.log("\n-- and a job we are not owed an answer on keeps the one button --");
+  {
+    const other = await page.evaluate(() => {
+      const card = [...document.querySelectorAll(".job-card")]
+        .find((el) => /leaking sink/i.test(el.querySelector("h3")?.innerText || ""));
+      return {
+        panel: !!card?.querySelector(".visit-mine"),
+        proposers: [...(card?.querySelectorAll("button") || [])]
+          .map((b) => b.innerText.trim()).filter((t) => /propose/i.test(t)),
+      };
+    });
+    // THE OTHER BRANCH, IN THE SAME PLACE. A change that hid the standalone
+    // button everywhere passes every assertion above and leaves every job we
+    // are NOT being asked about with no way to propose a time at all.
+    t.ck("no answer panel where it is not our turn", other.panel === false, JSON.stringify(other));
+    t.ck("and the standalone propose button is still there",
+      other.proposers?.length === 1 && /different time/i.test(other.proposers[0]),
+      JSON.stringify(other.proposers));
+  }
 
   console.log("\n-- and an unapproved request still gets none --");
   await openCard(page, "Repaint the lobby");

@@ -13356,6 +13356,11 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
   // that tells a crew how to get in.
   const noteTo = partyWords(parties.filter((pp) => pp !== "manager"),
     { tenantName: who?.name, contractorWord: hiresWord }) || "whoever attends";
+  // IS IT OUR TURN TO ANSWER? Read once, because two things depend on it: the
+  // panel that offers the answer, and the standalone propose button that must
+  // not sit under it offering the same thing again.
+  const myTurn = visit?.status === "proposed"
+    && visitMayAnswer(visit, parties, "manager") && !!onAnswerVisit;
   return (
     <div className="visit-block">
       <div className="form-sec">Visit</div>
@@ -13430,17 +13435,31 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
           one case: the crew came back with a different time. That is a slot
           this account did not choose and may not be able to let anybody in
           for, which is the one hop the chain pulls them back into. */}
-      {visit?.status === "proposed" && visitMayAnswer(visit, parties, "manager") && onAnswerVisit && (
+      {myTurn && (
+        /* THREE LINES, IN THE ORDER SOMEBODY READS THEM: what happened, when,
+           and what saying yes does. It was one sentence with the date bolded
+           in the middle of it, which the flex rule above then broke into
+           columns -- but even laid out correctly, a date buried mid-clause is
+           the one value on this panel somebody has to find before they can
+           decide, so it gets a line. */
         <div className="visit-mine">
-          <p className="visit-state wait"><Clock size={14} /> The {hiresWord} has put
-            forward <b>{visitWhen(visit)}</b>. Agree it and {parties.includes("tenant")
-              ? <>{name} is asked to confirm.</> : <>the job is booked.</>}</p>
+          <p className="vm-lede"><Clock size={14} /> The {hiresWord} proposed a new time</p>
+          <p className="vm-when">{visitWhen(visit)}</p>
+          {/* "Agree it" is British. So was "has put forward" above it. */}
+          <p className="vm-note">Approve it and {parties.includes("tenant")
+            ? <>{name} is asked to confirm.</> : <>the job is booked.</>}</p>
           <div className="jr-vis-acts">
             <button className="btn-solid sm" onClick={() => onAnswerVisit(visit.id, "confirmed")}>
-              <CheckCircle2 size={14} /> That works
+              <CheckCircle2 size={14} /> Approve this time
             </button>
+            {/* ONE NAME FOR ONE ACTION. This read "Propose another" directly
+                above a button reading "Propose a different time" that does
+                exactly the same thing -- two names for one object, which is
+                how somebody concludes there are two of them. The one below is
+                withheld while this panel is up, so there is also only one of
+                them on screen. */}
             <button className="btn-ghost sm" onClick={() => setOpen(true)}>
-              <Clock size={13} /> Propose another
+              <Clock size={13} /> Propose a different time
             </button>
           </div>
         </div>
@@ -13456,7 +13475,7 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
       )}
       {visit?.status === "confirmed" && (
         visitPassed(visit)
-          ? <p className="visit-state wait"><Clock size={14} /> <b>{visitWhen(visit)}</b> has been and gone. {name} hasn't said yet whether anybody came.</p>
+          ? <p className="visit-state wait"><Clock size={14} /> <b>{visitWhen(visit)}</b> has passed. {name} hasn't said yet whether anybody showed up.</p>
           /* WHO agreed it, read from the parties rather than from a ternary
              that knew about two of them. The same bug as the waiting line one
              branch along: with three parties this said "the tenant and the
@@ -13495,7 +13514,12 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
         <VisitForm jobId={job.id} startDate={job.date || ""} forWhom={noteTo} replacing={!!visit}
           onPropose={onPropose} onDone={() => setOpen(false)}
           onCancel={visit ? () => setOpen(false) : null} />
-      ) : (
+      ) : !myTurn && (
+        /* WITHHELD WHILE THE ANSWER PANEL IS UP, because that panel carries
+           this exact button. Two of one control, one above the other, both
+           opening the same form -- the second of which was named differently,
+           so it read as a second thing to do rather than the same thing
+           twice. */
         <button className="btn-ghost sm" onClick={() => setOpen(true)}>Propose a different time</button>
       )}
     </div>
@@ -25025,8 +25049,15 @@ function VisitAnswer({ when, job, canAnswer, onAnswer, onPropose, onOpenClient, 
               <button className="vans-yes" onClick={() => answer("confirmed")} disabled={!!busy}>
                 <CheckCircle2 size={16} /> {busy === "confirmed" ? "Confirming…" : "Yes, I'll be there"}
               </button>
+              {/* The same words the hiring side's panel uses, because it is
+                  the same act on the same object. "Propose another time" here
+                  and "Propose a different time" there is two names for one
+                  thing, read by the two parties to one appointment.
+                  The SERVICE CALL flow keeps "Propose another date"
+                  deliberately: a return date is not a window, and matching the
+                  wording there would name the wrong thing. */}
               <button className="vans-alt" onClick={onPropose} disabled={!!busy}>
-                <Calendar size={14} /> Propose another time
+                <Calendar size={14} /> Propose a different time
               </button>
               <button className="vans-skip" onClick={() => setSaying(true)} disabled={!!busy}>
                 Can't make it
@@ -34263,7 +34294,7 @@ iframe.dv-frame{display:block}
 /* A visit with nobody booked for it. Sits above the rest of the block and
    carries the way out, because the manager is the only person who can fix
    it and the tenant's screen is meanwhile promising somebody. */
-.visit-nobody{display:flex;align-items:flex-start;gap:9px;flex-wrap:wrap;
+.visit-state.visit-nobody{display:flex;align-items:flex-start;gap:9px;flex-wrap:wrap;
   padding:11px 13px;border-radius:10px;background:#faece7;border:1px solid #f0d1c8}
 .visit-nobody > svg{flex:none;margin-top:2px}
 .visit-nobody > span{flex:1;min-width:200px}
@@ -34273,11 +34304,39 @@ iframe.dv-frame{display:block}
 .rec-blocked-why{font-size:11.5px;line-height:1.4;color:var(--amber-ink);text-align:right;font-weight:600}
 /* and on the manager's job */
 .visit-block{margin-top:14px}
-.visit-state{display:flex;align-items:center;gap:8px;margin:6px 0 10px;font-size:13.5px;color:var(--ink-soft)}
+/* A SENTENCE IS TEXT, NOT A ROW OF FLEX ITEMS.
+   This was a flex row with a gap, so the icon, each run of text AND every
+   <b> inside it became its own flex item -- each sized to its own content and
+   wrapping on its own. Reported with the manager's answer panel circled,
+   where it rendered as three columns and left a line beginning " . Approve
+   it and..." : a period orphaned at the start of a line, with the gap in
+   front of it.
+   Every one of these nine lines has that shape (an icon, a sentence, a bold
+   date in the middle) so every one of them was one wrap away from the same
+   thing -- the dash-row-open lesson this file already records, inside a
+   single paragraph. The icon goes inline instead and the text flows. */
+.visit-state{display:block;margin:6px 0 10px;font-size:13.5px;line-height:1.5;color:var(--ink-soft)}
+.visit-state:not(.visit-nobody) > svg{vertical-align:-2px;margin-right:7px}
 /* 064. The hiring side's own turn, which it only gets when the crew moved the
    time. A block rather than a bare row, because it carries a decision. */
-.visit-mine{margin:6px 0 10px;padding:10px 12px;border-radius:12px;background:var(--paper)}
-.visit-mine .visit-state{margin:0 0 9px}
+/* IT IS THE ONE THING ON THIS CARD WAITING ON A DECISION, so it reads as one.
+   It sat on the same flat paper tone as the access note directly above it --
+   two tinted blocks stacked, neither of them saying which was the statement
+   and which was the question. An amber edge, which is the tone this product
+   already uses for something waiting on you, and the tint carries it rather
+   than a second badge. */
+.visit-mine{margin:6px 0 10px;padding:11px 13px;border-radius:12px;
+  background:#fdf7ec;border:1px solid #ecd9b0}
+/* WHAT HAPPENED, WHEN, AND WHAT YES DOES -- in that order, because the date
+   is the value somebody has to find before they can answer and it was buried
+   in the middle of a sentence. */
+.vm-lede{display:block;margin:0;font-size:12.5px;font-weight:700;color:#8a5a12}
+.vm-lede > svg{vertical-align:-2px;margin-right:6px}
+.vm-when{margin:3px 0 0 20px;font-size:16px;font-weight:700;color:var(--ink);line-height:1.3}
+.vm-note{margin:4px 0 10px 20px;font-size:12.5px;line-height:1.45;color:var(--ink-soft)}
+@media(max-width:520px){
+  .vm-when,.vm-note{margin-left:0}
+}
 /* And what a tenant sees while the chain is still upstream of them. Quiet:
    nothing is being asked of them yet, which is the whole point. */
 .tn-visit-wait{display:flex;align-items:flex-start;gap:6px;margin:8px 0 0;
