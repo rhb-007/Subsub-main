@@ -578,6 +578,22 @@ try {
     // A party the list has never heard of is dropped rather than rendered as
     // `undefined` in a sentence somebody reads.
     ck("an unknown party is dropped", partyText(["nobody"]) === "", partyText(["nobody"]));
+    // AND THE CONTRACTOR'S WORD IS THE CALLER'S, not the constant. Reported as
+    // *"it should actually say handyman since pacific is a handyman"*. The
+    // label in VISIT_PARTIES is the default and stays right for every roster
+    // that has not said otherwise; `jobHiresWord` is what reads the engagement.
+    const hm = partyText(["contractor", "manager", "tenant"],
+      { tenantName: "John Smith", contractorWord: "handyman" });
+    ck("a handyman is called a handyman", /the handyman/.test(hm), hm);
+    ck("and the constant does not come out beside it", !/the contractor/.test(hm), hm);
+    // THE OTHER TWO ARE UNTOUCHED BY IT, asserted here because a change that
+    // overwrote every label with the word would pass the two checks above.
+    ck("while the hiring side and the tenant keep their own",
+      /the hiring side/.test(hm) && /the tenant \(John Smith\)/.test(hm), hm);
+    // AND NO WORD IS THE OLD SENTENCE, which is what every call site that has
+    // no job to read gets. Both branches in the same place.
+    ck("and passing none leaves the default word",
+      /the contractor/.test(three) && !/the handyman/.test(three), three);
     // EVERY PARTY HAS A LABEL, so a party added later cannot reach a screen
     // nameless -- which is the whole class of bug this helper exists to close.
     ck("every party in the order has a label",

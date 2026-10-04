@@ -61,6 +61,40 @@ export const engagedSeatLabel = (engaged, hiringWord) =>
   isHandyman(engaged) ? ENGAGED_AS.handyman.label
     : (hiringWord || ENGAGED_AS.subcontractor.label);
 
+// AND THE WORD FOR WHOEVER HOLDS THE WORK ON ONE JOB, mid-sentence.
+//
+// Reported as *"it should actually say handyman since pacific is a
+// handyman"*, on an appointment line reading *"waiting on the contractor and
+// the hiring side to confirm"*. `VISIT_PARTIES.contractor.label` is a flat
+// constant -- the same shape as the `roleLabel` constant this file was
+// written to replace, one screen along. A party label that cannot see the
+// engagement is a label that is wrong for every handyman on every roster.
+//
+// MIXED IS ANSWERED WITH THE NEUTRAL WORD, which is `workingForVerb`'s own
+// refusal: there is no word that is right for two companies when one is a
+// licensed trade and the other is a maintenance worker, so a list that is not
+// all one kind says the hiring account's ordinary roster word rather than
+// flattering it. Nobody assigned yet gets the same answer, because there is no
+// engagement to read.
+//
+// `hiringWord` is passed in for the reason `engagedSeatLabel` takes one: this
+// module must not take a dependency on `hires.js` to say one word, and the
+// hiring word is already decided per account kind.
+//
+// AND THE LIST IS NOT FILTERED HERE, which is the one thing a later pass will
+// want to tidy. `null` in it is a row whose relationship was never answered,
+// which `engagedAs` reads as subcontractor -- so dropping the blanks would
+// make a job held by a handyman AND a subcontractor read as all-handyman, on
+// the sentence somebody reads before standing them down. Rows with nobody
+// assigned are dropped by the CALLER, where a trade with no company on it is
+// visibly a different thing from a company with no word against it.
+export function jobHiresWord(engagedList, hiringWord) {
+  const list = engagedList || [];
+  const neutral = hiringWord || "contractor";
+  if (!list.length) return neutral;
+  return list.every((e) => isHandyman(e)) ? "handyman" : neutral;
+}
+
 // WHICH ACCOUNTS HAVE HANDYMAN WORK: the ones with buildings.
 //
 // Asked for as "under property manager, portfolio manager, and building

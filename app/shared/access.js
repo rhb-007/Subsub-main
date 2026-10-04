@@ -29,7 +29,12 @@ export const ACCESS_KINDS = {
     // 061. BOTH of them, now that the party who drives to the address is asked
     // as well. The first version of this line said only "they", which was
     // true the day it shipped and became the half-truth the next change made.
-    note: "The tenant and the contractor both confirm the time before it is booked.",
+    // A FUNCTION OF THE WORD, not a constant. Reported as *"it should actually
+    // say handyman since pacific is a handyman"* -- the same party label that
+    // was a constant one module along. The default keeps every reading that is
+    // right today, and the call site that knows which companies hold the work
+    // passes what `jobHiresWord` decided.
+    note: (w = "contractor") => `The tenant and the ${w} both confirm the time before it is booked.`,
     // What the person turning up needs to know, which is a different sentence
     // from what the manager needs to decide.
     forContractor: "The tenant will let you in. The time is agreed with them." },
@@ -39,11 +44,12 @@ export const ACCESS_KINDS = {
     // every job, because a time the crew cannot make is not a time whoever
     // opens the door. Saying otherwise here would be the screen promising an
     // outcome the route no longer produces.
-    note: "The contractor confirms the time. The tenant is not asked.",
+    note: (w = "contractor") => `The ${w} confirms the time. The tenant is not asked.`,
     forContractor: "The managing agent will let you in — not the tenant." },
   none: { id: "none", label: "No access needed",
     short: "No access needed",
-    note: "Outside, a common area, or an empty unit. Only the contractor confirms the time.",
+    note: (w = "contractor") =>
+      `Outside, a common area, or an empty unit. Only the ${w} confirms the time.`,
     forContractor: "No access needed — nobody has to be there to let you in." },
 };
 export const ACCESS_IDS = Object.keys(ACCESS_KINDS);

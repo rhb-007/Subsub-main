@@ -51,7 +51,15 @@ const SUB = {
   categories: ["plumbing"], caps: [], crews: [], propertyIds: [], zips: [],
   notify: {}, rating: null, bond: true, insurance: true, contract: true, w9: true,
   hasPortal: true, license: "", licenseCheck: null, available: true, unavailableDays: [],
-  docReview: {}, coverage: {},
+  docReview: {}, coverage: {}, engagedAs: "subcontractor",
+};
+// AND A HANDYMAN ON THE SAME ROSTER. 058 put the relationship on
+// `engagements`, so one account's handyman and its subcontractor sit side by
+// side -- which is the only fixture either word can be told apart on.
+const HANDY = {
+  ...SUB, id: "cmp_hdy", company: "Ballard odd jobs", engagementId: "en_hdy",
+  contact: "Dee Rivas", email: "dee@ballard.test", engagedAs: "handyman",
+  bond: false, insurance: false,
 };
 const USERS = [
   { id: "u_mgr", name: "Christopher Lane", email: "chris@soundpm.test", phone: null,
@@ -64,16 +72,16 @@ const USERS = [
 // An ACCEPTED work order, because a company that has not said yes to the job
 // cannot be waited on for the time -- which is what makes the contractor a
 // party at all.
-const accepted = (wo) => ({ plumbing: {
-  id: wo, wo, subId: "cmp_pac", status: "accepted", auto: false,
+const accepted = (wo, subId = "cmp_pac") => ({ plumbing: {
+  id: wo, wo, subId, status: "accepted", auto: false,
   responseWindow: null, respondBy: null, respondedAt: null, value: "400",
   payKind: "fixed", rate: "", capHours: null, tradeScope: null, crewName: null,
   signedWO: null, rating: null,
 } });
-const job = (id, title, extra = {}) => ({
+const job = (id, title, extra = {}, subId = "cmp_pac") => ({
   id, accountId: "acc_pm", propertyId: "prop_1", title, status: "active",
   date: "2026-10-01", time: "09:00", address: "1620 Belmont Ave", area: "Seattle", zip: "98122",
-  trades: ["plumbing"], assignments: accepted(`WO-${id}`), notes: "", createdAt: "2026-09-20",
+  trades: ["plumbing"], assignments: accepted(`WO-${id}`, subId), notes: "", createdAt: "2026-09-20",
   photos: [], severity: null, client: null, sqft: null, stories: null, scope: "",
   measurementDocs: [], materialSource: null, materialsPaidBy: null,
   requestedBy: null, approvedAt: "2026-09-20", declinedAt: null, withdrawnAt: null,
@@ -96,6 +104,10 @@ const JOBS = () => [
   // named nobody.
   job("insp", "Move-out work - unit 3B",
     { accessEffective: "tenant", accessUserId: "u_ada" }),
+  // THE SAME SHAPE AS THE FIRST, held by a HANDYMAN. Everything else about it
+  // is identical, so the only thing the sentences can differ by is the
+  // engagement.
+  job("handy", "Ballard - tap washer", {}, "cmp_hdy"),
 ];
 
 // A live window on the reported job, so the propose form is a REPLACEMENT
@@ -112,7 +124,7 @@ const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, PM];
   if (path === "/api/account") return [200, PM];
-  if (path === "/api/subs") return [200, [SUB]];
+  if (path === "/api/subs") return [200, [SUB, HANDY]];
   if (path === "/api/account-users") return [200, USERS];
   if (path === "/api/jobs") return [200, JOBS()];
   if (path === "/api/visits") return [200, VISITS()];
@@ -254,6 +266,36 @@ try {
   t.ck("and names them rather than falling back to \"the tenant\"",
     /Ada Threeby/.test(`${insp?.state} ${insp?.noteLabel}`),
     `${insp?.state} | ${insp?.noteLabel}`);
+
+  console.log("\n-- and the party is called what this roster calls them --");
+  await openCard(page, "tap washer");
+  await wait(600);
+  const handy = await cardBlock(page, "tap washer");
+  t.ck("the block is on the handyman's job", !!handy && !handy.missing, JSON.stringify(handy));
+  // Reported as *"it should actually say handyman since pacific is a
+  // handyman"*. `VISIT_PARTIES.contractor.label` was a flat constant, so every
+  // handyman on every roster was called the contractor on the one line that
+  // says who an appointment is waiting on.
+  t.ck("the party on it is the handyman",
+    /the handyman/i.test(handy?.state || ""), handy?.state);
+  t.ck("rather than \"the contractor\"",
+    !/the contractor/i.test(handy?.state || ""), handy?.state);
+  // THE NOTE IS ADDRESSED THE SAME WAY, which is the one field that tells
+  // whoever turns up how to get in.
+  t.ck("and the note is addressed to the handyman",
+    /Note for the handyman/i.test(handy?.noteLabel || ""), handy?.noteLabel);
+  // AND THE HIRING SIDE KEEPS ITS OWN LABEL beside it: a change that painted
+  // every party with the word would pass both checks above.
+  t.ck("while the hiring side is still the hiring side",
+    /the hiring side/i.test(handy?.state || ""), handy?.state);
+  // AND THE SUBCONTRACTOR'S JOB ON THE SAME ROSTER STILL SAYS CONTRACTOR,
+  // asserted in the same place: a change that renamed every party "handyman"
+  // would pass every assertion above, and the account kind decides that word.
+  const stillSub = await cardBlock(page, "leaking sink");
+  t.ck("while a subcontractor's job keeps the roster word",
+    /the contractor/i.test(stillSub?.state || ""), stillSub?.state);
+  t.ck("and is not called a handyman",
+    !/handyman/i.test(stillSub?.state || ""), stillSub?.state);
 
   console.log("\n-- and an unapproved request still gets none --");
   await openCard(page, "Repaint the lobby");

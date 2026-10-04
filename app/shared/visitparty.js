@@ -73,11 +73,21 @@ export const joinAnd = (xs) =>
 // a manager has never met read as a stranger who had wandered into the
 // sentence. "the tenant (John Smith)" answers both at once, and a tenant we
 // hold no name for keeps the plain label rather than a blank bracket.
-export function partyText(list, { tenantName } = {}) {
+// AND THE CONTRACTOR'S WORD FOLLOWS THE ENGAGEMENT, which is why it is a
+// parameter rather than the constant in VISIT_PARTIES.
+//
+// Reported as *"it should actually say handyman since pacific is a
+// handyman"*. `label` is the default and is right for every roster that has
+// not said otherwise; `contractorWord` is what `jobHiresWord` worked out from
+// the companies actually holding the work. The same composition
+// `engagedSeatLabel` makes about the chip under somebody's name, applied to
+// the sentence that says who an appointment is waiting on.
+export function partyText(list, { tenantName, contractorWord } = {}) {
   const words = PARTY_ORDER
     .filter((p) => (list || []).includes(p))
     .map((p) => {
-      const label = VISIT_PARTIES[p]?.label;
+      const label = p === "contractor" && contractorWord
+        ? `the ${contractorWord}` : VISIT_PARTIES[p]?.label;
       if (!label) return null;
       return p === "tenant" && tenantName ? `${label} (${tenantName})` : label;
     })
@@ -166,6 +176,10 @@ export const visitSettled = (visit, parties) =>
 // the tenant" are the same fact and completely different instructions, and a
 // screen that says the second to somebody it means the first about is a screen
 // nobody acts on.
+//
+// It reads VISIT_PARTIES directly and so does NOT follow the engagement -- no
+// screen calls it, and the day one does it needs `contractorWord` the way
+// `partyText` above took it, or it will call a handyman the contractor.
 export function waitingText(visit, parties, me) {
   const left = waitingOn(visit, parties);
   if (!left.length) return null;

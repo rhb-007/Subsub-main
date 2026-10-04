@@ -227,7 +227,28 @@ try {
     // Every kind has words for both audiences: what a manager decides and what
     // somebody arriving needs to know are different sentences.
     ck("every kind has words for the manager and for the contractor",
-      Object.values(ACCESS_KINDS).every((k) => k.label && k.short && k.note && k.forContractor));
+      // 068. `note` IS A FUNCTION NOW, because the word for whoever holds the
+      // work follows the engagement -- a handyman is not "the contractor".
+      // Called rather than merely truthy: a function that returns an empty
+      // string is as useless as a missing one, and `k.note &&` would pass
+      // over it.
+      Object.values(ACCESS_KINDS).every((k) =>
+        k.label && k.short && k.forContractor
+        && typeof k.note === "function" && !!k.note() && !!k.note("handyman")));
+    // AND THE WORD REACHES THE SENTENCE, on every kind. All three notes name
+    // whoever holds the work, so there is no kind this can be skipped on --
+    // and asserting it on one would be the diagonal coverage this project
+    // keeps paying for.
+    ck("every note says handyman when it is passed one",
+      Object.values(ACCESS_KINDS).every((k) =>
+        /\bhandyman\b/i.test(k.note("handyman")) && !/the contractor/i.test(k.note("handyman"))),
+      Object.values(ACCESS_KINDS).map((k) => k.note("handyman")).join(" | "));
+    // AND THE DEFAULT IS THE OLD SENTENCE, which is what the two call sites
+    // with no job behind them get. Both branches in the same place.
+    ck("and keeps the contractor when it is not",
+      Object.values(ACCESS_KINDS).every((k) =>
+        /the contractor/i.test(k.note()) && !/handyman/i.test(k.note())),
+      Object.values(ACCESS_KINDS).map((k) => k.note()).join(" | "));
     // The same three-way split `HANDYMAN_ACCOUNT_KINDS` carries, for the same
     // reason: a list that cannot be imported is pinned equal instead.
     const worker = readFileSync(join(app, "worker", "index.js"), "utf8");

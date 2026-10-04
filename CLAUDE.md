@@ -8236,6 +8236,75 @@ refactor.
   backticks inside the seed. Caught by the suite failing to parse, with the
   one-line guard now beside it.
 
+- **A HANDYMAN WAS CALLED THE CONTRACTOR ON THE APPOINTMENT LINE, AND THE WORD
+  IS A PROPERTY OF THE ENGAGEMENT RATHER THAN OF THE SENTENCE.** Reported in
+  the same breath as the entry above, looking at the same card: *"Or it should
+  actually say handyman since pacific is a handyman"*. The line read *waiting
+  on the contractor and the hiring side to confirm*, and Pacific apartment
+  maintenance is engaged as a **handyman** — which 058 recorded, 058's own
+  picker sets, and the chip under their name already follows.
+
+  `VISIT_PARTIES.contractor.label` is a flat constant. **The same shape as the
+  `roleLabel` constant this file already records being wrong twice over**, one
+  screen along, and wrong for the same reason: a label that cannot see the
+  engagement is wrong for every handyman on every roster, and it reads exactly
+  right in the source.
+
+  **IT IS READ OFF THE COMPANIES ACTUALLY HOLDING THE WORK, not off the
+  account.** A roster carries both kinds, so the question is not *what does
+  this account call its contractors* but *what is this account's relationship
+  with whoever is on this job* — which is per-engagement, which is the whole
+  shape of 058.
+
+  **MIXED TAKES THE NEUTRAL WORD, which is `workingForVerb`'s own refusal.**
+  There is no word that is right for two companies when one is a licensed trade
+  and the other is a maintenance worker, so a job held by both says the
+  account's ordinary roster word rather than flattering one of them. Nobody
+  assigned yet reads the same way, because there is no engagement to read.
+
+  **AND `null` IN THE LIST IS A SUBCONTRACTOR, NOT A GAP — which the first
+  version got wrong.** `jobHiresWord` filtered the blanks out, so a job held by
+  a handyman **and** a company whose relationship nobody had answered read as
+  all-handyman. Every roster row written before 058 is that blank, so this is
+  the common case rather than the odd one, and the sentence it lands on is the
+  one somebody reads before standing a licensed trade down. The rows with
+  **nobody assigned** are dropped by the caller instead, where a trade with no
+  company on it is visibly a different thing from a company with no word
+  against it.
+
+  **The neutral word is the CALLER'S, never a literal.** `hiringWord` is passed
+  in for the reason `engagedSeatLabel` takes one: a general contractor's roster
+  says subcontractor and a managing agent's says contractor, `hiresLabel`
+  already decides that, and `engaged.js` must not take a dependency on
+  `hires.js` to say one word.
+
+  **`partyText` TAKES THE WORD RATHER THAN READING IT, and the other two
+  labels are untouched by it.** `VISIT_PARTIES` keeps its label as the default,
+  so every call site with no job to read — the job form's access note, the
+  inspection's — renders exactly the sentence it did. A change that painted
+  every party with the word would pass every assertion about the handyman, so
+  the hiring side and the tenant are asserted beside it.
+
+  **AND THE THREE ACCESS NOTES BECAME FUNCTIONS OF IT.** *The tenant and the
+  contractor both confirm the time* is a sentence about the parties, so it goes
+  stale the same way — the lesson 061 recorded about 060's copy going stale one
+  change later, paid again rather than relearned. The two call sites with no job
+  behind them call it with no argument, because the default word is the only
+  honest one where nobody is assigned yet.
+
+  **BOTH BRANCHES ARE ASSERTED IN THE SAME PLACE, in two suites, which needed
+  two fixtures to earn.** A handyman and a subcontractor on **one roster**,
+  each holding an otherwise identical job: only a pair that can be told apart
+  on each other can show that the word follows the engagement rather than
+  having been swapped wholesale. The diagonal coverage that left `hiresLabel`
+  half-wired, refused in the place that rule was written about.
+
+  Nine mutations fire, each on its own assertion: `partyText` back to the
+  constant, `every` → `some`, the blanks filtered out, the neutral word
+  hard-coded, either mount site dropping `hiresWord`, the mount site reading
+  the company row instead of the engagement, the stand-down sentence back to
+  the constant, and `jobHiresWord` answering handyman for everybody.
+
 
 ## Working here
 

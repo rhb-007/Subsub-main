@@ -73,8 +73,9 @@ import { SUMMARY_REFUSALS, countComments, whyNotSummary } from "../shared/inspec
 import { AUTO_TRIES } from "../shared/autopick.js";
 import { agreementStateText, renderAgreement } from "../shared/agreement.js";
 import { typedNameMatches, typedNameHint } from "../shared/typedname.js";
-import { ENGAGED_AS, engagedAs, isHandyman, engagedSeatLabel, mayEngageHandyman, mayCover,
-  tradesAllowed, requiredDocsFor, needsLicense, ENGAGED_REFUSALS } from "../shared/engaged.js";
+import { ENGAGED_AS, engagedAs, isHandyman, engagedSeatLabel, jobHiresWord,
+  mayEngageHandyman, mayCover, tradesAllowed, requiredDocsFor, needsLicense,
+  ENGAGED_REFUSALS } from "../shared/engaged.js";
 import { handymanCapCheck, handymanCapText,
   HANDYMAN_GLOBAL_RULES } from "../shared/handycap.js";
 import { workWhen, scheduledOn, WHEN_KINDS } from "../shared/schedule.js";
@@ -6598,6 +6599,19 @@ export default function SubSub() {
                         nobody has agreed to do. */}
                     {j.approvedAt && !isClosed(j) && (
                       <VisitBlock job={j} visit={visits.find((v) => v.jobId === j.id) || null}
+                        /* 068. WHAT THIS ACCOUNT CALLS WHOEVER HOLDS THE WORK
+                           on this job, which is not a constant. Reported as
+                           *"it should actually say handyman since pacific is
+                           a handyman"*, on a line reading "waiting on the
+                           contractor". Read off the ENGAGEMENTS of the
+                           companies actually assigned -- a mixed job answers
+                           with the account's ordinary roster word, the same
+                           refusal `workingForVerb` makes about a mixed list
+                           of clients. */
+                        hiresWord={jobHiresWord(
+                          j.trades.map((t) => allSubs.find((x) => x.id === j.assignments?.[t]?.subId))
+                            .filter(Boolean).map((x) => x.engagedAs),
+                          rosterWords(account).one)}
                         /* WHO HAS TO BE LET IN, which since 062 is not the
                            same person as who asked: a job raised from an
                            inspection names the tenant of the unit and has no
@@ -6978,6 +6992,10 @@ export default function SubSub() {
       {endingJob && (
         <EndJobModal
           job={endingJob}
+          hiresWord={jobHiresWord(
+            (endingJob.trades || []).map((t) => allSubs.find((x) => x.id === endingJob.assignments?.[t]?.subId))
+              .filter(Boolean).map((x) => x.engagedAs),
+            rosterWords(account).one)}
           onCancel={() => setEndingJob(null)}
           onConfirm={(body) => endJob(endingJob.id, body)} />
       )}
@@ -10798,7 +10816,7 @@ function ConfirmComplete({ job, effects, onConfirm, onCancel }) {
 // and its releases all stay, which is the whole reason this is a status. What
 // it owes somebody instead is naming who gets stood down, because that is the
 // thing they hesitate over and the card cannot show it.
-function EndJobModal({ job, onConfirm, onCancel }) {
+function EndJobModal({ job, onConfirm, onCancel, hiresWord = "contractor" }) {
   const [kind, setKind] = useState("");
   const [note, setNote] = useState("");
   const [until, setUntil] = useState("");
@@ -10873,8 +10891,11 @@ function EndJobModal({ job, onConfirm, onCancel }) {
             <div className="form-sec">What this stands down</div>
             <ul>
               {booked.map((t) => (
+                /* The word follows the engagement, not a constant: a
+                   handyman is not "the contractor", and this is the sentence
+                   somebody reads before standing them down. */
                 <li key={`b-${t}`}><b>{TRADE_LABEL[t] || t}</b> — {accepted.includes(t)
-                  ? "the contractor accepted this work order; it is voided and they are told"
+                  ? `the ${hiresWord} accepted this work order; it is voided and they are told`
                   : "the work order is still unanswered; it is voided"}</li>
               ))}
               {hasVisit && <li>The agreed time comes off — nobody is scheduled to arrive</li>}
@@ -13240,7 +13261,7 @@ function VisitForm({ jobId, startDate = "", forWhom, replacing = false, placehol
 // On the manager's side of the same thing: where the visit stands, and the
 // form to propose one (or the next one).
 function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswerVisit,
-  canSetAccess = false }) {
+  canSetAccess = false, hiresWord = "contractor" }) {
   // Open by default whenever there is no live time to wait on: nothing
   // proposed, a time refused, or one that came and went with nobody there.
   const [open, setOpen] = useState(!visit || visit.status === "declined" || visit.status === "missed");
@@ -13271,14 +13292,14 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
   // 064 added a third: the hiring side came out wearing the contractor's
   // label, next to the real contractor, in the same sentence -- *"waiting on
   // the contractor and the contractor and John Smith to confirm"*.
-  const owedText = partyWords(stillOwed, { tenantName: who?.name }) || name;
+  const owedText = partyWords(stillOwed, { tenantName: who?.name, contractorWord: hiresWord }) || name;
   // WHO THE NOTE TRAVELS TO, which is whoever ATTENDS -- a gate code, a dog or
   // which entrance is for the people turning up. So the hiring side is off it:
   // they are the ones writing it. It read "Note for the tenant" on a job with
   // no tenant in the loop at all, which is the wrong word on the one field
   // that tells a crew how to get in.
   const noteTo = partyWords(parties.filter((pp) => pp !== "manager"),
-    { tenantName: who?.name }) || "whoever attends";
+    { tenantName: who?.name, contractorWord: hiresWord }) || "whoever attends";
   return (
     <div className="visit-block">
       <div className="form-sec">Visit</div>
@@ -13294,7 +13315,7 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
           <AlertTriangle size={14} />
           <span>
             {someoneAsked(job)
-              ? <>A time is {visit.status === "confirmed" ? "agreed" : "proposed"} and no vendor has
+              ? <>A time is {visit.status === "confirmed" ? "agreed" : "proposed"} and no {hiresWord} has
                   accepted this job yet. Nobody is scheduled to arrive until one does.</>
               : <>A time is {visit.status === "confirmed" ? "agreed" : "proposed"} and <b>no vendor
                   is assigned</b>. Nobody is scheduled to arrive.</>}
@@ -13317,7 +13338,7 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
         <div className="visit-access">
           <Key size={14} />
           <div className="va-main">
-            <span><b>{ACCESS_KINDS[job.accessEffective].short}.</b> {ACCESS_KINDS[job.accessEffective].note}</span>
+            <span><b>{ACCESS_KINDS[job.accessEffective].short}.</b> {ACCESS_KINDS[job.accessEffective].note(hiresWord)}</span>
             {/* AND IT IS CHANGED HERE, which is what was actually asked for:
                 *"allow the property manager to adjust that when scheduling the
                 job"*. What a repair turns out to need is usually only clear
@@ -13355,7 +13376,7 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
           for, which is the one hop the chain pulls them back into. */}
       {visit?.status === "proposed" && visitMayAnswer(visit, parties, "manager") && onAnswerVisit && (
         <div className="visit-mine">
-          <p className="visit-state wait"><Clock size={14} /> The contractor has put
+          <p className="visit-state wait"><Clock size={14} /> The {hiresWord} has put
             forward <b>{visitWhen(visit)}</b>. Agree it and {parties.includes("tenant")
               ? <>{name} is asked to confirm.</> : <>the job is booked.</>}</p>
           <div className="jr-vis-acts">
@@ -13374,7 +13395,7 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
               contractor" over a tenant who confirmed last week reads as
               nothing having happened at all. */}
           {visit.respondedAt && stillOwed.includes("contractor") && <em> {name} has confirmed.</em>}
-          {visit.contractorAt && stillOwed.includes("tenant") && <em> The contractor has confirmed.</em>}
+          {visit.contractorAt && stillOwed.includes("tenant") && <em> The {hiresWord} has confirmed.</em>}
         </p>
       )}
       {visit?.status === "confirmed" && (
@@ -13386,7 +13407,7 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
              contractor" and left the hiring side out of a sentence it had
              agreed to. */
           : <p className="visit-state ok"><CheckCircle2 size={14} /> {parties.length
-              ? <>{cap1(partyWords(parties, { tenantName: who?.name }))} {parties.length > 1
+              ? <>{cap1(partyWords(parties, { tenantName: who?.name, contractorWord: hiresWord }))} {parties.length > 1
                   ? "all confirmed" : "confirmed"} <b>{visitWhen(visit)}</b>.</>
               : <>Booked for <b>{visitWhen(visit)}</b>.</>}</p>
       )}
@@ -13404,7 +13425,7 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
            "the tenant can't make it" over a contractor who turned it down
            sends somebody to the wrong telephone. */
         <p className="visit-state bad"><AlertTriangle size={14} /> {visit.contractorNote || (visit.contractorAt && !visit.respondedAt)
-          ? <>The contractor can't make <b>{visitWhen(visit)}</b>{visit.contractorNote ? <>: “{visit.contractorNote}”</> : "."}</>
+          ? <>The {hiresWord} can't make <b>{visitWhen(visit)}</b>{visit.contractorNote ? <>: “{visit.contractorNote}”</> : "."}</>
           : <>{name} can't make <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."}</>} Propose another.</p>
       )}
       {/* `cap1`, because this starts a sentence. The party labels are written
@@ -21232,7 +21253,9 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
           </div>
           <p className="cov-hint">
             {f.access
-              ? ACCESS_KINDS[f.access].note
+              /* No companies on it yet -- nobody is assigned until after it
+                 exists -- so the default word is the only honest one here. */
+              ? ACCESS_KINDS[f.access].note()
               : "Not set — a tenant's own report waits on them to confirm; anything else is booked as soon as you set a time."}
           </p>
         </div>
@@ -28352,7 +28375,7 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
           ))}
         </div>
         {ACCESS_KINDS[access] && (
-          <p className="fld-note insp-accnote">{ACCESS_KINDS[access].note}</p>
+          <p className="fld-note insp-accnote">{ACCESS_KINDS[access].note()}</p>
         )}
         <label className="fld">When, if you know
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />

@@ -57,8 +57,21 @@ const SUB = {
   categories: ["plumbing"], caps: [], crews: [], propertyIds: [], zips: [],
   notify: {}, rating: null, bond: true, insurance: true, contract: true, w9: true,
   hasPortal: true, license: "", licenseCheck: null, available: true, unavailableDays: [],
-  docReview: {}, coverage: {},
+  docReview: {}, coverage: {}, engagedAs: "subcontractor",
 };
+// AND A HANDYMAN ON THE SAME ROSTER, because what this account calls whoever
+// holds the work is a fact about the ENGAGEMENT -- and a fixture with one
+// relationship on it passes whichever word is in force.
+const HANDY = {
+  ...SUB, id: "cmp_hdy", company: "Ballard odd jobs", engagementId: "en_hdy",
+  contact: "Dee Rivas", email: "dee@ballard.test", engagedAs: "handyman",
+  bond: false, insurance: false,
+};
+const held = (wo, subId) => ({ plumbing: {
+  id: wo, wo, subId, status: "accepted", auto: false, responseWindow: null,
+  respondBy: null, respondedAt: null, value: "400", payKind: "fixed", rate: "",
+  capHours: null, tradeScope: null, crewName: null, signedWO: null, rating: null,
+} });
 const USERS = [{ id: "u_mgr", name: "Christopher Lane", email: "chris@soundpm.test",
   phone: null, role: "admin", subId: null, propertyIds: [], unit: null, hasLogin: true,
   inviteSentAt: null, hasAvatar: false }];
@@ -78,7 +91,8 @@ const job = (id, title, over = {}) => ({
 const JOBS = () => [
   // The one being ended. Dated in the past, so it is what the overdue count
   // is about -- and that count is the reader a hold has to come off.
-  job("job_live", "Press Apartments - leaking sink", { date: day(-3) }),
+  job("job_live", "Press Apartments - leaking sink",
+    { date: day(-3), assignments: held("WO-1", "cmp_hdy") }),
   // ALREADY ON HOLD, with a date ahead. The only row that can show the
   // schedule, the strip and the overdue count dropping it, and the empty slot
   // shutting -- `isClosed` answers NO to this, which is the whole trap.
@@ -95,6 +109,12 @@ const JOBS = () => [
   job("job_cancelled", "Repaint the lobby", { date: day(-4),
     endingKind: "cancelled", endingNote: "tenant had it fixed privately",
     endingAt: "2026-10-01T09:00:00.000Z" }),
+  // THE SAME SHAPE AS job_live, held by a SUBCONTRACTOR. The only thing the
+  // two can differ by is the word for whoever is being stood down, which is
+  // the diagonal coverage this suite already keeps: a change that called
+  // everybody a handyman would pass a check written against one of them.
+  job("job_sub", "Roof flashing - block C",
+    { date: day(-5), assignments: held("WO-9", "cmp_pac") }),
 ];
 
 // What the pre-flight says. Two jobs, two answers: one with people booked and
@@ -103,6 +123,9 @@ const JOBS = () => [
 const CHECKS = {
   job_live: { booked: ["plumbing"], accepted: ["plumbing"], openQuotes: 1,
     openOverflow: 0, hasVisit: true, fundedCents: 0,
+    blocked: { cancelled: null, deferred: null, no_work: null }, onHold: false },
+  job_sub: { booked: ["plumbing"], accepted: ["plumbing"], openQuotes: 0,
+    openOverflow: 0, hasVisit: false, fundedCents: 0,
     blocked: { cancelled: null, deferred: null, no_work: null }, onHold: false },
   job_lapsed: { booked: [], accepted: [], openQuotes: 0, openOverflow: 0,
     hasVisit: false, fundedCents: 150000,
@@ -116,7 +139,7 @@ const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, PM];
   if (path === "/api/account") return [200, PM];
-  if (path === "/api/subs") return [200, [SUB]];
+  if (path === "/api/subs") return [200, [SUB, HANDY]];
   if (path === "/api/account-users") return [200, USERS];
   if (path === "/api/jobs") return [200, JOBS()];
   if (path === "/api/visits") return [200, []];
@@ -219,10 +242,11 @@ try {
         marked: [...document.querySelectorAll(".shs-day.has")].length,
       };
     });
-    // Three jobs are dated in the past; one is on hold, one is cancelled, so
-    // two are genuinely late -- the live one and the lapsed hold.
+    // Five jobs are dated in the past; one is on hold and one is cancelled, so
+    // three are genuinely late -- the live one, the lapsed hold, and the
+    // subcontractor's job the party-word branch needs.
     t.ck("the overdue count counts the live ones only",
-      /2 jobs are past their date/.test(sh.late), sh.late);
+      /3 jobs are past their date/.test(sh.late), sh.late);
     t.ck("and names them", sh.rows.some((r) => /leaking sink/i.test(r))
       && sh.rows.some((r) => /extractor/i.test(r)), JSON.stringify(sh.rows));
     // THE DISCRIMINATING PAIR: the held one is out, the lapsed one is in.
@@ -323,6 +347,35 @@ try {
     // modal opens rather than after somebody has chosen.
     t.ck("it names the contractor who accepted",
       c.stands.some((l) => /Plumbing/i.test(l) && /accepted/i.test(l)), JSON.stringify(c.stands));
+    // AND CALLS THEM WHAT THIS ROSTER CALLS THEM. Reported as *"it should
+    // actually say handyman since pacific is a handyman"* -- the word was a
+    // constant, on the sentence somebody reads before standing them down.
+    t.ck("by the word the engagement decides",
+      c.stands.some((l) => /the handyman accepted/i.test(l)), JSON.stringify(c.stands));
+    t.ck("rather than \"the contractor\"",
+      !c.stands.some((l) => /the contractor accepted/i.test(l)), JSON.stringify(c.stands));
+    // AND THE SUBCONTRACTOR'S JOB ON THE SAME ROSTER STILL SAYS CONTRACTOR, in
+    // the same place: a change that called everybody a handyman would pass both
+    // checks above, and the account kind is what decides that word.
+    await page.evaluate(() => [...document.querySelectorAll(".modal .form-actions button")]
+      .find((b) => /leave it alone/i.test(b.innerText))?.click());
+    await wait(500);
+    await openEnd(page, "Roof flashing");
+    await page.evaluate(() => [...document.querySelectorAll(".modal .endj-pick")]
+      .find((b) => /Cancel this job/i.test(b.innerText))?.click());
+    await wait(400);
+    const cs = await modal(page);
+    t.ck("a subcontractor's job keeps the roster word",
+      cs.stands.some((l) => /the contractor accepted/i.test(l)), JSON.stringify(cs.stands));
+    t.ck("and is not called a handyman",
+      !cs.stands.some((l) => /handyman/i.test(l)), JSON.stringify(cs.stands));
+    await page.evaluate(() => [...document.querySelectorAll(".modal .form-actions button")]
+      .find((b) => /leave it alone/i.test(b.innerText))?.click());
+    await wait(500);
+    await openEnd(page, "leaking sink");
+    await page.evaluate(() => [...document.querySelectorAll(".modal .endj-pick")]
+      .find((b) => /Cancel this job/i.test(b.innerText))?.click());
+    await wait(400);
     t.ck("the agreed time coming off",
       c.stands.some((l) => /nobody is scheduled to arrive/i.test(l)), JSON.stringify(c.stands));
     t.ck("and the open quote request",

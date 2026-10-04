@@ -31,7 +31,8 @@ import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { ENGAGED_AS, engagedAs, isEngagedAs, isHandyman, mayEngageHandyman,
   HANDYMAN_ACCOUNT_KINDS, HANDYMAN_TRADES, handymanCovers, tradesAllowed,
-  mayCover, requiredDocsFor, needsLicense, ENGAGED_REFUSALS } from "../shared/engaged.js";
+  mayCover, requiredDocsFor, needsLicense, engagedSeatLabel, jobHiresWord,
+  ENGAGED_REFUSALS } from "../shared/engaged.js";
 import { DOC_KINDS } from "../shared/docs.js";
 import { TRADES } from "../shared/trades.js";
 
@@ -160,6 +161,39 @@ console.log("\n-- the rule, before anything is driven --");
   ck("every refusal has words", wordless.length === 0, wordless.join(" "));
   ck("and both relationships have a label and a note",
     Object.values(ENGAGED_AS).every((k) => k.label && k.note));
+
+  // AND THE WORD FOR WHOEVER HOLDS THE WORK ON ONE JOB. Reported as *"it
+  // should actually say handyman since pacific is a handyman"*, on a line
+  // reading "waiting on the contractor" -- a flat constant where the
+  // engagement was the fact.
+  ck("a job held only by a handyman says handyman",
+    jobHiresWord(["handyman"], "contractor") === "handyman");
+  ck("and two of them still do",
+    jobHiresWord(["handyman", "handyman"], "contractor") === "handyman");
+  // MIXED TAKES THE NEUTRAL WORD, which is `workingForVerb`'s own refusal.
+  ck("a mixed job takes the account's roster word",
+    jobHiresWord(["handyman", "subcontractor"], "contractor") === "contractor");
+  // AND `null` IN THE LIST IS A SUBCONTRACTOR, NOT A GAP. Dropping the blanks
+  // would make this read "handyman" -- the sentence somebody reads before
+  // standing a licensed trade down.
+  ck("an unanswered relationship beside a handyman is still mixed",
+    jobHiresWord(["handyman", null], "contractor") === "contractor");
+  // Nobody assigned reads the same way, because there is no engagement.
+  ck("nobody assigned takes the roster word too",
+    jobHiresWord([], "subcontractor") === "subcontractor");
+  // AND IT FOLLOWS THE ACCOUNT KIND through `hiringWord`, which is the whole
+  // reason that is a parameter: a GC's roster says subcontractor and a
+  // managing agent's says contractor, and neither is hard-coded here.
+  ck("the neutral word is the caller's, never a literal",
+    jobHiresWord(["subcontractor"], "subcontractor") === "subcontractor"
+    && jobHiresWord(["subcontractor"], "contractor") === "contractor");
+  ck("with a fallback rather than a blank when none is passed",
+    jobHiresWord([]) === "contractor");
+  // It is the same composition `engagedSeatLabel` makes one screen along, so
+  // the two cannot drift into calling one company two things.
+  ck("and it agrees with the seat label about a handyman",
+    /handyman/i.test(engagedSeatLabel("handyman", "Contractor"))
+    && jobHiresWord(["handyman"], "contractor") === "handyman");
 }
 
 console.log("\n-- what the roster carries --");
