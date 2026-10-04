@@ -70,7 +70,7 @@ import { visitParties, waitingOn as visitWaitingOn,
 // How long a proposed window is, and whether a date change has anybody to be
 // put to. Both live beside `workWhen` because the browser's propose form uses
 // the first and two copies of that arithmetic is two records of one fact.
-import { windowEnd, othersMustAgree } from "../shared/schedule.js";
+import { windowEnd, othersMustAgree, workWhen } from "../shared/schedule.js";
 import { AUTO_TRIES, AUTO_START, AUTO_END, autoPickText, isTurnaroundKind,
   rankCandidates, slotFor, whyNotAuto } from "../shared/autopick.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
@@ -78,7 +78,7 @@ import { AUTO_TRIES, AUTO_START, AUTO_END, autoPickText, isTurnaroundKind,
 // them read `status` -- a work order could be issued against a job closed out
 // last week. One predicate, both sides.
 import { jobIsClosed, jobClosure, jobHold, jobIsLive, whyNotEnd, whyNotResume,
-  isEndingKind, ENDING_KINDS, CHOOSABLE_ENDINGS } from "../shared/jobstate.js";
+  isEndingKind, ENDING_KINDS, CHOOSABLE_ENDINGS, jobProgress } from "../shared/jobstate.js";
 // Which seat to open an account as. One rule, so the console's "1 team user"
 // and this route cannot disagree about whether anybody is there.
 import { pickSeat, hasAdminSeat, isTeamSeat, staffStandsIn,
@@ -12413,12 +12413,83 @@ app.get("/api/inspections", requireRole(...INSPECTION_READ_ROLES), async (c) => 
     if (!missingSchema(err)) throw err;
     return c.json([]);
   }
-  return c.json((results || []).map((r) => ({
+  // WHERE THE RAISED JOB GOT TO, which the list could not say.
+  //
+  // `jobId` is a fact about whether a row exists, so the chip read "Job
+  // raised" on the day it was pressed and for ever afterwards -- the same two
+  // words over a unit booked for Thursday, a unit whose crew has not answered
+  // and a unit whose job was cancelled. Everything 061, 064 and 066 added
+  // happens after that chip is earned and none of it reached it.
+  //
+  // Only the server can answer it: the browser holds no work orders and no
+  // visits for a job it is not standing on, so a screen deriving this would be
+  // guessing. One extra statement for the whole page rather than one per row.
+  const rows = (results || []).map((r) => ({
     ...inspectionRowToJs(r),
     rooms: r.n_rooms, flagged: r.n_flagged, unchecked: r.n_unchecked,
     sent: r.n_sent || 0,
-  })));
+  }));
+  return c.json(await withJobProgress(c.env, auth, rows));
 });
+
+// The job half of an inspection row. Separate from the query above because it
+// reaches three tables the inspection does not know about, and because a
+// database behind the code must cost the progress line and never the list.
+async function withJobProgress(env, auth, rows) {
+  const ids = [...new Set(rows.map((r) => r.jobId).filter(Boolean))];
+  if (!ids.length) return rows;
+  const marks = ids.map(() => "?").join(",");
+  let jobs = [];
+  try {
+    ({ results: jobs } = await env.DB.prepare(
+      `SELECT j.id, j.status, j.date, j.time, j.withdrawn_at, j.declined_at,
+              (SELECT COUNT(*) FROM work_orders w
+                WHERE w.job_id = j.id AND w.voided_at IS NULL) AS assigned,
+              (SELECT COUNT(*) FROM work_orders w
+                WHERE w.job_id = j.id AND w.voided_at IS NULL
+                  AND w.status = 'accepted') AS accepted
+         FROM jobs j
+        WHERE j.id IN (${marks}) AND j.account_id = ?`
+    ).bind(...ids, auth.accountId).all());
+  } catch (err) {
+    // A list that still lists is worth more than a line that says where one
+    // of them got to, so this degrades to the row with no `job` on it and the
+    // screen falls back to saying a job was raised.
+    if (!missingSchema(err)) throw err;
+    return rows;
+  }
+  const byId = {};
+  for (const j of jobs || []) byId[j.id] = { ...j };
+  // The newest LIVE window per job, read exactly as every other reader does
+  // -- a job collects superseded proposals behind it, and taking whichever
+  // row came back first is a date nobody agreed to drawn as the appointment.
+  try {
+    const { results: vs } = await env.DB.prepare(
+      `SELECT * FROM visits
+        WHERE job_id IN (${marks}) AND status IN ('proposed','confirmed')
+        ORDER BY created_at ASC, rowid ASC`).bind(...ids).all();
+    // Ascending, last-write-wins: the same answer as DESC + LIMIT 1 per job,
+    // in one statement.
+    for (const v of vs || []) if (byId[v.job_id]) byId[v.job_id].visit = visitRowToJs(v);
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  try {
+    const { results: es } = await env.DB.prepare(
+      `SELECT e.job_id, e.kind, e.note, e.until, e.at FROM job_endings e
+        WHERE e.job_id IN (${marks})
+        ORDER BY e.at ASC, e.rowid ASC`).bind(...ids).all();
+    for (const e of es || []) {
+      if (!byId[e.job_id]) continue;
+      Object.assign(byId[e.job_id], { ending_kind: e.kind, ending_note: e.note,
+        ending_until: e.until, ending_at: e.at });
+    }
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  const today = dayKeyUtc();
+  return rows.map((r) => {
+    const j = r.jobId ? byId[r.jobId] : null;
+    if (!j) return r;
+    return { ...r, job: jobProgress(j, { today, when: workWhen(j) }) };
+  });
+}
 
 app.post("/api/inspections", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
   const auth = c.get("auth");
@@ -12507,7 +12578,12 @@ app.get("/api/inspections/:id", requireRole(...INSPECTION_READ_ROLES), async (c)
   // says. `aiDrafts` is read for this too -- it means "SubSub has a model
   // key", which is one fact, and a second field with the same value in it is
   // two records of one.
-  return c.json({ ...base, aiDrafts: aiConfigured(c.env),
+  // WHERE THE RAISED JOB GOT TO, through the same one function the list uses.
+  // The button under this read *Open the job raised from this* and said
+  // nothing about whether anybody is coming, which is the question somebody
+  // standing on a finished walk actually has.
+  const [withJob] = await withJobProgress(c.env, auth, [base]);
+  return c.json({ ...withJob, aiDrafts: aiConfigured(c.env),
     summary: summaryShape(await inspectionSummaryRow(c.env.DB, row.id), inspectionRowToJs(row), base.rooms),
     ...(await inspectionAudience(c.env.DB, row)) });
 });

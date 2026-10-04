@@ -239,3 +239,85 @@ export function completionEffects(job = {}, { openQuotes = 0, openOverflow = 0 }
   const awaiting = trades.filter((t) => assignments[t]?.status === "pending");
   return { unassigned, awaiting, openQuotes, openOverflow };
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// WHERE HAS THIS JOB ACTUALLY GOT TO.
+//
+// Reported against the Inspections list, every flagged row of which read the
+// same two words for ever: *"details or status of the inspection of ones that
+// were flagged for follow up should have the status updated from job raised to
+// what's happening currently — job scheduled for specific date"*.
+//
+// **"Job raised" is true on the day it is pressed and never stops being
+// true.** It is `!!inspection.jobId` -- a fact about whether a row exists, not
+// about the work -- so a unit whose repaint is booked for Thursday, a unit
+// whose crew has not answered, and a unit whose job was cancelled all read
+// identically from the one screen a managing agent opens to see what is
+// outstanding. The whole of 061, 064 and 066 happens after that chip is
+// earned and none of it reached it.
+//
+// So this is the one rule for the sentence, read by the route that builds the
+// row and by every screen that draws one. It answers a STEM and a date rather
+// than a finished string, the same split `WHEN_KINDS` already makes: the date
+// is formatted by the reader, because the Worker answers in UTC and the
+// browser in the reader's own zone and this file has already paid for a date
+// helper that disagreed with the one beside it.
+export const JOB_PROGRESS = {
+  // Nothing has been committed. Named first because it is the one state a
+  // manager has to act on, and the state the reported screen could not show.
+  unassigned: { id: "unassigned", tone: "wait", label: "Needs a contractor" },
+  // Issued and not answered. The crew has it; nobody is committed yet.
+  offered: { id: "offered", tone: "wait", label: "Waiting on a contractor" },
+  // Taken, with no time anywhere.
+  taken: { id: "taken", tone: "plain", label: "No time set" },
+  // A date on the job and no live window: the honest answer for work with
+  // nobody who has to be let in, which is most of a turnaround.
+  target: { id: "target", tone: "plain", label: "Target" },
+  proposed: { id: "proposed", tone: "wait", label: "Time proposed" },
+  scheduled: { id: "scheduled", tone: "ok", label: "Scheduled" },
+  done: { id: "done", tone: "ok", label: "Work done" },
+  // 066's three, in their own words rather than flattened to "closed":
+  // somebody who read the problem and decided nothing needed doing is saying
+  // a different thing from somebody calling the work off.
+  cancelled: { id: "cancelled", tone: "plain", label: "Cancelled" },
+  no_work: { id: "no_work", tone: "plain", label: "No work needed" },
+  on_hold: { id: "on_hold", tone: "wait", label: "On hold" },
+  withdrawn: { id: "withdrawn", tone: "plain", label: "Withdrawn" },
+};
+
+// NOBODY ON IT OUTRANKS A DATE, which is the one ordering decision here worth
+// writing down. A window settles the moment everybody who must agree has --
+// and `visitParties` counts only crews who have ACCEPTED, so on a job with
+// nobody assigned the hiring side agrees with itself and the visit reads
+// `confirmed`. Drawing "Scheduled Oct 9" over a unit no contractor is coming
+// to is the screen-that-lies rule pointed at the one line somebody scans to
+// decide what still needs them. So the crew is asked about first.
+//
+// `job` carries whatever the caller has: the closure columns in either
+// spelling, `date`/`time`, a live `visit`, and two counts the caller works out
+// from the work orders -- `assigned` (live rows, accepted or not) and
+// `accepted`. Both default to 0, which reads as "nobody", because a caller
+// that cannot see the work orders must not claim a crew is on it.
+export function jobProgress(job, { today = null, when = null } = {}) {
+  if (!job) return null;
+  const closed = jobClosure(job);
+  if (closed.closed) {
+    return JOB_PROGRESS[closed.reason === "completed" ? "done" : closed.reason]
+      || JOB_PROGRESS.done;
+  }
+  const hold = jobHold(job, today);
+  if (hold.held) return { ...JOB_PROGRESS.on_hold, date: hold.until || null };
+  const assigned = Number(job.assigned || 0);
+  const accepted = Number(job.accepted || 0);
+  if (!assigned) return JOB_PROGRESS.unassigned;
+  if (!accepted) return JOB_PROGRESS.offered;
+  // `when` is `workWhen(job)` done by the caller, because importing
+  // shared/schedule.js here would make this module depend on it to answer a
+  // question it is handed the answer to. Absent, the job's own date is read,
+  // which is what every caller without a visit would compute anyway.
+  const w = when || { kind: job.date ? "target" : "none", date: job.date || null };
+  if (w.kind === "confirmed") return { ...JOB_PROGRESS.scheduled, date: w.date || null };
+  if (w.kind === "proposed") return { ...JOB_PROGRESS.proposed, date: w.date || null };
+  if (w.kind === "target") return { ...JOB_PROGRESS.target, date: w.date || null };
+  return JOB_PROGRESS.taken;
+}

@@ -28371,6 +28371,15 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
             <ArrowRight size={13} /> Open the job raised from this
           </button>
         )}
+        {/* AND WHERE IT GOT TO, beside the button into it. The same chip the
+            list draws, off the same server answer, because a second rule here
+            is how the two screens come to disagree about one job. */}
+        {inspection.jobId && inspection.job && (
+          <span className={`tn-chip ${inspection.job.tone}`}>
+            {inspection.job.label}
+            {inspection.job.date ? ` ${rowDay(inspection.job.date)}` : ""}
+          </span>
+        )}
       </div>
 
       {/* A disabled Finish with nothing beside it is indistinguishable from a
@@ -28858,7 +28867,24 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
               {i.unchecked > 0 && <span className="tn-chip wait">{i.unchecked} to mark</span>}
               {i.flagged > 0 && <span className="tn-chip sos">{i.flagged} flagged</span>}
               {i.status === "finished" && i.flagged === 0 && <span className="tn-chip ok">All clear</span>}
-              {i.jobId && <span className="tn-chip">Job raised</span>}
+              {/* WHERE THE JOB GOT TO, which this read as "Job raised" for
+                  ever. That chip was `!!i.jobId` -- a fact about whether a row
+                  exists -- so a unit booked for Thursday, a unit whose crew
+                  has not answered and a unit whose job was cancelled all read
+                  the same from the one screen somebody opens to see what is
+                  still outstanding.
+
+                  The answer comes off the server rather than being derived
+                  here: the browser holds no work orders and no visits for a
+                  job it is not standing on, so a screen working this out would
+                  be guessing. `jobId` with no answer beside it still says a
+                  job was raised, because a database behind the code must cost
+                  the progress line and never the row. */}
+              {i.jobId && (i.job
+                ? <span className={`tn-chip ${i.job.tone}`}>
+                    {i.job.label}{i.job.date ? ` ${rowDay(i.job.date)}` : ""}
+                  </span>
+                : <span className="tn-chip plain">Job raised</span>)}
               <ArrowRight size={15} className="seat-go" />
             </button>
           );
@@ -32447,6 +32473,11 @@ p.fld-note{margin:6px 0 0}
 .tn-chip.wait{background:#fbf0dd;color:#8a5a12}
 .tn-chip.busy{background:#e8eff8;color:#2b4d7a}
 .tn-chip.ok{background:#e6f2ec;color:#1d5740}
+/* A state that is settled and is neither good news nor something waiting on
+   anybody: cancelled, no work needed, a target date. It has to read as a
+   chip rather than as loose text, because the bare class sets no background
+   at all -- which is what the old "Job raised" was, and it read as a link. */
+.tn-chip.plain{background:var(--paper);color:var(--ink-soft)}
 /* Get out and call 911. Deliberately the loudest thing this product can
    draw: it has to survive being read by somebody who is frightened, on a
    phone, in the dark. Its own colours rather than the theme's, because a
@@ -32615,11 +32646,24 @@ p.fld-note{margin:6px 0 0}
    change a verdict. No backticks anywhere in here -- the whole stylesheet is
    one template literal and one in a comment closes it. */
 .insp-list{display:flex;flex-direction:column;gap:9px}
+/* WRAPS, because the progress chip now carries a date. "Scheduled Thu, Oct 9"
+   is about 150px, and a nowrap chip beside a nowrap arrow in a fixed row is
+   paid for out of the title -- which is the thing somebody is scanning for.
+   The chips drop under the title on a phone instead. */
 .insp-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;cursor:pointer;
+  flex-wrap:wrap;
   background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 14px;
   font:inherit;box-shadow:var(--shadow)}
+
 .insp-row:hover{border-color:var(--brand)}
-.insp-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+/* A BASIS, NOT a bare grow of 1, which is what makes the row above actually
+   wrap. With a basis of zero this column shrinks to nothing rather than
+   pushing the chips onto a second line, so wrapping changes nothing and the
+   title is ellipsed to about four characters at phone width -- which is the
+   thing somebody is scanning for, paid out to show the thing beside it.
+   (No backticks in here: this block is inside a template literal, and that
+   is the sixteenth time this file has closed one with a comment.) */
+.insp-row-main{flex:1 1 220px;min-width:0;display:flex;flex-direction:column;gap:2px}
 .insp-detail{display:flex;flex-direction:column;gap:14px}
 .insp-rooms{display:flex;flex-direction:column;gap:12px}
 /* The left edge carries the verdict, so a column of rooms can be read for

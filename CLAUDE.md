@@ -8621,6 +8621,85 @@ refactor.
   change to reach for, and the one it reached for would be the one nothing
   uses. Its place in the file carries a comment saying where it went.
 
+- **"JOB RAISED" IS TRUE ON THE DAY IT IS PRESSED AND NEVER STOPS BEING
+  TRUE.** Reported against the Inspections list with the flagged rows circled:
+  *"details or status of the inspection of ones that were flagged for follow
+  up should have the status updated from job raised to what's happening
+  currently — job scheduled for specific date"*.
+
+  The chip was `!!inspection.jobId` — **a fact about whether a row exists, not
+  about the work.** So a unit whose repaint is booked for Thursday, a unit
+  whose crew has not answered, and a unit whose job was cancelled all read the
+  same two words from the one screen a managing agent opens to see what is
+  still outstanding. Everything 061, 064 and 066 added happens *after* that
+  chip is earned and none of it reached it.
+
+  `jobProgress` in `app/shared/jobstate.js` is the one rule, read by the two
+  routes that build a row and by both screens that draw one.
+
+  **NOBODY ON IT OUTRANKS A DATE, which is the one ordering decision worth
+  writing down.** A window settles the moment everybody who must agree has —
+  and `visitParties` counts only crews who have **accepted** — so on a job with
+  nobody assigned the hiring side agrees with itself and the visit reads
+  `confirmed`. Drawing *Scheduled Oct 9* over a unit no contractor is coming to
+  is the screen-that-lies rule pointed at the one line somebody scans to decide
+  what still needs them. So the crew is asked about first, and the mutation that
+  proves it reads the visit before the count.
+
+  **IT ANSWERS A STEM AND A DATE, never a finished string.** The Worker answers
+  in UTC and the browser in the reader's own zone, and this file has already
+  paid in full for a date helper that disagreed with the one beside it — so the
+  module says *Scheduled* and the screen says which day, through the `rowDay`
+  the contractor's own schedule already uses. A test asserts no label in
+  `JOB_PROGRESS` contains a digit.
+
+  **ONLY THE SERVER CAN ANSWER IT.** The browser holds no work orders and no
+  visits for a job it is not standing on, so a screen deriving this would be
+  guessing — the same reason `turn` is computed server-side. One extra
+  statement for the whole page rather than one per row, and the **detail screen
+  reads the same function** rather than deriving a second opinion beside the
+  button into the job.
+
+  **AND `jobId` WITH NO ANSWER BESIDE IT STILL SAYS A JOB WAS RAISED.** A
+  database behind the code must cost the progress line and never the row —
+  which is also why each of the three joins has its own `missingSchema` catch,
+  and why a missing `job_endings` leaves the list listing rather than refusing
+  it.
+
+  **FOUR GUARDS WERE COVERED FOR BY OTHER GUARDS, and the fixture is what
+  earned each one.** This is the seventh time this file has recorded the shape,
+  and it took four rows to close:
+
+  - The visits query's `status IN ('proposed','confirmed')` filter survived
+    deletion, because `workWhen` checks liveness again and the ordering hid the
+    dead row. The only row that can tell them apart is **a live window with a
+    NEWER declined one behind it** — which is exactly what the propose route's
+    deliberate insert-then-supersede order leaves when the newest of two live
+    windows is turned down.
+  - The newest-live **ordering** needed a second live row on one job, which is
+    the same shape from the other side.
+  - `voided_at IS NULL` on the assigned count survived, because no fixture had
+    a voided work order — and re-assigning and ending a job both leave one. A
+    voided row is not a crew.
+  - The endings' last-write-wins ordering survived, because every job had at
+    most one ending. `job_endings` is append-only, so **a job put on hold and
+    picked back up carries two** — reversed, work somebody restarted reads as
+    on hold for ever.
+
+  **AND THE ROW HAD TO LEARN TO WRAP, which cost two goes.** The chip is wider
+  than the two words it replaced, so at 390px the title was ellipsed to about
+  four characters — the thing somebody is scanning for, paid out to show the
+  thing beside it. `flex-wrap` alone did nothing: `.insp-row-main` was a bare
+  grow, whose basis is zero, so the column shrinks to nothing rather than
+  pushing the chips onto a second line and **wrapping never happens**. A basis
+  is what makes the wrap real, and the measurement (`titleRight` 64px → 250px)
+  is the only thing that can see it.
+
+  **The backtick trap, for the SIXTEENTH time**, in the comment explaining that
+  very rule — which named the flex shorthand in backticks and closed the
+  stylesheet's template literal. Caught by `npm run lint` and by `test:css`,
+  which now runs its static half anywhere, one change after that was fixed.
+
 
 ## Working here
 

@@ -90,6 +90,8 @@
     "test:woinsp": "node --no-warnings scripts/wo-inspection-ui-test.mjs",
     "test:inspectjob": "node --no-warnings scripts/inspection-job-test.mjs",
     "test:inspectsummary": "node --no-warnings scripts/inspect-summary-test.mjs",
+    "test:inspprogress": "node --no-warnings scripts/insp-progress-test.mjs",
+    "test:inspprogui": "node --no-warnings scripts/insp-progress-ui-test.mjs",
     "test:resched": "node --no-warnings scripts/reschedule-ui-test.mjs",
     "test:ownportal": "node --no-warnings scripts/own-portal-ui-test.mjs",
     "test:autoturn": "node --no-warnings scripts/auto-turnaround-test.mjs",
