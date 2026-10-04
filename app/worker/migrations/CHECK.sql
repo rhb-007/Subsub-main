@@ -21,20 +21,35 @@
 -- Rows, unlike columns, have no ceiling. Adding a check is one more
 -- `UNION ALL` and can never run the file into a limit again.
 --
--- MOST rows answer 1 for applied and 0 for not. FOUR do not, and reading
--- them the same way turns a healthy database into four bug reports:
+-- READ THE FIRST COLUMN AND NOTHING ELSE. `verdict` is 'ok', or it names what
+-- to do, and the rows that are not ok sort to the TOP. If the first row says
+-- ok then every one of them does.
 --
---   m031_hireable_without, m031_others_with, m039_unowned
---       INVARIANTS. They count BROKEN ROWS, so 0 is the good answer and
---       anything above 0 is the bug report. All three read 1 once, and each
---       was a different route writing a row the migration had taught the
---       schema to expect.
+--   NOT RUN       that migration has not been applied. Paste it.
+--   BROKEN ROWS   an invariant found rows that should not exist. It is not a
+--                 missing migration -- it is a route writing something the
+--                 schema was taught to forbid, and it needs a fix rather than
+--                 a paste.
+--   RUN 046       only 046, and only when its own count is exactly 1.
 --
---   m046_kind_check
---       TRI-STATE, and the only one where the middle value means "do not
---       run the migration". 0 and 2 are both fine; only 1 needs 046.
+-- `value` is beside it because a verdict that is wrong has to be visible
+-- rather than silent -- which is the difference between a column like this and
+-- a check query that quietly answers a different question. What the numbers
+-- mean, if you want them:
 --
--- Everything whose name contains `_inv_` is an invariant too and must read 0.
+--   MOST rows answer 1 for applied and 0 for not. FOUR do not, and reading
+--   them the same way turns a healthy database into four bug reports:
+--
+--     m031_hireable_without, m031_others_with, m039_unowned, and anything
+--     whose name contains `_inv_`
+--         INVARIANTS. They count BROKEN ROWS, so 0 is the good answer and
+--         anything above 0 is the bug report. The first three read 1 once, and
+--         each was a different route writing a row the migration had taught
+--         the schema to expect.
+--
+--     m046_kind_check
+--         TRI-STATE, and the only one where the middle value means "do not
+--         run the migration". 0 and 2 are both fine; only 1 needs 046.
 --
 -- A few rows count SEVERAL columns at once, so they answer with how many they
 -- found rather than 1: m055_inspections and m057_photo_notes read 6,
@@ -44,7 +59,9 @@
 -- An earlier header said "every column answers 1 for applied and 0 for not",
 -- which is the screen-that-lies rule pointed at a comment: somebody reading
 -- their own healthy row would have found four zeros and gone looking for four
--- migrations that were never missing.
+-- migrations that were never missing. That is most of why the verdict is
+-- computed now instead of recited -- prose describing a rule is a second
+-- record of it, and the second record is the one that goes wrong.
 --
 -- It exists because "did I run that one?" came up after nearly every round,
 -- and the honest answer from a chat thread is a guess. Safe to run as often
@@ -53,6 +70,34 @@
 --
 -- Add a line here whenever a migration adds a column, so this keeps pace
 -- with the folder it lives in.
+  -- AND IT SAYS WHICH ROWS ARE WRONG, because a hundred and ten numbers and a
+  -- four-part rule is an answer that is present and not legible. The rule used
+  -- to live in the prose above and in the reader's head, applied a hundred and
+  -- ten times on a phone -- and the prose had already been wrong about it once,
+  -- telling somebody with a perfectly healthy database to go and find four
+  -- migrations that were never missing.
+  --
+  -- So it is computed here, from the naming convention this file already keeps,
+  -- and the problems sort to the top where somebody actually looks. `value` is
+  -- still beside it: a verdict that is wrong is then visible rather than
+  -- silent, which is the difference between this and a check query that
+  -- quietly answers the wrong question.
+  --
+  -- `instr` rather than LIKE '%_inv_%' -- `_` is a LIKE wildcard, so that
+  -- pattern matches any three characters around "inv" and would start
+  -- classifying rows by accident.
+SELECT
+  CASE
+    WHEN instr(name, '_inv_') > 0
+      OR name IN ('m031_hireable_without', 'm031_others_with', 'm039_unowned')
+      THEN CASE WHEN value = 0 THEN 'ok' ELSE 'BROKEN ROWS' END
+    WHEN name = 'm046_kind_check'
+      THEN CASE WHEN value = 1 THEN 'RUN 046' ELSE 'ok' END
+    ELSE CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END
+  END AS verdict,
+  name,
+  value
+FROM (
   SELECT 'm018_user_notify' AS name, (SELECT COUNT(*) FROM pragma_table_info('users')       WHERE name='notify') AS value
 UNION ALL
   SELECT 'm019_visits' AS name, (SELECT COUNT(*) FROM sqlite_master                    WHERE type='table' AND name='visits') AS value
@@ -721,7 +766,12 @@ UNION ALL
       AND EXISTS (SELECT 1 FROM memberships m
                    WHERE m.user_id = v.proposed_by
                      AND m.account_id = v.account_id
-                     AND m.role IN ('admin', 'pm'))) AS value;
+                     AND m.role IN ('admin', 'pm'))) AS value
+)
+-- Problems first: `verdict = 'ok'` is 1 when it is fine and 0 when it is not,
+-- and ASC puts the 0s at the top. Then by name, so one database's answer is
+-- always in the same order as another's.
+ORDER BY verdict = 'ok', name;
   -- NO INVARIANT, AND THE REASON IS WORTH STATING rather than leaving the
   -- next person to wonder why 061 has one and this does not.
   --

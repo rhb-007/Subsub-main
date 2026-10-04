@@ -165,10 +165,10 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
   // schema itself. It could not be run at all on a fresh database, because the
   // invariants read columns schema.sql did not have -- so the one tool for
   // spotting this drift was disabled BY the drift.
-  let row = null, err = "", width = 0;
+  let row = null, err = "", width = 0, rows = [];
   try {
-    const first = fresh.prepare(checkSql()).all();
-    width = first.length ? Object.keys(first[0]).length : 0;
+    rows = fresh.prepare(checkSql()).all();
+    width = rows.length ? Object.keys(rows[0]).length : 0;
     row = runCheck(fresh);
   } catch (e) { err = String(e.message); }
   ck("it runs", !!row && Object.keys(row).length > 0, err);
@@ -188,6 +188,32 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
   // grow without limit and a bound on them would come back.
   ck("and the console will return it", width > 0 && width <= D1_MAX_COLUMNS,
     `${width} columns, D1 allows ${D1_MAX_COLUMNS}`);
+
+  // AND THE VERDICT COLUMN AGREES WITH THE NUMBERS, which is the half a
+  // reader cannot check for themselves. CHECK.sql computes 'ok' / 'NOT RUN' /
+  // 'BROKEN ROWS' / 'RUN 046' from the naming convention, because a hundred
+  // and ten numbers and a four-part rule is an answer that is present and not
+  // legible on the device it is read from -- and the prose version of that
+  // rule had already been wrong once.
+  //
+  // A verdict nothing checks is the shape this whole file is about, so:
+  //
+  //   EVERY ROW READS 'ok' on a fresh database, which is the same claim the
+  //   two assertions below make about the raw numbers, read off the column
+  //   somebody actually looks at.
+  //
+  //   AND THE INVARIANTS READ 'ok' AT ZERO, which is the only thing that
+  //   proves the CASE is not just `value >= 1` for everything. There are 29
+  //   such rows on a fresh database and the length is asserted, because
+  //   `[].every(...)` is true -- a check over rows that have disappeared
+  //   passes loudest exactly when the subject is gone.
+  const notOk = rows.filter((r) => r.verdict !== "ok");
+  ck("every row's verdict reads ok on a fresh database", notOk.length === 0,
+    JSON.stringify(notOk.slice(0, 5)));
+  const zeroes = rows.filter((r) => r.value === 0);
+  ck("and a zero invariant is ok rather than not-run",
+    zeroes.length > 10 && zeroes.every((r) => r.verdict === "ok"),
+    `${zeroes.length} rows read 0: ${JSON.stringify(zeroes.filter((r) => r.verdict !== "ok").slice(0, 5))}`);
   if (row) {
     // On an empty database every did-I-run-it count is 1 and every invariant
     // is 0. That is the shape a new environment should report.
@@ -231,6 +257,42 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
     ck("subdomain uniqueness is seen however it is enforced",
       row.m046_subdomain_unique >= 1, String(row.m046_subdomain_unique));
   }
+}
+
+console.log("\n-- and a problem sorts to the top --");
+{
+  // THE ORDERING IS THE WHOLE POINT OF THE VERDICT COLUMN and a clean database
+  // cannot check it: every row reads 'ok', so any order satisfies "problems
+  // first" vacuously -- deleting `ORDER BY verdict = 'ok'` passed every
+  // assertion above. A hundred and ten rows with the one bad number at
+  // position 74 is the answer being present and not legible, which is what
+  // this column exists to fix, so it needs a database with something wrong
+  // with it.
+  //
+  // `m039_unowned` is the cheapest one to break: `owner_account_id` is
+  // nullable, so one property row with it NULL is a real invariant violation
+  // of exactly the kind that read 1 on the live database once.
+  const db = buildFresh();
+  let rows = [], err = "";
+  try {
+    db.exec(`INSERT INTO accounts (id, name, subdomain, kind)
+               VALUES ('a_drift', 'Drift', 'drift', 'property_manager');
+             INSERT INTO properties (id, account_id, name, owner_account_id)
+               VALUES ('p_drift', 'a_drift', 'Unowned', NULL);`);
+    rows = db.prepare(checkSql()).all();
+  } catch (e) { err = String(e.message); }
+  ck("a broken invariant is seen", rows.some((r) => r.name === "m039_unowned" && r.value === 1), err);
+  ck("and it says BROKEN ROWS rather than NOT RUN",
+    rows.find((r) => r.name === "m039_unowned")?.verdict === "BROKEN ROWS",
+    JSON.stringify(rows.find((r) => r.name === "m039_unowned")));
+  // The reader looks at the first row and nowhere else, so that is the
+  // assertion: not "it is somewhere in the list sorted correctly", but that
+  // the thing wrong with their database is the FIRST thing they see.
+  ck("and it is the first row", rows[0]?.name === "m039_unowned",
+    `first row is ${rows[0]?.name}`);
+  ck("and everything after the problems reads ok",
+    rows.length > 1 && rows.slice(1).every((r) => r.verdict === "ok"),
+    JSON.stringify(rows.slice(1).filter((r) => r.verdict !== "ok").slice(0, 3)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

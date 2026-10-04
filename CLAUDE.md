@@ -9268,3 +9268,55 @@ refactor.
   touched. `grep -rhoE '\b(5[0-9]{3}|8[0-9]{3})\b' app/scripts/*.mjs | sort
   -un` is the list already taken.
 - Before claiming a fix works, revert it and confirm the test fails.
+
+- **AND IT ANSWERED WITH A HUNDRED AND TEN NUMBERS AND A FOUR-PART RULE.** The
+  entry above made `CHECK.sql` runnable. It did not make it readable: 110 rows
+  on an iPad, where most must read 1 or more, three named ones must read 0,
+  anything containing `_inv_` must read 0, and `m046_kind_check` is fine at 0 or
+  2 and needs a migration at exactly 1. The reader applies that a hundred and
+  ten times with their thumb, and the one bad number is at position 74.
+
+  **The rule lived in the prose and in the reader's head, and the prose had
+  already been wrong about it once** — an earlier header said *every column
+  answers 1 for applied and 0 for not*, which would send somebody with a
+  perfectly healthy database looking for four migrations that were never
+  missing. That is this file's own screen-that-lies rule pointed at a comment,
+  and it is the general case: **prose describing a rule is a second record of
+  it, and the second record is the one that goes wrong.**
+
+  So `verdict` is computed in the file, from the naming convention the file
+  already keeps, and **the problems sort to the top** — `ORDER BY verdict =
+  'ok'` puts the 0s first, so somebody reads the first row and stops. Three
+  words rather than one, because *the migration has not been run* and *a route
+  wrote rows the schema forbids* need opposite actions: `NOT RUN` means paste
+  it, `BROKEN ROWS` means fix a route, `RUN 046` is the one tri-state. The same
+  expired-versus-never-added distinction `docs.js` draws in colour.
+
+  **`value` stays beside it**, which is what separates this from the per-migration
+  check `npm run paste` refuses to generate: a verdict that is wrong is then
+  visible rather than silent.
+
+  **`instr(name, '_inv_')` AND NOT `LIKE '%_inv_%'`, because `_` is a LIKE
+  wildcard.** That pattern matches any three characters around "inv", so it
+  classifies `m027_invite_email`, `m028_user_invites` and `m038_invites` as
+  invariants — a healthy database reporting three bug reports, which is the
+  failure this column exists to remove, caused by the column. The mutation
+  fires on five rows.
+
+  **AND THE ORDERING COULD NOT BE CHECKED ON A CLEAN DATABASE.** Every row
+  reads `ok` there, so any order satisfies "problems first" vacuously and
+  deleting the `ORDER BY` passed every assertion — the could-not-fail shape, on
+  the one property the column was added for. The fixture breaks
+  `m039_unowned` with a single property row whose `owner_account_id` is NULL,
+  which is a real violation of exactly the kind that read 1 on the live
+  database once, and the assertion is that it is the **first** row rather than
+  that it is somewhere in a sorted list: the reader looks at the top and
+  nowhere else.
+
+  **The two readers in `scripts/lib/check-sql.mjs` survived the wrapper by
+  luck, and it is worth knowing why.** `checkExpr` counts parens from the
+  entry's own `SELECT '<name>' AS name,` rather than from the start of the
+  file, so wrapping the whole chain in `SELECT … FROM ( … )` leaves every
+  entry's `AS value` at depth 0 where the scan expects it. Had it tracked depth
+  from the top of the file, every one of its 110 entries would have become
+  unfindable in one edit.
