@@ -9615,6 +9615,20 @@ refactor.
   and would each have carried their own copy of the shape. One function, one
   edit per rewrite, and the mutation that drops its paren guard crashes both.
 
+  **AND IT RAN.** Both statements answered in the console on the first attempt
+  after four refusals, 110 rows, every verdict `ok`. So the shape is no longer
+  reasoned about — it is the one that has been seen to work, which is what every
+  previous note in this saga claimed about a number instead.
+
+  Two readings from that run are worth keeping, because they are the answers
+  somebody will look for next time. **`m046_kind_check` is 0, which means do not
+  run 046**: this database grew through the migrations, so `accounts.kind` has no
+  CHECK on it and the subcontractor kind stores with nothing pasted — exactly the
+  case that entry describes as the common one. And
+  **`m057_inv_drafted_after_finish` is 0 where it read 8**, which is the
+  ISO-versus-`CURRENT_TIMESTAMP` comparison fixed and confirmed against the live
+  rows rather than against a seeded fixture.
+
   **Still open, and now the only thing left worth measuring: nobody knows D1's
   compound limit.** It is below seven. Four refusals, all four found by a person
   pasting on an iPad; local SQLite allows 500, so nothing here can see it. It no
