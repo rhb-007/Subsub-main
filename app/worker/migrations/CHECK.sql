@@ -1,25 +1,8 @@
 -- Which migrations has this database actually had?
 --
--- Paste this into the D1 console and read the list. There is no migrations
--- table to consult -- they are applied by hand -- so this asks the schema
--- itself, which cannot be wrong about it.
---
--- ONE ROW PER CHECK: a `name` and a `value`. It used to be one row of 110
--- COLUMNS, and that is why it is not any more -- D1 refuses a result set
--- wider than 100 columns with `too many columns in result set`, so this file
--- became unrunnable in the console the moment 063 took it from 100 to 102.
--- It had been dead for five migrations when somebody finally pasted it.
---
--- WHICH IS THE OLDEST SHAPE IN CLAUDE.md, pointed at the tool that exists to
--- catch it: the one thing that answers "did I run that one?" was disabled by
--- its own growth, exactly as it once could not be run against a fresh
--- database because the invariants read columns `schema.sql` did not have.
--- And `schema-drift-test` was green throughout, because local SQLite allows
--- 2000 columns where D1 allows 100 -- a guard that runs where nobody is
--- looking, reporting to nobody. It now asserts the width as well.
---
--- Rows, unlike columns, have no ceiling. Adding a check is one more
--- `UNION ALL` and can never run the file into a limit again.
+-- Paste this into the D1 console. It is TWO statements: run the first, read
+-- it, then run the second. Each answers a different question and neither can
+-- be folded into the other -- see WHY IT IS TWO, below.
 --
 -- READ THE FIRST COLUMN AND NOTHING ELSE. `verdict` is 'ok', or it names what
 -- to do, and the rows that are not ok sort to the TOP. If the first row says
@@ -34,58 +17,233 @@
 --
 -- `value` is beside it because a verdict that is wrong has to be visible
 -- rather than silent -- which is the difference between a column like this and
--- a check query that quietly answers a different question. What the numbers
--- mean, if you want them:
+-- a check query that quietly answers a different question.
 --
---   MOST rows answer 1 for applied and 0 for not. FOUR do not, and reading
---   them the same way turns a healthy database into four bug reports:
+-- WHY IT IS TWO STATEMENTS, AND WHY THE FIRST ONE IS A LIST RATHER THAN SQL.
 --
---     m031_hireable_without, m031_others_with, m039_unowned, and anything
---     whose name contains `_inv_`
---         INVARIANTS. They count BROKEN ROWS, so 0 is the good answer and
---         anything above 0 is the bug report. The first three read 1 once, and
---         each was a different route writing a row the migration had taught
---         the schema to expect.
+-- This file has now been refused by D1 twice, for two different limits, and
+-- the second refusal was caused by the fix for the first:
 --
---     m046_kind_check
---         TRI-STATE, and the only one where the middle value means "do not
---         run the migration". 0 and 2 are both fine; only 1 needs 046.
+--   ONE ROW OF 110 COLUMNS -> `too many columns in result set`. D1 refuses a
+--   result set wider than 100. Unrunnable from migration 063, which took it
+--   from 100 to 102, and nobody found out for five migrations because the only
+--   place it is ever really run is an iPad.
 --
--- A few rows count SEVERAL columns at once, so they answer with how many they
--- found rather than 1: m055_inspections and m057_photo_notes read 6,
--- m055_inspection_rooms / m056_inspection_sends / m063_inspection_summary /
--- m066_job_endings read 5, m055_inspection_photos reads 3.
+--   110 ROWS VIA UNION ALL -> `too many terms in compound SELECT`. The note
+--   written at the time said rows "have no ceiling" and "can never run the
+--   file into a limit again". That was simply wrong: every UNION ALL is a term
+--   and terms are capped too. A fix that trades one ceiling for another is not
+--   a fix, it is the same bug wearing the next limit along.
 --
--- An earlier header said "every column answers 1 for applied and 0 for not",
--- which is the screen-that-lies rule pointed at a comment: somebody reading
--- their own healthy row would have found four zeros and gone looking for four
--- migrations that were never missing. That is most of why the verdict is
--- computed now instead of recited -- prose describing a rule is a second
--- record of it, and the second record is the one that goes wrong.
+-- So the half that GROWS -- one did-I-run-it check per migration -- is now
+-- DATA rather than SQL. Seventy-nine checks are one list inside statement 1
+-- and cost ZERO compound terms between them, so adding a migration can never
+-- move this file toward either limit again. What is left as SQL is the
+-- invariants, which are arbitrary queries that cannot be expressed as data;
+-- there are 31, so statement 2 has 31 terms where the file used to have 110.
+--
+-- THAT IS A SMALLER CEILING, NOT NO CEILING, which is the thing the last note
+-- got wrong and this one will not: an invariant still costs a term, and
+-- nobody here knows D1's exact limit -- only that it refused 110 and accepts
+-- this. If statement 2 is ever refused, split it, do not re-describe it.
+--
+-- Adding a did-I-run-it check is ONE LINE in statement 1's list. The comment
+-- above it sits between the concatenated pieces, so each entry keeps the
+-- record of why it exists.
 --
 -- It exists because "did I run that one?" came up after nearly every round,
 -- and the honest answer from a chat thread is a guess. Safe to run as often
 -- as you like: it reads nothing but the table definitions and changes
 -- nothing.
+
+-- ===== STATEMENT 1 of 2 -- did I run that one? =====================
 --
--- Add a line here whenever a migration adds a column, so this keeps pace
--- with the folder it lives in.
-  -- AND IT SAYS WHICH ROWS ARE WRONG, because a hundred and ten numbers and a
-  -- four-part rule is an answer that is present and not legible. The rule used
-  -- to live in the prose above and in the reader's head, applied a hundred and
-  -- ten times on a phone -- and the prose had already been wrong about it once,
-  -- telling somebody with a perfectly healthy database to go and find four
-  -- migrations that were never missing.
+-- A few rows count SEVERAL columns at once, so they answer with how many they
+-- found rather than 1. That is why the list carries a column NAME LIST rather
+-- than a count: the check is "these columns are present", and a number in the
+-- file would be a second record of the same fact.
+WITH spec(j) AS (SELECT
+  '[["m018_user_notify","col","users",["notify"]]' ||
+  ',["m019_visits","table","visits",null]' ||
+  ',["m020_withdrawn","col","jobs",["withdrawn_at"]]' ||
+  ',["m021_declined","col","jobs",["declined_at"]]' ||
+  ',["m022_photos","col","jobs",["photos"]]' ||
+  ',["m022_report_detail","col","jobs",["report_detail"]]' ||
+  ',["m023_severity","col","jobs",["severity"]]' ||
+  ',["m023_emergency_sub","col","accounts",["emergency_company_id"]]' ||
+  ',["m024_pay_kind","col","work_orders",["pay_kind"]]' ||
+  ',["m024_rate_cents","col","work_orders",["rate_cents"]]' ||
+  ',["m024_cap_hours","col","work_orders",["cap_hours"]]' ||
+  ',["m025_updated_at","col","jobs",["updated_at"]]' ||
+  ',["m026_supplier","col","jobs",["material_supplier"]]' ||
+  ',["m026_branch","col","jobs",["material_branch"]]' ||
+  ',["m027_invite_email","col","sub_invites",["email"]]' ||
+  ',["m027_invite_sent","col","sub_invites",["sent_at"]]' ||
+  ',["m028_user_invites","table","user_invites",null]' ||
+  ',["m029_invite_phone","col","sub_invites",["phone"]]' ||
+  ',["m030_connect_requests","table","connect_requests",null]' ||
+  ',["m030_connect_code","col","companies",["connect_code"]]' ||
+  ',["m031_account_company","col","accounts",["company_id"]]' ||
+  ',["m032_avatar","col","users",["avatar_key"]]' ||
+  ',["m033_milestones","table","wo_milestones",null]' ||
+  ',["m033_events","table","wo_events",null]' ||
+  ',["m033_releases","table","wo_releases",null]' ||
+  ',["m034_retainage","col","work_orders",["retainage_bps"]]' ||
+  ',["m035_waivers","table","lien_waivers",null]' ||
+  ',["m035_lower_tier","table","lower_tier_parties",null]' ||
+  ',["m036_scope","col","work_orders",["scope_kind"]]' ||
+  ',["m037_docs","table","company_docs",null]' ||
+  ',["m037_reminders","table","doc_reminders",null]' ||
+  ',["m038_optin","col","companies",["overflow_opt_in"]]' ||
+  ',["m038_trades","col","companies",["overflow_trades"]]' ||
+  ',["m038_since","col","companies",["overflow_since"]]' ||
+  ',["m038_posts","table","overflow_posts",null]' ||
+  ',["m038_invites","table","overflow_invites",null]' ||
+  ',["m038_responses","table","overflow_responses",null]' ||
+  ',["m039_owner","col","properties",["owner_account_id"]]' ||
+  ',["m039_transfers","table","property_transfers",null]' ||
+  ',["m040_declared_at","col","properties",["owner_declared_at"]]' ||
+  ',["m040_declared_by","col","properties",["owner_declared_by"]]' ||
+  ',["m041_doc_shares","table","doc_shares",null]' ||
+  ',["m043_quote_requests","table","quote_requests",null]' ||
+  ',["m043_quote_invites","table","quote_invites",null]' ||
+  ',["m044_retouches","table","doc_retouches",null]' ||
+  ',["m044_optouts","table","doc_share_optouts",null]' ||
+  ',["m045_inboxes","table","doc_inboxes",null]' ||
+  -- 047. Whether this company has been ASKED to be hireable. NULL on a row
+  -- means not answered, never "no", and the effective default is open -- so
+  -- this counts the column, not the answers.
+  ',["m047_open_to_hire","col","companies",["open_to_hire"]]' ||
+  -- 048. The CRM API: the tokens, and the row that makes a retried webhook
+  -- return the job it already made. ux_job_sources_external is counted
+  -- separately because it is the constraint doing that work -- the table
+  -- without it takes the duplicate and reports success.
+  ',["m048_api_tokens","table","api_tokens",null]' ||
+  ',["m048_job_sources","table","job_sources",null]' ||
+  ',["m048_dedupe_index","index","ux_job_sources_external",null]' ||
+  -- 049. The account's CRM vocabulary, and the words that meant nothing.
+  ',["m049_trade_rules","table","crm_trade_rules",null]' ||
+  ',["m049_unmapped","table","crm_unmapped",null]' ||
+  -- 050. Where a subcontractor's money goes. Both indexes are counted
+  -- separately from the table because each one is doing work the table alone
+  -- does not: the first stops a company growing a second connected account
+  -- (two places money could go, nothing saying which), and the second is the
+  -- column the Connect webhook looks a row up by, so a duplicate there is an
+  -- ambiguous answer at the moment money is involved.
+  ',["m050_payout_accounts","table","payout_accounts",null]' ||
+  ',["m050_one_per_company","index","ux_payout_account_company",null]' ||
+  ',["m050_one_per_acct","index","ux_payout_account_processor",null]' ||
+  -- 051. Money in against a work order, money out per release. The live-
+  -- transfer index is counted separately because it is the half that holds
+  -- when two people press pay at once -- the table alone takes the second
+  -- transfer and reports success, which is the one failure this whole ledger
+  -- exists to make impossible. It is PARTIAL (status <> 'failed') so a
+  -- declined attempt can be retried; a plain unique index there would leave
+  -- somebody unpayable because a card bounced once.
+  ',["m051_wo_funding","table","wo_funding",null]' ||
+  ',["m051_wo_transfers","table","wo_transfers",null]' ||
+  ',["m051_one_live_transfer","index","ux_wo_transfer_live",null]' ||
+  ',["m051_one_per_intent","index","ux_wo_funding_intent",null]' ||
+  -- 052. An agreement is between TWO PARTIES, so it hangs off the pair rather
+  -- than sitting as one boolean on the shared company row. The live index is
+  -- counted separately because it is the half that holds when two people
+  -- issue one at once, and it is PARTIAL ('sent','signed','countersigned') so
+  -- a relationship whose first agreement was declined can have another.
+  ',["m052_agreements","table","agreements",null]' ||
+  ',["m052_agreement_terms","table","agreement_terms",null]' ||
+  ',["m052_one_live_agreement","index","ux_agreement_live",null]' ||
+  -- 053. A project manager scoped to named jobs, which is what a general
+  -- contractor has instead of buildings. No rows means no restriction, so
+  -- there is nothing here that must be non-zero -- the table existing is the
+  -- whole of what the migration did.
+  ',["m053_membership_jobs","table","membership_jobs",null]' ||
+  -- 055. Move-in and move-out unit inspections. Three tables; no rows is the
+  -- ordinary state of a fresh database, so what is checked is that they are
+  -- there and carry the columns the routes read.
+  ',["m055_inspections","col","inspections",["kind","status","property_id","unit","job_id","finished_at"]]' ||
+  ',["m055_inspection_rooms","col","inspection_rooms",["inspection_id","name","status","note","position"]]' ||
+  ',["m055_inspection_photos","col","inspection_photos",["room_id","file_key","content_type"]]' ||
+  -- 056. Who has been sent an inspection report. No rows is the ordinary
+  -- state, so what is checked is the shape.
+  ',["m056_inspection_sends","col","inspection_sends",["inspection_id","user_id","sent_by","emailed","sent_at"]]' ||
+  -- 057. What is written about a photograph. No rows until somebody drafts
+  -- or captions one, so what is checked is the shape.
+  ',["m057_photo_notes","col","inspection_photo_notes",["photo_id","caption","draft","draft_unclear","drafted_at","drafted_by"]]' ||
+  -- 058. What somebody is to the account that engaged them.
+  ',["m058_engaged_as","col","engagements",["engaged_as"]]' ||
+  -- 059. What they will be to you, carried on the invite until they arrive.
+  ',["m059_invite_engaged_as","col","sub_invites",["engaged_as"]]' ||
+  -- 060. Who has to be there to let somebody in.
+  ',["m060_job_access","col","jobs",["access"]]' ||
+  -- 061. The contractor's half of an appointment.
+  ',["m061_visit_contractor_at","col","visits",["contractor_at"]]' ||
+  ',["m061_visit_contractor_note","col","visits",["contractor_note"]]' ||
+  -- 062. Which tenant has to be let in, when it is not the person who asked.
+  ',["m062_job_access_user","col","jobs",["access_user_id"]]' ||
+  -- 063. The summary the work order carries.
   --
-  -- So it is computed here, from the naming convention this file already keeps,
-  -- and the problems sort to the top where somebody actually looks. `value` is
-  -- still beside it: a verdict that is wrong is then visible rather than
-  -- silent, which is the difference between this and a check query that
-  -- quietly answers the wrong question.
+  -- Counted by its COLUMNS and not by the table name, which is the lesson 052
+  -- paid for against a live database: `sqlite_master` tells you a table is
+  -- there and `pragma_table_info` tells you it is the right one. Must read 5.
+  ',["m063_inspection_summary","col","inspection_summaries",["summary","source","model","written_at","written_by"]]' ||
+  -- 064. The hiring side's own leg of an appointment.
+  ',["m064_visit_manager_at","col","visits",["manager_at"]]' ||
+  -- 065. The auto-turnaround switch. A column rather than a table, so this is
+  -- the one did-I-run-it check for it -- and it was missing until the paste
+  -- steps were written out, which is how a migration with a route, a panel and
+  -- a test suite behind it still had no way to answer "did I run that one?".
+  ',["m065_auto_turnaround","col","accounts",["auto_turnaround"]]' ||
+  -- 066. The three ways a job ends without recording that work was done.
   --
-  -- `instr` rather than LIKE '%_inv_%' -- `_` is a LIKE wildcard, so that
-  -- pattern matches any three characters around "inv" and would start
-  -- classifying rows by accident.
+  -- FIVE NAMED COLUMNS, not the table name. `sqlite_master` tells you a table
+  -- is there and `pragma_table_info` tells you it is the RIGHT one -- which is
+  -- what the broken 052 cost once already, when a did-I-run-it check asked
+  -- only whether the table existed and answered yes over a table nothing
+  -- could write to.
+  ',["m066_job_endings","col","job_endings",["job_id","kind","note","until","at"]]' ||
+  ']'),
+want(name, kind, on_, cols) AS (
+  SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
+         json_extract(value, '$[2]'), json_extract(value, '$[3]')
+    FROM spec, json_each(spec.j)
+)
+-- EVERY ROW HERE IS A DID-I-RUN-IT CHECK, so the verdict needs no special
+-- cases: the tri-state and the invariants are all in statement 2. A rule with
+-- branches that can never fire is a rule somebody later reads as load-bearing.
+SELECT
+  CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END AS verdict,
+  name,
+  value
+FROM (
+  SELECT w.name AS name, CASE w.kind
+    WHEN 'col'   THEN (SELECT COUNT(*) FROM pragma_table_info(w.on_) p
+                        WHERE EXISTS (SELECT 1 FROM json_each(w.cols) c WHERE c.value = p.name))
+    WHEN 'table' THEN (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = w.on_)
+    WHEN 'index' THEN (SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = w.on_)
+    END AS value
+    FROM want w
+)
+-- Problems first: `verdict = 'ok'` is 1 when it is fine and 0 when it is not,
+-- and ASC puts the 0s at the top. Then by name, so one database's answer is
+-- always in the same order as another's.
+ORDER BY verdict = 'ok', name;
+
+-- ===== STATEMENT 2 of 2 -- is anything WRONG? ======================
+--
+-- These are not migrations. Every one counts BROKEN ROWS, so 0 is the good
+-- answer and anything above 0 is a bug report about a route rather than a
+-- missing paste. They are SQL and not data because each asks its own question.
+--
+-- m031_hireable_without, m031_others_with and m039_unowned predate the
+-- `_inv_` marker and are named here for that reason; nothing new should join
+-- them without it.
+-- THIS ONE IS NOT ALL INVARIANTS, which is why the verdict keeps the full
+-- rule. Two of its rows are did-I-run-it checks that could not be written as
+-- data: `m046_kind_check` is a tri-state read off the table's own DDL, and
+-- `m046_subdomain_unique` has to ask which COLUMN an index covers, because
+-- schema.sql gets its uniqueness from an inline UNIQUE whose autoindex has no
+-- name to look up. Reading either as "0 is good" would report a healthy
+-- database as broken.
 SELECT
   CASE
     WHEN instr(name, '_inv_') > 0
@@ -98,49 +256,6 @@ SELECT
   name,
   value
 FROM (
-  SELECT 'm018_user_notify' AS name, (SELECT COUNT(*) FROM pragma_table_info('users')       WHERE name='notify') AS value
-UNION ALL
-  SELECT 'm019_visits' AS name, (SELECT COUNT(*) FROM sqlite_master                    WHERE type='table' AND name='visits') AS value
-UNION ALL
-  SELECT 'm020_withdrawn' AS name, (SELECT COUNT(*) FROM pragma_table_info('jobs')        WHERE name='withdrawn_at') AS value
-UNION ALL
-  SELECT 'm021_declined' AS name, (SELECT COUNT(*) FROM pragma_table_info('jobs')        WHERE name='declined_at') AS value
-UNION ALL
-  SELECT 'm022_photos' AS name, (SELECT COUNT(*) FROM pragma_table_info('jobs')        WHERE name='photos') AS value
-UNION ALL
-  SELECT 'm022_report_detail' AS name, (SELECT COUNT(*) FROM pragma_table_info('jobs')        WHERE name='report_detail') AS value
-UNION ALL
-  SELECT 'm023_severity' AS name, (SELECT COUNT(*) FROM pragma_table_info('jobs')        WHERE name='severity') AS value
-UNION ALL
-  SELECT 'm023_emergency_sub' AS name, (SELECT COUNT(*) FROM pragma_table_info('accounts')    WHERE name='emergency_company_id') AS value
-UNION ALL
-  SELECT 'm024_pay_kind' AS name, (SELECT COUNT(*) FROM pragma_table_info('work_orders') WHERE name='pay_kind') AS value
-UNION ALL
-  SELECT 'm024_rate_cents' AS name, (SELECT COUNT(*) FROM pragma_table_info('work_orders') WHERE name='rate_cents') AS value
-UNION ALL
-  SELECT 'm024_cap_hours' AS name, (SELECT COUNT(*) FROM pragma_table_info('work_orders') WHERE name='cap_hours') AS value
-UNION ALL
-  SELECT 'm025_updated_at' AS name, (SELECT COUNT(*) FROM pragma_table_info('jobs')        WHERE name='updated_at') AS value
-UNION ALL
-  SELECT 'm026_supplier' AS name, (SELECT COUNT(*) FROM pragma_table_info('jobs')        WHERE name='material_supplier') AS value
-UNION ALL
-  SELECT 'm026_branch' AS name, (SELECT COUNT(*) FROM pragma_table_info('jobs')        WHERE name='material_branch') AS value
-UNION ALL
-  SELECT 'm027_invite_email' AS name, (SELECT COUNT(*) FROM pragma_table_info('sub_invites') WHERE name='email') AS value
-UNION ALL
-  SELECT 'm027_invite_sent' AS name, (SELECT COUNT(*) FROM pragma_table_info('sub_invites') WHERE name='sent_at') AS value
-UNION ALL
-  SELECT 'm028_user_invites' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='user_invites') AS value
-UNION ALL
-  SELECT 'm029_invite_phone' AS name, (SELECT COUNT(*) FROM pragma_table_info('sub_invites') WHERE name='phone') AS value
-UNION ALL
-  SELECT 'm030_connect_requests' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='connect_requests') AS value
-UNION ALL
-  SELECT 'm030_connect_code' AS name, (SELECT COUNT(*) FROM pragma_table_info('companies')   WHERE name='connect_code') AS value
-UNION ALL
-  SELECT 'm031_account_company' AS name, (SELECT COUNT(*) FROM pragma_table_info('accounts')    WHERE name='company_id') AS value
-UNION ALL
-
   -- Not a column check: the point of 031 is that every account that can BE
   -- HIRED has one, and no other kind does. It read `general_contractor` alone
   -- until `subcontractor` was added -- at which point the invariant would have
@@ -156,64 +271,10 @@ UNION ALL
     WHERE kind NOT IN ('general_contractor','subcontractor')
       AND company_id IS NOT NULL) AS value
 UNION ALL
-  SELECT 'm032_avatar' AS name, (SELECT COUNT(*) FROM pragma_table_info('users')       WHERE name='avatar_key') AS value
-UNION ALL
-  SELECT 'm033_milestones' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_milestones') AS value
-UNION ALL
-  SELECT 'm033_events' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_events') AS value
-UNION ALL
-  SELECT 'm033_releases' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_releases') AS value
-UNION ALL
-  SELECT 'm034_retainage' AS name, (SELECT COUNT(*) FROM pragma_table_info('work_orders') WHERE name='retainage_bps') AS value
-UNION ALL
-  SELECT 'm035_waivers' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='lien_waivers') AS value
-UNION ALL
-  SELECT 'm035_lower_tier' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='lower_tier_parties') AS value
-UNION ALL
-  SELECT 'm036_scope' AS name, (SELECT COUNT(*) FROM pragma_table_info('work_orders') WHERE name='scope_kind') AS value
-UNION ALL
-  SELECT 'm037_docs' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='company_docs') AS value
-UNION ALL
-  SELECT 'm037_reminders' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_reminders') AS value
-UNION ALL
-  SELECT 'm038_optin' AS name, (SELECT COUNT(*) FROM pragma_table_info('companies')   WHERE name='overflow_opt_in') AS value
-UNION ALL
-  SELECT 'm038_trades' AS name, (SELECT COUNT(*) FROM pragma_table_info('companies')   WHERE name='overflow_trades') AS value
-UNION ALL
-  SELECT 'm038_since' AS name, (SELECT COUNT(*) FROM pragma_table_info('companies')   WHERE name='overflow_since') AS value
-UNION ALL
-  SELECT 'm038_posts' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='overflow_posts') AS value
-UNION ALL
-  SELECT 'm038_invites' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='overflow_invites') AS value
-UNION ALL
-  SELECT 'm038_responses' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='overflow_responses') AS value
-UNION ALL
-  SELECT 'm039_owner' AS name, (SELECT COUNT(*) FROM pragma_table_info('properties')  WHERE name='owner_account_id') AS value
-UNION ALL
-  SELECT 'm039_transfers' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='property_transfers') AS value
-UNION ALL
-
   -- Not a column check: 039's backfill must have left every building owned by
   -- whoever holds it, or an unclaimed property can never be handed over.
   SELECT 'm039_unowned' AS name, (SELECT COUNT(*) FROM properties WHERE owner_account_id IS NULL) AS value
 UNION ALL
-  SELECT 'm040_declared_at' AS name, (SELECT COUNT(*) FROM pragma_table_info('properties')  WHERE name='owner_declared_at') AS value
-UNION ALL
-  SELECT 'm040_declared_by' AS name, (SELECT COUNT(*) FROM pragma_table_info('properties')  WHERE name='owner_declared_by') AS value
-UNION ALL
-  SELECT 'm041_doc_shares' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_shares') AS value
-UNION ALL
-  SELECT 'm043_quote_requests' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='quote_requests') AS value
-UNION ALL
-  SELECT 'm043_quote_invites' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='quote_invites') AS value
-UNION ALL
-  SELECT 'm044_retouches' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_retouches') AS value
-UNION ALL
-  SELECT 'm044_optouts' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_share_optouts') AS value
-UNION ALL
-  SELECT 'm045_inboxes' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_inboxes') AS value
-UNION ALL
-
   -- 046 is the one migration here that MOST DATABASES MUST NOT RUN, so this
   -- reads the shape rather than asking whether a column arrived.
   --
@@ -230,7 +291,6 @@ UNION ALL
             LIKE '%''subcontractor''%' THEN 2
      ELSE 1 END) AS value
 UNION ALL
-
   -- And the uniqueness 046's rebuild has to put back, because
   -- CREATE TABLE AS SELECT keeps the rows and drops everything else. Every
   -- branded page load looks an account up by subdomain, and two accounts
@@ -247,47 +307,6 @@ UNION ALL
       AND EXISTS (SELECT 1 FROM pragma_index_info(il.name) ii
                    WHERE ii.name = 'subdomain')) AS value
 UNION ALL
-
-  -- 047. Whether this company has been ASKED to be hireable. NULL on a row
-  -- means not answered, never "no", and the effective default is open -- so
-  -- this counts the column, not the answers.
-  SELECT 'm047_open_to_hire' AS name, (SELECT COUNT(*) FROM pragma_table_info('companies')
-    WHERE name = 'open_to_hire') AS value
-UNION ALL
-
-  -- 048. The CRM API: the tokens, and the row that makes a retried webhook
-  -- return the job it already made. ux_job_sources_external is counted
-  -- separately because it is the constraint doing that work -- the table
-  -- without it takes the duplicate and reports success.
-  SELECT 'm048_api_tokens' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='api_tokens') AS value
-UNION ALL
-  SELECT 'm048_job_sources' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='job_sources') AS value
-UNION ALL
-  SELECT 'm048_dedupe_index' AS name, (SELECT COUNT(*) FROM sqlite_master
-    WHERE type='index' AND name='ux_job_sources_external') AS value
-UNION ALL
-
-  -- 049. The account's CRM vocabulary, and the words that meant nothing.
-  SELECT 'm049_trade_rules' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='crm_trade_rules') AS value
-UNION ALL
-  SELECT 'm049_unmapped' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='crm_unmapped') AS value
-UNION ALL
-
-  -- 050. Where a subcontractor's money goes. Both indexes are counted
-  -- separately from the table because each one is doing work the table alone
-  -- does not: the first stops a company growing a second connected account
-  -- (two places money could go, nothing saying which), and the second is the
-  -- column the Connect webhook looks a row up by, so a duplicate there is an
-  -- ambiguous answer at the moment money is involved.
-  SELECT 'm050_payout_accounts' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='payout_accounts') AS value
-UNION ALL
-  SELECT 'm050_one_per_company' AS name, (SELECT COUNT(*) FROM sqlite_master
-    WHERE type='index' AND name='ux_payout_account_company') AS value
-UNION ALL
-  SELECT 'm050_one_per_acct' AS name, (SELECT COUNT(*) FROM sqlite_master
-    WHERE type='index' AND name='ux_payout_account_processor') AS value
-UNION ALL
-
   -- And an invariant, which must read ZERO: a row saying verified while
   -- Stripe says money cannot move is a roster reading payable over an
   -- account that is not.
@@ -304,25 +323,6 @@ UNION ALL
     WHERE kyc_status = 'verified'
       AND (payouts_enabled = 0 OR transfers_active = 0)) AS value
 UNION ALL
-
-  -- 051. Money in against a work order, money out per release. The live-
-  -- transfer index is counted separately because it is the half that holds
-  -- when two people press pay at once -- the table alone takes the second
-  -- transfer and reports success, which is the one failure this whole ledger
-  -- exists to make impossible. It is PARTIAL (status <> 'failed') so a
-  -- declined attempt can be retried; a plain unique index there would leave
-  -- somebody unpayable because a card bounced once.
-  SELECT 'm051_wo_funding' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_funding') AS value
-UNION ALL
-  SELECT 'm051_wo_transfers' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='wo_transfers') AS value
-UNION ALL
-  SELECT 'm051_one_live_transfer' AS name, (SELECT COUNT(*) FROM sqlite_master
-    WHERE type='index' AND name='ux_wo_transfer_live') AS value
-UNION ALL
-  SELECT 'm051_one_per_intent' AS name, (SELECT COUNT(*) FROM sqlite_master
-    WHERE type='index' AND name='ux_wo_funding_intent') AS value
-UNION ALL
-
   -- Invariants, both of which must read ZERO.
   --
   -- A release marked paid with no transfer behind it is the ORIGINAL bug in a
@@ -335,27 +335,12 @@ UNION ALL
       AND NOT EXISTS (SELECT 1 FROM wo_transfers t
                        WHERE t.release_id = r.id AND t.status IN ('paid','pending'))) AS value
 UNION ALL
-
   -- And the reverse, which is worse: money that left against a release
   -- nothing says was paid. That is a transfer nobody can reconcile.
   SELECT 'm051_inv_transfer_without_paid' AS name, (SELECT COUNT(*) FROM wo_transfers t
     JOIN wo_releases r ON r.id = t.release_id
     WHERE t.status = 'paid' AND r.status <> 'paid') AS value
 UNION ALL
-
-  -- 052. An agreement is between TWO PARTIES, so it hangs off the pair rather
-  -- than sitting as one boolean on the shared company row. The live index is
-  -- counted separately because it is the half that holds when two people
-  -- issue one at once, and it is PARTIAL ('sent','signed','countersigned') so
-  -- a relationship whose first agreement was declined can have another.
-  SELECT 'm052_agreements' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agreements') AS value
-UNION ALL
-  SELECT 'm052_agreement_terms' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agreement_terms') AS value
-UNION ALL
-  SELECT 'm052_one_live_agreement' AS name, (SELECT COUNT(*) FROM sqlite_master
-    WHERE type='index' AND name='ux_agreement_live') AS value
-UNION ALL
-
   -- Invariants, both of which must read ZERO.
   --
   -- In force means BOTH signed. A row saying countersigned with either
@@ -365,7 +350,6 @@ UNION ALL
     WHERE status = 'countersigned'
       AND (signed_at IS NULL OR countersigned_at IS NULL)) AS value
 UNION ALL
-
   -- And a signature with no record of WHAT was signed. The hash is the whole
   -- difference between proving somebody signed something and proving what;
   -- an uploaded agreement is excused only until it has been uploaded, so this
@@ -374,15 +358,6 @@ UNION ALL
     WHERE signed_at IS NOT NULL
       AND COALESCE(doc_sha256, '') = '' AND COALESCE(file_name, '') = '') AS value
 UNION ALL
-
-
-  -- 053. A project manager scoped to named jobs, which is what a general
-  -- contractor has instead of buildings. No rows means no restriction, so
-  -- there is nothing here that must be non-zero -- the table existing is the
-  -- whole of what the migration did.
-  SELECT 'm053_membership_jobs' AS name, (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='membership_jobs') AS value
-UNION ALL
-
   -- Invariant, must read ZERO: a scope row against a seat that is not scoped
   -- by job at all. `jobScopeFrom` ignores those, so such a row is a list
   -- somebody built that narrows nobody -- and it would start narrowing them
@@ -391,7 +366,6 @@ UNION ALL
      JOIN memberships m ON m.id = mj.membership_id
     WHERE m.role <> 'pm') AS value
 UNION ALL
-
   -- And a scope row pointing at a job on a different account from the seat.
   -- The cascade cannot catch this one: both rows are real, and the pair is
   -- what is wrong. A seat narrowed to somebody else's job either sees nothing
@@ -401,8 +375,6 @@ UNION ALL
      JOIN jobs j ON j.id = mj.job_id
     WHERE j.account_id <> m.account_id) AS value
 UNION ALL
-
-
   -- 054. The same shape one axis over, and the one that actually bit.
   -- Invariant, must read ZERO: a BUILDING scope row against a seat that is
   -- not narrowed by building at all. `propertyScope` answers null for
@@ -419,21 +391,6 @@ UNION ALL
      JOIN memberships m ON m.id = mp.membership_id
     WHERE m.role NOT IN ('pm', 'owner', 'tenant')) AS value
 UNION ALL
-
-
-  -- 055. Move-in and move-out unit inspections. Three tables; no rows is the
-  -- ordinary state of a fresh database, so what is checked is that they are
-  -- there and carry the columns the routes read.
-  SELECT 'm055_inspections' AS name, (SELECT COUNT(*) FROM pragma_table_info('inspections')
-    WHERE name IN ('kind','status','property_id','unit','job_id','finished_at')) AS value
-UNION ALL
-  SELECT 'm055_inspection_rooms' AS name, (SELECT COUNT(*) FROM pragma_table_info('inspection_rooms')
-    WHERE name IN ('inspection_id','name','status','note','position')) AS value
-UNION ALL
-  SELECT 'm055_inspection_photos' AS name, (SELECT COUNT(*) FROM pragma_table_info('inspection_photos')
-    WHERE name IN ('room_id','file_key','content_type')) AS value
-UNION ALL
-
   -- Invariant, must read ZERO: a room on an inspection that is not there.
   -- The cascade covers a deleted inspection; this covers a row written
   -- against an id that never existed, which is what a route taking an id from
@@ -441,7 +398,6 @@ UNION ALL
   SELECT 'm055_inv_orphan_rooms' AS name, (SELECT COUNT(*) FROM inspection_rooms r
     WHERE NOT EXISTS (SELECT 1 FROM inspections i WHERE i.id = r.inspection_id)) AS value
 UNION ALL
-
   -- And a finished inspection with a room nobody answered. `whyNotFinish`
   -- refuses that, so a row here is a route that stopped asking it.
   SELECT 'm055_inv_finished_unchecked' AS name, (SELECT COUNT(*) FROM inspections i
@@ -449,14 +405,6 @@ UNION ALL
       AND EXISTS (SELECT 1 FROM inspection_rooms r
                    WHERE r.inspection_id = i.id AND r.status = 'unchecked')) AS value
 UNION ALL
-
-
-  -- 056. Who has been sent an inspection report. No rows is the ordinary
-  -- state, so what is checked is the shape.
-  SELECT 'm056_inspection_sends' AS name, (SELECT COUNT(*) FROM pragma_table_info('inspection_sends')
-    WHERE name IN ('inspection_id','user_id','sent_by','emailed','sent_at')) AS value
-UNION ALL
-
   -- Invariant, must read ZERO: a report sent from an inspection that is not
   -- finished. `canSendInspection` refuses it, because a half-walked document
   -- says nothing while looking like it says everything -- a row here is a
@@ -465,14 +413,6 @@ UNION ALL
      JOIN inspections i ON i.id = s.inspection_id
     WHERE i.status <> 'finished') AS value
 UNION ALL
-
-
-  -- 057. What is written about a photograph. No rows until somebody drafts
-  -- or captions one, so what is checked is the shape.
-  SELECT 'm057_photo_notes' AS name, (SELECT COUNT(*) FROM pragma_table_info('inspection_photo_notes')
-    WHERE name IN ('photo_id','caption','draft','draft_unclear','drafted_at','drafted_by')) AS value
-UNION ALL
-
   -- Invariant, must read ZERO: a note against a photograph that is not
   -- there. The foreign key says it cannot happen and this is here because
   -- m055_inv_orphan_rooms is -- a route that takes an id from the body
@@ -480,7 +420,6 @@ UNION ALL
   SELECT 'm057_inv_orphan_notes' AS name, (SELECT COUNT(*) FROM inspection_photo_notes n
     WHERE NOT EXISTS (SELECT 1 FROM inspection_photos p WHERE p.id = n.photo_id)) AS value
 UNION ALL
-
   -- Invariant, must read ZERO: a draft written after the inspection was
   -- finished. Drafting is a write, and finishing is a one-way door --
   -- `whyNotDraft` refuses it, so a row here is a route that stopped asking.
@@ -510,13 +449,6 @@ UNION ALL
         OR datetime(i.finished_at) IS NULL
         OR datetime(n.drafted_at) > datetime(i.finished_at))) AS value
 UNION ALL
-
-
-  -- 058. What somebody is to the account that engaged them.
-  SELECT 'm058_engaged_as' AS name, (SELECT COUNT(*) FROM pragma_table_info('engagements')
-    WHERE name = 'engaged_as') AS value
-UNION ALL
-
   -- Invariant, must read ZERO: a value the product does not produce. NULL is
   -- the ordinary state and reads as subcontractor, so this counts only rows
   -- carrying a word that is neither -- which is a route that stopped
@@ -525,7 +457,6 @@ UNION ALL
     WHERE engaged_as IS NOT NULL
       AND engaged_as NOT IN ('subcontractor','handyman')) AS value
 UNION ALL
-
   -- Invariant, must read ZERO: a handyman on an account that has no buildings
   -- to maintain. `mayEngageHandyman` refuses it, so a row here is a route
   -- that stopped asking -- and it would be a maintenance worker excused their
@@ -535,13 +466,6 @@ UNION ALL
     WHERE e.engaged_as = 'handyman'
       AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager')) AS value
 UNION ALL
-
-
-  -- 059. What they will be to you, carried on the invite until they arrive.
-  SELECT 'm059_invite_engaged_as' AS name, (SELECT COUNT(*) FROM pragma_table_info('sub_invites')
-    WHERE name = 'engaged_as') AS value
-UNION ALL
-
   -- Invariant, must read ZERO: the same two faults 058 counts, one table
   -- earlier. They are counted again rather than trusted to the engagement
   -- check, because an invite is where the word is DECIDED and an engagement
@@ -551,7 +475,6 @@ UNION ALL
     WHERE engaged_as IS NOT NULL
       AND engaged_as NOT IN ('subcontractor','handyman')) AS value
 UNION ALL
-
   -- Invariant, must read ZERO: a handyman invite from an account with no
   -- buildings to maintain. Counted on every invite, spent or not: a spent one
   -- has already written the word onto an engagement, and an outstanding one
@@ -561,13 +484,6 @@ UNION ALL
     WHERE i.engaged_as = 'handyman'
       AND a.kind NOT IN ('property_manager','building_owner','portfolio_manager')) AS value
 UNION ALL
-
-
-  -- 060. Who has to be there to let somebody in.
-  SELECT 'm060_job_access' AS name, (SELECT COUNT(*) FROM pragma_table_info('jobs')
-    WHERE name = 'access') AS value
-UNION ALL
-
   -- Invariant, must read ZERO: a value the product does not produce. NULL is
   -- the ordinary state and means "not answered", so this counts only a job
   -- carrying a word that is none of the three -- which is a route that stopped
@@ -576,16 +492,6 @@ UNION ALL
     WHERE access IS NOT NULL
       AND access NOT IN ('tenant','manager','none')) AS value
 UNION ALL
-
-
-  -- 061. The contractor's half of an appointment.
-  SELECT 'm061_visit_contractor_at' AS name, (SELECT COUNT(*) FROM pragma_table_info('visits')
-    WHERE name = 'contractor_at') AS value
-UNION ALL
-  SELECT 'm061_visit_contractor_note' AS name, (SELECT COUNT(*) FROM pragma_table_info('visits')
-    WHERE name = 'contractor_note') AS value
-UNION ALL
-
   -- Invariant, must read ZERO: a visit marked confirmed that somebody who had
   -- to agree never answered. Scoped to visits on a job whose access answer
   -- asks the tenant, because that is the only side this can be checked for
@@ -601,13 +507,6 @@ UNION ALL
       AND j.access = 'tenant'
       AND j.requested_by IS NOT NULL) AS value
 UNION ALL
-
-
-  -- 062. Which tenant has to be let in, when it is not the person who asked.
-  SELECT 'm062_job_access_user' AS name, (SELECT COUNT(*) FROM pragma_table_info('jobs')
-    WHERE name = 'access_user_id') AS value
-UNION ALL
-
   -- Invariant, must read ZERO: a job naming somebody who is not a tenant on
   -- that job's own account. NULL is the ordinary state and means "the only
   -- person who can confirm a window is whoever reported the repair", so this
@@ -622,17 +521,6 @@ UNION ALL
                          AND m.account_id = j.account_id
                          AND m.role = 'tenant')) AS value
 UNION ALL
-
-
-  -- 063. The summary the work order carries.
-  --
-  -- Counted by its COLUMNS and not by the table name, which is the lesson 052
-  -- paid for against a live database: `sqlite_master` tells you a table is
-  -- there and `pragma_table_info` tells you it is the right one. Must read 5.
-  SELECT 'm063_inspection_summary' AS name, (SELECT COUNT(*) FROM pragma_table_info('inspection_summaries')
-    WHERE name IN ('summary','source','model','written_at','written_by')) AS value
-UNION ALL
-
   -- Invariant, must read ZERO: a summary row that says nothing, or one that
   -- does not record what it was written from.
   --
@@ -647,35 +535,6 @@ UNION ALL
     WHERE TRIM(COALESCE(summary, '')) = ''
        OR TRIM(COALESCE(source, '')) = '') AS value
 UNION ALL
-
-
-  -- 064. The hiring side's own leg of an appointment.
-  SELECT 'm064_visit_manager_at' AS name, (SELECT COUNT(*) FROM pragma_table_info('visits')
-    WHERE name = 'manager_at') AS value
-UNION ALL
-
-
-  -- 065. The auto-turnaround switch. A column rather than a table, so this is
-  -- the one did-I-run-it check for it -- and it was missing until the paste
-  -- steps were written out, which is how a migration with a route, a panel and
-  -- a test suite behind it still had no way to answer "did I run that one?".
-  SELECT 'm065_auto_turnaround' AS name, (SELECT COUNT(*) FROM pragma_table_info('accounts')
-    WHERE name = 'auto_turnaround') AS value
-UNION ALL
-
-
-  -- 066. The three ways a job ends without recording that work was done.
-  --
-  -- FIVE NAMED COLUMNS, not the table name. `sqlite_master` tells you a table
-  -- is there and `pragma_table_info` tells you it is the RIGHT one -- which is
-  -- what the broken 052 cost once already, when a did-I-run-it check asked
-  -- only whether the table existed and answered yes over a table nothing
-  -- could write to.
-  SELECT 'm066_job_endings' AS name, (SELECT COUNT(*) FROM pragma_table_info('job_endings')
-    WHERE name IN ('job_id', 'kind', 'note', 'until', 'at')) AS value
-UNION ALL
-
-
   -- Invariant, must read ZERO: an ending whose kind is not one of the four.
   --
   -- The column is plain TEXT on purpose -- a CHECK on a table this young is a
@@ -686,8 +545,6 @@ UNION ALL
   SELECT 'm066_inv_bad_kind' AS name, (SELECT COUNT(*) FROM job_endings
     WHERE kind NOT IN ('cancelled', 'deferred', 'no_work', 'resumed')) AS value
 UNION ALL
-
-
   -- Invariant, must read ZERO: a cancelled or closed-out job with a work order
   -- nobody voided.
   --
@@ -701,8 +558,6 @@ UNION ALL
       AND (SELECT e.kind FROM job_endings e WHERE e.job_id = w.job_id
             ORDER BY e.at DESC, e.rowid DESC LIMIT 1) IN ('cancelled', 'no_work')) AS value
 UNION ALL
-
-
   -- Invariant, must read ZERO: money settled against a job that was cancelled
   -- or closed with nothing done.
   --
@@ -717,8 +572,6 @@ UNION ALL
       AND (SELECT e.kind FROM job_endings e WHERE e.job_id = w.job_id
             ORDER BY e.at DESC, e.rowid DESC LIMIT 1) IN ('cancelled', 'no_work')) AS value
 UNION ALL
-
-
   -- Invariant, must read ZERO: a `resumed` row against a job whose newest
   -- OTHER ending was never a deferral.
   --
@@ -741,8 +594,6 @@ UNION ALL
                        AND (e.at < r.at OR (e.at = r.at AND e.rowid < r.rowid))
                      ORDER BY e.at DESC, e.rowid DESC LIMIT 1), 'none') <> 'deferred') AS value
 UNION ALL
-
-
   -- 067. Invariant, must read ZERO: a live window the HIRING SIDE proposed
   -- with no record that they agreed to it.
   --
@@ -768,22 +619,4 @@ UNION ALL
                      AND m.account_id = v.account_id
                      AND m.role IN ('admin', 'pm'))) AS value
 )
--- Problems first: `verdict = 'ok'` is 1 when it is fine and 0 when it is not,
--- and ASC puts the 0s at the top. Then by name, so one database's answer is
--- always in the same order as another's.
 ORDER BY verdict = 'ok', name;
-  -- NO INVARIANT, AND THE REASON IS WORTH STATING rather than leaving the
-  -- next person to wonder why 061 has one and this does not.
-  --
-  -- The obvious one -- a confirmed visit with no hiring-side agreement -- reads
-  -- NON-ZERO on every live database, because every row written before this
-  -- migration settled under the 061 rule and legitimately has none. An
-  -- invariant that ships knowing it reads non-zero is a bug report nobody can
-  -- action, which is this file's own rule about the untrimmed company names.
-  --
-  -- Scoping it to rows written after the column arrived would need a date this
-  -- schema does not hold, and scoping it to "rows that had a contractor leg"
-  -- catches exactly the 061-era rows it must not. The property is checked
-  -- where it can be: `visit-party-test.mjs` drives the chain end to end, and
-  -- whether a party is owed an answer at all depends on a live work order,
-  -- which is `visitParties`'s to decide and not SQL's.

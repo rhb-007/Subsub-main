@@ -37,7 +37,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runCheck, checkSql, D1_MAX_COLUMNS } from "./lib/check-sql.mjs";
+import { runCheck, checkSql, checkRows, checkStatements, D1_MAX_COLUMNS, D1_MAX_COMPOUND } from "./lib/check-sql.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const M = join(app, "worker", "migrations");
@@ -165,10 +165,15 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
   // schema itself. It could not be run at all on a fresh database, because the
   // invariants read columns schema.sql did not have -- so the one tool for
   // spotting this drift was disabled BY the drift.
-  let row = null, err = "", width = 0, rows = [];
+  // THE FILE IS TWO STATEMENTS, so reading one of them is reading part of it.
+  // The first version of this ran `prepare(checkSql())`, which takes only the
+  // leading statement -- so the invariants went unchecked and the assertions
+  // about them passed on an empty list.
+  let row = null, err = "", width = 0, rows = [], parts = [];
   try {
-    rows = fresh.prepare(checkSql()).all();
-    width = rows.length ? Object.keys(rows[0]).length : 0;
+    parts = checkRows(fresh);
+    rows = parts.flat();
+    width = Math.max(0, ...parts.map((p) => (p.length ? Object.keys(p[0]).length : 0)));
     row = runCheck(fresh);
   } catch (e) { err = String(e.message); }
   ck("it runs", !!row && Object.keys(row).length > 0, err);
@@ -188,6 +193,25 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
   // grow without limit and a bound on them would come back.
   ck("and the console will return it", width > 0 && width <= D1_MAX_COLUMNS,
     `${width} columns, D1 allows ${D1_MAX_COLUMNS}`);
+
+  // AND IT IS SHORT ENOUGH FOR THE OTHER LIMIT, which is the one the fix for
+  // the first one walked straight into. D1 refused 110 UNION ALL terms with
+  // `too many terms in compound SELECT`, so the did-I-run-it half is a DATA
+  // list costing no terms at all and only the invariants are compound.
+  //
+  // The bound is on the GROWING half being free, not on a number somebody
+  // tunes: a migration adds a line to the list and no term anywhere, which is
+  // the property that stops this coming back a third time. Nobody here knows
+  // D1's exact limit -- only that it refused 110 and accepts this -- so the
+  // assertion is deliberately generous and the real guard is the shape.
+  const terms = checkStatements().map((st) =>
+    st.replace(/^\s*--.*$/gm, "").split(/\bUNION\s+ALL\b/i).length);
+  ck("no statement is a long compound SELECT", Math.max(...terms) <= D1_MAX_COMPOUND,
+    `terms per statement: ${JSON.stringify(terms)}`);
+  // The half that grows costs nothing: 79 checks, one term.
+  ck("and the did-I-run-it half costs one term however many there are",
+    terms[0] === 1 && parts[0].length > 50,
+    `${terms[0]} term(s) for ${parts[0]?.length} checks`);
 
   // AND THE VERDICT COLUMN AGREES WITH THE NUMBERS, which is the half a
   // reader cannot check for themselves. CHECK.sql computes 'ok' / 'NOT RUN' /
@@ -273,13 +297,14 @@ console.log("\n-- and a problem sorts to the top --");
   // nullable, so one property row with it NULL is a real invariant violation
   // of exactly the kind that read 1 on the live database once.
   const db = buildFresh();
-  let rows = [], err = "";
+  let rows = [], parts = [], err = "";
   try {
     db.exec(`INSERT INTO accounts (id, name, subdomain, kind)
                VALUES ('a_drift', 'Drift', 'drift', 'property_manager');
              INSERT INTO properties (id, account_id, name, owner_account_id)
                VALUES ('p_drift', 'a_drift', 'Unowned', NULL);`);
-    rows = db.prepare(checkSql()).all();
+    parts = checkRows(db);
+    rows = parts.flat();
   } catch (e) { err = String(e.message); }
   ck("a broken invariant is seen", rows.some((r) => r.name === "m039_unowned" && r.value === 1), err);
   ck("and it says BROKEN ROWS rather than NOT RUN",
@@ -288,11 +313,14 @@ console.log("\n-- and a problem sorts to the top --");
   // The reader looks at the first row and nowhere else, so that is the
   // assertion: not "it is somewhere in the list sorted correctly", but that
   // the thing wrong with their database is the FIRST thing they see.
-  ck("and it is the first row", rows[0]?.name === "m039_unowned",
-    `first row is ${rows[0]?.name}`);
+  // Problems sort to the top OF THEIR OWN STATEMENT -- the invariants are
+  // statement 2, so that is where a broken row has to surface.
+  const inv = parts[1] || [];
+  ck("and it is the first row of the statement it is in", inv[0]?.name === "m039_unowned",
+    `first row is ${inv[0]?.name}`);
   ck("and everything after the problems reads ok",
-    rows.length > 1 && rows.slice(1).every((r) => r.verdict === "ok"),
-    JSON.stringify(rows.slice(1).filter((r) => r.verdict !== "ok").slice(0, 3)));
+    inv.length > 1 && inv.slice(1).every((r) => r.verdict === "ok"),
+    JSON.stringify(inv.slice(1).filter((r) => r.verdict !== "ok").slice(0, 3)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

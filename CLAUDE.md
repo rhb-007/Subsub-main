@@ -9413,3 +9413,59 @@ refactor.
   there is no work order yet, so the people being asked to **price** the work
   still cannot see the photographs. That needs a route keyed by the quote invite
   with the same redaction, and it is its own piece.
+
+- **AND THE FIX FOR THE COLUMN LIMIT WALKED STRAIGHT INTO THE NEXT ONE.** The
+  rewritten file was pasted and D1 answered **`too many terms in compound
+  SELECT`**. Every `UNION ALL` is a term and terms are capped too, so 110 rows
+  is refused exactly as 110 columns was.
+
+  **THE ENTRY ABOVE SAYS, IN ITS OWN WORDS, THAT THIS COULD NOT HAPPEN:**
+  *"Rows, unlike columns, have no ceiling. Adding a check is one more `UNION
+  ALL` and can never run the file into a limit again."* That was not a slip of
+  phrasing, it was the reasoning — and it was wrong, which is why the file was
+  shipped a second time without anybody looking for a second limit. **A fix
+  that trades one ceiling for another is the same bug wearing the next limit
+  along**, and the confident sentence is what stopped it being checked.
+
+  So the fix this time is **not a bigger number, it is removing the thing that
+  grows from the count at all.** The did-I-run-it half — one check per
+  migration, which is the half that gets longer every week — is now **DATA**: a
+  JSON list read through `json_each`, with `pragma_table_info(w.tbl)` taking
+  the table name from the outer row. Seventy-nine checks, **one** compound
+  term between them. What stays SQL is the 31 invariants, which are arbitrary
+  queries that cannot be expressed as a list.
+
+  **TWO STATEMENTS, AND THEY ANSWER DIFFERENT QUESTIONS ANYWAY.** *Did I run
+  that one* and *is anything wrong* were always two things wearing one verdict
+  column; splitting them is what lets statement 1 have no special cases at all.
+  A rule with branches that can never fire is a rule somebody later reads as
+  load-bearing. Statement 2 keeps the full rule, because two of its rows are
+  **not** invariants: `m046_kind_check` is a tri-state and
+  `m046_subdomain_unique` has to ask which column an index covers.
+
+  **AND THE NEW GUARD IS ON THE SHAPE, NOT ON A NUMBER.** `D1_MAX_COMPOUND` is
+  a deliberately generous bound — nobody here knows D1's real figure, only that
+  it refused 110 and accepts 31 — so the assertion that matters is the other
+  one: **the growing half costs one term however many checks are in it.** That
+  is the property that stops this returning a third time, and tuning a constant
+  would not have been. The mutation puts the data list back as a compound chain
+  and fires both.
+
+  **The per-check comments survived the conversion**, which is most of why it
+  was done by a script rather than by hand: they are the record of why each
+  check exists, and SQL comments sit **between the concatenated string pieces**
+  (`'...' || -- note || '...'`), so each entry still carries its own. Adding a
+  did-I-run-it check is now one line rather than a six-line SELECT.
+
+  **And `schema-drift-test` was reading one statement**, because
+  `prepare(checkSql())` takes only the leading one — so after the split the
+  invariants went unchecked and every assertion about them passed on an empty
+  list. `checkStatements` and `checkRows` are in the one reader module for the
+  same reason `runCheck` is: nine suites wanted an object keyed by name before
+  the file was split and still do.
+
+  **Still open, and the honest limit: nothing here runs this against D1.** Both
+  limits were found by a person pasting it on an iPad, twice. A local SQLite
+  accepts far more of both, so the suite can prove the file parses, that the
+  answers are right and that the shape stays small — and cannot prove D1 will
+  take it. If statement 2 is ever refused, **split it; do not re-describe it.**
