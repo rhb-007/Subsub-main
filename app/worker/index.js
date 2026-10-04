@@ -73,7 +73,8 @@ import { AUTO_TRIES, AUTO_START, AUTO_END, autoPickText, isTurnaroundKind,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
 // last week. One predicate, both sides.
-import { jobIsClosed, jobClosure } from "../shared/jobstate.js";
+import { jobIsClosed, jobClosure, jobHold, jobIsLive, whyNotEnd, whyNotResume,
+  isEndingKind, ENDING_KINDS, CHOOSABLE_ENDINGS } from "../shared/jobstate.js";
 // Which seat to open an account as. One rule, so the console's "1 team user"
 // and this route cannot disagree about whether anybody is there.
 import { pickSeat, hasAdminSeat, isTeamSeat, staffStandsIn,
@@ -6249,6 +6250,7 @@ export function missingSchema(err) {
   // loosely -- so it is matched only in the two shapes SQLite actually
   // produces for a missing column, and it is first because a later rule with a
   // broader pattern would otherwise claim it.
+  if (/\bjob_endings\b/i.test(m)) return "066_job_endings";
   if (/\binspection_summaries\b/i.test(m)) return "063_inspection_summary";
   if (/\bauto_turnaround\b/i.test(m)) return "065_auto_turnaround";
   if (/\bmanager_at\b/i.test(m)) return "064_visit_manager";
@@ -6859,9 +6861,49 @@ app.get("/api/jobs", async (c) => {
     for (const w of wos) (woByJob[w.job_id] ||= []).push(w);
   }
 
+  // 066. HOW EACH JOB ENDED, WHERE IT HAS, in ONE query for all four lists.
+  //
+  // Stitched onto the rows rather than subqueried into each SELECT, because
+  // there are four of them -- this account's, the owned-not-operated ones, a
+  // tenant's past reports and the inherited ones -- and a column added to
+  // three of four is the shape this file keeps recording: the list that
+  // forgets is the one that draws a cancelled job as live.
+  //
+  // The newest row per job wins, which is what makes the table append-only
+  // usable: a deferral is ended by a `resumed` row rather than by deleting
+  // the one that put it on hold. `at DESC, rowid DESC` for the reason the
+  // visit lookup uses it -- two rows written in the same second need a
+  // tiebreak that is not the one SQLite feels like.
+  //
+  // A database without 066 has no endings, which is exactly the behaviour
+  // this route had before it. Narrow catch: only the missing table.
+  const endingByJob = await (async () => {
+    const ids = [...new Set([...jobs, ...ownedJobs, ...pastReports, ...inheritedJobs]
+      .map((j) => j.id))];
+    if (!ids.length) return {};
+    const out = {};
+    try {
+      const marks = ids.map(() => "?").join(",");
+      const { results } = await c.env.DB.prepare(
+        `SELECT e.job_id, e.kind, e.note, e.until, e.at FROM job_endings e
+          WHERE e.job_id IN (${marks})
+          ORDER BY e.at ASC, e.rowid ASC`).bind(...ids).all();
+      // Ascending, then last-write-wins into the map: the same answer as
+      // DESC + LIMIT 1 per job, in one pass and one statement.
+      for (const r of results || []) out[r.job_id] = r;
+    } catch (err) { if (!missingSchema(err)) throw err; }
+    return out;
+  })();
+  const withEnding = (j) => {
+    const e = endingByJob[j.id];
+    return e ? { ...j, ending_kind: e.kind, ending_note: e.note,
+      ending_until: e.until, ending_at: e.at } : j;
+  };
+
   // Every job leaving this route goes through the same two redactions, rather
   // than each list remembering to apply them.
-  const forCaller = (j) => stripOtherTrades(auth, stripMoney(auth, jobRowToJs(j, woByJob[j.id] || [])));
+  const forCaller = (j) => stripOtherTrades(auth,
+    stripMoney(auth, jobRowToJs(withEnding(j), woByJob[j.id] || [])));
   return c.json([
     ...jobs.map((j) => ({
       ...forCaller(j),
@@ -6888,7 +6930,7 @@ app.get("/api/jobs", async (c) => {
     // inheritedShape decides what crosses instead: what is wrong with the
     // building and when somebody is due, never who or for how much.
     ...inheritedJobs.map((j) => inheritedShape(
-      { ...jobRowToJs(j, woByJob[j.id] || []),
+      { ...jobRowToJs(withEnding(j), woByJob[j.id] || []),
         ...(j.requested_by_name ? { requestedByName: j.requested_by_name } : {}) },
       j.prev_name || null)),
   ]);
@@ -6905,6 +6947,48 @@ app.get("/api/jobs/all-bookings", async (c) => {
   ).all();
   return c.json(results);
 });
+
+// 066. THE NEWEST ENDING FOR ONE JOB, stitched onto a row a route has already
+// loaded.
+//
+// Three doors commit a contractor to work -- assign, ask for quotes, post to
+// overflow -- and each loads the job with its own named SELECT. Adding a
+// correlated subquery to three places is the shape this file keeps recording:
+// the one that forgets is the one that issues a work order against a job
+// somebody cancelled on Tuesday. One helper, read by all of them.
+//
+// A database without 066 answers the row unchanged, which is exactly the
+// behaviour these routes had before it. Narrow catch, because a catch wide
+// enough to hide a real error would hide it in front of a work order.
+async function jobWithEnding(env, job) {
+  if (!job?.id) return job;
+  try {
+    const e = await env.DB.prepare(
+      `SELECT kind, note, until, at FROM job_endings WHERE job_id = ?
+        ORDER BY at DESC, rowid DESC LIMIT 1`).bind(job.id).first();
+    if (!e) return job;
+    return { ...job, ending_kind: e.kind, ending_note: e.note,
+      ending_until: e.until, ending_at: e.at };
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return job;
+  }
+}
+
+// AND WHY A DOOR THAT COMMITS SOMEBODY ELSE'S TIME IS SHUT, in one place.
+//
+// Closed and on hold are two different answers and both have to refuse: a
+// held job is deliberately NOT closed, so `jobClosure` says no to it and a
+// route reading only that would issue the work order. The reason is named
+// either way, because "on hold until the 14th" and "cancelled" need different
+// sentences and a reversible thing must not be reported as a finished one.
+function jobCommitRefusal(job) {
+  const shut = jobClosure(job);
+  if (shut.closed) return { error: "job_closed", reason: shut.reason };
+  const hold = jobHold(job, dayKeyUtc());
+  if (hold.held) return { error: "job_deferred", until: hold.until || null };
+  return null;
+}
 
 // Mark a job as having just moved.
 //
@@ -6988,6 +7072,18 @@ function jobRowToJs(j, workOrders) {
     // Turned down by the manager, with the reason they gave. A request that
     // is neither approved nor declined is still waiting on them.
     declinedAt: j.declined_at || null, declinedNote: j.declined_note || null,
+    // 066. HOW IT ENDED, flat, and the same four names `shared/jobstate.js`
+    // reads on a raw row. Flat on both sides on purpose: a nested object in
+    // the browser and columns on the server is a conversion to forget, and a
+    // missed one here reads as "not ended", which is the direction that draws
+    // a cancelled job as live work.
+    //
+    // Absent -- not null -- on a database without 066, which is the signal
+    // `jobEnding` needs and the shape this route had before it.
+    ...(j.ending_kind ? {
+      endingKind: j.ending_kind, endingNote: j.ending_note || null,
+      endingUntil: j.ending_until || null, endingAt: j.ending_at || null,
+    } : {}),
     // The full timestamp, for the ten minutes in which a report can still be
     // corrected. createdAt above is the date alone and always was.
     createdAtIso: j.created_at || null,
@@ -8174,6 +8270,250 @@ app.patch("/api/jobs/:id/report", async (c) => {
   return c.json(jobRowToJs(row, []));
 });
 
+// 066. WHAT ENDING THIS JOB WOULD COST, asked BEFORE the modal opens.
+//
+// The same shape and the same reason as `/api/subs/:companyId/end-check`,
+// which this file already records: *the consequence can name what is booked
+// and how many people lose access; opening the modal first and filling it in
+// afterwards puts the question in front of somebody above an empty space, and
+// they answer it before it is finished.*
+//
+// The browser cannot derive the money. What is funded sits on `wo_funding`
+// per work order and the jobs list deliberately does not carry it -- a figure
+// on every job row would have to be redacted for owners and tenants, and the
+// server is the side that knows it authoritatively anyway.
+//
+// A COURTESY, not a gate. Every answer here is advisory: the route refuses
+// what it refuses whatever this said, and the screen is written to ask anyway
+// if this call fails. A pre-flight that could stop somebody tidying up their
+// own job list would be worse than no pre-flight.
+app.get("/api/jobs/:id/end-check", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const id = c.req.param("id");
+  if (!maySeeJob(c.get("auth"), id)) return c.json({ error: "job_not_found" }, 404);
+  const job = await jobWithEnding(c.env, await c.env.DB.prepare(
+    `SELECT id, trades, status, withdrawn_at, declined_at, requested_by, approved_at
+       FROM jobs WHERE id = ? AND account_id = ?`).bind(id, accountId).first());
+  if (!job) return c.json({ error: "job_not_found" }, 404);
+
+  // WHO WOULD BE STOOD DOWN. Pending as well as accepted: an offer somebody
+  // is about to take, voided silently, is an afternoon they spent pricing
+  // work that was already off.
+  const { results: wos } = await c.env.DB.prepare(
+    `SELECT trade, status, auto_scheduled FROM work_orders
+      WHERE job_id = ? AND voided_at IS NULL AND status != 'declined'`).bind(id).all();
+  const booked = [...new Set((wos || []).map((w) => w.trade))];
+  const accepted = [...new Set((wos || [])
+    .filter((w) => w.status === "accepted" || w.auto_scheduled).map((w) => w.trade))];
+
+  const count = async (sql, ...binds) => {
+    try { return Number((await c.env.DB.prepare(sql).bind(...binds).first())?.n || 0); }
+    catch (err) { if (!missingSchema(err)) throw err; return 0; }
+  };
+  const openQuotes = await count(
+    `SELECT COUNT(*) AS n FROM quote_requests WHERE job_id = ? AND status = 'open'`, id);
+  const openOverflow = await count(
+    `SELECT COUNT(*) AS n FROM overflow_posts WHERE job_id = ? AND status = 'open'`, id);
+  const hasVisit = (await count(
+    `SELECT COUNT(*) AS n FROM visits WHERE job_id = ?
+      AND status IN ('proposed','confirmed')`, id)) > 0;
+  const fundedCents = await count(
+    `SELECT COALESCE(SUM(f.amount_cents), 0) AS n FROM wo_funding f
+       JOIN work_orders w ON w.id = f.work_order_id
+      WHERE w.job_id = ? AND f.status = 'funded'`, id);
+  const refundedCents = await count(
+    `SELECT COALESCE(SUM(f.refunded_cents), 0) AS n FROM wo_funding f
+       JOIN work_orders w ON w.id = f.work_order_id
+      WHERE w.job_id = ?`, id);
+  const net = Math.max(0, fundedCents - refundedCents);
+
+  return c.json({
+    booked, accepted, openQuotes, openOverflow, hasVisit, fundedCents: net,
+    // What each kind would be refused for, worked out by the one rule the
+    // route reads -- so the modal can grey an option with the reason beside
+    // it rather than offering a press that answers 409.
+    blocked: Object.fromEntries(CHOOSABLE_ENDINGS.map((k) =>
+      [k, whyNotEnd(job, k, { fundedCents: net, today: dayKeyUtc() })])),
+    onHold: jobHold(job, dayKeyUtc()).held,
+  });
+});
+
+// 066. CANCEL, DEFER, OR CLOSE IT OUT WITH NOTHING DONE.
+//
+// Asked for as *"a job should be able to be cancelled or deferred if needed
+// for some reason... maybe we have something 'complete, no work done'"*.
+//
+// ONE ROUTE FOR THE THREE, because they share everything that matters: the
+// same approval check, the same money boundary, the same standing-down of
+// whoever was booked, the same append-only row. Three routes would be three
+// places for the void to be forgotten, and the one that forgot it would be a
+// contractor turning up to work nobody is expecting.
+//
+// `whyNotEnd` is the rule, shared with the screen so neither can offer what
+// the other refuses -- and the screen is NOT allowed to be the only gate: a
+// job id and a word is all this takes, which is the gate-lives-in-the-browser
+// lie this file refuses everywhere.
+app.post("/api/jobs/:id/end", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = c.req.param("id");
+  // Before anything is read, let alone written: 053's job scope, which the
+  // middleware also applies -- this is the belt to its braces and costs a
+  // function call.
+  if (!maySeeJob(c.get("auth"), id)) return c.json({ error: "job_not_found" }, 404);
+  const b = await c.req.json().catch(() => ({}));
+  const kind = String(b.kind || "").trim();
+  if (!isEndingKind(kind) || kind === "resumed") return c.json({ error: "bad_kind" }, 400);
+
+  const job = await jobWithEnding(c.env, await c.env.DB.prepare(
+    `SELECT id, title, requested_by, approved_at, status, withdrawn_at, declined_at
+       FROM jobs WHERE id = ? AND account_id = ?`).bind(id, accountId).first());
+  if (!job) return c.json({ error: "job_not_found" }, 404);
+
+  // MONEY IS THE HARD BOUNDARY AND IT IS NOT OVERRIDABLE. Once a funding has
+  // landed there is real money in a balance with this job's name on it, and a
+  // route that cancelled around it would leave the only record of that money
+  // saying the work was called off.
+  //
+  // READ FOR EVERY KIND, and `whyNotEnd` is the only thing that decides what
+  // to do with it -- a hold is exempt because putting work off spends nothing
+  // and the funding is still there when it comes back. The first version
+  // skipped the query for a deferral, which is the same answer by a second
+  // route: two guards covering for each other, so a mutation to the rule
+  // changed no outcome here and the suite's own money assertion could not see
+  // it. One query is cheaper than that.
+  let fundedCents = 0;
+  try {
+    const f = await c.env.DB.prepare(
+      `SELECT COALESCE(SUM(f.amount_cents), 0) AS n FROM wo_funding f
+         JOIN work_orders w ON w.id = f.work_order_id
+        WHERE w.job_id = ? AND f.status = 'funded'`).bind(id).first();
+    fundedCents = Number(f?.n || 0);
+  } catch (err) { if (!missingSchema(err)) throw err; }
+
+  const why = whyNotEnd(job, kind, { fundedCents, today: dayKeyUtc() });
+  if (why) return c.json({ error: why, fundedCents }, why === "bad_kind" ? 400 : 409);
+
+  // THE REASON IS REQUIRED ON THE TWO TERMINAL ONES. *"An inaccurate
+  // assessment of what the issue was"* is exactly the thing somebody reads
+  // back in six months, and a cancellation with no words on it is
+  // indistinguishable from a mis-press. A hold usually has the date as its
+  // whole story, so there it is optional.
+  const note = String(b.note || "").trim().slice(0, 500) || null;
+  if (ENDING_KINDS[kind].needsNote && !note) return c.json({ error: "reason_required" }, 400);
+  // The day it comes back, deferrals only. NULL is an indefinite hold, which
+  // only a resume ends.
+  const until = kind === "deferred" && b.until
+    ? String(b.until).trim() : null;
+  if (until && !DATE_RE.test(until)) return c.json({ error: "bad_date" }, 400);
+  // A date already gone is a hold that is over before it starts, which reads
+  // on screen as nothing having happened.
+  if (until && until < dayKeyUtc()) return c.json({ error: "until_in_the_past" }, 400);
+
+  const now = new Date().toISOString();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO job_endings (id, job_id, account_id, kind, note, until, at, by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(uid(), id, accountId, kind, note, until, now, userId).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+
+  // NOBODY IS LEFT BOOKED FOR WORK THAT IS NOT HAPPENING, and that is true of
+  // a hold as much as a cancellation: a crew expecting Tuesday is a crew that
+  // turns up. The work orders are VOIDED rather than deleted -- the question
+  // afterwards is what was issued and what happened to it -- and the open
+  // window is superseded, the same pair `withdraw` has done since 020.
+  //
+  // `no_work` voids too. The job is finished with; an un-voided order against
+  // it is a contractor who has not been told.
+  const voided = await c.env.DB.prepare(
+    `UPDATE work_orders SET voided_at = CURRENT_TIMESTAMP
+      WHERE job_id = ? AND voided_at IS NULL`).bind(id).run();
+  try {
+    await c.env.DB.prepare(
+      `UPDATE visits SET status = 'superseded'
+        WHERE job_id = ? AND status IN ('proposed', 'confirmed')`).bind(id).run();
+  } catch { /* no visits table yet is not a reason to refuse the ending */ }
+  // Quote requests go too: three companies pricing work that is cancelled is
+  // an afternoon each, and the whole reason the commit gate refuses a closed
+  // job is that it costs somebody else their time.
+  try {
+    await c.env.DB.prepare(
+      `UPDATE quote_requests SET status = 'cancelled', closed_at = CURRENT_TIMESTAMP
+        WHERE job_id = ? AND status = 'open'`).bind(id).run();
+  } catch { /* 043 not applied */ }
+
+  // `no_work` IS A COMPLETION. The row says why; `status` is what every
+  // existing reader -- the phase filter, the roster, the ledger -- already
+  // answers correctly for, and a fourth status word would mean a full rebuild
+  // of a table with a CHECK on it for nothing.
+  if (kind === "no_work") {
+    await c.env.DB.prepare(
+      `UPDATE jobs SET status = 'completed', completed_at = ? WHERE id = ? AND account_id = ?`
+    ).bind(new Date().toISOString().slice(0, 10), id, accountId).run();
+  }
+
+  await touchJob(c.env, id);
+  await logEvent(c.env, accountId, userId, `job.${kind}`, id,
+    { title: job.title, note, until, voided: voided?.meta?.changes ?? 0 });
+  await logActivity(c.env, accountId, userId, `job_${kind}`,
+    `${ENDING_KINDS[kind].short} "${job.title}"${until ? ` until ${until}` : ""}${note ? `: ${note}` : ""}`
+      + `${voided?.meta?.changes ? ` (${voided.meta.changes} work order${voided.meta.changes === 1 ? "" : "s"} voided)` : ""}`);
+  // Whoever asked for it is told, because a tenant watching a repair they
+  // reported is the one person who finds out otherwise by it never happening.
+  //
+  // THE KIND AS IT IS, not flattened to "cancelled": somebody who read the
+  // problem and decided nothing needed doing is saying a different thing from
+  // somebody calling the work off, and a tenant told the wrong one of those
+  // rings up. The date rides along on a hold, so the message can name it.
+  await notifyTenant(c, id, kind, kind === "deferred" ? (until ? `back on ${until}` : "") : note);
+  return c.json({ ok: true, kind, until, voided: voided?.meta?.changes ?? 0 });
+});
+
+// AND TAKING A HOLD OFF, which is what makes a deferral a hold rather than a
+// delete wearing a softer word.
+//
+// A `resumed` ROW rather than deleting the one that put it on hold: *we put
+// this off in January and picked it up in March* is two facts, and the first
+// is the one anybody asks about later. Same reason the invite list revokes
+// rather than deletes.
+//
+// It does NOT re-issue the work orders it voided. Those were a price and a
+// date somebody agreed to for a day that has gone; re-issuing silently would
+// commit a contractor to work they have not been asked about again, which is
+// the rule `autoschedule.js` states at length about whose calendar may be
+// written to.
+app.post("/api/jobs/:id/resume", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = c.req.param("id");
+  if (!maySeeJob(c.get("auth"), id)) return c.json({ error: "job_not_found" }, 404);
+  const job = await jobWithEnding(c.env, await c.env.DB.prepare(
+    `SELECT id, title, status, withdrawn_at, declined_at
+       FROM jobs WHERE id = ? AND account_id = ?`).bind(id, accountId).first());
+  if (!job) return c.json({ error: "job_not_found" }, 404);
+  const why = whyNotResume(job, { today: dayKeyUtc() });
+  if (why) return c.json({ error: why }, 409);
+  const note = String((await c.req.json().catch(() => ({})))?.note || "").trim().slice(0, 500) || null;
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO job_endings (id, job_id, account_id, kind, note, until, at, by_user_id)
+       VALUES (?, ?, ?, 'resumed', ?, NULL, ?, ?)`
+    ).bind(uid(), id, accountId, note, new Date().toISOString(), userId).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  await touchJob(c.env, id);
+  await logEvent(c.env, accountId, userId, "job.resumed", id, { title: job.title, note });
+  await logActivity(c.env, accountId, userId, "job_resumed",
+    `Took "${job.title}" off hold${note ? `: ${note}` : ""}`);
+  return c.json({ ok: true });
+});
+
 app.post("/api/jobs/:id/reopen", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   await c.env.DB.prepare(
@@ -8348,10 +8688,10 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   const { trade, companyId, crewName, tradeScope, value, responseWindow,
     payKind, rate, capHours } = await c.req.json();
 
-  const job = await c.env.DB.prepare(
+  const job = await jobWithEnding(c.env, await c.env.DB.prepare(
     `SELECT id, requested_by, approved_at, date, status, withdrawn_at, declined_at
        FROM jobs WHERE id = ? AND account_id = ?`
-  ).bind(jobId, accountId).first();
+  ).bind(jobId, accountId).first());
   if (!job || !maySeeJob(c.get("auth"), jobId)) return c.json({ error: "job_not_found" }, 404);
   // A request an owner raised is not work anybody has agreed to yet. Issuing a
   // work order against one would commit the account to a price it never set.
@@ -8363,9 +8703,12 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   // against a closed job is a contractor turning up to work nobody is
   // expecting. The reason is named, so the screen can say which of the three
   // it was rather than "no".
+  // 066. AND ON HOLD IS NOT WORK EITHER, which `jobClosure` deliberately does
+  // not answer -- a held job keeps its phase and can be resumed. One refusal
+  // for both, so a door cannot read one and miss the other.
   {
-    const shut = jobClosure(job);
-    if (shut.closed) return c.json({ error: "job_closed", reason: shut.reason }, 409);
+    const no = jobCommitRefusal(job);
+    if (no) return c.json(no, 409);
   }
 
   // ON THE ROSTER, not merely once engaged. This read had no status check at
@@ -10098,8 +10441,8 @@ app.post("/api/jobs/:id/quote-requests", requireRole("admin", "pm"), async (c) =
   const trade = String(b.trade || "").trim();
   if (!trade) return c.json({ error: "trade_required" }, 400);
 
-  const job = await c.env.DB.prepare(
-    `SELECT * FROM jobs WHERE id = ? AND account_id = ?`).bind(jobId, accountId).first();
+  const job = await jobWithEnding(c.env, await c.env.DB.prepare(
+    `SELECT * FROM jobs WHERE id = ? AND account_id = ?`).bind(jobId, accountId).first());
   if (!job) return c.json({ error: "not_found" }, 404);
   if (!parseJson(job.trades, []).includes(trade)) return c.json({ error: "not_a_trade_on_this_job" }, 400);
 
@@ -10113,7 +10456,11 @@ app.post("/api/jobs/:id/quote-requests", requireRole("admin", "pm"), async (c) =
     const may = canRequestQuotes(
       { ...jobRowToJs(job, []), requestedBy: job.requested_by, approvedAt: job.approved_at,
         withdrawnAt: job.withdrawn_at },
-      { role, hasOpenRequest: !!open, liveWorkOrder: !!live });
+      // 066. `today` so a hold whose date has passed does not refuse. The job
+      // comes off hold by itself when that day arrives -- which is what
+      // "defer until March" says -- and a route that ignored the date would
+      // keep refusing work that is live again.
+      { role, hasOpenRequest: !!open, liveWorkOrder: !!live, today: dayKeyUtc() });
     if (!may.ok) return c.json({ error: may.reason }, 409);
 
     // The roster, for this trade. Their engagement is what makes them askable;
@@ -10924,6 +11271,40 @@ async function loadWorkOrder(c, id) {
   return { wo };
 }
 
+// 066. NOTHING IS PAYABLE AGAINST A JOB THAT WAS CANCELLED, OR CLOSED OUT
+// WITH NOTHING DONE.
+//
+// This is the half of "complete, no work done" that would otherwise be a
+// word on a screen. `no_work` writes `status = 'completed'` so every existing
+// reader answers correctly for it -- and *completed* is precisely the state a
+// release is normally paid against, so without this it would be the most
+// payable a job ever gets. A transfer out against work nobody did is the one
+// mistake in this codebase that cannot be undone with a word.
+//
+// IN ONE PLACE, read by settle AND pay, because those are two routes on
+// purpose -- one records money that moved elsewhere, one moves it -- and a
+// gate on one of the two is a door round it. Both already call
+// `loadWorkOrder`, so this reads what it hands back plus the ending.
+//
+// A database without 066 has no endings and answers null, which is the
+// behaviour both routes had before this. Narrow catch, because a catch wide
+// enough to hide a real error would hide it in front of money.
+// WIDENING `loadWorkOrder`'S SELECT WAS THE FIRST VERSION AND IT BROKE A
+// SUITE IMMEDIATELY. `milestone-test.mjs` builds its own schema by hand --
+// *"if a route reaches for a column that is not here, that is worth
+// knowing"* -- and three aliases added here for columns nothing reads duly
+// reported themselves. Worth more than the convenience: on a database without
+// 020 or 021 that SELECT throws, and `loadWorkOrder` is in the path of every
+// money route. `work_orders.job_id` is already on the row, so nothing needed
+// widening at all.
+async function jobEndingBlocksPay(c, wo) {
+  const row = await jobWithEnding(c.env, { id: wo?.job_id });
+  const kind = row?.ending_kind || null;
+  if (kind === "cancelled") return { error: "job_cancelled", note: row.ending_note || null };
+  if (kind === "no_work") return { error: "job_no_work", note: row.ending_note || null };
+  return null;
+}
+
 // The append-only record. Everything that changes a milestone or a release
 // goes through here and nothing updates what it wrote.
 async function woEvent(c, { workOrderId, milestoneId = null, kind, payload = {}, idemKey = null }) {
@@ -11288,6 +11669,11 @@ app.post("/api/releases/:id/settle", requireRole("admin", "pm"), async (c) => {
   if (r.status === "void") return c.json({ error: "void" }, 409);
   const { wo, error } = await loadWorkOrder(c, r.work_order_id);
   if (error) return error;
+  // 066. Not against a job that was cancelled or closed with nothing done.
+  // Deliberately BEFORE the two paperwork gates: those are overridable with a
+  // recorded reason, and this is not -- no reason makes work that was never
+  // done payable, which is the same line `canPay` draws about unfunded money.
+  { const no = await jobEndingBlocksPay(c, wo); if (no) return c.json(no, 409); }
 
   const b = await c.req.json().catch(() => ({}));
   const method = String(b.method || "manual").trim().slice(0, 40);
@@ -11599,6 +11985,11 @@ app.post("/api/releases/:id/pay", requireRole("admin"), async (c) => {
   if (!r) return c.json({ error: "not_found" }, 404);
   const { wo, error } = await loadWorkOrder(c, r.work_order_id);
   if (error) return error;
+  // 066. Not against a job that was cancelled or closed with nothing done.
+  // `settle` and `pay` are two routes on purpose -- one records money that
+  // moved elsewhere, one moves it -- so a gate on one of the two is a door
+  // round it rather than a gate.
+  { const no = await jobEndingBlocksPay(c, wo); if (no) return c.json(no, 409); }
   const b = await c.req.json().catch(() => ({}));
 
   let money, payee;
@@ -12973,10 +13364,20 @@ async function autoProposeOnAccept(c, wo) {
 // a fourth date will not fix, and that is where a person has to look at it.
 async function autoRepropose(c, visit) {
   const auth = c.get("auth");
-  const job = await c.env.DB.prepare(
-    `SELECT j.id, j.date, j.title, j.account_id FROM jobs j WHERE j.id = ?`)
-    .bind(visit.job_id).first().catch(() => null);
+  const job = await jobWithEnding(c.env, await c.env.DB.prepare(
+    `SELECT j.id, j.date, j.title, j.account_id, j.status,
+            j.withdrawn_at, j.declined_at FROM jobs j WHERE j.id = ?`)
+    .bind(visit.job_id).first().catch(() => null));
   if (!job) return null;
+  // 066. NOT ON WORK THAT IS CANCELLED OR ON HOLD. This is the one auto hook
+  // that fires LATER -- a tenant declining a window days afterwards -- so it
+  // is the one that can find the job ended underneath it, and a machine
+  // proposing times for work somebody called off is the standing-permission
+  // failure this file records about a flag nobody is watching.
+  //
+  // `jobIsLive` rather than `jobIsClosed`, because a hold is deliberately not
+  // a closure and a reading of only the second would carry on regardless.
+  if (!jobIsLive(job, dayKeyUtc())) return null;
   const acct = await c.env.DB.prepare(
     `SELECT auto_turnaround FROM accounts WHERE id = ?`).bind(job.account_id).first()
     .catch((err) => { if (missingSchema(err)) return null; throw err; });
@@ -14383,18 +14784,19 @@ app.post("/api/jobs/:jobId/overflow", requireRole("admin", "pm"), async (c) => {
   const trade = String(b.trade || "").trim();
   if (!trade) return c.json({ error: "trade_required" }, 400);
 
-  const job = await c.env.DB.prepare(
+  const job = await jobWithEnding(c.env, await c.env.DB.prepare(
     `SELECT id, title, date, address, area, zip, severity, status, withdrawn_at, declined_at
        FROM jobs WHERE id = ? AND account_id = ?`
-  ).bind(jobId, accountId).first();
+  ).bind(jobId, accountId).first());
   if (!job || !maySeeJob(c.get("auth"), jobId)) return c.json({ error: "job_not_found" }, 404);
 
-  // Finished with. Broadcasting a closed job reaches past this account to
-  // companies who would answer an offer that cannot be taken up -- the one
-  // door of the three where being wrong costs somebody ELSE their time.
+  // Finished with, or on hold. Broadcasting either reaches past this account
+  // to companies who would answer an offer that cannot be taken up -- the one
+  // door of the three where being wrong costs somebody ELSE their time, which
+  // is why a HELD job matters as much here as a cancelled one.
   {
-    const shut = jobClosure(job);
-    if (shut.closed) return c.json({ error: "job_closed", reason: shut.reason }, 409);
+    const no = jobCommitRefusal(job);
+    if (no) return c.json(no, 409);
   }
 
   // Overflow means overflow. An account with somebody of their own who could

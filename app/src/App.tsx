@@ -25,7 +25,7 @@ import {
   Search, Phone, Mail, MapPin, FileText, FileWarning, Shield, ScrollText, Calendar,
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
   Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList,
-  Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, UserX, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, ArrowRightLeft, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck,
+  Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, UserX, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, ArrowRightLeft, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck, Ban, PlayCircle,
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
@@ -57,7 +57,9 @@ import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
   ASSIGN_KINDS, PAY_ONLY_KINDS, isOptionalDoc, docStatus as docStatusOf,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso, DOC_LABELS } from "../shared/docs.js";
 import { setupGaps, mayFinishSetup, firstGapStep } from "../shared/setup.js";
-import { jobIsClosed, jobClosure, completionEffects } from "../shared/jobstate.js";
+import { jobIsClosed, jobClosure, completionEffects, jobHold, jobIsLive,
+  endingEffects, whyNotEnd, whyNotResume, ENDING_KINDS, ENDING_REFUSALS,
+  CHOOSABLE_ENDINGS } from "../shared/jobstate.js";
 import { hasAdminSeat, isTeamSeat, staffMayWriteShared } from "../shared/seats.js";
 import { ALWAYS_SCOPED_ROLES, isPropertyScopedRole, isPropertyScoped } from "../shared/propscope.js";
 import { suggestedAccessForInspection } from "../shared/inspection.js";
@@ -2323,6 +2325,9 @@ export default function SubSub() {
   // The job somebody is about to close out, held so the confirmation can name
   // what is still outstanding on it.
   const [completingJob, setCompletingJob] = useState(null);
+  // 066. The job being cancelled, put on hold, or closed out with nothing
+  // done. One piece of state for the three, because the modal asks which.
+  const [endingJob, setEndingJob] = useState(null);
   const [overflowPosts, setOverflowPosts] = useState([]);
   const [overflowOffers, setOverflowOffers] = useState([]);
   const [overflowStanding, setOverflowStanding] = useState(null);
@@ -2932,6 +2937,37 @@ export default function SubSub() {
     setJobs((js) => js.map((j) => j.id === id ? {
       ...j, status: "completed", completedAt: new Date().toISOString().slice(0, 10) } : j));
   };
+  // 066. ENDING A JOB WITHOUT RECORDING THAT WORK WAS DONE.
+  //
+  // AWAITED, and the modal stays open on a refusal: the route turns a
+  // cancellation against funded money into `money_funded`, and a card drawn
+  // as cancelled over a write that did not happen is the
+  // save-that-reports-success shape on the press that stands a crew down.
+  //
+  // The whole job is re-read rather than patched field by field. Ending one
+  // voids its work orders, supersedes its visit and cancels its quote
+  // requests -- three things the browser would have to invent, and a locally
+  // guessed set of voided assignments disagrees with the roster the moment it
+  // reloads. Same rule the pack card's upload follows.
+  const endJob = async (id, body) => {
+    await api.endJob(id, body);
+    const jb = allJobs.find((j) => j.id === id);
+    const [js, vs] = await Promise.all([
+      api.listJobs().catch(() => null), api.listVisits().catch(() => null)]);
+    if (Array.isArray(js)) setJobs(js);
+    if (Array.isArray(vs)) setVisits(vs);
+    logEvent(`job_${body.kind}`,
+      `${ENDING_KINDS[body.kind].short} ${jb?.title || "a job"}${body.note ? `: ${body.note}` : ""}`);
+    setEndingJob(null);
+  };
+  const resumeJob = async (id) => {
+    await api.resumeJob(id);
+    const jb = allJobs.find((j) => j.id === id);
+    const js = await api.listJobs().catch(() => null);
+    if (Array.isArray(js)) setJobs(js);
+    logEvent("job_resumed", `Took ${jb?.title || "a job"} off hold`);
+  };
+
   const completeJobInner = (id) =>
     setJobs((js) => js.map((j) => j.id === id ? {
       ...j, status: "completed", completedAt: new Date().toISOString().slice(0, 10) } : j));
@@ -6046,6 +6082,10 @@ export default function SubSub() {
       )}
 
       {tab === "jobs" && can("jobs") && (() => {
+      // 066. Today, in the reader's own zone, because that is what decides
+      // whether a hold has lapsed -- and read once for the whole list rather
+      // than per card, so every row on one render agrees about it.
+      const todayKey = dayKey();
       // Newest movement first. The API already orders by it, but the list is
       // filtered and re-derived here, and a sort that lives in only one of
       // the two places is a sort that disagrees with itself the first time
@@ -6190,7 +6230,16 @@ export default function SubSub() {
                               </span>
                             )
                           )}
-                          <span className={`job-phase ${done ? "done" : ""}`}>{j.withdrawnAt ? "withdrawn by tenant" : j.declinedAt ? "not approved" : done ? "completed" : "active"}</span>
+                          {/* 066. The phase, from the one predicate rather
+                              than a ternary that knows three endings. It read
+                              "completed" over a job closed out with nothing
+                              done, which is the one thing that reading must
+                              never say -- and "active" over a cancelled one.
+                              A held job keeps its phase: it is not finished
+                              with, which is the whole difference. */}
+                          <span className={`job-phase ${done ? "done" : ""}`}>{
+                            jobClosure(j).closed ? jobClosure(j).label.toLowerCase()
+                              : jobHold(j, todayKey).held ? "on hold" : "active"}</span>
                           {/* Only while it is genuinely news. A badge that
                               never expires is wallpaper. */}
                           {moved && <span className="job-moved"><Zap size={11} /> Updated {moved}</span>}
@@ -6203,6 +6252,43 @@ export default function SubSub() {
                         {j.declinedAt && !j.withdrawnAt && (
                           <div className="job-withdrawn">
                             <X size={12} /> Not approved {niceWhen(j.declinedAt)}{j.declinedNote ? <> — “{j.declinedNote}”</> : null}
+                          </div>
+                        )}
+                        {/* 066. HOW IT ENDED, AND THE WAY BACK WHERE THERE IS
+                            ONE. A cancellation with no words on the card is
+                            indistinguishable from a mis-press, and a held job
+                            that said nothing would read as one that had
+                            quietly stopped being worked on.
+
+                            A hold is drawn on a plain surface rather than the
+                            withdrawn red: work somebody deliberately put off
+                            is a decision, not a problem -- the same
+                            distinction the never-added document dot makes by
+                            being hollow. */}
+                        {jobHold(j, todayKey).held && (
+                          <div className="job-held">
+                            <Clock size={12} />
+                            <span>
+                              <b>On hold</b>{jobHold(j, todayKey).until
+                                ? <> until {niceDay(jobHold(j, todayKey).until)}</>
+                                : <> — no date set</>}
+                              {jobHold(j, todayKey).note ? <> — “{jobHold(j, todayKey).note}”</> : null}
+                              {". Nobody can be assigned until it is back."}
+                            </span>
+                            {maySetAccess(role) && !j.readOnly && (
+                              <button className="jh-resume" onClick={() => resumeJob(j.id)}>
+                                <PlayCircle size={13} /> Take it off hold
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {/* And why it ended, for the two terminal ones. The
+                            phase chip beside the title says WHICH; this is
+                            the reason somebody typed, which is the thing
+                            anybody reads this back for. */}
+                        {jobClosure(j).note && (
+                          <div className="job-withdrawn">
+                            <Ban size={12} /> {jobClosure(j).label} — “{jobClosure(j).note}”
                           </div>
                         )}
                         <div className="job-meta">
@@ -6366,6 +6452,27 @@ export default function SubSub() {
                                   );
                                 })()}
                               </div>
+                            ) : jobHold(j, todayKey).held ? (
+                              // 066. AND NOTHING TO PRESS ON A JOB THAT IS ON
+                              // HOLD, which `done` does not cover: a held job
+                              // is deliberately not closed. All three routes
+                              // behind these buttons refuse it, so a screen
+                              // that drew them would be looser than the route
+                              // -- and what it would cost is a contractor
+                              // committed to work somebody deliberately put
+                              // off.
+                              //
+                              // Its own sentence rather than the closed one,
+                              // because "nothing to assign" over a reversible
+                              // thing is the wrong word and the way back is
+                              // the banner at the top of the card.
+                              <div className="trade-actions">
+                                <span className="trade-shut">
+                                  <Clock size={12} /> On hold{jobHold(j, todayKey).until
+                                    ? ` until ${niceDay(jobHold(j, todayKey).until)}`
+                                    : ""} — take it off hold to assign this
+                                </span>
+                              </div>
                             ) : done ? (
                               // NOTHING TO PRESS ON A JOB THAT IS FINISHED
                               // WITH. This branch used to be the three buttons
@@ -6383,9 +6490,16 @@ export default function SubSub() {
                               // is shut rather than broken.
                               <div className="trade-actions">
                                 <span className="trade-shut">
-                                  <Lock size={12} /> {jobClosure(j).label.toLowerCase() === "completed"
+                                  <Lock size={12} /> {jobClosure(j).reason === "completed"
                                     ? "Job completed — reopen it to assign this"
-                                    : `Job ${jobClosure(j).label.toLowerCase()} — nothing to assign`}
+                                    : jobClosure(j).reason === "no_work"
+                                      // 066. Not "job closed, no work done --
+                                      // nothing to assign", which reads as a
+                                      // tautology. Reopening is the way back,
+                                      // the same as a completion, because
+                                      // that is what this one is.
+                                      ? "Closed with no work done — reopen it to assign this"
+                                      : `Job ${jobClosure(j).label.toLowerCase()} — nothing to assign`}
                                 </span>
                               </div>
                             ) : (
@@ -6523,6 +6637,18 @@ export default function SubSub() {
                                 ways to put somebody on a trade -- which is a
                                 thing to be told before it happens rather than
                                 discovered on a card that has gone quiet. */}
+                            {/* 066. THE OTHER WAY OUT, beside the one that
+                                records work. A job arrived through four doors
+                                and left through this one button -- so tidying
+                                anything up meant saying the work had been
+                                done, on a product whose ledger hangs off
+                                exactly that. Quiet rather than solid: ending
+                                a job without doing it is the rarer press and
+                                must not sit at the same weight as finishing
+                                one properly. */}
+                            <button className="btn-ghost jf-btn" onClick={() => setEndingJob(j)}>
+                              <Ban size={14} /> Cancel or hold
+                            </button>
                             <button className="btn-solid jf-btn" onClick={() => setCompletingJob(j)}>
                               <CheckCircle2 size={15} /> Mark job complete
                             </button>
@@ -6844,6 +6970,16 @@ export default function SubSub() {
             await completeJob(completingJob.id);
             setCompletingJob(null);
           }} />
+      )}
+      {/* 066. And the three endings that are NOT a completion. Fed the same
+          kind of effects as the modal above, because what somebody has to be
+          told before pressing is the same question -- who is stood down -- and
+          the money that refuses a cancellation outright. */}
+      {endingJob && (
+        <EndJobModal
+          job={endingJob}
+          onCancel={() => setEndingJob(null)}
+          onConfirm={(body) => endJob(endingJob.id, body)} />
       )}
       {/* Asking. The list is the account's OWN roster for that trade -- there
           is nothing to search, because there is nothing here but people they
@@ -10638,6 +10774,187 @@ function ConfirmComplete({ job, effects, onConfirm, onCancel }) {
               }
             }}>
             <CheckCircle2 size={15} /> {busy ? "Completing…" : "Mark complete"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// 066. ENDING A JOB WITHOUT RECORDING THAT WORK WAS DONE.
+//
+// Asked for as *"a job should be able to be cancelled or deferred if needed
+// for some reason - maybe it's an inaccurate assessment of what the issue was
+// etc. maybe we have something 'complete, no work done'"*.
+//
+// ONE MODAL FOR THE THREE, because the question is *which of these is it* and
+// three buttons on the card would ask it three times. The kind is chosen
+// here, which is also what lets the consequence change with the answer
+// instead of being a paragraph covering all three.
+//
+// IT IS NOT `ConfirmRemove` WITH DIFFERENT WORDS, and it is not
+// `DeleteConfirmModal` either. Typed confirmation is for what cannot be
+// undone; nothing here is a delete -- the job, its history, its work orders
+// and its releases all stay, which is the whole reason this is a status. What
+// it owes somebody instead is naming who gets stood down, because that is the
+// thing they hesitate over and the card cannot show it.
+function EndJobModal({ job, onConfirm, onCancel }) {
+  const [kind, setKind] = useState("");
+  const [note, setNote] = useState("");
+  const [until, setUntil] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  // THE CHECK RUNS BEFORE ANYTHING IS CHOSEN, which is the roster's own rule:
+  // the consequence can name what is booked rather than putting the question
+  // above an empty space. The browser cannot derive the money -- what is
+  // funded sits per work order and the jobs list deliberately does not carry
+  // it -- so the server answers.
+  //
+  // A COURTESY, NOT A GATE. If it fails, the modal asks anyway with what is
+  // known: a pre-flight that could stop somebody tidying up their own job
+  // list would be worse than no pre-flight, and the route refuses whatever it
+  // refuses regardless.
+  const [check, setCheck] = useState(null);
+  useEffect(() => {
+    let live = true;
+    api.jobEndCheck(job.id)
+      .then((r) => { if (live) setCheck(r); })
+      .catch((e) => {
+        console.error("[endJob] end-check failed:", e);
+        if (live) setCheck({});
+      });
+    return () => { live = false; };
+  }, [job.id]);
+  const { booked = [], accepted = [], openQuotes = 0, openOverflow = 0,
+    fundedCents = 0, hasVisit = false, blocked = {} } = check || {};
+  const K = kind ? ENDING_KINDS[kind] : null;
+  // WHY THIS KIND WOULD BE REFUSED, from the one rule the route reads rather
+  // than a second opinion here. Said BEFORE the press: the route refuses a
+  // cancellation against funded money, and nothing about a dead button would
+  // say why -- which this file calls indistinguishable from a broken one.
+  const no = kind ? (blocked?.[kind] || null) : null;
+  const moneyBlocks = no === "money_funded";
+  const needNote = !!K?.needsNote;
+  const ready = !!kind && !no && !!check && (!needNote || note.trim().length > 0);
+  return (
+    <Modal onClose={onCancel}>
+      <div className="form">
+        <h2>
+          <Ban size={18} style={{ color: "var(--amber-ink)", verticalAlign: -3, marginRight: 8 }} />
+          {job.title}
+        </h2>
+        <p className="form-sub">
+          Nothing is deleted. The job, its history and its work orders stay where they
+          are — what changes is whether anybody is still expected to turn up.
+        </p>
+
+        <div className="form-sec">What is happening to it?</div>
+        <div className="endj-picks">
+          {CHOOSABLE_ENDINGS.map((id) => (
+            <button key={id} type="button"
+              className={`endj-pick ${kind === id ? "on" : ""}`}
+              onClick={() => { setKind(kind === id ? "" : id); setErr(""); }}>
+              <span className="endj-label">{ENDING_KINDS[id].label}</span>
+              <span className="endj-note">{ENDING_KINDS[id].note}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* WHO GETS STOOD DOWN, named rather than counted. The whole reason
+            this modal exists rather than a bare confirm: a crew expecting
+            Tuesday is the one thing somebody has to be told before pressing,
+            and the card counts filled slots without saying anybody accepted.
+
+            PENDING WORK ORDERS COUNT TOO. An offer somebody is about to
+            accept, voided silently, is an afternoon they spent pricing work
+            that was already off. */}
+        {!!kind && (booked.length > 0 || openQuotes > 0 || openOverflow > 0 || hasVisit) && (
+          <div className="cc-loose">
+            <div className="form-sec">What this stands down</div>
+            <ul>
+              {booked.map((t) => (
+                <li key={`b-${t}`}><b>{TRADE_LABEL[t] || t}</b> — {accepted.includes(t)
+                  ? "the contractor accepted this work order; it is voided and they are told"
+                  : "the work order is still unanswered; it is voided"}</li>
+              ))}
+              {hasVisit && <li>The agreed time comes off — nobody is scheduled to arrive</li>}
+              {openQuotes > 0 && (
+                <li>{openQuotes} open quote request{openQuotes > 1 ? "s" : ""} — the companies you asked stop being able to answer</li>
+              )}
+              {openOverflow > 0 && (
+                <li>{openOverflow} trade{openOverflow > 1 ? "s" : ""} out to overflow — those posts stop taking answers</li>
+              )}
+            </ul>
+            {kind === "deferred" && (
+              <p className="endj-warn">
+                Taking it off hold does not re-issue any of that. Whoever you want back on it
+                has to be assigned again, because the price and the date they agreed were for
+                a day that will have gone.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* The day it comes back, which is usually the whole story of a hold
+            and is what makes it come off by itself rather than needing to be
+            remembered. */}
+        {kind === "deferred" && (
+          <label className="fld">When should it come back?{" "}
+            <span className="fld-note">optional — leave it blank to hold it open-endedly</span>
+            <input type="date" value={until} min={dayKey()}
+              onChange={(e) => setUntil(e.target.value)} />
+          </label>
+        )}
+
+        {moneyBlocks ? (
+          // Named, with somewhere to go. A refusal somebody cannot act on is
+          // the dead-end-wearing-instructions failure pointed at money.
+          <p className="endj-blocked" role="alert">
+            <AlertTriangle size={14} /> {formatMoney(String(fundedCents / 100))} is funded
+            against this job, so this is a refund rather than a tidy-up. Refund what is unspent
+            on the work order first, then come back. Putting it on hold is fine — a hold
+            spends nothing.
+          </p>
+        ) : no ? (
+          <p className="endj-blocked" role="alert">
+            <AlertTriangle size={14} /> {ENDING_REFUSALS[no] || "That cannot be done to this job."}
+          </p>
+        ) : !!kind && (
+          <label className="fld">Why?{" "}
+            <span className="fld-note">{needNote
+              ? "required — somebody reading this in six months needs to know"
+              : "optional"}</span>
+            <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder={kind === "no_work"
+                ? "e.g. looked at it on site, the seal was fine — nothing to do"
+                : kind === "cancelled"
+                  ? "e.g. the tenant had already had it fixed privately"
+                  : "e.g. waiting on the owner's budget for next quarter"} />
+          </label>
+        )}
+
+        {err && <div className="form-err" role="alert">{err}</div>}
+        <div className="form-actions">
+          <button className="btn-ghost" type="button" onClick={onCancel} disabled={busy}>
+            Leave it alone
+          </button>
+          <button className="btn-solid" type="button" disabled={!ready || busy}
+            onClick={async () => {
+              setBusy(true); setErr("");
+              try { await onConfirm({ kind, note: note.trim(), until: until || null }); }
+              catch (e) {
+                // Left open with the reason on it, the rule `ConfirmRemove`
+                // follows: closing on a refusal reads as success, and the
+                // card behind would already be drawn as ended.
+                console.error("[endJob] refused:", e);
+                setErr(ENDING_REFUSALS[e?.body?.error]
+                  || (e?.body?.error === "migration_needed"
+                    ? `The database isn't migrated yet — run ${e.body.migration}.sql.`
+                    : "That did not go through. Try again in a moment."));
+                setBusy(false);
+              }
+            }}>
+            <Ban size={15} /> {busy ? "Saving…" : K ? K.label : "Choose one above"}
           </button>
         </div>
       </div>
@@ -19515,7 +19832,7 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
   }, [jobs, todayK]);
   // The nearest thing still to come, for the line under an empty month.
   const nextAhead = useMemo(() => jobs
-    .filter((j) => j.date && j.date >= todayK && !isClosed(j))
+    .filter((j) => j.date && j.date >= todayK && jobIsLive(j, todayK))
     .map((j) => j.date).sort()[0] || "", [jobs, todayK]);
   // null means "follow the work" -- derived on every render rather than
   // seeded once, because the jobs arrive after mount on a cold load and a
@@ -19578,7 +19895,7 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
         {cells.map((k, i) => {
           if (!k) return <span key={`pad${i}`} className="jcal-cell empty" />;
           const list = byDay[k] || [];
-          const openOnes = list.filter((j) => !isClosed(j));
+          const openOnes = list.filter((j) => jobIsLive(j, todayK));
           return (
             <button key={k}
               className={`jcal-cell ${list.length ? "has" : ""} ${k === todayK ? "today" : ""} ${k === selected ? "on" : ""} ${k < todayK ? "past" : ""}`}
@@ -19745,7 +20062,15 @@ function PageHead({ title, sub, children }) {
 // that claims everything in it is still to come.
 function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
   const todayK = dayKey();
-  const dated = jobs.filter((j) => !isClosed(j) && j.date)
+  // 066. LIVE, not merely "not closed". A job on hold is deliberately NOT
+  // closed -- it keeps its phase, it can be resumed, and the list must not
+  // file it under completed -- so `isClosed` answers no to it and every
+  // reader here would have gone on treating it as work still to come: on the
+  // schedule, in the overdue count, on the fortnight strip and in the undated
+  // tally. "1 job is past its date" about work somebody deliberately put off
+  // is the red number that never clears, which is how people learn to stop
+  // reading the panel.
+  const dated = jobs.filter((j) => jobIsLive(j, todayK) && j.date)
     .sort((a, b) => a.date.localeCompare(b.date) || String(a.time || "").localeCompare(String(b.time || "")));
   const late = dated.filter((j) => j.date < todayK);
   const ahead = dated.filter((j) => j.date >= todayK);
@@ -19768,7 +20093,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
   // calendar, which is what the count links to.
   const REST_SHOWN = 4;
   const rest = ahead.slice(1);
-  const undated = jobs.filter((j) => !isClosed(j) && !j.date).length;
+  const undated = jobs.filter((j) => jobIsLive(j, todayK) && !j.date).length;
   // Two weeks: as far ahead as anybody plans from a dashboard, and it fits
   // across a phone by scrolling rather than by shrinking to nothing.
   const strip = Array.from({ length: 14 }, (_, i) => {
@@ -19923,7 +20248,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // ones included, under a tile reading "Work scheduled" -- so a building
   // owner was told three things were coming when two of them were last
   // week's. The panel above splits the two; so does this.
-  const upcoming = jobs.filter((j) => !isClosed(j) && j.date && j.date >= dayKey())
+  const upcoming = jobs.filter((j) => jobIsLive(j, dayKey()) && j.date && j.date >= dayKey())
     .sort((a, b) => a.date.localeCompare(b.date));
   // Everybody who has been asked something and has not answered.
   //
@@ -19965,7 +20290,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   const licenseIssues = subs.filter((s) => !licenseOk(s));
   // Offers that ran out of time need a different action from ones still ticking.
   const expiredOffers = [];
-  jobs.filter((j) => !isClosed(j)).forEach((j) =>
+  jobs.filter((j) => jobIsLive(j, dayKey())).forEach((j) =>
     Object.entries(j.assignments || {}).forEach(([t, a]) => {
       if (isExpired(a, now)) expiredOffers.push({ job: j, trade: t, a });
     }));
@@ -19974,7 +20299,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
     && s.job.status === "completed");
   const committed = slots.filter((s) => s.a && (s.a.status === "accepted" || s.a.auto))
     .reduce((n, s) => n + Number(moneyRaw(s.a.value) || 0), 0);
-  const readyToComplete = jobs.filter((j) => !isClosed(j)
+  const readyToComplete = jobs.filter((j) => jobIsLive(j, dayKey())
     && j.trades.every((t) => j.assignments[t] && (j.assignments[t].status === "accepted" || j.assignments[t].auto)));
 
   const first = me.name.split(" ")[0];
@@ -19993,7 +20318,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // is on the way" is exactly the thing a manager wants in front of them,
   // not filed away as handled.
   const emergencies = jobs
-    .filter((j) => j.severity && !isClosed(j))
+    .filter((j) => j.severity && jobIsLive(j, dayKey()))
     .sort((a, b) => (severityRank(a.severity) - severityRank(b.severity))
       || String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || "")));
 
@@ -32552,6 +32877,37 @@ strong.insp-name{background:none;border:0;padding:0}
 .jr-vis-wait{display:flex;align-items:center;gap:6px;margin:8px 0 0;
   font-size:12.5px;font-weight:600;color:var(--ink-soft)}
 .jr-vis-wait > svg{flex:none}
+/* 066. ON HOLD, on the card. A plain surface rather than the withdrawn red:
+   work somebody deliberately put off is a decision, not a problem, which is
+   the same distinction the never-added document dot makes by being hollow.
+   The amber ink carries it without the tint shouting.
+   (No backticks in this stylesheet. It is a template literal, and one in a
+   comment closes it -- this repository has paid for that fourteen times.) */
+.job-held{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0 0;
+  padding:7px 10px;border-radius:9px;background:var(--paper);border:1px solid var(--line);
+  font-size:12.5px;line-height:1.45;color:var(--ink)}
+.job-held > svg{flex:none;color:var(--amber-ink)}
+.jh-resume{display:inline-flex;align-items:center;gap:5px;margin-left:auto;
+  padding:5px 10px;border-radius:8px;border:1px solid var(--brand);background:#fff;
+  color:var(--brand);font-size:12px;font-weight:700;cursor:pointer}
+.jh-resume:hover{background:var(--brand);color:#fff}
+/* THE THREE ENDINGS, as a column of what-happens rather than a chip row. Each
+   one is a sentence somebody reads before choosing, so they stack and the
+   label leads -- three chips with the consequence in help text underneath
+   would be the picker that makes people choose the wrong one. */
+.endj-picks{display:flex;flex-direction:column;gap:8px;margin:0 0 4px}
+.endj-pick{display:flex;flex-direction:column;gap:3px;text-align:left;cursor:pointer;
+  padding:11px 13px;border-radius:11px;border:1px solid var(--line);background:var(--card)}
+.endj-pick:hover{border-color:var(--brand)}
+.endj-pick.on{border-color:var(--brand);background:#f1f7f3;box-shadow:inset 0 0 0 1px var(--brand)}
+.endj-label{font-size:13.5px;font-weight:700;color:var(--ink)}
+.endj-note{font-size:12px;line-height:1.45;color:var(--ink-soft)}
+.endj-pick.on .endj-note{color:var(--ink)}
+.endj-warn{margin:8px 0 0;font-size:12px;line-height:1.45;color:var(--amber-ink);font-weight:600}
+.endj-blocked{display:flex;align-items:flex-start;gap:7px;margin:10px 0 0;padding:10px 12px;
+  border-radius:10px;background:#fbf0dd;border:1px solid #e3c994;
+  font-size:12.5px;line-height:1.5;color:var(--ink)}
+.endj-blocked > svg{flex:none;margin-top:2px;color:var(--amber-ink)}
 /* The job name as the way into editing it. A button that does not look like
    one until it is wanted: the pencil is always there so it reads as editable,
    the underline arrives on hover so the heading stays a heading. */

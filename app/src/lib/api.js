@@ -379,6 +379,16 @@ export const api = {
   acceptTenantInvite: (token, body) =>
     request(`/tenant-invite/${encodeURIComponent(token)}`, { method: "POST", body: JSON.stringify(body) }),
   completeJob: (jobId) => request(`/jobs/${jobId}/complete`, { method: "POST" }),
+  // 066. Cancel, put on hold, or close out with nothing done. One route for
+  // the three, because they share the money boundary, the standing-down and
+  // the append-only row.
+  // What ending it would stand down, asked before the modal opens -- the same
+  // shape and reason as the roster's own end-check.
+  jobEndCheck: (jobId) => request(`/jobs/${jobId}/end-check`),
+  endJob: (jobId, body) => request(`/jobs/${jobId}/end`,
+    { method: "POST", body: JSON.stringify(body) }),
+  resumeJob: (jobId, note) => request(`/jobs/${jobId}/resume`,
+    { method: "POST", body: JSON.stringify(note ? { note } : {}) }),
   reopenJob: (jobId) => request(`/jobs/${jobId}/reopen`, { method: "POST" }),
   assign: (jobId, details) => request(`/jobs/${jobId}/assign`, { method: "POST", body: JSON.stringify(details) }),
   unassignTrade: (jobId, trade) => request(`/jobs/${jobId}/unassign/${trade}`, { method: "POST" }),

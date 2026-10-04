@@ -2044,3 +2044,22 @@ CREATE TABLE IF NOT EXISTS inspection_summaries (
   written_at    TEXT,
   written_by    TEXT REFERENCES users(id)
 );
+
+-- 066. THE THREE WAYS A JOB ENDS WITHOUT RECORDING THAT WORK WAS DONE:
+-- cancelled, deferred (a reversible hold, with the day it comes back) and
+-- no_work (a completion with a reason). Append-only -- a `resumed` row is how
+-- a hold ends, because "we put this off in January and picked it up in March"
+-- is two facts. The current state is the newest row. See
+-- migrations/066_job_endings.sql and app/shared/jobstate.js.
+CREATE TABLE job_endings (
+  id          TEXT PRIMARY KEY,
+  job_id      TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL,   -- cancelled | deferred | no_work | resumed
+  note        TEXT,
+  until       TEXT,            -- deferrals only; NULL is indefinite
+  at          TEXT NOT NULL,
+  by_user_id  TEXT REFERENCES users(id)
+);
+CREATE INDEX ix_job_endings_job ON job_endings(job_id, at DESC);
+CREATE INDEX ix_job_endings_account ON job_endings(account_id, kind);

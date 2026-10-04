@@ -200,7 +200,9 @@
     "test:staffwrite": "node --no-warnings scripts/staffwrite-test.mjs",
     "test:staffwriteui": "node --no-warnings scripts/staffwrite-ui-test.mjs",
     "test:jobedit": "node --no-warnings scripts/job-edit-test.mjs",
-    "test:jobeditui": "node --no-warnings scripts/job-edit-ui-test.mjs"
+    "test:jobeditui": "node --no-warnings scripts/job-edit-ui-test.mjs",
+    "test:jobend": "node --no-warnings scripts/job-end-test.mjs",
+    "test:jobendui": "node --no-warnings scripts/job-end-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

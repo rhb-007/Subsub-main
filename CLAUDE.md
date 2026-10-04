@@ -7947,6 +7947,201 @@ refactor.
   change.
 
 
+- **A JOB ARRIVED THROUGH FOUR DOORS AND LEFT THROUGH ONE.** Asked for as *"a
+  job should be able to be cancelled or deferred if needed for some reason -
+  maybe it's an inaccurate assessment of what the issue was etc. maybe we have
+  something 'complete, no work done'"*.
+
+  The one door out was **Mark job complete**. `DELETE /api/jobs/:id` does not
+  exist; `withdraw` is the requester's own move and most jobs have no
+  requester; `decline` answers `not_a_request` on anything approved. So tidying
+  anything up meant **recording that work had been done** — on a product whose
+  payment ledger hangs off exactly that. Migration 066, `job_endings`,
+  `app/shared/jobstate.js` extended rather than joined by a second module.
+
+  **A STATUS RATHER THAN A DELETE**, which is the shape the roster already
+  settled: the job history is what answers *were they insured on the day of
+  that job*, the work orders and releases hang off it, and a repair somebody
+  cancelled is a thing that happened.
+
+  **ONE TABLE RATHER THAN SIX `ADD COLUMN`s**, for the reason 048, 057 and 063
+  all chose a table: `ALTER TABLE ... ADD COLUMN` is the one statement that
+  cannot be run twice, so six of them is six pastes and an operator who has to
+  get the order right. One paste, every statement `IF NOT EXISTS`.
+
+  **AND IT IS APPEND-ONLY, no primary key on `job_id`.** A deferral ends with a
+  `resumed` row rather than by deleting the one that put it on hold, because
+  *we put this off in January and picked it up in March* is two facts and the
+  first is the one anybody asks about later. Same shape as `wo_events`, the
+  superseded visit and the revoked invite. The current state is the **newest
+  row**, read `at DESC, rowid DESC` the way the live visit is, and there is
+  deliberately no denormalised copy on `jobs` — two records of one fact, and
+  the stale one would be the one every screen reads.
+
+  **ONE ROUTE FOR THE THREE**, because they share the approval check, the money
+  boundary, the standing-down and the row. Three routes would be three places
+  for the void to be forgotten, and the one that forgot it would be a
+  contractor turning up to work nobody is expecting.
+
+  **NOBODY IS LEFT BOOKED, AND THAT IS AS TRUE OF A HOLD AS OF A
+  CANCELLATION.** A crew expecting Tuesday is a crew that turns up. Live work
+  orders are **voided** rather than deleted — the question afterwards is what
+  was issued and what happened to it — the open window is superseded and open
+  quote requests are cancelled, because three companies pricing cancelled work
+  is an afternoon each and that is the whole reason the commit gate refuses a
+  closed job. **Pending work orders count too**: an offer somebody is about to
+  accept, voided silently, is an afternoon they spent pricing work that was
+  already off.
+
+  **MONEY IS THE HARD BOUNDARY AND IT IS NOT OVERRIDABLE.** Once a funding has
+  landed there is real money in a balance with this job's name on it, and a
+  route that cancelled around it would leave the only record of that money
+  saying the work was called off. **A hold is deliberately exempt** — putting
+  work off spends nothing and the funding is still there when it comes back.
+
+  **AND THE FIRST VERSION HAD TWO GUARDS COVERING FOR EACH OTHER.** The route
+  skipped the funding query `if (kind !== "deferred")` and `whyNotEnd` also
+  checked the kind — so a mutation to the rule changed no outcome on that path
+  and the suite's own money assertion could not see it. One query is cheaper
+  than that: the route reads the figure for every kind and the rule is the only
+  thing that decides. Caught by mutation, which is the only thing that could
+  have.
+
+  **NOTHING IS PAYABLE AGAINST AN ENDED JOB, and this is the half of "complete,
+  no work done" that would otherwise be a word on a screen.** `no_work` writes
+  `status = 'completed'` — deliberately, because a fourth status value means a
+  full rebuild of a table carrying a CHECK and every existing reader already
+  answers correctly for `completed` — and *completed* is precisely the state a
+  release is normally paid against. So without a gate it would be **the most
+  payable a job ever gets.** `jobEndingBlocksPay` sits in `loadWorkOrder`'s
+  shadow and is read by `settle` **and** `pay`: those are two routes on purpose,
+  one recording money that moved elsewhere and one moving it, so a gate on one
+  of the two is a door round it. It is checked **before** the cover and waiver
+  gates, because those are overridable with a recorded reason and this is not —
+  no reason makes work that was never done payable, which is the line `canPay`
+  already draws about unfunded money.
+
+  **A HOLD COMES OFF BY ITSELF WHEN ITS DATE PASSES.** That is what "defer
+  until March" says, and it is why this needs no nightly sweep to undo. A hold
+  with no date is indefinite and only a `resumed` row ends it. **Strictly
+  past**: a hold until the 6th is still a hold *on* the 6th, because somebody
+  who picked a date meant the work happens then and not before.
+
+  **`jobIsLive` IS A SECOND PREDICATE, NOT A WIDER `jobIsClosed`, and the
+  difference is the whole feature.** A held job is deliberately **not closed**:
+  it keeps its phase on the Jobs screen, it can be resumed, and the list must
+  not file it under completed. So `jobClosure` answers *no* to it — and every
+  reader that treats a job as work still to come would have gone on counting
+  it: the schedule, the overdue count, the fortnight strip, the undated tally,
+  the calendar's aim, the unassigned-slot count, the emergencies list and
+  `readyToComplete`. *"1 job is past its date"* about work somebody
+  deliberately put off is the red number that never clears, which is how people
+  learn to stop reading the panel.
+
+  **AND THE THREE COMMIT DOORS REFUSE A HELD JOB SEPARATELY**, because
+  `jobClosure` says no to it. `jobCommitRefusal` answers both for assign and
+  overflow; `canRequestQuotes` carries its own line, which is right — that is
+  the shared rule, and the one place `today` has to reach it so a lapsed hold
+  stops refusing. Named `job_deferred` rather than `job_closed`, because
+  "closed" is the wrong word for a reversible thing and the screen has to be
+  able to say *on hold until the 14th*.
+
+  **`autoRepropose` IS THE ONE AUTO HOOK THAT FIRES LATER**, when a tenant
+  declines a window days afterwards — so it is the one that can find the job
+  ended underneath it, and a machine proposing times for work somebody called
+  off is the standing-permission failure this file records about a flag nobody
+  is watching. It reads `jobIsLive`, not `jobIsClosed`.
+
+  **WHAT ENDING IT COSTS IS ASKED BEFORE THE MODAL OPENS**, which is the
+  roster's own rule word for word: *the consequence can name what is booked and
+  how many people lose access; opening the modal first and filling it in
+  afterwards puts the question in front of somebody above an empty space.*
+  `GET /api/jobs/:id/end-check` answers it, because the browser cannot derive
+  the money — what is funded sits on `wo_funding` per work order and the jobs
+  list deliberately does not carry it, since a figure on every row would have
+  to be redacted for owners and tenants. It is **a courtesy, not a gate**: the
+  route refuses what it refuses whatever this said, and the modal asks anyway
+  if the call fails, because a pre-flight that could stop somebody tidying up
+  their own job list would be worse than none. It returns the refusal **per
+  kind, from the one rule the route reads**, so the screen greys an option with
+  the reason beside it rather than offering a press that answers 409.
+
+  **NAMED, NOT COUNTED**, the same rule the completion modal already follows:
+  *Plumbing — the contractor accepted this work order; it is voided and they
+  are told* is what somebody stops at, where "3 things affected" is the number
+  they press past.
+
+  **IT IS NOT `ConfirmRemove` WITH DIFFERENT WORDS, AND NOT THE TYPED-NAME ONE
+  EITHER.** Typed confirmation is for what cannot be undone, and nothing here
+  is a delete — the job, its history, its work orders and its releases all
+  stay, which is the whole reason this is a status. What it owes somebody
+  instead is naming who gets stood down, because that is the thing they
+  hesitate over and the card cannot show it.
+
+  **A REASON IS REQUIRED ON THE TWO TERMINAL ONES AND NOT ON A HOLD.** *"An
+  inaccurate assessment of what the issue was"* is exactly the thing somebody
+  reads back in six months, and a cancellation with no words on it is
+  indistinguishable from a mis-press. A hold's date is usually its whole story.
+
+  **AND THE TENANT IS TOLD, in the right one of three sentences.** The person
+  who reported a leak is the one who otherwise finds out by it never happening.
+  Not flattened to "cancelled": somebody who read the problem and decided
+  nothing needed doing is saying a different thing from somebody calling the
+  work off, and a tenant told the wrong one of those rings up.
+
+  **Which uncovered a default written for one stage leaking into every stage
+  added after it.** `stageWords` was `w(detail || "a time to be confirmed")` —
+  right for `visit`, and a deferral with no date came out reading *"has been
+  put on hold: a time to be confirmed"*. The default belongs to the stage that
+  wants it, and each function now answers for its own missing detail.
+
+  **TAKING A HOLD OFF DOES NOT RE-ISSUE WHAT IT VOIDED**, and the modal says so
+  before the press. Those were a price and a date somebody agreed to for a day
+  that has gone; re-issuing silently would commit a contractor to work they
+  have not been asked about again, which is the rule `autoschedule.js` states
+  at length about whose calendar may be written to.
+
+  **THE INVARIANTS ARE RUN AGAINST REAL ROWS, and that is what caught the one
+  real bug in them.** 057's lesson: every invariant reads zero on an empty
+  database, so one that is subtly wrong passes for ever. Four are seeded both
+  ways in the feature's own suite, out of the real `CHECK.sql` and by column
+  name so the test cannot drift from the file an operator pastes — and
+  `m066_inv_resume_without_hold` **fired on an ordinary deferral** on its first
+  run. `at` is an ISO string from the route, so a hold and the resume seconds
+  later can share one to the millisecond; `e.at < r.at` then found nothing,
+  read the hold as absent, and counted the common case as a fault. The tiebreak
+  is part of "previous": `(at, rowid)`, the same ordering every read uses.
+
+  **And `missingSchema` had never heard of `job_endings`**, so a database
+  without 066 answered `migration: "unknown"` — a 503 somebody cannot act on.
+  Also caught by the suite, which asserts the name rather than the status.
+
+  **The two it refuses by name are worth keeping**: an unapproved **request**
+  is sent to `decline` instead, because that is its door and two doors onto one
+  act is how the two come to disagree about what they wrote; and `resumed` is
+  refused through the ending door, because offering it there would let a resume
+  be written against a job that was never held — which is the invariant above,
+  and would make `jobEnding` answer *live* for work somebody called off.
+
+  Nine server mutations and seven browser ones fire, each on its own assertion.
+  Three harness faults in the first run of the browser suite were all ones this
+  file already records: `.job-phase` is `text-transform:uppercase` and Chrome's
+  `innerText` applies it, so a case-sensitive compare was testing the
+  stylesheet; a **cancelled job is closed**, so the Active tab correctly hid it
+  and the suite had to ask for All (now asserted in both directions before
+  switching); and the card reader returned `{missing:true}` while the block
+  below read `.slotBtns.length` off it, so it **threw on exactly the case it
+  exists to catch** — the read-through-`link?.` lesson, for the sixth time.
+
+  **Still open, and deliberately not in this change: reopening a cancelled job
+  is not offered.** `reopen` writes `status` back and would leave the
+  cancellation row as the newest ending, so the job would read as cancelled
+  either way — and a cancelled job that can be un-cancelled is a fourth
+  lifecycle to reason about on top of the three endings. Raising a new job is
+  the honest answer today; making `reopen` append a `resumed`-shaped row for a
+  cancellation is a product decision rather than a patch.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

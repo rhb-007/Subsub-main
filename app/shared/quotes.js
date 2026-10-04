@@ -16,7 +16,7 @@
 
 // Whether a job is finished with, shared with the card and the two routes
 // beside this one, so all three cannot hold different answers.
-import { jobClosure } from "./jobstate.js";
+import { jobClosure, jobHold } from "./jobstate.js";
 
 // Statuses, in one place, so nothing spells them differently.
 export const REQUEST_STATUS = ["open", "awarded", "cancelled"];
@@ -34,7 +34,8 @@ export const MAX_INVITES = 8;
 // The precondition is the mirror of overflow's. Overflow is refused when the
 // account HAS somebody of their own who could be issued the work; this is only
 // available then, because it asks the roster and nobody else.
-export function canRequestQuotes(job = {}, { role, hasOpenRequest, liveWorkOrder } = {}) {
+export function canRequestQuotes(job = {}, { role, hasOpenRequest, liveWorkOrder,
+  today = null } = {}) {
   if (role !== "admin" && role !== "pm") return { ok: false, reason: "not_your_call" };
   if (job.readOnly || job.atOwnedProperty || job.inherited) {
     return { ok: false, reason: "not_your_job" };
@@ -49,6 +50,18 @@ export function canRequestQuotes(job = {}, { role, hasOpenRequest, liveWorkOrder
   // and with the two routes beside this one.
   const shut = jobClosure(job);
   if (shut.closed) return { ok: false, reason: shut.reason === "withdrawn" ? "withdrawn" : "job_closed" };
+  // 066. AND ON HOLD IS NOT WORK ANYBODY MAY BE ASKED TO PRICE EITHER.
+  //
+  // A held job is deliberately NOT closed -- it keeps its phase, it can be
+  // resumed, and the list must not file it under completed -- so `jobClosure`
+  // answers no and this needs its own line. Asking three companies to price
+  // work that is on hold spends an afternoon of theirs on an offer nobody can
+  // take up, which is the same cost the closed check above exists to refuse.
+  //
+  // Named separately so the screen can say *on hold until the 14th* rather
+  // than "closed", which would be the wrong word on a reversible thing.
+  const hold = jobHold(job, today);
+  if (hold.held) return { ok: false, reason: "job_deferred", until: hold.until };
   // Already committed. Asking for quotes on a trade somebody is already
   // issued would be asking companies to price work that is gone.
   if (liveWorkOrder) return { ok: false, reason: "already_issued" };

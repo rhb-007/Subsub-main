@@ -439,7 +439,76 @@ SELECT
 
   -- 064. The hiring side's own leg of an appointment.
   (SELECT COUNT(*) FROM pragma_table_info('visits')
-    WHERE name = 'manager_at')                                                                  AS m064_visit_manager_at;
+    WHERE name = 'manager_at')                                                                  AS m064_visit_manager_at,
+
+  -- 066. The three ways a job ends without recording that work was done.
+  --
+  -- FIVE NAMED COLUMNS, not the table name. `sqlite_master` tells you a table
+  -- is there and `pragma_table_info` tells you it is the RIGHT one -- which is
+  -- what the broken 052 cost once already, when a did-I-run-it check asked
+  -- only whether the table existed and answered yes over a table nothing
+  -- could write to.
+  (SELECT COUNT(*) FROM pragma_table_info('job_endings')
+    WHERE name IN ('job_id', 'kind', 'note', 'until', 'at'))                                    AS m066_job_endings,
+
+  -- Invariant, must read ZERO: an ending whose kind is not one of the four.
+  --
+  -- The column is plain TEXT on purpose -- a CHECK on a table this young is a
+  -- full rebuild the first time a fifth word is wanted, which is 003's own
+  -- trade -- so this is what stands in for one. A row nothing recognises reads
+  -- as "not ended" to `jobEnding`, which is the direction that draws a
+  -- cancelled job as live work.
+  (SELECT COUNT(*) FROM job_endings
+    WHERE kind NOT IN ('cancelled', 'deferred', 'no_work', 'resumed'))                          AS m066_inv_bad_kind,
+
+  -- Invariant, must read ZERO: a cancelled or closed-out job with a work order
+  -- nobody voided.
+  --
+  -- This is the one that costs somebody a wasted journey. The route voids
+  -- every live order as it writes the ending, so a row here is a contractor
+  -- who still has a price, a date and no idea the work is off. Scoped to the
+  -- NEWEST ending per job, because a job deferred in January, resumed in
+  -- March and running again legitimately has live orders.
+  (SELECT COUNT(*) FROM work_orders w
+    WHERE w.voided_at IS NULL
+      AND (SELECT e.kind FROM job_endings e WHERE e.job_id = w.job_id
+            ORDER BY e.at DESC, e.rowid DESC LIMIT 1) IN ('cancelled', 'no_work'))              AS m066_inv_live_wo_on_ended,
+
+  -- Invariant, must read ZERO: money settled against a job that was cancelled
+  -- or closed with nothing done.
+  --
+  -- `no_work` writes `status = 'completed'`, which is exactly the state a
+  -- release is normally paid against -- so without the gate in
+  -- `jobEndingBlocksPay` it would be the most payable a job ever gets. A row
+  -- here is a payment made for work nobody did, which is the one mistake in
+  -- this schema that a word cannot undo.
+  (SELECT COUNT(*) FROM wo_releases r
+    JOIN work_orders w ON w.id = r.work_order_id
+    WHERE r.status = 'paid'
+      AND (SELECT e.kind FROM job_endings e WHERE e.job_id = w.job_id
+            ORDER BY e.at DESC, e.rowid DESC LIMIT 1) IN ('cancelled', 'no_work'))              AS m066_inv_paid_on_ended,
+
+  -- Invariant, must read ZERO: a `resumed` row against a job whose newest
+  -- OTHER ending was never a deferral.
+  --
+  -- Resuming is how a HOLD ends and nothing else: a cancellation is terminal,
+  -- and a row claiming to have taken one off hold would make `jobEnding`
+  -- answer "live" for work somebody called off -- which is the gate opening
+  -- rather than merely a tidiness complaint. The route refuses it; this counts
+  -- what got past.
+  -- THE TIEBREAK IS PART OF "PREVIOUS", and leaving it out is what the
+  -- feature's own suite caught on its first run: `at` is written as an ISO
+  -- string from the route, so a hold and the resume that follows it seconds
+  -- later can share one to the millisecond -- and `e.at < r.at` then finds
+  -- nothing, reads the hold as absent, and counts an ORDINARY deferral as a
+  -- fault. An invariant that fires on the common case is a bug report nobody
+  -- can action. `(at, rowid)` is the same ordering every read above uses.
+  (SELECT COUNT(*) FROM job_endings r
+    WHERE r.kind = 'resumed'
+      AND COALESCE((SELECT e.kind FROM job_endings e
+                     WHERE e.job_id = r.job_id
+                       AND (e.at < r.at OR (e.at = r.at AND e.rowid < r.rowid))
+                     ORDER BY e.at DESC, e.rowid DESC LIMIT 1), 'none') <> 'deferred')          AS m066_inv_resume_without_hold;
   -- NO INVARIANT, AND THE REASON IS WORTH STATING rather than leaving the
   -- next person to wonder why 061 has one and this does not.
   --

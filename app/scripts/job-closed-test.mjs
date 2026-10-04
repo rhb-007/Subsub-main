@@ -114,11 +114,23 @@ console.log("\n-- the routes refuse, not just the screen --");
   // which is the gate failing open with nothing to see.
   const assign = (WORKER.match(/app\.post\("\/api\/jobs\/:jobId\/assign"[\s\S]{0,2600}/) || [""])[0];
   t.ck("the assign route reads the job's status at all", /status, withdrawn_at, declined_at/.test(assign));
-  t.ck("and refuses a closed one", /jobClosure\(job\)[\s\S]{0,200}job_closed/.test(assign));
+  // 066 MOVED THE REFUSAL INTO ONE HELPER, and the property is stronger for
+  // it rather than weaker: closed AND on hold are two different answers and
+  // both have to refuse, so a route reading `jobClosure` alone would issue
+  // the work order on a job somebody deliberately put on hold. What is
+  // pinned is that the door reads the shared refusal, and that the refusal
+  // itself answers both -- the second is what the first is worth.
+  t.ck("and refuses through the shared refusal", /jobCommitRefusal\(job\)/.test(assign));
 
   const ovf = (WORKER.match(/app\.post\("\/api\/jobs\/:jobId\/overflow"[\s\S]{0,1800}/) || [""])[0];
   t.ck("the overflow route reads it too", /status, withdrawn_at, declined_at/.test(ovf));
-  t.ck("and refuses a closed one", /jobClosure\(job\)[\s\S]{0,200}job_closed/.test(ovf));
+  t.ck("and refuses through it as well", /jobCommitRefusal\(job\)/.test(ovf));
+
+  const refusal = (WORKER.match(/function jobCommitRefusal\(job\)[\s\S]{0,700}/) || [""])[0];
+  t.ck("which answers job_closed for a closure",
+    /jobClosure\(job\)[\s\S]{0,160}job_closed/.test(refusal));
+  t.ck("and job_deferred for a hold",
+    /jobHold\(job[\s\S]{0,160}job_deferred/.test(refusal));
 
   // One predicate. A second copy in App.tsx is how the two sides drifted in
   // the first place.

@@ -643,16 +643,39 @@ export const TENANT_STAGE_WORDS = {
   approved: "has been approved, and a contractor is being arranged",
   arranging: "has gone to a contractor, who is finding a time",
   booked: "has a contractor assigned -- a time still needs arranging with you",
-  visit: (detail) => `has a visit proposed for ${detail}. Please confirm it in the app, or say if it doesn't work`,
-  scheduled: (detail) => `is scheduled for ${detail}`,
+  // THE DEFAULT BELONGS TO THE STAGE THAT WANTS IT, not to `stageWords`.
+  //
+  // It lived in the lookup as `w(detail || "a time to be confirmed")`, which
+  // is right for exactly these two and wrong for every stage added after
+  // them: a deferral with no date came out reading *"has been put on hold: a
+  // time to be confirmed"*, which is nonsense on the one message telling
+  // somebody their repair is not coming yet. Each function now answers for
+  // its own missing detail.
+  visit: (detail) => `has a visit proposed for ${detail || "a time to be confirmed"}.`
+    + " Please confirm it in the app, or say if it doesn't work",
+  scheduled: (detail) => detail ? `is scheduled for ${detail}` : "has been scheduled",
   declined: (detail) => `hasn't been approved: ${detail}`,
   done: "is done",
+  // 066. THE THREE ENDINGS, and the tenant who reported it is the one person
+  // who otherwise finds out by the repair never happening. The fallback below
+  // answers "has been updated" for an unknown stage, which is true and
+  // useless on the one message that has to say the work is not coming.
+  cancelled: (detail) => `has been cancelled: ${detail}`,
+  // A hold without a date is honest about being open-ended rather than
+  // promising a day nobody has picked.
+  deferred: (detail) => detail
+    ? `has been put on hold: ${detail}`
+    : "has been put on hold -- your manager will be in touch when it is back",
+  // NOT "cancelled". Somebody read the problem and decided there was nothing
+  // to fix, which is a different thing from calling the work off, and a
+  // tenant told the wrong one of those rings up.
+  no_work: (detail) => `has been closed with no work needed: ${detail}`,
 };
 // `detail` is whatever that stage needs said with it -- the time for a
 // visit, the reason for a decline.
 const stageWords = (stage, detail) => {
   const w = TENANT_STAGE_WORDS[stage];
-  return typeof w === "function" ? w(detail || "a time to be confirmed") : (w || "has been updated");
+  return typeof w === "function" ? w(detail || "") : (w || "has been updated");
 };
 // "Thu, Oct 2, 2026, 9 AM–11 AM": the date the way niceDate says it, the
 // window in 12-hour clock, because that is how somebody says it aloud.
@@ -685,6 +708,12 @@ an unmonitored address. Replies aren't received.`;
   const subject = stage === "visit" ? `${who}: a time for "${title}" — please confirm`
     : stage === "done" ? `${who}: "${title}" is done`
     : stage === "declined" ? `${who}: "${title}" wasn't approved`
+    // 066. A subject line decides whether this is read today or next week,
+    // and "has moved" over a repair that is not happening is the one that
+    // gets left.
+    : stage === "cancelled" ? `${who}: "${title}" has been cancelled`
+    : stage === "deferred" ? `${who}: "${title}" is on hold`
+    : stage === "no_work" ? `${who}: "${title}" — nothing needed doing`
     : `${who}: "${title}" has moved`;
   return { subject, text, html: textToHtml(text, link) };
 }
