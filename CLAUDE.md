@@ -9469,3 +9469,67 @@ refactor.
   accepts far more of both, so the suite can prove the file parses, that the
   answers are right and that the shape stays small — and cannot prove D1 will
   take it. If statement 2 is ever refused, **split it; do not re-describe it.**
+
+- **AND IT WAS REFUSED A THIRD TIME, ON THE LIMIT THE PREVIOUS FIX SAID IT WAS
+  COMFORTABLY UNDER.** The entry above made the growing half cost no compound
+  terms and left 31 invariants as a 31-term `UNION ALL`. D1 refused that too —
+  the same `too many terms in compound SELECT`, from the same console, one
+  paste later.
+
+  **THE SENTENCE THAT SHIPPED IT IS THE WHOLE LESSON, AND IT IS THE SECOND
+  TIME IN TWO CHANGES.** The first note said rows *"have no ceiling"*. Its
+  correction then said 31 terms *"accepts this"* — on no evidence at all beyond
+  110 having been refused. **"Under the number that failed" is not a
+  measurement**, and a bound somebody reasons their way to is exactly as good
+  as the reasoning: `D1_MAX_COMPOUND` was 60, which was generous right up to
+  the paste that failed at 31. So the real ceiling is somewhere **below 31**
+  and nobody here knows where, because the only place it can be measured is an
+  iPad and every measurement costs a round trip to the person holding it.
+
+  **SO THE FIX IS THE ONE THE PREVIOUS ENTRY INSTRUCTED: split it, do not
+  re-describe it.** Five statements of seven terms and under, the same
+  thirty-one expressions verbatim, the same verdict wrapper on each. Seven is
+  not read off a spec either — the point is that it is *far* under the smallest
+  number ever refused, which is the only kind of number that can be trusted
+  without measuring.
+
+  **AND THE OBVIOUS ONE-PASTE ALTERNATIVE IS WHAT THE INSTRUCTION EXISTS TO
+  REFUSE.** The invariants could be unpivoted out of a `json_object` — or out
+  of a `||`-concatenated list of `json_array(name, (SELECT …))`, which is the
+  shape statement 1 already uses and which D1 demonstrably accepts at 79
+  entries. It would be one paste and zero compound terms. **It would also be a
+  third unverified ceiling**: `json_object` needs two arguments per invariant
+  and D1 caps arguments per function (far lower than SQLite's own default), so
+  the thing that grows would be pointed straight at the next limit along. A
+  split has **no** ceiling — growth adds a statement, not a term — which is
+  what makes it the answer rather than the fallback. Going round a third time
+  would have been the same bug for the third time, and it was promised to the
+  person pasting it that it would not be.
+
+  **The cost is real and is the right trade: six pastes instead of two**, read
+  one at a time. `verdict` is what makes that bearable — the first row of each
+  statement is the whole answer — and the growing half is still free, so adding
+  a migration never adds a paste. Adding an *invariant* can, which the header
+  says in so many words: past seven, add a statement rather than lengthening
+  one.
+
+  **FIVE COPIES OF ONE VERDICT RULE IS THE NEW RISK, so it is asserted.** Each
+  statement carries its own `CASE`, and a copy that drifted would report a
+  healthy database as broken — or a broken one as healthy — for whichever
+  handful of invariants happened to land in it. `schema-drift-test` normalises
+  the text above each `FROM (` and requires exactly one distinct wrapper across
+  all five; deleting the `m046_kind_check` branch from one of them fails it.
+
+  **And the ordering assertion had to stop naming a position.** It read
+  `parts[1]`, which was right only because `m039_unowned` is the third
+  invariant; the suite now finds the statement that row actually landed in.
+  Hard-coding an index would be right today and wrong the moment an invariant
+  is added, **which is the same thing as not checking it** — proved by moving
+  the entry to the last statement, where `find` passes and `parts[1]` fails.
+
+  **Still open, and unchanged by any of this: nothing here runs this against
+  D1.** Three refusals, all three found by a person pasting it. Local SQLite
+  allows 2000 columns and 500 compound terms, so this suite can prove the file
+  parses, that the answers are right and that the shape stays small — and
+  cannot prove D1 will take it. If a statement is refused again, **split it
+  smaller; the limit is lower than anybody here has guessed, twice.**

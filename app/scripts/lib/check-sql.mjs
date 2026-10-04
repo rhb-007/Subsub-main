@@ -19,12 +19,14 @@ import { readFileSync } from "node:fs";
 export const checkSql = () =>
   readFileSync(new URL("../../worker/migrations/CHECK.sql", import.meta.url), "utf8");
 
-// THE FILE IS TWO STATEMENTS NOW, so splitting it is part of reading it.
+// THE FILE IS SIX STATEMENTS NOW, so splitting it is part of reading it.
 //
 // D1 refused one row of 110 columns, then refused 110 rows via UNION ALL --
 // every term in a compound SELECT is capped too, which the note claiming rows
-// "have no ceiling" simply had wrong. So the half that grows is a data list
-// costing no terms at all, and what is left as SQL is the invariants.
+// "have no ceiling" simply had wrong -- and then refused 31 of them, which the
+// note claiming 31 "accepts this" had wrong in exactly the same way. So the
+// half that grows is a data list costing no terms at all, and the invariants
+// are split across five statements of seven terms and under.
 //
 // Split on a semicolon at depth zero, skipping strings and comments, for the
 // same reason `checkExpr` does: a comment in this file carries a semicolon,
@@ -80,10 +82,17 @@ export function runCheck(db) {
 export const D1_MAX_COLUMNS = 100;
 
 // AND THE SECOND LIMIT, which the fix for the first one walked into: D1
-// refused 110 UNION ALL terms with `too many terms in compound SELECT`.
-// Nobody here knows the exact figure -- only that 110 is over it -- so this is
-// a bound the file should never approach rather than a number read off a spec.
-export const D1_MAX_COMPOUND = 60;
+// refused 110 UNION ALL terms with `too many terms in compound SELECT`, and
+// then refused 31. So the real ceiling is somewhere BELOW 31 and nobody here
+// knows where -- the console is the only place it can be measured, and each
+// measurement costs a round trip to the person holding the iPad.
+//
+// This is therefore a bound no statement should approach rather than a figure
+// read off a spec: ten is comfortably under the smallest number ever refused,
+// and the file sits at seven. It was 60 while 31 was believed to be fine,
+// which is exactly how 31 shipped unchecked -- a generous bound is only
+// generous against a limit somebody has measured.
+export const D1_MAX_COMPOUND = 10;
 
 // ONE entry's expression, by name.
 //

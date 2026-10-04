@@ -165,7 +165,7 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
   // schema itself. It could not be run at all on a fresh database, because the
   // invariants read columns schema.sql did not have -- so the one tool for
   // spotting this drift was disabled BY the drift.
-  // THE FILE IS TWO STATEMENTS, so reading one of them is reading part of it.
+  // THE FILE IS SIX STATEMENTS, so reading one of them is reading part of it.
   // The first version of this ran `prepare(checkSql())`, which takes only the
   // leading statement -- so the invariants went unchecked and the assertions
   // about them passed on an empty list.
@@ -195,15 +195,15 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
     `${width} columns, D1 allows ${D1_MAX_COLUMNS}`);
 
   // AND IT IS SHORT ENOUGH FOR THE OTHER LIMIT, which is the one the fix for
-  // the first one walked straight into. D1 refused 110 UNION ALL terms with
-  // `too many terms in compound SELECT`, so the did-I-run-it half is a DATA
-  // list costing no terms at all and only the invariants are compound.
+  // the first one walked straight into -- twice. D1 refused 110 UNION ALL
+  // terms with `too many terms in compound SELECT`, so the did-I-run-it half
+  // became a DATA list costing no terms at all; it then refused the 31 that
+  // were left, which the note calling 31 safe had asserted on no evidence.
   //
-  // The bound is on the GROWING half being free, not on a number somebody
-  // tunes: a migration adds a line to the list and no term anywhere, which is
-  // the property that stops this coming back a third time. Nobody here knows
-  // D1's exact limit -- only that it refused 110 and accepts this -- so the
-  // assertion is deliberately generous and the real guard is the shape.
+  // So the real ceiling is below 31 and only the console can say where. The
+  // bound here is deliberately far under the smallest number ever refused --
+  // a generous bound is only generous against a limit somebody has measured,
+  // and 60 was generous right up to the paste that failed.
   const terms = checkStatements().map((st) =>
     st.replace(/^\s*--.*$/gm, "").split(/\bUNION\s+ALL\b/i).length);
   ck("no statement is a long compound SELECT", Math.max(...terms) <= D1_MAX_COMPOUND,
@@ -212,6 +212,17 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
   ck("and the did-I-run-it half costs one term however many there are",
     terms[0] === 1 && parts[0].length > 50,
     `${terms[0]} term(s) for ${parts[0]?.length} checks`);
+
+  // AND THE SPLIT IS THE ONLY THING DIVIDING THE INVARIANT STATEMENTS. Each
+  // carries its own copy of the verdict CASE, which is five records of one
+  // rule -- the shape this repository keeps paying for. A statement whose
+  // wrapper drifted would report a healthy database as broken, or a broken one
+  // as healthy, for whichever handful of invariants happened to land in it.
+  const wrappers = new Set(checkStatements().slice(1).map((st) =>
+    st.slice(0, st.indexOf("FROM (")).replace(/^\s*--.*$/gm, "").replace(/\s+/g, " ").trim()));
+  ck("and every invariant statement carries the same verdict rule",
+    checkStatements().length > 2 && wrappers.size === 1,
+    `${wrappers.size} distinct wrappers across ${checkStatements().length - 1} statements`);
 
   // AND THE VERDICT COLUMN AGREES WITH THE NUMBERS, which is the half a
   // reader cannot check for themselves. CHECK.sql computes 'ok' / 'NOT RUN' /
@@ -314,8 +325,11 @@ console.log("\n-- and a problem sorts to the top --");
   // assertion: not "it is somewhere in the list sorted correctly", but that
   // the thing wrong with their database is the FIRST thing they see.
   // Problems sort to the top OF THEIR OWN STATEMENT -- the invariants are
-  // statement 2, so that is where a broken row has to surface.
-  const inv = parts[1] || [];
+  // spread over five of them, so the statement to read is the one this row
+  // landed in rather than a position in the file. Hard-coding `parts[1]` would
+  // have been right today and wrong the moment an invariant is added, which is
+  // the same thing as not checking it.
+  const inv = parts.find((p) => p.some((r) => r.name === "m039_unowned")) || [];
   ck("and it is the first row of the statement it is in", inv[0]?.name === "m039_unowned",
     `first row is ${inv[0]?.name}`);
   ck("and everything after the problems reads ok",

@@ -1,12 +1,14 @@
 -- Which migrations has this database actually had?
 --
--- Paste this into the D1 console. It is TWO statements: run the first, read
--- it, then run the second. Each answers a different question and neither can
--- be folded into the other -- see WHY IT IS TWO, below.
+-- Paste this into the D1 console ONE STATEMENT AT A TIME, in order, reading
+-- each answer before the next. There are six, separated by blank lines and
+-- marked `===== STATEMENT n of 6`. Statement 1 answers "did I run that one?"
+-- and statements 2 to 6 answer "is anything wrong?" -- see WHY IT IS SIX,
+-- below, because the count is forced rather than chosen.
 --
 -- READ THE FIRST COLUMN AND NOTHING ELSE. `verdict` is 'ok', or it names what
--- to do, and the rows that are not ok sort to the TOP. If the first row says
--- ok then every one of them does.
+-- to do, and the rows that are not ok sort to the TOP. If the first row of a
+-- statement says ok then every row of it does.
 --
 --   NOT RUN       that migration has not been applied. Paste it.
 --   BROKEN ROWS   an invariant found rows that should not exist. It is not a
@@ -19,10 +21,10 @@
 -- rather than silent -- which is the difference between a column like this and
 -- a check query that quietly answers a different question.
 --
--- WHY IT IS TWO STATEMENTS, AND WHY THE FIRST ONE IS A LIST RATHER THAN SQL.
+-- WHY IT IS SIX STATEMENTS, AND WHY THE FIRST ONE IS A LIST RATHER THAN SQL.
 --
--- This file has now been refused by D1 twice, for two different limits, and
--- the second refusal was caused by the fix for the first:
+-- D1 has refused this file three times, for two different limits, and the
+-- second refusal was caused by the fix for the first:
 --
 --   ONE ROW OF 110 COLUMNS -> `too many columns in result set`. D1 refuses a
 --   result set wider than 100. Unrunnable from migration 063, which took it
@@ -35,28 +37,39 @@
 --   and terms are capped too. A fix that trades one ceiling for another is not
 --   a fix, it is the same bug wearing the next limit along.
 --
--- So the half that GROWS -- one did-I-run-it check per migration -- is now
--- DATA rather than SQL. Seventy-nine checks are one list inside statement 1
--- and cost ZERO compound terms between them, so adding a migration can never
--- move this file toward either limit again. What is left as SQL is the
--- invariants, which are arbitrary queries that cannot be expressed as data;
--- there are 31, so statement 2 has 31 terms where the file used to have 110.
+--   AND THEN 31 ROWS VIA UNION ALL -> the same error again. The note written
+--   at THAT point said 31 terms "accepts this", on no evidence beyond 110
+--   having been refused. D1's compound limit is somewhere below 31 and nobody
+--   here knows where: the console is the only place it can be measured, and
+--   measuring it costs a round trip to the person holding the iPad.
 --
--- THAT IS A SMALLER CEILING, NOT NO CEILING, which is the thing the last note
--- got wrong and this one will not: an invariant still costs a term, and
--- nobody here knows D1's exact limit -- only that it refused 110 and accepts
--- this. If statement 2 is ever refused, split it, do not re-describe it.
+-- So the half that GROWS -- one did-I-run-it check per migration -- is DATA
+-- rather than SQL. Seventy-nine checks are one list inside statement 1 and
+-- cost ZERO compound terms between them, so adding a migration can never move
+-- this file toward either limit again.
 --
--- Adding a did-I-run-it check is ONE LINE in statement 1's list. The comment
--- above it sits between the concatenated pieces, so each entry keeps the
--- record of why it exists.
+-- What is left as SQL is the invariants, which are arbitrary queries that
+-- cannot be expressed as data. There are 31, and they are SPLIT ACROSS FIVE
+-- STATEMENTS of seven terms and under -- not because seven is a figure read
+-- off a spec, but because a number far below the one that was refused is the
+-- only kind that can be trusted without a measurement. The previous note's
+-- own instruction when this happened was "split it, do not re-describe it",
+-- and that is what this is: the same thirty-one expressions, the same verdict
+-- wrapper on each, in smaller pieces. A third redesign would have been a
+-- third unverified ceiling.
+--
+-- Adding an INVARIANT is a term, so a new one goes in whichever statement has
+-- room; past seven, add a statement rather than lengthening one. Adding a
+-- did-I-run-it check is ONE LINE in statement 1's list, and the comment above
+-- it sits between the concatenated pieces, so each entry keeps the record of
+-- why it exists.
 --
 -- It exists because "did I run that one?" came up after nearly every round,
 -- and the honest answer from a chat thread is a guess. Safe to run as often
 -- as you like: it reads nothing but the table definitions and changes
 -- nothing.
 
--- ===== STATEMENT 1 of 2 -- did I run that one? =====================
+-- ===== STATEMENT 1 of 6 -- did I run that one? =====================
 --
 -- A few rows count SEVERAL columns at once, so they answer with how many they
 -- found rather than 1. That is why the list carries a column NAME LIST rather
@@ -228,22 +241,29 @@ FROM (
 -- always in the same order as another's.
 ORDER BY verdict = 'ok', name;
 
--- ===== STATEMENT 2 of 2 -- is anything WRONG? ======================
+-- ===== STATEMENTS 2 TO 6 -- is anything WRONG? =====================
 --
 -- These are not migrations. Every one counts BROKEN ROWS, so 0 is the good
 -- answer and anything above 0 is a bug report about a route rather than a
 -- missing paste. They are SQL and not data because each asks its own question.
 --
+-- FIVE STATEMENTS RATHER THAN ONE, and the split is the only thing dividing
+-- them: the verdict wrapper below is repeated verbatim on each, every
+-- expression is unchanged, and which invariant landed in which statement means
+-- nothing at all. Run them in order and read the first row of each.
+--
 -- m031_hireable_without, m031_others_with and m039_unowned predate the
 -- `_inv_` marker and are named here for that reason; nothing new should join
 -- them without it.
--- THIS ONE IS NOT ALL INVARIANTS, which is why the verdict keeps the full
--- rule. Two of its rows are did-I-run-it checks that could not be written as
--- data: `m046_kind_check` is a tri-state read off the table's own DDL, and
+-- THESE ARE NOT ALL INVARIANTS, which is why the verdict keeps the full rule.
+-- Two of the rows are did-I-run-it checks that could not be written as data:
+-- `m046_kind_check` is a tri-state read off the table's own DDL, and
 -- `m046_subdomain_unique` has to ask which COLUMN an index covers, because
 -- schema.sql gets its uniqueness from an inline UNIQUE whose autoindex has no
 -- name to look up. Reading either as "0 is good" would report a healthy
 -- database as broken.
+
+-- ----- STATEMENT 2 of 6 -- invariants 1-7 of 31 -----
 SELECT
   CASE
     WHEN instr(name, '_inv_') > 0
@@ -334,7 +354,22 @@ UNION ALL
     WHERE r.status = 'paid' AND r.method = 'stripe'
       AND NOT EXISTS (SELECT 1 FROM wo_transfers t
                        WHERE t.release_id = r.id AND t.status IN ('paid','pending'))) AS value
-UNION ALL
+)
+ORDER BY verdict = 'ok', name;
+
+-- ----- STATEMENT 3 of 6 -- invariants 8-13 of 31 -----
+SELECT
+  CASE
+    WHEN instr(name, '_inv_') > 0
+      OR name IN ('m031_hireable_without', 'm031_others_with', 'm039_unowned')
+      THEN CASE WHEN value = 0 THEN 'ok' ELSE 'BROKEN ROWS' END
+    WHEN name = 'm046_kind_check'
+      THEN CASE WHEN value = 1 THEN 'RUN 046' ELSE 'ok' END
+    ELSE CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END
+  END AS verdict,
+  name,
+  value
+FROM (
   -- And the reverse, which is worse: money that left against a release
   -- nothing says was paid. That is a transfer nobody can reconcile.
   SELECT 'm051_inv_transfer_without_paid' AS name, (SELECT COUNT(*) FROM wo_transfers t
@@ -390,7 +425,22 @@ UNION ALL
   SELECT 'm054_inv_scoped_wrong_role' AS name, (SELECT COUNT(*) FROM membership_properties mp
      JOIN memberships m ON m.id = mp.membership_id
     WHERE m.role NOT IN ('pm', 'owner', 'tenant')) AS value
-UNION ALL
+)
+ORDER BY verdict = 'ok', name;
+
+-- ----- STATEMENT 4 of 6 -- invariants 14-19 of 31 -----
+SELECT
+  CASE
+    WHEN instr(name, '_inv_') > 0
+      OR name IN ('m031_hireable_without', 'm031_others_with', 'm039_unowned')
+      THEN CASE WHEN value = 0 THEN 'ok' ELSE 'BROKEN ROWS' END
+    WHEN name = 'm046_kind_check'
+      THEN CASE WHEN value = 1 THEN 'RUN 046' ELSE 'ok' END
+    ELSE CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END
+  END AS verdict,
+  name,
+  value
+FROM (
   -- Invariant, must read ZERO: a room on an inspection that is not there.
   -- The cascade covers a deleted inspection; this covers a row written
   -- against an id that never existed, which is what a route taking an id from
@@ -456,7 +506,22 @@ UNION ALL
   SELECT 'm058_inv_unknown_engaged_as' AS name, (SELECT COUNT(*) FROM engagements
     WHERE engaged_as IS NOT NULL
       AND engaged_as NOT IN ('subcontractor','handyman')) AS value
-UNION ALL
+)
+ORDER BY verdict = 'ok', name;
+
+-- ----- STATEMENT 5 of 6 -- invariants 20-25 of 31 -----
+SELECT
+  CASE
+    WHEN instr(name, '_inv_') > 0
+      OR name IN ('m031_hireable_without', 'm031_others_with', 'm039_unowned')
+      THEN CASE WHEN value = 0 THEN 'ok' ELSE 'BROKEN ROWS' END
+    WHEN name = 'm046_kind_check'
+      THEN CASE WHEN value = 1 THEN 'RUN 046' ELSE 'ok' END
+    ELSE CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END
+  END AS verdict,
+  name,
+  value
+FROM (
   -- Invariant, must read ZERO: a handyman on an account that has no buildings
   -- to maintain. `mayEngageHandyman` refuses it, so a row here is a route
   -- that stopped asking -- and it would be a maintenance worker excused their
@@ -520,7 +585,22 @@ UNION ALL
                        WHERE m.user_id = j.access_user_id
                          AND m.account_id = j.account_id
                          AND m.role = 'tenant')) AS value
-UNION ALL
+)
+ORDER BY verdict = 'ok', name;
+
+-- ----- STATEMENT 6 of 6 -- invariants 26-31 of 31 -----
+SELECT
+  CASE
+    WHEN instr(name, '_inv_') > 0
+      OR name IN ('m031_hireable_without', 'm031_others_with', 'm039_unowned')
+      THEN CASE WHEN value = 0 THEN 'ok' ELSE 'BROKEN ROWS' END
+    WHEN name = 'm046_kind_check'
+      THEN CASE WHEN value = 1 THEN 'RUN 046' ELSE 'ok' END
+    ELSE CASE WHEN value >= 1 THEN 'ok' ELSE 'NOT RUN' END
+  END AS verdict,
+  name,
+  value
+FROM (
   -- Invariant, must read ZERO: a summary row that says nothing, or one that
   -- does not record what it was written from.
   --
