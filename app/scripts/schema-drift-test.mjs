@@ -37,6 +37,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runCheck, checkSql, D1_MAX_COLUMNS } from "./lib/check-sql.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const M = join(app, "worker", "migrations");
@@ -164,10 +165,29 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
   // schema itself. It could not be run at all on a fresh database, because the
   // invariants read columns schema.sql did not have -- so the one tool for
   // spotting this drift was disabled BY the drift.
-  const sql = readFileSync(join(M, "CHECK.sql"), "utf8").replace(/;\s*$/, "");
-  let row = null, err = "";
-  try { row = fresh.prepare(sql).get(); } catch (e) { err = String(e.message); }
-  ck("it runs", !!row, err);
+  let row = null, err = "", width = 0;
+  try {
+    const first = fresh.prepare(checkSql()).all();
+    width = first.length ? Object.keys(first[0]).length : 0;
+    row = runCheck(fresh);
+  } catch (e) { err = String(e.message); }
+  ck("it runs", !!row && Object.keys(row).length > 0, err);
+
+  // AND IT IS NARROW ENOUGH FOR THE CONSOLE TO RETURN, which is the half this
+  // suite could not see. D1 refuses a result set wider than 100 columns with
+  // `too many columns in result set`; node:sqlite allows 2000. So this file was
+  // one row of 110 columns, green here and DEAD in the console -- unrunnable
+  // from migration 063, which took it from 100 to 102, and nobody found out
+  // for five migrations because the only place it is ever really run is an
+  // iPad. A guard that runs where nobody is looking is a guard that reports to
+  // nobody, which this repository had just finished recording about five red
+  // deploys.
+  //
+  // One row per check is two columns whatever gets added, so the assertion is
+  // on the SHAPE and not on a count of entries -- the entries are meant to
+  // grow without limit and a bound on them would come back.
+  ck("and the console will return it", width > 0 && width <= D1_MAX_COLUMNS,
+    `${width} columns, D1 allows ${D1_MAX_COLUMNS}`);
   if (row) {
     // On an empty database every did-I-run-it count is 1 and every invariant
     // is 0. That is the shape a new environment should report.

@@ -24,6 +24,7 @@
 
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
+import { runCheck } from "./lib/check-sql.mjs";
 import { whyNotDraft, readDrafts, draftSystem, draftContext, DRAFT_MODEL,
   DRAFT_SCHEMA, DRAFT_LONG_EDGE, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   MAX_CAPTION, DRAFT_REFUSALS, DRAFT_THINKING, draftThinking,
@@ -526,9 +527,7 @@ try {
     // CHECK.sql, by column name, so this cannot drift from the file an
     // operator actually pastes. Reverting either side to a raw comparison
     // fails the first assertion.
-    const CHECK = readFileSync(new URL("../worker/migrations/CHECK.sql", import.meta.url), "utf8")
-      .replace(/;\s*$/, "");
-    const invariant = (db) => db.prepare(CHECK).get().m057_inv_drafted_after_finish;
+    const invariant = (db) => runCheck(db).m057_inv_drafted_after_finish;
 
     const { db, env } = seed();
     const { id, roomId, photos } = await walkedRoom(env, { photos: 1 });

@@ -35,6 +35,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
+import { runCheck } from "./lib/check-sql.mjs";
 import { MAX_SUMMARY, SUMMARY_MODEL, SUMMARY_REFUSALS, SUMMARY_SCHEMA,
   countComments, readSummary, summaryShape, summarySource, summarySystem,
   summaryThinking, summaryUser, whyNotSummary } from "../shared/inspectsummary.js";
@@ -632,16 +633,16 @@ try {
     const { db, env } = seed();
     resetStub();
     await raise(env);
-    const clean = db.prepare(bare(CHECK)).get();
+    const clean = runCheck(db);
     ck("a real summary reads zero",
       clean.m063_inv_summary_empty === 0 && clean.m063_inspection_summary === 5,
       JSON.stringify([clean.m063_inspection_summary, clean.m063_inv_summary_empty]));
     db.prepare(`UPDATE inspection_summaries SET source = '  ' WHERE inspection_id = 'ins_out'`).run();
     ck("and a row that cannot say what it summarised is counted",
-      db.prepare(bare(CHECK)).get().m063_inv_summary_empty === 1);
+      runCheck(db).m063_inv_summary_empty === 1);
     db.prepare(`UPDATE inspection_summaries SET source = 'x', summary = '' WHERE inspection_id = 'ins_out'`).run();
     ck("so is one that says nothing",
-      db.prepare(bare(CHECK)).get().m063_inv_summary_empty === 1);
+      runCheck(db).m063_inv_summary_empty === 1);
   }
 
   console.log("\n-- the limit, because every press spends money --");

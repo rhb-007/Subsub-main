@@ -40,6 +40,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serveApp, launch, tally, wait } from "./lib/stub-stack.mjs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
+import { checkExpr } from "./lib/check-sql.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const root = join(app, "..");
@@ -547,16 +548,19 @@ const SITE = 5257;
 {
   console.log("\n-- CHECK.sql says whether 046 is needed --");
   const { DatabaseSync } = await import("node:sqlite");
-  const check = readFileSync(join(app, "worker", "migrations", "CHECK.sql"), "utf8");
-  const probe = check.match(/\(SELECT CASE[\s\S]*?AS m046_kind_check/);
-  t.ck("the probe was found in CHECK.sql", !!probe, "");
+  // By NAME rather than by a regex ending in the alias: CHECK.sql is one row
+  // per check now, so the alias is `AS value` and the name is a literal.
+  let probeSql = "";
+  try { probeSql = checkExpr("m046_kind_check"); } catch (e) { probeSql = ""; }
+  t.ck("the probe was found in CHECK.sql",
+    !!probeSql && /SELECT CASE/.test(probeSql), probeSql.slice(0, 50));
 
   const shapeOf = (ddl) => {
     const db = new DatabaseSync(":memory:");
     db.exec(ddl);
     // Just the probe, against just the table it reads. CHECK.sql as a whole
     // runs against a migrated database and schema.sql is not one.
-    const sql = `SELECT ${probe[0].replace(/ AS m046_kind_check$/, "")} AS v`;
+    const sql = `SELECT ${probeSql} AS v`;
     return db.prepare(sql).get().v;
   };
 

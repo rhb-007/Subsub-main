@@ -32,6 +32,7 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
+import { checkExpr, checkSql } from "./lib/check-sql.mjs";
 import { ALWAYS_SCOPED_ROLES, PROPERTY_SCOPED_ROLES,
   isPropertyScopedRole, isPropertyScoped } from "../shared/propscope.js";
 
@@ -233,11 +234,12 @@ console.log("\n-- 054 clears what the old door already left --");
 console.log("\n-- the invariant that finds it on a live database --");
 {
   const { db } = seed();
-  const CHECK = readFileSync(new URL("../worker/migrations/CHECK.sql", import.meta.url), "utf8");
-  const m = /\(SELECT COUNT\(\*\) FROM membership_properties mp[\s\S]*?\)\s+AS m054_inv_scoped_wrong_role/
-    .exec(CHECK);
-  ck("CHECK.sql counts the shape", !!m);
-  const q = m[0].replace(/\s+AS m054_inv_scoped_wrong_role$/, "");
+  // Read out of CHECK.sql by NAME rather than by a regex ending in the alias,
+  // which is what broke when that file became one row per check: the alias is
+  // `AS value` now and the name is a string literal.
+  let q = "";
+  try { q = checkExpr("m054_inv_scoped_wrong_role"); } catch (e) { q = ""; }
+  ck("CHECK.sql counts the shape", !!q && /membership_properties/.test(q), q.slice(0, 60));
   ck("and reads zero on a healthy database", db.prepare(`SELECT ${q} AS n`).get().n === 0,
     String(db.prepare(`SELECT ${q} AS n`).get().n));
   db.exec(`UPDATE memberships SET role = 'admin' WHERE id = 'm_pm'`);
@@ -247,7 +249,7 @@ console.log("\n-- the invariant that finds it on a live database --");
   // `_inv_` in the name is what tells schema-drift it is a must-be-zero count
   // rather than an unrun migration -- the trap that file already records.
   ck("and it says in its own name that it is an invariant",
-    /m054_inv_/.test(CHECK));
+    /m054_inv_/.test(checkSql()));
 }
 
 supa.close();

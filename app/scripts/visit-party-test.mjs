@@ -39,6 +39,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
+import { runCheck } from "./lib/check-sql.mjs";
 import { visitParties, waitingOn, visitSettled, waitingText, partyText, joinAnd,
   VISIT_PARTIES, PARTY_ORDER, nextToAnswer, mayAnswer } from "../shared/visitparty.js";
 
@@ -506,9 +507,7 @@ try {
         ('v_done','acc_pm','j1','u_mgr','2026-10-20','09:00','10:00','proposed','2026-09-20 14:00:00');
       UPDATE visits SET manager_at = '2026-09-20T14:00:00.000Z' WHERE id = 'v_done';
     `);
-    const CHECKSQL = readFileSync(join(app, "worker", "migrations", "CHECK.sql"), "utf8")
-      .replace(/;\s*$/, "");
-    const unstamped = () => db.prepare(CHECKSQL).get().m067_inv_manager_unstamped;
+    const unstamped = () => runCheck(db).m067_inv_manager_unstamped;
     const legOf = (id) => db.prepare(`SELECT manager_at FROM visits WHERE id = ?`).get(id).manager_at;
 
     // THE INVARIANT IS RUN AGAINST REAL ROWS, which is 057's lesson: every

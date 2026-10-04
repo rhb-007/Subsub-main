@@ -47,6 +47,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
+import { runCheck } from "./lib/check-sql.mjs";
 import { jobClosure, jobHold, jobIsLive, whyNotEnd, whyNotResume,
   ENDING_KINDS, CHOOSABLE_ENDINGS, ENDING_REFUSALS, isEndingKind } from "../shared/jobstate.js";
 
@@ -56,9 +57,7 @@ const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok 
 
 const { default: worker } = await import("../worker/index.js");
 const SCHEMA = readFileSync(join(app, "worker", "schema.sql"), "utf8");
-const CHECK = readFileSync(join(app, "worker", "migrations", "CHECK.sql"), "utf8")
-  .replace(/;\s*$/, "");
-const inv = (db, name) => db.prepare(CHECK).get()[name];
+const inv = (db, name) => runCheck(db)[name];
 
 const day = (n) => {
   const d = new Date(); d.setDate(d.getDate() + n);

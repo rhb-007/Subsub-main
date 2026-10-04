@@ -32,6 +32,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
+import { runCheck } from "./lib/check-sql.mjs";
 import { AUTO_TRIES, TURNAROUND_KINDS, isTurnaroundKind, rankCandidates,
   slotFor, whyNotAuto, autoPickText } from "../shared/autopick.js";
 import { nextToAnswer } from "../shared/visitparty.js";
@@ -44,9 +45,7 @@ const { default: worker } = await import("../worker/index.js");
 const SCHEMA = readFileSync(join(app, "worker", "schema.sql"), "utf8");
 // Read out of the real CHECK.sql by column name, so the assertion cannot
 // drift from the file an operator pastes.
-const CHECK = readFileSync(join(app, "worker", "migrations", "CHECK.sql"), "utf8")
-  .replace(/;\s*$/, "");
-const inv = (db, name) => db.prepare(CHECK).get()[name];
+const inv = (db, name) => runCheck(db)[name];
 
 // A 2026 Monday, so the weekday arithmetic is readable in the assertions.
 const MON = "2026-10-05";

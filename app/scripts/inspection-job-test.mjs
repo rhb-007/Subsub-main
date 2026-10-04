@@ -33,6 +33,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
+import { runCheck } from "./lib/check-sql.mjs";
 import { suggestedAccessForInspection, contractorInspectionShape } from "../shared/inspection.js";
 import { accessTenant, canAskTenant, accessFor } from "../shared/access.js";
 
@@ -416,10 +417,9 @@ try {
     // RUN AGAINST REAL ROWS, which is the lesson 057 paid for: every invariant
     // reads zero on an empty database, so one that is subtly wrong passes for
     // ever. Seeded both ways here.
-    const bare = (s) => s.replace(/--[^\n]*/g, "");
     const { db, env } = seed();
     const [, b] = await json(await raise(env, "ins_in"));
-    const clean = db.prepare(bare(CHECK)).get();
+    const clean = runCheck(db);
     ck("a real move-in job reads zero",
       clean.m062_inv_access_not_a_tenant === 0 && clean.m062_job_access_user === 1,
       JSON.stringify([clean.m062_job_access_user, clean.m062_inv_access_not_a_tenant]));
@@ -427,8 +427,8 @@ try {
     // no tenant seat is a confirmation step waiting on nobody.
     db.prepare(`UPDATE jobs SET access_user_id = 'u_mgr' WHERE id = ?`).run(b.jobId);
     ck("and names one that does not",
-      db.prepare(bare(CHECK)).get().m062_inv_access_not_a_tenant === 1,
-      String(db.prepare(bare(CHECK)).get().m062_inv_access_not_a_tenant));
+      runCheck(db).m062_inv_access_not_a_tenant === 1,
+      String(runCheck(db).m062_inv_access_not_a_tenant));
   }
 } catch (err) {
   fail++; console.log("FAIL  threw:", err?.stack || err);

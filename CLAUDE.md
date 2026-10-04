@@ -8867,6 +8867,78 @@ refactor.
   columns it reads — `ALTER TABLE accounts DROP COLUMN auto_turnaround` is what
   reproduces an unmigrated database without taking the sign-in with it.
 
+- **`CHECK.sql` HAD BEEN UNRUNNABLE IN THE CONSOLE FOR FIVE MIGRATIONS, AND
+  THE SUITE THAT GUARDS IT WAS GREEN THROUGHOUT.** Pasted it to verify 063–067
+  and got `too many columns in result set: SQLITE_ERROR`. **D1 refuses a result
+  set wider than 100 columns.** The file was one row of 110, and 062 landed on
+  exactly 100 — so **063 is the migration that killed it**, taking it to 102,
+  and nothing has been able to answer *did I run that one?* since.
+
+  **WHICH IS THIS FILE'S OLDEST SHAPE, pointed at the tool that exists to catch
+  it.** The entry about `schema.sql` drift says it in so many words: *CHECK.sql
+  could not even be run against a fresh database, so the one tool for spotting
+  the drift was disabled BY the drift.* That was fixed. This is the same
+  sentence with a different cause — **disabled by its own growth** — and the
+  one place it is ever really run is an iPad, so the only way to find out was to
+  paste it.
+
+  **AND `schema-drift-test` PASSED EVERY TIME, because node:sqlite allows 2000
+  columns where D1 allows 100.** The assertion was *it runs*, which was true
+  locally and false where it matters. **A guard that runs where nobody is
+  looking is a guard that reports to nobody** — written here one release ago
+  about five red deploys, found again inside the suite built to catch this
+  class. The new assertion reads the **width** and names the ceiling, and the
+  mutation that proves it is the old file: `110 columns, D1 allows 100`.
+
+  **ONE ROW PER CHECK, which is the shape that cannot come back.** `name` and
+  `value`, 109 `UNION ALL`s. A bound on the number of entries would be the same
+  bug waiting — entries are meant to grow with the folder — so the fix is a
+  shape with no ceiling and an assertion on **two columns** rather than on a
+  count. It also reads better on the device it is used from: a list of 110 named
+  rows rather than one row 110 columns wide.
+
+  **Splitting the paste in half was the obvious alternative and is refused**,
+  in this file's own words about why `npm run paste` has no `check`
+  sub-command: *a check query that is subtly wrong is worse than none.* Two
+  hand-split pastes is two records of one fact, and the half somebody skips is
+  the half that was going to report something.
+
+  **`runCheck(db)` IS A HELPER BECAUSE SIX SUITES READ IT BY COLUMN NAME.**
+  `db.prepare(CHECK).get().m057_inv_drafted_after_finish` was written out in
+  `schema-drift`, `photo-draft`, `job-end`, `auto-turnaround`, `visit-party`
+  and `inspect-summary` — so a change to the file's shape was six edits, which
+  is how five of them would have been made and one forgotten. The helper hands
+  back the object they all already wanted, so the thing a later change has to
+  keep is **the function's** shape and not the file's.
+
+  **THE CONVERTER COST FOUR ATTEMPTS AND EACH FAILURE IS THE SAME CLASS: SQL
+  COMMENTS ARE NOT INERT.** Splitting 110 entries on top-level commas needs a
+  scanner that skips strings **and** comments, because this file's comments
+  carry a **comma** (031's note on `HIREABLE_KINDS`), carry a **semicolon** —
+  which made `indexOf(";")` truncate the scan at entry 21 and silently produce
+  22 chunks out of 110 — and because `m046_kind_check` compares against
+  `'%CHECK (kind IN%'`, a **string literal holding an unmatched paren**. Fifth,
+  sixth and seventh instances of *a comment reads to a scanner exactly like the
+  code it describes*, in one afternoon, in one file.
+
+  And the statement's `;` is **not at end of file**: a note about why 064 has no
+  invariant sits after it, which `.get()` never saw because SQLite stops at the
+  semicolon. The terminator has to be found by the same scan.
+
+  **The header was rewritten rather than left**, because it said *read the row*
+  and *MOST columns answer 1* over a file that no longer produces either — and
+  that header already records being wrong once about exactly this, when it
+  claimed every column answers 1 and a healthy database read four zeros. **A
+  comment describing a shape the file no longer has is the screen-that-lies rule
+  with nothing on screen to contradict it.**
+
+  **Still open, and worth a decision rather than a guess:** nothing anywhere
+  runs `CHECK.sql` against D1 itself. The width guard closes the one failure
+  that was live, but a query that D1 rejects for some *other* reason — a
+  pragma it does not serve, a function it lacks — would pass here and fail in
+  the console exactly as this did. The only real check is pasting it, which is
+  what found this.
+
 
 ## Working here
 
