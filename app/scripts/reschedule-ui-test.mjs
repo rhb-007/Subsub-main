@@ -143,7 +143,22 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/visits") return [200, VISITS()];
   if (/^\/api\/jobs\/[^/]+\/visits$/.test(path) && method === "POST") {
     sent.push({ path, body });
-    return [201, { ok: true, status: "proposed" }];
+    // THE ROW, as the real route answers. It returned `{ok, status}` with no
+    // id, date or jobId -- a shape the product never produces, so the card it
+    // was proposed on silently lost its window and then drew the no-time
+    // branch. A test that stores a shape the product never produces is a test
+    // of its own fixture.
+    // The ROW itself, which is what the route answers and what the browser
+    // puts straight into its list -- not wrapped in an envelope.
+    const jobId = path.split("/")[3];
+    return [201, {
+      id: `v-${jobId}-new`, jobId, status: "proposed", date: body.date,
+      startTime: body.startTime || null, endTime: body.endTime || null,
+      note: body.note || "", tenantNote: null, respondedAt: null,
+      contractorAt: null, contractorNote: null, managerAt: new Date().toISOString(),
+      turn: "contractor", waitingOn: ["contractor"], proposedBy: "u_mgr",
+      parties: ["contractor", "manager"], createdAt: new Date().toISOString(),
+    }];
   }
   if (/^\/api\/work-orders\/[^/]+\/plan$/.test(path))
     return [200, { valueCents: 40000, milestones: [], releases: [], retainageBps: 0 }];
@@ -322,6 +337,18 @@ try {
     return {
       lede: txt(".vm-lede"), when: txt(".vm-when"), note: txt(".vm-note"),
       btns: [...el.querySelectorAll("button")].map((b) => b.innerText.trim()),
+      // THE SIZE, measured. These were `btn-solid sm` / `btn-ghost sm` --
+      // and `.sm` is not a size this stylesheet defines, so the modifier did
+      // nothing and the pair read as ordinary form buttons at the foot of a
+      // long card. Which is the report: *"a bit hidden right now especially
+      // on the property manager side"*. Every assertion about the WORDS above
+      // passes over that.
+      acts: [...el.querySelectorAll(".vacts .vact")].map((b) => ({
+        label: b.innerText.trim(),
+        kind: [...b.classList].find((k) => k.startsWith("vact-"))?.slice(5) || null,
+        h: Math.round(b.getBoundingClientRect().height),
+        px: parseFloat(getComputedStyle(b).fontSize),
+      })),
       // Every propose control on the WHOLE card, which is the duplicate the
       // report was about -- one inside this panel and one under it.
       proposers: [...card.querySelectorAll("button")]
@@ -365,6 +392,22 @@ try {
     (ours.states || []).length > 0 && ours.states.every((d) => d === "block"),
     JSON.stringify(ours.states));
 
+  // AND IT IS THE SAME CONTROL THE CREW AND THE TENANT GET. One `.vacts` row,
+  // one size, three sides -- which is the whole of this change: the words on
+  // each side were already right and the controls were not. A manager panel
+  // pointed back at its own buttons passes every wording assertion above.
+  t.ck("the hiring side's answers are the shared control",
+    (ours.acts || []).length === 2, JSON.stringify(ours.acts));
+  t.ck("at the same size the other two sides get",
+    (ours.acts || []).length === 2
+      && ours.acts.every((a) => a.h >= 44 && a.px >= 15), JSON.stringify(ours.acts));
+  // One commitment, and approving is it. Two solid buttons of equal weight
+  // make somebody stop and read both.
+  t.ck("approving is the one commitment",
+    (ours.acts || []).filter((a) => a.kind === "yes").length === 1
+      && /Approve/i.test((ours.acts || []).find((a) => a.kind === "yes")?.label || ""),
+    JSON.stringify(ours.acts));
+
   console.log("\n-- and a job we are not owed an answer on keeps the one button --");
   {
     const other = await page.evaluate(() => {
@@ -374,6 +417,7 @@ try {
         panel: !!card?.querySelector(".visit-mine"),
         proposers: [...(card?.querySelectorAll("button") || [])]
           .map((b) => b.innerText.trim()).filter((t) => /propose/i.test(t)),
+        all: [...(card?.querySelectorAll("button") || [])].map((b) => b.innerText.trim()),
       };
     });
     // THE OTHER BRANCH, IN THE SAME PLACE. A change that hid the standalone
@@ -383,6 +427,57 @@ try {
     t.ck("and the standalone propose button is still there",
       other.proposers?.length === 1 && /different time/i.test(other.proposers[0]),
       JSON.stringify(other.proposers));
+  }
+
+  // AND ON A JOB WITH NO TIME AT ALL THE FORM IS ALREADY OPEN, which is why
+  // there is no "set a time" button and must not be one. `open` starts true
+  // without a visit, so the primary action on work nobody has scheduled is
+  // filling the form in -- and a button beside it reading "Set a time for
+  // this job" could never draw. The first version of this change carried
+  // exactly that label: a correct-looking piece with no way in, in miniature,
+  // found only by driving the branch. Asserted so a later pass that adds one
+  // back has to notice it is unreachable.
+  console.log("\n-- a job with no time opens the form rather than a button --");
+  await openCard(page, "tap washer");
+  await wait(600);
+  {
+    const none = await page.evaluate(() => {
+      const card = [...document.querySelectorAll(".job-card")]
+        .find((el) => /tap washer/i.test(el.querySelector("h3")?.innerText || ""));
+      const el = card?.querySelector(".visit-block");
+      if (!el) return { missing: true };
+      return {
+        state: (el.querySelector(".visit-state")?.innerText || "").replace(/\s+/g, " ").trim(),
+        form: !!el.querySelector(".visit-form"),
+        acts: [...el.querySelectorAll(".vacts .vact")].map((b) => b.innerText.trim()),
+      };
+    });
+    t.ck("the block is drawn on a job with no time", none.missing !== true, JSON.stringify(none));
+    t.ck("and says there is no time yet",
+      /no time proposed yet/i.test(none.state || ""), none.state);
+    t.ck("the form is already open on it", none.form === true, JSON.stringify(none));
+    t.ck("so there is no button offering to set one",
+      (none.acts || []).length === 0, JSON.stringify(none.acts));
+  }
+
+  // THE OTHER BRANCH, IN THE SAME PLACE. With a window already live the form
+  // is closed and the one control is the second answer -- outlined, because
+  // replacing a time somebody has agreed is not what anybody came for.
+  {
+    const live = await page.evaluate(() => {
+      const card = [...document.querySelectorAll(".job-card")]
+        .find((el) => /leaking sink/i.test(el.querySelector("h3")?.innerText || ""));
+      return [...(card?.querySelectorAll(".vacts .vact") || [])].map((b) => ({
+        label: b.innerText.trim(),
+        kind: [...b.classList].find((k) => k.startsWith("vact-"))?.slice(5) || null,
+        h: Math.round(b.getBoundingClientRect().height),
+      }));
+    });
+    t.ck("a live window gets one control, the shared size",
+      live.length === 1 && live[0].h >= 44, JSON.stringify(live));
+    t.ck("and it is the second answer rather than the commitment",
+      live[0]?.kind === "alt" && /Propose a different time/.test(live[0]?.label || ""),
+      JSON.stringify(live));
   }
 
   console.log("\n-- and an unapproved request still gets none --");

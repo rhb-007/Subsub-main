@@ -13177,20 +13177,26 @@ function TenantVisitAsk({ visit, brandName, onRespond }) {
         <>
           <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
             placeholder="When would work instead? e.g. weekday mornings, or any time after 5" />
-          <div className="tn-visit-actions">
-            <button className="btn-ghost" onClick={() => setSaying(false)} disabled={!!busy}>Back</button>
-            <button className="btn-solid" onClick={() => answer("declined")} disabled={!!busy}>
-              {busy === "declined" ? "Sending…" : "Send — that time doesn't work"}
-            </button>
-          </div>
+          <VisitActs acts={[
+            { kind: "quiet", label: "Back", disabled: !!busy, onClick: () => setSaying(false) },
+            { kind: "no", label: "Send — that time doesn't work", disabled: !!busy,
+              busy: busy === "declined" ? "Sending…" : null,
+              onClick: () => answer("declined") },
+          ]} />
         </>
       ) : (
-        <div className="tn-visit-actions">
-          <button className="btn-ghost" onClick={() => setSaying(true)} disabled={!!busy}>That doesn't work</button>
-          <button className="btn-solid" onClick={() => answer("confirmed")} disabled={!!busy}>
-            <Check size={15} /> {busy === "confirmed" ? "Confirming…" : "Yes, confirm"}
-          </button>
-        </div>
+        /* THE SAME ROW THE CREW AND THE HIRING SIDE GET. These were the
+           default form buttons, right-aligned at the bottom of the panel --
+           smaller than the crew's and in the opposite order, so one party to
+           an appointment was answering a different-looking question from the
+           other. Yes leads here as it does there. */
+        <VisitActs acts={[
+          { kind: "yes", label: "Yes, that works", icon: <Check size={17} />,
+            disabled: !!busy, busy: busy === "confirmed" ? "Confirming…" : null,
+            onClick: () => answer("confirmed") },
+          { kind: "no", label: "That doesn't work", disabled: !!busy,
+            onClick: () => setSaying(true) },
+        ]} />
       )}
       {err && <p className="billing-err" role="alert">{err}</p>}
     </div>
@@ -13448,20 +13454,23 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
           {/* "Agree it" is British. So was "has put forward" above it. */}
           <p className="vm-note">Approve it and {parties.includes("tenant")
             ? <>{name} is asked to confirm.</> : <>the job is booked.</>}</p>
-          <div className="jr-vis-acts">
-            <button className="btn-solid sm" onClick={() => onAnswerVisit(visit.id, "confirmed")}>
-              <CheckCircle2 size={14} /> Approve this time
-            </button>
-            {/* ONE NAME FOR ONE ACTION. This read "Propose another" directly
-                above a button reading "Propose a different time" that does
-                exactly the same thing -- two names for one object, which is
-                how somebody concludes there are two of them. The one below is
-                withheld while this panel is up, so there is also only one of
-                them on screen. */}
-            <button className="btn-ghost sm" onClick={() => setOpen(true)}>
-              <Clock size={13} /> Propose a different time
-            </button>
-          </div>
+          {/* ONE NAME FOR ONE ACTION. This read "Propose another" directly
+              above a button reading "Propose a different time" that does
+              exactly the same thing -- two names for one object, which is how
+              somebody concludes there are two of them. The one below is
+              withheld while this panel is up, so there is also only one of
+              them on screen.
+              And at the SAME SIZE the crew and the tenant get, through the
+              same component: these were `btn-solid sm` and `btn-ghost sm`,
+              where `.sm` is not a size this stylesheet defines -- so the
+              modifier did nothing and the pair read as ordinary form buttons
+              at the foot of a long card. */}
+          <VisitActs acts={[
+            { kind: "yes", label: "Approve this time", icon: <CheckCircle2 size={17} />,
+              onClick: () => onAnswerVisit(visit.id, "confirmed") },
+            { kind: "alt", label: "Propose a different time", icon: <Clock size={16} />,
+              onClick: () => setOpen(true) },
+          ]} />
         </div>
       )}
       {visit?.status === "proposed" && !visitMayAnswer(visit, parties, "manager") && (
@@ -13518,9 +13527,21 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
         /* WITHHELD WHILE THE ANSWER PANEL IS UP, because that panel carries
            this exact button. Two of one control, one above the other, both
            opening the same form -- the second of which was named differently,
-           so it read as a second thing to do rather than the same thing
-           twice. */
-        <button className="btn-ghost sm" onClick={() => setOpen(true)}>Propose a different time</button>
+           so it read as a second thing to do rather than the same thing twice.
+
+           IT IS ALWAYS THE SECOND ANSWER, and there is deliberately no
+           "set a time" variant of it: `open` starts true on a job with no
+           visit, so on work nobody has scheduled the FORM is already on
+           screen and the primary action is filling it in. A button here
+           reading "Set a time for this job" could never draw -- the first
+           version of this carried one, which is a label with no way in, in
+           miniature. With a window live, replacing a time somebody has
+           already agreed is not what anybody came to the card to do, so
+           outlined rather than solid. */
+        <VisitActs acts={[
+          { kind: "alt", icon: <Clock size={16} />, label: "Propose a different time",
+            onClick: () => setOpen(true) },
+        ]} />
       )}
     </div>
   );
@@ -24997,6 +25018,46 @@ function MyDocRow({ sub, kind, label, Icon, brandName, onUploadDoc, onDeleteDoc 
 // `not_open`, a dropped connection -- left the card exactly as it was. That is
 // the save-that-reports-success shape, on the press that decides whether a
 // crew is expected.
+// ANSWERING A PROPOSED TIME, AT ONE SIZE, ON ALL THREE SIDES.
+//
+// Asked for after a round of screenshots: *"All the scheduling call-to-actions
+// on the tenant side, the property manager side and the contractor/handyman
+// side need to be well designed, very clear. They're a bit hidden right now,
+// especially on the property manager side... large buttons, make it easy to
+// select propose a new time."*
+//
+// The same question -- can you make this time -- was asked in three places and
+// drawn three ways. The contractor had a purpose-built row; the tenant had
+// right-aligned default buttons; the manager had `btn-solid sm` and
+// `btn-ghost sm`, where `.sm` is not a size this stylesheet defines at all, so
+// the modifier did nothing and the pair read as ordinary form buttons at the
+// foot of a long card. Three implementations of one interaction is three
+// places for it to drift, and it had.
+//
+// One row, one size. The WORDS stay with each side, because the tenant, the
+// crew and the hiring account are being asked genuinely different things and
+// each side's sentence is already right -- what was wrong is that the controls
+// did not look like the thing to do.
+//
+// `kind` carries the meaning rather than the caller picking colours: `yes` is
+// the commitment, `alt` is proposing another time, `no` is declining, `quiet`
+// is a way back out. A caller choosing a class is a caller who can make the
+// decline look like the commitment.
+const VISIT_ACT_KINDS = ["yes", "alt", "no", "quiet"];
+function VisitActs({ acts }) {
+  return (
+    <div className="vacts">
+      {(acts || []).filter(Boolean).map((a) => (
+        <button key={a.label} type="button"
+          className={`vact vact-${VISIT_ACT_KINDS.includes(a.kind) ? a.kind : "alt"}`}
+          onClick={a.onClick} disabled={!!a.disabled}>
+          {a.icon}{a.busy || a.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function VisitAnswer({ when, job, canAnswer, onAnswer, onPropose, onOpenClient, clientName }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -25037,32 +25098,31 @@ function VisitAnswer({ when, job, canAnswer, onAnswer, onPropose, onOpenClient, 
             <>
               <input className="vans-why" value={note} onChange={(e) => setNote(e.target.value)}
                 placeholder="Why not? e.g. already booked that morning (optional)" />
-              <div className="vans-acts">
-                <button className="btn-ghost sm" onClick={() => { setSaying(false); setErr(""); }} disabled={!!busy}>Back</button>
-                <button className="vans-no" onClick={() => answer("declined")} disabled={!!busy}>
-                  {busy === "declined" ? "Sending…" : "Send — I can't make it"}
-                </button>
-              </div>
+              <VisitActs acts={[
+                { kind: "quiet", label: "Back", disabled: !!busy,
+                  onClick: () => { setSaying(false); setErr(""); } },
+                { kind: "no", label: "Send — I can't make it", disabled: !!busy,
+                  busy: busy === "declined" ? "Sending…" : null,
+                  onClick: () => answer("declined") },
+              ]} />
             </>
           ) : (
-            <div className="vans-acts">
-              <button className="vans-yes" onClick={() => answer("confirmed")} disabled={!!busy}>
-                <CheckCircle2 size={16} /> {busy === "confirmed" ? "Confirming…" : "Yes, I'll be there"}
-              </button>
-              {/* The same words the hiring side's panel uses, because it is
-                  the same act on the same object. "Propose another time" here
-                  and "Propose a different time" there is two names for one
-                  thing, read by the two parties to one appointment.
-                  The SERVICE CALL flow keeps "Propose another date"
-                  deliberately: a return date is not a window, and matching the
-                  wording there would name the wrong thing. */}
-              <button className="vans-alt" onClick={onPropose} disabled={!!busy}>
-                <Calendar size={14} /> Propose a different time
-              </button>
-              <button className="vans-skip" onClick={() => setSaying(true)} disabled={!!busy}>
-                Can't make it
-              </button>
-            </div>
+            /* The same words the hiring side's panel uses, because it is the
+               same act on the same object. "Propose another time" here and
+               "Propose a different time" there is two names for one thing,
+               read by the two parties to one appointment. The SERVICE CALL
+               flow keeps "Propose another date" deliberately: a return date is
+               not a window, and matching the wording there would name the
+               wrong thing. */
+            <VisitActs acts={[
+              { kind: "yes", label: "Yes, I'll be there", icon: <CheckCircle2 size={17} />,
+                disabled: !!busy, busy: busy === "confirmed" ? "Confirming…" : null,
+                onClick: () => answer("confirmed") },
+              { kind: "alt", label: "Propose a different time", icon: <Calendar size={16} />,
+                disabled: !!busy, onClick: onPropose },
+              { kind: "no", label: "Can't make it", disabled: !!busy,
+                onClick: () => setSaying(true) },
+            ]} />
           )}
         </>
       ) : (
@@ -25074,11 +25134,10 @@ function VisitAnswer({ when, job, canAnswer, onAnswer, onPropose, onOpenClient, 
         <>
           <p className="vans-q">This time has to be answered
             on {clientName ? `${clientName}'s` : "their"} account.</p>
-          <div className="vans-acts">
-            <button className="vans-yes" onClick={onOpenClient}>
-              <ArrowUpDown size={15} /> Open {clientName || "that account"} to answer
-            </button>
-          </div>
+          <VisitActs acts={[
+            { kind: "yes", icon: <ArrowUpDown size={16} />,
+              label: `Open ${clientName || "that account"} to answer`, onClick: onOpenClient },
+          ]} />
         </>
       )}
       {err && <p className="vans-err" role="alert"><AlertTriangle size={13} /> {err}</p>}
@@ -33089,25 +33148,41 @@ strong.insp-name{background:none;border:0;padding:0}
 .vans-q{margin:10px 0 8px;font-size:13.5px;font-weight:700;color:var(--ink)}
 .vans-why{width:100%;margin:0 0 9px;padding:9px 10px;border-radius:9px;
   border:1px solid var(--line);background:#fff;font-size:13px;color:var(--ink)}
-.vans-acts{display:flex;flex-wrap:wrap;gap:8px}
-.vans-yes,.vans-alt,.vans-no,.vans-skip{display:inline-flex;align-items:center;
-  justify-content:center;gap:7px;border-radius:10px;font-weight:700;cursor:pointer;
-  padding:11px 14px;font-size:13.5px;border:1px solid transparent}
-.vans-yes,.vans-no{background:var(--brand);border-color:var(--brand);color:#fff}
-.vans-yes:hover,.vans-no:hover{background:var(--brand-dk);border-color:var(--brand-dk)}
-.vans-alt{background:#fff;border-color:#dcc08a;color:var(--amber-ink)}
-.vans-alt:hover{background:#fff8ec}
-.vans-skip{background:transparent;color:var(--ink-soft);padding:11px 10px}
-.vans-skip:hover{color:var(--ink);text-decoration:underline}
-.vans-yes[disabled],.vans-alt[disabled],.vans-no[disabled],.vans-skip[disabled]{opacity:.6;cursor:default}
+/* THE ONE SCHEDULING ACTION ROW, and the size is the whole point of it.
+   46px tall and 15px, because these are pressed on a phone on a job site and
+   on an iPad -- and because the manager's pair were ordinary form buttons at
+   the foot of a long card, which is what "a bit hidden" meant. They share the
+   row and go full width when there is not room for two, so nothing ends up
+   half a button wide. */
+.vacts{display:flex;flex-wrap:wrap;gap:9px;margin-top:10px}
+.vact{flex:1 1 auto;min-width:168px;min-height:46px;display:inline-flex;
+  align-items:center;justify-content:center;gap:8px;padding:11px 16px;
+  border-radius:11px;border:1px solid transparent;font:inherit;font-size:15px;
+  font-weight:700;line-height:1.2;cursor:pointer;text-align:center}
+.vact-yes{background:var(--brand);border-color:var(--brand);color:#fff}
+.vact-yes:hover{background:var(--brand-dk);border-color:var(--brand-dk)}
+/* Proposing another time is the second real answer, not a way out -- outlined
+   rather than filled, because two solid buttons of equal weight make somebody
+   stop and read both, which is the rule the review modal already records. */
+.vact-alt{background:#fff;border-color:#dcc08a;color:var(--amber-ink)}
+.vact-alt:hover{background:#fff8ec}
+.vact-no{background:#fff;border-color:var(--line);color:var(--ink)}
+.vact-no:hover{background:var(--paper)}
+/* A way back out of a form, which is not an answer and must not look like one.
+   It does not take a share of the row. */
+.vact-quiet{flex:0 0 auto;min-width:0;background:transparent;border-color:transparent;
+  color:var(--ink-soft);font-weight:600}
+.vact-quiet:hover{color:var(--ink);text-decoration:underline}
+.vact[disabled]{opacity:.55;cursor:default}
+@media (max-width:560px){ .vact{flex:1 1 100%} .vact-quiet{flex:1 1 100%} }
+/* The contractor's own button set lived here. It is the shared .vact row now,
+   so it is gone rather than left behind -- a second scheduling button system
+   in the stylesheet is a second one for a later change to reach for, and the
+   one it reached for would be the one nothing uses. */
 .vans-err{display:flex;align-items:flex-start;gap:6px;margin:9px 0 0;
   font-size:12.5px;line-height:1.45;font-weight:600;color:var(--red)}
 .vans-err > svg{flex:none;margin-top:2px}
-@media (max-width:420px){
-  .vans-when{font-size:17px}
-  .vans-yes{width:100%}
-  .vans-alt{flex:1 1 auto}
-}
+@media (max-width:420px){ .vans-when{font-size:17px} }
 /* The counter-proposal modal. The job it is about, under the heading, because
    a date form with no subject is a date form somebody fills in for the wrong
    job. */

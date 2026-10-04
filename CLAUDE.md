@@ -8545,6 +8545,82 @@ refactor.
   reported the panel as missing on a screen that had rendered perfectly.
   **The selector was wrong, not the product** — for the third time.
 
+- **ONE ACTION ROW, ONE SIZE, THREE SIDES — AND THE WORDS WERE ALREADY
+  RIGHT.** Asked for as *"all the scheduling call to actions on the tenant
+  side, the property manager side and the contractor / handyman side need to be
+  well designed, very clear… large buttons, make it easy to select propose a new
+  time"*.
+
+  Three sides answer a question about one appointment and each had grown its
+  own buttons: the contractor's `.vans-*` set, the tenant's `.tn-visit` pair,
+  and the manager's `btn-solid sm` / `btn-ghost sm`. **Nothing was wrong with
+  any of the sentences.** What was wrong is that all three rendered at the
+  card's own 12.5px, inline, among five other rows of small bold text — so the
+  most consequential question this product asks anybody, *does somebody turn up
+  on Tuesday*, was the quietest thing on the card. Reported as "a bit hidden",
+  which is exactly what it was.
+
+  **`.sm` IS NOT A SIZE THIS STYLESHEET DEFINES**, and that is worth its own
+  line. The manager's pair carried it, so the modifier did nothing at all and
+  the two read as ordinary form buttons at the foot of a long card — a class
+  that looks like a decision and is a no-op. The same shape as a misspelt
+  capability: the source reads exactly as intended, it fails in the quiet
+  direction, and nothing anywhere reports it. Only the computed pixels can see
+  it, which is why the suites measure `getBoundingClientRect().height` and the
+  font size rather than asserting a class is present.
+
+  `VisitActs` is the one row, and **`kind` carries the meaning rather than the
+  caller picking a class**: `yes` is the commitment, `alt` is proposing another
+  time, `no` is declining, `quiet` is a way back out of a sub-form. A caller
+  choosing colours is a caller who can paint the decline green — somebody
+  tapping the solid button to say no — so the component maps the kind and an
+  unrecognised one falls to `alt` rather than to the commitment. Pinned in both
+  directions: exactly one `yes` per row, and the refusal is a `no`. Painting
+  the decline as the commitment fails three assertions.
+
+  **THE WORDS STAY WITH EACH SIDE.** The tenant, the crew and the hiring
+  account are being asked genuinely different things — *can you be in*, *can
+  you make it*, *is this time all right with us* — so one component owning the
+  copy would have flattened three questions into one. What is shared is the
+  size, the shape and which of the three acts each button is.
+
+  **44px AND 15px ARE FLOORS, ASSERTED AS BOUNDS.** This is used on a phone at
+  a kerb, so the floor is the smallest target anybody recommends for a thumb
+  and the design may exceed it. Each bound carries **its own length check**,
+  because `[].every(...)` is true — a size assertion over a control that has
+  disappeared passes loudest exactly when the subject is gone, which is the
+  read-through-`link?.` lesson in its arithmetic form. The manager-side
+  mutation (back to `btn-solid sm`) fails three assertions only after that fix;
+  before it, two of them passed on the empty array.
+
+  **AND THE NARROW-SCREEN STACK IS MEASURED AT 540px, NOT AT 390px, which is
+  the whole of why that assertion means anything.** `min-width:168px` plus
+  `flex-wrap` already stacks the row under about 345px, so at phone width the
+  media query and no media query at all draw the identical thing — **deleting
+  the query is a mutation that SURVIVES there.** 540 is the one band where they
+  differ: two buttons fit side by side and the query is the only thing stopping
+  them pairing up. Checking the narrower viewport would have been choosing the
+  width that flatters it, which this file already records about the hero's
+  right-clip bound.
+
+  **AND THE FIRST VERSION SHIPPED A LABEL WITH NO WAY IN, in miniature.** The
+  manager's standalone control was written as `visit ? "alt" : "yes"` reading
+  *Set a time for this job* on a job nobody had scheduled — which reads
+  perfectly and can never draw: `open` starts true when there is no visit, so
+  the propose **form** is already on screen there and `onCancel` is null, so
+  there is no way back to a button. Found only by driving the branch and
+  dumping the block's own HTML. The ternary is gone rather than made reachable,
+  because a form already open **is** the primary action and is strictly better
+  than a button that opens one — and the suite now asserts that (form open, no
+  button) so a later pass adding the label back has to notice it is
+  unreachable. Fifteenth no-way-in in this file and the first one authored in
+  the same change that was fixing the others.
+
+  The old `.vans-*` button system is **deleted rather than left behind**: a
+  second scheduling button set in the stylesheet is a second one for a later
+  change to reach for, and the one it reached for would be the one nothing
+  uses. Its place in the file carries a comment saying where it went.
+
 
 ## Working here
 

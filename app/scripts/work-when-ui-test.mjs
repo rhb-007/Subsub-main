@@ -277,7 +277,23 @@ const cards = (page) => page.evaluate(() => [...document.querySelectorAll(".jr-c
       ? parseFloat(getComputedStyle(el.querySelector(".vans-when")).fontSize) : null,
     panelBg: el.querySelector(".vans")
       ? getComputedStyle(el.querySelector(".vans")).backgroundColor : null,
-    btns: [...el.querySelectorAll(".vans-acts button")].map((b) => b.innerText.trim()),
+    btns: [...el.querySelectorAll(".vacts .vact")].map((b) => b.innerText.trim()),
+    // THE SIZE IS THE FEATURE, so it is measured rather than described. The
+    // request was "very clear and well designed large buttons"; the row these
+    // replaced rendered the same words at the card's own small size, so every
+    // assertion about the WORDS above passes over the control that was
+    // reported as hidden. Kind as well as geometry, because what paints a
+    // button is what says which of the three acts it is.
+    acts: [...el.querySelectorAll(".vacts .vact")].map((b) => {
+      const r = b.getBoundingClientRect();
+      const row = b.closest(".vacts").getBoundingClientRect();
+      return {
+        label: b.innerText.trim(),
+        kind: [...b.classList].find((k) => k.startsWith("vact-"))?.slice(5) || null,
+        h: Math.round(r.height), px: parseFloat(getComputedStyle(b).fontSize),
+        wide: row.width ? r.width / row.width : 0,
+      };
+    }),
     wait: (el.querySelector(".jr-vis-wait")?.innerText || "").replace(/\s+/g, " ").trim(),
     access: (el.querySelector(".jr-access")?.innerText || "").replace(/\s+/g, " ").trim(),
   };
@@ -564,12 +580,68 @@ try {
       !(away?.btns || []).some((b) => /I'll be there|Can't make it/i.test(b)),
       JSON.stringify(away?.btns));
 
+    // THE CONTROLS ARE LARGE, AND THE SIZE IS WHAT WAS WRONG. The words were
+    // already right; the row rendered them at the card's own 12.5px with two
+    // inline chips, which is why it was reported as hidden on the one screen
+    // where a missed press is a missed appointment. 44px is the smallest
+    // target anybody recommends for a thumb and this is used on a phone at a
+    // kerb, so the floor is asserted rather than the exact value -- a bound
+    // the design may exceed and must not go under.
+    const acts = (open?.acts || []);
+    t.ck("there are controls to measure", acts.length === 3, JSON.stringify(acts));
+    t.ck("every control is at least 44px high",
+      acts.length === 3 && acts.every((a) => a.h >= 44),
+      JSON.stringify(acts.map((a) => [a.label, a.h])));
+    t.ck("and reads at 15px or more",
+      acts.length === 3 && acts.every((a) => a.px >= 15),
+      JSON.stringify(acts.map((a) => [a.label, a.px])));
+
+    // EXACTLY ONE COMMITMENT PER ROW. `kind` carries the meaning so a caller
+    // cannot pick colours, and the one thing that must never happen is a
+    // decline wearing the commitment's green -- somebody tapping the solid
+    // button to say no. Pinned in both directions: one `yes`, and no `no`
+    // painted as one.
+    t.ck("exactly one control is the commitment",
+      acts.filter((a) => a.kind === "yes").length === 1,
+      JSON.stringify(acts.map((a) => [a.label, a.kind])));
+    t.ck("and the refusal is not painted as one",
+      acts.some((a) => a.kind === "no" && /Can't make it/i.test(a.label)),
+      JSON.stringify(acts.map((a) => [a.label, a.kind])));
+
+    // AND ON A NARROW SCREEN EACH ONE TAKES THE ROW. Three controls sharing
+    // 330px is three 100px targets side by side, which is the row this
+    // replaced wearing a bigger font -- *"make it easy to select propose a
+    // new time"*. Read as the DRAWN width, because the stack is a media
+    // query and a rule written above the base one in the same stylesheet does
+    // nothing while looking exactly like one that fired.
+    //
+    // MEASURED AT 540px AND NOT AT 390px, which is the whole of why this
+    // assertion means anything. `min-width:168px` plus `flex-wrap` already
+    // stacks them under about 345px, so at phone width the media query and
+    // no media query at all draw the identical row -- deleting the query is a
+    // mutation that SURVIVES there. 540 is the one band where the two differ:
+    // two buttons fit side by side and the query is the only thing that stops
+    // them pairing up. Choosing the narrower viewport would have been
+    // choosing the width that flatters it.
+    await page.setViewport({ width: 540, height: 1800 });
+    await wait(500);
+    const narrow = (await cards(page)).find((c) => /Sparking breaker/i.test(c.title));
+    t.ck("every control takes the row on a narrow screen",
+      (narrow?.acts || []).length === 3
+        && narrow.acts.every((a) => a.wide > 0.9),
+      JSON.stringify((narrow?.acts || []).map((a) => [a.label, a.wide.toFixed(2)])));
+    t.ck("and is still at least 44px high there",
+      (narrow?.acts || []).length === 3 && narrow.acts.every((a) => a.h >= 44),
+      JSON.stringify((narrow?.acts || []).map((a) => [a.label, a.h])));
+    await page.setViewport({ width: 1340, height: 1800 });
+    await wait(500);
+
     // THE DECLINE PATH ASKS FOR A REASON FIRST, then posts it. A bare
     // "declined" tells the manager a window is dead and nothing about why,
     // which is a telephone call.
     await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
       .find((el) => /Sparking breaker/i.test(el.querySelector("h3")?.innerText || ""))
-      ?.querySelector(".vans-skip")?.click());
+      ?.querySelector(".vacts .vact-no")?.click());
     await wait(400);
     const why = await page.evaluate(() => {
       const card = [...document.querySelectorAll(".jr-card")]
@@ -584,7 +656,7 @@ try {
     // decline pane has replaced -- which would read as the panel being gone.
     await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
       .find((el) => /Sparking breaker/i.test(el.querySelector("h3")?.innerText || ""))
-      ?.querySelector(".vans-acts .btn-ghost")?.click());
+      ?.querySelector(".vacts .vact-quiet")?.click());
     await wait(400);
 
     // AND PRESSING IT REACHES THE SERVER. The button could render and the
@@ -592,7 +664,7 @@ try {
     t.ck("nothing has been answered yet", answers.length === 0, JSON.stringify(answers));
     await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
       .find((el) => /Sparking breaker/i.test(el.querySelector("h3")?.innerText || ""))
-      ?.querySelector(".vans-yes")?.click());
+      ?.querySelector(".vacts .vact-yes")?.click());
     await wait(900);
     t.ck("confirming posts exactly one answer", answers.length === 1, JSON.stringify(answers));
     t.ck("and it says confirmed", answers[0]?.status === "confirmed",
@@ -609,13 +681,13 @@ try {
     // somebody fills in for the wrong job.
     await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
       .find((el) => /stack leak/i.test(el.querySelector("h3")?.innerText || ""))
-      ?.querySelector(".vans-alt")?.click());
+      ?.querySelector(".vacts .vact-alt")?.click());
     await wait(400);
     t.ck("a row at another client cannot even open the form",
       await page.evaluate(() => !document.querySelector(".modal .visit-form")));
     await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
       .find((el) => /Unit 12 shower/i.test(el.querySelector("h3")?.innerText || ""))
-      ?.querySelector(".vans-alt")?.click());
+      ?.querySelector(".vacts .vact-alt")?.click());
     await wait(400);
     t.ck("nor can a window we have already agreed",
       await page.evaluate(() => !document.querySelector(".modal .visit-form")));
