@@ -152,6 +152,21 @@ const WORK = () => ({ work: [
     completedAt: null, tradeScope: null, crewName: null, payKind: "fixed", value: "100",
     rate: "", capHours: null, signedWO: null, issuedAt: null, updatedAtIso: null,
     visit: null },
+  // A TARGET DATE WITH NO HOUR ON IT, on a day that already has work -- so it
+  // changes neither the strip count nor the undated tally, and is the only row
+  // that can show what the time line says when there is no time to say.
+  // At Cascade, which is already a client -- so this adds a row without
+  // adding a company, and `here: false` is what puts it on the schedule at
+  // all: a row on THIS account arrives through /api/jobs instead.
+  { woId: "wo_tgt", wo: "WO-222", jobId: "job_tgt", trade: "painting",
+    accountId: "acc_cas", accountName: "Cascade Management",
+    accountSubdomain: "cascade", accountKind: "property_manager", here: false,
+    status: "accepted", auto: false, responseWindow: null, respondBy: null, respondedAt: null,
+    title: "Repaint the lobby", address: "1620 Belmont Ave", area: "Seattle", zip: "98122",
+    propertyName: null, date: LATER, time: null, severity: null, jobStatus: "active",
+    completedAt: null, tradeScope: null, crewName: null, payKind: "fixed", value: "100",
+    rate: "", capHours: null, signedWO: null, issuedAt: null, updatedAtIso: null,
+    visit: null },
 ] });
 
 // THE ROWS AS /api/jobs SERVES THEM, which is where the card for the account
@@ -276,6 +291,14 @@ const sched = (page) => page.evaluate(() => {
     head: (el.querySelector(".sh-head h3")?.innerText || "").trim(),
     next: (el.querySelector(".sh-next")?.innerText || "").replace(/\s+/g, " ").trim(),
     rows: [...el.querySelectorAll(".mys-row")].map((r) => (r.innerText || "").replace(/\s+/g, " ").trim()),
+    // The two halves of the when column, read separately: a check on the row's
+    // whole text passes with the day and the time run together, and the fault
+    // this is about is a column that said one and not the other.
+    when: [...el.querySelectorAll(".mys-row")].map((r) => ({
+      day: (r.querySelector(".mysd-day")?.innerText || "").trim(),
+      time: (r.querySelector(".mysd-time")?.innerText || "").trim(),
+      title: (r.querySelector(".mys-title")?.innerText || "").trim(),
+    })),
     marked: [...el.querySelectorAll(".shs-day.has")].length,
     soft: [...el.querySelectorAll(".shs-day.soft")].length,
     undated: (el.querySelector(".sh-undated")?.innerText || "").replace(/\s+/g, " ").trim(),
@@ -360,6 +383,99 @@ try {
   // panel can report to somebody trying to fill a week.
   t.ck("the job with no time at all is counted, not hidden",
     /1 job has no date/i.test(s.undated || ""), s.undated);
+
+  console.log("\n-- and every row says its date and its time --");
+  {
+    // Reported with four rows of this panel circled, all four reading
+    // **Wednesday** and nothing else: *"Add date / time on these jobs too."*
+    // The fixture is that case -- four jobs land on one day -- which is the
+    // only shape where the fault is visible at all.
+    const same = s.when.filter((r) => r.day === s.when[0]?.day);
+    t.ck("several rows really do land on one day", same.length >= 3,
+      JSON.stringify(s.when.map((r) => r.day)));
+    // THE FIX: the day is no longer the whole of what a row says.
+    t.ck("each of them carries a time",
+      same.every((r) => !!r.time), JSON.stringify(same));
+    // AND THE TIMES TELL THEM APART, which is the point rather than the
+    // presence of a string: a column printing the same hour on every row
+    // would pass the check above and leave the panel exactly as it was.
+    const hours = same.map((r) => r.time).filter((x) => x !== "No time set");
+    t.ck("and they are not all the same time",
+      new Set(hours).size === hours.length && hours.length >= 2, JSON.stringify(hours));
+    // THE DATE, not only the weekday. Past a week `relDay` answers "In 70
+    // days", which is the one thing somebody reading a schedule cannot use --
+    // so the day line carries a real date on everything but today and
+    // tomorrow.
+    t.ck("the day line names a date, not just a weekday",
+      same.every((r) => /\d/.test(r.day)), JSON.stringify(same.map((r) => r.day)));
+    t.ck("with the weekday still on it, which is what gets scanned",
+      same.every((r) => /^[A-Z][a-z]{2}\b/.test(r.day)), JSON.stringify(same.map((r) => r.day)));
+    // A WINDOW, not a bare start. How long they have got is the other half of
+    // a time, and the card below is not where somebody plans a day from.
+    t.ck("a window is drawn as a window",
+      s.when.some((r) => /\u2013/.test(r.time)), JSON.stringify(s.when.map((r) => r.time)));
+    // AND A ROW WITH NO HOUR SAYS SO. A blank there reads as a line that
+    // failed to draw, which is the opposite of the fact it is reporting.
+    const tgt = s.when.find((r) => /Repaint the lobby/i.test(r.title));
+    t.ck("a job with a date and no hour says there is no time set",
+      tgt?.time === "No time set", JSON.stringify(tgt));
+    t.ck("and still says which day it is on", /\d/.test(tgt?.day || ""), JSON.stringify(tgt));
+
+    // AND IT STILL FITS ON A PHONE, which is the one thing no static check
+    // can see: a wider when column squeezing the title is how this fix would
+    // pay for itself in the wrong place. Measured rather than asserted on the
+    // CSS, because `white-space:nowrap` means a time that does not fit
+    // overflows the row silently instead of wrapping.
+    await page.setViewport({ width: 390, height: 1600 });
+    await wait(500);
+    const fit = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll(".my-sched .mys-row")];
+      return rows.map((r) => {
+        const box = r.getBoundingClientRect();
+        const t = r.querySelector(".mysd-time")?.getBoundingClientRect();
+        const ttl = r.querySelector(".mys-title")?.getBoundingClientRect();
+        const when = r.querySelector(".mys-when")?.getBoundingClientRect();
+        const cs = ttl ? getComputedStyle(r.querySelector(".mys-title")) : null;
+        return {
+          ws: cs?.whiteSpace,
+          // Does the time run past the COLUMN it is in, which is the box that
+          // can actually be too narrow -- the row's own right edge is 200px
+          // away and an assertion against it could not fail.
+          over: t && when ? Math.round(t.right - when.right) : null,
+          title: ttl ? Math.round(ttl.width) : null,
+          rows: ttl ? Math.round(ttl.height) : null,
+          lines: t ? Math.round(t.height) : null };
+      });
+    });
+    t.ck("no row's time runs past its own column at 390px",
+      fit.every((r) => r.over !== null && r.over <= 1), JSON.stringify(fit));
+    t.ck("the time stays on one line", fit.every((r) => r.lines <= 20), JSON.stringify(fit));
+    // AND THE TITLE IS STILL A TITLE. A when column that took the row would
+    // leave the thing somebody is actually looking for ellipsed to nothing --
+    // the same failure the dashboard's request titles already record.
+    // AND THE TITLE GETS A SECOND LINE RATHER THAN AN ELLIPSIS. Read as the
+    // COMPUTED value, because only that knows whether the rule fired -- the
+    // first version of it sat above the base `.mys-title` in the same
+    // stylesheet, where a media query does not raise specificity and the later
+    // of two identical selectors wins whatever the query says. Nothing about
+    // the source looked wrong and the measured height said one line.
+    t.ck("the title may wrap at 390px", fit.every((r) => r.ws === "normal"),
+      JSON.stringify(fit.map((r) => r.ws)));
+    // And it really does: a title too long for the column takes two lines
+    // rather than being cut to about twelve characters. Not every row -- a
+    // short one legitimately fits on one, and requiring two everywhere would
+    // be an assertion about the fixture's titles.
+    t.ck("and a long one takes two of them", fit.some((r) => r.rows >= 30),
+      JSON.stringify(fit.map((r) => r.rows)));
+    await page.setViewport({ width: 1340, height: 1600 });
+    await wait(400);
+    // SCOPED TO THE PHONE, not a blanket change: on a wide screen the row is
+    // one line and an ellipsis is the right answer there.
+    const wide = await page.evaluate(() => [...document.querySelectorAll(".my-sched .mys-title")]
+      .map((e) => getComputedStyle(e).whiteSpace));
+    t.ck("and is back to one line on a wide screen",
+      wide.length > 0 && wide.every((w) => w === "nowrap"), JSON.stringify(wide));
+  }
 
   console.log("\n-- 061/064: the window can be answered from here, loudly --");
   {

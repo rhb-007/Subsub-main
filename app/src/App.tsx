@@ -1788,6 +1788,43 @@ function relDay(k, from = dayKey()) {
   if (n < 7) return dayFromKey(k).toLocaleDateString(undefined, { weekday: "long" });
   return `In ${n} days`;
 }
+// THE DAY ON A SCHEDULE ROW, which `relDay` could not answer on its own.
+//
+// Reported with four rows of a contractor's own schedule circled, every one
+// of them reading **Wednesday** and nothing else: *"Add date / time on these
+// jobs too."* Two separate holes in one column. Four jobs on one day are four
+// identical words, so there is no way to tell which is the morning one. And
+// past a week `relDay` stops naming a day at all -- *"In 70 days"* is the
+// one answer a person looking at a schedule cannot use.
+//
+// A SEPARATE HELPER RATHER THAN A CHANGE TO `relDay`, which is the lesson the
+// agreement templates record about `plural`: that one is read by the activity
+// feed, the dashboard and half a dozen other screens where "Wednesday" is
+// exactly right beside a sentence. Widening it there would rewrite all of
+// them to fix a column in one panel.
+//
+// Today, Tomorrow and Yesterday keep their words, because those are what make
+// a schedule readable at a glance and a date cannot say them. Everything else
+// gets the weekday AND the date, so a row is unambiguous however far out it
+// is -- with the year only when it is not the current one, the rule the
+// compliance pack's date column already follows so the common row stays short.
+function rowDay(k, from = dayKey()) {
+  const n = Math.round((dayFromKey(k) - dayFromKey(from)) / 86400000);
+  if (n === 0) return "Today";
+  if (n === 1) return "Tomorrow";
+  if (n === -1) return "Yesterday";
+  const d = dayFromKey(k);
+  return d.toLocaleDateString(undefined, {
+    weekday: "short", month: "short", day: "numeric",
+    ...(d.getFullYear() === dayFromKey(from).getFullYear() ? {} : { year: "numeric" }),
+  });
+}
+// And the window on its own, because the row already says the day. `visitWhen`
+// leads with the date, so using it here would print the date twice.
+function winText(when) {
+  if (!when?.startTime) return "No time set";
+  return `${niceTime(when.startTime)}${when.endTime ? `\u2013${niceTime(when.endTime)}` : ""}`;
+}
 function niceWhen(iso) {
   if (!iso) return "";
   const then = new Date(iso);
@@ -23623,7 +23660,14 @@ function MySchedule({ rows, onOpen, onOpenCalendar }) {
   const row = (x, cls) => (
     <button key={`${x.m.job.id}-${x.m.trade}`} className={cls}
       onClick={() => onOpen?.(x.m)}>
-      <span className="mys-when">{relDay(x.when.date, todayK)}</span>
+      {/* THE DAY AND THE TIME, because four rows on one Wednesday reading
+          "Wednesday" four times is a schedule that cannot be ordered -- and a
+          job with no time on it says so rather than leaving the line blank,
+          which reads as a row that failed to draw. */}
+      <span className="mys-when">
+        <span className="mysd-day">{rowDay(x.when.date, todayK)}</span>
+        <span className="mysd-time">{winText(x.when)}</span>
+      </span>
       <span className="mys-title">{x.m.job.title}</span>
       <span className={`mys-tag mysw-${WHEN_KINDS[x.when.kind]?.tone || "wait"}`}>
         {x.when.kind === "confirmed" ? "Confirmed" : x.when.kind === "proposed" ? "Not confirmed" : "Target"}
@@ -32818,7 +32862,12 @@ strong.insp-name{background:none;border:0;padding:0}
 .my-sched{margin:14px 0 4px}
 .my-sched .sh-head h3{margin:0}
 .mys-row{align-items:center}
-.mys-when{flex:none;font-size:11.5px;font-weight:700;color:var(--ink-soft);min-width:78px}
+/* Two lines: the day somebody scans for, and the time that tells four jobs on
+   one Wednesday apart. Wide enough for a full window at this size, because a
+   wrapped "11:30 AM-" over "12:30 PM" reads as two times rather than one. */
+.mys-when{flex:none;display:flex;flex-direction:column;gap:1px;min-width:102px}
+.mysd-day{font-size:11.5px;font-weight:700;color:var(--ink-soft)}
+.mysd-time{font-size:11px;font-weight:600;color:var(--ink-soft);opacity:.78;white-space:nowrap}
 .mys-title{flex:1;min-width:0;font-size:13.5px;font-weight:600;color:var(--ink);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mys-tag{flex:none;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px}
@@ -32826,6 +32875,19 @@ strong.insp-name{background:none;border:0;padding:0}
 .mysw-wait{background:#fbf0dd;color:var(--amber-ink)}
 .mysw-plain{background:var(--paper);color:var(--ink-soft)}
 .mys-more{margin:6px 0 0;padding:0 6px;font-size:12px;color:var(--ink-soft)}
+/* AND THE TITLE WRAPS RATHER THAN ELLIPSING ON A PHONE. The when column is
+   24px wider than it was, and at 390px that leaves the job name about twelve
+   characters before the ellipsis -- which is the fix paying for itself out of
+   the one thing somebody is actually looking for. Two lines, clamped, which is
+   the same answer the dashboard's request titles already give at this width
+   and for the same reason: an ellipsis there leaves a third of the sentence.
+   Top-aligned, or a two-line title re-centres the day against the middle of
+   it. */
+@media (max-width: 520px) {
+  .mys-row{align-items:flex-start}
+  .mys-title{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;
+    -webkit-line-clamp:2;line-height:1.28;overflow-wrap:anywhere}
+}
 /* A day holding nothing but unconfirmed times is not a day that is spoken
    for, so it is tinted rather than filled. */
 .shs-day.soft{background:#fdf7ec;border-color:#ecd9b0}

@@ -8416,6 +8416,63 @@ refactor.
   which outranks the other — a product decision about what a target date is
   for, not a patch.
 
+- **FOUR ROWS OF A SCHEDULE ALL READING "WEDNESDAY".** Asked for in four
+  words, with the rows circled: *"Add date / time on these jobs too."* The
+  contractor's own schedule panel drew its follow-on rows as
+  `relDay(date)` and nothing else, so four jobs on one day were four
+  identical words — and the thing somebody actually needs from a schedule,
+  which of them is the morning one, was on none of them.
+
+  **TWO HOLES IN ONE COLUMN, and only one of them is about the time.** Past a
+  week `relDay` stops naming a day at all: *"In 70 days"* is the one answer a
+  person looking at a schedule cannot use. So the day line carries a real
+  **date** as well as the weekday on everything but today and tomorrow.
+
+  **`rowDay` IS A NEW HELPER RATHER THAN A CHANGE TO `relDay`**, which is the
+  lesson the agreement templates record about `plural`: `relDay` is read by
+  the activity feed, the dashboard and half a dozen other screens where
+  "Wednesday" beside a sentence is exactly right, and widening it there would
+  rewrite all of them to fix a column in one panel. Today, Tomorrow and
+  Yesterday keep their words, because those are what make a schedule readable
+  at a glance and a date cannot say them. The year rides along only when it is
+  not the current one — the rule the compliance pack's date column already
+  follows so the common row stays short.
+
+  **AND A ROW WITH NO HOUR SAYS SO.** A blank there reads as a line that
+  failed to draw, which is the opposite of the fact it is reporting:
+  *No time set* is itself the useful answer on a target date.
+
+  **THE PROPERTY UNDER TEST IS THAT THE TIMES TELL THE ROWS APART**, not that
+  a time is present. A column printing the same hour on every row passes
+  "each of them carries a time" and leaves the panel exactly as it was, which
+  is the mutation that proves it. The fixture is the reported shape — several
+  jobs landing on one day — because that is the only shape where the fault is
+  visible at all.
+
+  **AND THE FIX NEARLY PAID FOR ITSELF OUT OF THE TITLE.** The when column is
+  24px wider, which at 390px left the job name about twelve characters before
+  the ellipsis. So at phone width the title **wraps to two lines, clamped** —
+  the same answer the dashboard's request titles already give at that width
+  and for the same reason. Caught by measuring the row rather than by reading
+  the CSS, which is the only thing that can see it.
+
+  **AND THE MEDIA BLOCK WAS WRITTEN ABOVE THE RULE IT OVERRIDES, WHICH DID
+  NOTHING AT ALL.** A media query does not raise specificity, so the later of
+  two identical selectors wins whatever the query says — `.mys-title` is
+  redeclared four lines below, and the computed `white-space` stayed `nowrap`.
+  **A colour set twice in one stylesheet is a colour decided by ordering**,
+  which this file already records about the compliance pack's dot, in CSS that
+  reads exactly as intended. Nothing static could see it: the selector is
+  right, the query is right, and the only witness is the computed value. So
+  the assertion reads `getComputedStyle` at both widths, and the mutation that
+  moves the block back above the base rule fails three of them.
+
+  One naming note worth keeping: the new spans are `mysd-*` rather than
+  `mysw-*`, because `mysw-` already means the TAG's tone (`mysw-ok`,
+  `mysw-wait`, `mysw-plain`). A second meaning on one prefix is how a selector
+  finds the wrong thing, which is the `.embed-code-btn` trap before it has a
+  chance to happen.
+
 
 ## Working here
 
