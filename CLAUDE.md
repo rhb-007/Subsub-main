@@ -9110,6 +9110,17 @@ refactor.
   The production branch today is `claude/hello-24aree`, which is also the
   repository's only branch, so a push to it is live.
 
+  **AND CHECKING THAT A RUN WENT GREEN HAS ITS OWN SILENT-FAILURE SHAPE.**
+  `gh api "…/actions/runs?head_sha=<sha>"` answers `{"total_count":0,
+  "workflow_runs":[]}` for a **short** sha — not an error, an empty list. So a
+  poll written to wait for completions reads that as *not finished yet* and
+  waits for ever, and it would read a **failed** deploy the same way: an empty
+  list is indistinguishable from an unfinished one in that query. Which is this
+  file's own lesson about the five red deploys, in the one tool left for
+  checking them. `git rev-parse HEAD` first, and a watch on that endpoint has
+  to treat `total_count: 0` as *the query is wrong* rather than as *nothing has
+  happened*.
+
 - **Whose page this is has two sources, and they can disagree.** `onSubdomain`
   is a fact about the **hostname**; `brand` is what the account lookup came
   back with. On a customer's address where that lookup does not land, the
