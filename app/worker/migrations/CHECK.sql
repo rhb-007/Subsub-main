@@ -441,6 +441,13 @@ SELECT
   (SELECT COUNT(*) FROM pragma_table_info('visits')
     WHERE name = 'manager_at')                                                                  AS m064_visit_manager_at,
 
+  -- 065. The auto-turnaround switch. A column rather than a table, so this is
+  -- the one did-I-run-it check for it -- and it was missing until the paste
+  -- steps were written out, which is how a migration with a route, a panel and
+  -- a test suite behind it still had no way to answer "did I run that one?".
+  (SELECT COUNT(*) FROM pragma_table_info('accounts')
+    WHERE name = 'auto_turnaround')                                                             AS m065_auto_turnaround,
+
   -- 066. The three ways a job ends without recording that work was done.
   --
   -- FIVE NAMED COLUMNS, not the table name. `sqlite_master` tells you a table
