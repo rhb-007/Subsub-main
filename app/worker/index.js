@@ -49,7 +49,7 @@ import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_
   whyNotFinish, inspectionTally, flaggedRooms, inspectionJobTitle,
   inspectionJobScope, whyNotSend, mayWriteInspection,
   contractorInspectionShape, isFlagged, suggestedAccessForInspection,
-  inspectionTradeScopes,
+  inspectionTradeScopes, quoteInspectionShape,
   INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
@@ -13462,6 +13462,96 @@ app.get("/api/work-orders/:id/inspection/photo/:photoId", requireRole("admin", "
   // counts as something to put right, so this cannot start disagreeing with
   // the shape above it about which rooms the job is.
   if (!photo || !isFlagged({ status: photo.room_status })) return c.notFound();
+  const obj = await c.env.FILES.get(photo.file_key);
+  if (!obj) return c.notFound();
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": photo.content_type || "image/jpeg",
+      "Cache-Control": "private, max-age=3600",
+      "Content-Disposition": `inline; filename="${String(photo.name || "photo").replace(/[^\w.\- ]/g, "_")}"`,
+    },
+  });
+});
+// WHAT THE PEOPLE ASKED TO PRICE IT ARE SHOWN, which is the half 062 gave
+// only to the company that won.
+//
+// `GET /api/work-orders/:id/inspection` carries the rooms, the captions and
+// the photographs to the holder of a work order. A quote request is PRE-AWARD
+// and there is no work order yet, so the two or three companies actually being
+// asked for a number were the ones who could not see the mark -- and a price
+// given off a line of text is a price that changes when somebody gets there.
+//
+// KEYED BY THE INVITE, NEVER BY THE INSPECTION OR THE JOB. Same shape and same
+// reasoning as the work-order route: there is no route anywhere that takes an
+// inspection id and describes it, so nothing here can be walked. The invite
+// names the request, the request names the job, the job names the inspection.
+//
+// SCOPED EXACTLY AS `/api/my-quotes` IS, clause for clause -- this company's
+// invite, not withdrawn, on a job that was not withdrawn. The detail must be
+// reachable for precisely the invites the list carries: narrower and a row on
+// their own screen opens onto a refusal, wider and there is a door into a job
+// their list does not show them. A cancelled or awarded request still answers,
+// because it still appears on their list and saying so is the list's job.
+async function quoteInspection(c, inviteId) {
+  const companyId = await seatCompany(c);
+  if (!companyId) return null;
+  const row = await c.env.DB.prepare(
+    `SELECT qr.trade AS trade, i.id AS insp_id
+       FROM quote_invites qi
+       JOIN quote_requests qr ON qr.id = qi.request_id
+       JOIN jobs j ON j.id = qr.job_id
+       JOIN inspections i ON i.job_id = j.id
+      WHERE qi.id = ? AND qi.company_id = ? AND qi.status != 'withdrawn'
+        AND j.withdrawn_at IS NULL LIMIT 1`
+  ).bind(inviteId, companyId).first().catch((err) => {
+    if (!missingSchema(err)) throw err;
+    return null;
+  });
+  if (!row?.insp_id) return null;
+  const insp = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`)
+    .bind(row.insp_id).first();
+  if (!insp) return null;
+  // `drafts: false`, the same rule the work-order route, the per-trade scope
+  // and the summary all follow: a sentence a model wrote and nobody kept is
+  // the team's working note, and this is read by somebody pricing the work.
+  const rooms = await inspectionRooms(c.env.DB, insp.id, { drafts: false });
+  // ONE SHAPE, computed once here, so the photo route below pins a photograph
+  // against exactly the rooms the panel drew rather than asking a second and
+  // looser question about it.
+  return { shape: quoteInspectionShape(inspectionRowToJs(insp), rooms, row.trade),
+    inspectionId: insp.id };
+}
+
+// No role gate: `seatCompany` is the gate, because what this answers is keyed
+// to a company rather than to a seat's rank -- the same reason `/api/my-quotes`
+// and `/api/quotes/:inviteId` beside it take none.
+app.get("/api/quotes/:inviteId/inspection", async (c) => {
+  const found = await quoteInspection(c, c.req.param("inviteId"));
+  // A JOB NOBODY WALKED AND AN INVITE THAT IS NOT THEIRS GIVE THE SAME 404.
+  // Most jobs were typed or arrived from a CRM, so "no inspection" is the
+  // ordinary answer -- and answering it differently from "not your invite"
+  // would say which invite ids are real.
+  if (!found) return c.json({ error: "not_found" }, 404);
+  return c.json(found.shape);
+});
+
+// The bytes. Pinned four ways: the invite names the inspection, the photograph
+// must belong to a room OF that inspection, and the room must be one of the
+// rooms THIS TRADE is being asked about -- which is read off the shape above
+// rather than re-derived, so a picture can never be served from a room the
+// panel did not draw.
+app.get("/api/quotes/:inviteId/inspection/photo/:photoId", async (c) => {
+  const found = await quoteInspection(c, c.req.param("inviteId"));
+  if (!found) return c.notFound();
+  const photoId = c.req.param("photoId");
+  const mine = found.shape.rooms.some((r) => (r.photos || []).some((p) => p.id === photoId));
+  if (!mine) return c.notFound();
+  const photo = await c.env.DB.prepare(
+    `SELECT p.* FROM inspection_photos p
+       JOIN inspection_rooms r ON r.id = p.room_id
+      WHERE p.id = ? AND r.inspection_id = ?`
+  ).bind(photoId, found.inspectionId).first();
+  if (!photo) return c.notFound();
   const obj = await c.env.FILES.get(photo.file_key);
   if (!obj) return c.notFound();
   return new Response(obj.body, {

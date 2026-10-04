@@ -63,6 +63,33 @@ let REQS = [];
 let MY_QUOTES = [];
 const asks = [], awards = [], answers = [];
 
+// WHAT THEY ARE BEING ASKED TO PRICE, WITH THE PICTURES. Narrowed by the
+// SERVER to the rooms this trade was asked about, which is why the stub answers
+// one room: the panel must not be doing that narrowing itself, and a stub
+// handing it the whole walk would let a browser-side filter pass.
+const QINSP = {
+  kind: "move_out", unit: "3B", inspectedOn: "2026-10-01", trade: "roofing",
+  rooms: [{ id: "r_ridge", name: "Ridge and flashing", status: "fail",
+    note: "Flashing lifted along the ridge",
+    photos: [{ id: "ph_ridge", name: "ridge.jpg", type: "image/jpeg",
+      caption: "Lifted about two feet from the chimney" }] }],
+};
+// A one-pixel PNG, so the thumbnail really loads rather than drawing the
+// "Couldn't load" state -- which would pass a check that only counted figures.
+const PNG = Buffer.from(
+  "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea735ed130000000049454e44ae426082",
+  "hex");
+// EVERY ASK, counted. One panel reading one record is the property; two mounts
+// of it would be two requests, which only the wire can see.
+const inspAsks = [];
+// AND WHICH ROUTE THE BYTES CAME FROM. This has to be read off the wire: a
+// thumbnail pointed at the WRONG route still renders an <img>, because
+// `ReportPhoto` fails only when the fetch rejects and the stub answers
+// something for every path -- so a count of loaded pictures passes whichever
+// route was asked. The mutation that proves it hard-codes the work-order
+// loader, and nothing but this list can see it.
+const photoAsks = [];
+
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body, headers) => {
   const contractor = String(headers["x-user-id"] || "") === "u_bay";
@@ -92,6 +119,16 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
   }
   if (/^\/api\/quotes\/[^/]+$/.test(path) && method === "POST") {
     answers.push(body); return [200, { ok: true }];
+  }
+  // Keyed by the INVITE. `qi_bare` is an invite on a job nobody walked, which
+  // is the ordinary case -- the route answers 404 and the panel draws nothing.
+  if (/^\/api\/quotes\/[^/]+\/inspection$/.test(path)) {
+    inspAsks.push(path);
+    return path.includes("qi_bare") ? [404, { error: "not_found" }] : [200, QINSP];
+  }
+  if (/\/inspection\/photo\//.test(path)) {
+    photoAsks.push(path);
+    return [200, null, { raw: PNG, type: "image/png" }];
   }
   if (path === "/api/properties" || path === "/api/invites" || path === "/api/clients"
     || path === "/api/connect-requests" || path === "/api/my-connect-requests"
@@ -235,6 +272,8 @@ try {
         assignments: {}, quoting: true, readOnly: true },
     }];
     answers.length = 0;
+    photoAsks.length = 0;
+    inspAsks.length = 0;
     const { ctx, page, crashes } = await open("u_bay");
     await wait(3100);
 
@@ -260,6 +299,79 @@ try {
     t.ck("no sign of the other roofers",
       !/Pine|Oak/.test(card.text), card.text.slice(0, 160));
 
+    // ---- WHAT THEY ARE PRICING, WITH THE PICTURES ----------------------
+    //
+    // 062 gave the rooms, the captions and the photographs to the company that
+    // WON. A quote request is pre-award and there is no work order yet, so the
+    // people actually being asked for a number were the ones who could not see
+    // the mark -- and a price given off a line of text changes when somebody
+    // gets there.
+    //
+    // DRIVEN RATHER THAN READ OFF THE SOURCE, which is the lesson 062 paid
+    // for one screen along: a static check that the panel is mounted passes
+    // over a modal that throws, and a panel that renders nothing reads
+    // exactly like a card that never had one.
+    const ins = await page.evaluate(() => {
+      const p = document.querySelector(".qask .woi");
+      if (!p) return { missing: true };
+      return {
+        text: p.innerText.replace(/\s+/g, " ").trim(),
+        rooms: [...p.querySelectorAll(".woi-room")].map((r) => ({
+          head: r.querySelector("b")?.innerText || "",
+          note: r.querySelector(".woi-note")?.innerText || "",
+          caps: [...r.querySelectorAll("figcaption")].map((f) => f.innerText),
+          thumbs: [...r.querySelectorAll(".ph-thumb img")].length,
+          gone: [...r.querySelectorAll(".ph-thumb.is-gone")].length,
+        })),
+        only: p.querySelector(".woi-only")?.innerText.replace(/\s+/g, " ").trim() || null,
+      };
+    });
+    t.ck("the panel is on the card", !ins.missing, JSON.stringify(ins).slice(0, 160));
+    t.ck("naming the room", ins.rooms?.[0]?.head === "Ridge and flashing",
+      JSON.stringify(ins.rooms));
+    t.ck("with what was wrong with it",
+      /Flashing lifted/.test(ins.rooms?.[0]?.note || ""), ins.rooms?.[0]?.note);
+    // THE PHOTOGRAPH ITSELF, loaded. A figure with no img is the
+    // "Couldn't load" state, which a count of figures cannot tell apart.
+    t.ck("and the photograph really loaded",
+      ins.rooms?.[0]?.thumbs === 1 && ins.rooms?.[0]?.gone === 0,
+      JSON.stringify(ins.rooms?.[0]));
+    t.ck("with the caption under it",
+      /Lifted about two feet/.test((ins.rooms?.[0]?.caps || []).join(" ")),
+      JSON.stringify(ins.rooms?.[0]?.caps));
+    // AND IT CAME THROUGH THE INVITE, not the work order. There is no work
+    // order yet -- that is the whole reason this route exists -- so a loader
+    // left on the work-order one would ask for bytes under an id that names
+    // nothing, and the picture would still draw.
+    t.ck("and the bytes came through the invite",
+      photoAsks.length === 1 && /^\/api\/quotes\/i1\/inspection\/photo\/ph_ridge$/.test(photoAsks[0]),
+      JSON.stringify(photoAsks));
+    // SAID, because "what the inspection found" over one room reads as the
+    // whole walk -- and somebody pricing off that has priced a unit rather
+    // than their own part of it.
+    t.ck("and it says these are the rooms they were asked about",
+      /asked about/.test(ins.only || ""), String(ins.only));
+    t.ck("and that the rest is somebody else's",
+      /somebody else's/.test(ins.only || ""), String(ins.only));
+    // ONE PANEL, ONE REQUEST. Two mounts of it would be two asks for one
+    // record, which nothing on the screen can see.
+    t.ck("asked for once", inspAsks.length === 1, JSON.stringify(inspAsks));
+
+    // THE SET IS STRUNG TOGETHER, through the one lightbox -- so the quote
+    // card did not grow a second one on its way to showing a picture.
+    await page.evaluate(() => document.querySelector(".qask .woi .ph-thumb")?.click());
+    await wait(500);
+    const lb = await page.evaluate(() => {
+      const b = document.querySelector(".ph-lightbox");
+      return b ? { open: true, img: !!b.querySelector("img") } : { open: false };
+    });
+    t.ck("tapping it opens the lightbox", lb.open === true, JSON.stringify(lb));
+    t.ck("with the picture in it", lb.img === true, JSON.stringify(lb));
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.evaluate(() => [...document.querySelectorAll(".ph-lightbox button")]
+      .find((b) => /close/i.test(b.getAttribute("aria-label") || b.innerText))?.click());
+    await wait(400);
+
     await page.evaluate(() => [...document.querySelectorAll(".qask button")]
       .find((b) => /Send a quote/i.test(b.innerText))?.click());
     await wait(500);
@@ -275,6 +387,32 @@ try {
     await wait(900);
     t.ck("the quote reaches the server", answers.length === 1, JSON.stringify(answers));
     t.ck("in whole cents", answers[0]?.priceCents === 480000, String(answers[0]?.priceCents));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- and a job nobody walked gets no panel at all --");
+  {
+    // THE ORDINARY CASE. Most jobs were typed or arrived from a CRM, so the
+    // route answers 404 and the card draws nothing -- a heading over "no
+    // photos" on every quote request in the product is the noise that teaches
+    // people to stop reading the card. The positive case above is what makes
+    // this absence mean anything: on its own it passes over a panel that never
+    // renders for anybody.
+    MY_QUOTES = [{ ...MY_QUOTES[0], inviteId: "qi_bare", status: "invited",
+      requestStatus: "open", wonIt: false, priceCents: null, answeredAt: null }];
+    inspAsks.length = 0;
+    const { ctx, page, crashes } = await open("u_bay");
+    await wait(3100);
+    const got = await page.evaluate(() => ({
+      card: !!document.querySelector(".qask"),
+      panel: !!document.querySelector(".qask .woi"),
+      only: !!document.querySelector(".qask .woi-only"),
+    }));
+    t.ck("the card is still there", got.card === true, JSON.stringify(got));
+    t.ck("and carries no inspection panel", got.panel === false, JSON.stringify(got));
+    t.ck("nor the line about which rooms", got.only === false, JSON.stringify(got));
+    t.ck("but it did ask", inspAsks.length === 1, JSON.stringify(inspAsks));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

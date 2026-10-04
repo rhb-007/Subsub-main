@@ -590,6 +590,20 @@ export const api = {
     request(`/quote-requests/${encodeURIComponent(requestId)}/cancel`, { method: "POST", body: "{}" }),
   // The other side: what we have been asked to price.
   myQuotes: () => request("/my-quotes"),
+  // WHAT WE ARE BEING ASKED TO PRICE, WITH THE PICTURES. Keyed by the INVITE,
+  // never by the inspection or the job, so there is nothing here to walk -- and
+  // narrowed to the one trade we were asked about, which is the same narrowing
+  // the scope text already gets. A 404 is the ordinary answer: most jobs have
+  // no walk behind them.
+  quoteInspection: (inviteId) =>
+    request(`/quotes/${encodeURIComponent(inviteId)}/inspection`),
+  quoteInspectionPhotoBlob: async (inviteId, photoId) => {
+    const res = await fetch(
+      `${API_BASE}/quotes/${encodeURIComponent(inviteId)}/inspection/photo/${encodeURIComponent(photoId)}`,
+      { headers: await authHeaders() });
+    if (!res.ok) throw new Error(`photo_${res.status}`);
+    return URL.createObjectURL(await res.blob());
+  },
   answerQuote: (inviteId, body) => request(`/quotes/${encodeURIComponent(inviteId)}`,
     { method: "POST", body: JSON.stringify(body) }),
   docShares: () => request("/doc-shares"),

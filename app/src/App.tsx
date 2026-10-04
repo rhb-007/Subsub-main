@@ -2755,7 +2755,7 @@ export default function SubSub() {
   const viewWOAssign = viewWO
     ? (jobs.find((j) => j.id === viewWO.job.id)?.assignments || {})[viewWO.trade] || viewWO.a
     : null;
-  const woInspection = useWoInspection(viewWOAssign?.id || null);
+  const woInspection = useRemoteInspection("wo", viewWOAssign?.id || null);
 
   // Users visible in THIS account, with their role in it.
   const accountUsers = useMemo(() => memberships
@@ -7185,7 +7185,7 @@ export default function SubSub() {
             them. Both sides of the modal get it: the hiring account because
             the inspection is theirs, the holder because the work is. */}
         {viewWOAssign?.id
-          ? <JobInspection woId={viewWOAssign.id} data={woInspection} />
+          ? <JobInspection kind="wo" id={viewWOAssign.id} data={woInspection} />
           : null}
         {/* Below the document, not inside it: the work order is a thing you
             print and this is a thing you work. Both sides open the same
@@ -12717,21 +12717,29 @@ function ReportPhoto({ jobId, photo, onOpen, onLoaded, load }) {
 // Two mounts of one component would be two fetches of one thing -- the
 // duplicate-state trap this project already refuses for the compliance pack
 // panel -- so the owner of the data is the modal and both pieces read it.
-function useWoInspection(woId) {
+// WHICH ROUTE SERVES IT, IN ONE PLACE. The work order's holder reads it by
+// work order; a company being ASKED to price reads it by invite, pre-award,
+// narrowed to their own trade. Same panel, same thumbnails, same lightbox --
+// two copies of any of that would be two things to keep in step, and the one
+// that rotted would be the quote door, since most jobs are assigned outright.
+const INSPECTION_FETCH = { wo: api.woInspection, quote: api.quoteInspection };
+const INSPECTION_PHOTO = { wo: api.woInspectionPhotoBlob, quote: api.quoteInspectionPhotoBlob };
+
+function useRemoteInspection(kind, id) {
   // undefined is still arriving, null is "there is no inspection behind this
   // work order", which is the common case and draws nothing. Two states rather
   // than one, because a spinner that never resolves and a job with no
   // inspection look identical from a single falsy value.
   const [data, setData] = useState(undefined);
   useEffect(() => {
-    if (!woId) { setData(null); return undefined; }
+    if (!id) { setData(null); return undefined; }
     let live = true;
     setData(undefined);
-    api.woInspection(woId)
+    INSPECTION_FETCH[kind](id)
       .then((d) => { if (live) setData(d && (d.rooms || []).length ? d : null); })
-      .catch((e) => { if (live) { if (e?.status !== 404) console.warn("[wo-inspection]", e); setData(null); } });
+      .catch((e) => { if (live) { if (e?.status !== 404) console.warn("[inspection-panel]", e); setData(null); } });
     return () => { live = false; };
-  }, [woId]);
+  }, [kind, id]);
   return data;
 }
 
@@ -12790,12 +12798,21 @@ function WoInspectionSummary({ data }) {
   );
 }
 
-function JobInspection({ woId, data }) {
+//
+// AND IT IS ONE PANEL FOR BOTH AUDIENCES. `kind` picks which route serves the
+// bytes and which sentence sits under the heading; everything else -- the
+// rooms, the thumbnails, the captions, the one lightbox that walks the set --
+// is identical, because it is the same evidence read by the same kind of
+// person. What DIFFERS is decided by the SERVER: a work order's holder gets
+// every flagged room, and a company being asked to price gets the rooms their
+// own trade was asked about. Deciding that here would be a redaction in the
+// browser, which is a redaction the browser can be made to undo.
+function JobInspection({ kind = "wo", id, data }) {
   const [shots, setShots] = useState({});
   const [lightbox, setLightbox] = useState(null);
-  // The photo state is keyed on the work order, so a different one opened
-  // into the same modal must not draw the last one's pictures.
-  useEffect(() => { setShots({}); setLightbox(null); }, [woId]);
+  // The photo state is keyed on whatever opened it, so a different work order
+  // or a different invite must not draw the last one's pictures.
+  useEffect(() => { setShots({}); setLightbox(null); }, [id]);
   if (!data) return null;
   // One flat set across every room, so the lightbox walks the whole unit in
   // the order it was walked rather than stopping at the end of a room -- the
@@ -12811,6 +12828,15 @@ function JobInspection({ woId, data }) {
         <span>{K ? K.label : "Inspection"}{data.unit ? ` — unit ${data.unit}` : ""}
           {data.inspectedOn ? ` · walked ${data.inspectedOn}` : ""}</span>
       </p>
+      {/* SAID, BECAUSE A HEADING READING "what the inspection found" OVER TWO
+          ROOMS WOULD BE READ AS THE WHOLE WALK -- and somebody pricing off
+          that has priced a unit rather than their own part of it. The server
+          narrows a quote invitee to the rooms their trade was asked about, so
+          the panel says which it is showing. */}
+      {kind === "quote" && (
+        <p className="woi-only">The rooms you are being asked about. The rest of the
+          walk is somebody else's to price.</p>
+      )}
       {/* The summary is NOT drawn again here. It leads the modal, above the
           document -- `WoInspectionSummary`, off the same fetch. Two copies of
           one paragraph on one screen is how somebody concludes there are two
@@ -12826,8 +12852,8 @@ function JobInspection({ woId, data }) {
             <div className="ph-grid">
               {r.photos.map((ph) => (
                 <figure key={ph.id} className="woi-shot">
-                  <ReportPhoto jobId={woId} photo={ph}
-                    load={() => api.woInspectionPhotoBlob(woId, ph.id)}
+                  <ReportPhoto jobId={id} photo={ph}
+                    load={() => INSPECTION_PHOTO[kind](id, ph.id)}
                     onLoaded={(id, url) => setShots((m) => ({ ...m, [id]: url }))}
                     onOpen={() => setLightbox(photos.findIndex((x) => x.id === ph.id))} />
                   {ph.caption && <figcaption>{ph.caption}</figcaption>}
@@ -26859,6 +26885,12 @@ function QuotePanel({ req, job, onAward, onCancelRequest }) {
 // asked for is a number.
 function QuoteAskCard({ q, onAnswer }) {
   const M = catMeta(q.trade);
+  // WHAT THEY ARE ACTUALLY PRICING, WITH THE PICTURES. The scope line says a
+  // basin is cracked; the photograph says how. Narrowed by the server to the
+  // rooms this trade was asked about, and absent on a job nobody walked --
+  // which is most of them, so the panel draws nothing rather than a heading
+  // over an empty space.
+  const insp = useRemoteInspection("quote", q.inviteId);
   const [open, setOpen] = useState(false);
   const [price, setPrice] = useState("");
   const [canStart, setCanStart] = useState("");
@@ -26898,6 +26930,7 @@ function QuoteAskCard({ q, onAnswer }) {
         <span className={`cat-badge cat-${q.trade}`}><M.icon size={12} /> {M.label}</span>
       </div>
       {q.job.scope && <p className="job-scope">{q.job.scope}</p>}
+      {insp && <JobInspection kind="quote" id={q.inviteId} data={insp} />}
 
       {!open ? (
         <div className="portal-respond">
@@ -33228,6 +33261,13 @@ strong.insp-name{background:none;border:0;padding:0}
 .woi-head{display:flex;align-items:center;gap:6px;margin:0 0 10px;font-size:12.5px;
   font-weight:600;color:var(--ink-soft)}
 .woi-head > svg{flex:none}
+/* PRE-AWARD, the panel says which rooms it is showing. It sits between the
+   heading and the first room, so the sentence is read before the evidence
+   rather than after it -- a reader who has already priced two rooms as the
+   whole unit has not been told anything by a footnote.
+   (No backticks in this stylesheet. It is a template literal, and one in a
+   comment closes it.) */
+.woi-only{margin:-4px 0 10px;font-size:11.5px;line-height:1.4;color:var(--ink-soft)}
 .woi-room{margin:0 0 12px;padding:10px 12px;border-radius:12px;background:var(--paper)}
 .woi-rhead{display:flex;align-items:center;justify-content:space-between;gap:10px;
   font-size:13px;margin-bottom:6px}

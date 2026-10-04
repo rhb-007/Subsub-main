@@ -309,9 +309,32 @@ try {
     // on a unit inspection, and the inspection panel on a work order -- which
     // is the one the contractor reads, and which arrived without this number
     // being raised, so the suite sat red for a release with its one real
-    // assertion underneath. A fifth place showing photographs should raise it
-    // again rather than grow a second lightbox.
+    // assertion underneath.
+    //
+    // A FIFTH PLACE SHOWING PHOTOGRAPHS DOES NOT ALWAYS RAISE IT, and the
+    // distinction matters because the obvious reading of the line above would
+    // have somebody add a mount to satisfy it. The quote card is a fifth
+    // place and it reuses `JobInspection`, which already holds one of these
+    // four -- so what must go up is the count of PANELS, not of grids. The
+    // assertion below is what keeps that honest: a new audience either goes
+    // through an existing panel, or it earns a mount here.
     t.ck("mounted wherever a set of photos is shown", uses === 4, String(uses));
+    // ONE INSPECTION PANEL, TWO AUDIENCES. The work order's holder reads it by
+    // work order and a company being ASKED to price reads it by invite,
+    // pre-award, narrowed by the server to their own trade. A second copy for
+    // the quote card would be a second grid, a second thumbnail loader and a
+    // second lightbox to keep in step -- and the one that rotted would be the
+    // quote door, since most jobs are assigned outright.
+    const panels = (APP.match(/function JobInspection\(/g) || []).length;
+    const panelUses = (APP.match(/<JobInspection[ />]/g) || []).length;
+    t.ck("one inspection panel", panels === 1, String(panels));
+    t.ck("and both audiences mount that one", panelUses === 2, String(panelUses));
+    // WHICH ROUTE SERVES THE BYTES IS A MAP, not a branch written at either
+    // mount: a panel that chose its own loader would be the place a third
+    // audience gets the wrong one.
+    t.ck("and the photo route is picked from one map",
+      /const INSPECTION_PHOTO = \{/.test(APP)
+        && /INSPECTION_PHOTO\[kind\]\(id, ph\.id\)/.test(APP));
     // AND EVERY THUMBNAIL REPORTS WHAT IT LOADED, which is the property that
     // matters: the lightbox draws from what the thumbnails fetched, so one
     // that stays quiet leaves it with nothing to show and no way to know why.

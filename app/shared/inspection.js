@@ -118,14 +118,46 @@ export function inspectionJobTitle(inspection = {}) {
 // below renders the same shape from a subset of the same rooms, and two
 // composers would be two documents -- a contractor reading the job's scope and
 // the one on their own work order would find the same walk worded differently.
+//
+// AND EVERY ROOM CARRIES WHAT WAS WRITTEN ABOUT ITS PHOTOGRAPHS. Asked for as
+// *"describe it by room, give the issue, image, and summary or what the issue
+// is"*. A room line said the room, the verdict and the note, and the note is
+// very often the shorter half: somebody photographs four marks in a bedroom
+// and writes a sentence about each, with "Scuffing" in the room's own box. The
+// captions are the detail and they were in the record and not on the document
+// the price is given off.
+//
+// THE KEPT CAPTION AND NEVER THE DRAFT, which is read off the field rather
+// than from which rooms were passed in. `inspectionJobScope` is called at raise
+// time with drafts INCLUDED -- the raise route hands an admin the writable
+// shape -- so a composer reading `draft` would stamp a model's unkept sentence
+// into `jobs.scope`, where it reads as a finding somebody made. Reading
+// `caption` alone is correct whichever shape arrives.
+//
+// NAMED AS A PHOTO rather than run in with the note: a caption is a sentence
+// about one picture, and a reader standing in the room needs to know which of
+// the four it refers to. Deduped against the note and against each other,
+// because the commonest caption on a one-photograph room is the note again.
+//
+// UNCAPPED, deliberately. Twelve captions is twelve faults, and a cap would
+// silently drop one from the document somebody prices from -- which is the
+// failure this whole composer exists to stop, reached from the other side.
 function scopeFrom(inspection, flagged) {
   const head = `From the ${(INSPECTION_KINDS[inspection.kind]?.label || "inspection").toLowerCase()} inspection`
     + (inspection.unit ? ` of unit ${inspection.unit}` : "")
     + (inspection.inspectedOn ? ` on ${inspection.inspectedOn}` : "") + ":";
-  const lines = flagged.map((r) => {
+  const lines = flagged.flatMap((r) => {
     const status = ROOM_STATUSES[r.status]?.label || "Flagged";
     const note = String(r.note || "").trim();
-    return `• ${roomName(r)} — ${status}${note ? `: ${note}` : ""}`;
+    const seen = new Set([note.toLowerCase()]);
+    const shots = [];
+    for (const p of r.photos || []) {
+      const cap = String(p?.caption || "").trim();
+      if (!cap || seen.has(cap.toLowerCase())) continue;
+      seen.add(cap.toLowerCase());
+      shots.push(`    - photo: ${cap}`);
+    }
+    return [`• ${roomName(r)} — ${status}${note ? `: ${note}` : ""}`, ...shots];
   });
   return [head, ...lines].join("\n");
 }
@@ -184,19 +216,26 @@ export function suggestedAccessForInspection(kind) {
 // the building -- the same line that keeps drafts off an owner's copy, which
 // this file already records. `tenant_name` is absent too: who was moving out
 // is not a contractor's business, and the unit is what they need to find.
+//
+// THE ROOM MAPPING IS ITS OWN FUNCTION because the PRE-AWARD shape below
+// renders the identical room from a narrower set. Two mappings would be two
+// redactions, and the one that drifted would be whichever door is used less
+// -- which is the quote one, since most jobs are assigned outright.
+const shapeHead = (inspection) => ({
+  kind: inspection.kind || null,
+  unit: String(inspection.unit || "").trim(),
+  inspectedOn: inspection.inspectedOn || null,
+});
+const shapeRoom = (r) => ({
+  id: r.id, name: roomName(r), status: r.status, note: String(r.note || "").trim(),
+  photos: (r.photos || []).map((p) => ({
+    id: p.id, name: p.name || "photo", type: p.type || "image/jpeg",
+    caption: String(p.caption || "").trim(),
+  })),
+});
+
 export function contractorInspectionShape(inspection = {}, rooms = []) {
-  return {
-    kind: inspection.kind || null,
-    unit: String(inspection.unit || "").trim(),
-    inspectedOn: inspection.inspectedOn || null,
-    rooms: flaggedRooms(rooms).map((r) => ({
-      id: r.id, name: roomName(r), status: r.status, note: String(r.note || "").trim(),
-      photos: (r.photos || []).map((p) => ({
-        id: p.id, name: p.name || "photo", type: p.type || "image/jpeg",
-        caption: String(p.caption || "").trim(),
-      })),
-    })),
-  };
+  return { ...shapeHead(inspection), rooms: flaggedRooms(rooms).map(shapeRoom) };
 }
 
 // WHO MAY BE SENT ONE, AND WHEN.
@@ -571,4 +610,43 @@ export function inspectionTradeScopes(inspection = {}, rooms = []) {
   const out = {};
   for (const [trade, rs] of Object.entries(byTrade)) out[trade] = scopeFrom(inspection, rs);
   return out;
+}
+
+// WHAT THE PEOPLE ASKED TO PRICE IT ARE SHOWN, which is narrower again.
+//
+// 062 gave the rooms, the kept captions and the photographs to the company
+// that WON -- `GET /api/work-orders/:id/inspection`. A quote request is
+// pre-award and there is no work order yet, so the two or three companies
+// actually being asked for a number were the ones who could not see the mark
+// they were pricing. Which is the wrong way round: a price given off a line of
+// text is a price that changes when somebody gets there.
+//
+// NARROWED TO THE TRADE'S OWN ROOMS, and that is the whole difference from the
+// shape above. `quoteJobShape` already hands over one trade and not the job's
+// list -- "the others are somebody else's to quote" -- and
+// `inspectionTradeScopes` already narrows the TEXT the same way, so a plumber
+// asked to price plumbing gets the toilet rather than eleven rooms with the
+// toilet somewhere in them. Read through the one `roomTrades` both of those
+// use, so the words a company is given and the pictures beside them cannot
+// name different rooms.
+//
+// DELIBERATELY STRICTER THAN THE WORK-ORDER VIEW, AND THE TWO MUST NOT BE
+// HARMONISED. The holder of a work order has the job: the whole walk is
+// context for work they are committed to. An invitee has a question, and two
+// or three of them have the same one -- so each sees what they were asked
+// about and nothing of the rest of the unit. Same shape, different redaction,
+// for the reason an incoming manager's roll-up is stricter than an owner's.
+//
+// A TRADE NOTHING MATCHED GETS NO ROOMS, never the whole walk as a fallback.
+// That is the same answer the scope gives in the same case -- the manager
+// typed that scope by hand, so which rooms it was about is not something this
+// can know, and widening to all of them would hand over the unit because a
+// word did not match.
+//
+// AND NO SUMMARY. The paragraph is written from every flagged room, so
+// carrying it here would put back in one block exactly what narrowing takes
+// out.
+export function quoteInspectionShape(inspection = {}, rooms = [], trade = null) {
+  const mine = flaggedRooms(rooms).filter((r) => !!roomTrades(r).hits[trade]);
+  return { ...shapeHead(inspection), trade: trade || null, rooms: mine.map(shapeRoom) };
 }

@@ -8940,6 +8940,128 @@ refactor.
   what found this.
 
 
+- **THE PEOPLE BEING ASKED TO PRICE THE WORK COULD NOT SEE IT, AND THE ROOMS
+  THEY GET ARE NARROWER THAN THE WINNER'S.** 062 carried the flagged rooms, the
+  kept captions and the photographs to the company that **won** —
+  `GET /api/work-orders/:id/inspection`. A quote request is **pre-award and has
+  no work order**, so the two or three companies actually being asked for a
+  number were the only readers who could not see the mark. Which is the wrong
+  way round: a price given off a line of text is a price that changes when
+  somebody gets there, and the moment the picture is worth most is before the
+  number is given rather than after.
+
+  **KEYED BY THE INVITE, which is what makes it safe rather than a second door
+  into the Inspections tab.** Same shape and same reasoning as the work-order
+  route: there is no route anywhere that takes an inspection id and describes
+  it, so nothing can be walked. The invite names the request, the request names
+  the job, the job names the inspection.
+
+  **SCOPED EXACTLY AS `/api/my-quotes` IS, clause for clause.** The detail must
+  be reachable for precisely the invites the list carries — narrower and a row
+  on their own screen opens onto a refusal, wider and there is a door into a job
+  their list does not show them. A cancelled or awarded request still answers,
+  because it still appears on that list.
+
+  **NARROWED TO THE TRADE'S OWN ROOMS, and that is the whole difference from the
+  work-order view.** `quoteJobShape` already hands over one trade and not the
+  job's list — *"the others are somebody else's to quote"* — and
+  `inspectionTradeScopes` already narrows the **text** the same way, so a
+  plumber asked to price plumbing gets the toilet rather than eleven rooms with
+  the toilet somewhere in them. Read through the one `roomTrades` both of those
+  use, so the words a company is given and the pictures beside them cannot name
+  different rooms. The test asserts that **against the per-trade scope rather
+  than against a literal**: a shape with its own matching could be internally
+  consistent and still show rooms the text never mentioned, and the contractor
+  reads both side by side.
+
+  **DELIBERATELY STRICTER THAN THE WORK-ORDER VIEW, AND THE TWO MUST NOT BE
+  HARMONISED.** The holder of a work order has the job, so the whole walk is
+  context for work they are committed to. An invitee has a question, and two or
+  three of them have the same one. Same component, same thumbnails, same
+  lightbox, different redaction — the shape this file already records about an
+  incoming manager's roll-up being stricter than an owner's.
+
+  **AND THE PHOTO ROUTE IS NARROWED THE SAME WAY, which is the assertion that
+  discriminates.** The work-order route pins a photograph with `isFlagged`, and
+  a copy of that check here serves the painter's wall to the plumber while
+  **every other assertion in the file passes** — the mutation that proves it
+  fires three. So the photo route reads the ids off the **shape the panel was
+  drawn from** rather than asking a second and looser question about the room:
+  a picture can never come from a room the panel did not show.
+
+  **A TRADE NOTHING MATCHED GETS NO ROOMS, never the whole walk as a
+  fallback.** That is the same answer the scope gives in the same case — the
+  manager typed that scope by hand, so which rooms it was about is not
+  something this can know, and widening to all of them would hand over the unit
+  because a word did not match.
+
+  **AND NO SUMMARY.** It is written from every flagged room, so carrying it
+  would put back in one paragraph exactly what the narrowing takes out.
+
+  **ONE PANEL FOR BOTH AUDIENCES, and `test:lightbox` is where that is held.**
+  `JobInspection` takes a `kind`, which picks the route the bytes come from and
+  the sentence under the heading; everything else is identical. A second copy
+  would be a second grid, a second thumbnail loader and a second lightbox to
+  keep in step, and the one that rotted would be the quote door, since most jobs
+  are assigned outright. Which needed that suite's own note corrected: it said
+  *a fifth place showing photographs should raise this number*, and a fifth
+  place has appeared and the number is right at four — **what goes up is the
+  count of PANELS, not of grids**, so the assertion beside it is now one panel
+  mounted by two audiences, and that a third audience either goes through it or
+  earns a mount.
+
+  **WHAT A HEADING READING "what the inspection found" SAYS OVER TWO ROOMS is
+  the whole unit**, and somebody pricing off that has priced a unit rather than
+  their own part of it. So the panel says which it is showing — *the rooms you
+  are being asked about* — and that line is drawn **before** the evidence, since
+  a reader who has already priced two rooms as the whole job has not been told
+  anything by a footnote.
+
+  **AND "the photograph really loaded" COULD NOT SEE WHICH ROUTE SERVED IT.**
+  `ReportPhoto` fails only when the fetch rejects, and a stub answers something
+  for every path, so a loader hard-coded to the work-order route still draws an
+  `<img>` — the mutation survived with 57 green. The ask is counted **on the
+  wire** now and the path is asserted, which is the only place that claim is
+  checkable: there is no work order yet, which is the entire reason this route
+  exists.
+
+  **AND EVERY ROOM LINE IN THE SCOPE NOW CARRIES WHAT WAS WRITTEN ABOUT ITS
+  PHOTOGRAPHS**, which is the other half of the same ask: *"describe it by room,
+  give the issue, image, and summary or what the issue is"*. A room line said
+  the room, the verdict and the note — and the note is very often the shorter
+  half, because somebody photographs four marks in a bedroom, writes a sentence
+  about each, and puts "Scuffing" in the room's own box. The captions were in
+  the record and not on the document the price is given off.
+
+  It is in **`scopeFrom`**, so it reaches the job's own stamped `jobs.scope` and
+  every per-trade seed through one composer — the two must not word one walk two
+  ways. Stamped, so nothing already raised moves.
+
+  **THE KEPT CAPTION AND NEVER THE DRAFT, read off the FIELD rather than from
+  which rooms were passed in.** `inspectionJobScope` runs at raise time with the
+  **writable** shape, drafts included, so a composer reading `draft` would stamp
+  a model's unkept sentence into `jobs.scope` where it reads as a finding
+  somebody made. Reading `caption` alone is correct whichever shape arrives, and
+  the fixture carries a room with a draft and no caption because that is the only
+  row either reading can be told apart on.
+
+  **NAMED AS A PHOTOGRAPH rather than run in with the note**, because a caption
+  is a sentence about one picture and a reader standing in the room needs to know
+  which of the four it refers to. Deduped against the note and against each
+  other, since the commonest caption on a one-photograph room is the note again
+  and a document saying it twice reads as two faults. **Uncapped**, deliberately:
+  twelve captions is twelve faults, and a cap would silently drop one from the
+  document somebody prices from, which is the failure this composer exists to
+  stop reached from the other side.
+
+  Seven server mutations and three browser ones fire, each on its own assertion.
+  One harness fault worth keeping, and it is a new spelling of an old one: a
+  regex written into the test through a Python heredoc had `\b` in a non-raw
+  string, so `/<JobInspection\b/` became `/<JobInspection\x08/` and the count
+  read zero — a selector that matches nothing, reporting the product as missing
+  on a screen that had rendered perfectly, for the fourth time.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
