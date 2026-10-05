@@ -1,0 +1,151 @@
+# Deploy the marketing site (subsub.work).
+#
+# The fourth button, for the fourth thing that ships. The site is a Cloudflare
+# Worker serving the repository root as static files -- `subsub-main`, from
+# wrangler.jsonc at the root -- and until this file existed the only thing
+# that deployed it was a build wired up on Cloudflare's side, with no record in
+# the Actions tab. That is the same blind spot deploy-app.yml was written to
+# close: a change goes in, nothing here says whether it shipped, and the only
+# symptom is a page that does not change.
+#
+#   Actions tab -> "Deploy marketing site" -> Run workflow. Works from a phone.
+#
+# It uses the two secrets the Worker deploys already use, CLOUDFLARE_API_TOKEN
+# and CLOUDFLARE_ACCOUNT_ID. The token already edits Workers, which is all this
+# needs.
+#
+# WHAT IT PUBLISHES IS THE WHOLE POINT OF TWO OF ITS STEPS. Serving the root
+# means serving the repository: the app's source, the Worker, the migrations,
+# CLAUDE.md. `.assetsignore` is an allow-list that publishes only the site, and
+# this workflow refuses to deploy unless `test:siteassets` -- which applies
+# that file the way wrangler does, to the real tree -- passes. Then, after the
+# deploy, it asks the live site for a private file and fails if it gets one,
+# because a check that only reads the config is the
+# prove-it-from-the-variable mistake deploy-app.yml already records.
+#
+# If Cloudflare's own build is still connected to this repository, both will
+# deploy on a push. That is harmless -- they publish the same thing, and the
+# Cloudflare-side build honours .assetsignore too -- and it can be switched off
+# in the Worker's settings once this has run green.
+name: Deploy marketing site
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "*.html"
+      - "*.png"
+      - "*.webp"
+      - "*.ico"
+      - "*.svg"
+      - "*.webmanifest"
+      - "robots.txt"
+      - "sitemap.xml"
+      - "_redirects"
+      - "licensing/**"
+      - "compare/**"
+      - "blog/**"
+      - "wrangler.jsonc"
+      - ".assetsignore"
+      - "app/scripts/site-assets-test.mjs"
+      - ".github/workflows/deploy-site.yml"
+
+concurrency:
+  group: deploy-site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Check the credentials are set
+        id: creds
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ASKED_FOR: ${{ github.event_name }}
+        run: |
+          missing=""
+          [ -n "$TOKEN" ]   || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "$ACCOUNT" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          if [ -z "$missing" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          if [ "$ASKED_FOR" = "workflow_dispatch" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            exit 1
+          fi
+          echo "::notice::Not deploying:$missing not set. Checking anyway."
+
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      # Nothing goes up unless the allow-list publishes the site and only the
+      # site, checked against the files as they are in this commit.
+      - name: Only the site is published
+        working-directory: app
+        run: npm run test:siteassets
+
+      # The site's own static checks: every link resolves, the footer is on
+      # every page, the structured data matches what a reader sees.
+      - name: The site's own checks
+        working-directory: app
+        run: npm run test:discover
+
+      - name: Check it is the site's config we are about to use
+        run: |
+          name=$(grep -m1 '"name"' wrangler.jsonc | cut -d'"' -f4)
+          if [ "$name" != "subsub-main" ]; then
+            echo "::error::wrangler.jsonc names '$name', expected 'subsub-main'."
+            exit 1
+          fi
+          echo "deploying $name"
+
+      # The installed dependencies come off before the upload. The allow-list
+      # ignores them anyway; removing them means there is nothing in the tree
+      # for a mistake in it to publish. wrangler runs from npx's own cache, at
+      # the version the app pins, so it is not inside the folder it uploads.
+      - name: Deploy
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          version=$(node -p "require('./app/node_modules/wrangler/package.json').version")
+          rm -rf app/node_modules
+          npx --yes "wrangler@${version}" deploy --config wrangler.jsonc
+
+      # PROVE IT FROM THE LIVE SITE. The pages a reader opens must answer, and
+      # a file that is not part of the site must not -- asked of subsub.work
+      # itself, because that is the only place the answer means anything.
+      # Retried for a minute, since a new version takes a moment to land.
+      - name: The live site serves the site, and only the site
+        if: steps.creds.outputs.ready == 'true'
+        run: |
+          code() { curl -s -o /dev/null -w "%{http_code}" --max-time 15 "https://subsub.work$1"; }
+          ok=0
+          for i in 1 2 3 4 5 6; do
+            home=$(code /)
+            priv=$(code /CLAUDE.md)
+            src=$(code /app/worker/index.js)
+            echo "try $i: / -> $home, /CLAUDE.md -> $priv, /app/worker/index.js -> $src"
+            if [ "$home" = "200" ] && [ "$priv" != "200" ] && [ "$src" != "200" ]; then ok=1; break; fi
+            sleep 10
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::subsub.work is not serving only the site (home $home, CLAUDE.md $priv, worker source $src)."
+            exit 1
+          fi
+          echo "subsub.work serves the site and keeps the repository private."

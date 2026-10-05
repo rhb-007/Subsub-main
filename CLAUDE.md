@@ -9487,7 +9487,32 @@ refactor.
   of bug — a name used and never declared, which esbuild does not check and
   which white-screens the app on render.
 
-- **Three things deploy, and each one is a button in the Actions tab.**
+- **THE MARKETING SITE IS THE FOURTH, AND IT WAS PUBLISHING THE REPOSITORY.**
+  `wrangler.jsonc` at the root serves `"directory": "./"`, and wrangler's
+  asset walk ignores nothing by default — not `app/`, not `.git`, not
+  `node_modules` (which is how a run once died on a 126 MiB file). So every
+  deploy of subsub.work uploaded the app's source, the Worker, the migrations
+  and this file alongside the pages. It could not be confirmed against the
+  live site from here — subsub.work is outside this environment's network —
+  which is exactly why the workflow now confirms it from a runner.
+
+  `.assetsignore` is an **allow-list**: ignore everything, then name the
+  site's own files and its three generated sections, so a new file at the root
+  is private until somebody adds it — the safe direction to be wrong in.
+  `test:siteassets` applies it with wrangler's own matcher (the `ignore`
+  package, the same three default patterns, the same recursive walk) to the
+  real tree and checks both directions: nothing private by name **and by
+  shape**, and nothing a page links to held back. wrangler's own debug log
+  agreed with it to the file: 169 kept out of about 29,100.
+
+  `deploy-site.yml` refuses to upload unless that suite and `test:discover`
+  pass, removes `node_modules` before the upload, and then asks subsub.work
+  itself for `/CLAUDE.md` and the Worker source and fails if either answers
+  200. Cloudflare's own git-connected build, if still on, honours the same
+  file.
+
+- **Four things deploy, and each one is a button in the Actions tab** — the
+  fourth, `deploy-site.yml`, is the marketing site above.
   `deploy-api.yml` is the `subsub-api` Worker, `deploy-admin.yml` is the
   `subsub-admin` Worker, and `deploy-app.yml` is the Cloudflare Pages project
   `subsub-app` — which is what serves `app.subsub.work` and every tenant

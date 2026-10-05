@@ -1,0 +1,24 @@
+# What subsub.work publishes: the marketing site and NOTHING ELSE.
+#
+# wrangler.jsonc serves the repository root ("assets": {"directory": "./"}),
+# and with no ignore file that is the whole repository -- the app's source,
+# the Worker, the migrations, CLAUDE.md, the business notes. So this is an
+# allow-list rather than a deny-list: ignore everything, then name what the
+# site is made of. A new file at the root is private until it is added here,
+# which is the safe direction to be wrong in.
+#
+# Read by wrangler with gitignore rules (the `ignore` package), and checked
+# by app/scripts/site-assets-test.mjs against the real tree before any deploy.
+*
+!*/
+!/*.html
+!/*.png
+!/*.webp
+!/*.ico
+!/*.svg
+!/*.webmanifest
+!/robots.txt
+!/sitemap.xml
+!/licensing/**
+!/compare/**
+!/blog/**
