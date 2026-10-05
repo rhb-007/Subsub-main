@@ -142,6 +142,80 @@ for (const name of FOOTER_PAGES) {
     (foot.match(/<h4>Resources<\/h4>[\s\S]{0,200}/) || [""])[0].replace(/\s+/g, " ").slice(0, 120));
 }
 
+// AND THE SECOND THING THAT PAGE DOCUMENTS NEEDS ITS OWN DOOR.
+//
+// The same token posts unit inspections, and that section shipped complete and
+// unreachable: no `id` to link to, and one footer link named "Connect your
+// CRM". An inspection app is not a CRM, so a managing agent who walks units on
+// a tablet never clicks it -- which is the reading error this repository has
+// now paid for twice, naming the page after one CRM and filing it under
+// "Developer tools". Third instance.
+//
+// The page is deliberately NOT renamed to cover both. Nearly every reader is
+// connecting a CRM, and a heading vague enough to cover an inspection app too
+// makes the common case worse to serve the rarer one -- the trade refused
+// elsewhere here. Two named doors into one page is the answer.
+console.log("\nand so does the inspections half of it");
+{
+  const dev = read("developers.html");
+  // A fragment pointing at nothing scrolls to the top of a long page, which
+  // reads exactly like a broken link rather than like a missing anchor.
+  ck("the inspections section has an id to land on",
+    /<h2 id="inspections">/.test(dev),
+    (dev.match(/<h2[^>]*>Unit inspections<\/h2>/) || ["missing"])[0]);
+  for (const name of FOOTER_PAGES) {
+    const foot = footerOf(read(name));
+    ck(name, foot.includes('href="developers.html#inspections"'),
+      (foot.match(/<h4>Resources<\/h4>[\s\S]{0,260}/) || [""])[0].replace(/\s+/g, " ").slice(0, 160));
+  }
+}
+
+// AND THE INDEX SAYS IT EXISTS, IN THE TIER IT HONESTLY BELONGS IN.
+//
+// The integrations section opens "Keep scheduling wherever you schedule" and
+// its three cards are about CRMs, so the one page a prospect reads never
+// answered "will this take my unit walks". It does now -- and the rule that
+// section already runs on decides WHERE: a name under "Built in" is a promise
+// that SubSub reads that system's own fields, and `INSPECT_PRESETS` carries
+// `generic` alone because nobody here has seen a real payload from an
+// inspection app. So inspections are described by shape and no product is
+// named, which is the looks-supported-fails-silently failure refused in
+// advance rather than after a release.
+console.log("\nthe index says unit walks arrive the same way");
+{
+  const idx = read("index.html");
+  // STRIP THE HTML COMMENTS FIRST. The note above that paragraph explains why
+  // inspections sit in tier three, so it contains the word -- and a substring
+  // check reads a comment exactly like the copy it describes, which is the
+  // trap `test:rosterword` already records about `//` and JSX comments. Found
+  // by mutation: deleting the sentence left the assertion green on its own
+  // explanation.
+  const noComments = (h) => h.replace(/<!--[\s\S]*?-->/g, "");
+  const sec = noComments((idx.match(/<section class="sec sec-bone" id="integrations">[\s\S]*?<\/section>/) || [""])[0]);
+  ck("the integrations section is still there", sec.length > 400, String(sec.length));
+  ck("and it names unit inspections", /inspection/i.test(sec), String(/inspection/i.test(sec)));
+  ck("with a link to the section that documents them",
+    sec.includes('href="developers.html#inspections"'), String(sec.includes("#inspections")));
+
+  // The guard that protects the positioning rather than the sentence. Every
+  // name in the "Built in" card must have a preset behind it, so a later pass
+  // cannot add an inspection app -- or a CRM -- to the one tier that claims
+  // SubSub reads its fields. The exact-match assertion further down compares
+  // `data-src` against the verified presets; this is what stops a name being
+  // added WITHOUT one, which that check cannot see.
+  const builtIn = (sec.match(/Built in<\/span>[\s\S]*?<\/ul>/) || [""])[0];
+  const rows = [...builtIn.matchAll(/<li\b[^>]*>/g)].map((m) => m[0]);
+  ck("the Built in card has names in it", rows.length >= 1, String(rows.length));
+  ck("and every one of them has a preset behind it",
+    rows.every((r) => r.includes("data-src=")), rows.join(" "));
+
+  // The inspections sentence sits OUTSIDE the three cards, because it is a
+  // second object arriving rather than a fourth kind of sender.
+  const cards = (sec.match(/<div class="ints">[\s\S]*?<\/div>\s*<\/div>/) || [""])[0];
+  ck("and the inspections line is not inside the tier cards",
+    !/inspection/i.test(cards), (cards.match(/.{0,60}inspection.{0,60}/i) || [""])[0]);
+}
+
 // The generated pages take the footer from the chrome slice, so a change to
 // the site reaches all 71 of them -- but only after `npm run licensing` runs.
 // Forgetting that leaves two thirds of the site's pages on last month's footer,

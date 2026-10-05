@@ -10090,3 +10090,61 @@ refactor.
   bare lookup inside the line found whichever existed and reported the value's
   note as the scope's — the `.embed-code-btn` trap, from the selector side. The
   note is read off the textarea's own label.
+
+- **THE INSPECTIONS WEBHOOK WAS DOCUMENTED AND UNREACHABLE, WHICH IS THE
+  NO-WAY-IN FAILURE ON THE OTHER SIDE OF THE API.** 068 shipped the receiver
+  *and* its section on `developers.html` — both addresses, a row per field, the
+  conditions queue, the always-a-draft rule — with `test:discover` pinning each
+  of those against `shared/inspectingest.js`. What it did not ship is any way to
+  arrive at it: the section carried **no `id`**, so nothing could link to it,
+  and the one footer link on every page reads *Connect your CRM*.
+
+  **AN INSPECTION APP IS NOT A CRM**, so a managing agent who walks units on a
+  tablet never presses that link — the reading error this file already records
+  twice, about naming the page after one CRM and about filing it under
+  *Developer tools*. Third instance, and the first where the words were right
+  and the **door** was missing.
+
+  **THE PAGE IS DELIBERATELY NOT RENAMED, and that is the decision rather than
+  the shortcut.** Nearly every reader is connecting a CRM; a heading vague
+  enough to cover an inspection app as well (*Connect your systems*) makes the
+  common case worse to serve the rarer one, which is the trade refused where the
+  account switcher keeps its flat list under the threshold. **Two named doors
+  into one page** is the answer: `id="inspections"` and a second Resources entry,
+  *Send inspections in*. The URL stays `/developers` — a URL is not a heading.
+
+  **AND THE INDEX ANSWERS IT IN THE TIER IT HONESTLY BELONGS IN.** That section
+  opens *"Keep scheduling wherever you schedule"* and its three cards are about
+  CRMs, so the one page a prospect reads never said unit walks arrive at all.
+  Where it goes is decided by the rule the section already runs on: a name under
+  **Built in** is a promise that SubSub reads that system's own fields, and
+  `INSPECT_PRESETS` carries `generic` alone because nobody here has seen a real
+  payload from an inspection app. So the sentence names the **shape** —
+  anything that can send a web request, or an automation tool in front of
+  anything that cannot — and **no product at all**.
+
+  **The guard is on the positioning rather than on the sentence.** The existing
+  check compares `data-src` against the verified presets exactly, which cannot
+  see a name added **without** one — so every `<li>` in the Built-in card must
+  carry a `data-src`, and the inspections line must sit outside the three cards,
+  because it is a second object arriving rather than a fourth kind of sender.
+  Adding `<li>AppFolio Inspections</li>` to that card fails two assertions.
+
+  **AND MY OWN NEW ASSERTION COULD NOT FAIL, caught by mutation on the first
+  run.** *The index names unit inspections* read the section with a substring,
+  and the note above the paragraph explains why inspections are tier three — so
+  it contains the word, and deleting the sentence left the check green **on its
+  own explanation**. Seventh instance of a comment reading to a scanner exactly
+  like the code it describes, this time in HTML and in a test I had just
+  written. `noComments` strips `<!-- … -->` first; the mutation then fires two.
+
+  Four mutations fire: the anchor removed, one page losing the footer link, an
+  unbacked name in the Built-in card, and the index sentence deleted.
+
+  **Not verified here:** the marketing site at the repo root has **no deploy
+  workflow** — `deploy-app.yml`, `deploy-api.yml` and `deploy-admin.yml` all
+  watch `app/` — so these pages reach subsub.work by whatever is connected to
+  the repository rather than through Actions, and a push cannot be confirmed
+  green the way the other three can. Worth a workflow of its own, for the reason
+  the customer app got one: *a deploy nobody can press is a deploy nobody can
+  fix*, and this one cannot even be watched.
