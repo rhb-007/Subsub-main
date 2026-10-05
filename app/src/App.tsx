@@ -21909,8 +21909,30 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
   }) : null;
   const capSay = capChk ? handymanCapText(capChk) : null;
   const pickSub = (sb) => {
-    const init = { [trade]: { on: true, scope: "", value: "" } };
-    bundleable(sb).forEach((t) => { init[t] = { on: false, scope: "", value: "" }; });
+    // THE SEED SURVIVES CHOOSING, WHICH IS WHERE IT WAS BEING LOST.
+    //
+    // Reported as the per-trade scope still opening blank on an inspection
+    // follow-up -- with the note under it reading "Filled in from the painting
+    // rooms on the inspection" over an empty box. Everything about the seed
+    // was right: the route answered, the effect above ran, and `lines` held
+    // the text. Then this function, which runs when the contractor is picked,
+    // replaced the whole of `lines` with a fresh object whose every scope is
+    // "". The scope boxes do not exist until that press, so the seed was
+    // being written and wiped BEFORE anything could draw it.
+    //
+    // THE NOTE AND THE BOX ARE TWO RECORDS OF ONE FACT, AND THE ONE PEOPLE
+    // READ WENT WRONG. The note is gated on `tradeScopes[t]`, which this never
+    // touched, so it went on claiming a fill that had just been undone -- the
+    // screen-that-lies rule, with the lie inside one label. No static check
+    // could see it: both halves read exactly as intended, and the only witness
+    // is the drawn textarea after the pick.
+    //
+    // `typed.current` is still what decides, so clearing a box and choosing
+    // somebody else does not put the seed back: seeded, never forced.
+    const keep = (t) => (typed.current[t] ? (lines[t]?.scope || "")
+      : (lines[t]?.scope || tradeScopes[t] || ""));
+    const init = { [trade]: { on: true, scope: keep(trade), value: "" } };
+    bundleable(sb).forEach((t) => { init[t] = { on: false, scope: keep(t), value: "" }; });
     setLines(init);
     const fc = dayStatus(sb, allJobs || jobs, job.date, job.id, accountId)?.crews || sb.crews || [];
     setCrewPick(fc[0]?.name || "");

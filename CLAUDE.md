@@ -10038,3 +10038,55 @@ refactor.
   longer matters for this file, which uses none — but any **other** query in
   this repository that grows a `UNION` chain is in exactly the position this one
   was in, and the number it may not reach is smaller than anybody would guess.
+
+- **THE SEED WAS WRITTEN AND WIPED BEFORE ANYTHING COULD DRAW IT, AND THE NOTE
+  BESIDE THE BOX WENT ON CLAIMING IT.** Reported as *"the scope is empty still
+  when raising a job for an inspection follow up … should be prepopulated"*,
+  with the work-order modal on screen: an empty **Scope for painting** box, its
+  placeholder showing, and the italic note under it reading *"Filled in from the
+  painting rooms on the inspection. Edit it if you want."*
+
+  **EVERY PIECE OF THE FEATURE WAS WORKING.** `GET /api/jobs/:id/trade-scope`
+  answered, `useJobTradeScope` fetched it, the seeding effect in
+  `PickContractor` ran, and `lines` held the text. Then `pickSub` — which runs
+  when somebody picks the contractor, and is the press that makes the scope
+  boxes exist at all — replaced the whole of `lines` with a fresh object whose
+  every scope was `""`. **The box the seed is for does not exist until after
+  the thing that wipes it**, so the seed was correct, applied, and unobservable.
+
+  **THE NOTE AND THE BOX ARE TWO RECORDS OF ONE FACT, AND THE ONE PEOPLE READ
+  WENT WRONG.** The note is gated on `tradeScopes[t]`, which `pickSub` never
+  touched, so it kept announcing a fill that had just been undone — the
+  screen-that-lies rule, inside a single label. Which is also why the report
+  reads as a feature that was never built rather than as one press too many:
+  the screen says it happened.
+
+  **NO STATIC CHECK COULD SEE IT, and `test:tradescope` passed throughout.**
+  The effect is exactly right, its typed-guard is exactly right, `pickSub` is
+  exactly right for everything it was written to initialise, and the bug is only
+  in the ORDER of two correct pieces. That suite asserts the effect and the
+  guard in the source — which is the class this project keeps catching from the
+  other direction, an assertion that cannot fail; this is its sibling, an
+  assertion that can only ever have been about the wrong half. The only witness
+  is the drawn textarea after the pick, so `test:scopeseed` drives the modal and
+  reads it back.
+
+  **`typed.current` IS STILL WHAT DECIDES, so a box somebody CLEARED stays
+  cleared.** Putting the seed back over an emptied box is the
+  preselection-mistaken-for-a-choice failure one press along, and it is a real
+  path: pick a contractor, clear the box, press Back, pick somebody else. The
+  mutation that drops that half fails exactly that assertion.
+
+  **AND THE NEGATIVE HALF IS ASSERTED IN THE SAME PLACE.** A "fix" that filled
+  every box, or that fell back to the job's whole scope when a trade had no
+  slice, passes every positive assertion and puts eleven rooms on a work order
+  for the one trade the walk said nothing about — which is the failure
+  `inspectionTradeScopes` exists to prevent, reintroduced one layer up. Three
+  mutations fire, each on its own assertion: the blank-out restored, the typed
+  guard dropped, and the job-scope fallback added.
+
+  One harness trap worth keeping, and it is this file's own: `.fld-note` is also
+  the class on the value field's hint (*"their pay for this trade only"*), so a
+  bare lookup inside the line found whichever existed and reported the value's
+  note as the scope's — the `.embed-code-btn` trap, from the selector side. The
+  note is read off the textarea's own label.
