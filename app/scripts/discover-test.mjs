@@ -181,7 +181,7 @@ console.log("\nand so does the inspections half of it");
 // inspection app. So inspections are described by shape and no product is
 // named, which is the looks-supported-fails-silently failure refused in
 // advance rather than after a release.
-console.log("\nthe index says unit walks arrive the same way");
+console.log("\nthe index integrations section");
 {
   const idx = read("index.html");
   // STRIP THE HTML COMMENTS FIRST. The note above that paragraph explains why
@@ -193,10 +193,14 @@ console.log("\nthe index says unit walks arrive the same way");
   const noComments = (h) => h.replace(/<!--[\s\S]*?-->/g, "");
   const sec = noComments((idx.match(/<section class="sec sec-bone" id="integrations">[\s\S]*?<\/section>/) || [""])[0]);
   ck("the integrations section is still there", sec.length > 400, String(sec.length));
-  ck("and it names unit inspections", /inspection/i.test(sec), String(/inspection/i.test(sec)));
-  ck("with a link to the section that documents them",
-    sec.includes('href="developers.html#inspections"'), String(sec.includes("#inspections")));
-
+  // THE INSPECTIONS PARAGRAPH CAME OFF, ON REQUEST: a paragraph about a
+  // second kind of record under a section about CRMs read as noise. The door
+  // it was is still the footer link on every page, asserted above, and the
+  // section on the developer page. What must not happen is a half-removal
+  // that leaves the link to it dangling here.
+  ck("and the inspections paragraph is gone from it", !/inspection/i.test(sec),
+    (sec.match(/.{0,60}inspection.{0,60}/i) || [""])[0]);
+  ck("the section still points at the developer page", sec.includes('href="developers.html"'));
   // The guard that protects the positioning rather than the sentence. Every
   // name in the "Built in" card must have a preset behind it, so a later pass
   // cannot add an inspection app -- or a CRM -- to the one tier that claims

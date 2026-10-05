@@ -4381,6 +4381,18 @@ refactor.
   date column earned. Asserted as the mechanism rather than the position,
   because this suite is static and both halves are needed for either to work.
 
+  **AND THE TIERS ARE CARDS, BECAUSE ON A TABLET THEY RAN TOGETHER.** At an
+  iPad's upright width each column was about 230px of grey text with only a
+  rule on top, so one tier read straight into the next. Each is a white card
+  now, three across only above 1000px and stacked below it. The inspections
+  paragraph under them came off **on request** — a second kind of record under
+  a section about CRMs read as noise — and the door it was is the footer link
+  on every page plus the developer page's own section. **AppFolio was asked for
+  and is deliberately not on it**: SubSub has no AppFolio receiver, AppFolio is
+  not on Zapier, and its own API is a partner programme with write access by
+  AppFolio's approval. A name here is a promise, which is this entry's whole
+  rule.
+
   **Still open, and pre-existing:** `developers.html` scrolls sideways at
   390px — the field tables and the long webhook URLs overflow, measured at 541px
   against a 390px viewport with none of this change applied. It matters slightly

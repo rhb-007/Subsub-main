@@ -157,21 +157,36 @@ nav.top a.btn-gold:hover{color:#20160A}
    Zapier step can post to SubSub" are both true and are not the same promise,
    and the gap between them is exactly where an integration that looks
    supported fails silently on first contact. The tier is the honesty. */
-.ints{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;margin-top:44px}
-/* A COLUMN, so the names line up across all three. The paragraphs are
-   different lengths, so without this the chips sit at three different heights
-   — and a row that is almost aligned reads as a mistake rather than as a
-   table, which is the same lesson the compliance pack's date column records. */
-.int{display:flex;flex-direction:column;padding-top:22px;border-top:2px solid var(--forest)}
-.int-tag{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.06em;
+.ints{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:36px}
+/* A CARD AND A COLUMN. The card is what stops three blocks of grey text
+   running into each other on a tablet -- each tier reads as one object with
+   an edge -- and the column is what lines the names up across all three: the
+   paragraphs are different lengths, so without the push the chips sit at three
+   different heights, and a row that is almost aligned reads as a mistake
+   rather than as a table. */
+.int{display:flex;flex-direction:column;padding:22px 22px 20px;background:#fff;
+  border:1px solid var(--rule);border-top:3px solid var(--forest);border-radius:14px}
+.int-tag{display:inline-block;font-size:11.5px;font-weight:700;letter-spacing:.07em;
   text-transform:uppercase;color:var(--gold-ink)}
-.int h3{margin-top:9px;font-size:19px;letter-spacing:-.02em}
-.int p{margin-top:9px;font-size:15.5px;color:var(--muted);line-height:1.55}
+.int h3{margin-top:8px;font-size:19px;letter-spacing:-.02em;line-height:1.25}
+.int p{margin-top:8px;font-size:15px;color:var(--muted);line-height:1.55}
 /* The names, which are the whole point: "works with any CRM" is true and
    useless, because somebody has to recognise their own tool to believe it. */
-.int-names{display:flex;flex-wrap:wrap;gap:7px;margin:auto 0 0;padding:14px 0 0;list-style:none}
-.int-names li{font-size:14px;font-weight:600;padding:4px 10px;border-radius:999px;
+.int-names{display:flex;flex-wrap:wrap;gap:7px;margin:auto 0 0;padding:16px 0 0;list-style:none}
+.int-names li{font-size:14px;font-weight:600;padding:4px 11px;border-radius:999px;
   background:var(--bone);border:1px solid var(--rule)}
+.ints-more{margin-top:24px;font-size:15.5px;color:var(--muted)}
+/* The section ended in two paragraphs of lede plus the full section padding,
+   which on a tablet was a screen of nothing under the last line. */
+#integrations{padding-bottom:64px}
+/* Three columns only where three columns fit. Between a phone and a desktop
+   -- an iPad held upright -- each card was about 230px wide, so the tier name
+   wrapped, the headings wrapped, and the text of one column read straight
+   into the next. Full-width cards, one above another, until there is room. */
+@media (max-width:1000px){
+  .ints{grid-template-columns:1fr;gap:14px}
+  .int-names{padding-top:12px}
+}
 
 /* ---------- pricing ---------- */
 .plans{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:44px}
@@ -303,7 +318,7 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
   .cmp th:first-child{width:40%}
 }
 @media (max-width:760px){
-  .rows2,.auds,.plans,.foot,.ints{grid-template-columns:1fr}
+  .rows2,.auds,.plans,.foot{grid-template-columns:1fr}
   .steps-bar{flex-direction:column}
   .steps-bar div{border-right:0;border-bottom:1px solid var(--rule)}
   .steps-bar div:last-child{border-bottom:0}
@@ -527,7 +542,7 @@ body.nav-open{overflow:hidden}
 <meta name="twitter:image" content="https://subsub.work/og-image.png">
 <meta name="twitter:title" content="Subcontractor Management & Compliance Software | SubSub">
 <meta name="twitter:description" content="Onboard subcontractors, verify insurance, bonds and licenses, schedule crews, issue work orders and track labor warranties by job. Free for 3 subs.">
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://subsub.work/#org","name":"SubSub","legalName":"SubSub, LLC","url":"https://subsub.work/","logo":"https://subsub.work/index.html","email":"legal@subsub.work","address":{"@type":"PostalAddress","streetAddress":"4616 25th Ave NE","addressLocality":"Seattle","addressRegion":"WA","postalCode":"98105","addressCountry":"US"}},{"@type":"SoftwareApplication","@id":"https://subsub.work/#software","name":"SubSub","applicationCategory":"BusinessApplication","operatingSystem":"Web browser","description":"Contractor management software for onboarding subcontractors, verifying insurance, bonds and state licenses, scheduling crews, issuing work orders and tracking labor warranties by job.","url":"https://subsub.work/","publisher":{"@id":"https://subsub.work/#org"},"offers":[{"@type":"Offer","name":"Basic","price":"0","priceCurrency":"USD","description":"Free for up to 3 subcontractors, 1 user and 5 jobs per month."},{"@type":"Offer","name":"Scale","price":"99","priceCurrency":"USD","description":"Unlimited subcontractors, users and jobs, plus your own branding. $990 per year paid annually."}]},{"@type":"WebPage","@id":"https://subsub.work/index.html","url":"https://subsub.work/index.html","name":"Subcontractor Management & Compliance Software | SubSub","description":"Onboard subcontractors, verify insurance, bonds and WA L&I licenses, schedule crews and issue work orders in one system. Free for up to 3 subcontractors.","isPartOf":{"@id":"https://subsub.work/#software"},"publisher":{"@id":"https://subsub.work/#org"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What does SubSub do?","acceptedAnswer":{"@type":"Answer","text":"SubSub is contractor management software. You onboard subcontractors, review and approve their compliance documents, schedule their crews onto jobs, issue a work order per trade, and record callbacks, warranty claims and ratings \u2014 in one system."}},{"@type":"Question","name":"Do subcontractors pay to use SubSub?","acceptedAnswer":{"@type":"Answer","text":"No. Subcontractor logins are free on every plan and do not use a seat. They maintain their own company details, crews, calendars and compliance documents."}},{"@type":"Question","name":"What compliance documents does SubSub track?","acceptedAnswer":{"@type":"Answer","text":"Certificate of insurance, surety bond, signed subcontractor agreement and IRS Form W-9. Each is reviewed against your requirements, and a subcontractor cannot be assigned to a job until all four are verified."}},{"@type":"Question","name":"Does SubSub verify contractor licenses?","acceptedAnswer":{"@type":"Answer","text":"Yes. Washington L&I contractor registrations are checked against public state records, which also report the bond and insurance the state has on file, so an uploaded certificate can be cross-checked against it."}},{"@type":"Question","name":"Does SubSub track subcontractor labor warranties?","acceptedAnswer":{"@type":"Answer","text":"Yes. Each subcontractor states how long they warranty their labor \u2014 one to ten years, or lifetime \u2014 and SubSub holds that against every job they complete. Defects reported within 30 days of completion are treated as callbacks; later issues are measured against their stated warranty term, so you can see whether a failure is still covered."}},{"@type":"Question","name":"How does SubSub handle change orders?","acceptedAnswer":{"@type":"Answer","text":"A work order is never edited once accepted. Any change \u2014 added scope, deducted scope, or a no-cost change like a date move \u2014 is raised as a numbered change order that the other party accepts or declines. Either side can raise one: the general contractor, or the subcontractor who finds hidden conditions on site. The revised value is the original plus every accepted change order, and the work order document shows the full schedule."}}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://subsub.work/#org","name":"SubSub","legalName":"SubSub, LLC","url":"https://subsub.work/","logo":"https://subsub.work/index.html","email":"legal@subsub.work","address":{"@type":"PostalAddress","streetAddress":"4616 25th Ave NE","addressLocality":"Seattle","addressRegion":"WA","postalCode":"98105","addressCountry":"US"}},{"@type":"SoftwareApplication","@id":"https://subsub.work/#software","name":"SubSub","applicationCategory":"BusinessApplication","operatingSystem":"Web browser","description":"Contractor management software for onboarding subcontractors, verifying insurance, bonds and state licenses, scheduling crews, issuing work orders and tracking labor warranties by job.","url":"https://subsub.work/","publisher":{"@id":"https://subsub.work/#org"},"offers":[{"@type":"Offer","name":"Basic","price":"0","priceCurrency":"USD","description":"Free for up to 3 subcontractors, 1 user and 5 jobs per month."},{"@type":"Offer","name":"Scale","price":"99","priceCurrency":"USD","description":"Unlimited subcontractors, users and jobs, plus your own branding. $990 per year paid annually."}]},{"@type":"WebPage","@id":"https://subsub.work/index.html","url":"https://subsub.work/index.html","name":"Subcontractor Management & Compliance Software | SubSub","description":"Onboard subcontractors, verify insurance, bonds and WA L&I licenses, schedule crews and issue work orders in one system. Free for up to 3 subcontractors.","isPartOf":{"@id":"https://subsub.work/#software"},"publisher":{"@id":"https://subsub.work/#org"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What does SubSub do?","acceptedAnswer":{"@type":"Answer","text":"SubSub is contractor management software. You onboard subcontractors, review and approve their compliance documents, schedule their crews onto jobs, issue a work order per trade, and record callbacks, warranty claims and ratings \u2014 in one system."}},{"@type":"Question","name":"Do subcontractors pay to use SubSub?","acceptedAnswer":{"@type":"Answer","text":"No. Subcontractor logins are free on every plan and do not use a seat. They maintain their own company details, crews, calendars and compliance documents."}},{"@type":"Question","name":"What compliance documents does SubSub track?","acceptedAnswer":{"@type":"Answer","text":"Certificate of insurance, surety bond, signed subcontractor agreement and IRS Form W-9. Each is reviewed against your requirements, and a subcontractor cannot be assigned to a job until all four are verified."}},{"@type":"Question","name":"Does SubSub verify contractor licenses?","acceptedAnswer":{"@type":"Answer","text":"Yes. Washington L&I contractor registrations are checked against public state records, which also report the bond and insurance the state has on file, so an uploaded certificate can be cross-checked against it."}},{"@type":"Question","name":"Does SubSub track subcontractor labor warranties?","acceptedAnswer":{"@type":"Answer","text":"Yes. Each subcontractor states how long they warranty their labor \u2014 one to ten years, or lifetime \u2014 and SubSub holds that against every job they complete. Defects reported within 30 days of completion are treated as callbacks; later issues are measured against their stated warranty term, so you can see whether a failure is still covered."}},{"@type":"Question","name":"How does SubSub handle change orders?","acceptedAnswer":{"@type":"Answer","text":"A work order is never edited once accepted. Any change \u2014 added scope, deducted scope, or a no-cost change like a date move \u2014 is raised as a numbered change order that the other party accepts or declines. Either side can raise one: the general contractor, or the subcontractor who finds hidden conditions on site. The revised value is the original plus every accepted change order, and the work order document shows the full schedule."}},{"@type":"Question","name":"Does SubSub handle lien waivers?","acceptedAnswer":{"@type":"Answer","text":"Yes, on Scale. Ask for a lien waiver against each payment \u2014 partial or final, conditional or unconditional \u2014 and the payment waits until it is signed, or until you record why you paid without it. Your subcontractor signs it in SubSub; in the twelve states that set the wording in law, they sign that state's own form and upload it. Anyone they name below them, like a supply house, is asked for theirs too, and you see whether the chain is clear and through which date."}}]}]}</script>
 </head>
 <body>
 
@@ -762,7 +777,7 @@ body.nav-open{overflow:hidden}
       <div class="auds">
         <a class="aud" href="for-general-contractors.html">
           <h3>General contractors</h3>
-          <p>One list for every trade you sub out, with the certificate behind each one actually read.</p>
+          <p>One list for every trade you sub out, with the certificate behind each one actually read — and a signed lien waiver before each payment goes out.</p>
           <span class="more">How SubSub works for GCs</span>
         </a>
         <a class="aud" href="for-property-managers.html">
@@ -772,7 +787,7 @@ body.nav-open{overflow:hidden}
         </a>
         <a class="aud" href="for-building-owners.html">
           <h3>Building owners</h3>
-          <p>Know who's on your building and that they carry the limits your lender expects.</p>
+          <p>Know who's on your building, that they carry the limits your lender expects, and that the lien waivers are signed before anyone is paid.</p>
           <span class="more">How SubSub works for owners</span>
         </a>
         <a class="aud" href="for-portfolio-managers.html">
@@ -833,27 +848,13 @@ body.nav-open{overflow:hidden}
           </ul>
         </div>
       </div>
-      <!-- AND UNIT WALKS COME IN THE SAME WAY, WHICH IS TIER THREE AND NEVER
-           TIER ONE. The same token posts move-in and move-out inspections, so
-           an account already walking units on a tablet does not type the walk
-           twice. What it must not do is name an inspection app: INSPECT_PRESETS
-           carries `generic` alone, because nobody here has seen a real payload
-           from one -- and the rule this section already runs on is that a NAME
-           on a marketing page is a stronger claim than a field map. So the
-           sentence names the shape (anything that can POST JSON, or an
-           automation tool in front of something that cannot) and no products.
-           `test:discover` pins that no name appears here outside `data-src`. -->
-      <p class="lede" style="max-width:58ch;font-size:16px">
-        <strong>Unit inspections arrive the same way.</strong> If you walk move-ins and
-        move-outs in an inspection app, a tablet form or a spreadsheet, the same address
-        takes the walk &mdash; rooms, conditions and notes &mdash; and it lands as a draft
-        you finish and raise the work from. Anything that can send a web request, or an
-        automation tool in front of anything that cannot.
-      </p>
-      <p class="lede" style="max-width:58ch;font-size:16px">
+      <!-- Unit inspections arrive through the same address, and that is said on
+           the page it is documented on and in the footer of every page -- not
+           here, where a paragraph about a second kind of record under a
+           section about CRMs read as noise, and was taken off on request. -->
+      <p class="ints-more">
         Not sure which one yours is? <a href="developers.html">Connect your CRM</a> names the
-        fields and the addresses for both, and
-        <a href="developers.html#inspections">sending inspections in</a> has its own section.
+        fields and the address for each.
       </p>
     </div>
   </section>
@@ -897,6 +898,10 @@ body.nav-open{overflow:hidden}
         <div>
           <h3>How does SubSub handle change orders?</h3>
           <p>A work order is never edited once accepted. Any change — added scope, deducted scope, or a no-cost change like a date move — is raised as a numbered change order that the other party accepts or declines. Either side can raise one: the general contractor, or the subcontractor who finds hidden conditions on site. The revised value is the original plus every accepted change order, and the work order document shows the full schedule.</p>
+        </div>
+        <div>
+          <h3>Does SubSub handle lien waivers?</h3>
+          <p>Yes, on Scale. Ask for a lien waiver against each payment — partial or final, conditional or unconditional — and the payment waits until it is signed, or until you record why you paid without it. Your subcontractor signs it in SubSub; in the twelve states that set the wording in law, they sign that state's own form and upload it. Anyone they name below them, like a supply house, is asked for theirs too, and you see whether the chain is clear and through which date.</p>
         </div>
       </div>
     </div>
