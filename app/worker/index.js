@@ -14,7 +14,8 @@ import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, app
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
   connectRequestEmail, connectRequestSms, workOrderIssuedSms,
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
-  docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail } from "./mail.js";
+  docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
+  waiverRequestEmail } from "./mail.js";
 import { sendSms, toE164 } from "./sms.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
@@ -30,11 +31,15 @@ import { INSPECT_PRESETS, isInspectSource, readInspection,
 // The same fifty states the browser offers, so a client that sends
 // something else -- an old build, a script, a typo that got through --
 // cannot put it in the database.
-import { normalizeState } from "../shared/states.js";
+import { normalizeState, stateName } from "../shared/states.js";
 // Money, and whether a chain of waivers is clear. Shared with the browser
 // so a figure on screen and a figure written here cannot disagree.
 import { releaseAmounts, milestonesCover } from "../shared/money.js";
-import { chainStatus, SCOPE_KINDS } from "../shared/waivers.js";
+import { chainStatus, SCOPE_KINDS, waiverKindFor } from "../shared/waivers.js";
+// The paper each link in that chain is made of, and which state takes which.
+import { formsFor, kindRefusal, generatedTemplateFor, renderWaiver, WAIVER_SOURCES,
+  KIND_WORDS, WAIVER_FILE_TYPES, MAX_WAIVER_BYTES,
+  canonicalText as wvCanonical } from "../shared/waiverform.js";
 import { mayRetouch, isOptedOut, RETOUCH_WINDOW_DAYS } from "../shared/retouch.js";
 import { inviteStage, dedupe, rank, summarise } from "../shared/stuck.js";
 import { INBOX_DAYS, INBOX_ASKS_PER_HOUR, inboxState, inboxRow, rankInbox,
@@ -328,6 +333,13 @@ app.use("/api/*", async (c, next) => {
     // Somebody a subcontractor sent their paperwork to. They have no account
     // -- not having to get one is the point -- and the token is the auth.
     || c.req.path.startsWith("/api/pack/")
+    // A lien waiver asked of somebody by link -- most often the supply house
+    // at the bottom of a chain, which has no account and no reason to want
+    // one. Same shape as the pack: 32 random bytes naming one waiver, emailed
+    // to the party being asked, nothing addressable by an id. The trailing
+    // slash matters -- /api/waivers/* is the paying side's and stays behind
+    // auth.
+    || c.req.path.startsWith("/api/waiver/")
     // The inbox is the same exemption for the same reason: the token is the
     // whole of the auth, nothing is addressable by an id, and a page that
     // needs an account is a page somebody with no account will not read.
@@ -6297,6 +6309,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\bwaiver_forms\b|ux_waiver_open/i.test(m)) return "069_waiver_forms";
   if (/\binspection_(sources|status_rules|unmapped)\b/i.test(m)) return "068_inspection_ingest";
   if (/\bjob_endings\b/i.test(m)) return "066_job_endings";
   if (/\binspection_summaries\b/i.test(m)) return "063_inspection_summary";
@@ -11765,23 +11778,42 @@ app.post("/api/milestones/:id/reject", requireRole("admin", "pm"), async (c) => 
 // subcontractor's chain is clear; the subcontractor's supplier list is that
 // subcontractor's book.
 async function waiverStateFor(c, { wo, release, asOf }) {
+  // WHICH WAIVER IS THE ONE THAT COUNTS. A release collects several over its
+  // life -- a conditional one before the money, an unconditional one after,
+  // one withdrawn and asked for again -- so "the newest" would let a fresh
+  // request for the unconditional waiver, unsigned, hide the conditional one
+  // that was signed and is what the payment went out against. A signed one
+  // outranks an unsigned one; a withdrawn one is not a waiver at all.
   const root = await c.env.DB.prepare(
-    `SELECT * FROM lien_waivers WHERE release_id = ? AND tier = 0
-      ORDER BY created_at DESC LIMIT 1`
+    `SELECT * FROM lien_waivers WHERE release_id = ? AND tier = 0 AND status <> 'void'
+      ORDER BY (status = 'signed') DESC, created_at DESC, rowid DESC LIMIT 1`
   ).bind(release.id).first();
   const kids = root
-    ? (await c.env.DB.prepare(`SELECT * FROM lien_waivers WHERE parent_id = ?`).bind(root.id).all()).results
+    ? (await c.env.DB.prepare(`SELECT * FROM lien_waivers WHERE parent_id = ? AND status <> 'void'`)
+        .bind(root.id).all()).results
     : [];
   const declared = await c.env.DB.prepare(
     `SELECT COUNT(*) AS n FROM lower_tier_parties WHERE work_order_id = ? AND company_id = ?`
   ).bind(wo.id, wo.company_id).first();
 
+  // THE DAY THE WORK THIS RELEASE PAYS FOR WAS VERIFIED, not the day somebody
+  // presses Pay. It used to be today, so a waiver signed through the 20th went
+  // stale on the 21st over a payment for work finished on the 20th -- every
+  // waiver expired the night after it was signed, and the gate could only be
+  // passed on the same day it was answered. Work after the release's own day
+  // is paid by a later release, with a waiver of its own.
+  const day = asOf || String(release.created_at || "").slice(0, 10) || dayKeyUtc();
+  // The signer's declaration outranks the work order's setting once they have
+  // signed it: "I furnished labour only" is a thing somebody swore to.
+  const scopeKind = root?.status === "signed" && root.scope_kind
+    ? root.scope_kind : (wo.scope_kind || "labor_materials");
+
   const shape = (w) => (w ? { status: w.status, throughDate: w.through_date, scopeKind: w.scope_kind } : null);
   return chainStatus({
     root: shape(root),
     children: (kids || []).map(shape),
-    asOf,
-    scopeKind: wo.scope_kind || "labor_materials",
+    asOf: day,
+    scopeKind,
     declaredCount: declared?.n || 0,
   });
 }
@@ -11848,7 +11880,703 @@ app.get("/api/releases/:id/waiver-state", requireRole("admin", "pm"), async (c) 
   if (!r) return c.json({ error: "not_found" }, 404);
   const { wo, error } = await loadWorkOrder(c, r.work_order_id);
   if (error) return error;
-  return c.json(await waiverStateFor(c, { wo, release: r, asOf: dayKeyUtc() }));
+  return c.json(await waiverStateFor(c, { wo, release: r }));
+});
+
+// ---------------------------------------------------------------------------
+// Lien waivers: asking for one, signing one, and the chain below it.
+//
+// 035 built the chain and the gate and wrote nothing, so every release has
+// answered "no waiver has been requested yet" since the gate shipped and the
+// override was the only way past it. This is the half that writes. The forms
+// themselves -- which state takes which paper, and SubSub's own for the ones
+// that prescribe none -- are in shared/waiverform.js, with the reasoning.
+//
+// THREE WAYS TO SIGN, ONE RECORD. A subcontractor on the roster signs in the
+// app; anybody holding the emailed link signs on a page that needs no
+// account, which is how the supply house at the bottom of a chain answers;
+// and a signed paper copy can be uploaded by the side that signed it or by
+// the side that received it. Each lands the same row, through `markSigned`,
+// so the gate cannot tell them apart -- and the record can, because it says
+// which.
+
+const waiverMigration = () => ({ error: "migration_needed", migration: "069_waiver_forms" });
+
+async function sha256Bytes(buf) {
+  const d = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// What a waiver's document says, from what is STORED and nothing live. The
+// declaration is the one input the signer supplies, so it is passed in at
+// signature and read back off the row afterwards.
+function renderStoredWaiver(w, f, scopeKind) {
+  if (!f || f.source !== "subsub_standard") return null;
+  return renderWaiver({
+    templateId: f.template_id, templateVersion: f.template_version, kind: w.kind,
+    parties: parseJson(f.parties, {}), amountCents: w.amount_cents,
+    throughDate: w.through_date, state: w.governing_state,
+    scopeKind: scopeKind === undefined ? (w.status === "signed" ? w.scope_kind : null) : scopeKind,
+  });
+}
+
+// The row as a screen reads it. `side` decides what crosses: the paying side
+// learns who signed and when; neither side is handed the token.
+function waiverToJs(w, f, extra = {}) {
+  let document = null;
+  try { document = renderStoredWaiver(w, f); }
+  catch (err) { console.warn("[waiver] render failed:", err?.message || err); }
+  const parties = parseJson(f?.parties, {});
+  return {
+    id: w.id, kind: w.kind, tier: w.tier, status: w.status,
+    title: KIND_WORDS[w.kind]?.title || "Lien waiver",
+    amountCents: w.amount_cents || 0, throughDate: w.through_date,
+    governingState: w.governing_state || null,
+    scopeKind: w.status === "signed" ? w.scope_kind : null,
+    source: f?.source || "uploaded",
+    claimant: parties.claimant || w.from_name || null,
+    customer: parties.customer || null,
+    job: parties.job || null, property: parties.property || null,
+    requestedAt: w.requested_at || w.created_at || null,
+    signedAt: w.signed_at || null, signedByName: w.signed_by_name || null,
+    declinedNote: w.declined_note || null,
+    hasFile: !!w.doc_key, fileName: f?.file_name || null,
+    uploadedSide: f?.uploaded_side || null,
+    emailed: !!f?.emailed, docSha256: w.doc_sha256 || null,
+    forms: formsFor(w.governing_state),
+    document,
+    ...extra,
+  };
+}
+
+async function loadWaiverForm(env, id) {
+  return env.DB.prepare(`SELECT * FROM waiver_forms WHERE waiver_id = ?`).bind(id).first();
+}
+
+// Where this release stands, for the screen that asks for one: which forms
+// the building's state allows, which of the four fits, and every waiver asked
+// for against it so far.
+async function releaseWaiverContext(c, release) {
+  const wo = await c.env.DB.prepare(
+    `SELECT wo.*, j.title AS job_title, j.property_id FROM work_orders wo
+       JOIN jobs j ON j.id = wo.job_id WHERE wo.id = ?`
+  ).bind(release.work_order_id).first();
+  // LIEN LAW FOLLOWS THE PROPERTY, and only the property. The company's own
+  // state is NOT a fallback here, unlike the handyman cap: a roofer registered
+  // in Oregon on a Washington building signs under Washington law, and a job
+  // at no building with a state on it has no governing state anybody here can
+  // name. That answers `no_state`, which offers an upload rather than a guess.
+  const prop = wo?.property_id
+    ? await c.env.DB.prepare(`SELECT * FROM properties WHERE id = ?`).bind(wo.property_id).first()
+    : null;
+  const state = normalizeState(prop?.state) || null;
+  // Final once this is the last milestone on the work order and everything
+  // before it is verified -- a suggestion the hiring side can change.
+  const ms = (await c.env.DB.prepare(
+    `SELECT id, seq, status FROM wo_milestones WHERE work_order_id = ? ORDER BY seq`
+  ).bind(release.work_order_id).all()).results || [];
+  const last = ms[ms.length - 1];
+  const isFinal = !!last && last.id === release.milestone_id && ms.every((m) => m.status === "verified");
+  const paid = release.status === "paid";
+  return { wo, prop, state, isFinal, paid, suggestedKind: waiverKindFor({ settled: paid, isFinal }) };
+}
+
+const propertyLine = (p) => !p ? null
+  : [p.name, p.address, [p.city, [p.state, p.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")]
+      .filter(Boolean).join(", ");
+
+app.get("/api/releases/:id/waivers", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const r = await c.env.DB.prepare(`SELECT * FROM wo_releases WHERE id = ? AND account_id = ?`)
+    .bind(c.req.param("id"), accountId).first();
+  if (!r) return c.json({ error: "not_found" }, 404);
+  const { wo, error } = await loadWorkOrder(c, r.work_order_id);
+  if (error) return error;
+  const ctx = await releaseWaiverContext(c, r);
+  const company = await c.env.DB.prepare(`SELECT company, email FROM companies WHERE id = ?`)
+    .bind(r.company_id).first();
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT * FROM lien_waivers WHERE release_id = ? AND tier = 0
+        ORDER BY created_at DESC, rowid DESC`
+    ).bind(r.id).all();
+    const waivers = [];
+    for (const w of results || []) {
+      const f = await loadWaiverForm(c.env, w.id);
+      // The lower tier as COUNTS, never names -- the subcontractor's supplier
+      // list is their book. See shared/waivers.js.
+      const kids = (await c.env.DB.prepare(
+        `SELECT status FROM lien_waivers WHERE parent_id = ? AND status <> 'void'`
+      ).bind(w.id).all()).results || [];
+      waivers.push(waiverToJs(w, f, {
+        lowerTierSigned: kids.filter((k) => k.status === "signed").length,
+        lowerTierTotal: kids.length,
+      }));
+    }
+    return c.json({
+      forms: formsFor(ctx.state), state: ctx.state, paid: ctx.paid, isFinal: ctx.isFinal,
+      suggestedKind: ctx.suggestedKind, claimant: company?.company || null,
+      claimantEmail: company?.email || null, amountCents: r.net_cents,
+      throughDate: String(r.created_at || "").slice(0, 10) || dayKeyUtc(),
+      waivers,
+      chain: await waiverStateFor(c, { wo, release: r }),
+    });
+  } catch (err) {
+    const m = missingSchema(err);
+    if (m) return c.json({ error: "migration_needed", migration: m }, 503);
+    throw err;
+  }
+});
+
+// Ask for one.
+app.post("/api/releases/:id/waiver", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const r = await c.env.DB.prepare(`SELECT * FROM wo_releases WHERE id = ? AND account_id = ?`)
+    .bind(c.req.param("id"), accountId).first();
+  if (!r) return c.json({ error: "not_found" }, 404);
+  if (r.status === "void") return c.json({ error: "release_void" }, 409);
+  const { error } = await loadWorkOrder(c, r.work_order_id);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  const ctx = await releaseWaiverContext(c, r);
+
+  const kind = b.kind || ctx.suggestedKind;
+  const refusal = kindRefusal({ kind, paid: ctx.paid });
+  if (refusal) return c.json({ error: refusal }, 400);
+
+  const forms = formsFor(ctx.state);
+  const source = b.source || forms.sources[0];
+  // A STATUTORY STATE IS REFUSED SUBSUB'S FORM ON THE SERVER, not merely not
+  // offered on the screen. A waiver on the wrong form can release nothing and
+  // still look exactly like one that does.
+  if (!WAIVER_SOURCES.includes(source) || !forms.sources.includes(source)) {
+    return c.json({ error: "form_not_allowed", reason: forms.reason || null, state: ctx.state }, 400);
+  }
+  const through = /^\d{4}-\d{2}-\d{2}$/.test(String(b.throughDate || ""))
+    ? b.throughDate : (String(r.created_at || "").slice(0, 10) || dayKeyUtc());
+
+  const company = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(r.company_id).first();
+  const account = await c.env.DB.prepare(`SELECT name, company_id FROM accounts WHERE id = ?`).bind(accountId).first();
+  const toEmail = String(b.toEmail || company?.email || "").trim().toLowerCase() || null;
+  if (toEmail && !validRecipient(toEmail)) return c.json({ error: "invalid_email" }, 400);
+
+  try {
+    // Already asked, or already signed: a second identical request is two
+    // links in one inbox. The partial index is what holds under a race.
+    const prior = await c.env.DB.prepare(
+      `SELECT id, status FROM lien_waivers
+        WHERE release_id = ? AND tier = 0 AND kind = ? AND status IN ('requested', 'signed')`
+    ).bind(r.id, kind).first();
+    if (prior) return c.json({ error: prior.status === "signed" ? "already_signed" : "already_requested", id: prior.id }, 409);
+
+    const id = uid();
+    const token = shareToken();
+    const tpl = source === "subsub_standard" ? generatedTemplateFor(ctx.state) : null;
+    const parties = {
+      claimant: company?.company || null,
+      customer: account?.name || null,
+      job: ctx.wo?.job_title || null,
+      property: propertyLine(ctx.prop),
+    };
+    await c.env.DB.prepare(
+      `INSERT INTO lien_waivers (id, job_id, account_id, from_company_id, from_email, to_company_id,
+         tier, work_order_id, release_id, kind, through_date, amount_cents, governing_state,
+         status, token, requested_by)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 'requested', ?, ?)`
+    ).bind(id, ctx.wo.job_id, accountId, r.company_id, toEmail, account?.company_id || null,
+      r.work_order_id, r.id, kind, through, r.net_cents || 0, ctx.state, token, userId).run();
+    await c.env.DB.prepare(
+      `INSERT INTO waiver_forms (waiver_id, source, template_id, template_version, parties)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(id, source, tpl?.templateId || null, tpl?.templateVersion || null, JSON.stringify(parties)).run();
+
+    const sent = await mailWaiverRequest(c.env, { id, token, toEmail, toName: company?.contact,
+      fromName: account?.name, kind, amountCents: r.net_cents, through, job: parties.job,
+      source, state: ctx.state });
+    await logEvent(c.env, accountId, userId, "waiver_requested", id,
+      { releaseId: r.id, kind, source, state: ctx.state, emailed: sent.ok });
+    const w = await c.env.DB.prepare(`SELECT * FROM lien_waivers WHERE id = ?`).bind(id).first();
+    return c.json({ ok: true, waiver: waiverToJs(w, await loadWaiverForm(c.env, id)),
+      emailed: sent.ok, emailError: sent.ok ? null : sent.error || null }, 201);
+  } catch (err) {
+    if (/UNIQUE constraint failed/i.test(String(err?.message || err))) {
+      return c.json({ error: "already_requested" }, 409);
+    }
+    const m = missingSchema(err);
+    if (m) return c.json({ error: "migration_needed", migration: m }, 503);
+    throw err;
+  }
+});
+
+// The email, and whether it went -- recorded on the row, because a row
+// reading "sent" over a supplier who was never told is how somebody says they
+// never got it while the screen says they did.
+async function mailWaiverRequest(env, { id, token, toEmail, toName, fromName, kind,
+  amountCents, through, job, source, state }) {
+  if (!toEmail) return { ok: false, error: "no_recipient" };
+  const mail = waiverRequestEmail({
+    toName, fromName, kindTitle: KIND_WORDS[kind]?.title || "Lien waiver",
+    conditional: kind.startsWith("conditional_"),
+    amount: Number(amountCents) > 0 ? `$${(amountCents / 100).toLocaleString("en-US", { minimumFractionDigits: 2 })}` : "everything you are owed",
+    through, job, link: `${APP_ORIGIN}/?waiver=${encodeURIComponent(token)}`,
+    uploadOnly: source === "uploaded", stateName: stateName(state),
+  });
+  const sent = await sendEmail(env, { to: toEmail, ...mail });
+  if (sent.ok) {
+    await env.DB.prepare(`UPDATE waiver_forms SET emailed = 1 WHERE waiver_id = ?`).bind(id).run();
+  }
+  return sent;
+}
+
+app.post("/api/waivers/:id/resend", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  try {
+    const w = await c.env.DB.prepare(`SELECT * FROM lien_waivers WHERE id = ? AND account_id = ?`)
+      .bind(c.req.param("id"), accountId).first();
+    if (!w) return c.json({ error: "not_found" }, 404);
+    if (w.status !== "requested") return c.json({ error: "already_answered" }, 409);
+    const f = await loadWaiverForm(c.env, w.id);
+    const account = await c.env.DB.prepare(`SELECT name FROM accounts WHERE id = ?`).bind(accountId).first();
+    const parties = parseJson(f?.parties, {});
+    const sent = await mailWaiverRequest(c.env, { id: w.id, token: w.token, toEmail: w.from_email,
+      fromName: w.tier === 0 ? account?.name : parties.customer, kind: w.kind,
+      amountCents: w.amount_cents, through: w.through_date, job: parties.job,
+      source: f?.source, state: w.governing_state });
+    await logEvent(c.env, accountId, userId, "waiver_resent", w.id, { emailed: sent.ok });
+    return c.json({ ok: sent.ok, error: sent.ok ? null : sent.error || null });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(waiverMigration(), 503);
+    throw err;
+  }
+});
+
+// Withdraw one. Not a delete: a waiver somebody was asked for is a thing that
+// happened, and the chain is the record of who was asked what.
+app.post("/api/waivers/:id/void", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const w = await c.env.DB.prepare(`SELECT * FROM lien_waivers WHERE id = ? AND account_id = ? AND tier = 0`)
+    .bind(c.req.param("id"), accountId).first();
+  if (!w) return c.json({ error: "not_found" }, 404);
+  // A SIGNED waiver is not withdrawn. It is somebody's signature releasing a
+  // right, and it stays on the record whatever happens to the payment.
+  if (w.status !== "requested") return c.json({ error: "already_answered" }, 409);
+  await c.env.DB.prepare(`UPDATE lien_waivers SET status = 'void' WHERE id = ? AND status = 'requested'`)
+    .bind(w.id).run();
+  await c.env.DB.prepare(`UPDATE lien_waivers SET status = 'void' WHERE parent_id = ? AND status = 'requested'`)
+    .bind(w.id).run();
+  await logEvent(c.env, accountId, userId, "waiver_voided", w.id, {});
+  return c.json({ ok: true });
+});
+
+// THE ONE WRITE THAT SIGNS. Every way in -- the app, the link, an upload by
+// either side -- comes through here, so the gate cannot tell them apart and
+// the record says which it was.
+//
+// Guarded on `status = 'requested'` in the UPDATE itself, so two presses at
+// once sign once, and the second answers `already_answered`.
+async function markSigned(c, w, { name, email, userId, scopeKind, hash, docKey, file }) {
+  const res = await c.env.DB.prepare(
+    `UPDATE lien_waivers SET status = 'signed', signed_at = CURRENT_TIMESTAMP,
+       signed_by_name = ?, signed_by_email = ?, signed_ip = ?, scope_kind = ?,
+       doc_sha256 = ?, doc_key = COALESCE(?, doc_key)
+     WHERE id = ? AND status = 'requested'`
+  ).bind(name || null, email || null, c.req.header("CF-Connecting-IP") || null,
+    scopeKind, hash, docKey || null, w.id).run();
+  if (!res.meta?.changes) return false;
+  await c.env.DB.prepare(
+    `UPDATE waiver_forms SET answered_at = CURRENT_TIMESTAMP,
+       file_name = COALESCE(?, file_name), file_type = COALESCE(?, file_type),
+       uploaded_by = COALESCE(?, uploaded_by), uploaded_side = COALESCE(?, uploaded_side)
+     WHERE waiver_id = ?`
+  ).bind(file?.name || null, file?.type || null, file ? (userId || null) : null,
+    file?.side || null, w.id).run();
+  await logEvent(c.env, w.account_id, userId || null, "waiver_signed", w.id,
+    { tier: w.tier, scopeKind, uploaded: !!file, side: file?.side || "claimant" });
+  // A signed link is what makes the chain below it worth asking for.
+  if (w.tier === 0) await requestLowerTier(c, { ...w, status: "signed", scope_kind: scopeKind });
+  return true;
+}
+
+// The declaration that comes with a signature: who else worked on this job.
+//
+// LABOUR ONLY means nobody, and is sworn to in the text. Anything else needs
+// somebody named, or a list already declared on this work order -- because
+// "I supplied materials and nobody supplied them to me" is the one answer
+// that would read the chain as clear with nobody below it ever asked.
+function readDeclaration(b, { declaredCount = 0, tier = 0 } = {}) {
+  const scopeKind = SCOPE_KINDS.includes(b.scopeKind) ? b.scopeKind : null;
+  if (!scopeKind) return { error: "declaration_required" };
+  const parties = (Array.isArray(b.parties) ? b.parties : []).slice(0, 25).map((p) => ({
+    name: String(p?.name || "").trim().slice(0, 160),
+    email: String(p?.email || "").trim().toLowerCase().slice(0, 200) || null,
+    role: ["supplier", "subcontractor", "equipment", "other"].includes(p?.role) ? p.role : "supplier",
+    amountCents: Math.max(0, Math.round(Number(p?.amountCents) || 0)),
+  })).filter((p) => p.name);
+  if (scopeKind === "labor_only" && parties.length) return { error: "labor_only_with_parties" };
+  if (parties.some((p) => p.email && !validRecipient(p.email))) return { error: "invalid_email" };
+  // Below the first tier, the chain is capped -- a supplier's own suppliers
+  // are not asked about here -- so a declaration there needs no list.
+  if (tier === 0 && scopeKind !== "labor_only" && !parties.length && !declaredCount) {
+    return { error: "parties_required" };
+  }
+  return { scopeKind, parties: tier === 0 ? parties : [] };
+}
+
+async function declaredCountFor(env, w) {
+  if (!w.work_order_id || !w.from_company_id) return 0;
+  const r = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM lower_tier_parties WHERE work_order_id = ? AND company_id = ?`
+  ).bind(w.work_order_id, w.from_company_id).first();
+  return r?.n || 0;
+}
+
+async function storeDeclaration(c, w, parties, { userId }) {
+  for (const p of parties) {
+    // Matched on the address, or the name where there is none, so declaring
+    // the same yard twice is one party rather than two waivers in its inbox.
+    const dup = await c.env.DB.prepare(
+      `SELECT id FROM lower_tier_parties WHERE work_order_id = ? AND company_id = ?
+         AND (lower(COALESCE(email, '')) = ? AND ? <> '' OR lower(name) = lower(?))`
+    ).bind(w.work_order_id, w.from_company_id, p.email || "", p.email || "", p.name).first();
+    if (dup) continue;
+    await c.env.DB.prepare(
+      `INSERT INTO lower_tier_parties (id, job_id, account_id, work_order_id, company_id,
+         name, email, role, declared_by, complete_attested)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+    ).bind(uid(), w.job_id, w.account_id, w.work_order_id, w.from_company_id,
+      p.name, p.email, p.role, userId || null).run();
+  }
+}
+
+// Ask everybody declared below a signed tier-0 waiver for theirs, of the same
+// kind and through the same date. Declared once per work order, asked once
+// per signed waiver -- a conditional waiver's chain is not an unconditional
+// one's, and a supplier who signed the first has not been paid yet.
+async function requestLowerTier(c, root) {
+  if (root.status !== "signed" || root.scope_kind === "labor_only") return 0;
+  const { results: parties } = await c.env.DB.prepare(
+    `SELECT * FROM lower_tier_parties WHERE work_order_id = ? AND company_id = ?`
+  ).bind(root.work_order_id, root.from_company_id).all();
+  const rootForm = await loadWaiverForm(c.env, root.id);
+  const rootParties = parseJson(rootForm?.parties, {});
+  const forms = formsFor(root.governing_state);
+  let made = 0;
+  for (const p of parties || []) {
+    // Nobody to send it to is still a party: the chain counts them, and the
+    // subcontractor can collect theirs on paper and upload it.
+    const already = await c.env.DB.prepare(
+      `SELECT id FROM lien_waivers WHERE parent_id = ? AND kind = ? AND status IN ('requested', 'signed')
+         AND (lower(COALESCE(from_email, '')) = lower(COALESCE(?, '')) AND lower(from_name) = lower(?))`
+    ).bind(root.id, root.kind, p.email || "", p.name).first();
+    if (already) continue;
+    const id = uid();
+    const token = shareToken();
+    const source = forms.sources[0];
+    const tpl = source === "subsub_standard" ? generatedTemplateFor(root.governing_state) : null;
+    const parties2 = { claimant: p.name, customer: rootParties.claimant || null,
+      job: rootParties.job || null, property: rootParties.property || null };
+    await c.env.DB.prepare(
+      `INSERT INTO lien_waivers (id, job_id, account_id, from_name, from_email, to_company_id,
+         tier, parent_id, work_order_id, kind, through_date, amount_cents, governing_state,
+         status, token)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 0, ?, 'requested', ?)`
+    ).bind(id, root.job_id, root.account_id, p.name, p.email || null, root.from_company_id,
+      root.id, root.work_order_id, root.kind, root.through_date, root.governing_state, token).run();
+    await c.env.DB.prepare(
+      `INSERT INTO waiver_forms (waiver_id, source, template_id, template_version, parties)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(id, source, tpl?.templateId || null, tpl?.templateVersion || null, JSON.stringify(parties2)).run();
+    await mailWaiverRequest(c.env, { id, token, toEmail: p.email, toName: p.name,
+      fromName: rootParties.claimant, kind: root.kind, amountCents: 0,
+      through: root.through_date, job: rootParties.job, source, state: root.governing_state });
+    made++;
+  }
+  return made;
+}
+
+// Signing SubSub's form: the hash is of the text shown, recomputed from what
+// is stored plus the declaration chosen now -- never carried over from the
+// request, because a caller who could name the hash could sign one document
+// and record another.
+async function signStandard(c, w, b, who) {
+  const f = await loadWaiverForm(c.env, w.id);
+  if (!f) return c.json(waiverMigration(), 503);
+  if (f.source !== "subsub_standard") return c.json({ error: "upload_required" }, 409);
+  if (w.status !== "requested") return c.json({ error: "already_answered" }, 409);
+  const dec = readDeclaration(b, { declaredCount: await declaredCountFor(c.env, w), tier: w.tier });
+  if (dec.error) return c.json({ error: dec.error }, 400);
+  let rendered;
+  try { rendered = renderStoredWaiver(w, f, dec.scopeKind); }
+  catch (err) { return c.json({ error: err.code || "unknown_template" }, 409); }
+  const hash = await sha256Hex(wvCanonical(rendered));
+  if (dec.parties.length) await storeDeclaration(c, w, dec.parties, who);
+  const ok = await markSigned(c, w, { ...who, scopeKind: dec.scopeKind, hash });
+  if (!ok) return c.json({ error: "already_answered" }, 409);
+  return c.json({ ok: true, docSha256: hash });
+}
+
+// Uploading a signed copy IS signing it, from whichever side it arrives.
+async function signByUpload(c, w, { fileName, side, who, declaration }) {
+  if (w.status !== "requested") return c.json({ error: "already_answered" }, 409);
+  const type = (c.req.header("Content-Type") || "").split(";")[0].trim().toLowerCase();
+  if (!WAIVER_FILE_TYPES.includes(type)) return c.json({ error: "not_a_document", type }, 415);
+  if (Number(c.req.header("Content-Length") || 0) > MAX_WAIVER_BYTES) {
+    return c.json({ error: "too_big", max: MAX_WAIVER_BYTES }, 413);
+  }
+  const body = await c.req.arrayBuffer();
+  if (!body.byteLength) return c.json({ error: "empty" }, 400);
+  if (body.byteLength > MAX_WAIVER_BYTES) return c.json({ error: "too_big", max: MAX_WAIVER_BYTES }, 413);
+  // The declaration rides in the query string on an upload, since the body
+  // is the file. The paying side uploading a copy it was emailed declares
+  // nothing -- it cannot swear to somebody else's suppliers -- so its
+  // upload keeps the work order's own scope.
+  let scopeKind = w.scope_kind || "labor_materials";
+  let dec = null;
+  if (declaration) {
+    dec = readDeclaration(declaration, { declaredCount: await declaredCountFor(c.env, w), tier: w.tier });
+    if (dec.error) return c.json({ error: dec.error }, 400);
+    scopeKind = dec.scopeKind;
+  } else if (side === "recipient") {
+    const wo = w.work_order_id ? await c.env.DB.prepare(`SELECT scope_kind FROM work_orders WHERE id = ?`)
+      .bind(w.work_order_id).first() : null;
+    scopeKind = wo?.scope_kind || "labor_materials";
+  }
+  const key = `${w.account_id}/lien-waiver/${uid()}-${safeFileName(fileName)}`;
+  await c.env.FILES.put(key, body, { httpMetadata: { contentType: type } });
+  const hash = await sha256Bytes(body);
+  if (dec?.parties?.length) await storeDeclaration(c, w, dec.parties, who);
+  const ok = await markSigned(c, w, { ...who, scopeKind, hash, docKey: key,
+    file: { name: safeFileName(fileName), type, side } });
+  if (!ok) return c.json({ error: "already_answered" }, 409);
+  return c.json({ ok: true, docSha256: hash });
+}
+
+async function decline(c, w, note, userId) {
+  if (w.status !== "requested") return c.json({ error: "already_answered" }, 409);
+  await c.env.DB.prepare(
+    `UPDATE lien_waivers SET status = 'declined', declined_note = ? WHERE id = ? AND status = 'requested'`
+  ).bind(String(note || "").trim().slice(0, 1000) || null, w.id).run();
+  await c.env.DB.prepare(`UPDATE waiver_forms SET answered_at = CURRENT_TIMESTAMP WHERE waiver_id = ?`)
+    .bind(w.id).run();
+  await logEvent(c.env, w.account_id, userId || null, "waiver_declined", w.id, { tier: w.tier });
+  return c.json({ ok: true });
+}
+
+// The paying side records a signed copy it was sent some other way -- by
+// email, on paper, through the post. Recorded as the RECIPIENT'S upload, so
+// nobody later reads it as the subcontractor having signed in the app.
+app.put("/api/waivers/:id/file/:fileName", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  try {
+    const w = await c.env.DB.prepare(`SELECT * FROM lien_waivers WHERE id = ? AND account_id = ? AND tier = 0`)
+      .bind(c.req.param("id"), accountId).first();
+    if (!w) return c.json({ error: "not_found" }, 404);
+    return await signByUpload(c, w, { fileName: c.req.param("fileName"), side: "recipient",
+      who: { userId, name: null, email: null } });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(waiverMigration(), 503);
+    throw err;
+  }
+});
+
+// The signed copy, to either party. The paying account reads its own chain's
+// tier-0 rows; the claimant reads its own.
+app.get("/api/waivers/:id/file", async (c) => {
+  const { accountId, role } = c.get("auth");
+  const w = await c.env.DB.prepare(`SELECT * FROM lien_waivers WHERE id = ?`).bind(c.req.param("id")).first();
+  let may = false;
+  if (w && w.tier === 0 && w.account_id === accountId && (role === "admin" || role === "pm")) may = true;
+  if (w && !may) {
+    const mine = await seatCompany(c);
+    if (mine && (w.from_company_id === mine || (w.tier > 0 && w.to_company_id === mine))) may = true;
+  }
+  if (!w || !may) return c.json({ error: "not_found" }, 404);
+  if (!w.doc_key) return c.json({ error: "no_file" }, 404);
+  const obj = await c.env.FILES.get(w.doc_key);
+  if (!obj) return c.json({ error: "no_file" }, 404);
+  const f = await loadWaiverForm(c.env, w.id);
+  return new Response(obj.body, { headers: {
+    "Content-Type": f?.file_type || obj.httpMetadata?.contentType || "application/octet-stream",
+    "Cache-Control": "private, no-store",
+  } });
+});
+
+// ---- the side being asked ---------------------------------------------------
+
+// EVERY CLIENT'S WAIVERS, IN ONE LIST, for the reason /api/my-work and
+// /api/my-agreements exist: a subcontractor on twenty-five rosters does not
+// find a waiver waiting by switching account twenty-five times. Scoped by
+// `from_company_id = mine`, read off the seat and never the URL.
+//
+// Their own lower tier comes with it, BY NAME -- these are their suppliers,
+// declared by them, and the only party who may never see this list is the one
+// above them.
+app.get("/api/my-waivers", async (c) => {
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ error: await noCompanyReason(c) }, 403);
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT w.*, acc.name AS account_name FROM lien_waivers w
+         JOIN accounts acc ON acc.id = w.account_id
+        WHERE w.from_company_id = ? AND w.tier = 0 AND w.status IN ('requested', 'signed', 'declined')
+        ORDER BY (w.status = 'requested') DESC, w.created_at DESC LIMIT 100`
+    ).bind(companyId).all();
+    const out = [];
+    for (const w of results || []) {
+      const f = await loadWaiverForm(c.env, w.id);
+      const below = (await c.env.DB.prepare(
+        `SELECT id, from_name, from_email, status, signed_at, declined_note FROM lien_waivers
+          WHERE parent_id = ? AND status <> 'void' ORDER BY created_at`
+      ).bind(w.id).all()).results || [];
+      const declared = (await c.env.DB.prepare(
+        `SELECT name, email, role FROM lower_tier_parties WHERE work_order_id = ? AND company_id = ?
+          ORDER BY created_at`
+      ).bind(w.work_order_id, companyId).all()).results || [];
+      out.push(waiverToJs(w, f, {
+        accountName: w.account_name,
+        below: below.map((k) => ({ id: k.id, name: k.from_name, email: k.from_email, status: k.status,
+          signedAt: k.signed_at, declinedNote: k.declined_note })),
+        declared,
+      }));
+    }
+    return c.json(out);
+  } catch (err) {
+    if (missingSchema(err)) return c.json(waiverMigration(), 503);
+    throw err;
+  }
+});
+
+async function myWaiver(c) {
+  const companyId = await seatCompany(c);
+  if (!companyId) return { res: c.json({ error: await noCompanyReason(c) }, 403) };
+  const w = await c.env.DB.prepare(
+    `SELECT * FROM lien_waivers WHERE id = ? AND from_company_id = ? AND tier = 0`
+  ).bind(c.req.param("id"), companyId).first();
+  if (!w) return { res: c.json({ error: "not_found" }, 404) };
+  return { w, companyId };
+}
+
+app.post("/api/my-waivers/:id/sign", async (c) => {
+  const { userId } = c.get("auth");
+  try {
+    const { w, res } = await myWaiver(c);
+    if (res) return res;
+    const b = await c.req.json().catch(() => ({}));
+    const me = await c.env.DB.prepare(`SELECT name, email FROM users WHERE id = ?`).bind(userId).first();
+    if (!typedNameMatches(b.typedName, me?.name)) {
+      return c.json({ error: "name_mismatch", expected: me?.name || null }, 400);
+    }
+    return await signStandard(c, w, b, { userId, name: me?.name, email: me?.email });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(waiverMigration(), 503);
+    throw err;
+  }
+});
+
+app.put("/api/my-waivers/:id/file/:fileName", async (c) => {
+  const { userId } = c.get("auth");
+  try {
+    const { w, res } = await myWaiver(c);
+    if (res) return res;
+    const me = await c.env.DB.prepare(`SELECT name, email FROM users WHERE id = ?`).bind(userId).first();
+    return await signByUpload(c, w, { fileName: c.req.param("fileName"), side: "claimant",
+      who: { userId, name: me?.name, email: me?.email },
+      declaration: parseJson(c.req.query("declaration"), { scopeKind: null }) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(waiverMigration(), 503);
+    throw err;
+  }
+});
+
+app.post("/api/my-waivers/:id/decline", async (c) => {
+  const { userId } = c.get("auth");
+  try {
+    const { w, res } = await myWaiver(c);
+    if (res) return res;
+    const b = await c.req.json().catch(() => ({}));
+    return await decline(c, w, b.note, userId);
+  } catch (err) {
+    if (missingSchema(err)) return c.json(waiverMigration(), 503);
+    throw err;
+  }
+});
+
+// ---- by link, for somebody with no account ---------------------------------
+//
+// The token is the whole of the auth, which is why this is on the public
+// exemption list: 32 random bytes, emailed to the party being asked, naming
+// one waiver. Nothing here is addressable by an id. Once answered it can no
+// longer change anything -- every write is guarded on `requested` -- and it
+// still reads, so somebody coming back to the link sees what they signed.
+
+async function waiverByToken(c) {
+  const token = c.req.param("token");
+  if (!token || token.length < 20) return null;
+  return c.env.DB.prepare(`SELECT * FROM lien_waivers WHERE token = ? AND status <> 'void'`)
+    .bind(token).first();
+}
+
+app.get("/api/waiver/:token", async (c) => {
+  try {
+    const w = await waiverByToken(c);
+    if (!w) return c.json({ error: "not_found" }, 404);
+    const f = await loadWaiverForm(c.env, w.id);
+    const shape = waiverToJs(w, f);
+    // Which side asked, by name: the claimant's customer. Never the account
+    // id, never who else was asked.
+    return c.json({ ...shape, docSha256: undefined, declaredCount: await declaredCountFor(c.env, w) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(waiverMigration(), 503);
+    throw err;
+  }
+});
+
+app.post("/api/waiver/:token/sign", async (c) => {
+  const rl = await rateLimit(c.env, "waiver-sign", c.req.header("CF-Connecting-IP") || "ip", { limit: 30, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+  try {
+    const w = await waiverByToken(c);
+    if (!w) return c.json({ error: "not_found" }, 404);
+    const b = await c.req.json().catch(() => ({}));
+    // Nobody here has an account to match a name against, so the name is the
+    // signature itself: typed in full, and recorded beside the address the
+    // link was sent to.
+    const name = String(b.typedName || "").trim().replace(/\s+/g, " ").slice(0, 160);
+    if (name.length < 3 || !/\s/.test(name)) return c.json({ error: "full_name_required" }, 400);
+    return await signStandard(c, w, b, { userId: null, name, email: w.from_email || null });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(waiverMigration(), 503);
+    throw err;
+  }
+});
+
+app.put("/api/waiver/:token/file/:fileName", async (c) => {
+  const rl = await rateLimit(c.env, "waiver-sign", c.req.header("CF-Connecting-IP") || "ip", { limit: 30, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+  try {
+    const w = await waiverByToken(c);
+    if (!w) return c.json({ error: "not_found" }, 404);
+    const name = String(c.req.query("name") || "").trim().replace(/\s+/g, " ").slice(0, 160);
+    if (name.length < 3 || !/\s/.test(name)) return c.json({ error: "full_name_required" }, 400);
+    return await signByUpload(c, w, { fileName: c.req.param("fileName"), side: "claimant",
+      who: { userId: null, name, email: w.from_email || null },
+      declaration: parseJson(c.req.query("declaration"), { scopeKind: null }) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(waiverMigration(), 503);
+    throw err;
+  }
+});
+
+app.post("/api/waiver/:token/decline", async (c) => {
+  try {
+    const w = await waiverByToken(c);
+    if (!w) return c.json({ error: "not_found" }, 404);
+    const b = await c.req.json().catch(() => ({}));
+    return await decline(c, w, b.note, null);
+  } catch (err) {
+    if (missingSchema(err)) return c.json(waiverMigration(), 503);
+    throw err;
+  }
 });
 
 // Money goes out.
@@ -11911,7 +12639,7 @@ app.post("/api/releases/:id/settle", requireRole("admin", "pm"), async (c) => {
       payload: { releaseId: r.id, reason: whyCover, cover } });
   }
 
-  const chain = await waiverStateFor(c, { wo, release: r, asOf: dayKeyUtc() });
+  const chain = await waiverStateFor(c, { wo, release: r });
   if (!chain.clear && !b.override) {
     return c.json({ error: "waiver_outstanding", ...chain }, 409);
   }
@@ -12233,7 +12961,7 @@ app.post("/api/releases/:id/pay", requireRole("admin"), async (c) => {
     await woEvent(c, { workOrderId: wo.id, milestoneId: r.milestone_id, kind: "release.cover_override",
       payload: { releaseId: r.id, reason: whyCover, cover } });
   }
-  const chain = await waiverStateFor(c, { wo, release: r, asOf: dayKeyUtc() });
+  const chain = await waiverStateFor(c, { wo, release: r });
   if (!chain.clear && !b.override) return c.json({ error: "waiver_outstanding", ...chain }, 409);
   if (!chain.clear) {
     const why = String(b.overrideReason || "").trim().slice(0, 500);

@@ -2794,11 +2794,117 @@ refactor.
   moves the exposure *up*, because then it is the hiring account's own supply
   house that can lien the owner.
 
-  **SubSub authors no waiver document.** It requests, tracks, gates payment
-  on, and stores what was signed with a hash of it. Generating the text is a
-  separate decision with a lawyer attached: roughly a dozen states prescribe
-  exact wording and a form that deviates can be void, and lien law follows
-  the property's state, not the signer's.
+  **SubSub authors no waiver document IN A STATUTORY STATE.** It requests,
+  tracks, gates payment on, and stores what was signed with a hash of it.
+  Twelve states prescribe exact wording and a form that deviates can be void,
+  and lien law follows the property's state, not the signer's. In the other
+  thirty-eight and DC it now offers a form of its own — see the entry below,
+  which is where that decision was made.
+
+- **LIEN WAIVERS ARE ASKED FOR, SIGNED AND RECORDED, AND THE TWELVE STATUTORY
+  STATES GET AN UPLOAD UNTIL THEIR TEXT IS LOADED FROM ITS SOURCE.** 035 built
+  the chain and the gate and wrote nothing at all: no route inserted a row, so
+  every release has answered *"No waiver has been requested yet"* since the
+  gate shipped, and the override was the only thing anybody could press.
+  Asked for as *"SubSub will create the waiver (or allow upload) — they are
+  standardized but differ by state based on regulations"*, with the twelve
+  statutory states and the four kinds named. Migration 069,
+  `app/shared/waiverform.js`.
+
+  **A STATUTORY STATE NEVER GETS SUBSUB'S FORM, and that is refused on the
+  server and counted by an invariant.** Arizona, California, Florida, Georgia,
+  Massachusetts, Michigan, Mississippi, Missouri, Nevada, Texas, Utah and
+  Wyoming set the words in statute, and a waiver on another form can release
+  nothing while looking exactly like one that does. **The verbatim text was not
+  written from memory**, for the reason the Stripe v2 migration was not: a
+  paraphrase of a statute reads exactly like the statute, and the person
+  relying on it is the one person who cannot tell. So `STATUTORY_FORMS` is
+  **empty on purpose**; an entry needs the statute, a source URL and a date,
+  and until one is there a waiver in that state is signed on the state's own
+  form and uploaded. Everything else — the request, the chain, the gate, the
+  record — works identically. `m069_inv_standard_in_statutory` counts a row
+  that got past.
+
+  **NO STATE ON THE BUILDING IS ITS OWN ANSWER, and it is upload-only too.**
+  It cannot be told apart from a statutory one, and "probably not" is how an
+  invalid waiver gets signed. **And the company's state is deliberately not a
+  fallback**, unlike the handyman cap: a roofer registered in Oregon on a
+  Washington building signs under Washington law.
+
+  **SUBSUB'S FORM IS PLAIN AND NARROW, and `reviewed` is null.** Releases only
+  to the extent of the payment, carves out retention, later work and unpaid
+  change orders, and says in section 4 whether it waits for the money. It is
+  keyed by id **and** version, a miss throws, and a hard-coded golden hash pins
+  1.0.0 — the agreement templates' machinery, spent a second time. **The
+  screen says the same one line the agreement does**: a starting point, not
+  legal advice. **Still open, and only a lawyer can close it: nobody has read
+  this text, or will have read any statutory text before it is loaded.**
+
+  **AN UNCONDITIONAL WAIVER IS NEVER ASKED FOR BEFORE THE PAYMENT IS
+  RECORDED.** It gives the right up whether or not the money arrives, so asking
+  for one first is asking somebody to sign away a lien for a cheque that may
+  bounce. The hiring side may pick any of the four; `kindRefusal` refuses that
+  one combination, and the picker greys it with the reason. The signer is also
+  told in amber, above the document, before they sign one.
+
+  **THE DECLARATION IS PART OF WHAT IS SIGNED.** *Labor only* versus *these
+  people supplied me* is section 5 of the document, chosen at the moment of
+  signing, rendered into the text and hashed with it — the preview re-renders
+  through the same `renderWaiver` the server hashes, so the page cannot show
+  one document and record another. It is also what made `setWoScope` stop
+  mattering: the signer's sworn answer outranks the work order's setting once
+  signed, because that is the one an attestation backs. Materials with nobody
+  named is refused (`parties_required`): it is the one answer that would read
+  the chain as clear with nobody below ever asked.
+
+  **NAMING A SUPPLIER ASKS THEM.** Each declared party with an address is
+  emailed a tier-1 waiver of the same kind and through date, signed from a link
+  with no account — `/api/waiver/:token`, on the public exemption list for the
+  pack's reason. **The paying side sees counts, never names**: the
+  subcontractor's supplier list is their book. **The subcontractor sees their
+  own by name**, because they declared them. Below tier 1 the chain is capped.
+
+  **THE GATE NOW COUNTS THE WORK'S DAY, NOT TODAY — and this changes an
+  existing answer.** `waiverStateFor` asked whether the waiver covered
+  *today*, so one signed through the 20th went stale on the 21st over a payment
+  for work finished on the 20th: every waiver expired the night after it was
+  signed. It now asks about the day the release was made, which is the work
+  that payment covers. **And a signed waiver outranks a newer unsigned one**,
+  or asking for the unconditional waiver after payment would hide the
+  conditional one the money went out against.
+
+  **ONE WRITE SIGNS, FOUR WAYS IN.** In the app, by link, by the claimant
+  uploading, or by the paying side recording a copy it was emailed — all through
+  `markSigned`, guarded on `status = 'requested'` in the UPDATE so two presses
+  sign once. **The recipient's upload is recorded as the recipient's**, so
+  nobody later reads it as the subcontractor having signed in the app. An
+  upload's hash is of its bytes; an in-app signature's is of the canonical text,
+  recomputed from stored inputs and never taken from the request.
+  `m069_inv_signed_unrecorded` counts a signed row with neither.
+
+  **WHERE IT LIVES ON SCREEN.** A *Lien waiver* button on every release row of
+  the work order, and the same panel inside the payment modal **where the gate
+  refuses** — it used to name the problem and offer only the override. The
+  subcontractor's list sits under their schedule on the contractor dashboard,
+  because a waiver waiting is a payment waiting, and beside their agreements in
+  the compliance pack.
+
+  **One assertion could not fail, caught by mutation**: *unconditional is not
+  choosable* read `every()` over the picker's options, which is true over an
+  empty list — so it passed loudest on a form that never opened. Length first.
+  And a mutation that broke the JSX built nothing and printed nothing, which
+  reads exactly like a suite that hung: *check the change means something*, in
+  the form of a mutation that has to compile to mean anything at all.
+
+  One pre-existing slip fixed in passing: agreements printed `signedAt` through
+  `formatExpiry`, which takes a bare date, so a timestamp came back raw —
+  *"Signed by Juan Soto on 2026-10-05 10:00:00"*.
+
+  **Still open:** a waiver cannot be requested for a release that has none —
+  `amount` and `through` come off the release, so work paid outside the
+  milestone ledger has no door yet. And **pasting 069 is required** before any
+  of this works on the live database; until then the routes answer
+  `migration_needed` naming it.
 
 - **A subcontractor is an account kind, because it is the one that gets hired.**
   Every kind before it hires. The send-your-compliance-pack loop is aimed at the

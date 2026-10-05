@@ -47,7 +47,9 @@ import { US_STATES, stateName } from "../shared/states.js";
 // The money arithmetic and the waiver roll-up, shared with the Worker so a
 // figure on screen and a figure written to the ledger cannot disagree.
 import { splitEven, releaseAmounts } from "../shared/money.js";
-import { chainReasonText } from "../shared/waivers.js";
+import { chainReasonText, WAIVER_KINDS } from "../shared/waivers.js";
+import { KIND_WORDS, kindShort, kindRefusal, isConditional, formsReasonText, renderWaiver,
+  waiverStateText } from "../shared/waiverform.js";
 import { coverProblemText, fixableByUpload } from "../shared/paygate.js";
 import { MIN_FUND_CENTS, canPay, payRefusalText, fundSuggestion } from "../shared/escrow.js";
 import { INSURANCE_LINES, OPTIONAL_LINES, BOND_MIN, INSURANCE_MIN, checkItems, findingsFor,
@@ -2081,6 +2083,13 @@ export default function SubSub() {
   const [packToken] = useState(() => {
     if (typeof window === "undefined") return null;
     return new URLSearchParams(window.location.search).get("pack");
+  });
+  // A lien waiver asked of somebody by link. Same reasoning as the pack: the
+  // holder -- often a supply house with no account -- is here to sign one
+  // document, not to sign in.
+  const [waiverToken] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("waiver");
   });
   // And the inbox: every pack sent to one address, on one page. Its own
   // parameter for the same reason as the pack -- the holder has no account and
@@ -5005,6 +5014,15 @@ export default function SubSub() {
   // that stays true if they happen to have a SubSub session of their own --
   // they clicked a link to read a certificate, not to open their account. So
   // this sits ABOVE the logged-in gate rather than among the logged-out views.
+  if (waiverToken) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <WaiverLinkPage token={waiverToken} />
+      </div>
+    );
+  }
+
   if (packToken) {
     return (
       <div className="ss-root">
@@ -17188,6 +17206,7 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
   const [reaching, setReaching] = useState(null);   // milestone id
   const [note, setNote] = useState("");
   const [settling, setSettling] = useState(null);   // release
+  const [waiverFor, setWaiverFor] = useState(null); // release whose waivers are open
   // 051. The same modal, two modes: "record" writes down a payment made
   // elsewhere, "pay" moves the money. One component, because both wear the
   // same two paperwork gates and two copies of those is two places for one of
@@ -17414,6 +17433,12 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
                         onClick={() => { setSettleMode("record"); setSettling(rel); }}>Record payment</button>
                     </>
                   )}
+                  {/* The waiver for this payment, asked for and read back here
+                      rather than only from inside the payment modal -- the
+                      commonest order is to ask first and pay once it is in. */}
+                  {canManage && rel && rel.status !== "void" && (
+                    <button className="pick" onClick={() => setWaiverFor(rel)}>Lien waiver</button>
+                  )}
                 </div>
               </div>
             );
@@ -17431,6 +17456,17 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
         </>
       )}
 
+      {waiverFor && (
+        <Modal onClose={() => setWaiverFor(null)} wide>
+          <div className="form">
+            <h2>Lien waiver</h2>
+            <p className="form-sub">
+              For {formatMoney(waiverFor.netCents)} on this work order. Each payment gets its own.
+            </p>
+            <ReleaseWaivers release={waiverFor} onChanged={() => { load(); onChanged?.(); }} />
+          </div>
+        </Modal>
+      )}
       {settling && (
         <SettleRelease release={settling} mode={settleMode} money={money}
           onClose={() => setSettling(null)}
@@ -17475,11 +17511,19 @@ function SettleRelease({ release, mode = "record", money, onClose, onDone }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  // Bumped when a waiver is asked for, signed or recorded from inside this
+  // modal, so the gate below re-reads rather than going on refusing a payment
+  // the waiver now clears.
+  const [chainN, setChainN] = useState(0);
   useEffect(() => {
     let live = true;
     api.releaseWaiverState(release.id)
       .then((r) => { if (live) setChain(r); })
       .catch((e) => { console.error("[waiver] state failed:", e); if (live) setChain({ clear: false, reasons: [] }); });
+    return () => { live = false; };
+  }, [release.id, chainN]);
+  useEffect(() => {
+    let live = true;
     // A failed lookup must not read as "cover is fine". It is the only one of
     // the two whose optimistic default would let money out over an unanswered
     // question, so it fails closed and says the lookup failed.
@@ -17603,8 +17647,12 @@ function SettleRelease({ release, mode = "record", money, onClose, onDone }) {
             <ul className="wop-reasons">
               {(chain.reasons || []).map((r) => <li key={r}>{chainReasonText(r)}</li>)}
             </ul>
+            {/* ASK FOR IT RIGHT HERE. The gate used to name the problem and offer
+                one way past it, the override; asking for the waiver was nowhere
+                at all, so the override was the only thing anybody could press. */}
+            <ReleaseWaivers release={release} onChanged={() => setChainN((n) => n + 1)} />
             <p className="cx-found-note">
-              You can pay anyway — say why, and it is recorded against this release.
+              Or pay anyway — say why, and it is recorded against this release.
             </p>
             <label className="fld">Why you are paying anyway
               <input value={why} maxLength={500} onChange={(e) => setWhy(e.target.value)}
@@ -18627,6 +18675,7 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
               in the grid above. It is here rather than on its own screen
               because submitting documents is the moment it gets answered. */}
           <MyAgreements myName={myName} />
+          <MyWaivers myName={myName} />
 
           {/* And sending them, which is the thing they are actually asked to
               do several times a month. */}
@@ -24433,6 +24482,11 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
             : onViewWO({ job: m.job, trade: m.trade, a: m.a }))}
             onOpenCalendar={onGoPane ? () => onGoPane("schedule") : null} />
 
+          {/* A waiver waiting is a payment waiting, which is why it sits with
+              the schedule rather than in the paperwork. Renders nothing at all
+              when nobody has asked for one. */}
+          <MyWaivers myName={me?.name || ""} />
+
           <div className="dash-grid">
             <div className="dash-card accent">
               <span className="dc-num">{pending.length}</span>
@@ -25361,11 +25415,569 @@ function MyAgreements({ myName }) {
               <h2>{open.document?.title || "Subcontractor agreement"}</h2>
               <p className="form-sub">
                 With {open.accountName}. {agreementStateText(open, { subName: "You", hiringName: open.accountName })}
-                {open.signedAt ? ` Signed by ${open.signedByName} on ${formatExpiry(open.signedAt)}.` : ""}
+                {open.signedAt ? ` Signed by ${open.signedByName} on ${formatExpiry(String(open.signedAt).slice(0, 10))}.` : ""}
               </p>
               <AgreementDoc document={open.document} />
             </div>
           </Modal>)}
+    </div>
+  );
+}
+
+// ---- Lien waivers ----------------------------------------------------------
+//
+// One form for each of three people, and the words follow who is reading.
+// The paying side ASKS, against a release; the side being paid SIGNS, in the
+// app or by uploading the state's own form; and a supply house at the bottom
+// of a chain signs from a link with no account at all. The rules -- which
+// state allows SubSub's form, which of the four kinds, who can see whose
+// suppliers -- are in shared/waiverform.js and shared/waivers.js, and every
+// one of them is enforced on the server too: a screen that merely hides a
+// button is a suggestion.
+
+const SCOPE_CHOICES = {
+  // The first tier: the subcontractor answering for everybody below them.
+  0: [
+    { id: "labor_only", label: "Labor only",
+      note: "I furnished no materials or equipment, and nobody I engaged worked on this job." },
+    { id: "labor_materials", label: "I bought materials or used others",
+      note: "Name every supplier or sub who worked on this job — each is asked for their own waiver." },
+  ],
+  // Below it, the chain stops: a supply house is not asked who supplied them.
+  1: [
+    { id: "materials_only", label: "We supplied materials" },
+    { id: "labor_materials", label: "We supplied materials and labor" },
+    { id: "labor_only", label: "Labor only" },
+  ],
+};
+
+// Who else worked on this job. Chosen at the moment of signing and printed in
+// what is signed, because "labor only" is a thing somebody swears to rather
+// than a setting.
+function WaiverDeclaration({ value, onChange, tier = 0, declaredCount = 0, disabled }) {
+  const choices = SCOPE_CHOICES[tier ? 1 : 0];
+  const parties = value.parties || [];
+  const setParty = (i, k, v) => onChange({ ...value,
+    parties: parties.map((p, j) => (j === i ? { ...p, [k]: v } : p)) });
+  return (
+    <div className="wv-decl">
+      <span className="wv-decl-q">{tier ? "What did you supply?" : "Who else worked on this job?"}</span>
+      <div className="wv-decl-opts" role="radiogroup">
+        {choices.map((c) => (
+          <label key={c.id} className={`wv-opt ${value.scopeKind === c.id ? "on" : ""}`}>
+            <input type="radio" name={`wv-scope-${tier}`} checked={value.scopeKind === c.id} disabled={disabled}
+              onChange={() => onChange({ ...value, scopeKind: c.id,
+                parties: c.id === "labor_only" ? [] : (parties.length || declaredCount ? parties : [{ name: "", email: "" }]) })} />
+            <span><b>{c.label}</b>{c.note ? <span className="cx-sub">{c.note}</span> : null}</span>
+          </label>
+        ))}
+      </div>
+      {!tier && value.scopeKind && value.scopeKind !== "labor_only" && (
+        <div className="wv-parties">
+          {declaredCount > 0 && (
+            <p className="cx-sub">
+              {declaredCount} already named on this work order. Add anybody else below — each one
+              is emailed a waiver of their own to sign.
+            </p>
+          )}
+          {parties.map((p, i) => (
+            <div key={i} className="wv-party">
+              <input placeholder="Supplier or sub" value={p.name} maxLength={160} disabled={disabled}
+                onChange={(e) => setParty(i, "name", e.target.value)} />
+              <input placeholder="Their email" type="email" value={p.email || ""} maxLength={200} disabled={disabled}
+                onChange={(e) => setParty(i, "email", e.target.value)} />
+              <button type="button" className="pick" disabled={disabled}
+                onClick={() => onChange({ ...value, parties: parties.filter((_, j) => j !== i) })}>Remove</button>
+            </div>
+          ))}
+          <button type="button" className="pick" disabled={disabled}
+            onClick={() => onChange({ ...value, parties: [...parties, { name: "", email: "" }] })}>
+            <Plus size={13} /> Add another
+          </button>
+          <p className="fld-note">
+            Listing everybody is part of what you are signing. Somebody left off can still claim on the building.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const declarationOk = (v, tier, declaredCount) => {
+  if (!v.scopeKind) return false;
+  if (tier || v.scopeKind === "labor_only") return true;
+  return (v.parties || []).some((p) => p.name.trim()) || declaredCount > 0;
+};
+const cleanDeclaration = (v) => ({ scopeKind: v.scopeKind,
+  parties: (v.parties || []).filter((p) => p.name.trim())
+    .map((p) => ({ name: p.name.trim(), email: (p.email || "").trim() || null })) });
+
+function waiverErrorText(e) {
+  const code = e?.body?.error;
+  return {
+    name_mismatch: `Type your name exactly as it appears on your account${e?.body?.expected ? `: ${e.body.expected}` : ""}.`,
+    full_name_required: "Type your first and last name.",
+    already_answered: "This waiver has already been answered.",
+    parties_required: "Name who supplied this job, or choose labor only.",
+    declaration_required: "Say who else worked on this job before signing.",
+    labor_only_with_parties: "Labor only means nobody else worked on it — remove the names or choose the other option.",
+    invalid_email: "One of those email addresses doesn't look right.",
+    not_a_document: "Upload the signed waiver as a PDF or a photo.",
+    too_big: "That file is too large. Under 15 MB, please.",
+    upload_required: "This one is signed on the state's own form and uploaded.",
+    migration_needed: `The database isn't migrated yet — run ${e?.body?.migration || "069_waiver_forms"}.sql.`,
+  }[code] || "That didn't go through. Try again in a moment.";
+}
+
+// Signing, or uploading the signed form. Used by a seated subcontractor and
+// by somebody holding a link -- one component, because two copies of the
+// declaration and the upload are two places for one of them to rot.
+function WaiverSigner({ waiver, myName = "", token = null, onDone }) {
+  const tier = waiver.tier || 0;
+  const [decl, setDecl] = useState({ scopeKind: null, parties: [] });
+  const [typed, setTyped] = useState("");
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [declining, setDeclining] = useState(false);
+  const [note, setNote] = useState("");
+  const upload = waiver.source === "uploaded";
+  const declared = waiver.declaredCount || (waiver.declared || []).length || 0;
+  const nameOk = token
+    ? /\S+\s+\S+/.test(typed.trim())
+    : typedNameMatches(typed, myName);
+  const ready = declarationOk(decl, tier, declared) && nameOk && (!upload || file);
+
+  // What they are about to sign, with the declaration they have chosen in
+  // it. The same renderer the server hashes, so the page cannot show one
+  // document and record another.
+  const doc = useMemo(() => {
+    if (upload || !waiver.document) return null;
+    try {
+      return renderWaiver({ kind: waiver.kind, parties: { claimant: waiver.claimant, customer: waiver.customer,
+        job: waiver.job, property: waiver.property }, amountCents: waiver.amountCents,
+        throughDate: waiver.throughDate, state: waiver.governingState, scopeKind: decl.scopeKind });
+    } catch { return waiver.document; }
+  }, [waiver, decl.scopeKind, upload]);
+
+  const go = async () => {
+    setBusy(true); setErr("");
+    try {
+      const d = cleanDeclaration(decl);
+      if (upload) {
+        if (token) await api.uploadWaiverByToken(token, file, typed.trim(), d);
+        else await api.uploadMyWaiver(waiver.id, file, d);
+      } else if (token) await api.signWaiverByToken(token, { typedName: typed, ...d });
+      else await api.signMyWaiver(waiver.id, { typedName: typed, ...d });
+      onDone?.();
+    } catch (e) {
+      console.error("[waiver] sign failed:", e);
+      setErr(waiverErrorText(e));
+      setBusy(false);
+    }
+  };
+  const refuse = async () => {
+    setBusy(true); setErr("");
+    try {
+      if (token) await api.declineWaiverByToken(token, note);
+      else await api.declineMyWaiver(waiver.id, note);
+      onDone?.();
+    } catch (e) {
+      console.error("[waiver] decline failed:", e);
+      setErr(waiverErrorText(e)); setBusy(false);
+    }
+  };
+
+  if (declining) {
+    return (
+      <div className="wv-signer">
+        <label className="agr-decline">
+          Tell them why, so they can sort it out
+          <textarea rows={3} value={note} maxLength={1000} onChange={(e) => setNote(e.target.value)}
+            placeholder="The check hasn't cleared yet." />
+        </label>
+        {err && <div className="form-err">{err}</div>}
+        <div className="form-actions">
+          <button className="btn-ghost" type="button" onClick={() => setDeclining(false)}>Back</button>
+          <button className="btn-solid" type="button" disabled={busy} onClick={refuse}>
+            {busy ? "Sending…" : "Decline this waiver"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="wv-signer">
+      {upload ? (
+        <div className="wv-upload-note">
+          <p>{formsReasonText(waiver.forms?.reason, waiver.governingState)
+            || "This one is signed on paper and uploaded."}</p>
+          <p className="cx-sub">
+            Use the {KIND_WORDS[waiver.kind]?.title || "lien waiver"} form
+            {waiver.governingState ? ` for ${stateName(waiver.governingState)}` : ""}, for
+            {waiver.amountCents ? ` ${formatMoney(waiver.amountCents)}` : " the amount you are owed"}
+            {waiver.kind?.endsWith("_progress") ? `, through ${niceDay(waiver.throughDate)}` : ""}.
+          </p>
+        </div>
+      ) : (
+        <>
+          {!isConditional(waiver.kind) && (
+            <p className="wv-warn"><AlertTriangle size={14} /> This waiver is unconditional: it takes effect
+              when you sign, whether or not the payment clears. Sign it only if the money has arrived.</p>
+          )}
+          <AgreementDoc document={doc} />
+          <p className="fld-note">A starting point, not legal advice. Have your own lawyer read it before you rely on it.</p>
+        </>
+      )}
+
+      <WaiverDeclaration value={decl} onChange={setDecl} tier={tier} declaredCount={declared} disabled={busy} />
+
+      {upload && (
+        <label className="meas-upload">
+          <Upload size={14} /> {file ? file.name : "Choose the signed waiver (PDF or photo)"}
+          <input type="file" hidden accept="application/pdf,image/*"
+            onChange={(e) => { setFile(e.target.files?.[0] || null); e.target.value = ""; }} />
+        </label>
+      )}
+
+      <div className="agr-sign">
+        <label>
+          {token ? "Type your full name to sign" : "Type your full name to sign"}
+          <input value={typed} onChange={(e) => setTyped(e.target.value)}
+            placeholder={myName || "First and last name"} autoComplete="off" />
+        </label>
+        {!token && !nameOk && typed.trim() !== "" && (
+          <span className="cx-sub">That does not match {myName}, the name on your account.</span>
+        )}
+      </div>
+      {/* A disabled control with no reason beside it is indistinguishable
+          from a broken one, so the button says what it is waiting for. */}
+      {!ready && !busy && (
+        <p className="cov-hint">
+          {!decl.scopeKind ? "Answer who else worked on this job to carry on."
+            : !declarationOk(decl, tier, declared) ? "Name who supplied this job, or choose labor only."
+            : upload && !file ? "Choose the signed waiver to upload."
+            : "Type your name to sign."}
+        </p>
+      )}
+      {err && <div className="form-err" role="alert">{err}</div>}
+      <div className="form-actions">
+        <button className="btn-ghost" type="button" onClick={() => setDeclining(true)}>I can't sign this</button>
+        <button className="btn-solid" type="button" disabled={!ready || busy} onClick={go}>
+          {busy ? (upload ? "Uploading…" : "Signing…") : upload ? "Upload signed waiver" : "Sign waiver"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// The subcontractor's own: every client's, in one list, for the reason
+// /api/my-work exists. Renders nothing at all when there are none.
+function MyWaivers({ myName }) {
+  const [rows, setRows] = useState(null);
+  const [open, setOpen] = useState(null);
+  const [err, setErr] = useState("");
+  const load = async () => {
+    try { setRows(await api.myWaivers()); setErr(""); }
+    catch (e) {
+      if (["not_hireable", "migration_needed", "forbidden"].includes(e?.body?.error)) { setRows([]); return; }
+      console.error("[my-waivers] load failed:", e);
+      setErr("Couldn't load your lien waivers."); setRows([]);
+    }
+  };
+  useEffect(() => { load(); }, []);
+  if (!rows || (rows.length === 0 && !err)) return null;
+  const waiting = rows.filter((r) => r.status === "requested");
+  return (
+    <section className="portal-panel wv-panel">
+      <h4>Lien waivers{waiting.length > 0 && <span className="agr-badge">{waiting.length}</span>}</h4>
+      <p className="cx-sub">Each one is for a single payment. Signing is what lets it go out.</p>
+      {err && <div className="form-err">{err}</div>}
+      <ul className="agr-rows">
+        {rows.map((r) => (
+          <li key={r.id} className={`agr-row ${r.status === "requested" ? "agr-todo" : ""}`}>
+            <div className="agr-row-main">
+              <b>{r.accountName} · {formatMoney(r.amountCents)}</b>
+              <span className="cx-sub">
+                {kindShort(r.kind)} · {r.job || "Job"}
+                {r.kind?.endsWith("_progress") ? ` · through ${niceDay(r.throughDate)}` : ""}
+              </span>
+              <span className="cx-sub">{waiverStateText(r, { asSigner: true })}</span>
+              {/* Their own suppliers, by name: declared by them, and theirs to
+                  chase. The only party who never sees this list is the one
+                  above them. */}
+              {(r.below || []).length > 0 && (
+                <ul className="wv-below">
+                  {r.below.map((k) => (
+                    <li key={k.id}>
+                      {k.name} — {k.status === "signed" ? "signed"
+                        : k.status === "declined" ? `declined${k.declinedNote ? `: ${k.declinedNote}` : ""}`
+                        : k.email ? "asked, not signed yet" : "no email — collect theirs on paper"}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {r.status === "requested" && (
+              <button className="btn-solid sm" type="button" onClick={() => setOpen(r)}>
+                {r.source === "uploaded" ? "Upload signed waiver" : "Read and sign"}
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {open && (
+        <Modal onClose={() => setOpen(null)} wide>
+          <div className="form">
+            <h2>{open.title}</h2>
+            <p className="form-sub">
+              {open.accountName} asked for this before paying you {formatMoney(open.amountCents)}.
+            </p>
+            <WaiverSigner waiver={open} myName={myName} onDone={() => { setOpen(null); load(); }} />
+          </div>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+// The page a link opens. No account, no branding lookup, no sign-in: the
+// holder was emailed one waiver and this is all of it.
+function WaiverLinkPage({ token }) {
+  const [w, setW] = useState(null);
+  const [err, setErr] = useState("");
+  const load = async () => {
+    try { setW(await api.waiverByToken(token)); }
+    catch (e) {
+      console.error("[waiver-link] load failed:", e);
+      setErr(e?.status === 404 ? "This link isn't valid any more — it may have been withdrawn. Ask whoever sent it for a new one."
+        : "This page couldn't load. Try again in a moment.");
+    }
+  };
+  useEffect(() => { load(); }, [token]);
+  if (err) {
+    return <div className="pack-page"><div className="pack-card"><p className="pack-lede">{err}</p></div>
+      <p className="pack-foot">Powered by SubSub</p></div>;
+  }
+  if (!w) return <div className="pack-page"><div className="pack-card"><p className="cov-hint">Loading…</p></div></div>;
+  return (
+    <div className="pack-page">
+      <div className="pack-card wv-link">
+        <span className="pack-kicker">Lien waiver</span>
+        <h1>{w.title}</h1>
+        <p className="pack-lede">
+          {w.customer || "Your customer"} asked {w.claimant || "you"} for a lien waiver
+          {w.amountCents ? ` on a payment of ${formatMoney(w.amountCents)}` : ""}
+          {w.job ? ` for ${w.job}` : ""}.
+        </p>
+        {w.status === "requested"
+          ? <WaiverSigner waiver={w} token={token} onDone={load} />
+          : <p className="wv-done">
+              {w.status === "signed"
+                ? <><CheckCircle2 size={16} /> Signed{w.signedByName ? ` by ${w.signedByName}` : ""}{w.signedAt ? ` on ${formatExpiry(String(w.signedAt).slice(0, 10))}` : ""}. Nothing more to do.</>
+                : w.status === "declined" ? "You declined this waiver. They have been told."
+                : "This waiver has been withdrawn."}
+            </p>}
+      </div>
+      <p className="pack-foot">Powered by SubSub</p>
+    </div>
+  );
+}
+
+// The paying side's half, against one release: what has been asked for, what
+// came back, and asking. Mounted in the release's own modal and inside the
+// payment modal where the gate refuses -- one component, because two would
+// be two request forms to keep in step.
+function ReleaseWaivers({ release, onChanged }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [kind, setKind] = useState("");
+  const [source, setSource] = useState("");
+  const [toEmail, setToEmail] = useState("");
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState("");
+  const [viewing, setViewing] = useState(null);
+
+  const load = async () => {
+    try {
+      const r = await api.releaseWaivers(release.id);
+      setD(r); setErr("");
+      setKind((k) => k || r.suggestedKind);
+      setSource((s) => s || r.forms.sources[0]);
+      setToEmail((t) => t || r.claimantEmail || "");
+    } catch (e) {
+      console.error("[release-waivers] load failed:", e);
+      setErr(waiverErrorText(e));
+    }
+  };
+  useEffect(() => { load(); }, [release.id]);
+  const act = async (name, fn) => {
+    setBusy(name); setErr(""); setNote("");
+    try { const r = await fn(); await load(); onChanged?.(); return r; }
+    catch (e) {
+      console.error(`[release-waivers] ${name} failed:`, e);
+      setErr({
+        unconditional_before_paid: "An unconditional waiver gives the rights up whether or not the money arrives, so it is only asked for once this payment is recorded.",
+        form_not_allowed: formsReasonText(e?.body?.reason, e?.body?.state) || "That form isn't allowed for this building's state.",
+        already_requested: "A waiver of that kind is already waiting on them.",
+        already_signed: "They have already signed a waiver of that kind for this payment.",
+        invalid_email: "That email address doesn't look right.",
+      }[e?.body?.error] || waiverErrorText(e));
+    } finally { setBusy(""); }
+  };
+
+  if (err && !d) return <p className="fld-err">{err}</p>;
+  if (!d) return <p className="cov-hint">Checking the waiver…</p>;
+  const open = d.waivers.filter((w) => w.status === "requested");
+  const bothForms = d.forms.sources.length > 1;
+
+  return (
+    <div className="wv-release">
+      {d.waivers.length === 0 && !asking && (
+        <p className="cov-hint">No lien waiver asked for on this payment yet.</p>
+      )}
+      <ul className="wv-list">
+        {d.waivers.map((w) => (
+          <li key={w.id} className={`wv-item is-${w.status}`}>
+            <div className="wv-item-main">
+              <b>{kindShort(w.kind)}</b>
+              <span className="cx-sub">
+                {waiverStateText(w)}
+                {w.status === "signed" && w.signedByName ? ` By ${w.signedByName}` : ""}
+                {w.status === "signed" && w.uploadedSide === "recipient" ? " Recorded from a copy you were sent." : ""}
+                {w.status === "signed" && w.signedAt ? ` on ${formatExpiry(String(w.signedAt).slice(0, 10))}.` : ""}
+                {w.status === "declined" && w.declinedNote ? ` “${w.declinedNote}”` : ""}
+                {w.status === "requested" && !w.emailed ? " Not emailed — they will see it when they sign in." : ""}
+              </span>
+              {/* Counts, never names: the subcontractor's supplier list is
+                  their book. */}
+              {w.lowerTierTotal > 0 && (
+                <span className="cx-sub">{w.lowerTierSigned} of {w.lowerTierTotal} below them signed</span>
+              )}
+            </div>
+            <div className="wv-item-acts">
+              {w.status === "signed" && (w.hasFile || w.document) && (
+                <button className="pick" type="button" onClick={() => setViewing(w)}>View</button>
+              )}
+              {w.status === "requested" && (
+                <>
+                  <button className="pick" type="button" disabled={!!busy}
+                    onClick={() => act("resend", async () => {
+                      const r = await api.resendWaiver(w.id);
+                      if (r?.ok) setNote("Sent again.");
+                    })}>{busy === "resend" ? "Sending…" : "Send again"}</button>
+                  <label className="pick wv-record">
+                    {busy === "record" ? "Uploading…" : "Record a signed copy"}
+                    <input type="file" hidden accept="application/pdf,image/*" disabled={!!busy}
+                      onChange={(e) => { const f = e.target.files?.[0]; e.target.value = "";
+                        if (f) act("record", () => api.recordWaiverCopy(w.id, f)); }} />
+                  </label>
+                  <button className="pick" type="button" disabled={!!busy}
+                    onClick={() => act("void", () => api.voidWaiver(w.id))}>Withdraw</button>
+                </>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      {!asking && open.length === 0 && (
+        <button className="btn-solid sm" type="button" onClick={() => setAsking(true)}>
+          Ask for a lien waiver
+        </button>
+      )}
+
+      {asking && (
+        <div className="wv-ask">
+          <label className="fld">Which waiver
+            <select className="fld-state" value={kind} onChange={(e) => setKind(e.target.value)}>
+              {WAIVER_KINDS.map((k) => {
+                const no = kindRefusal({ kind: k, paid: d.paid });
+                return <option key={k} value={k} disabled={!!no}>
+                  {KIND_WORDS[k].short}{no ? " — once this payment is recorded" : ""}
+                </option>;
+              })}
+            </select>
+          </label>
+          <p className="fld-note">{KIND_WORDS[kind]?.when}</p>
+          {bothForms ? (
+            <div className="wv-src" role="radiogroup">
+              <label className={`wv-opt ${source === "subsub_standard" ? "on" : ""}`}>
+                <input type="radio" name="wv-src" checked={source === "subsub_standard"}
+                  onChange={() => setSource("subsub_standard")} />
+                <span><b>SubSub's form</b><span className="cx-sub">{stateName(d.state)} sets no form, so they read and sign it here.</span></span>
+              </label>
+              <label className={`wv-opt ${source === "uploaded" ? "on" : ""}`}>
+                <input type="radio" name="wv-src" checked={source === "uploaded"}
+                  onChange={() => setSource("uploaded")} />
+                <span><b>Your own form</b><span className="cx-sub">They sign it on paper and upload it.</span></span>
+              </label>
+            </div>
+          ) : (
+            <p className="cov-hint">{formsReasonText(d.forms.reason, d.state)}</p>
+          )}
+          <label className="fld">Send it to
+            <input type="email" value={toEmail} maxLength={200} onChange={(e) => setToEmail(e.target.value)}
+              placeholder="their email" />
+          </label>
+          <p className="fld-note">
+            {formatMoney(d.amountCents)} to {d.claimant || "them"}
+            {kind.endsWith("_progress") ? `, for work through ${niceDay(d.throughDate)}` : ""}.
+          </p>
+          <div className="form-actions">
+            <button className="btn-ghost" type="button" onClick={() => setAsking(false)}>Cancel</button>
+            <button className="btn-solid" type="button" disabled={!!busy || !kind}
+              onClick={async () => {
+                const r = await act("ask", () => api.requestWaiver(release.id,
+                  { kind, source, toEmail: toEmail.trim() || undefined }));
+                if (r) {
+                  setAsking(false);
+                  setNote(r.emailed ? "Sent." : "Asked. It wasn't emailed, so they will see it when they sign in.");
+                }
+              }}>{busy === "ask" ? "Sending…" : "Send the request"}</button>
+          </div>
+        </div>
+      )}
+      {note && <p className="cov-hint" role="status"><Check size={12} /> {note}</p>}
+      {err && <p className="fld-err" role="alert">{err}</p>}
+
+      {viewing && (
+        <Modal onClose={() => setViewing(null)} wide>
+          <div className="form">
+            <h2>{viewing.title}</h2>
+            <p className="form-sub">
+              {waiverStateText(viewing)}{viewing.signedByName ? ` By ${viewing.signedByName}` : ""}
+              {viewing.signedAt ? ` on ${formatExpiry(String(viewing.signedAt).slice(0, 10))}.` : ""}
+            </p>
+            {viewing.hasFile ? <WaiverFile id={viewing.id} /> : <AgreementDoc document={viewing.document} />}
+            {viewing.docSha256 && <p className="fld-note wv-hash">Fingerprint {viewing.docSha256.slice(0, 16)}…</p>}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// A signed copy, fetched with the session rather than linked to -- the route
+// needs an Authorization header, which no anchor or frame can carry.
+function WaiverFile({ id }) {
+  const [f, setF] = useState(null);
+  const [failed, setFailedFile] = useState(false);
+  useEffect(() => {
+    let url = null, live = true;
+    api.waiverFileBlob(id).then((r) => { url = r.url; if (live) setF(r); })
+      .catch((e) => { console.error("[waiver-file] failed:", e); if (live) setFailedFile(true); });
+    return () => { live = false; if (url) URL.revokeObjectURL(url); };
+  }, [id]);
+  if (failed) return <p className="fld-err">The signed copy couldn't be opened.</p>;
+  if (!f) return <p className="cov-hint">Opening…</p>;
+  return (
+    <div className="wv-file">
+      {f.type.startsWith("image/") ? <img src={f.url} alt="Signed lien waiver" />
+        : <iframe src={f.url} title="Signed lien waiver" />}
+      <a className="pick" href={f.url} target="_blank" rel="noreferrer" download>Download</a>
     </div>
   );
 }
@@ -35559,6 +36171,45 @@ iframe.dv-frame{display:block}
   .agr-row{flex-direction:column;align-items:stretch}
   .agr-doc{max-height:60vh;padding:13px 14px}
 }
+/* Lien waivers. The declaration is two big choices rather than a dropdown,
+   because "labor only" is a thing somebody swears to and should read as a
+   decision rather than a field; the chosen one is drawn solid with the same
+   brand edge the selected chips use. */
+.wv-decl{display:flex;flex-direction:column;gap:8px;margin:14px 0}
+.wv-decl-q{font-size:13px;font-weight:700}
+.wv-decl-opts,.wv-src{display:flex;flex-direction:column;gap:7px}
+.wv-opt{display:flex;align-items:flex-start;gap:9px;padding:10px 12px;
+  border:1px solid var(--line);border-radius:10px;background:var(--paper);cursor:pointer}
+.wv-opt.on{border-color:var(--brand);box-shadow:0 0 0 1px var(--brand)}
+.wv-opt input{margin-top:3px;flex:none}
+.wv-opt span{display:flex;flex-direction:column;gap:2px;font-size:13px}
+.wv-parties{display:flex;flex-direction:column;gap:7px;padding-left:2px}
+.wv-party{display:flex;gap:7px;flex-wrap:wrap}
+.wv-party input{flex:1 1 160px;min-width:0;font-size:15px;padding:8px 10px}
+.wv-warn{display:flex;gap:8px;align-items:flex-start;margin:10px 0;padding:10px 12px;
+  border:1px solid var(--warn,#b45309);border-radius:9px;font-size:13px;font-weight:600;
+  background:color-mix(in srgb,var(--warn,#b45309) 9%,transparent)}
+.wv-upload-note{margin:10px 0;padding:11px 13px;border:1px solid var(--line);
+  border-radius:10px;background:var(--paper);font-size:13px}
+.wv-upload-note p{margin:0 0 5px}
+.wv-release{display:flex;flex-direction:column;gap:9px;margin:8px 0}
+.wv-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
+.wv-list:empty{display:none}
+.wv-item{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;
+  padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--card,#fff)}
+.wv-item.is-signed{border-color:color-mix(in srgb,var(--brand) 45%,var(--line))}
+.wv-item-main{display:flex;flex-direction:column;gap:2px;flex:1 1 220px;min-width:0;font-size:13px}
+.wv-item-acts{display:flex;gap:6px;flex-wrap:wrap}
+.wv-record{position:relative;cursor:pointer}
+.wv-ask{display:flex;flex-direction:column;gap:8px;padding:11px 12px;border:1px solid var(--line);
+  border-radius:10px;background:var(--paper)}
+.wv-below{margin:4px 0 0;padding-left:16px;font-size:12px;color:var(--ink-soft)}
+.wv-file img,.wv-file iframe{width:100%;max-height:60vh;border:1px solid var(--line);border-radius:8px}
+.wv-file iframe{height:60vh}
+.wv-file .pick{margin-top:8px;display:inline-block}
+.wv-hash{font-family:ui-monospace,monospace}
+.wv-link h1{font-size:21px;margin:4px 0 8px}
+.wv-done{display:flex;gap:8px;align-items:center;font-size:14px;font-weight:600}
 .wof{background:var(--paper);border:1px solid var(--line);border-radius:10px;
   padding:11px 12px;margin:0 0 14px;display:flex;flex-direction:column;gap:8px}
 .wof-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}

@@ -122,6 +122,8 @@
     "test:states": "node scripts/states-test.mjs",
     "test:money": "node --no-warnings scripts/money-test.mjs",
     "test:waiver": "node --no-warnings scripts/waiver-test.mjs",
+    "test:lienwaiver": "node --no-warnings scripts/lien-waiver-test.mjs",
+    "test:lienwaiverui": "node --no-warnings scripts/lien-waiver-ui-test.mjs",
     "test:milestone": "node --no-warnings scripts/milestone-test.mjs",
     "test:docexpiry": "node --no-warnings scripts/doc-expiry-test.mjs",
     "test:firstadmin": "node --no-warnings scripts/first-admin-test.mjs",

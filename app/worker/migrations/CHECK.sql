@@ -221,6 +221,11 @@ WITH spec(j) AS (SELECT
   -- per room per walk.
   ',["m068_inspection_sources_unique","index","ux_inspection_sources_external",[]]' ||
   ',["m068_inspection_unmapped_unique","index","ux_inspection_unmapped",[]]' ||
+  -- 069. The paper each waiver is made of. Counted by its columns -- 052's
+  -- lesson -- and the open-request index named, because without it two
+  -- presses ask a subcontractor for the same waiver twice.
+  ',["m069_waiver_forms","col","waiver_forms",["waiver_id","source","template_id","template_version","parties","uploaded_side"]]' ||
+  ',["m069_waiver_open_unique","index","ux_waiver_open",[]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -626,6 +631,21 @@ WITH inv(j) AS (SELECT '['
   || ',' || json_array('m068_inv_source_cross_account', (SELECT COUNT(*) FROM inspection_sources s
     JOIN inspections i ON i.id = s.inspection_id
     WHERE i.account_id <> s.account_id))
+  -- 069. A WAIVER MARKED SIGNED WITH NOTHING BEHIND IT. Signing in the app
+  -- writes the hash of the text shown; an upload writes the file and the hash
+  -- of its bytes. A signed row with neither is a lien release nobody can
+  -- produce -- the gate reads it as clear and money moves on it.
+  || ',' || json_array('m069_inv_signed_unrecorded', (SELECT COUNT(*) FROM lien_waivers w
+    JOIN waiver_forms f ON f.waiver_id = w.id
+    WHERE w.status = 'signed' AND w.doc_sha256 IS NULL AND w.doc_key IS NULL))
+  -- 069. SUBSUB'S OWN FORM SIGNED IN A STATUTORY STATE. Twelve states set the
+  -- wording of a lien waiver in statute and a waiver on any other form can be
+  -- void; the route offers only an upload there until a state's verbatim text
+  -- is loaded. A row here is a waiver that may release nothing.
+  || ',' || json_array('m069_inv_standard_in_statutory', (SELECT COUNT(*) FROM lien_waivers w
+    JOIN waiver_forms f ON f.waiver_id = w.id
+    WHERE f.source = 'subsub_standard' AND f.template_id = 'subsub_standard_waiver'
+      AND w.governing_state IN ('AZ','CA','FL','GA','MA','MI','MS','MO','NV','TX','UT','WY')))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

@@ -759,6 +759,55 @@ function textToHtml(text, link) {
   return `<div style="font:14px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#12211C;max-width:640px">${linked}</div>`;
 }
 
+// Asking somebody to sign a lien waiver.
+//
+// Two readers and one template. A subcontractor on the roster gets it with a
+// link that opens the waiver whether or not they sign in; a supply house at
+// the bottom of a chain has no account and no reason to want one, and the
+// link is the whole of how they answer -- the same way every other way into
+// this product already works for somebody outside it.
+//
+// It says WHICH of the four it is, in words, because the difference between
+// conditional and unconditional is the difference between "this takes effect
+// when the money clears" and "you are giving this up now", and that is the
+// sentence somebody reads before deciding whether to open it at all. And it
+// names the amount and the through date, since a waiver is only ever for a
+// payment and up to a day -- one that does not say which is one nobody can
+// check against their own books.
+export function waiverRequestEmail({ toName, fromName, kindTitle, conditional, amount,
+  through, job, link, uploadOnly = false, stateName = null }) {
+  const who = fromName || "A customer";
+  const how = uploadOnly
+    ? `${stateName || "This state"} sets the exact wording of a lien waiver, so sign
+it on ${stateName ? `${stateName}'s` : "the state's"} own form and upload the signed copy at the link.`
+    : "You can read it and sign it at the link, or decline it there with a note.";
+  const text = `Hi ${toName || "there"},
+
+${who} has asked you for a lien waiver.
+
+  ${kindTitle}
+  Job: ${job || "—"}
+  Payment: ${amount}
+  For work through: ${through}
+
+${conditional
+    ? "It is conditional: it only takes effect once you have actually received\nthe payment."
+    : "It is UNCONDITIONAL: it takes effect when you sign it, whether or not the\npayment clears. Sign it only if the money has arrived."}
+
+${how}
+
+  ${link}
+
+-- sent by ${who}, through SubSub
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+  return {
+    subject: `${who} asked you for a lien waiver — ${amount}`,
+    text,
+    html: textToHtml(text, link),
+  };
+}
+
 // ---- Delivery -------------------------------------------------------------
 
 // Returns a result rather than throwing: a failed notification must not undo

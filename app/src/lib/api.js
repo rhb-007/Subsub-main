@@ -171,6 +171,22 @@ async function uploadFile(kind, file) {
   return res.json(); // { key }
 }
 
+// A file PUT straight at a route that consumes it -- a signed lien waiver is
+// hashed from its bytes on the way in, so it is never staged under a key the
+// client then names. Errors carry the body, like request(), so a screen can
+// say "that is not a PDF" rather than "upload failed".
+async function putFile(path, file) {
+  const headers = { "Content-Type": file.type || "application/octet-stream", ...(await authHeaders()) };
+  const res = await fetch(`${API_BASE}${path}`, { method: "PUT", headers, body: file });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(body.error || `upload_failed_${res.status}`);
+    err.status = res.status; err.body = body;
+    throw err;
+  }
+  return body;
+}
+
 export const api = {
   devLogin: (email) => request("/auth/dev-login", { method: "POST", body: JSON.stringify({ email }) }),
   // Real-auth equivalent of devLogin: identity comes from the verified
@@ -558,6 +574,37 @@ export const api = {
     request(`/milestones/${needId(id, "milestone")}/reject`, { method: "POST", body: JSON.stringify({ reason }) }),
   releaseWaiverState: (id) => request(`/releases/${needId(id, "release")}/waiver-state`),
   releaseCoverState: (id) => request(`/releases/${needId(id, "release")}/cover-state`),
+  // Lien waivers. The paying side asks against a release; the side being
+  // paid signs in the app, by link, or by uploading the signed form. See
+  // shared/waiverform.js for which states allow which.
+  releaseWaivers: (id) => request(`/releases/${needId(id, "release")}/waivers`),
+  requestWaiver: (id, body) =>
+    request(`/releases/${needId(id, "release")}/waiver`, { method: "POST", body: JSON.stringify(body || {}) }),
+  resendWaiver: (id) => request(`/waivers/${needId(id, "waiver")}/resend`, { method: "POST", body: "{}" }),
+  voidWaiver: (id) => request(`/waivers/${needId(id, "waiver")}/void`, { method: "POST", body: "{}" }),
+  recordWaiverCopy: (id, file) =>
+    putFile(`/waivers/${needId(id, "waiver")}/file/${encodeURIComponent(file.name)}`, file),
+  waiverFileBlob: async (id) => {
+    const res = await fetch(`${API_BASE}/waivers/${needId(id, "waiver")}/file`, { headers: await authHeaders() });
+    if (!res.ok) throw new Error(`waiver_file_${res.status}`);
+    const blob = await res.blob();
+    return { url: URL.createObjectURL(blob), type: blob.type };
+  },
+  myWaivers: () => request("/my-waivers"),
+  signMyWaiver: (id, body) =>
+    request(`/my-waivers/${needId(id, "waiver")}/sign`, { method: "POST", body: JSON.stringify(body) }),
+  declineMyWaiver: (id, note) =>
+    request(`/my-waivers/${needId(id, "waiver")}/decline`, { method: "POST", body: JSON.stringify({ note }) }),
+  uploadMyWaiver: (id, file, declaration) =>
+    putFile(`/my-waivers/${needId(id, "waiver")}/file/${encodeURIComponent(file.name)}?declaration=${encodeURIComponent(JSON.stringify(declaration || {}))}`, file),
+  // By link, for somebody with no account. The token is the whole of the auth.
+  waiverByToken: (token) => request(`/waiver/${encodeURIComponent(token)}`),
+  signWaiverByToken: (token, body) =>
+    request(`/waiver/${encodeURIComponent(token)}/sign`, { method: "POST", body: JSON.stringify(body) }),
+  declineWaiverByToken: (token, note) =>
+    request(`/waiver/${encodeURIComponent(token)}/decline`, { method: "POST", body: JSON.stringify({ note }) }),
+  uploadWaiverByToken: (token, file, name, declaration) =>
+    putFile(`/waiver/${encodeURIComponent(token)}/file/${encodeURIComponent(file.name)}?name=${encodeURIComponent(name)}&declaration=${encodeURIComponent(JSON.stringify(declaration || {}))}`, file),
   settleRelease: (id, body) =>
     request(`/releases/${needId(id, "release")}/settle`, { method: "POST", body: JSON.stringify(body || {}) }),
 

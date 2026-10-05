@@ -1165,6 +1165,27 @@ CREATE INDEX IF NOT EXISTS ix_lower_tier_job ON lower_tier_parties (job_id, comp
 
 CREATE INDEX IF NOT EXISTS ix_lower_tier_wo ON lower_tier_parties (work_order_id);
 
+-- 069. The paper each waiver is made of, and one open request per link.
+-- See migrations/069_waiver_forms.sql for the reasoning.
+CREATE TABLE IF NOT EXISTS waiver_forms (
+  waiver_id        TEXT PRIMARY KEY REFERENCES lien_waivers(id) ON DELETE CASCADE,
+  source           TEXT NOT NULL CHECK (source IN ('subsub_standard', 'uploaded')),
+  template_id      TEXT,
+  template_version TEXT,
+  parties          TEXT NOT NULL DEFAULT '{}',
+  file_name        TEXT,
+  file_type        TEXT,
+  uploaded_by      TEXT REFERENCES users(id),
+  uploaded_side    TEXT CHECK (uploaded_side IN ('claimant', 'recipient')),
+  emailed          INTEGER NOT NULL DEFAULT 0,
+  answered_at      TEXT,
+  created_at       TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_waiver_open
+  ON lien_waivers (release_id, kind) WHERE status = 'requested' AND tier = 0 AND release_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_waiver_open_lower
+  ON lien_waivers (parent_id, from_email, kind) WHERE status = 'requested' AND parent_id IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS ix_lower_tier_acct ON lower_tier_parties (account_id);
 
 -- ---------------------------------------------------------------------------
