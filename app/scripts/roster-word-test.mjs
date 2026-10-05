@@ -58,6 +58,17 @@ const t = tally();
     /<JobForm[\s\S]{0,400}?accountName=\{account\.name\}/.test(src)
       && /<JobForm[\s\S]{0,400}?rosterWord=\{rosterWords\(account\)\.One\}/.test(src));
 }
+// SubSub's own sign-in page names the product for everybody who signs in on
+// it -- contractors, managers, owners -- so it says CONTRACTOR, the neutral
+// noun, and not subcontractor, which describes one chain and one audience.
+{
+  const src = readFileSync(join(app, "src/App.tsx"), "utf8");
+  const i = src.indexOf("const signInTagline");
+  const line = src.slice(i, src.indexOf(";", i));
+  t.ck("SubSub's own sign-in page says Contractor Management Platform",
+    /\?\s*"Contractor Management Platform"/.test(line), line.split("\n")[1]);
+  t.ck("and not Subcontractor", !/Subcontractor Management/.test(line));
+}
 
 // ---- one rule, and the switcher used to hold a second copy of it ---------
 //

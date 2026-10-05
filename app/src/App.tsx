@@ -573,8 +573,12 @@ const isHiring = (account) => ACCOUNT_KINDS[kindOf(account)].hires !== false;
 // people signing in there are its staff, its owners, its tenants, its
 // subcontractors, and "Property manager portal" is what all of them would
 // call it. Neither prints the address: it is the one they are standing on.
+// SubSub's own says CONTRACTOR, not subcontractor: the people signing in here
+// are general contractors, property managers, owners and the trades they
+// hire, and "subcontractor" names one of those as the whole audience -- the
+// noun `hiresLabel` already refuses to give a managing agent's roster.
 const signInTagline = (brand) => brand?.isSubSub
-  ? "Subcontractor Management Platform"
+  ? "Contractor Management Platform"
   : `${ACCOUNT_KINDS[kindOf(brand)].label} portal`;
 
 // Phone numbers are typed in a dozen shapes and then compared, dialled and
