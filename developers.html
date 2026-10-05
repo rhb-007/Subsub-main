@@ -747,6 +747,113 @@ Content-Type: application/json</code></pre>
   <code>garage_doors</code> <code>restoration</code> <code>cleaning</code>
 </p>
 
+<h2>Unit inspections</h2>
+<p>
+  The same token posts <strong>move-in and move-out inspections</strong>, for an account that keeps
+  buildings. Already walking units in an inspection app, a tablet form or a spreadsheet? Post the
+  walk and it lands in SubSub as a draft inspection with its rooms and conditions on it — ready to
+  read, finish, and raise the work from.
+</p>
+<pre class="dev-pre"><code>POST https://api.subsub.work/api/v1/inspections
+Authorization: Bearer ssk_your_token_here
+Content-Type: application/json</code></pre>
+<p>
+  Or, where there is no field for a header, the same webhook address with the object on the end:
+</p>
+<pre class="dev-pre"><code>POST https://api.subsub.work/api/v1/hooks/generic/&lt;your-webhook-token&gt;/inspections
+Content-Type: application/json</code></pre>
+
+<h3>What to send</h3>
+<table class="dev-tbl">
+  <thead><tr><th>Field</th><th>Required</th><th>What it is</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>externalId</code></td><td>Yes</td>
+      <td>Your own id for the walk. A retry carrying the same one updates nothing and returns the
+      inspection that already exists, rather than creating a second.</td>
+    </tr>
+    <tr>
+      <td><code>kind</code></td><td>Yes</td>
+      <td><code>move_in</code> or <code>move_out</code>. Most spellings are read —
+      <code>Move Out</code>, <code>moveout</code>, <code>check-out</code>. A word SubSub cannot
+      place is refused rather than guessed: the two are opposite documents.</td>
+    </tr>
+    <tr>
+      <td><code>property</code> <em>or</em> <code>propertyId</code></td><td>Yes</td>
+      <td>The building. <code>propertyId</code> is exact; <code>property</code> is matched whole and
+      case-insensitively against the name and the address of your own buildings. Two matches are
+      refused, so send the id where a name is not unique. <code>GET /api/v1/properties</code> lists
+      them with their ids.</td>
+    </tr>
+    <tr>
+      <td><code>rooms</code></td><td>Yes</td>
+      <td>An array, one entry per room or item, each with a <code>name</code>. A bare string is a
+      room name with nothing said about it yet.</td>
+    </tr>
+    <tr>
+      <td><code>rooms[].status</code></td><td>No</td>
+      <td>Their condition, in your own words — see below. Left out, the room arrives
+      <em>not checked</em>.</td>
+    </tr>
+    <tr>
+      <td><code>rooms[].note</code></td><td>No</td>
+      <td>What was written about the room.</td>
+    </tr>
+    <tr><td><code>unit</code></td><td>No</td><td>The unit, as it reads on the door: <code>10B</code>, <code>Apt 12</code>.</td></tr>
+    <tr><td><code>tenantName</code></td><td>No</td><td>Who was moving. Not a SubSub user — the person moving out may have no login left and the one moving in may not have one yet.</td></tr>
+    <tr><td><code>inspectedOn</code></td><td>No</td><td>The day it was <em>walked</em>, as <code>YYYY-MM-DD</code>, which is not the day it was typed up.</td></tr>
+    <tr><td><code>propertyId</code></td><td>No</td><td>Exact building id, in place of <code>property</code>.</td></tr>
+    <tr><td><code>source</code></td><td>No</td><td>Where it came from: <code>generic</code>, or <code>other</code> for your own system. The webhook address names this itself.</td></tr>
+  </tbody>
+</table>
+<p>
+  <strong>Photographs are not accepted here.</strong> A webhook carries JSON and a photograph is
+  bytes; the rooms, the conditions and the notes arrive, and pictures are added on the inspection
+  itself. Common field names are read as well as SubSub's own — <code>external_id</code>,
+  <code>items</code>, <code>condition</code>, <code>notes</code>, <code>completed_at</code> and the
+  rest — so most systems need no mapping.
+</p>
+
+<h3>Conditions arrive as your own words</h3>
+<p>
+  Every inspection app has its own scale: pass and fail, good and fair and poor, 1 to 5, A to C.
+  SubSub has four room statuses — <strong>not checked</strong>, <strong>OK</strong>,
+  <strong>follow-up</strong> and <strong>fail</strong> — and reads the ordinary words for the last
+  three without being told.
+</p>
+<p>
+  A word it does not know lands the room <em>not checked</em>, which is deliberate: anything else
+  would assert that somebody walked the room and found nothing wrong. The walk still
+  <strong>arrives</strong> — it is never refused over a word — and the reply says which words were
+  not understood, in <code>unmapped</code>, with <code>needsAnswers</code> counting the rooms left
+  without one. Say what those mean once under
+  <strong>My account → Profile → Inspections from your inspection app</strong> and every walk after
+  that reads properly.
+</p>
+
+<h3>What comes back</h3>
+<pre class="dev-pre"><code>{
+  "ok": true,
+  "source": "generic",
+  "duplicate": false,
+  "inspectionId": "9f2c…",
+  "status": "draft",
+  "rooms": 11,
+  "needsAnswers": 2,
+  "unmapped": ["Grade C"],
+  "url": "https://app.subsub.work/?inspection=9f2c…"
+}</code></pre>
+<p>
+  <strong>It is always a draft, and nothing finishes it but a person.</strong> Finishing is what
+  makes the inspection a document somebody can quote back, what writes its summary and what lets it
+  be sent to the building's owner — so it is one tap on the screen rather than something a webhook
+  does. The rooms, the notes and the photographs are all editable until then.
+</p>
+<p>
+  An account with no buildings answers <code>no_buildings</code>: there are no units to walk. That
+  is a different gate from the jobs endpoint, which a general contractor can use.
+</p>
+
 <h2>Keeping the token safe</h2>
 <ul>
   <li>It is shown once. SubSub stores a SHA-256 of it, not the token, so it cannot be read back — by you or by us. Lost it? Revoke it and make another.</li>

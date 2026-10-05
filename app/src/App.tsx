@@ -521,7 +521,12 @@ const hasTenants = (account) => ACCOUNT_KINDS[kindOf(account)].properties;
 const DEFAULT_ACCOUNT_KIND = "general_contractor";
 const kindOf = (account) =>
   (account && ACCOUNT_KINDS[account.kind]) ? account.kind : DEFAULT_ACCOUNT_KIND;
-const hasProperties = (account) => ACCOUNT_KINDS[kindOf(account)].properties;
+// Whether an account keeps buildings. Two call sites ask it two ways -- some
+// hold the whole account, some only the kind off a prop -- so the kind version
+// is the rule and the other is defined in terms of it. Two expressions of one
+// field is how the two come to disagree the day a kind is added.
+const kindHasProperties = (kind) => !!ACCOUNT_KINDS[kind]?.properties;
+const hasProperties = (account) => kindHasProperties(kindOf(account));
 // Whether this account can itself be hired as a subcontractor.
 const isHireable = (account) => !!ACCOUNT_KINDS[kindOf(account)].hireable;
 // What this account calls the companies on its roster.
@@ -16691,7 +16696,215 @@ function CrmMapping() {
   );
 }
 
-function ApiTokens({ isScale }) {
+// Inspections posted in from an inspection app, and what its condition words
+// mean here.
+//
+// A managing agent already walks units in something -- an inspection app, a
+// tablet form, a spreadsheet -- and that system can post the walk straight in.
+// What it cannot know is SubSub's four room statuses: every app has its own
+// scale, pass/fail or good/fair/poor or 1 to 5, so the account says once what
+// their words mean and every walk after that arrives readable.
+//
+// THE WORK QUEUE COMES FIRST, for the reason the CRM panel's does. A walk whose
+// condition words map to nothing still arrives -- refusing it would make the
+// sender retry for ever with nobody told -- so those rooms land `unchecked`,
+// which keeps the inspection out of being signed off, and the word is counted.
+// This panel is where that count becomes one tap. A screen that only listed
+// rules would leave somebody to work out for themselves which word was
+// missing, which is the knows-the-answer-and-offers-no-way-in shape this
+// product refuses everywhere else.
+//
+// Admin only and buildings only, which is exactly what `/api/inspection-rules`
+// allows: a condition rule is the dictionary every arriving walk is read
+// through, which is the same account-level decision as the token that posts it,
+// and an account with no buildings has no units to walk.
+function InspectionIngest({ isScale }) {
+  const [data, setData] = useState(null);
+  const [open, setOpen] = useState(null);      // which queue row is being answered
+  const [adding, setAdding] = useState(false);
+  const [value, setValue] = useState("");
+  const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const load = async () => {
+    try { setData(await api.inspectionRules()); }
+    catch { setData({ rules: [], unmapped: [] }); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const save = async (val, status) => {
+    setErr("");
+    try {
+      await api.saveInspectionRule({ value: val, status });
+      setOpen(null); setAdding(false); setValue("");
+      await load();
+    } catch { setErr("Could not save that. Try again."); }
+  };
+
+  const remove = async (r) => {
+    if (!window.confirm(`Stop reading "${r.value}" as ${ROOM_STATUSES[r.status]?.label || r.status}?`)) return;
+    try { await api.removeInspectionRule(r.id); await load(); }
+    catch { setErr("Could not remove that."); }
+  };
+
+  // The four answers, in the order they read as a scale. `unchecked` is on it
+  // deliberately: it is what an unanswered word already becomes, so an account
+  // choosing it is DECIDING that this word means nobody looked -- which is the
+  // right answer for an app that sends "N/A" on rooms a flat does not have.
+  const answers = ["ok", "follow_up", "fail", "unchecked"];
+  const statusLabel = (s) => ROOM_STATUSES[s]?.label || s;
+
+  // The address, with the token left as a placeholder. A token is hashed the
+  // moment it is minted, so no screen can ever print a whole one again -- what
+  // this can do is say exactly where it goes, which is strictly better than
+  // leaving somebody to assemble it out of the developer docs. The box under a
+  // freshly minted token prints the complete address.
+  const base = /^https?:/.test(API_BASE) ? API_BASE : `${window.location.origin}${API_BASE}`;
+  const hookUrl = `${base}/v1/hooks/generic/YOUR_TOKEN/inspections`;
+
+  const rules = data?.rules || [];
+  const gaps = data?.unmapped || [];
+
+  return (
+    <div className="portal-panel settings-panel">
+      <h4>Inspections from your inspection app</h4>
+      <p className="panel-note">
+        Already walking units somewhere else? Post the walk straight into SubSub and it arrives as a
+        draft inspection with its rooms and conditions on it — ready to read, finish, and raise the
+        work from. Photographs are added here on the inspection itself.
+      </p>
+
+      {err && <p className="fld-err" role="alert">{err}</p>}
+
+      {/* First, because it is the only part of this screen with anything to do
+          in it. */}
+      {gaps.length > 0 && (
+        <>
+          <div className="form-sec">Waiting on you ({gaps.length})</div>
+          <p className="cov-hint crm-gap-note">
+            These arrived on rooms and meant nothing to SubSub, so those rooms came in as
+            <b> not checked</b>. The inspections are safe — they are on your Inspections screen. Say
+            what these mean and the rooms read properly from the next walk on.
+          </p>
+          <ul className="crm-list">
+            {gaps.map((g) => (
+              <li key={g.id} className="crm-row gap">
+                <div className="crm-main">
+                  <b>{g.value}</b>
+                  <span className="cx-sub">
+                    on {g.hits} room{g.hits === 1 ? "" : "s"} so far
+                  </span>
+                </div>
+                {open === g.id ? null : (
+                  <button type="button" className="cpr-do"
+                    onClick={() => { setOpen(g.id); setAdding(false); }}>
+                    What does it mean?
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          {gaps.map((g) => (open === g.id ? (
+            <div key={`p${g.id}`} className="insp-answer">
+              <div className="cov-hint">“{g.value}” means:</div>
+              <div className="insp-answer-row">
+                {answers.map((s) => (
+                  <button key={s} type="button" className="chip"
+                    onClick={() => save(g.value, s)}>{statusLabel(s)}</button>
+                ))}
+                <button type="button" className="btn-quiet" onClick={() => setOpen(null)}>Cancel</button>
+              </div>
+            </div>
+          ) : null))}
+        </>
+      )}
+
+      <div className="form-sec">Your words{rules.length ? ` (${rules.length})` : ""}</div>
+      {rules.length === 0 ? (
+        <p className="cov-hint">
+          Nothing set yet. SubSub already reads the ordinary ones — pass, good, fair, poor, fail and
+          the rest — so most apps need nothing here. Add a word if yours uses its own scale, or wait
+          until a walk arrives and answer it above.
+        </p>
+      ) : (
+        <ul className="crm-list">
+          {rules.map((r) => (
+            <li key={r.id} className="crm-row">
+              <div className="crm-main">
+                <b>{r.value}</b>
+                <span className="cx-sub">
+                  reads as {statusLabel(r.status)}
+                  {/* Silent for the ordinary rule, which is every rule this
+                      screen makes. Said only when one is narrowed, because
+                      then it is the reason it does not fire elsewhere. */}
+                  {r.source && r.source !== ANY_SOURCE ? ` · ${r.source} only` : ""}
+                </span>
+              </div>
+              <button type="button" className="cpr-do quiet" onClick={() => remove(r)}>Remove</button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {adding ? (
+        <div className="crm-add">
+          <label className="fld">Their word for it
+            <input value={value} maxLength={120} placeholder="Grade C"
+              onChange={(e) => setValue(e.target.value)} />
+          </label>
+          {/* Whole values, not prefixes -- said here because somebody typing
+              "Poor" would otherwise expect it to catch "Very poor". */}
+          <p className="cov-hint">
+            Matched whole, ignoring capitals. “Poor” will not match “Very poor”.
+          </p>
+          {value.trim() ? (
+            <div className="insp-answer-row">
+              {answers.map((s) => (
+                <button key={s} type="button" className="chip"
+                  onClick={() => save(value.trim(), s)}>{statusLabel(s)}</button>
+              ))}
+              <button type="button" className="btn-quiet"
+                onClick={() => { setAdding(false); setValue(""); }}>Cancel</button>
+            </div>
+          ) : <p className="cov-hint">Type their word for it first.</p>}
+        </div>
+      ) : (
+        <button type="button" className="add-line"
+          onClick={() => { setAdding(true); setOpen(null); }}>
+          <Plus size={12} /> Add a word
+        </button>
+      )}
+
+      <div className="form-sec">Where to send them</div>
+      {!isScale ? (
+        /* Named plainly rather than hidden. Somebody whose inspection app could
+           feed this needs to know it exists before they can decide to pay. */
+        <p className="cov-hint">The API is part of Scale. Your plan is on the Billing tab.</p>
+      ) : (
+        <>
+          <code className="tok-val">{hookUrl}</code>
+          <div className="tok-new-acts">
+            <button type="button" className="btn-solid" onClick={() => {
+              navigator.clipboard?.writeText(hookUrl);
+              setCopied(true);
+            }}>
+              <Copy size={14} /> {copied ? "Copied" : "Copy the address"}
+            </button>
+          </div>
+          <p className="cov-hint">
+            Put your API token where it says <code>YOUR_TOKEN</code>. SubSub keeps only a
+            fingerprint of a token, so no screen here can fill that in for you — make one under
+            <b> Connect your CRM</b> above and the whole address is printed beside it while it is on
+            screen. <a href="https://subsub.work/developers" target="_blank" rel="noopener">The
+            fields it expects are in the docs</a>.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ApiTokens({ isScale, canInspect }) {
   const [rows, setRows] = useState(null);
   const [name, setName] = useState("");
   const [minted, setMinted] = useState(null);
@@ -16703,6 +16916,7 @@ function ApiTokens({ isScale }) {
   // exactly one named one today.
   const [src, setSrc] = useState("generic");
   const [copiedUrl, setCopiedUrl] = useState(false);
+  const [copiedInsp, setCopiedInsp] = useState(false);
 
   // The webhook address, absolute, because it is going into a box on somebody
   // else's website and a relative path is useless there. API_BASE already
@@ -16713,6 +16927,11 @@ function ApiTokens({ isScale }) {
       : `${window.location.origin}${API_BASE}`;
     return `${base}/v1/hooks/${source}/${token}`;
   };
+  // The inspections door. The object is the LAST segment, so the two addresses
+  // cannot be mistaken for each other by somebody pasting one of them into a
+  // field. One receiver, because there is no inspection app whose real payload
+  // anybody here has had in front of them -- the rule SOURCE_PRESETS keeps.
+  const inspectHookUrl = (token) => `${hookUrl("generic", token)}/inspections`;
 
   // `pick` is the picker's wording, which has to teach; `short` is the name in
   // a row; `label` is the noun in a sentence. See SOURCE_PRESETS for why that
@@ -16734,7 +16953,7 @@ function ApiTokens({ isScale }) {
     try {
       const made = await api.createApiToken(n);
       setMinted(made);
-      setCopied(false); setCopiedUrl(false);
+      setCopied(false); setCopiedUrl(false); setCopiedInsp(false);
       setName("");
       await load();
     } catch (e) {
@@ -16782,7 +17001,7 @@ function ApiTokens({ isScale }) {
                 }}>
                   <Copy size={14} /> {copied ? "Copied" : "Copy token"}
                 </button>
-                <button type="button" className="btn-quiet" onClick={() => { setMinted(null); setCopied(false); }}>
+                <button type="button" className="btn-quiet" onClick={() => { setMinted(null); setCopied(false); setCopiedInsp(false); }}>
                   Done
                 </button>
               </div>
@@ -16820,9 +17039,39 @@ function ApiTokens({ isScale }) {
                   ? "Use this for anything not listed: a Zapier or Make webhook step, n8n, or your own code. It expects SubSub's own field names — the docs list them."
                   : `Use this wherever ${SOURCE_PRESETS[src]?.short || SOURCE_PRESETS[src]?.label || src} asks for a webhook URL. SubSub translates their field names, so there is nothing to map.`}
               </p>
+              {/* THE SECOND ADDRESS, in the same box and for the same reason
+                  the first one is here: the token is hashed the moment this
+                  closes, so an address that is not printed now can never be
+                  printed whole again. Listed rather than hidden behind a
+                  picker, because nobody would go looking for a second one they
+                  have not been told exists.
+
+                  Only for an account that keeps buildings. A general
+                  contractor has no units to walk, so the route refuses it --
+                  and a screen offering an address the server will not answer
+                  is the screen-that-lies rule pointed at a clipboard. */}
+              {canInspect && (
+                <>
+                  <div className="form-sec">And for unit inspections</div>
+                  <code className="tok-val">{inspectHookUrl(minted.token)}</code>
+                  <div className="tok-new-acts">
+                    <button type="button" className="btn-solid" onClick={() => {
+                      navigator.clipboard?.writeText(inspectHookUrl(minted.token));
+                      setCopiedInsp(true);
+                    }}>
+                      <Copy size={14} /> {copiedInsp ? "Copied" : "Copy the address"}
+                    </button>
+                  </div>
+                  <p className="cov-hint">
+                    For an inspection app posting a move-in or move-out walk. It arrives as a draft
+                    inspection with its rooms on it — what its condition words mean is set under
+                    <b> Inspections from your inspection app</b> below.
+                  </p>
+                </>
+              )}
               <p className="cov-hint">
-                The token is in that address, so treat it like a password. Anyone holding it can
-                create jobs on this account.
+                The token is in {canInspect ? "those addresses" : "that address"}, so treat it like a
+                password. Anyone holding it can create jobs on this account.
               </p>
             </div>
           )}
@@ -18485,7 +18734,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["docs", "Compliance pack"]] : [])
     .concat(canManage ? [["users", "Users"]] : [])
     // Only where there are buildings for tenants to be in.
-    .concat(canManage && ACCOUNT_KINDS[accountKind].properties ? [["tenants", "Tenants"]] : [])
+    .concat(canManage && kindHasProperties(accountKind) ? [["tenants", "Tenants"]] : [])
     .concat(canManage ? [["billing", "Subscription"]] : []);
   // Who is about to be removed, so the row does not vanish before anybody
   // has agreed to it.
@@ -18793,7 +19042,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               hiding the panel is not a gate, and a downgrade has to stop an
               integration that is already running. */}
           {canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && (
-            <ApiTokens isScale={plan === "scale"} />
+            <ApiTokens isScale={plan === "scale"} canInspect={kindHasProperties(accountKind)} />
           )}
           {/* Directly below the token, because setting a CRM up is one story
               and making somebody find the second half on another tab is how
@@ -18808,6 +19057,18 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               through. */}
           {canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && (
             <CrmMapping />
+          )}
+          {/* Beside the CRM pair, because it is the same story -- a system
+              outside SubSub posting records in -- and setting one up should not
+              mean finding its second half on another tab.
+
+              `hasProperties` as well as `canManage`, which is exactly what
+              `/api/inspection-rules` asks: an account with no buildings has no
+              units to walk, so a condition dictionary on one is a setting about
+              nothing. The same pair of gates on both sides, because a screen
+              stricter than its route is the same lie as looser. */}
+          {canManage && kindHasProperties(accountKind) && (
+            <InspectionIngest isScale={plan === "scale"} />
           )}
 
           {canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
@@ -32951,6 +33212,14 @@ strong.insp-name{background:none;border:0;padding:0}
 .insp-kind.seg button:disabled{opacity:.6;cursor:default}
 .insp-kind.seg button:focus-visible{outline:2px solid var(--brand);outline-offset:-3px}
 .insp-suggest .chip{display:inline-flex;align-items:center;gap:5px;min-height:36px}
+/* Answering a condition word that arrived meaning nothing. The four answers
+   are the chip grid's own look, so a selected one reads the same here as
+   everywhere -- but they are NOT inside a .chips wrapper, because that is the
+   selector two inspection suites find the trade grid by. */
+.insp-answer{margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);
+  border-radius:10px;background:var(--paper)}
+.insp-answer .cov-hint{margin:0 0 8px}
+.insp-answer-row{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
 .insp-add{display:flex;gap:8px;align-items:center}
 .insp-add input{flex:1;min-width:0;border:1px solid var(--line);border-radius:9px;padding:10px 12px;
   font:inherit;font-size:14px;background:var(--card);color:var(--ink)}

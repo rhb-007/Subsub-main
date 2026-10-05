@@ -208,7 +208,9 @@
     "test:jobend": "node --no-warnings scripts/job-end-test.mjs",
     "test:jobendui": "node --no-warnings scripts/job-end-ui-test.mjs",
     "test:tradescope": "node --no-warnings scripts/trade-scope-test.mjs",
-    "test:quoteinsp": "node --no-warnings scripts/quote-inspection-test.mjs"
+    "test:quoteinsp": "node --no-warnings scripts/quote-inspection-test.mjs",
+    "test:inspingest": "node --no-warnings scripts/inspect-ingest-test.mjs",
+    "test:inspingestui": "node scripts/inspect-ingest-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

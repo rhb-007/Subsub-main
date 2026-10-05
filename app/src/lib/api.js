@@ -531,6 +531,15 @@ export const api = {
   crmRules: () => request("/crm-rules"),
   saveCrmRule: (rule) => request("/crm-rules", { method: "POST", body: JSON.stringify(rule) }),
   removeCrmRule: (id) => request(`/crm-rules/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // The condition dictionary for inspections posted in from an inspection app.
+  // A separate list from the trade rules above: a trade rule says what work a
+  // job is, this says what a room's condition word means.
+  inspectionRules: () => request("/inspection-rules"),
+  saveInspectionRule: (rule) =>
+    request("/inspection-rules", { method: "POST", body: JSON.stringify(rule) }),
+  removeInspectionRule: (id) =>
+    request(`/inspection-rules/${encodeURIComponent(id)}`, { method: "DELETE" }),
   // Milestones, verification and release. The plan call returns the parts,
   // the event log and the releases together: a screen that fetches three
   // renders three different moments.

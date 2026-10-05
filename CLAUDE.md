@@ -9062,6 +9062,199 @@ refactor.
   on a screen that had rendered perfectly, for the fourth time.
 
 
+- **THE WALK ARRIVES FROM WHATEVER THEY ALREADY WALK UNITS IN, AND IT ARRIVES AS
+  A DRAFT.** Jobs have posted in from somebody else's CRM since 048; an
+  inspection is the other record a managing agent types twice — once in an
+  inspection app on a tablet in the flat, once into SubSub so the work can be
+  raised. Migration 068, `app/shared/inspectingest.js`, and the panel that hands
+  over the address and answers what arrived meaning nothing.
+
+  **IT IS NEVER FINISHED ON ARRIVAL, which is the decision everything else
+  hangs off.** Finishing is a one-way door: it is what makes the inspection a
+  document somebody quotes back months later, what writes the summary, and what
+  lets the report go to the building's owner. A receiver that finished them
+  would bake an unrecognised condition word **permanently into a record nobody
+  can edit** — and the account's own press is one tap and is the thing that
+  writes the summary anyway, so nothing is lost by waiting for it. The reply
+  says `status: "draft"` while whoever is wiring it up is still looking at the
+  screen, rather than leaving them to find out from a walk they cannot explain.
+
+  **A WALK WHOSE CONDITION WORDS MEAN NOTHING STILL ARRIVES**, which is 049's
+  argument one object along and the reason this has a queue at all. Every
+  inspection app has its own scale — pass/fail, good/fair/poor, 1 to 5, A to C
+  — and SubSub has four room statuses. Refusing a word is the worst answer
+  available: the sender does not get a 200, so it retries, so it keeps not
+  getting one, and **nobody is told** — the unit has no record of being walked
+  and the only symptom is its absence. So those rooms land `unchecked`, the
+  words are counted in `inspection_unmapped`, and the panel turns that count
+  into one tap.
+
+  **AND THE FALLBACK IS THE STRICT ANSWER.** `unchecked` rather than `ok`,
+  because `ok` asserts that somebody walked the room and found nothing wrong —
+  a claim nobody made, on the document a deposit argument is run from. It is
+  also what keeps the walk out of being signed off, since `whyNotFinish`
+  refuses an unanswered room.
+
+  **THERE ARE NO SYNONYMS FOR `unchecked`, AND THAT IS NOT AN OMISSION.** It is
+  already the fallback, so a built-in synonym for it — `n/a`, `skipped`,
+  `unknown`, `not inspected` — would produce exactly the room an unrecognised
+  word already produces and buy one thing only: **silence in the queue.**
+  Silence about rooms nobody has walked is the one thing an inspection must not
+  have, so those words go to the queue, where the account answers them once and
+  they are quiet for ever. The room is identical either way; the difference is
+  whether anybody was told, which is the whole of why the queue exists.
+
+  **Nor is there a fifth status for "does not apply".** It would have to be
+  answered by `inspectionTally`, `whyNotFinish`, `flaggedRooms`,
+  `suggestTrades`, `inspectionJobScope`, `contractorInspectionShape`, the chips
+  and the room form — eight places for a word — and this is a receiver, not the
+  place to decide what an inspection can say. `Not checked` is offered as an
+  answer on the panel precisely so an app sending "N/A" on rooms a flat does
+  not have can be dealt with as a decision rather than as a guess.
+
+  **RULES FIRST, BUILT-IN WORDS SECOND.** An account's "Fair" may well mean
+  follow-up where ours says it is fine, and a built-in that outranked their rule
+  would be a setting that does nothing. The rule is filed for **every** system
+  unless one is named — 049's lesson taken at the start rather than after a
+  release of rules that fired for nobody — and a source with no receiver is
+  **refused rather than defaulted**, since a rule filed against a CRM the
+  account does not use fires for nobody and does not clear its queue row either.
+
+  **THE KIND IS REFUSED RATHER THAN GUESSED.** A move-in and a move-out are
+  opposite documents and the entire value of the record is two dated walks of
+  one unit — "the carpet was like that when I moved in" is the commonest dispute
+  in the business. Every ordinary spelling is read; a word that places as
+  neither is a 400 naming both, because defaulting would silently file a
+  move-out as the move-in it is about to be compared against.
+
+  **THE BUILDING IS FOUND, NEVER GUESSED EITHER.** An inspection has no address
+  of its own — `inspections.property_id` is NOT NULL — so unlike a job there is
+  nowhere to put a bare street and a building has to be resolved. Matching a
+  name or address against **this account's own** properties is its own data,
+  which is the line this file already draws about local name matching; whole
+  value, case-insensitive, never a prefix. **Two matches are refused rather
+  than resolved**: picking either files a walk of one flat against a different
+  building, which is a job raised at the wrong address and a deposit record
+  attached to the wrong tenancy, and nothing downstream would look wrong. Only
+  a fixture with two buildings of one name can tell that from a lucky first row.
+
+  **THE KIND GATE IS NOT THE JOBS ENDPOINT'S.** `apiCaller` refuses a
+  non-`HIRING_KINDS` account, which lets a general contractor post jobs — and a
+  general contractor keeps no buildings, so it has no unit to walk. So the
+  inspections door adds `ACCOUNT_KINDS_WITH_PROPERTIES` and answers
+  `no_buildings` by name. **The screen and the route read the same pair of
+  gates**, including the rules routes, because a screen stricter than its route
+  is the same lie as looser.
+
+  **PHOTOGRAPHS ARE DELIBERATELY NOT ACCEPTED.** A webhook carries JSON and a
+  photograph is bytes, so taking them would mean base64 inside the payload with
+  its own ceiling, its own content-type checking and its own R2 path — a second
+  upload route beside the checked one the screen already uses. The rooms, the
+  conditions and the notes arrive; the pictures are added on the inspection.
+  Said on the panel and in the docs rather than left to be discovered.
+
+  **ONE RECEIVER, because nobody here has had a real payload from an inspection
+  app in front of them.** `INSPECT_PRESETS` holds `generic` and `verified`
+  records which that is true of — the rule `crmsources.js` states and the
+  licensing dataset runs on: inventing plausible field names for an app
+  produces an integration that looks supported, fails on first contact, and
+  fails in the way that is hardest to debug. Common spellings of our own fields
+  are read (`external_id`, `items`, `condition`, `completed_at`), so most
+  systems need no mapping anyway.
+
+  **THE OBJECT IS THE LAST SEGMENT OF THE HOOK ADDRESS**
+  (`/v1/hooks/generic/<token>/inspections`), so the two addresses cannot be
+  mistaken for each other by somebody pasting one into a field. And **the URL's
+  source outranks the payload's**: somebody pasted that address, and it is the
+  one fact about a delivery nobody can mistype into a different meaning.
+
+  **BOTH ADDRESSES ARE PRINTED IN THE MINTED TOKEN BOX, and that is not
+  convenience.** A token is hashed the moment that box closes, so **an address
+  not printed then can never be printed whole again** — which is what made this
+  a change to the token panel as well as a new one. Listed rather than hidden
+  behind a picker, because nobody goes looking for a second address they have
+  not been told exists. The inspections panel below prints the same address
+  with `YOUR_TOKEN` in it and says why it cannot fill it in, which is strictly
+  better than leaving somebody to assemble it out of the developer docs —
+  the correct-pieces-and-no-way-in shape, in miniature.
+
+  **THE QUEUE COUNTS ROOMS, NOT DELIVERIES, and the first version got it
+  wrong.** One row per distinct word — twelve rooms saying "Poor" is one
+  question — but the number on it is twelve, because the panel says *on N rooms
+  so far* and that is the measure of how much of the walk is unreadable.
+  Counting deliveries reported "1 room" over twelve, which is the wrong scale
+  for deciding whether to answer it, and the suite caught it.
+
+  **A RETRY COUNTS NOTHING.** The duplicate is recognised and returned **before**
+  anything is written, because a redelivered walk is one walk and climbing
+  `hits` on retries would report nine rooms where there was one room delivered
+  nine times. Everything else about the retry is 048's shape: the pre-check
+  makes the ordinary case cheap and hands back the id, `ux_inspection_sources_external`
+  is what is correct when two deliveries arrive at once, and the two are **not
+  interchangeable** — so the index is asserted directly.
+
+  **AND THEY COVER FOR EACH OTHER IN A WAY WORTH RECORDING.** Deleting the
+  pre-check leaves *one inspection, not two* passing: the insert runs, the index
+  refuses the source row, the catch deletes the inspection again. What the
+  pre-check uniquely buys is the assertion beside it — the queue is not
+  re-counted — and that is the only one its mutation fires. Seventh time this
+  file has recorded two guards covering for each other.
+
+  **A QUEUE ROW IS WRITTEN BEFORE THE INSPECTION AND NEVER FAILS THE REQUEST.**
+  The word *did* arrive, which is the fact the queue records, so a row left by a
+  failed insert is still a rule worth having — where a word that arrived and was
+  never counted is a room nobody is told about. A work queue that can break an
+  integration is worse than one with a hole.
+
+  **A BLANK CONDITION IS NOT A QUEUE ROW.** A room that said nothing lands
+  `unchecked` and is counted in `needsAnswers`, because the panel's question is
+  how much of the walk has no answer on it — but nothing arrived that we failed
+  to understand, so there is nothing to ask about. Both halves are pinned, since
+  dropping the guard puts an empty-string row in the queue.
+
+  **`missingSchema` HAD TO LEARN THE THREE TABLES, or 068 answered
+  `migration: "unknown"`** — a 503 somebody cannot act on, which is the shape
+  this file records about `job_endings`. Each is named in full rather than by an
+  `inspection_` prefix, because `inspection_summaries` (063) and
+  `inspection_sends` (056) start the same way. Asserted on the **field** rather
+  than the message, which is what caught it: the prose said 068 while the field
+  a caller reads said nothing.
+
+  **THE PUBLISHED PAGE IS THE THIRD RECORD.** `shared/inspectingest.js` exists
+  so the route, the tests and `developers.html` agree, and the jobs receiver one
+  feature along shipped with its **whole webhook address undocumented** — found
+  by exactly this check. A field is documented when it has a **row somebody can
+  read**, not when the string appears on the page, which is why the assertion
+  reads the `<td>` cells; both doors, `needsAnswers`, `unmapped`, the
+  always-a-draft rule and the `no_buildings` refusal are each pinned, and the
+  panel the page sends somebody to is checked against a heading the app
+  actually has.
+
+  **BOTH ACCOUNT KINDS ARE DRIVEN IN THE SAME PLACE**, because a panel checked
+  on one branch is the diagonal coverage that left `hiresLabel` half-wired — and
+  the general-contractor block asserts the account screen **really opened**
+  before asserting the panel is absent, since "there is no panel" passes loudest
+  on a screen that never rendered. The ordering of the queue is **measured**
+  rather than read off the source, because source order is not screen order;
+  proving that assertion took a mutation that *moved* the block rather than one
+  that deleted it, since deleting it fails sixteen other checks and says nothing
+  about where it sits.
+
+  Twenty-five mutations fire across the two suites, each on its own assertion —
+  and **one did not apply on the first attempt**, which is the lesson this file
+  keeps paying for: `if (seen) {` appears in `ingestJob` as well, so a
+  first-occurrence patch mutated the jobs route and the inspections suite ran
+  green against unmodified code. *Check the file changed, and that the change
+  means something.*
+
+  **Still open, and the user's call rather than a build:** a walk cannot be
+  **updated**. A retry returns the inspection that exists and changes nothing,
+  which is right for a redelivery and wrong for a correction made in the
+  inspection app afterwards — and an update would have to decide what happens to
+  rooms somebody has since edited here, to photographs added here, and to a job
+  already raised off the back of it. That is a merge policy, not an endpoint.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

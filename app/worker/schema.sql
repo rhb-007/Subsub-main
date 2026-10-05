@@ -2063,3 +2063,46 @@ CREATE TABLE job_endings (
 );
 CREATE INDEX ix_job_endings_job ON job_endings(job_id, at DESC);
 CREATE INDEX ix_job_endings_account ON job_endings(account_id, kind);
+
+-- 068. INSPECTIONS ARRIVING FROM SOMEBODY ELSE'S SYSTEM. `inspection_sources`
+-- is the retry key -- without it one walk becomes four inspections and four
+-- jobs raised against one flat. `inspection_status_rules` is the account's own
+-- dictionary for condition words (their "Poor" against our four statuses) and
+-- `inspection_unmapped` is the queue of words that meant nothing, because the
+-- alternative is refusing the post, which makes the sender retry for ever with
+-- nobody told. See migrations/068_inspection_ingest.sql and
+-- app/shared/inspectingest.js.
+CREATE TABLE inspection_sources (
+  inspection_id TEXT PRIMARY KEY REFERENCES inspections(id) ON DELETE CASCADE,
+  account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  source        TEXT NOT NULL,
+  external_id   TEXT NOT NULL,
+  token_id      TEXT REFERENCES api_tokens(id),
+  created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX ux_inspection_sources_external
+  ON inspection_sources(account_id, source, external_id);
+
+CREATE TABLE inspection_status_rules (
+  id          TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  source      TEXT NOT NULL DEFAULT '*',
+  match_value TEXT NOT NULL,
+  status      TEXT NOT NULL,   -- one of ROOM_STATUSES in shared/inspection.js
+  created_by  TEXT REFERENCES users(id),
+  created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX ux_inspection_status_rules
+  ON inspection_status_rules(account_id, source, match_value);
+
+CREATE TABLE inspection_unmapped (
+  id          TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  source      TEXT NOT NULL,
+  match_value TEXT NOT NULL,
+  hits        INTEGER NOT NULL DEFAULT 0,
+  last_seen   TEXT,
+  created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX ux_inspection_unmapped
+  ON inspection_unmapped(account_id, source, match_value);

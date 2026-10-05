@@ -25,6 +25,8 @@ import { validateIngest, SOURCES } from "../shared/ingest.js";
 import { TRADES, TRADE_IDS } from "../shared/trades.js";
 import { tradesFor, validRule, ANY_SOURCE } from "../shared/crmmap.js";
 import { SOURCE_PRESETS, isSource, unwrap, translate } from "../shared/crmsources.js";
+import { INSPECT_PRESETS, isInspectSource, readInspection,
+  roomStatusFor, validStatusRule } from "../shared/inspectingest.js";
 // The same fifty states the browser offers, so a client that sends
 // something else -- an old build, a script, a typo that got through --
 // cannot put it in the database.
@@ -6263,6 +6265,11 @@ export function missingSchema(err) {
   // loosely -- so it is matched only in the two shapes SQLite actually
   // produces for a missing column, and it is first because a later rule with a
   // broader pattern would otherwise claim it.
+  // 068's three tables all start `inspection_`, which `inspection_summaries`
+  // (063) and `inspection_sends` (056) also do -- so each is named in full
+  // rather than by a prefix, and they sit above the older rules for the reason
+  // the comment above gives.
+  if (/\binspection_(sources|status_rules|unmapped)\b/i.test(m)) return "068_inspection_ingest";
   if (/\bjob_endings\b/i.test(m)) return "066_job_endings";
   if (/\binspection_summaries\b/i.test(m)) return "063_inspection_summary";
   if (/\bauto_turnaround\b/i.test(m)) return "065_auto_turnaround";
@@ -16465,6 +16472,429 @@ app.post("/api/v1/hooks/:source/:token", async (c) => {
     unmapped: mapped.unmatched.map((u) => `${u.kind}:${u.value}`),
     url: `https://app.subsub.work/?job=${res.jobId}`,
   }, res.duplicate ? 200 : 201);
+});
+
+// ---------------------------------------------------------------------------
+// Move-in and move-out inspections arriving from somebody else's system
+// ---------------------------------------------------------------------------
+// A managing agent walks the unit in whatever they already walk units in and
+// that system posts the walk here. `app/shared/inspectingest.js` holds the
+// field rules and the condition vocabulary, because the route, the published
+// page and the tests all describe them.
+//
+// IT LANDS AS A DRAFT, ALWAYS. Finishing is a one-way door -- it is what makes
+// the document quotable, what writes the summary and what lets the report go
+// to the building's owner -- so a receiver that finished them would bake an
+// unrecognised condition word permanently into a record nobody can edit. The
+// account presses Finish, which is one tap and is also what writes the
+// summary, so nothing is lost by waiting for it.
+//
+// A WALK WHOSE CONDITION WORDS MAP TO NOTHING STILL ARRIVES, which is 049's
+// argument one object along. Refusing is the worst answer available: the
+// sender does not get a 200, so it retries, so it keeps not getting one, and
+// nobody is told -- the unit has no record of being walked and the only
+// symptom is its absence. So those rooms land `unchecked` and the words are
+// counted in `inspection_unmapped`, which is a question somebody answers in
+// one tap.
+
+// Which building, from an id or from a name the account's own buildings carry.
+//
+// An inspection has no address of its own -- `inspections.property_id` is NOT
+// NULL -- so unlike a job there is nowhere to put a bare street, and a
+// building has to be found. Matching a typed name against THIS ACCOUNT'S OWN
+// properties is its own data, which is the line CLAUDE.md already draws about
+// local name matching; whole value and case-insensitive, never a prefix.
+//
+// TWO MATCHES ARE REFUSED RATHER THAN RESOLVED. Picking either one files a
+// walk of one flat against a different building, which is a job raised at the
+// wrong address and a deposit record attached to the wrong tenancy -- and
+// nothing downstream would look wrong. Named, so the integrator can send the
+// id instead.
+async function ingestProperty(db, accountId, { propertyId, property }) {
+  if (propertyId) {
+    const row = await db.prepare(
+      `SELECT id FROM properties WHERE id = ? AND account_id = ?`
+    ).bind(propertyId, accountId).first();
+    // not_found for somebody else's building as well as one that does not
+    // exist: a 403 would confirm which property ids are real.
+    return row ? { id: row.id } : { error: "property_not_found", status: 404,
+      message: "No building with that propertyId on this account." };
+  }
+  const { results } = await db.prepare(
+    `SELECT id, name FROM properties
+      WHERE account_id = ?
+        AND (lower(TRIM(name)) = lower(TRIM(?)) OR lower(TRIM(address)) = lower(TRIM(?)))`
+  ).bind(accountId, property, property).all();
+  const hits = results || [];
+  if (!hits.length) {
+    return { error: "property_not_found", status: 404,
+      message: `No building on this account is called or addressed "${property}". Send propertyId instead, or add the building first.` };
+  }
+  if (hits.length > 1) {
+    return { error: "property_ambiguous", status: 409,
+      message: `${hits.length} buildings on this account match "${property}". Send propertyId so the walk lands on the right one.`,
+      extra: { matches: hits.length } };
+  }
+  return { id: hits[0].id };
+}
+
+// Creating the inspection, and the retry protection. ONE implementation: the
+// header endpoint and the path-token hook both go through here, because two
+// copies of an insert this careful is two places for the duplicate guard to
+// rot. Answers a plain object rather than a Response, so each caller shapes
+// its own reply.
+async function ingestInspection(c, { accountId, token, source, inspection: v, rules }) {
+  const prop = await ingestProperty(c.env.DB, accountId, v);
+  if (prop.error) return prop;
+
+  // The retry. Asked before the insert AND enforced by the unique index after
+  // it: the index is what is correct when two deliveries arrive at once, this
+  // is what makes the ordinary retry cheap and hands back the id.
+  let seen;
+  try {
+    seen = await c.env.DB.prepare(
+      `SELECT inspection_id FROM inspection_sources
+        WHERE account_id = ? AND source = ? AND external_id = ?`
+    ).bind(accountId, source, v.externalId).first();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return { error: "migration_needed", status: 503,
+      message: "This SubSub environment has not had migration 068 applied yet.",
+      extra: { migration } };
+  }
+  if (seen) {
+    await touchApiToken(c.env, token);
+    // Returned BEFORE anything is counted. A redelivered walk is one walk, and
+    // climbing `hits` on retries would report nine rooms saying Poor when it
+    // was one room delivered nine times.
+    return { inspectionId: seen.inspection_id, duplicate: true, rooms: 0,
+      unchecked: 0, unmapped: [] };
+  }
+
+  const rooms = v.rooms.map((r, i) => {
+    const got = roomStatusFor(r.rawStatus, rules);
+    return { ...r, position: i, status: got.status, word: got.word, matched: got.matched };
+  });
+  // ONE ROW PER DISTINCT WORD, COUNTING ROOMS. Twelve rooms saying "Poor" is
+  // one question, so it is one queue row -- but the number on it is twelve,
+  // because what the panel says is "on N rooms so far" and that is the measure
+  // of how much of the walk is unreadable. Counting deliveries instead would
+  // report "1 room" over twelve, which is the wrong scale for deciding whether
+  // to answer it.
+  const counts = new Map();
+  for (const r of rooms) {
+    if (r.matched || !r.word) continue;
+    const key = r.word.toLowerCase();
+    const seen = counts.get(key);
+    if (seen) seen.rooms += 1;
+    else counts.set(key, { word: r.word, rooms: 1 });
+  }
+  const unmapped = [...counts.values()];
+
+  // Recorded BEFORE the inspection is written, and never allowed to fail the
+  // request. The word DID arrive, which is the fact this queue records -- so a
+  // row left behind by a failed insert is still a rule worth having, where a
+  // word that arrived and was never counted is a room nobody is told about. A
+  // work queue that can break an integration is worse than one with a hole.
+  for (const u of unmapped) {
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO inspection_unmapped (id, account_id, source, match_value, hits, last_seen)
+         VALUES (?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT (account_id, source, match_value)
+           DO UPDATE SET hits = hits + excluded.hits, last_seen = datetime('now')`
+      ).bind(uid(), accountId, source, u.word, u.rooms).run();
+    } catch (err) {
+      console.warn("[insp-hooks] unmapped not recorded:", err?.message || err);
+    }
+  }
+
+  const id = uid();
+  try {
+    // created_by is deliberately NULL: no person walked this into SubSub.
+    // Provenance goes on `inspection_sources`, where it is true -- the same
+    // reason an ingested job has none.
+    await c.env.DB.prepare(
+      `INSERT INTO inspections (id, account_id, property_id, unit, kind, tenant_name, inspected_on, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`
+    ).bind(id, accountId, prop.id, v.unit, v.kind, v.tenantName, v.inspectedOn).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return { error: "migration_needed", status: 503,
+      message: "This SubSub database is behind the code.", extra: { migration } };
+  }
+
+  for (const r of rooms) {
+    await c.env.DB.prepare(
+      `INSERT INTO inspection_rooms (id, inspection_id, name, status, note, position)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(uid(), id, r.name, r.status, r.note, r.position).run();
+  }
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO inspection_sources (inspection_id, account_id, source, external_id, token_id)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(id, accountId, source, v.externalId, token.id).run();
+  } catch (err) {
+    // The unique index fired: a second delivery landed between the check and
+    // here. The other one won; report the inspection that exists rather than
+    // leaving one nothing points at.
+    const other = await c.env.DB.prepare(
+      `SELECT inspection_id FROM inspection_sources
+        WHERE account_id = ? AND source = ? AND external_id = ?`
+    ).bind(accountId, source, v.externalId).first().catch(() => null);
+    if (other) {
+      await c.env.DB.prepare(`DELETE FROM inspections WHERE id = ?`).bind(id).run().catch(() => {});
+      await touchApiToken(c.env, token);
+      return { inspectionId: other.inspection_id, duplicate: true, rooms: 0,
+        unchecked: 0, unmapped: [] };
+    }
+    throw err;
+  }
+
+  const unchecked = rooms.filter((r) => r.status === "unchecked").length;
+  const label = INSPECTION_KINDS[v.kind].label.toLowerCase();
+  await logEvent(c.env, accountId, null, "inspection.created", id,
+    { kind: v.kind, unit: v.unit, via: "api", source, externalId: v.externalId });
+  await logActivity(c.env, accountId, null, "inspection_started",
+    unchecked
+      // Said differently when something did not map, because the thing to do
+      // is different: this one cannot be finished until those rooms have an
+      // answer, and the queue is where that answer is given.
+      ? `A ${label} inspection${v.unit ? ` of unit ${v.unit}` : ""} arrived from your inspection app — ${unchecked} room${unchecked === 1 ? "" : "s"} still need an answer`
+      : `A ${label} inspection${v.unit ? ` of unit ${v.unit}` : ""} arrived from your inspection app`);
+  await touchApiToken(c.env, token);
+  // The reply carries the WORDS, because the reader is an integrator deciding
+  // whether their scale is understood; the counts are for the panel.
+  return { inspectionId: id, duplicate: false, rooms: rooms.length, unchecked,
+    unmapped: unmapped.map((u) => u.word) };
+}
+
+// The account's condition dictionary. Read on every arrival rather than
+// cached, because answering a queue row has to take effect on the next walk.
+async function inspectStatusRules(db, accountId, source) {
+  try {
+    const { results } = await db.prepare(
+      // A rule is for every system unless it names one, so this reads both --
+      // 049's lesson taken at the start rather than after a release of rules
+      // that fired for nobody.
+      `SELECT match_value, status FROM inspection_status_rules
+        WHERE account_id = ? AND (source = ? OR source = ?)`
+    ).bind(accountId, source, ANY_SOURCE).all();
+    return { rules: (results || []).map((r) => ({ value: r.match_value, status: r.status })) };
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return { migration };
+  }
+}
+
+// Which accounts can take one at all. An inspection is a walk of a UNIT in a
+// BUILDING, so this is the account kinds that have buildings -- which is a
+// different question from `HIRING_KINDS` above: a general contractor hires
+// subcontractors and has no book of buildings to walk, so a walk posted to one
+// would have no property to land on. The screen reads the same rule, so the
+// panel and the route cannot disagree about who may wire this up.
+const inspectKindRefusal = (c, kind) => apiError(c, 403, "no_buildings",
+  "This account does not keep buildings, so it has no units to inspect.", { kind });
+
+// The one body-to-reply path, shared by both doors so neither can grow its own
+// validation, its own rule lookup or its own reply shape.
+//
+// `urlSource` is the receiver the hook's own address named, which outranks
+// anything in the payload: somebody pasted that URL and it is the one fact
+// about this delivery nobody can mistype into a different meaning. Null on the
+// header door, where the payload may label its own provenance and `other` is
+// what an in-house form gets.
+async function inspectIngestCall(c, { ctx, urlSource = null, preset }) {
+  const { token, accountId } = ctx;
+  if (!ACCOUNT_KINDS_WITH_PROPERTIES.includes(token.kind)) {
+    return inspectKindRefusal(c, token.kind);
+  }
+
+  let body;
+  try { body = await c.req.json(); }
+  catch { return apiError(c, 400, "invalid_json", "The request body must be valid JSON."); }
+
+  const check = readInspection(body, { preset });
+  if (!check.ok) {
+    return apiError(c, 400, "invalid_request",
+      `Some fields were missing or not understood on this ${preset.label}. See \`errors\` for which.`,
+      { errors: check.errors });
+  }
+  const source = urlSource || check.inspection.source || "other";
+
+  const got = await inspectStatusRules(c.env.DB, accountId, source);
+  if (got.migration) {
+    return apiError(c, 503, "migration_needed",
+      "This SubSub environment has not had migration 068 applied yet.", { migration: got.migration });
+  }
+
+  const res = await ingestInspection(c, {
+    accountId, token, source, inspection: check.inspection, rules: got.rules,
+  });
+  if (res.error) return apiError(c, res.status, res.error, res.message, res.extra || {});
+
+  return c.json({
+    ok: true, source, duplicate: res.duplicate,
+    inspectionId: res.inspectionId,
+    // Said while whoever is wiring this up is still looking at the screen,
+    // which is the whole reason the reply carries it rather than leaving them
+    // to find out a week later from a walk they cannot finish.
+    status: "draft",
+    rooms: res.rooms,
+    needsAnswers: res.unchecked,
+    unmapped: res.unmapped,
+    url: `https://app.subsub.work/?inspection=${res.inspectionId}`,
+  }, res.duplicate ? 200 : 201);
+}
+
+// The header door, for somebody writing code.
+app.post("/api/v1/inspections", async (c) => {
+  const ctx = await apiCaller(c);
+  if (ctx.res) return ctx.res;
+  // No source in the URL: the payload may label its own provenance, which
+  // `readInspection` validates against INSPECT_SOURCES, and an in-house form
+  // that names nothing is `other`. The preset is ours either way, because this
+  // door reads SubSub's own field names.
+  return inspectIngestCall(c, { ctx, preset: INSPECT_PRESETS.generic });
+});
+
+// The path-token door, for an inspection app whose webhook step takes a URL
+// and nothing else -- no field for a header, so a token that can only arrive
+// in one cannot arrive at all. Same shape and same reasoning as
+// /api/pack/:token and the jobs hook above; the object is the last segment so
+// the two addresses cannot be mistaken for each other.
+app.post("/api/v1/hooks/:source/:token/inspections", async (c) => {
+  const source = String(c.req.param("source") || "").toLowerCase();
+  if (!isInspectSource(source)) {
+    // Named rather than 404'd blankly: the integrator pasted a URL and a typo
+    // in it should say so, with the list of what is available.
+    return apiError(c, 404, "unknown_source",
+      `SubSub has no inspection receiver for "${source}".`,
+      { supported: Object.keys(INSPECT_PRESETS) });
+  }
+  const ctx = await apiCallerByPathToken(c);
+  if (ctx.res) return ctx.res;
+  return inspectIngestCall(c, { ctx, urlSource: source, preset: INSPECT_PRESETS[source] });
+});
+
+// ---- The condition dictionary, from inside the account -------------------
+//
+// ADMIN ONLY, for the reason the trade rules are: a condition rule is the
+// dictionary the receiver reads to decide what every arriving walk SAYS about
+// a unit, from then on, and that is the same account-level decision as the
+// token that posts it. The panel beside it has been admin-only since it
+// shipped, and two halves of one integration behind two different gates is how
+// a project manager ends up holding half of it.
+//
+// AND THE KIND GATE IS THE ROUTE'S, not only the screen's. An account with no
+// buildings can never receive an inspection, so a rule on one is a setting
+// about nothing -- and a screen stricter than its route is the same lie as
+// looser, which this file has paid for in both directions.
+const inspectRulesGate = async (c) => {
+  const { accountId } = c.get("auth");
+  const acct = await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`)
+    .bind(accountId).first().catch(() => null);
+  return ACCOUNT_KINDS_WITH_PROPERTIES.includes(acct?.kind || "")
+    ? null : c.json({ error: "no_buildings" }, 403);
+};
+
+app.get("/api/inspection-rules", requireRole("admin"), async (c) => {
+  const gate = await inspectRulesGate(c);
+  if (gate) return gate;
+  const { accountId } = c.get("auth");
+  try {
+    const rules = await c.env.DB.prepare(
+      `SELECT id, source, match_value, status FROM inspection_status_rules
+        WHERE account_id = ? ORDER BY lower(match_value)`
+    ).bind(accountId).all();
+    const gaps = await c.env.DB.prepare(
+      `SELECT id, source, match_value, hits, last_seen FROM inspection_unmapped
+        WHERE account_id = ? ORDER BY hits DESC, last_seen DESC LIMIT 50`
+    ).bind(accountId).all();
+    return c.json({
+      rules: (rules.results || []).map((r) => ({
+        id: r.id, source: r.source, value: r.match_value, status: r.status,
+      })),
+      // What arrived meaning nothing, commonest first -- the work queue.
+      unmapped: (gaps.results || []).map((r) => ({
+        id: r.id, source: r.source, value: r.match_value,
+        hits: r.hits, lastSeen: r.last_seen,
+      })),
+    });
+  } catch (err) {
+    // A database without 068 has no rules and no queue, which is an empty
+    // panel rather than a screen that fails to load.
+    if (missingSchema(err)) return c.json({ rules: [], unmapped: [] });
+    throw err;
+  }
+});
+
+app.post("/api/inspection-rules", requireRole("admin"), async (c) => {
+  const gate = await inspectRulesGate(c);
+  if (gate) return gate;
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const rule = validStatusRule(b);
+  if (!rule) return c.json({ error: "invalid_rule" }, 400);
+  // Validated against INSPECT_PRESETS, not the provenance list: a rule is only
+  // ever read by a RECEIVER, so the sources a rule can name is exactly the set
+  // of receivers. REFUSED rather than defaulted -- a rule filed against a
+  // source the account does not use fires for nobody, and does not even clear
+  // the queue row, because the DELETE below is scoped the same way.
+  const asked = String(b?.source || "").toLowerCase();
+  if (asked && asked !== ANY_SOURCE && !isInspectSource(asked)) {
+    return c.json({ error: "unknown_source", supported: Object.keys(INSPECT_PRESETS) }, 400);
+  }
+  const source = asked || ANY_SOURCE;
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO inspection_status_rules (id, account_id, source, match_value, status, created_by)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (account_id, source, match_value)
+         DO UPDATE SET status = excluded.status`
+    ).bind(uid(), accountId, source, rule.value, rule.status, userId).run();
+    // Answering the question clears it from the queue. Leaving it would make
+    // the list read as work still to do, which is how a queue stops meaning
+    // anything -- and a row that survives being answered is a button somebody
+    // presses again, and again.
+    await (source === ANY_SOURCE
+      ? c.env.DB.prepare(
+        `DELETE FROM inspection_unmapped
+          WHERE account_id = ? AND lower(match_value) = lower(?)`
+      ).bind(accountId, rule.value)
+      : c.env.DB.prepare(
+        `DELETE FROM inspection_unmapped
+          WHERE account_id = ? AND source = ? AND lower(match_value) = lower(?)`
+      ).bind(accountId, source, rule.value)).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+
+  await logEvent(c.env, accountId, userId, "inspection_rule.saved", null,
+    { source, value: rule.value, status: rule.status });
+  return c.json({ ok: true });
+});
+
+app.delete("/api/inspection-rules/:id", requireRole("admin"), async (c) => {
+  const gate = await inspectRulesGate(c);
+  if (gate) return gate;
+  const { accountId, userId } = c.get("auth");
+  const id = c.req.param("id");
+  const row = await c.env.DB.prepare(
+    `SELECT id FROM inspection_status_rules WHERE id = ? AND account_id = ?`
+  ).bind(id, accountId).first().catch(() => null);
+  if (!row) return c.json({ error: "not_found" }, 404);
+  await c.env.DB.prepare(`DELETE FROM inspection_status_rules WHERE id = ?`).bind(id).run();
+  await logEvent(c.env, accountId, userId, "inspection_rule.removed", id, {});
+  return c.json({ ok: true });
 });
 
 // ---- The rules, from inside the account ----------------------------------

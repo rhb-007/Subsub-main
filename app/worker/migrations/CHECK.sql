@@ -209,6 +209,18 @@ WITH spec(j) AS (SELECT
   -- only whether the table existed and answered yes over a table nothing
   -- could write to.
   ',["m066_job_endings","col","job_endings",["job_id","kind","note","until","at"]]' ||
+  -- 068. Inspections arriving from somebody else's system: the retry key, the
+  -- account's dictionary for condition words, and the queue of words that meant
+  -- nothing. Three tables, counted by their COLUMNS -- 052's lesson.
+  ',["m068_inspection_sources","col","inspection_sources",["inspection_id","source","external_id","token_id"]]' ||
+  ',["m068_inspection_status_rules","col","inspection_status_rules",["source","match_value","status"]]' ||
+  ',["m068_inspection_unmapped","col","inspection_unmapped",["source","match_value","hits","last_seen"]]' ||
+  -- The two unique indexes, named because neither is a convenience. Dropping
+  -- the first does not slow anything down, it silently allows one walk to
+  -- arrive four times; dropping the second turns a counted queue into one row
+  -- per room per walk.
+  ',["m068_inspection_sources_unique","index","ux_inspection_sources_external",[]]' ||
+  ',["m068_inspection_unmapped_unique","index","ux_inspection_unmapped",[]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -600,6 +612,20 @@ WITH inv(j) AS (SELECT '['
                    WHERE m.user_id = v.proposed_by
                      AND m.account_id = v.account_id
                      AND m.role IN ('admin', 'pm'))))
+  -- 068. A CONDITION RULE NAMING A STATUS THAT DOES NOT EXIST. It fires,
+  -- matches the word, and sets nothing -- so the room lands `unchecked`
+  -- exactly as it would have with no rule at all, and the screen shows a rule
+  -- somebody set up and believes is working. The route validates against
+  -- ROOM_STATUSES, so a row here is a route that stopped.
+  || ',' || json_array('m068_inv_bad_status', (SELECT COUNT(*) FROM inspection_status_rules
+    WHERE status NOT IN ('unchecked', 'ok', 'follow_up', 'fail')))
+  -- 068. A PROVENANCE ROW AGAINST ANOTHER ACCOUNT'S INSPECTION. The id in a
+  -- webhook body is a claim and the insert is what makes it true, so a row
+  -- here is the retry key of one account pointing at another's walk -- which
+  -- would make the second delivery hand back somebody else's inspection.
+  || ',' || json_array('m068_inv_source_cross_account', (SELECT COUNT(*) FROM inspection_sources s
+    JOIN inspections i ON i.id = s.inspection_id
+    WHERE i.account_id <> s.account_id))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')
