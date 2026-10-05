@@ -2147,3 +2147,15 @@ CREATE TABLE IF NOT EXISTS sms_overage (
   billed_at     TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_sms_overage_month ON sms_overage(account_id, month);
+
+-- 071. An account's own fee terms, set from the staff console. No row means
+-- the defaults in app/shared/fee.js; each figure falls back on its own.
+CREATE TABLE IF NOT EXISTS account_fee_terms (
+  account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  fee_bps     INTEGER,
+  cap_cents   INTEGER,
+  free_cents  INTEGER,
+  note        TEXT,
+  updated_by  TEXT,
+  updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

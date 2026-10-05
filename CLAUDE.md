@@ -2812,6 +2812,47 @@ refactor.
   is per payment: two $100,000 draws are two $500 fees, and one lump would
   suggest one and leave the second draw short.
 
+- **THE FIRST $50,000 AN ACCOUNT SENDS THROUGH SUBSUB IS FREE, AND STAFF CAN
+  SET AN ACCOUNT'S OWN RATE, CAP AND FREE AMOUNT.** `feeFor` and `feeTerms` in
+  `app/shared/fee.js`; migration 071 (`account_fee_terms`); the **Payment fee**
+  panel on an account in the console.
+
+  **Counted against what was PAID through SubSub, not what is owed.** A check
+  recorded here uses none of it -- nothing went through us. A payment that
+  straddles the line is charged only on the part past it ($45,000 sent and a
+  $10,000 payment is a fee on $5,000), because a cliff that charges the whole
+  payment for crossing is a price nobody would agree to.
+
+  **Stamped at verify as an estimate, worked out again at pay.** The stamp
+  counts releases still owed against the allowance, so two releases verified
+  back to back do not both claim the same free dollars; `/pay` recomputes from
+  what has actually been paid and writes the figure back **before** the money
+  check, so the check, the screen and the ledger read the fee charged. This
+  replaced the per-work-order cumulative cut for the fee: the allowance and
+  the cap are both promises about each payment, and the cost is at most a cent
+  per payment in SubSub's disfavour.
+
+  **An account's own terms fall back one figure at a time.** No row is the
+  defaults; a lower rate keeps the default cap and free amount; a free amount
+  of **zero** is zero, not the default -- `feeTerms` treats only NULL as
+  "not set", and the test pins the zero case because `|| default` would get it
+  wrong. Reset deletes the row so the account follows the defaults if they
+  change.
+
+  **Typed as percent and dollars, stored as basis points and cents**, and the
+  panel says back what a $10,000 payment would cost before the save: this fee
+  already had one slipped decimal the day it shipped. The route refuses past
+  10% and refuses fractions of a basis point rather than rounding them. **A
+  reason is required** and every change is audited with the old terms and the
+  new, for the reason a comp carries a note. Support reads the terms; only a
+  superadmin sets them, enforced on the route and drawn as no controls.
+
+  **The customer's screens quote the account's own terms.** `/funding`
+  carries `feeTerms`, `processedCents` and `freeLeftCents`; the pay window,
+  the fund form and the fund suggestion all read them, and the pay window
+  **says** when the free amount covers a payment -- silence there reads the
+  same as a charge nobody mentioned.
+
 - **AND EVERY AMOUNT ON THE PAYMENT SCREENS HAD BEEN A HUNDRED TIMES TOO
   LARGE, AND ADD FUNDS CHARGED A HUNDREDTH OF WHAT WAS TYPED.** Found by the
   browser test for the fee line, which read "$380,000.00" where it expected

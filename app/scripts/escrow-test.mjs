@@ -136,9 +136,19 @@ console.log("\n-- what to fund, derived from money.js and not reinvented --");
     retainageBps: 500 });
   ck("funding covers the GROSS, retainage included", s.grossCents === 500000, String(s.grossCents));
   ck("and the net is what would reach them", s.netCents === 475000, String(s.netCents));
-  ck("the top-up is net of what is already there, and carries the fee",
-    fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000 }).topUpCents === 300250,
+  ck("the top-up is net of what is already there -- inside the free $50,000 there is no fee",
+    fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000 }).topUpCents === 300000,
     String(fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000 }).topUpCents));
+  ck("and past it, the fee is in the figure",
+    fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000,
+      processedCents: 5_000_000 }).topUpCents === 300250);
+  // The free amount is used up in order, payment by payment.
+  const straddle = fundSuggestion({ milestones: [{ amountCents: 3_000_000 }, { amountCents: 3_000_000 }] });
+  ck("the second of two $30,000 draws is charged on the $10,000 past the free $50,000",
+    straddle.feeCents === 500, String(straddle.feeCents));
+  ck("and an account's own terms are used, not the default",
+    fundSuggestion({ milestones: [{ amountCents: 1_000_000 }],
+      terms: { bps: 100, capCents: 50000, freeCents: 0 } }).feeCents === 10000);
   // The cap is per payment, so two capped draws are two fees. Suggested as one
   // lump it would be one, and the second draw could not be paid.
   const big = fundSuggestion({ milestones: [{ amountCents: 200_000_000 }, { amountCents: 200_000_000 }] });
@@ -165,12 +175,14 @@ console.log("\n-- what to fund, derived from money.js and not reinvented --");
   // The fee is said where it is paid, on the paying side only, in the one
   // set of words the module holds -- three screens quoting three fees is how
   // somebody is told 0.5% and charged something else.
-  ck("the pay window names the fee before the press",
-    /paying && release\.feeCents > 0 && \([\s\S]{0,200}Plus SubSub's fee of \{formatCents\(release\.feeCents\)\} \(\{FEE_TERMS\}\)/.test(APP));
+  ck("the pay window names the fee before the press, in the account's own terms",
+    /paying && release\.feeCents > 0 && \([\s\S]{0,200}Plus SubSub's fee of \{formatCents\(release\.feeCents\)\} \(\{feeTermsText\(money\?\.feeTerms/.test(APP));
+  ck("and says so when the free amount covers it",
+    /paying && !\(release\.feeCents > 0\) && money\?\.feeTerms\?\.freeCents > 0/.test(APP));
   ck("and the record window says a payment made elsewhere carries none",
     /!paying && release\.feeCents > 0 && \([\s\S]{0,120}No SubSub fee/.test(APP));
   ck("and the fund form says the figure includes it",
-    /Includes SubSub's fee on payments sent through SubSub: \{FEE_TERMS\}/.test(APP));
+    /Includes SubSub's fee on payments sent through SubSub: \{feeTermsText\(feeTerms\)\}/.test(APP));
   ck("the pay window's own check carries the fee, as the route's does",
     /netCents: release\.netCents,\s*feeCents: release\.feeCents/.test(APP));
 }
@@ -714,7 +726,8 @@ console.log("\n-- SubSub's fee: on top, spent by paying through SubSub, nothing 
   // and the $20 stays, so it is neither available nor refundable afterwards.
   const { runCheck } = await import("./lib/check-sql.mjs");
   const db = seed();
-  db.exec(`UPDATE wo_releases SET fee_bps = 50, fee_cents = 2000 WHERE id = 'rel1'`);
+  db.exec(`UPDATE wo_releases SET fee_bps = 40, fee_cents = 2000 WHERE id = 'rel1';
+    INSERT INTO account_fee_terms(account_id, fee_bps, cap_cents, free_cents) VALUES ('acc_gc', 40, 50000, 0)`);
   const env = ENV(db);
   await fund(env, 400000);
   calls = [];
@@ -735,7 +748,8 @@ console.log("\n-- SubSub's fee: on top, spent by paying through SubSub, nothing 
   // cannot share it.
   const { runCheck } = await import("./lib/check-sql.mjs");
   const db = seed();
-  db.exec(`UPDATE wo_releases SET fee_bps = 50, fee_cents = 2000 WHERE id = 'rel1'`);
+  db.exec(`UPDATE wo_releases SET fee_bps = 40, fee_cents = 2000 WHERE id = 'rel1';
+    INSERT INTO account_fee_terms(account_id, fee_bps, cap_cents, free_cents) VALUES ('acc_gc', 40, 50000, 0)`);
   const env = ENV(db);
   await fund(env, 402000);
   calls = [];
@@ -757,7 +771,8 @@ console.log("\n-- SubSub's fee: on top, spent by paying through SubSub, nothing 
   // charged, and the money funded for the fee is the account's again.
   const { runCheck } = await import("./lib/check-sql.mjs");
   const db = seed();
-  db.exec(`UPDATE wo_releases SET fee_bps = 50, fee_cents = 2000 WHERE id = 'rel1'`);
+  db.exec(`UPDATE wo_releases SET fee_bps = 40, fee_cents = 2000 WHERE id = 'rel1';
+    INSERT INTO account_fee_terms(account_id, fee_bps, cap_cents, free_cents) VALUES ('acc_gc', 40, 50000, 0)`);
   const env = ENV(db);
   await fund(env, 402000);
   const r = await call(env, "/api/releases/rel1/settle", { method: "POST", body: { method: "check", reference: "1042" } });
@@ -774,6 +789,55 @@ console.log("\n-- SubSub's fee: on top, spent by paying through SubSub, nothing 
   db.exec(`UPDATE wo_releases SET fee_cents = 2000 WHERE id = 'rel1'`);
   ck("and it counts a fee on a release that never went through SubSub",
     runCheck(db).m033_inv_fee_off_platform === 1, String(runCheck(db).m033_inv_fee_off_platform));
+}
+
+console.log("\n-- the first $50,000 is free, counted against what was actually sent --");
+{
+  // A release stamped with a fee at verify, paid while the account is still
+  // inside its free amount: the fee charged is worked out at payment, so it
+  // is nothing, and the stamp is corrected rather than charged.
+  const db = seed();
+  db.exec(`UPDATE wo_releases SET fee_bps = 5, fee_cents = 2000 WHERE id = 'rel1'`);
+  const env = ENV(db);
+  await fund(env, 400000);
+  calls = [];
+  const r = await call(env, "/api/releases/rel1/pay", { method: "POST" });
+  ck("inside the free amount the net alone pays it", r.status === 200 && r.body.feeCents === 0,
+    `${r.status} ${JSON.stringify(r.body)}`);
+  ck("and the release records no fee", db.prepare(`SELECT fee_cents f FROM wo_releases WHERE id='rel1'`).get().f === 0);
+  const m = await call(env, "/api/work-orders/wo1/funding");
+  ck("and the free amount left goes down by what was sent",
+    m.body.processedCents === 500000 && m.body.freeLeftCents === 4_500_000, JSON.stringify(m.body));
+  ck("the account's terms are on the panel",
+    m.body.feeTerms?.bps === 5 && m.body.feeTerms?.freeCents === 5_000_000, JSON.stringify(m.body.feeTerms));
+}
+{
+  // $48,000 already sent through SubSub, then a $5,000 release: $2,000 of it
+  // is free and $3,000 is charged -- $1.50 at 0.05%.
+  const db = seed();
+  db.exec(`
+    INSERT INTO wo_milestones(id,work_order_id,account_id,seq,label,amount_cents,status)
+      VALUES ('ms0','wo1','acc_gc',0,'Earlier',4800000,'verified');
+    INSERT INTO wo_releases(id,work_order_id,account_id,milestone_id,company_id,gross_cents,net_cents,status,method,reference)
+      VALUES ('rel0','wo1','acc_gc','ms0','cmp_roof',4800000,4800000,'paid','stripe','tr_old');
+    UPDATE wo_releases SET fee_cents = 0, net_cents = 500000 WHERE id = 'rel1';`);
+  const env = ENV(db);
+  await fund(env, 500150);
+  const r = await call(env, "/api/releases/rel1/pay", { method: "POST" });
+  ck("the payment that crosses the line is charged only past it", r.status === 200 && r.body.feeCents === 150,
+    `${r.status} ${JSON.stringify(r.body)}`);
+}
+{
+  // A check does not use the free amount: nothing went through SubSub.
+  const db = seed();
+  db.exec(`
+    INSERT INTO wo_milestones(id,work_order_id,account_id,seq,label,amount_cents,status)
+      VALUES ('ms0','wo1','acc_gc',0,'Earlier',9000000,'verified');
+    INSERT INTO wo_releases(id,work_order_id,account_id,milestone_id,company_id,gross_cents,net_cents,status,method,reference)
+      VALUES ('rel0','wo1','acc_gc','ms0','cmp_roof',9000000,9000000,'paid','check','1042');`);
+  const m = await call(ENV(db), "/api/work-orders/wo1/funding");
+  ck("a payment made by check does not use up the free amount",
+    m.body.processedCents === 0 && m.body.freeLeftCents === 5_000_000, JSON.stringify(m.body));
 }
 
 console.log("\n-- a database behind the code says so --");

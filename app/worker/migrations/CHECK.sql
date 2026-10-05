@@ -230,6 +230,9 @@ WITH spec(j) AS (SELECT
   -- it is run texts still go; the nightly sweep cannot record a bill and says so.
   ',["m070_sms_overage","col","sms_overage",["account_id","month","blocks","amount_cents","status","processor_ref"]]' ||
   ',["m070_sms_overage_unique","index","ux_sms_overage_month",[]]' ||
+  -- 071. An account's own fee terms from the staff console. Until it is run
+  -- every account is on the defaults and the console's fee panel says so.
+  ',["m071_fee_terms","col","account_fee_terms",["account_id","fee_bps","cap_cents","free_cents","updated_by"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

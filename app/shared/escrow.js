@@ -35,7 +35,7 @@
 // company. `available` is the whole of that guard.
 
 import { releaseAmounts } from "./money.js";
-import { PLATFORM_FEE_BPS, PLATFORM_FEE_CAP_CENTS } from "./fee.js";
+import { DEFAULT_FEE_TERMS, feeFor } from "./fee.js";
 
 // The states each row may be in. These are the same list as the CHECK clauses
 // in migration 051, which makes them two records of one fact -- so a test
@@ -169,26 +169,34 @@ export function payRefusalText(r, { subName = "They" } = {}) {
 // release nets would put a figure on the fund screen that the release then
 // disagrees with by a cent.
 //
-// Milestone by milestone rather than as one lump, because the fee's cap is per
-// payment: two $100,000 draws are two $500 fees, and the lump would suggest
-// one -- an account told to fund a figure that then cannot pay the second
+// Milestone by milestone rather than as one lump, because the fee's cap and
+// its free allowance are both per payment: two capped draws are two capped
+// fees, and the first $50,000 is used up in order. A lump would suggest one
+// fee, and the account would fund a figure that then cannot pay the second
 // draw.
+//
+// `terms` and `processedCents` are the account's -- what it is charged and how
+// much it has already sent through SubSub -- because a suggestion worked out
+// on the default rate for an account on its own rate is a figure the release
+// then disagrees with.
 //
 // `owedCents` is what is already owed and unpaid -- net and fee -- because the
 // top-up has to cover that as well as the work still to come, or funding to
 // the suggested figure leaves a release that was already due short.
 export function fundSuggestion({ milestones = [], priorGross = 0, retainageBps = 0,
-                                 feeBps = PLATFORM_FEE_BPS, feeCapCents = PLATFORM_FEE_CAP_CENTS,
+                                 terms = DEFAULT_FEE_TERMS, processedCents = 0,
                                  owedCents = 0, alreadyAvailable = 0 } = {}) {
   let running = Math.round(priorGross);
+  let processed = Math.max(0, Math.round(processedCents));
   let gross = 0, net = 0, retainage = 0, fee = 0;
   for (const m of milestones) {
     if (m.status === "paid" || m.released) continue;
     const g = Math.round(m.amountCents ?? m.amount_cents ?? 0);
     if (g <= 0) continue;
-    const a = releaseAmounts({ gross: g, priorGross: running, retainageBps, feeBps, feeCapCents });
-    gross += a.gross; net += a.net; retainage += a.retainage; fee += a.fee;
-    running += g;
+    const a = releaseAmounts({ gross: g, priorGross: running, retainageBps });
+    const f = feeFor({ gross: g, processedBefore: processed, terms }).fee;
+    gross += a.gross; net += a.net; retainage += a.retainage; fee += f;
+    running += g; processed += g;
   }
   const owed = Math.max(0, Math.round(owedCents));
   if (gross <= 0 && owed <= 0) return { grossCents: 0, netCents: 0, feeCents: 0, topUpCents: 0 };

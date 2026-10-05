@@ -343,6 +343,9 @@ console.log("\n-- the marketing site quotes the same figures --");
     const visible = html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<!--[\s\S]*?-->/g, "");
     const ld = html.match(/FAQPage[\s\S]*?<\/script>/)?.[0] || "";
     ck(`${page}: the fee answer says ${fee}, ${cap}`, visible.includes(fee) && visible.includes(cap));
+    const { PLATFORM_FEE_FREE_CENTS } = await import("../shared/fee.js");
+    ck(`${page}: and that the first $${n(PLATFORM_FEE_FREE_CENTS / 100)} is free`,
+      visible.includes(`Nothing on the first $${n(PLATFORM_FEE_FREE_CENTS / 100)} you send through SubSub`));
     ck(`${page}: and that the subcontractor receives the full amount`,
       /your subcontractor receives the full amount/.test(visible));
     ck(`${page}: the texts answer says ${sms}`, visible.includes(sms));

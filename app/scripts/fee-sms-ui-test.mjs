@@ -122,7 +122,7 @@ try {
       refusal: document.querySelector(".cx-found-note")?.innerText || "",
     }));
     t.ck("the pay window names the fee before anybody presses anything",
-      /Plus SubSub's fee of \$20\.00 \(0\.05% of each payment, at most \$500 a payment\)/.test(r.fee), r.fee);
+      /Plus SubSub's fee of \$20\.00 \(0\.05% of each payment, at most \$500 a payment, after the first \$50,000 free\)/.test(r.fee), r.fee);
     t.ck("and says the subcontractor receives the full amount", /They receive the full \$3,800\.00/.test(r.fee), r.fee);
     // Funded for the net and not the fee: the screen's own check agrees with
     // the route's, and says how much to add.
@@ -136,19 +136,20 @@ try {
       .find((b) => /Add funds/.test(b.innerText))?.click());
     await wait(600);
     const box = await page.evaluate(() => document.querySelector(".modal .form .fld input")?.value || "");
-    // What is to come ($6,000 gross + $3 fee) and what is already owed
-    // ($3,800 + $20 fee), less the $3,800 already in.
-    t.ck("the suggested figure covers the work to come, what is owed, and the fee",
-      box === "$6,023.00", box);
+    // What is to come ($6,000, inside the free $50,000 so no fee) and what is
+    // already owed ($3,800 + the $20 fee stamped on it), less the $3,800 in.
+    t.ck("the suggested figure covers the work to come and what is owed",
+      box === "$6,020.00", box);
     const fee = await page.evaluate(() => document.querySelector(".fund-fee")?.innerText || "");
-    t.ck("and the form says the fee is included", /0\.05% of each payment, at most \$500 a payment/.test(fee), fee);
+    t.ck("and the form says the fee is included, with the free amount",
+      /0\.05% of each payment, at most \$500 a payment, after the first \$50,000 free/.test(fee), fee);
     sent.length = 0;
     await page.evaluate(() => [...document.querySelectorAll(".form-actions .btn-solid")]
       .find((b) => /Continue/.test(b.innerText))?.click());
     await wait(800);
     const fund = sent.find((x) => /\/fund$/.test(x.path));
-    t.ck("and it sends that figure in CENTS -- $6,023 is 602300, not 6023",
-      fund?.body?.amountCents === 602300, JSON.stringify(fund?.body));
+    t.ck("and it sends that figure in CENTS -- $6,020 is 602000, not 6020",
+      fund?.body?.amountCents === 602000, JSON.stringify(fund?.body));
     await page.evaluate(() => [...document.querySelectorAll(".form-actions .btn-ghost")]
       .find((x) => /^Cancel$/.test((x.innerText || "").trim()))?.click());
     await wait(400);

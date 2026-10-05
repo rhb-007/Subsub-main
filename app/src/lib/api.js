@@ -818,6 +818,11 @@ export const api = {
     createAccount: (data) => request("/platform/accounts", { method: "POST", body: JSON.stringify(data) }),
     patchAccount: (id, patch) =>
       request(`/platform/accounts/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    // An account's own fee terms. Reading is any staff member; setting is a
+    // superadmin, with a reason, and `{ reset: true }` puts the defaults back.
+    feeTerms: (id) => request(`/platform/accounts/${encodeURIComponent(id)}/fee-terms`),
+    setFeeTerms: (id, body) =>
+      request(`/platform/accounts/${encodeURIComponent(id)}/fee-terms`, { method: "PUT", body: JSON.stringify(body) }),
     deleteAccount: (id, confirmName) =>
       request(`/platform/accounts/${encodeURIComponent(id)}`,
         { method: "DELETE", body: JSON.stringify({ confirmName }) }),

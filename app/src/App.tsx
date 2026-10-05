@@ -52,7 +52,7 @@ import { KIND_WORDS, kindShort, kindRefusal, isConditional, formsReasonText, ren
   waiverStateText } from "../shared/waiverform.js";
 import { coverProblemText, fixableByUpload } from "../shared/paygate.js";
 import { MIN_FUND_CENTS, canPay, payRefusalText, fundSuggestion } from "../shared/escrow.js";
-import { FEE_TERMS } from "../shared/fee.js";
+import { feeTermsText, DEFAULT_FEE_TERMS } from "../shared/fee.js";
 import { smsUsageText, smsOverageText, SMS_OVERAGE_TERMS } from "../shared/smsquota.js";
 import { INSURANCE_LINES, OPTIONAL_LINES, BOND_MIN, INSURANCE_MIN, checkItems, findingsFor,
   problemsIn, allConfirmed, reviewProgress, outcomeWords } from "../shared/doccheck.js";
@@ -9257,6 +9257,8 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
 
             <CompPanel account={open.a} onSave={(patch) => onPatchAccount(open.a.id, patch)} />
 
+            <FeeTermsPanel accountId={open.a.id} canEdit={isSuper} />
+
             <div className="pf-panel">
               <div className="pf-panel-hd">
                 <h3>Team</h3>
@@ -10740,6 +10742,119 @@ function CompPanel({ account, onSave }) {
             <Zap size={15} /> {busy ? "Working…" : "Comp this account"}
           </button>
           {!note.trim() && <p className="cov-hint">A reason is required — a comp nobody can explain becomes permanent.</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+// SubSub's fee for one account: what they are charged on payments sent through
+// SubSub, and the free amount before it starts. The defaults are in
+// shared/fee.js; this sets an account's own, for a negotiated deal or a design
+// partner.
+//
+// It fetches its own figures rather than riding the console's bootstrap: they
+// are read for one account at a time, and how much an account has sent
+// through SubSub is not something every console load needs to sum.
+//
+// IN THE UNITS PEOPLE SAY, NOT THE ONES STORED. A rate is typed as a percent
+// and a cap as dollars, because typing "5" meaning 0.05% is a slipped decimal
+// waiting to happen -- and this fee has already had one, the day it shipped.
+// The panel says back what a $10,000 payment would cost before the save, so
+// the figure is checked in a form nobody can misread.
+//
+// A REASON IS REQUIRED, for the reason a comp carries one: a rate nobody can
+// explain becomes permanent. Only a superadmin may set it, which is what the
+// route enforces; support sees the terms and nothing to press.
+function FeeTermsPanel({ accountId, canEdit }) {
+  const [d, setD] = useState(null);
+  const [f, setF] = useState(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [said, setSaid] = useState("");
+  const load = () => api.platform.feeTerms(accountId).then((r) => {
+    setD(r);
+    setF({ pct: String(r.terms.bps / 100), cap: String(r.terms.capCents / 100), free: String(r.terms.freeCents / 100) });
+  }).catch((e) => setErr(e?.body?.error === "forbidden" ? "" : "Couldn't load the fee terms."));
+  useEffect(() => { setD(null); setNote(""); setErr(""); setSaid(""); load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [accountId]);
+  if (!d || !f) return err ? <div className="pf-panel"><p className="billing-err">{err}</p></div> : null;
+
+  const next = {
+    bps: Math.round(Number(f.pct) * 100), capCents: Math.round(Number(f.cap) * 100),
+    freeCents: Math.round(Number(f.free) * 100),
+  };
+  const valid = [f.pct, f.cap, f.free].every((v) => v !== "" && Number.isFinite(Number(v)) && Number(v) >= 0)
+    && next.bps <= 1000;
+  const changed = valid && (next.bps !== d.terms.bps || next.capCents !== d.terms.capCents
+    || next.freeCents !== d.terms.freeCents);
+  const example = valid ? Math.min(Math.floor(1_000_000 * next.bps / 10000), next.capCents) : 0;
+  const save = async (body) => {
+    setBusy(true); setErr(""); setSaid("");
+    try { await api.platform.setFeeTerms(accountId, body); setNote(""); setSaid("Saved."); await load(); }
+    catch (e) {
+      const code = e?.body?.error;
+      setErr(code === "reason_required" ? "Say why, and who agreed to it."
+        : code === "bad_rate" ? "The rate must be between 0% and 10%."
+        : code === "bad_cap" || code === "bad_free" ? "Those amounts are outside what can be set."
+        : code === "migration_needed" ? "This needs migration 071 run first."
+        : "That didn't save.");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="pf-panel pf-fee">
+      <h3>Payment fee</h3>
+      <p className="pf-note">
+        {d.custom ? "Their own terms" : "The standard terms"}: {feeTermsText(d.terms)}.
+        {" "}{formatCents(d.processedCents)} sent through SubSub so far
+        {d.terms.freeCents > 0 ? `, ${formatCents(d.freeLeftCents)} of the free amount left` : ""}.
+        {d.custom && d.note ? ` Reason: ${d.note}.` : ""}
+      </p>
+      {d.migration && <p className="cov-hint">Migration 071 has not been run, so every account is on the standard terms.</p>}
+      {canEdit && !d.migration && (
+        <>
+          <div className="fld-row">
+            <label className="fld">Rate (%)
+              <input inputMode="decimal" value={f.pct} disabled={busy}
+                onChange={(e) => setF({ ...f, pct: e.target.value.replace(/[^0-9.]/g, "") })} />
+            </label>
+            <label className="fld">Cap per payment ($)
+              <input inputMode="decimal" value={f.cap} disabled={busy}
+                onChange={(e) => setF({ ...f, cap: e.target.value.replace(/[^0-9.]/g, "") })} />
+            </label>
+            <label className="fld">Free before the fee starts ($)
+              <input inputMode="decimal" value={f.free} disabled={busy}
+                onChange={(e) => setF({ ...f, free: e.target.value.replace(/[^0-9.]/g, "") })} />
+            </label>
+          </div>
+          {valid && (
+            <p className="cov-hint pf-fee-example">
+              A $10,000 payment past the free amount would cost them {formatCents(example)}.
+            </p>
+          )}
+          {!valid && <p className="fld-err">The rate must be 0% to 10%, and every box needs a number.</p>}
+          {changed && (
+            <label className="fld">Why, and who agreed to it
+              <input value={note} maxLength={300} disabled={busy}
+                placeholder="Design partner rate through 2027 — agreed with RB"
+                onChange={(e) => setNote(e.target.value)} />
+            </label>
+          )}
+          {err && <p className="billing-err" role="alert">{err}</p>}
+          {said && <p className="cov-hint" role="status"><Check size={12} /> {said}</p>}
+          <div className="form-actions">
+            {d.custom && (
+              <button className="btn-ghost" disabled={busy} onClick={() => save({ reset: true })}>
+                Back to standard terms
+              </button>
+            )}
+            <button className="btn-solid" disabled={busy || !changed || !note.trim()}
+              onClick={() => save({ ...next, note: note.trim() })}>
+              {busy ? "Saving…" : "Save fee terms"}
+            </button>
+          </div>
+          {changed && !note.trim() && <p className="cov-hint">A reason is required — a rate nobody can explain becomes permanent.</p>}
         </>
       )}
     </div>
@@ -17369,6 +17484,11 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
                 // was due before it still short.
                 owedCents: money?.owedCents ?? money?.dueCents ?? 0,
                 alreadyAvailable: money?.availableCents || 0,
+                // The account's own fee terms and how much it has already
+                // sent, so the free $50,000 and any negotiated rate are in the
+                // figure rather than the default.
+                terms: money?.feeTerms || DEFAULT_FEE_TERMS,
+                processedCents: money?.processedCents || 0,
               }).topUpCents}
               onChanged={() => { load(); onChanged?.(); }} />
           )}
@@ -17613,8 +17733,19 @@ function SettleRelease({ release, mode = "record", money, onClose, onDone }) {
             what makes the difference between the two buttons legible. */}
         {paying && release.feeCents > 0 && (
           <p className="cov-hint pay-fee">
-            Plus SubSub's fee of {formatCents(release.feeCents)} ({FEE_TERMS}), from the
-            funds on this work order. They receive the full {formatCents(release.netCents)}.
+            Plus SubSub's fee of {formatCents(release.feeCents)} ({feeTermsText(money?.feeTerms || DEFAULT_FEE_TERMS)}),
+            from the funds on this work order. They receive the full {formatCents(release.netCents)}.
+          </p>
+        )}
+        {/* Inside the free allowance the fee is nothing, and SAYING so is the
+            point: the first $50,000 free is a promise, and a pay window that
+            is silent about it reads the same as one that forgot to mention a
+            charge. */}
+        {paying && !(release.feeCents > 0) && money?.feeTerms?.freeCents > 0 && (
+          <p className="cov-hint pay-fee">
+            No SubSub fee on this one — it is inside the first {formatCents(money.feeTerms.freeCents)} you
+            send through SubSub{money.freeLeftCents > 0 ? `, which has ${formatCents(money.freeLeftCents)} left` : ""}.
+            They receive the full {formatCents(release.netCents)}.
           </p>
         )}
         {!paying && release.feeCents > 0 && (
@@ -17847,6 +17978,7 @@ function WoFunding({ woId, money: m, canPayOut, suggestCents, onChanged }) {
              `alreadyAvailable`, so subtracting it again here would suggest
              half of what is needed. */
           suggestCents={suggestCents || 0}
+          feeTerms={m.feeTerms || DEFAULT_FEE_TERMS} freeLeftCents={m.freeLeftCents || 0}
           onClose={() => setFunding(false)}
           onDone={() => { setFunding(false); onChanged?.(); }} />
       )}
@@ -17863,7 +17995,7 @@ function WoFunding({ woId, money: m, canPayOut, suggestCents, onChanged }) {
 // because a route that believed "it worked" from here would let anybody mark a
 // work order funded without paying, and every gate downstream reads that
 // figure.
-function FundWorkOrder({ woId, suggestCents, onClose, onDone }) {
+function FundWorkOrder({ woId, suggestCents, feeTerms = DEFAULT_FEE_TERMS, freeLeftCents = 0, onClose, onDone }) {
   const [amount, setAmount] = useState(suggestCents ? String(Math.round(suggestCents) / 100) : "");
   const [fundingId, setFundingId] = useState("");
   const [secret, setSecret] = useState("");
@@ -17949,8 +18081,9 @@ function FundWorkOrder({ woId, suggestCents, onClose, onDone }) {
                 so the number in the box is the number that pays everybody --
                 said here, where somebody decides how much to put in. */}
             <p className="cov-hint fund-fee">
-              Includes SubSub's fee on payments sent through SubSub: {FEE_TERMS}.
-              Subcontractors receive their full amount.
+              Includes SubSub's fee on payments sent through SubSub: {feeTermsText(feeTerms)}.
+              {freeLeftCents > 0 ? ` You have ${formatCents(freeLeftCents)} of the free amount left.` : ""}
+              {" "}Subcontractors receive their full amount.
             </p>
             {err && <p className="fld-err" role="alert">{err}</p>}
             <div className="form-actions">

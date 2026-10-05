@@ -38,7 +38,7 @@ import { normalizeState, stateName } from "../shared/states.js";
 // Money, and whether a chain of waivers is clear. Shared with the browser
 // so a figure on screen and a figure written here cannot disagree.
 import { releaseAmounts, milestonesCover } from "../shared/money.js";
-import { PLATFORM_FEE_BPS, PLATFORM_FEE_CAP_CENTS } from "../shared/fee.js";
+import { feeTerms, feeFor, feeTermsRefusal, DEFAULT_FEE_TERMS } from "../shared/fee.js";
 import { chainStatus, SCOPE_KINDS, waiverKindFor } from "../shared/waivers.js";
 // The paper each link in that chain is made of, and which state takes which.
 import { formsFor, kindRefusal, generatedTemplateFor, renderWaiver, WAIVER_SOURCES,
@@ -6344,6 +6344,7 @@ export function missingSchema(err) {
   if (/\binspection_summaries\b/i.test(m)) return "063_inspection_summary";
   if (/\bauto_turnaround\b/i.test(m)) return "065_auto_turnaround";
   if (/\bsms_overage\b/i.test(m)) return "070_sms_overage";
+  if (/\baccount_fee_terms\b/i.test(m)) return "071_fee_terms";
   if (/\bmanager_at\b/i.test(m)) return "064_visit_manager";
   if (/contractor_(at|note)/i.test(m)) return "061_visit_contractor";
   if (/access_user_id/i.test(m)) return "062_job_access_user";
@@ -11728,6 +11729,34 @@ app.post("/api/milestones/:id/reach", async (c) => {
   return c.json({ ok: true, photos: photos.length });
 });
 
+// The account's fee terms -- its own where staff set them, the defaults where
+// not. A database without 071 is on the defaults, which is exactly what every
+// account was on before 071 existed, so a missing table costs nothing.
+async function accountFeeTerms(env, accountId) {
+  try {
+    const row = await env.DB.prepare(`SELECT * FROM account_fee_terms WHERE account_id = ?`)
+      .bind(accountId).first();
+    return { ...feeTerms(row), custom: !!row, row: row || null };
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return { ...DEFAULT_FEE_TERMS, custom: false, row: null, migration: "071_fee_terms" };
+  }
+}
+
+// What this account has sent through SubSub: releases PAID by `stripe`, which
+// is what the free $50,000 is counted against. A check recorded here is not
+// in it -- nothing went through us. `includeDue` adds releases still owed, for
+// the estimate stamped at verify, so two releases verified back to back do not
+// both claim the same free dollars.
+async function processedCents(env, accountId, { includeDue = false, excludeReleaseId = null } = {}) {
+  const r = await env.DB.prepare(
+    `SELECT COALESCE(SUM(gross_cents), 0) AS n FROM wo_releases
+      WHERE account_id = ? AND id <> COALESCE(?, '')
+        AND ((status = 'paid' AND method = 'stripe')${includeDue ? " OR status = 'due'" : ""})`
+  ).bind(accountId, excludeReleaseId).first();
+  return Number(r?.n) || 0;
+}
+
 // And the hiring account agrees, which is what makes anything owed.
 app.post("/api/milestones/:id/verify", requireRole("admin", "pm"), async (c) => {
   const { userId } = c.get("auth");
@@ -11749,13 +11778,18 @@ app.post("/api/milestones/:id/verify", requireRole("admin", "pm"), async (c) => 
       WHERE work_order_id = ? AND status <> 'void'`
   ).bind(wo.id).first();
 
-  const amounts = releaseAmounts({
+  // SubSub's fee, stamped now so the account sees it before it funds or pays:
+  // the account's own terms, and only on the part of this payment past the
+  // free allowance still left. An ESTIMATE -- `/pay` works it out again from
+  // what has actually been processed by then, which is the figure charged.
+  const terms = await accountFeeTerms(c.env, wo.account_id);
+  const fee = feeFor({ gross: m.amount_cents, terms,
+    processedBefore: await processedCents(c.env, wo.account_id, { includeDue: true }) }).fee;
+  const amounts = { ...releaseAmounts({
     gross: m.amount_cents,
     priorGross: prior?.gross || 0,
     retainageBps: wo.retainage_bps || 0,
-    feeBps: PLATFORM_FEE_BPS,
-    feeCapCents: PLATFORM_FEE_CAP_CENTS,
-  });
+  }), fee };
 
   await c.env.DB.prepare(
     `UPDATE wo_milestones SET status = 'verified', verified_at = CURRENT_TIMESTAMP,
@@ -11769,7 +11803,7 @@ app.post("/api/milestones/:id/verify", requireRole("admin", "pm"), async (c) => 
          gross_cents, retainage_cents, fee_bps, fee_cents, net_cents, idem_key)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(releaseId, wo.id, wo.account_id, m.id, wo.company_id,
-      amounts.gross, amounts.retainage, PLATFORM_FEE_BPS, amounts.fee, amounts.net,
+      amounts.gross, amounts.retainage, terms.bps, amounts.fee, amounts.net,
       `rel:${m.id}`).run();
   } catch (err) {
     // The unique index on milestone_id doing its job. Verifying twice is a
@@ -11781,7 +11815,7 @@ app.post("/api/milestones/:id/verify", requireRole("admin", "pm"), async (c) => 
   }
 
   await woEvent(c, { workOrderId: wo.id, milestoneId: m.id, kind: "milestone.verified",
-    payload: { releaseId, ...amounts, feeBps: PLATFORM_FEE_BPS } });
+    payload: { releaseId, ...amounts, feeBps: terms.bps } });
   return c.json({ ok: true, releaseId, ...amounts });
 });
 
@@ -12833,6 +12867,16 @@ app.get("/api/work-orders/:id/funding", requireRole("admin", "pm"), async (c) =>
       ...money,
       configured: !!c.env.STRIPE_SECRET_KEY,
       onScale: await payingAccountOnScale(c.env, wo.account_id),
+      // The account's fee terms and how much of its free allowance is left,
+      // so the fund form and the pay window quote ITS price rather than the
+      // default -- a negotiated rate shown as 0.05% is the screen naming the
+      // wrong price.
+      ...(await (async () => {
+        const t = await accountFeeTerms(c.env, wo.account_id);
+        const processed = await processedCents(c.env, wo.account_id);
+        return { feeTerms: { bps: t.bps, capCents: t.capCents, freeCents: t.freeCents },
+          processedCents: processed, freeLeftCents: Math.max(0, t.freeCents - processed) };
+      })()),
       // The payee's STATUS and nothing else about them. Which requirements
       // Stripe is still asking of a subcontractor is between Stripe and the
       // subcontractor; the hiring account needs to know only whether money
@@ -13024,6 +13068,22 @@ app.post("/api/releases/:id/pay", requireRole("admin"), async (c) => {
   // THE AMOUNT IS THE RELEASE'S, never the body's. Same rule as the draft
   // route refusing `status`: a figure taken from the caller here is a figure
   // somebody chooses.
+  // THE FEE THAT IS CHARGED IS WORKED OUT NOW, not the one stamped at verify.
+  // The stamp counted releases still owed against the free allowance; this
+  // counts only what has actually been paid through SubSub, which is what the
+  // allowance is for. Written back before the money is checked, so the check,
+  // the screen and the ledger all read the figure charged.
+  if (r.status === "due") {
+    const terms = await accountFeeTerms(c.env, r.account_id);
+    const fee = feeFor({ gross: r.gross_cents, terms,
+      processedBefore: await processedCents(c.env, r.account_id, { excludeReleaseId: r.id }) }).fee;
+    if (fee !== (r.fee_cents || 0) || terms.bps !== r.fee_bps) {
+      await c.env.DB.prepare(`UPDATE wo_releases SET fee_cents = ?, fee_bps = ? WHERE id = ? AND status = 'due'`)
+        .bind(fee, terms.bps, r.id).run();
+      r.fee_cents = fee; r.fee_bps = terms.bps;
+      money = await woMoney(c, wo.id);
+    }
+  }
   const verdict = canPay({ release: { status: r.status, netCents: r.net_cents,
       feeCents: r.fee_cents || 0 },
     funding: money, payable: payee.payable === true });
@@ -18628,6 +18688,70 @@ app.patch("/api/platform/accounts/:id", async (c) => {
   const changed = Object.entries(b).map(([k, v]) => `${k} → ${v}`).join(", ");
   await auditPlatform(c.env, staff, id, "plan_changed", `${staff.name} changed ${changed}`, b);
   return c.json({ ok: true });
+});
+
+// An account's own fee terms: what staff see, and what they may set.
+//
+// Read by any staff member, because answering "what is this customer charged"
+// is support's question; set by a superadmin only, because it is pricing.
+// Every change is audited with who, the old terms and the new, and a reason,
+// for the reason a comp carries one: a rate nobody can explain becomes
+// permanent. Setting the defaults back is `reset`, which deletes the row, so
+// the account follows the defaults again if they ever change.
+app.get("/api/platform/accounts/:id/fee-terms", async (c) => {
+  const { error } = await requireStaff(c);
+  if (error) return error;
+  const id = c.req.param("id");
+  const a = await c.env.DB.prepare(`SELECT id FROM accounts WHERE id = ?`).bind(id).first();
+  if (!a) return c.json({ error: "not_found" }, 404);
+  const t = await accountFeeTerms(c.env, id);
+  let processed = 0;
+  try { processed = await processedCents(c.env, id); }
+  catch (err) { if (!missingSchema(err)) throw err; }
+  return c.json({
+    terms: { bps: t.bps, capCents: t.capCents, freeCents: t.freeCents },
+    defaults: DEFAULT_FEE_TERMS, custom: t.custom,
+    note: t.row?.note || null, updatedAt: t.row?.updated_at || null, updatedBy: t.row?.updated_by || null,
+    processedCents: processed, freeLeftCents: Math.max(0, t.freeCents - processed),
+    ...(t.migration ? { migration: t.migration } : {}),
+  });
+});
+
+app.put("/api/platform/accounts/:id/fee-terms", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+  const id = c.req.param("id");
+  const a = await c.env.DB.prepare(`SELECT id, name FROM accounts WHERE id = ?`).bind(id).first();
+  if (!a) return c.json({ error: "not_found" }, 404);
+  const b = await c.req.json().catch(() => ({}));
+  const before = await accountFeeTerms(c.env, id);
+  if (before.migration) return c.json({ error: "migration_needed", migration: before.migration }, 503);
+
+  if (b.reset) {
+    await c.env.DB.prepare(`DELETE FROM account_fee_terms WHERE account_id = ?`).bind(id).run();
+    await auditPlatform(c.env, staff, id, "fee_terms_changed",
+      `${staff.name} put ${a.name} back on the default fee terms`, { from: before, to: DEFAULT_FEE_TERMS });
+    return c.json({ ok: true, terms: DEFAULT_FEE_TERMS, custom: false });
+  }
+  const next = { bps: Number(b.bps), capCents: Number(b.capCents), freeCents: Number(b.freeCents) };
+  const why = feeTermsRefusal(next);
+  if (why) return c.json({ error: why }, 400);
+  const note = String(b.note || "").trim().slice(0, 300);
+  if (!note) return c.json({ error: "reason_required" }, 400);
+  await c.env.DB.prepare(
+    `INSERT INTO account_fee_terms (account_id, fee_bps, cap_cents, free_cents, note, updated_by, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(account_id) DO UPDATE SET fee_bps = excluded.fee_bps, cap_cents = excluded.cap_cents,
+       free_cents = excluded.free_cents, note = excluded.note, updated_by = excluded.updated_by,
+       updated_at = CURRENT_TIMESTAMP`
+  ).bind(id, next.bps, next.capCents, next.freeCents, note, staff.userId).run();
+  await auditPlatform(c.env, staff, id, "fee_terms_changed",
+    `${staff.name} set ${a.name}'s fee to ${next.bps / 100}%, cap $${next.capCents / 100}, `
+    + `first $${next.freeCents / 100} free -- ${note}`,
+    { from: { bps: before.bps, capCents: before.capCents, freeCents: before.freeCents }, to: next, note });
+  return c.json({ ok: true, terms: next, custom: true });
 });
 
 // Irreversible, so the caller has to name the thing it is deleting. That is
