@@ -10648,3 +10648,48 @@ refactor.
   webhook endpoint has to be subscribed to the v2 account events (an *event
   destination* for thin events) as well as `account.updated`, or the row moves
   only when somebody opens the panel or comes back from the hosted link.
+
+- **A DASHBOARD ROW OPENS ITS JOB; AN UNBOOKED TRADE COMES OFF FROM ITS ROW;
+  AND A FINISHED INSPECTION CAN BE REOPENED — ON THE RECORD.** Three asks in
+  one message, with sixteen "Needs a contractor" rows circled.
+
+  **The rows were a title, a trade and a ZIP beside a solid Assign**, so the
+  only way to learn what the work was meant committing somebody to it.
+  `JobPeek` opens from every job row on the dashboard (open slots, no reply,
+  declined, ready to complete, unrated, a tenant who can't make the time) and
+  carries the SAME action as the row as its primary button — a modal that
+  answers "what is this" and then sends you elsewhere to act is the dead end
+  wearing instructions. The row's own button is untouched, so the fast path is
+  not taxed. It fetches only what the browser cannot hold: the per-trade scope
+  and, where the job came from an inspection, the rooms THAT trade came from,
+  through `quoteInspectionShape` — so the plumbing row shows the bathroom and
+  not the living room. It is a fifth PhotoLightbox mount, because it reads a
+  job rather than a work order or an invite and cannot go through
+  `JobInspection`; `test:lightbox` says so.
+
+  **Taking a trade off is a Remove on the trade's own row**, offered only where
+  `PATCH /api/jobs/:id` would take it: nobody booked on the slot, an admin or
+  pm, and never the last trade. The route now also **closes the open quote
+  request and overflow post for that trade** — companies pricing a trade the
+  job no longer has is an afternoon each, the reason ending a job cancels its
+  quotes — scoped to the dropped trades only, which the fixture's second quote
+  request on the kept trade is what pins. It asks first with ConfirmRemove,
+  because it is reversible (add it back on Edit) and not typed-name.
+
+  **FINISHED WAS A ONE-WAY DOOR, AND IS NOW A DOOR WITH A LOG ON IT — the
+  owner's decision, asked for in so many words.** What it protected was never
+  that a record cannot change; it was that it cannot change WITHOUT TRACE,
+  which is what the other side of a deposit argument says about a document
+  edited afterwards. So `POST /api/inspections/:id/reopen` requires a reason,
+  writes `inspection.reopened` to the append-only `events` log with the actor
+  and the time it had been finished, and **every copy of the report lists
+  every reopen — the owner's included**. No migration: `events` is already
+  keyed by `subject_id`. It goes back to a DRAFT, so an owner it was sent to
+  cannot open it until it is finished again (a half-edited record must not
+  read as the report), and re-finishing runs the same `whyNotFinish` gate. The
+  screen says all of that before the press. Guarded on `status = 'finished'`
+  in the UPDATE, so two presses log one reopen.
+
+  **Still open:** a job already raised from the inspection is not touched by
+  reopening. Rooms added afterwards that need another trade are added to the
+  job through Edit; the job's stamped scope does not move, by design.

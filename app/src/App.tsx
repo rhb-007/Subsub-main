@@ -70,7 +70,7 @@ import { suggestedAccessForInspection } from "../shared/inspection.js";
 import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   MAX_ROOM_PHOTOS, roomName, inspectionTally, flaggedRooms,
   whyNotFinish, canSendInspection, mayWriteInspection,
-  suggestTrades, inspectionStep } from "../shared/inspection.js";
+  suggestTrades, inspectionStep, quoteInspectionShape } from "../shared/inspection.js";
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { SUMMARY_REFUSALS, countComments, whyNotSummary } from "../shared/inspectsummary.js";
@@ -2976,6 +2976,24 @@ export default function SubSub() {
   // Only what the form holds is sent. It does not know about the photos, the
   // report detail, the severity or the access answer, so it must not send
   // them: a form that edits part of a record must not replace the whole of it.
+  // A trade being taken off a job from its own row. Held by id, so the modal
+  // reads the job as it is now rather than as it was when the press happened.
+  const [removingTrade, setRemovingTrade] = useState(null);
+  const removeTrade = async (jobId, trade) => {
+    const jb = allJobs.find((x) => x.id === jobId);
+    if (!jb) return;
+    const trades = jb.trades.filter((x) => x !== trade);
+    // AWAITED, AND ONLY THEN DRAWN. A refusal -- a work order issued on that
+    // trade a moment ago in another tab -- must leave the row where it is and
+    // say why, not vanish it over a write that did not happen.
+    await api.patchJob(jobId, { trades });
+    setJobs((js) => js.map((x) => (x.id !== jobId ? x : { ...x, trades, updatedAt: new Date().toISOString() })));
+    logEvent("job_edited", `Took ${catMeta(trade).label} off ${jb.title}`);
+    // The server closed any open quote request or overflow post for it; read
+    // those back rather than guessing which rows it touched.
+    refreshQuotes();
+    loadOverflow().catch(() => {});
+  };
   const editJob = async (id, f) => {
     const body = {
       title: f.title, client: f.client, address: f.address, area: f.area, zip: f.zip,
@@ -3365,6 +3383,11 @@ export default function SubSub() {
   // building, by phase, and by which tab you are on -- so landing on a list
   // that does not contain the job just clicked is the easy failure here.
   // Every filter that would hide it is cleared on the way.
+  // An inspection opened from somewhere other than its own tab -- a job's
+  // details on the dashboard. A nonce rides with the id so asking for the same
+  // one twice opens it twice, the rule the compliance pack's focus follows.
+  const [inspectionFocus, setInspectionFocus] = useState(null);
+  const openInspection = (id) => { setInspectionFocus({ id, n: Date.now() }); setTab("inspections"); };
   const openJob = (id) => {
     const j = jobs.find((x) => x.id === id);
     if (j && jobProperty && j.propertyId !== jobProperty) setJobProperty("");
@@ -5822,6 +5845,8 @@ export default function SubSub() {
           onReviewDoc={(sb, kind) => setReviewing({ sub: sb, kind })}
           onVerifyLicense={(sb) => verifyLicense(sb.id)}
           onApproveJob={approveJob} onDeclineJob={declineJob} users={accountUsers}
+          inspections={can("inspections") ? inspections : []}
+          onOpenInspection={can("inspections") ? openInspection : null}
           runsAccount={runsTheAccount(role, membership)} />
       )}
 
@@ -6140,6 +6165,7 @@ export default function SubSub() {
 
       {tab === "inspections" && can("inspections") && (
         <InspectionsView inspections={inspections} properties={accountProperties} subs={subs}
+          focus={inspectionFocus}
           unitWord={tenantWhere(kindOf(account)) === "office" ? "Suite" : "Unit"}
           /* AN OWNER READS. The capability gets them the tab -- a move-out
              report is theirs to produce in a deposit argument -- and every
@@ -6673,6 +6699,24 @@ export default function SubSub() {
                                     </button>
                                   );
                                 })()}
+                                {/* TAKING A TRADE OFF, from the row it is on.
+                                    An inspection suggests trades from words in
+                                    the notes, and some of those turn out not
+                                    to be needed -- the only way off was the
+                                    whole edit form, which nobody found.
+                                    Offered only where the route would take it:
+                                    nobody booked on this slot (that is this
+                                    branch), a seat the PATCH allows, and never
+                                    the last trade, which the server refuses as
+                                    trades_required. Reversible by adding it
+                                    back on Edit, so it asks plainly rather
+                                    than with a typed name. */}
+                                {maySetAccess(role) && !j.readOnly && j.trades.length > 1 && (
+                                  <button className="trade-swap trade-drop"
+                                    onClick={() => setRemovingTrade({ jobId: j.id, trade: t })}>
+                                    <X size={12} /> Remove
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
@@ -7047,6 +7091,25 @@ export default function SubSub() {
           the trade grid, the supplier chooser, the property picker and the
           access answer -- the rule this file records about the apply form and
           the QR panel, pointed at the biggest form in the product. */}
+      {removingTrade && (() => {
+        const rj = allJobs.find((x) => x.id === removingTrade.jobId);
+        if (!rj) return null;
+        const label = catMeta(removingTrade.trade).label;
+        const q = quoteReqs.some((r) => r.jobId === rj.id && r.trade === removingTrade.trade && r.status === "open");
+        const o = overflowPosts.some((p) => p.jobId === rj.id && p.trade === removingTrade.trade && p.status === "open");
+        return (
+          <ConfirmRemove name={label} what="trade"
+            explain={(e) => e?.body?.error === "trade_has_work_order"
+              ? `Somebody has just been issued a work order for ${label}, so it can no longer be taken off. Void that work order first.`
+              : e?.body?.error === "trades_required" ? "A job needs at least one trade." : null}
+            consequence={`${label} comes off ${rj.title}. Nobody is booked on it, so no contractor is affected.`
+              + (q ? " The open quote request for it is closed, and the companies asked are no longer waiting on." : "")
+              + (o ? " The overflow post for it is withdrawn." : "")
+              + " You can add it back from Edit job at any time."}
+            onConfirm={async () => { await removeTrade(rj.id, removingTrade.trade); setRemovingTrade(null); }}
+            onCancel={() => setRemovingTrade(null)} />
+        );
+      })()}
       {editingJob && <Modal onClose={() => setEditingJob(null)} wide>
         <JobForm allJobs={allJobs} accountId={account.id} accountName={account.name}
           rosterWord={rosterWords(account).One} properties={accountProperties}
@@ -10927,7 +10990,7 @@ function CompanyEditFields({ co, onSave, onCancel }) {
 // confirmation is for what cannot be undone. What this owes them instead is
 // naming who, and saying what actually goes -- because "remove user" does not
 // say whether their reports, their buildings or their history go with them.
-function ConfirmRemove({ name, what, consequence, verb = "Remove", onConfirm, onCancel }) {
+function ConfirmRemove({ name, what, consequence, verb = "Remove", onConfirm, onCancel, explain = null }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   return (
@@ -10950,9 +11013,9 @@ function ConfirmRemove({ name, what, consequence, verb = "Remove", onConfirm, on
                 // Left open with the reason on it. Closing on failure would
                 // read as success, which is the one outcome worse than the
                 // silent removal this modal exists to replace.
-                setErr(e?.body?.error === "cannot_remove_self"
+                setErr((explain && explain(e)) || (e?.body?.error === "cannot_remove_self"
                   ? "You cannot remove your own admin seat — somebody has to be able to administer this account."
-                  : "That did not go through. Try again in a moment.");
+                  : "That did not go through. Try again in a moment."));
                 setBusy(false);
               }
             }}>
@@ -20893,6 +20956,159 @@ function DashRows({ id, peek = 3, children }) {
   );
 }
 
+// WHAT A DASHBOARD ROW IS ABOUT, BEFORE ANYBODY PRESSES THE BUTTON ON IT.
+//
+// Every job row on the dashboard was a title, a trade and a ZIP code beside a
+// solid Assign -- so the only way to find out what "Move-out work -- unit 14"
+// actually needed was to commit somebody to it, or leave for the Jobs screen
+// and hunt for the card. Reported with sixteen such rows circled: *"open up
+// into modals so you can see details before clicking the assign CTA"*.
+//
+// The row opens this; the row's own button still does what it did, so the
+// fast path is not taxed for somebody who already knows. And the modal
+// carries the SAME action as the row, as its primary button, because a modal
+// that answers "what is this" and then sends you elsewhere to act on it is
+// the dead end wearing instructions this product keeps finding.
+//
+// It reads what the browser already holds -- the job, its trades, the visits
+// -- and fetches only the two things it cannot: the per-trade scope (the
+// server's own slice of the inspection, the same one Assign seeds its box
+// with) and, where the job was raised from an inspection, the rooms that
+// trade was suggested from, with their photographs. Narrowed through
+// `quoteInspectionShape` so the rooms shown under "Plumbing" are the rooms
+// the plumbing chip was ticked from and not the whole unit.
+function JobPeek({ job, trade, inspection, visits = [], users = [], action, onOpenJob, onOpenInspection, onClose }) {
+  const scopes = useJobTradeScope(job?.id || null);
+  const [rooms, setRooms] = useState(null);
+  const [shots, setShots] = useState({});
+  const [box, setBox] = useState(null);
+  const inspId = inspection?.id || null;
+  useEffect(() => {
+    if (!inspId) { setRooms(null); return undefined; }
+    let live = true;
+    api.getInspection(inspId)
+      .then((d) => {
+        if (!live) return;
+        const all = Array.isArray(d?.rooms) ? d.rooms : [];
+        const mine = trade ? quoteInspectionShape(d, all, trade).rooms : [];
+        setRooms({ mine, flagged: flaggedRooms(all).length, forTrade: !!trade });
+      })
+      .catch((e) => { if (live) { console.warn("[job-peek] inspection", e); setRooms({ failed: true }); } });
+    return () => { live = false; };
+  }, [inspId, trade]);
+  if (!job) return null;
+  const M = trade ? catMeta(trade) : null;
+  const where = [job.address, job.area, job.zip].filter(Boolean).join(", ");
+  const dir = directionsUrl(job.address, job.area, job.zip);
+  const visit = visits.filter((v) => v.jobId === job.id && ["proposed", "confirmed"].includes(v.status))
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  const asked = users.find((u) => u.id === job.requestedBy);
+  const tradeScope = trade && scopes[trade];
+  const photos = Array.isArray(job.photos) ? job.photos : [];
+  const roomPhotos = (rooms?.mine || []).flatMap((r) => r.photos.map((p) => ({ ...p, room: r.name })));
+  const seeShot = (id, url) => setShots((m) => ({ ...m, [id]: url }));
+  const slot = (t) => {
+    const a = job.assignments?.[t];
+    if (!a) return "Nobody assigned";
+    if (a.status === "declined") return `${a.company || "The contractor"} declined`;
+    if (a.status === "pending") return `Offered to ${a.company || "a contractor"}, no reply yet`;
+    return `${a.company || "Assigned"}${a.status === "accepted" ? " · accepted" : ""}`;
+  };
+  return (
+    <Modal onClose={onClose} wide>
+      <div className="jp">
+        {M && <span className="jp-eyebrow"><M.icon size={13} /> {M.label}</span>}
+        <h2 className="jp-title">{job.title}</h2>
+        <div className="jp-facts">
+          <span><Calendar size={14} /> {visit ? visitWhen(visit) : (formatWhen(job.date, job.time) || "No date set")}
+            {visit ? (visit.status === "confirmed" ? " · agreed" : " · proposed") : ""}</span>
+          {where && <span><MapPin size={14} /> {where}{dir && <> · <a href={dir} target="_blank" rel="noopener noreferrer">Directions</a></>}</span>}
+          {asked && <span><Users size={14} /> Asked for by {asked.name}</span>}
+        </div>
+
+        <div className="tn-said">
+          <h4>{M ? `What needs doing for ${M.label}` : "What needs doing"}</h4>
+          <p>{tradeScope || job.scope || "No scope written yet. Open the job to add one."}</p>
+        </div>
+
+        {inspection && (
+          <div className="tn-said">
+            <h4>From the {INSPECTION_KINDS[inspection.kind]?.label?.toLowerCase() || "inspection"}{inspection.unit ? ` of unit ${inspection.unit}` : ""}</h4>
+            {rooms === null ? <p className="fine">Loading the rooms…</p>
+              : rooms.failed ? <p className="fine">The inspection could not be loaded. Open it to see the rooms.</p>
+              : rooms.mine.length === 0 ? (
+                <p className="fine">{rooms.forTrade
+                  ? `None of the ${rooms.flagged} flagged room${rooms.flagged === 1 ? "" : "s"} named ${M.label.toLowerCase()} in so many words. Open the inspection to see them all.`
+                  : "Open the inspection to see the rooms."}</p>
+              ) : (
+                <ul className="jp-rooms">
+                  {rooms.mine.map((r) => (
+                    <li key={r.id}><b>{r.name}</b> — {ROOM_STATUSES[r.status]?.label || r.status}{r.note ? `: ${r.note}` : ""}</li>
+                  ))}
+                </ul>
+              )}
+            {roomPhotos.length > 0 && (
+              <div className="ph-grid">
+                {roomPhotos.map((ph, i) => (
+                  <ReportPhoto key={ph.id} photo={ph} onLoaded={seeShot}
+                    load={() => api.inspectionPhotoBlob(inspection.id, ph.id)}
+                    onOpen={() => setBox({ set: roomPhotos, at: i })} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {photos.length > 0 && (
+          <div className="tn-said">
+            <h4>Photos on the report <span className="sec-count">{photos.length}</span></h4>
+            <div className="ph-grid">
+              {photos.map((ph, i) => (
+                <ReportPhoto key={ph.id} jobId={job.id} photo={ph} onLoaded={seeShot}
+                  onOpen={() => setBox({ set: photos, at: i })} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {job.trades?.length > 1 && (
+          <div className="tn-said">
+            <h4>Every trade on this job</h4>
+            <ul className="jp-trades">
+              {job.trades.map((t) => (
+                <li key={t} className={t === trade ? "on" : ""}>
+                  <span>{catMeta(t).label}</span><span className="fine">{slot(t)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {job.notes && (
+          <div className="tn-said"><h4>Notes</h4><p>{job.notes}</p></div>
+        )}
+
+        <div className="form-actions">
+          {inspection && onOpenInspection && (
+            <button className="btn-ghost" onClick={() => { onClose(); onOpenInspection(inspection.id); }}>
+              <ClipboardList size={14} /> Open the inspection</button>
+          )}
+          <button className="btn-ghost" onClick={() => { onClose(); onOpenJob(job.id); }}>
+            <ArrowRight size={14} /> Open in Jobs</button>
+          {action && (
+            <button className="btn-solid" onClick={() => { onClose(); action.run(); }}>
+              {action.icon} {action.label}</button>
+          )}
+        </div>
+      </div>
+      {box && (
+        <PhotoLightbox photos={box.set} urls={shots} at={box.at}
+          onAt={(at) => setBox((b) => ({ ...b, at }))} onClose={() => setBox(null)} />
+      )}
+    </Modal>
+  );
+}
+
 // The name of the screen you are on.
 //
 // Properties had one and the rest did not, so Contractors opened on a
@@ -21094,7 +21310,12 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   invites = [], connectsOut = [], onOpenInvite, onOpenConnect,
   connectsIn = [], onRespondConnect, onReloadConnects,
   hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null,
-  onManagePack = null, onAddPackField = null, onReloadCompany = null, weather = null }) {
+  onManagePack = null, onAddPackField = null, onReloadCompany = null, weather = null,
+  inspections = [], onOpenInspection = null }) {
+  // Which job row is open in the details modal. Held by id rather than as the
+  // job object, for the reason `openReq` is: an assign or a reload replaces
+  // the row, and a captured copy would draw the old one under the modal.
+  const [peek, setPeek] = useState(null);
   // Which request is being turned down, and why. One at a time: the reason
   // is the point, and a row of open boxes invites none of them being filled.
   const [declining, setDeclining] = useState(null);
@@ -21480,12 +21701,12 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             const who = users.find((u) => u.id === job.requestedBy);
             return (
               <div key={v.id} className="dash-row">
-                <div className="dash-row-main">
-                  <div className="dr-title">{job.title}</div>
+                <button className="dash-row-main dash-row-open" onClick={() => setPeek({ jobId: job.id, trade: null, kind: "time" })}>
+                  <span className="dr-title">{job.title}</span>
                   <span className="dr-meta">
                     {who ? who.name : "The tenant"} can't make {visitWhen(v)}{v.tenantNote ? ` — “${v.tenantNote}”` : ""}
                   </span>
-                </div>
+                </button>
                 <button className="btn-solid sm" onClick={onGoJobs}><Calendar size={13} /> Propose another</button>
               </div>
             );
@@ -21553,10 +21774,10 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             return (
               <div key={`${job.id}-${trade}`} className="dash-row">
                 <div className={`trade-icon cat-${trade}`}><M.icon size={15} /></div>
-                <div className="dash-row-main">
+                <button className="dash-row-main dash-row-open" onClick={() => setPeek({ jobId: job.id, trade, kind: "open" })}>
                   <span className="dr-title">{job.title}</span>
                   <span className="dr-meta">{M.label} · {formatWhen(job.date, job.time) || "no date"}{job.zip ? ` · ${job.zip}` : ""}</span>
-                </div>
+                </button>
                 <button className="btn-solid dash-row-btn" onClick={() => onAssign(job, trade)}>
                   <Plus size={13} /> Assign
                 </button>
@@ -21576,13 +21797,13 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
           {expiredOffers.map(({ job, trade, a }) => (
             <div key={`${job.id}-${trade}`} className="dash-row">
               <div className="dash-avatar">{(a.company || "?").split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
-              <div className="dash-row-main">
-                <span className="dr-title" onClick={() => onGoJobs()}>{job.title}</span>
+              <button className="dash-row-main dash-row-open" onClick={() => setPeek({ jobId: job.id, trade, kind: "expired", subId: a.subId })}>
+                <span className="dr-title">{job.title}</span>
                 <span className="dr-meta">
                   {catMeta(trade).label} · {a.company} didn't reply by {new Date(a.respondBy)
                     .toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}
                 </span>
-              </div>
+              </button>
               <button className="btn-solid dash-row-btn"
                 onClick={() => onAssign(job, trade, a.subId)}>
                 <Zap size={13} /> Find alternatives
@@ -21666,10 +21887,10 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             return (
               <div key={`${job.id}-${trade}`} className="dash-row">
                 <div className={`trade-icon cat-${trade}`}><M.icon size={15} /></div>
-                <div className="dash-row-main">
+                <button className="dash-row-main dash-row-open" onClick={() => setPeek({ jobId: job.id, trade, kind: "declined", subId: a.subId })}>
                   <span className="dr-title">{job.title}</span>
                   <span className="dr-meta">{a.company} declined {M.label}</span>
-                </div>
+                </button>
                 <button className="btn-solid dash-row-btn" onClick={onGoJobs}>Review</button>
               </div>
             );
@@ -21685,10 +21906,10 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
           {readyToComplete.map((j) => (
             <div key={j.id} className="dash-row">
               <div className="dash-avatar"><CheckCircle2 size={15} /></div>
-              <div className="dash-row-main">
+              <button className="dash-row-main dash-row-open" onClick={() => setPeek({ jobId: j.id, trade: null, kind: "ready" })}>
                 <span className="dr-title">{j.title}</span>
                 <span className="dr-meta">All {j.trades.length} trade{j.trades.length > 1 ? "s" : ""} accepted · complete it to rate crews</span>
-              </div>
+              </button>
               <button className="btn-solid dash-row-btn" onClick={onGoJobs}>Review</button>
             </div>
           ))}
@@ -21701,18 +21922,35 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
           <h3><Star size={15} /> Completed, not yet rated <span className="sec-count">{unrated.length}</span></h3>
           <DashRows id="unrated">
           {unrated.map(({ job, trade, a }) => (
-            <div key={`${job.id}-${trade}`} className="dash-row" onClick={onGoJobs}>
+            <div key={`${job.id}-${trade}`} className="dash-row">
               <div className="dash-avatar">{(a.company || "?").split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
-              <div className="dash-row-main">
+              <button className="dash-row-main dash-row-open" onClick={() => setPeek({ jobId: job.id, trade, kind: "unrated" })}>
                 <span className="dr-title">{job.title}</span>
                 <span className="dr-meta">{a.crewName || a.company} · {catMeta(trade).label}</span>
-              </div>
+              </button>
               <button className="btn-ghost dash-row-btn" onClick={onGoJobs}>Rate</button>
             </div>
           ))}
           </DashRows>
         </section>
       )}
+      {peek && (() => {
+        const pj = jobs.find((j) => j.id === peek.jobId);
+        if (!pj) return null;
+        const pAction = peek.kind === "open"
+          ? { label: "Assign", icon: <Plus size={14} />, run: () => onAssign(pj, peek.trade) }
+          : peek.kind === "expired"
+            ? { label: "Find alternatives", icon: <Zap size={14} />, run: () => onAssign(pj, peek.trade, peek.subId) }
+            : peek.kind === "declined"
+              ? { label: "Assign someone else", icon: <Plus size={14} />, run: () => onAssign(pj, peek.trade, peek.subId) }
+              : null;
+        return (
+          <JobPeek job={pj} trade={peek.trade} visits={visits} users={users}
+            inspection={inspections.find((i) => i.jobId === pj.id) || null}
+            action={pAction} onOpenJob={onOpenJob} onOpenInspection={onOpenInspection}
+            onClose={() => setPeek(null)} />
+        );
+      })()}
     </main>
   );
 }
@@ -29398,6 +29636,8 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [raising, setRaising] = useState(false);
+  // Reopening a finished one: the reason being typed, or null while closed.
+  const [reopenWhy, setReopenWhy] = useState(null);
   // POINTING AT THE NEXT THING, which is scrolling AND ringing.
   //
   // Landing somewhere is not the same as pointing at something -- already
@@ -29471,6 +29711,8 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
         : code === "already_finished" ? "This inspection is finished, so it cannot be changed."
         : code === "nothing_flagged" ? "Nothing was flagged, so there is no work to raise."
         : code === "already_raised" ? "A job has already been raised from this one."
+        : code === "reason_required" ? "Say why it is being reopened — that goes on the record."
+        : code === "not_finished" ? "It has already been reopened."
         : code === "migration_needed" ? "SubSub needs a database update before this works. We've been told."
         : "That didn't go through. Try again.");
     } finally { setBusy(""); }
@@ -29547,8 +29789,59 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
             {inspection.inspectedOn ? ` · ${niceDay(inspection.inspectedOn)}` : ""}
           </span>
         </div>
-        <span className={`tn-chip ${locked ? "ok" : "wait"}`}>{locked ? "Finished" : "Draft"}</span>
+        <span className={`tn-chip ${inspection.status === "finished" ? "ok" : "wait"}`}>
+          {inspection.status === "finished" ? "Finished" : "Draft"}</span>
       </div>
+
+      {/* REOPENING, which used to be impossible. A room missed on the walk or
+          a note in the wrong room was found after Finish and there was no way
+          back. What finishing protected -- a record nobody can quietly edit
+          afterwards -- is kept by RECORDING the reopen: a reason is required,
+          it is logged with the name and the time, and every copy of the report
+          lists it below, the owner's included. Said before the press, because
+          finding out that an owner can no longer open it is finding out too
+          late to decide. */}
+      {inspection.status === "finished" && canEdit && (
+        reopenWhy === null ? (
+          <div className="insp-reopen">
+            <span>Missed a room, or need to correct something?</span>
+            <button className="btn-ghost" onClick={() => setReopenWhy("")}>
+              <Pencil size={14} /> Reopen to edit</button>
+          </div>
+        ) : (
+          <div className="insp-reopen open">
+            <p>Reopening puts it back to a draft so rooms can be added and changed. While it is
+              open, an owner it was sent to cannot open it. When you finish it again, the report
+              says it was reopened, by you, today, and why.</p>
+            <label className="fld">Why is it being reopened?
+              <textarea rows={2} value={reopenWhy} maxLength={500} autoFocus
+                placeholder="e.g. Missed the balcony on the walk"
+                onChange={(e) => setReopenWhy(e.target.value)} />
+            </label>
+            <div className="form-actions">
+              <button className="btn-ghost" onClick={() => setReopenWhy(null)} disabled={busy === "reopen"}>Cancel</button>
+              <button className="btn-solid" disabled={busy === "reopen" || reopenWhy.trim().length < 3}
+                onClick={() => run("reopen", async () => {
+                  await api.reopenInspection(inspection.id, reopenWhy.trim());
+                  setReopenWhy(null);
+                  await onReload();
+                })}>
+                <Pencil size={14} /> {busy === "reopen" ? "Reopening…" : "Reopen it"}</button>
+            </div>
+            {reopenWhy.trim().length < 3 && (
+              <p className="fld-note">Reopen is ready once there is a reason — it goes on the record.</p>
+            )}
+          </div>
+        )
+      )}
+      {(inspection.reopens || []).length > 0 && (
+        <ul className="insp-reopens">
+          {inspection.reopens.map((r, i) => (
+            <li key={i}><Pencil size={12} /> Reopened {niceDay(String(r.at || "").slice(0, 10))} by {r.by}
+              {r.reason ? ` — “${r.reason}”` : ""}</li>
+          ))}
+        </ul>
+      )}
 
       {/* WHICH WALK IT IS, AND WHO IT IS ABOUT, EDITABLE WHILE IT IS A DRAFT.
           `PATCH /api/inspections/:id` has taken all four of these since it was
@@ -30141,7 +30434,7 @@ function InspectionSend({ inspection, onReload, onAddOwner }) {
 
 
 function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
-  unitWord = "Unit", canEdit = true, onAddOwner }) {
+  unitWord = "Unit", canEdit = true, onAddOwner, focus = null }) {
   const [form, setForm] = useState(null);
   const [open, setOpen] = useState(null);   // the loaded inspection
   const [busy, setBusy] = useState(false);
@@ -30155,6 +30448,12 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
       setErr("Could not open that inspection.");
     }
   };
+  // Asked for from elsewhere -- a job's details on the dashboard. Keyed on the
+  // nonce as well as the id, so asking for the same one twice opens it twice.
+  useEffect(() => {
+    if (focus?.id) load(focus.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus?.id, focus?.n]);
 
   // BACK CLOSES THE INSPECTION RATHER THAN LEAVING SUBSUB.
   //
@@ -33895,6 +34194,28 @@ p.fld-note{margin:6px 0 0}
   letter-spacing:.04em;padding-top:1px}
 .tn-facts dd{margin:0;font-size:13.5px;color:var(--ink)}
 .tn-said{margin-top:18px}
+/* Reopening a finished inspection, and the record that it happened. */
+.insp-reopen{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;
+  margin:12px 0 0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;
+  background:var(--paper);font-size:14px;color:var(--ink-soft)}
+.insp-reopen.open{display:block}
+.insp-reopen.open p{margin:0 0 10px;line-height:1.5}
+.insp-reopens{list-style:none;margin:10px 0 0;padding:0;font-size:13px;color:var(--ink-soft)}
+.insp-reopens li{display:flex;align-items:baseline;gap:6px;padding:3px 0}
+/* The job details opened from a dashboard row. What needs doing, the rooms and
+   photographs it came from, and every trade on the job, above the same action
+   the row offers. */
+.jp-eyebrow{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;
+  color:var(--brand);text-transform:uppercase;letter-spacing:.04em}
+.jp-title{margin:6px 0 8px;font-size:21px;line-height:1.25;padding-right:32px}
+.jp-facts{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13.5px;color:var(--ink-soft)}
+.jp-facts span{display:inline-flex;align-items:center;gap:6px}
+.jp-facts a{color:var(--brand);font-weight:600}
+.jp-rooms{margin:0;padding-left:18px;font-size:14px;line-height:1.6}
+.jp-trades{list-style:none;margin:0;padding:0}
+.jp-trades li{display:flex;justify-content:space-between;gap:12px;padding:7px 0;
+  border-top:1px solid var(--line);font-size:14px}
+.jp-trades li.on{font-weight:700}
 .tn-said h4{margin:0 0 7px;font-size:12px;font-weight:700;color:var(--ink-soft);
   text-transform:uppercase;letter-spacing:.04em}
 .tn-said p{margin:0;font-size:14px;line-height:1.6;white-space:pre-wrap}

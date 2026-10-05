@@ -236,8 +236,18 @@ try {
     const src = readFileSync(join(app, "src", "App.tsx"), "utf8");
     // ONE FETCH FOR BOTH MODALS. Two mounts of one record is two requests for
     // it, which is the duplicate-state trap this project already refuses.
+    //
+    // THE DASHBOARD'S JOB DETAILS CALL IT TOO, and that is a different modal
+    // rather than a second copy of these two: it closes before Assign opens,
+    // so the two never hold the same record at once. So the count is the
+    // definition, the one hoisted call the two Jobs-screen modals share, and
+    // one inside JobPeek -- and a third call anywhere else still fails.
     const hooks = src.match(/useJobTradeScope\(/g) || [];
-    ck("the hook is declared once and called once", hooks.length === 2, String(hooks.length));
+    const peekAt = src.indexOf("function JobPeek(");
+    const peekEnd = src.indexOf("\nfunction ", peekAt + 10);
+    const inPeek = (src.slice(peekAt, peekEnd).match(/useJobTradeScope\(/g) || []).length;
+    ck("the hook is declared once and the two modals share one call",
+      hooks.length === 3 && inPeek === 1, `${hooks.length} total, ${inPeek} in JobPeek`);
     ck("and both modals are handed the same answer",
       /<PickContractor[\s\S]{0,400}?tradeScopes=\{tradeScopes\}/.test(src)
       && /<AskQuotes[\s\S]{0,400}?tradeScopes=\{tradeScopes\}/.test(src));

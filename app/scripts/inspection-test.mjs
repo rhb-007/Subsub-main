@@ -197,6 +197,45 @@ try {
     ck("and it cannot be deleted", s === 409 && after.error === "already_finished", `${s} ${after.error}`);
     ck("but it is still readable",
       (await json(await call(env, `/api/inspections/${id}`)))[1].rooms.length === 3);
+
+    // REOPENING. Finishing shut the record; the way back is a RECORDED act,
+    // which is what keeps it worth anything in an argument: a reason, a name
+    // and a time, listed on every copy of the report.
+    console.log("\n-- reopening a finished inspection --");
+    [s, after] = await json(await call(env, `/api/inspections/${id}/reopen`, { method: "POST", body: {} }));
+    ck("it will not reopen without a reason", s === 400 && after.error === "reason_required", `${s} ${after.error}`);
+    ck("and refusing leaves it finished",
+      (await json(await call(env, `/api/inspections/${id}`)))[1].status === "finished");
+    [s] = await json(await call(env, `/api/inspections/${id}/reopen`,
+      { method: "POST", body: { reason: "Missed the balcony" }, who: "u_own" }));
+    ck("an owner cannot reopen it", s === 403, String(s));
+    [s, after] = await json(await call(env, `/api/inspections/${id}/reopen`,
+      { method: "POST", body: { reason: "Missed the balcony" } }));
+    ck("with a reason it goes back to a draft", s === 200 && after.status === "draft" && !after.finishedAt,
+      `${s} ${after.status} ${after.finishedAt}`);
+    ck("and the reopen is on the record, with who and why",
+      after.reopens?.length === 1 && after.reopens[0].reason === "Missed the balcony"
+        && after.reopens[0].by && after.reopens[0].by !== "Somebody" && !!after.reopens[0].finishedAt,
+      JSON.stringify(after.reopens));
+    [s, after] = await json(await call(env, `/api/inspections/${id}/reopen`,
+      { method: "POST", body: { reason: "Again" } }));
+    ck("a second press does not log a second reopen", s === 409 && after.error === "not_finished", `${s} ${after.error}`);
+    [s] = await json(await call(env, `/api/inspections/${id}`, { who: "u_own" }));
+    ck("while it is open the owner cannot read a half-edited report", s === 404, String(s));
+    [s, after] = await json(await call(env, `/api/inspections/${id}/rooms`,
+      { method: "POST", body: { name: "Balcony" } }));
+    ck("and now a room can be added", s === 201 || s === 200, `${s} ${after.error || ""}`);
+    const balcony = after.rooms?.find((r) => r.name === "Balcony")?.id;
+    [s, after] = await json(await call(env, `/api/inspections/${id}`, { method: "PATCH", body: { finish: true } }));
+    ck("re-finishing goes through the same gate", s === 409 && after.error === "rooms_unchecked", `${s} ${after.error}`);
+    await call(env, `/api/inspections/${id}/rooms/${balcony}`, { method: "PATCH", body: { status: "ok" } });
+    [s, after] = await json(await call(env, `/api/inspections/${id}`, { method: "PATCH", body: { finish: true } }));
+    ck("and finishes again once the new room is marked", s === 200 && after.status === "finished", `${s} ${after.status}`);
+    const [os, mine] = await json(await call(env, `/api/inspections/${id}`, { who: "u_own" }));
+    ck("the owner's copy says it was reopened, and why",
+      os === 200 && mine.reopens?.length === 1 && mine.reopens[0].reason === "Missed the balcony",
+      `${os} ${JSON.stringify(mine.reopens)}`);
+    ck("and carries the room that was added", mine.rooms?.some((r) => r.name === "Balcony"));
   }
 
   console.log("\n-- photographs --");

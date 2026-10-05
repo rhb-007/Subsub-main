@@ -26,7 +26,7 @@ import { monthStart, previousMonth, smsAllowance, smsVerdict, smsOverageBlocks, 
 // be labelled urgent and call somebody out at the account's expense.
 import { severityOf } from "../shared/emergency.js";
 import { validateIngest, SOURCES } from "../shared/ingest.js";
-import { TRADES, TRADE_IDS } from "../shared/trades.js";
+import { TRADES, TRADE_IDS, tradeLabel } from "../shared/trades.js";
 import { tradesFor, validRule, ANY_SOURCE } from "../shared/crmmap.js";
 import { SOURCE_PRESETS, isSource, unwrap, translate } from "../shared/crmsources.js";
 import { INSPECT_PRESETS, isInspectSource, readInspection,
@@ -8813,6 +8813,7 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
   // invisible on every screen, and a contractor who still turns up. Refused by
   // name so the form can say which, rather than quietly keeping it, which is
   // the save-that-writes-nothing shape.
+  let droppedTrades = [];
   if (b.trades !== undefined) {
     const want = (Array.isArray(b.trades) ? b.trades : []).filter((t) => TRADE_IDS.has(t));
     if (!want.length) return c.json({ error: "trades_required" }, 400);
@@ -8824,6 +8825,11 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
     const booked = (live || []).map((r) => r.trade).filter((t) => !kept.has(t));
     if (booked.length) return c.json({ error: "trade_has_work_order", trades: booked }, 409);
     sets.push("trades = ?"); vals.push(JSON.stringify([...new Set(want)]));
+    // What is being taken OFF, read before the write so the questions still
+    // out about it can be closed once the write lands.
+    const prior = await c.env.DB.prepare(
+      `SELECT trades FROM jobs WHERE id = ? AND account_id = ?`).bind(id, accountId).first();
+    droppedTrades = parseJson(prior?.trades, []).filter((t) => !kept.has(t));
   }
   if (b.propertyId !== undefined) {
     const pid = b.propertyId || null;
@@ -8856,6 +8862,28 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
   // that is a save that reports success. `maySeeJob` as well, so a scoped
   // project manager cannot edit a job outside their list.
   if (!res.meta?.changes) return c.json({ error: "job_not_found" }, 404);
+  // A TRADE TAKEN OFF TAKES ITS OPEN QUESTIONS WITH IT. Companies asked to
+  // price that trade, or answering an overflow post for it, would otherwise
+  // spend an afternoon on work the job no longer has -- the reason ending a
+  // job cancels its open quote requests. Only open ones: an awarded request
+  // has a work order behind it, and the booked check above already refuses
+  // that. Tolerant of a database without 043 or 038, because losing the tidy
+  // must not cost the edit.
+  if (droppedTrades.length) {
+    const marks = droppedTrades.map(() => "?").join(",");
+    for (const table of ["quote_requests", "overflow_posts"]) {
+      try {
+        await c.env.DB.prepare(
+          `UPDATE ${table} SET status = 'cancelled', closed_at = CURRENT_TIMESTAMP
+            WHERE job_id = ? AND account_id = ? AND status = 'open' AND trade IN (${marks})`
+        ).bind(id, accountId, ...droppedTrades).run();
+      } catch (e) {
+        if (!missingSchema(e)) throw e;
+      }
+    }
+    await logActivity(c.env, accountId, userId, "job_trades_removed",
+      `Took ${droppedTrades.map(tradeLabel).join(", ")} off the job`);
+  }
   await logActivity(c.env, accountId, userId, "job_edited", "Edited the job details");
   // AND THE PEOPLE WHO HAVE TO BE THERE ARE ASKED AGAIN.
   //
@@ -13633,7 +13661,11 @@ app.get("/api/inspections/:id", requireRole(...INSPECTION_READ_ROLES), async (c)
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
-  const base = { ...inspectionRowToJs(row), rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) };
+  const base = { ...inspectionRowToJs(row), rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }),
+    // On EVERY copy, the owner's included. A report that was changed after it
+    // was finished has to say so to the person who will quote it, or the
+    // reopening is exactly the edit-after-the-fact a deposit argument turns on.
+    reopens: await inspectionReopens(c.env.DB, row.id) };
   // WHO ELSE WAS TOLD IS THE TEAM'S OWN RECORD. The audience is the other
   // owners' names and addresses, which is not a reading seat's to collect --
   // the same rule that keeps an overflow distribution list server-side.
@@ -13737,12 +13769,79 @@ app.post("/api/inspections/:id/send", requireRole(...INSPECTION_WRITE_ROLES), as
   return c.json({ ok: true, sent: done, ...(await inspectionAudience(c.env.DB, row)) });
 });
 
+// EVERY TIME A FINISHED INSPECTION WAS OPENED AGAIN, oldest first: who, when,
+// why, and when it had been finished. Read off the event log rather than a
+// table of its own -- `events` is append-only and already keyed by subject,
+// and a reopen is an event about the inspection rather than a fact the
+// inspection carries. Names are resolved here so the screen never shows an id.
+async function inspectionReopens(db, inspectionId) {
+  try {
+    const { results } = await db.prepare(
+      `SELECT e.created_at, e.payload, u.name AS by_name FROM events e
+         LEFT JOIN users u ON u.id = e.actor_id
+        WHERE e.kind = 'inspection.reopened' AND e.subject_id = ?
+        ORDER BY e.created_at, e.id`).bind(inspectionId).all();
+    return (results || []).map((r) => {
+      const p = parseJson(r.payload, {}) || {};
+      return { at: r.created_at, by: r.by_name || "Somebody", reason: p.reason || "",
+        finishedAt: p.finishedAt || null };
+    });
+  } catch (err) {
+    console.warn("[inspection] reopen history unavailable:", err?.message || err);
+    return [];
+  }
+}
+
+// REOPENING A FINISHED INSPECTION, which the door below used to refuse for
+// ever. Asked for as *"need to be able to edit and go back to original
+// inspection, add rooms after you finalize as well"* -- a room missed on the
+// walk, a note written in the wrong room, found after Finish was pressed.
+//
+// What finishing protected is still protected, by a different means. The
+// danger was never that a record changes; it is that it changes WITHOUT
+// TRACE, so the other side of a deposit argument can say it was edited after
+// the fact and nobody can say what changed or when. So a reopen is a recorded
+// act: a reason is required, it is written to the event log with the person
+// and the time it had been finished, and every copy of the report -- the
+// owner's included -- lists it. Re-finishing goes through the same gate as the
+// first time.
+//
+// It goes back to a DRAFT, which means an owner it was sent to cannot open it
+// until it is finished again: a half-edited record must not read as the
+// report, which is the reason drafts are refused to them at all.
+app.post("/api/inspections/:id/reopen", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
+  const auth = c.get("auth");
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return c.json({ error, migration }, status);
+  if (row.status !== "finished") return c.json({ error: "not_finished" }, 409);
+  const b = await c.req.json().catch(() => ({}));
+  const reason = String(b.reason || "").trim().slice(0, 500);
+  if (reason.length < 3) return c.json({ error: "reason_required" }, 400);
+  // Guarded on the status in the UPDATE, so two presses reopen once and the
+  // second answers rather than logging a reopen that did not happen.
+  const res = await c.env.DB.prepare(
+    `UPDATE inspections SET status = 'draft', finished_at = NULL WHERE id = ? AND status = 'finished'`
+  ).bind(row.id).run();
+  if (!res.meta?.changes) return c.json({ error: "not_finished" }, 409);
+  await logEvent(c.env, row.account_id, auth.userId, "inspection.reopened", row.id,
+    { reason, finishedAt: row.finished_at || null });
+  await logActivity(c.env, row.account_id, auth.userId, "inspection_reopened",
+    `Reopened the ${INSPECTION_KINDS[row.kind]?.label.toLowerCase() || ""} inspection${
+      row.unit ? ` of unit ${row.unit}` : ""} to change it: ${reason}`);
+  const after = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(row.id).first();
+  return c.json({ ...inspectionRowToJs(after),
+    rooms: await inspectionRooms(c.env.DB, row.id, { drafts: true }),
+    reopens: await inspectionReopens(c.env.DB, row.id) });
+});
+
 // The header fields, and finishing.
 //
-// FINISHED IS A ONE-WAY DOOR, which is the point of it: an inspection is
+// FINISHED SHUTS THE RECORD, which is the point of it: an inspection is
 // evidence in a deposit argument months later, and a record that can be
 // edited after the fact is one the other side can say was edited after the
-// fact. Everything stays readable; nothing stays writable.
+// fact. Everything stays readable; nothing stays writable -- until somebody
+// REOPENS it through the route above, which records who, when and why, and
+// is the only way back to a draft.
 app.patch("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));

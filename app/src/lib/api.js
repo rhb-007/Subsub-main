@@ -314,6 +314,7 @@ export const api = {
   createInspection: (body) => request("/inspections", { method: "POST", body: JSON.stringify(body) }),
   getInspection: (id) => request(`/inspections/${id}`),
   patchInspection: (id, body) => request(`/inspections/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  reopenInspection: (id, reason) => request(`/inspections/${id}/reopen`, { method: "POST", body: JSON.stringify({ reason }) }),
   removeInspection: (id) => request(`/inspections/${id}`, { method: "DELETE" }),
   addInspectionRoom: (id, name) =>
     request(`/inspections/${id}/rooms`, { method: "POST", body: JSON.stringify({ name }) }),

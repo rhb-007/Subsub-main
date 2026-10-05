@@ -318,7 +318,13 @@ try {
     // four -- so what must go up is the count of PANELS, not of grids. The
     // assertion below is what keeps that honest: a new audience either goes
     // through an existing panel, or it earns a mount here.
-    t.ck("mounted wherever a set of photos is shown", uses === 4, String(uses));
+    //
+    // FIVE since the dashboard's job details: a manager reading what a row is
+    // before pressing Assign sees the report's photos and the inspection's,
+    // and that is a new PANEL rather than a new grid -- it reads a job, not a
+    // work order or an invite, so it cannot go through JobInspection and it
+    // earns its own mount, exactly as the line above says a new audience must.
+    t.ck("mounted wherever a set of photos is shown", uses === 5, String(uses));
     // ONE INSPECTION PANEL, TWO AUDIENCES. The work order's holder reads it by
     // work order and a company being ASKED to price reads it by invite,
     // pre-award, narrowed by the server to their own trade. A second copy for

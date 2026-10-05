@@ -190,6 +190,30 @@ try {
       `${s} ${jobOf(db, "job_1").trades}`);
   }
 
+  // A TRADE TAKEN OFF TAKES ITS OPEN QUESTIONS WITH IT. Roofing has nobody
+  // booked, an open quote request and an open overflow post; a SECOND quote
+  // request on plumbing, which stays, is the row that tells "close the
+  // dropped trade's" from "close everything on the job".
+  console.log("\n-- taking an unbooked trade off --");
+  {
+    const { db, env } = seed();
+    db.exec(`
+      INSERT INTO quote_requests(id,account_id,job_id,trade,status) VALUES
+        ('qr_roof','acc_pm','job_1','roofing','open'),
+        ('qr_plumb','acc_pm','job_1','plumbing','open');
+      INSERT INTO overflow_posts(id,account_id,job_id,trade,status,expires_at) VALUES
+        ('op_roof','acc_pm','job_1','roofing','open','2099-01-01');`);
+    const [s, b] = await json(await patch(env, "/api/jobs/job_1", { trades: ["plumbing"] }));
+    ck("the unbooked trade comes off", s === 200 && jobOf(db, "job_1").trades === '["plumbing"]',
+      `${s} ${JSON.stringify(b)} ${jobOf(db, "job_1").trades}`);
+    const st = (t, id) => db.prepare(`SELECT status FROM ${t} WHERE id = ?`).get(id)?.status;
+    ck("its open quote request is closed", st("quote_requests", "qr_roof") === "cancelled", st("quote_requests", "qr_roof"));
+    ck("its overflow post is withdrawn", st("overflow_posts", "op_roof") === "cancelled", st("overflow_posts", "op_roof"));
+    ck("and the trade that stays keeps its own", st("quote_requests", "qr_plumb") === "open", st("quote_requests", "qr_plumb"));
+    const feed = db.prepare(`SELECT text FROM activity WHERE account_id = 'acc_pm' AND kind = 'job_trades_removed'`).get();
+    ck("the feed names what came off", /Roofing/.test(feed?.text || ""), feed?.text);
+  }
+
   console.log("\n-- what it refuses, by name --");
   {
     const { db, env } = seed();
