@@ -44,11 +44,12 @@ const FOOTER_PAGES = readdirSync(root)
   .filter((f) => read(f).includes('<footer class="site">'))
   .sort();
 
-// The four audience pages, which get a link in the body as well: a footer link
+// The five audience pages, which get a link in the body as well: a footer link
 // is how a crawler finds a section, a link with real anchor text next to
 // relevant copy is how a reader does.
 const AUDIENCE = ["for-general-contractors.html", "for-property-managers.html",
-  "for-building-owners.html", "for-portfolio-managers.html"];
+  "for-building-owners.html", "for-portfolio-managers.html",
+  "for-subcontractors.html"];
 
 const footerOf = (html) => {
   const a = html.indexOf('<footer class="site">');

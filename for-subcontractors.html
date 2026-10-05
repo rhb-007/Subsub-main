@@ -5,8 +5,8 @@
 <meta charset="utf-8">
 <meta name="build" content="v12 2026-09-18 22:19 UTC">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Book a Demo — 30-Minute Walkthrough | SubSub</title>
-<meta name="description" content="Book a 30-minute SubSub demo using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.">
+<title>Compliance Pack & Job Schedule for Subcontractors | SubSub</title>
+<meta name="description" content="Keep your certificate of insurance, bond and W-9 in one live compliance pack, send it to whoever asks, and see every client's jobs in one schedule. Free for subcontractors.">
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
@@ -289,6 +289,12 @@ footer.site{background:var(--ink);color:#8FA79B;padding:44px 0;font-size:14.5px}
   *{transition:none !important;animation:none !important}
   html{scroll-behavior:auto}
 }
+  @media (max-width:560px){
+    .aw-url{max-width:none;width:100%;margin-left:0;order:3}
+    .aw-chrome{flex-wrap:wrap}
+    .s-row{grid-template-columns:1fr;gap:7px}
+    .s-row .chip{justify-self:start}
+  }
 .foot-legal{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
   margin-top:30px;padding-top:20px;border-top:1px solid rgba(255,255,255,.12);font-size:13.5px}
 .foot-legal-links{display:flex;gap:20px;flex-wrap:wrap}
@@ -342,48 +348,65 @@ body.nav-open{overflow:hidden}
   .cta-row{flex-direction:column;align-items:stretch}
   .cta-row .btn{width:100%;justify-content:center}
 }
+  .all-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:26px 28px;margin-top:40px}
+  .all-item h3{font-size:17px;letter-spacing:-.02em}
+  .all-item p{margin-top:8px;font-size:14.5px;color:var(--muted);line-height:1.55}
+  .all-item{padding-top:16px;border-top:2px solid var(--forest)}
+  @media (max-width:900px){.all-grid{grid-template-columns:1fr 1fr;gap:22px 24px}}
+  @media (max-width:600px){.all-grid{grid-template-columns:1fr}}
 </style>
 <style>
-  .dgrid{display:grid;grid-template-columns:.9fr 1.1fr;gap:48px;align-items:start;
-    padding-top:52px;padding-bottom:88px}
-  .agenda{list-style:none;margin:26px 0 0;padding:0;display:flex;flex-direction:column;gap:0}
-  .agenda li{display:grid;grid-template-columns:auto 1fr;gap:14px;padding:15px 0;border-bottom:1px solid var(--rule)}
-  .agenda li:first-child{border-top:1px solid var(--rule)}
-  .agenda .m{font:600 13px Inter;color:var(--muted);padding-top:2px;white-space:nowrap}
-  .agenda b{display:block;font-size:15.5px;font-weight:600}
-  .agenda p{font-size:14px;color:var(--muted);margin-top:3px;line-height:1.5}
-  .bk-steps{display:flex;gap:0;border:1px solid var(--rule);border-radius:9px;overflow:hidden;
-    margin-bottom:22px}
-  .bk-step{flex:1;padding:11px 12px;font-size:13px;font-weight:600;color:var(--muted);
-    background:var(--bone);border-right:1px solid var(--rule);text-align:center}
-  .bk-step:last-child{border-right:0}
-  .bk-step[data-on]{background:#fff;color:var(--ink)}
-  .bk-back{display:inline-flex;align-items:center;gap:7px;background:none;border:0;padding:0 0 14px;
-    font:600 14px Inter,sans-serif;color:var(--forest-lift);cursor:pointer}
-  .bk-back:hover{text-decoration:underline;text-underline-offset:3px}
-  .bk-chosen{display:flex;align-items:center;gap:10px;background:#f1f6f3;border:1.5px solid var(--forest);
-    border-radius:9px;padding:13px 15px;font-size:15px;margin-bottom:22px}
-  .bk-chosen b{font-weight:700}
-  .picked{display:flex;align-items:center;gap:10px;background:#F1F6F3;border:1.5px solid var(--forest);
-    border-radius:8px;padding:13px 15px;font-size:15px;margin-top:16px}
-  .picked b{font-weight:600}
-  @media (max-width:1000px){.dgrid{grid-template-columns:1fr;gap:40px;padding-top:40px;padding-bottom:64px}}
+  .snap{background:#fff;border-radius:12px;overflow:hidden;color:var(--ink)}
+  .aw-chrome{display:flex;align-items:center;gap:11px;padding:13px 16px;
+    background:var(--bone);border-bottom:1px solid var(--rule)}
+  .aw-mark{width:26px;height:26px;border-radius:7px;background:var(--forest);color:#fff;
+    display:grid;place-items:center;flex:none;font:700 10.5px/1 Inter,sans-serif;letter-spacing:.02em}
+  .aw-brand{font-family:'Bricolage Grotesque';font-weight:700;font-size:15.5px;
+    letter-spacing:-.02em;color:var(--ink)}
+  .aw-url{margin-left:auto;display:flex;align-items:center;gap:6px;background:#fff;
+    border:1px solid var(--rule);border-radius:20px;padding:5px 12px;
+    font-size:12px;color:var(--muted);max-width:62%;overflow:hidden}
+  .aw-url svg{flex:none;color:var(--forest-lift)}
+  .aw-url b{font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .snap-hd{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+    padding:15px 16px 10px}
+  .snap-hd b{font-family:'Bricolage Grotesque';font-size:13px;letter-spacing:-.01em;color:var(--ink)}
+  .snap-hd span{font-size:12px;color:var(--muted)}
+  .s-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;
+    padding:11px 16px;border-top:1px solid var(--rule)}
+  .s-name{font-size:14.5px;font-weight:600;letter-spacing:-.01em;color:var(--ink)}
+  .s-meta{font-size:12px;color:var(--muted);margin-top:2px}
+  .chip{font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px;white-space:nowrap}
+  .c-live{background:#E7F1EA;color:#1B5E41}
+  .c-review{background:#FBF0DC;color:#8A5A12}
+  .c-block{background:#FAEAE5;color:#9B3A22}
+  .c-invite{background:#EEF1F3;color:#54646E}
+  .aw-note{display:flex;align-items:center;gap:9px;padding:12px 16px;
+    border-top:1px solid var(--rule);background:var(--bone);font-size:12px;color:var(--muted)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--gold);flex:none}
+  .flowlist{counter-reset:f;list-style:none;margin:40px 0 0;padding:0}
+  .flowlist li{counter-increment:f;display:grid;grid-template-columns:44px 1fr;gap:20px;
+    padding:24px 0;border-top:1px solid var(--rule)}
+  .flowlist li:last-child{border-bottom:1px solid var(--rule)}
+  .flowlist li::before{content:counter(f);font:700 15px 'Bricolage Grotesque';color:var(--gold-dk);padding-top:3px}
+  .flowlist h3{font-size:19px;letter-spacing:-.02em}
+  .flowlist p{margin-top:7px;font-size:15.5px;color:var(--muted);line-height:1.55;max-width:62ch}
 </style>
-<link rel="canonical" href="https://subsub.work/book-a-demo.html">
+<link rel="canonical" href="https://subsub.work/for-subcontractors.html">
 <meta name="robots" content="index,follow">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="SubSub">
-<meta property="og:title" content="Book a Demo — 30-Minute Walkthrough | SubSub">
-<meta property="og:description" content="Book a 30-minute SubSub demo using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.">
-<meta property="og:url" content="https://subsub.work/book-a-demo.html">
+<meta property="og:title" content="Compliance Pack & Job Schedule for Subcontractors | SubSub">
+<meta property="og:description" content="Keep your certificate of insurance, bond and W-9 in one live compliance pack, send it to whoever asks, and see every client's jobs in one schedule. Free for subcontractors.">
+<meta property="og:url" content="https://subsub.work/for-subcontractors.html">
 <meta property="og:image" content="https://subsub.work/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="https://subsub.work/og-image.png">
-<meta name="twitter:title" content="Book a Demo — 30-Minute Walkthrough | SubSub">
-<meta name="twitter:description" content="Book a 30-minute SubSub demo using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.">
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://subsub.work/#org","name":"SubSub","legalName":"SubSub, LLC","url":"https://subsub.work/","logo":"https://subsub.work/index.html","email":"legal@subsub.work","address":{"@type":"PostalAddress","streetAddress":"4616 25th Ave NE","addressLocality":"Seattle","addressRegion":"WA","postalCode":"98105","addressCountry":"US"}},{"@type":"SoftwareApplication","@id":"https://subsub.work/#software","name":"SubSub","applicationCategory":"BusinessApplication","operatingSystem":"Web browser","description":"Contractor management software for onboarding subcontractors, verifying insurance, bonds and state licenses, scheduling crews and issuing work orders.","url":"https://subsub.work/","publisher":{"@id":"https://subsub.work/#org"},"offers":[{"@type":"Offer","name":"Basic","price":"0","priceCurrency":"USD","description":"Free for up to 3 subcontractors, 1 user and 5 jobs per month."},{"@type":"Offer","name":"Scale","price":"99","priceCurrency":"USD","description":"Unlimited subcontractors, users and jobs, plus your own branding. $990 per year paid annually."}]},{"@type":"WebPage","@id":"https://subsub.work/book-a-demo.html","url":"https://subsub.work/book-a-demo.html","name":"Book a Demo \u2014 30-Minute Walkthrough | SubSub","description":"Book a 30-minute SubSub demo using your own trades and insurance requirements. See onboarding, document approval, scheduling and work orders.","isPartOf":{"@id":"https://subsub.work/#software"},"publisher":{"@id":"https://subsub.work/#org"}}]}</script>
+<meta name="twitter:title" content="Compliance Pack & Job Schedule for Subcontractors | SubSub">
+<meta name="twitter:description" content="Keep your certificate of insurance, bond and W-9 in one live compliance pack, send it to whoever asks, and see every client's jobs in one schedule. Free for subcontractors.">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://subsub.work/#org","name":"SubSub","legalName":"SubSub, LLC","url":"https://subsub.work/","logo":"https://subsub.work/index.html","email":"legal@subsub.work","address":{"@type":"PostalAddress","streetAddress":"4616 25th Ave NE","addressLocality":"Seattle","addressRegion":"WA","postalCode":"98105","addressCountry":"US"}},{"@type":"SoftwareApplication","@id":"https://subsub.work/#software","name":"SubSub","applicationCategory":"BusinessApplication","operatingSystem":"Web browser","description":"Contractor management software for onboarding subcontractors, verifying insurance, bonds and state licenses, scheduling crews and issuing work orders.","url":"https://subsub.work/","publisher":{"@id":"https://subsub.work/#org"},"offers":[{"@type":"Offer","name":"Basic","price":"0","priceCurrency":"USD","description":"Free for up to 3 subcontractors, 1 user and 5 jobs per month."},{"@type":"Offer","name":"Scale","price":"99","priceCurrency":"USD","description":"Unlimited subcontractors, users and jobs, plus your own branding. $990 per year paid annually."}]},{"@type":"WebPage","@id":"https://subsub.work/for-subcontractors.html","url":"https://subsub.work/for-subcontractors.html","name":"Compliance Pack & Job Schedule for Subcontractors | SubSub","description":"Keep your certificate of insurance, bond and W-9 in one live compliance pack, send it to whoever asks, and see every client's jobs in one schedule. Free for subcontractors.","isPartOf":{"@id":"https://subsub.work/#software"},"publisher":{"@id":"https://subsub.work/#org"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://subsub.work/"},{"@type":"ListItem","position":2,"name":"For subcontractors","item":"https://subsub.work/for-subcontractors.html"}]}]}</script>
 </head>
 <body>
 
@@ -395,7 +418,7 @@ body.nav-open{overflow:hidden}
       <a href="index.html#lifecycle">Platform</a>
       <a href="index.html#who">Who it's for</a>
       <a href="pricing.html">Pricing</a>
-      <a href="book-a-demo.html" aria-current="page">Book a demo</a>
+      <a href="book-a-demo.html">Book a demo</a>
       <a href="https://app.subsub.work">Sign in</a>
       <a href="pricing.html" class="keep btn btn-gold btn-sm">Get started</a>
     </nav>
@@ -403,120 +426,163 @@ body.nav-open{overflow:hidden}
 </header>
 
 <main>
-  <div class="wrap dgrid">
 
-    <div>
-      <h1 class="h-lg" style="max-width:18ch">Book a demo.</h1>
-      <p class="lede">Thirty minutes, screen shared, using your trades and your insurance
-        requirements rather than a canned demo. If SubSub isn't a fit we'll say so.</p>
-
-      <ul class="agenda">
-        <li><span class="m">0–5 min</span>
-          <div><b>What you're dealing with now</b>
-            <p>How many subs, how you track certificates today, what breaks.</p></div></li>
-        <li><span class="m">5–20 min</span>
-          <div><b>The demo</b>
-            <p>Onboarding a sub, approving their documents, creating a job and issuing work orders
-              to a crew.</p></div></li>
-        <li><span class="m">20–30 min</span>
-          <div><b>Your requirements</b>
-            <p>We set up your actual coverage limits and trades so you can see it with your own
-              numbers in it.</p></div></li>
-      </ul>
-
-      <p class="fine" style="margin-top:24px">Prefer to just try it? Basic is free for up to three
-        subcontractors — <a href="pricing.html" style="color:var(--forest-lift);font-weight:600">start there</a>.</p>
-    </div>
-
-    <div class="card card-pad-lg">
-      <form id="demoForm">
-        <div class="bk-steps">
-          <span class="bk-step" data-on>1 · Pick a time</span>
-          <span class="bk-step">2 · Your details</span>
-        </div>
-
-        <div id="stepTime">
-          <h2 class="h-md" style="font-size:22px">Pick a time</h2>
-          <p class="fine" style="margin-top:8px">Thirty minutes. Times are shown in your own time zone.</p>
-
-        <div class="cal">
-          <div class="cal-hd">
-            <b id="monthLabel">Month</b>
-            <div class="cal-nav">
-              <button type="button" id="prevM" aria-label="Previous month">‹</button>
-              <button type="button" id="nextM" aria-label="Next month">›</button>
-            </div>
-          </div>
-          <div class="cal-grid" id="dow"></div>
-          <div class="cal-grid" id="days"></div>
-          <div class="slots hide" id="slots"></div>
-          <p class="pick-note hide" id="pickNote"></p>
-        </div>
-        </div>
-
-        <div id="stepDetails" class="hide">
-          <button type="button" class="bk-back" id="bkBack">
-            <span aria-hidden="true">&#8249;</span> Change time
-          </button>
-          <div class="bk-chosen" id="bkChosen"></div>
-
-        <div class="two">
-          <div class="field"><label for="name">Your name</label>
-            <input id="name" autocomplete="name" required></div>
-          <div class="field"><label for="company">Company</label>
-            <input id="company" autocomplete="organization" required></div>
-        </div>
-
-        <div class="two">
-          <div class="field"><label for="email">Work email</label>
-            <input id="email" type="email" autocomplete="email" required></div>
-          <div class="field"><label for="phone">Mobile</label>
-            <input id="phone" type="tel" autocomplete="tel" placeholder="206-555-0100"></div>
-        </div>
-
-        <div class="two">
-          <div class="field"><label for="role">Which best describes your business?</label>
-            <select id="role">
-              <option>General contractor</option>
-              <option>Property manager</option>
-              <option>Building owner</option>
-              <option>Commercial portfolio manager</option>
-              <option>Something else</option>
-            </select>
-          </div>
-          <div class="field"><label for="subs">Subcontractors you use</label>
-            <select id="subs">
-              <option>1–5</option>
-              <option>6–20</option>
-              <option>21–50</option>
-              <option>More than 50</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="field"><label for="notes">Anything you want covered</label>
-          <textarea id="notes" rows="3" placeholder="e.g. we're chasing certificates across 40 vendors and keep missing renewals"></textarea>
-        </div>
-
-          <button class="btn btn-forest btn-lg btn-block" type="submit">Book a demo</button>
-          <p class="fine">We'll email a calendar invite with a video link. No sales sequence.</p>
-        </div>
-      </form>
-
-      <div class="done" id="done">
-        <h2>You're booked.</h2>
-        <p id="doneWhen">We've sent a calendar invite.</p>
-        <ul class="ticks" style="margin-top:20px">
-          <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span>Check your email for the invite and video link.</span></li>
-          <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span>Bring a certificate of insurance from one of your subs if you have one handy — we'll run it through the approval flow live.</span></li>
-        </ul>
+  <section class="phero">
+    <div class="wrap phero-grid">
+      <div>
+        <span class="eyebrow eyebrow-d">For subcontractors</span>
+        <h1 class="h-xl">Send your paperwork once. It stays current.</h1>
+        <p class="lede-d">Every general contractor and property manager asks for the same certificate, bond and W-9, and asks again every time one expires. Keep them in one compliance pack, send it in seconds, and see every client's jobs in one schedule.</p>
         <div class="cta-row">
-          <a class="btn btn-ghost" href="pricing.html">Start free in the meantime</a>
+          <!-- Not "Get started", and not the plans: a subcontractor's account has
+               nothing to buy, and a page of plan limits counted in subcontractors
+               invites the one question this audience cannot be asked — am I about
+               to be charged for sending a certificate. as=subcontractor
+               preselects the kind on the signup form, the same door the licensing
+               pages use. -->
+          <a class="btn btn-gold btn-lg" href="get-started.html?as=subcontractor">Set up your compliance pack</a>
+          <a class="btn btn-ghost-d btn-lg" href="licensing/">What your state requires</a>
+        </div>
+        <p class="fine-d" style="margin-top:20px">Free for subcontractors. No card, no contract, and no licence or documents needed to sign up.</p>
+      </div>
+      <div class="snap shadow-lift">
+        <div class="aw-chrome">
+          <span class="aw-mark">AR</span>
+          <span class="aw-brand">Alder Roofing</span>
+          <span class="aw-url">
+            <svg width="11" height="11" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.2">
+              <rect x="3.5" y="8" width="11" height="7.5" rx="1.5"/><path d="M6 8V6a3 3 0 016 0v2"/>
+            </svg>
+            <b>Compliance pack</b>
+          </span>
+        </div>
+        <div class="snap-hd"><b>4 documents</b><span>Sent to 6 companies · 14 opens</span></div>
+        <div class="s-row"><div><div class="s-name">Certificate of insurance</div><div class="s-meta">GL $2M · expires Apr 12</div></div><span class="chip c-live">On file</span></div>
+        <div class="s-row"><div><div class="s-name">Surety bond</div><div class="s-meta">$15,000 · expires Nov 3</div></div><span class="chip c-review">Renew soon</span></div>
+        <div class="s-row"><div><div class="s-name">W-9</div><div class="s-meta">Does not expire</div></div><span class="chip c-live">On file</span></div>
+        <div class="s-row"><div><div class="s-name">Signed agreement</div><div class="s-meta">Only when a client sends one</div></div><span class="chip c-invite">Optional</span></div>
+        <div class="aw-note"><span class="dot"></span> Renew the bond and everyone you sent it to gets the new one.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="wrap">
+      <h2 class="h-lg" style="max-width:26ch">The same four documents, asked for every week.</h2>
+      <p class="lede">Being good at the work doesn't get you on site. Proving you're covered does, and the proof goes stale the day it's sent.</p>
+      <div class="rows2">
+        <div class="stack"><div class="pain"><span class="mk mk-bad"><svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M4 4l10 10M14 4L4 14"/></svg></span><div><h3>PDFs attached to every email</h3><p>Out of date the moment the policy renews, and nobody on the other end knows it has.</p></div></div>
+          <div class="pain"><span class="mk mk-bad"><svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M4 4l10 10M14 4L4 14"/></svg></span><div><h3>Hunting for the certificate on site</h3><p>A general contractor asks while you're standing in their yard, and it's on a laptop at home.</p></div></div>
+          <div class="pain"><span class="mk mk-bad"><svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M4 4l10 10M14 4L4 14"/></svg></span><div><h3>Your W-9 in somebody's inbox</h3><p>Your taxpayer number, forwarded around an office you've never been to.</p></div></div>
+          <div class="pain"><span class="mk mk-bad"><svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M4 4l10 10M14 4L4 14"/></svg></span><div><h3>Jobs scattered across texts</h3><p>Five clients, five ways of telling you when to turn up, and no one place that says what's next.</p></div></div></div>
+        <div class="stack"><div class="pain"><span class="mk mk-good"><svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M3 9.5l4 4 8-9"/></svg></span><div><h3>A pack that stays current</h3><p>Whoever you send it to sees the carrier, the policy number, the coverage and the live expiry — not a copy from last spring.</p></div></div>
+          <div class="pain"><span class="mk mk-good"><svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M3 9.5l4 4 8-9"/></svg></span><div><h3>Sent in one field, from your phone</h3><p>Type the address of whoever just asked. That's the whole form.</p></div></div>
+          <div class="pain"><span class="mk mk-good"><svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M3 9.5l4 4 8-9"/></svg></span><div><h3>Your W-9 stays out of the link</h3><p>The page says it's on file. Reading it takes an account, so it doesn't travel by email.</p></div></div>
+          <div class="pain"><span class="mk mk-good"><svg width="13" height="13" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M3 9.5l4 4 8-9"/></svg></span><div><h3>Every client's work in one schedule</h3><p>Job requests, times to confirm and what's booked next, across every company you work for.</p></div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec sec-bone">
+    <div class="wrap">
+      <h2 class="h-lg" style="max-width:24ch">From sign-up to on the roof.</h2>
+      <p class="lede">No invitation needed. You don't have to wait for a client to be on SubSub.</p>
+      <ol class="flowlist"><li><div><h3>Sign up as a subcontractor</h3><p>Your company, your trades and where you work. A licence number is asked for later, inside the account, never to sign up.</p></div></li>
+        <li><div><h3>Upload your documents once</h3><p>Certificate of insurance, surety bond and W-9, with the expiry on each. A signed agreement only when a client sends you one.</p></div></li>
+        <li><div><h3>Send the pack to whoever asks</h3><p>From the menu, or hold up your QR code on site. They get a live page rather than an attachment, and it renews when your policy does.</p></div></li>
+        <li><div><h3>Get added to their roster</h3><p>A company that's been sent packs by a few of their subs can add every one of them in a single step — the paperwork is already done.</p></div></li>
+        <li><div><h3>Take the work</h3><p>Accept or decline each job, confirm the time or propose another, and open directions to the address. Photos of the problem come with the work order.</p></div></li></ol>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="wrap">
+      <h2 class="h-lg" style="max-width:26ch">Built for the company doing the work.</h2>
+      <p class="lede">One login, however many companies you work for.</p>
+      <ul class="ticks" style="margin-top:32px;max-width:72ch"><li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span><b>Reminders before anything lapses.</b> Expiry dates are tracked on every policy, and you hear about a renewal before a client does.</span></li>
+        <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span><b>Renewals reach the people you already sent it to.</b> Upload the new certificate and they're sent a fresh link, without you writing to anybody.</span></li>
+        <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span><b>See who opened it.</b> How many companies you've sent your pack to and how many looked.</span></li>
+        <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span><b>Told exactly what to fix.</b> If a client sends a certificate back, you're told which line is wrong and what to ask your agent for — not to start again.</span></li>
+        <li><svg width="19" height="19" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2"><path d="M3 9.5l4 4 8-9"/></svg><span><b>You decide who can find you.</b> Clients who already have your email, mobile or licence number can ask to connect. Turn that off any time.</span></li></ul>
+    </div>
+  </section>
+
+  <section class="sec sec-bone">
+    <div class="wrap">
+      <h2 class="h-lg" style="max-width:30ch">Everything else that comes with it.</h2>
+      <p class="lede" style="max-width:60ch">The pack is why most subcontractors start. The schedule is why they keep it open.</p>
+      <div class="all-grid">
+        <div class="all-item">
+          <h3>Job requests</h3>
+          <p>Each work order arrives with its scope, price and address. Accept or decline it,
+            and ask for a change when the scope is wrong.</p>
+        </div>
+        <div class="all-item">
+          <h3>Scheduling</h3>
+          <p>Confirm the time a client proposed, put forward a different one, or say it doesn't
+            work — in one tap, from your phone.</p>
+        </div>
+        <div class="all-item">
+          <h3>Your calendar</h3>
+          <p>A month view across every client, showing which times are agreed and which are
+            still waiting on a yes.</p>
+        </div>
+        <div class="all-item">
+          <h3>Photos before you price</h3>
+          <p>When a job comes from an inspection, you see the rooms and the photographs of what
+            needs fixing — before you quote and before you load the van.</p>
+        </div>
+        <div class="all-item">
+          <h3>Quotes</h3>
+          <p>Price a job when a client asks for quotes. Nobody else sees your number.</p>
+        </div>
+        <div class="all-item">
+          <h3>Directions</h3>
+          <p>Open the job address in Maps from where you're standing.</p>
+        </div>
+        <div class="all-item">
+          <h3>Lien waivers</h3>
+          <p>When a client asks for one, sign it in SubSub or upload your own state form.</p>
+        </div>
+        <div class="all-item">
+          <h3>Connect requests</h3>
+          <p>When a company asks to work with you, see who they are — how many buildings,
+            where, how much work goes through them — before you say yes.</p>
+        </div>
+        <div class="all-item">
+          <h3>Your QR code</h3>
+          <p>Hold it up on site and the person in front of you has your pack without spelling
+            out an email address on a roof.</p>
         </div>
       </div>
     </div>
+  </section>
 
-  </div>
+  <!-- Into the licensing reference. A footer link is how a crawler finds a
+       section; a link in the body with real anchor text is how a reader does,
+       and this is the question both audiences arrive with. -->
+  <section class="sec sec-bone">
+    <div class="narrow">
+      <h2 class="h-md" style="max-width:26ch">What your state actually requires you to hold.</h2>
+      <p class="lede">Which trades your state licenses, who administers it, and the four documents clients ask for whatever the state says. Sourced and dated, one page per state.</p>
+      <div class="cta-row">
+        <a class="btn btn-ghost" href="licensing/">Contractor licensing by state</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap band-in">
+      <div>
+        <h2 class="h-md">Put your pack together once.</h2>
+        <p>Upload your certificate today, send it to the next person who asks, and stop attaching PDFs.</p>
+      </div>
+      <div class="cta-row" style="margin:0">
+        <a class="btn btn-gold btn-lg" href="get-started.html?as=subcontractor">Set up your compliance pack</a>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <footer class="site">
@@ -562,293 +628,6 @@ body.nav-open{overflow:hidden}
 
 </footer>
 
-<script>
-/* Where the API lives.
-   The marketing site is static and has no build step, so this is the one
-   place the hostname is written down. It must match the subsub-api Worker's
-   own address -- if it does not, the page cannot load times, says so, and
-   offers an email address instead. It does not quietly show made-up hours,
-   which is what it did before. */
-window.SUBSUB_API = window.SUBSUB_API || 'https://api.subsub.work/api';
-</script>
-<script>
-(function(){
-  /* Booking a demo.
-
-     This page used to show eight fixed hours on every weekday, take the
-     form, swap two divs and say "You're booked. We've sent a calendar
-     invite." It sent nothing at all -- no request, no action, not even a
-     mailto. Everybody who used it went away believing a meeting existed.
-
-     So there is one rule here, and the rest of this file serves it: the
-     confirmation screen appears if and only if the server said a booking
-     was created. Every other outcome keeps the form on screen, with what
-     went wrong and what to do about it. */
-
-  var API = window.SUBSUB_API;
-  var TZ = 'America/Los_Angeles';
-  try { TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || TZ; } catch (e) { /* older browser */ }
-
-  var today = new Date(); today.setHours(0,0,0,0);
-  var view = new Date(today.getFullYear(), today.getMonth(), 1);
-  var chosenDay = null;      /* a Date, midnight local */
-  var chosenSlot = null;     /* the exact instant Cal gave us, as an ISO string */
-  var byDay = {};            /* 'YYYY-MM-DD' -> [iso, iso, ...] */
-  var loading = false, loadErr = '';
-  var loadedMonths = {};
-
-  var dowWrap = document.getElementById('dow');
-  ['S','M','T','W','T','F','S'].forEach(function(d){
-    var e = document.createElement('div');
-    e.className = 'cal-dow'; e.textContent = d;
-    e.setAttribute('aria-hidden','true');
-    dowWrap.appendChild(e);
-  });
-
-  function key(d){
-    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-  }
-  function fmtLong(d){
-    return d.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
-  }
-  /* The slot is an instant, so it is shown in the reader's own zone and
-     labelled with it. A demo agreed as "2pm" by somebody three time zones
-     away is the oldest booking bug there is. */
-  function fmtTime(iso){
-    try {
-      return new Date(iso).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
-    } catch (e) { return iso; }
-  }
-  function zoneLabel(){
-    try {
-      var parts = new Intl.DateTimeFormat(undefined,{timeZoneName:'short'}).formatToParts(new Date());
-      for (var i=0;i<parts.length;i++) if (parts[i].type === 'timeZoneName') return parts[i].value;
-    } catch (e) { /* fall through */ }
-    return TZ;
-  }
-
-  function monthRange(v){
-    var first = new Date(v.getFullYear(), v.getMonth(), 1);
-    var last  = new Date(v.getFullYear(), v.getMonth()+1, 0);
-    /* Never ask about days already gone; Cal would only answer nothing. */
-    if (first < today) first = today;
-    return { start: key(first), end: key(last) };
-  }
-
-  function loadMonth(){
-    var mk = view.getFullYear() + '-' + view.getMonth();
-    if (loadedMonths[mk]) return;
-    var r = monthRange(view);
-    if (r.start > r.end) { loadedMonths[mk] = true; render(); return; }
-    loading = true; loadErr = ''; render(); showSlots();
-    fetch(API + '/demo/slots?start=' + r.start + '&end=' + r.end + '&timeZone=' + encodeURIComponent(TZ))
-      .then(function(res){ return res.json().then(function(j){ return { s: res.status, j: j }; }); })
-      .then(function(out){
-        loading = false;
-        if (out.s === 200 && out.j && out.j.slots) {
-          Object.keys(out.j.slots).forEach(function(day){ byDay[day] = out.j.slots[day]; });
-          loadedMonths[mk] = true;
-        } else if (out.s === 503) {
-          /* The key is not set yet. Saying "no times available" would be a
-             lie of the same kind this page used to tell. */
-          loadErr = 'not_configured';
-        } else {
-          loadErr = 'unavailable';
-        }
-        render(); showSlots();
-      })
-      .catch(function(){
-        loading = false; loadErr = 'unavailable'; render(); showSlots();
-      });
-  }
-
-  function bookable(d){
-    if (d < today) return false;
-    return (byDay[key(d)] || []).length > 0;
-  }
-
-  function render(){
-    document.getElementById('monthLabel').textContent =
-      view.toLocaleDateString(undefined,{month:'long',year:'numeric'});
-    var first = new Date(view.getFullYear(), view.getMonth(), 1);
-    var days = new Date(view.getFullYear(), view.getMonth()+1, 0).getDate();
-    var grid = document.getElementById('days');
-    grid.innerHTML = '';
-    for (var i=0;i<first.getDay();i++) grid.appendChild(document.createElement('div'));
-    for (var n=1;n<=days;n++){
-      var d = new Date(view.getFullYear(), view.getMonth(), n);
-      var b = document.createElement('button');
-      b.type='button'; b.className='cal-day'; b.textContent=n;
-      var ok = bookable(d);
-      b.disabled = !ok;
-      if (ok){
-        b.setAttribute('aria-label', fmtLong(d));
-        b.setAttribute('aria-pressed', chosenDay && d.getTime()===chosenDay.getTime() ? 'true':'false');
-        b.addEventListener('click', (function(dd){ return function(){
-          chosenDay = dd; chosenSlot = null; render(); showSlots();
-        };})(d));
-      }
-      grid.appendChild(b);
-    }
-    var atStart = view.getFullYear()===today.getFullYear() && view.getMonth()===today.getMonth();
-    document.getElementById('prevM').disabled = atStart;
-  }
-
-  function showSlots(){
-    var wrap = document.getElementById('slots');
-    var note = document.getElementById('pickNote');
-    note.classList.remove('hide');
-
-    if (loading){
-      wrap.classList.add('hide');
-      note.textContent = 'Finding times…';
-      return;
-    }
-    if (loadErr === 'not_configured'){
-      wrap.classList.add('hide');
-      note.innerHTML = 'Online booking isn\u2019t switched on yet. Email '
-        + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a> '
-        + 'and we\u2019ll set a time by hand.';
-      return;
-    }
-    if (loadErr){
-      wrap.classList.add('hide');
-      note.innerHTML = 'We couldn\u2019t load available times just now. Try again in a moment, or email '
-        + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a>.';
-      return;
-    }
-    if (!chosenDay){
-      wrap.classList.add('hide');
-      var any = Object.keys(byDay).some(function(k){ return byDay[k].length; });
-      note.textContent = any ? 'Pick a day with times available.'
-        : 'No times free this month — try the next one.';
-      return;
-    }
-
-    var list = byDay[key(chosenDay)] || [];
-    wrap.classList.remove('hide'); wrap.innerHTML='';
-    list.forEach(function(iso){
-      var b=document.createElement('button');
-      b.type='button'; b.className='slot'; b.textContent=fmtTime(iso);
-      b.setAttribute('data-start', iso);
-      b.setAttribute('aria-pressed', chosenSlot===iso ? 'true':'false');
-      b.addEventListener('click', function(){ chosenSlot=iso; showSlots(); toStep(2); });
-      wrap.appendChild(b);
-    });
-    note.innerHTML = chosenSlot
-      ? 'Booking <b>' + fmtLong(chosenDay) + ' at ' + fmtTime(chosenSlot) + '</b>, ' + zoneLabel() + '.'
-      : 'Pick a time on <b>' + fmtLong(chosenDay) + '</b>. Times are in ' + zoneLabel() + '.';
-  }
-
-  function toStep(n){
-    var a=document.getElementById('stepTime'), b=document.getElementById('stepDetails');
-    var tabs=document.querySelectorAll('.bk-step');
-    if(n===2){
-      a.classList.add('hide'); b.classList.remove('hide');
-      tabs[0].removeAttribute('data-on'); tabs[1].setAttribute('data-on','');
-      document.getElementById('bkChosen').innerHTML =
-        '<svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="#1B4835" stroke-width="2.2">'
-        + '<path d="M3 9.5l4 4 8-9"/></svg><span><b>' + fmtLong(chosenDay) + ' at ' + fmtTime(chosenSlot)
-        + '</b> \u00b7 30 minutes, ' + zoneLabel() + '</span>';
-    } else {
-      b.classList.add('hide'); a.classList.remove('hide');
-      tabs[1].removeAttribute('data-on'); tabs[0].setAttribute('data-on','');
-    }
-    var card=document.querySelector('.card');
-    if(card) card.scrollIntoView({block:'start',behavior:'smooth'});
-  }
-  document.getElementById('bkBack').addEventListener('click', function(){ toStep(1); });
-
-  document.getElementById('prevM').addEventListener('click', function(){
-    view = new Date(view.getFullYear(), view.getMonth()-1, 1);
-    chosenDay = null; chosenSlot = null; render(); showSlots(); loadMonth();
-  });
-  document.getElementById('nextM').addEventListener('click', function(){
-    view = new Date(view.getFullYear(), view.getMonth()+1, 1);
-    chosenDay = null; chosenSlot = null; render(); showSlots(); loadMonth();
-  });
-
-  /* Said where the person is looking, not in a console. */
-  function submitErr(msg){
-    var el = document.getElementById('bookErr');
-    if (!el){
-      el = document.createElement('p');
-      el.id = 'bookErr'; el.className = 'fine'; el.setAttribute('role','alert');
-      el.style.color = '#B3261E'; el.style.fontWeight = '600';
-      var btn = document.querySelector('#stepDetails button[type=submit]');
-      btn.parentNode.insertBefore(el, btn.nextSibling);
-    }
-    el.innerHTML = msg;
-  }
-
-  document.getElementById('demoForm').addEventListener('submit', function(e){
-    e.preventDefault();
-    if(!chosenDay || !chosenSlot){ toStep(1); return; }
-    var need=['name','company','email'];
-    for(var i=0;i<need.length;i++){
-      var el=document.getElementById(need[i]);
-      if(!el.value.trim()){ el.focus(); return; }
-    }
-    var btn = document.querySelector('#stepDetails button[type=submit]');
-    var label = btn.textContent;
-    btn.disabled = true; btn.textContent = 'Booking…';
-    submitErr('');
-
-    var val = function(id){ var e2=document.getElementById(id); return e2 ? e2.value.trim() : ''; };
-    fetch(API + '/demo/book', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        start: chosenSlot, timeZone: TZ,
-        name: val('name'), company: val('company'), email: val('email'),
-        phone: val('phone'), role: val('role'), subs: val('subs'), notes: val('notes')
-      })
-    })
-      .then(function(res){ return res.json().catch(function(){ return {}; })
-        .then(function(j){ return { s: res.status, j: j }; }); })
-      .then(function(out){
-        btn.disabled = false; btn.textContent = label;
-        /* The only branch that may show the confirmation. */
-        if (out.s === 201 && out.j && out.j.booked){
-          document.getElementById('doneWhen').innerHTML =
-            'We\u2019ve sent a calendar invite to <b>' + val('email') +
-            '</b> for <b>' + fmtLong(chosenDay) + ' at ' + fmtTime(chosenSlot) + '</b>, ' + zoneLabel() + '.';
-          document.getElementById('demoForm').classList.add('hide');
-          document.getElementById('done').classList.add('on');
-          return;
-        }
-        if (out.s === 409){
-          /* Somebody took it while this form was being filled in. "Try
-             again" would be wrong advice; the time is gone. */
-          delete loadedMonths[view.getFullYear() + '-' + view.getMonth()];
-          chosenSlot = null;
-          submitErr('That time was taken while you were filling this in. Pick another one.');
-          toStep(1); loadMonth();
-          return;
-        }
-        if (out.s === 503){
-          submitErr('Online booking isn\u2019t switched on yet. Email '
-            + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a> and we\u2019ll set a time by hand.');
-          return;
-        }
-        if (out.s === 429){
-          submitErr('That\u2019s a lot of attempts from this connection. Wait a few minutes, or email '
-            + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a>.');
-          return;
-        }
-        submitErr('We couldn\u2019t book that just now \u2014 nothing has been sent. Try again, or email '
-          + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a>.');
-      })
-      .catch(function(){
-        btn.disabled = false; btn.textContent = label;
-        submitErr('We couldn\u2019t reach SubSub \u2014 nothing has been sent. Check your connection and try again, or email '
-          + '<a href="mailto:hello@subsub.work?subject=Demo%20request">hello@subsub.work</a>.');
-      });
-  });
-
-  render(); showSlots(); loadMonth();
-})();
-</script>
 <script>
 (function(){
   var t=document.getElementById('navToggle'), n=document.getElementById('siteNav');

@@ -16,6 +16,7 @@ external requests are Google Fonts.
 | `for-property-managers.html` | `/for-property-managers` | Property manager landing page |
 | `for-building-owners.html` | `/for-building-owners` | Building owner landing page |
 | `for-portfolio-managers.html` | `/for-portfolio-managers` | Portfolio manager landing page |
+| `for-subcontractors.html` | `/for-subcontractors` | Subcontractor landing page |
 | `privacy-policy.html` | `/privacy-policy` | Privacy Policy |
 | `terms-of-use.html` | `/terms-of-use` | Terms of Use |
 | `404.html` | — | Not-found page |
