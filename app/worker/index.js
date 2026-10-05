@@ -11880,6 +11880,8 @@ app.get("/api/releases/:id/waiver-state", requireRole("admin", "pm"), async (c) 
   if (!r) return c.json({ error: "not_found" }, 404);
   const { wo, error } = await loadWorkOrder(c, r.work_order_id);
   if (error) return error;
+  // A Basic account cannot ask for a waiver, so nothing is outstanding on one.
+  if (!(await payingAccountOnScale(c.env, accountId))) return c.json({ clear: true, reasons: [], onScale: false });
   return c.json(await waiverStateFor(c, { wo, release: r }));
 });
 
@@ -11901,6 +11903,25 @@ app.get("/api/releases/:id/waiver-state", requireRole("admin", "pm"), async (c) 
 // which.
 
 const waiverMigration = () => ({ error: "migration_needed", migration: "069_waiver_forms" });
+
+// LIEN WAIVERS ARE SCALE, BECAUSE THEY BELONG TO PAYMENTS AND PAYING IS SCALE.
+// A waiver is only ever for a payment, and moving money through SubSub is the
+// Scale plan. Read off the PAYING account -- the one that asks -- and never off
+// the subcontractor's, whose own plan has nothing to do with it.
+//
+// Three consequences, each deliberate. Asking, re-sending and recording a copy
+// are refused with `scale_required`. The payment gate does NOT demand a waiver
+// of an account that cannot ask for one: holding a Basic account's cheque over
+// a feature it does not have would make every payment an override. And a
+// waiver already asked for stays signable and withdrawable after a downgrade,
+// because the subcontractor's signature is their act and taking a request back
+// costs nobody anything.
+async function payingAccountOnScale(env, accountId) {
+  const a = await env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  return accountOnScale(a);
+}
+const scaleRequired = (c) => c.json({ error: "scale_required",
+  detail: "Lien waivers and paying subcontractors through SubSub are part of the Scale plan." }, 403);
 
 async function sha256Bytes(buf) {
   const d = await crypto.subtle.digest("SHA-256", buf);
@@ -12013,13 +12034,15 @@ app.get("/api/releases/:id/waivers", requireRole("admin", "pm"), async (c) => {
         lowerTierTotal: kids.length,
       }));
     }
+    const onScale = await payingAccountOnScale(c.env, accountId);
     return c.json({
+      onScale,
       forms: formsFor(ctx.state), state: ctx.state, paid: ctx.paid, isFinal: ctx.isFinal,
       suggestedKind: ctx.suggestedKind, claimant: company?.company || null,
       claimantEmail: company?.email || null, amountCents: r.net_cents,
       throughDate: String(r.created_at || "").slice(0, 10) || dayKeyUtc(),
       waivers,
-      chain: await waiverStateFor(c, { wo, release: r }),
+      chain: onScale ? await waiverStateFor(c, { wo, release: r }) : { clear: true, reasons: [], onScale: false },
     });
   } catch (err) {
     const m = missingSchema(err);
@@ -12037,6 +12060,7 @@ app.post("/api/releases/:id/waiver", requireRole("admin", "pm"), async (c) => {
   if (r.status === "void") return c.json({ error: "release_void" }, 409);
   const { error } = await loadWorkOrder(c, r.work_order_id);
   if (error) return error;
+  if (!(await payingAccountOnScale(c.env, accountId))) return scaleRequired(c);
   const b = await c.req.json().catch(() => ({}));
   const ctx = await releaseWaiverContext(c, r);
 
@@ -12135,6 +12159,7 @@ app.post("/api/waivers/:id/resend", requireRole("admin", "pm"), async (c) => {
       .bind(c.req.param("id"), accountId).first();
     if (!w) return c.json({ error: "not_found" }, 404);
     if (w.status !== "requested") return c.json({ error: "already_answered" }, 409);
+    if (!(await payingAccountOnScale(c.env, accountId))) return scaleRequired(c);
     const f = await loadWaiverForm(c.env, w.id);
     const account = await c.env.DB.prepare(`SELECT name FROM accounts WHERE id = ?`).bind(accountId).first();
     const parties = parseJson(f?.parties, {});
@@ -12371,6 +12396,7 @@ app.put("/api/waivers/:id/file/:fileName", requireRole("admin", "pm"), async (c)
     const w = await c.env.DB.prepare(`SELECT * FROM lien_waivers WHERE id = ? AND account_id = ? AND tier = 0`)
       .bind(c.req.param("id"), accountId).first();
     if (!w) return c.json({ error: "not_found" }, 404);
+    if (!(await payingAccountOnScale(c.env, accountId))) return scaleRequired(c);
     return await signByUpload(c, w, { fileName: c.req.param("fileName"), side: "recipient",
       who: { userId, name: null, email: null } });
   } catch (err) {
@@ -12639,7 +12665,8 @@ app.post("/api/releases/:id/settle", requireRole("admin", "pm"), async (c) => {
       payload: { releaseId: r.id, reason: whyCover, cover } });
   }
 
-  const chain = await waiverStateFor(c, { wo, release: r });
+  const chain = (await payingAccountOnScale(c.env, r.account_id))
+    ? await waiverStateFor(c, { wo, release: r }) : { clear: true, reasons: [], onScale: false };
   if (!chain.clear && !b.override) {
     return c.json({ error: "waiver_outstanding", ...chain }, 409);
   }
@@ -12757,6 +12784,7 @@ app.get("/api/work-orders/:id/funding", requireRole("admin", "pm"), async (c) =>
     return c.json({
       ...money,
       configured: !!c.env.STRIPE_SECRET_KEY,
+      onScale: await payingAccountOnScale(c.env, wo.account_id),
       // The payee's STATUS and nothing else about them. Which requirements
       // Stripe is still asking of a subcontractor is between Stripe and the
       // subcontractor; the hiring account needs to know only whether money
@@ -12791,6 +12819,11 @@ app.post("/api/work-orders/:id/fund", requireRole("admin"), async (c) => {
   const { wo, error } = await loadWorkOrder(c, c.req.param("id"));
   if (error) return error;
   const { accountId, userId } = c.get("auth");
+  // PAYING SUBCONTRACTORS THROUGH SUBSUB IS SCALE, and this is the door the
+  // money comes in by, so it is where that is enforced. Only here: paying out
+  // money already funded, and refunding it, stay open after a downgrade --
+  // money that is in must always have a way out, to the subcontractor or back.
+  if (!(await payingAccountOnScale(c.env, accountId))) return scaleRequired(c);
 
   const b = await c.req.json().catch(() => ({}));
   const amount = Math.round(Number(b.amountCents) || 0);
@@ -12961,7 +12994,8 @@ app.post("/api/releases/:id/pay", requireRole("admin"), async (c) => {
     await woEvent(c, { workOrderId: wo.id, milestoneId: r.milestone_id, kind: "release.cover_override",
       payload: { releaseId: r.id, reason: whyCover, cover } });
   }
-  const chain = await waiverStateFor(c, { wo, release: r });
+  const chain = (await payingAccountOnScale(c.env, r.account_id))
+    ? await waiverStateFor(c, { wo, release: r }) : { clear: true, reasons: [], onScale: false };
   if (!chain.clear && !b.override) return c.json({ error: "waiver_outstanding", ...chain }, 409);
   if (!chain.clear) {
     const why = String(b.overrideReason || "").trim().slice(0, 500);

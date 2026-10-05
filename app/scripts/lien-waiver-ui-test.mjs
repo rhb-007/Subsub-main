@@ -374,6 +374,35 @@ try {
     t.ck("and it says why, naming the state", /California sets the exact wording/.test(r.why), r.why);
     await ctx.close();
   }
+
+  console.log("\n-- on Basic, the panel says Scale and offers nothing the server refuses --");
+  {
+    RELEASE_WAIVERS = { ...RELEASE_WAIVERS, onScale: false, state: "WA", waivers: [],
+      forms: { state: "WA", statutory: false, sources: ["subsub_standard", "uploaded"] } };
+    const { ctx, page } = await visitApp(browser, { host: "alder", webPort: WEB,
+      seat: { userId: "usr_a", accountId: "acc_gc" }, viewport: { width: 1340, height: 1500 } });
+    await wait(2600);
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^Jobs/i.test((b.innerText || "").trim()))?.click());
+    await wait(900);
+    await page.evaluate(() => document.querySelector(".ta-wo-link")?.click());
+    await wait(1400);
+    const opened = await page.evaluate(() => { const b = [...document.querySelectorAll(".modal .wop-row-acts button")]
+      .find((x) => /Lien waiver/.test(x.innerText)); b?.click(); return !!b; });
+    await wait(900);
+    const r = await page.evaluate(() => ({
+      panel: !!document.querySelector(".wv-release"),
+      plan: document.querySelector(".wv-release .wv-plan")?.innerText || "",
+      ask: [...document.querySelectorAll(".wv-release button")].some((b) => /Ask for a lien waiver/.test(b.innerText)),
+    }));
+    // The panel has to have opened, or "there is no Ask button" passes on a
+    // screen that never rendered.
+    t.ck("the waiver panel opened", opened && r.panel, JSON.stringify({ opened, panel: r.panel }));
+    t.ck("it says lien waivers come with Scale, and where to move", /come with Scale/.test(r.plan)
+      && /Account → Subscription/.test(r.plan), r.plan);
+    t.ck("and offers no request the server would refuse", r.ask === false);
+    await ctx.close();
+  }
 } catch (err) {
   t.ck("the suite ran to the end", false, err?.stack || String(err));
 } finally {

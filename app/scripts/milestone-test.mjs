@@ -31,7 +31,7 @@ const { default: worker } = await import("../worker/index.js");
 // than the whole of 001: if a route reaches for a column that is not here,
 // that is worth knowing.
 const BASE = `
-CREATE TABLE accounts (id TEXT PRIMARY KEY, name TEXT, kind TEXT, company_id TEXT);
+CREATE TABLE accounts (id TEXT PRIMARY KEY, name TEXT, kind TEXT, company_id TEXT, plan TEXT, comped INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, email TEXT, auth_id TEXT);
 -- The document booleans and doc_files, because settling is now gated on cover
 -- as well as on the waiver -- see shared/paygate.js. docShapeWithLegacy reads
@@ -62,7 +62,9 @@ const MIGRATIONS = ["033_job_ledger", "034_retainage", "035_waiver_chain", "036_
 const seed = () => {
   const db = freshDb({ base: BASE, migrations: MIGRATIONS });
   db.exec(`
-    INSERT INTO accounts(id,name,kind) VALUES ('acc1','Outerhome','general_contractor');
+    -- Scale, because the waiver gate below only stands in front of an account
+    -- that can ask for a waiver -- and asking for one is Scale.
+    INSERT INTO accounts(id,name,kind,plan) VALUES ('acc1','Outerhome','general_contractor','scale');
     -- Paperwork in order, so the WAIVER gate is the one these tests are about.
     -- Settling is gated on cover as well now, and it is asked first, so a
     -- company with no documents refuses with cover_outstanding before the

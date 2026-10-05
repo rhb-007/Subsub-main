@@ -483,6 +483,53 @@ try {
     } finally { globalThis.fetch = real; }
   }
 
+  console.log("\n-- on Basic: no waivers, and no gate demanding one --");
+  {
+    // BOTH BRANCHES IN THE SAME PLACE. Everything above ran on Scale; a change
+    // that gated everybody, or nobody, passes one branch and not the other.
+    const { db: d2, env: e2 } = seed();
+    // A waiver asked for while the account was on Scale, before it moved down.
+    let [s, b] = await json(await call(e2, "POST", "/api/releases/rel_wa/waiver", { body: {} }));
+    const earlier = b.waiver?.id;
+    ck("asked for while on Scale", s === 201 && !!earlier, `${s} ${b.error}`);
+    d2.exec(`UPDATE accounts SET plan = 'basic' WHERE id = 'acc_gc'`);
+
+    [s, b] = await json(await call(e2, "POST", "/api/releases/rel_ca/waiver", { body: {} }));
+    ck("a Basic account cannot ask for one", s === 403 && b.error === "scale_required", `${s} ${b.error}`);
+    [s, b] = await json(await call(e2, "POST", `/api/waivers/${earlier}/resend`, { body: {} }));
+    ck("nor send one again", s === 403 && b.error === "scale_required", `${s} ${b.error}`);
+    [s, b] = await json(await call(e2, "GET", "/api/releases/rel_ca/waivers"));
+    ck("the panel is told it is not on Scale", s === 200 && b.onScale === false, `${s} ${b.onScale}`);
+    [s, b] = await json(await call(e2, "GET", "/api/releases/rel_ns/waiver-state"));
+    // Holding a Basic account's cheque over a feature it does not have would
+    // make every payment an override.
+    ck("and nothing is outstanding on it", s === 200 && b.clear === true && b.onScale === false, JSON.stringify(b));
+    [s, b] = await json(await call(e2, "POST", "/api/releases/rel_ns/settle", { body: { method: "check", reference: "9" } }));
+    ck("so recording a payment is not held for a waiver", s === 200 && b.status === "paid", `${s} ${JSON.stringify(b)}`);
+
+    // The subcontractor's act survives the other side's plan, and taking a
+    // request back costs nothing.
+    [s, b] = await json(await call(e2, "POST", `/api/my-waivers/${earlier}/sign`,
+      { who: "u_sub", body: { typedName: "Juan Soto", scopeKind: "labor_only" } }));
+    ck("an earlier request can still be signed", s === 200 && b.ok, `${s} ${b.error}`);
+
+    // Comped is Scale, which is the rule accountOnScale already keeps.
+    d2.exec(`UPDATE accounts SET comped = 1 WHERE id = 'acc_gc'`);
+    [s, b] = await json(await call(e2, "POST", "/api/releases/rel_ca/waiver", { body: {} }));
+    ck("a comped account can ask", s === 201, `${s} ${b.error}`);
+    d2.exec(`UPDATE accounts SET comped = 0 WHERE id = 'acc_gc'`);
+
+    // PAYING THROUGH SUBSUB IS SCALE, enforced where the money comes in. The
+    // Stripe key is set so the plan check is what answers, not the missing key.
+    const real = globalThis.fetch;
+    globalThis.fetch = async (u) => { throw new Error(`unexpected Stripe call: ${u}`); };
+    try {
+      [s, b] = await json(await call({ ...e2, STRIPE_SECRET_KEY: "sk_test_x" }, "POST",
+        "/api/work-orders/wo_wa/fund", { body: { amountCents: 500000 } }));
+    } finally { globalThis.fetch = real; }
+    ck("a Basic account cannot fund a work order", s === 403 && b.error === "scale_required", `${s} ${b.error}`);
+  }
+
   console.log("\n-- what only reading the source can show --");
   {
     const src = readFileSync(join(app, "worker", "index.js"), "utf8");

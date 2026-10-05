@@ -17634,7 +17634,10 @@ function SettleRelease({ release, mode = "record", money, onClose, onDone }) {
           </div>
         )}
 
-        {!chain ? <p className="cov-hint">Checking the waiver…</p> : chain.clear ? (
+        {/* Lien waivers are Scale, and a Basic account has nothing outstanding
+            on one -- so the block is not drawn at all rather than reading
+            "Waiver clear" over a waiver nobody could have asked for. */}
+        {chain?.onScale === false ? null : !chain ? <p className="cov-hint">Checking the waiver…</p> : chain.clear ? (
           <p className="cov-hint"><Check size={12} /> Waiver clear
             {chain.through ? <> through {niceDay(chain.through)}</> : null}
             {chain.lowerTierTotal
@@ -17730,6 +17733,12 @@ function WoFunding({ woId, money: m, canPayOut, suggestCents, onChanged }) {
   // No rail configured: the panel is not here at all, rather than offering an
   // Add funds that answers 501.
   if (!m.configured) return null;
+  // PAYING THROUGH SUBSUB IS SCALE. With nothing funded there is nothing to say
+  // to a Basic account here; with money already in -- an account that moved
+  // down -- the panel stays, because that money must still be able to reach
+  // the subcontractor or come back, and only Add funds goes.
+  const onScale = m.onScale !== false;
+  if (!onScale && !(m.availableCents > 0) && !(m.transferredCents > 0)) return null;
 
   const refund = async () => {
     setBusy("refund"); setErr(""); setSaid("");
@@ -17781,9 +17790,11 @@ function WoFunding({ woId, money: m, canPayOut, suggestCents, onChanged }) {
           route -- and is offered neither button. */}
       {canPayOut && (
         <div className="wof-acts">
-          <button className="btn-solid sm" onClick={() => setFunding(true)}>
-            <Plus size={13} /> Add funds
-          </button>
+          {onScale && (
+            <button className="btn-solid sm" onClick={() => setFunding(true)}>
+              <Plus size={13} /> Add funds
+            </button>
+          )}
           {m.refundableCents > 0 && (
             <button className="pick" disabled={!!busy} onClick={refund}>
               {busy === "refund" ? "Sending back…" : `Send back ${formatMoney(m.refundableCents)}`}
@@ -25831,11 +25842,21 @@ function ReleaseWaivers({ release, onChanged }) {
   if (err && !d) return <p className="fld-err">{err}</p>;
   if (!d) return <p className="cov-hint">Checking the waiver…</p>;
   const open = d.waivers.filter((w) => w.status === "requested");
+  // Scale, because a waiver belongs to a payment and paying through SubSub is
+  // Scale. Anything asked for before a downgrade stays listed, and can still be
+  // viewed or withdrawn; asking, re-sending and recording a copy cannot.
+  const onScale = d.onScale !== false;
   const bothForms = d.forms.sources.length > 1;
 
   return (
     <div className="wv-release">
-      {d.waivers.length === 0 && !asking && (
+      {!onScale && (
+        <p className="cov-hint wv-plan">
+          Lien waivers come with Scale, alongside paying your subcontractors through SubSub.
+          You can move to Scale in Account → Subscription.
+        </p>
+      )}
+      {onScale && d.waivers.length === 0 && !asking && (
         <p className="cov-hint">No lien waiver asked for on this payment yet.</p>
       )}
       <ul className="wv-list">
@@ -25863,6 +25884,7 @@ function ReleaseWaivers({ release, onChanged }) {
               )}
               {w.status === "requested" && (
                 <>
+                  {onScale && <>
                   <button className="pick" type="button" disabled={!!busy}
                     onClick={() => act("resend", async () => {
                       const r = await api.resendWaiver(w.id);
@@ -25874,6 +25896,7 @@ function ReleaseWaivers({ release, onChanged }) {
                       onChange={(e) => { const f = e.target.files?.[0]; e.target.value = "";
                         if (f) act("record", () => api.recordWaiverCopy(w.id, f)); }} />
                   </label>
+                  </>}
                   <button className="pick" type="button" disabled={!!busy}
                     onClick={() => act("void", () => api.voidWaiver(w.id))}>Withdraw</button>
                 </>
@@ -25883,7 +25906,7 @@ function ReleaseWaivers({ release, onChanged }) {
         ))}
       </ul>
 
-      {!asking && open.length === 0 && (
+      {onScale && !asking && open.length === 0 && (
         <button className="btn-solid sm" type="button" onClick={() => setAsking(true)}>
           Ask for a lien waiver
         </button>

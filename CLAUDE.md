@@ -2900,6 +2900,28 @@ refactor.
   `formatExpiry`, which takes a bare date, so a timestamp came back raw —
   *"Signed by Juan Soto on 2026-10-05 10:00:00"*.
 
+  **AND IT IS SCALE, BECAUSE A WAIVER BELONGS TO A PAYMENT AND PAYING IS
+  SCALE.** Asked for in those words — and the second half turned out not to be
+  true in the code either: `/fund` and `/pay` checked only that Stripe was
+  configured, so the plan limit on paying subcontractors existed on the
+  pricing page and nowhere else. Both are enforced now, by one helper
+  (`payingAccountOnScale`, reading `accountOnScale` so a comped account counts)
+  on the **paying** account, never the subcontractor's.
+
+  Three choices in it, each deliberate. **Money is gated where it comes in**,
+  at `/fund`: paying out money already funded and refunding it stay open after
+  a downgrade, because money that is in must always have a way out — to the
+  subcontractor or back. **The payment gate stands aside for a Basic account**
+  rather than demanding a waiver it cannot ask for, which would have made every
+  recorded cheque an override; the waiver block is not drawn at all there,
+  rather than reading "Waiver clear" over a waiver nobody could have asked for.
+  And **a request made before a downgrade stays signable and withdrawable** —
+  the subcontractor's signature is their act — while asking, re-sending and
+  recording a copy answer `scale_required`. The panel says Scale in words and
+  offers no button the route refuses. Both plans are asserted in the same
+  suites, because a gate checked on one branch is the diagonal coverage that
+  left `hiresLabel` half-wired.
+
   **Still open:** a waiver cannot be requested for a release that has none —
   `amount` and `through` come off the release, so work paid outside the
   milestone ledger has no door yet. And **pasting 069 is required** before any
