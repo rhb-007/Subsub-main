@@ -295,6 +295,46 @@ try {
     await ctx.close();
   }
 
+  // ---- and when the refusal is OURS rather than theirs ---------------------
+  //
+  // Reported from this panel: "Stripe refused that: Stripe no longer
+  // recommends Accounts v1 for new Connect integrations ... enable Accounts v1
+  // support in the Dashboard: https://dashboard.stripe.com/settings/..." --
+  // every word of it addressed to SubSub, printed to somebody who runs a
+  // roofing company, under a heading reading "A few details before we can pay
+  // you". It reads as their application being rejected and the instruction in
+  // it is one they cannot carry out.
+  //
+  // The route answers `platform_not_ready` for any refusal at mint time and
+  // withholds Stripe's sentence from anybody but staff -- see `shared/pay.js`.
+  // This is the half only the drawn panel can show: that the sentence they get
+  // instead says whose problem it is and asks nothing of them.
+  {
+    payout = { status: "none", ready: false, requirements: [], configured: true };
+    refuseSession = { error: "platform_not_ready", replayed: false };
+    const { ctx, page } = await visitApp(browser, { host: "bay", webPort: WEB,
+      seat: { userId: "usr_rae", accountId: "acc_bay" }, viewport: { width: 1340, height: 1800 } });
+    await wait(2200);
+    await goCompany(page);
+    await wait(1000);
+
+    console.log("\n-- and when the refusal is SubSub's own --");
+    const p = await panel(page);
+    t.ck("the panel is there to read", !!p && p.text.length > 20, p?.text?.slice(0, 120));
+    t.ck("it says the setup is ours rather than theirs",
+      /SubSub is finishing its payment setup/i.test(p?.text || ""), p?.text?.slice(0, 200));
+    t.ck("and tells them there is nothing for them to do",
+      /nothing for you to do/i.test(p?.text || ""), p?.text?.slice(0, 200));
+    // THE ASSERTION THE LIVE SCREEN FAILED. Stripe's message names our
+    // dashboard and our endpoint choice; a subcontractor can act on neither.
+    t.ck("and never hands them a Stripe dashboard link",
+      !/dashboard\.stripe\.com/i.test(p?.text || ""), p?.text?.slice(0, 200));
+    t.ck("nor blames their paperwork for it",
+      !/few details before we can pay you/i.test(p?.text || ""), p?.text?.slice(0, 200));
+    refuseSession = null;
+    await ctx.close();
+  }
+
   // ---- payments not switched on at all ------------------------------------
   {
     payout = { status: "none", ready: false, requirements: [], configured: false };

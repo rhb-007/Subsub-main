@@ -98,10 +98,15 @@ globalThis.fetch = async (url, init = {}) => {
 const ENV = (db) => ({ DB: makeD1(db), STRIPE_SECRET_KEY: "sk_test_x",
   STRIPE_CONNECT_WEBHOOK_SECRET: "whsec_connect" });
 
-const call = async (env, path, { method = "GET", seat = { u: "u_ad", a: "acc_sub" }, body } = {}) => {
+const call = async (env, path, { method = "GET", seat = { u: "u_ad", a: "acc_sub" }, body, imp } = {}) => {
   const res = await worker.fetch(new Request(`https://api.subsub.work${path}`, {
     method,
-    headers: { "X-User-Id": seat.u, "X-Account-Id": seat.a, "Content-Type": "application/json" },
+    headers: imp
+      // Staff stand in through a real `impersonation_sessions` row, never a
+      // header: the caller names a TOKEN and the row says who is really
+      // there, so there is nothing a customer can send to claim it.
+      ? { "X-Impersonation-Token": imp, "Content-Type": "application/json" }
+      : { "X-User-Id": seat.u, "X-Account-Id": seat.a, "Content-Type": "application/json" },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   }), env);
   return { status: res.status, body: await res.json().catch(() => ({})) };
@@ -536,11 +541,79 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
     const mints = calls.filter((x) => /\/accounts$/.test(x.url) && x.method === "POST");
     ck("a FRESH refusal is not retried -- only a replayed one is",
       mints.length === 1, String(mints.length));
-    ck("and it is reported rather than swallowed",
-      r.status === 502 && /Something Stripe just decided/.test(r.body.detail || ""),
-      `${r.status} ${r.body.detail || r.body.error}`);
+    // THIS ASSERTION USED TO PIN `stripe_failed` WITH STRIPE'S SENTENCE ON IT,
+    // and it was rewritten to the new rule rather than loosened -- a test can
+    // pin the old answer as firmly as the right one.
+    //
+    // What changed, and why it is not a relaxation: a refusal HERE is a
+    // refusal at mint time, when Stripe has been told nothing about this
+    // company beyond an email. There is no identity to reject and no document
+    // outstanding, so it is about OUR request or OUR platform settings by
+    // construction. It reached the screen verbatim once -- "enable Accounts v1
+    // support in the Dashboard: https://dashboard.stripe.com/settings/..." --
+    // in front of somebody who runs a roofing company, under a heading reading
+    // "A few details before we can pay you".
+    ck("a mint refusal is reported as OURS rather than as theirs",
+      r.status === 502 && r.body.error === "platform_not_ready",
+      `${r.status} ${r.body.error}`);
+    // The half that matters on the screen: Stripe's words name our dashboard
+    // and our endpoint choice, so handing them to a customer is an instruction
+    // they cannot carry out about an account they cannot open.
+    ck("and Stripe's words are withheld from somebody who cannot act on them",
+      !r.body.detail, JSON.stringify(r.body.detail || null));
     ck("and says it was not a replay, so the screen does not blame a cache",
       r.body.replayed === false, JSON.stringify(r.body.replayed));
+  }
+  {
+    // AND STAFF STANDING IN GET THE SENTENCE, because they ARE the party who
+    // can go and change it -- withholding it there would hide the one message
+    // that says what to do. `impersonatedBy` comes off the session ROW, so a
+    // customer cannot claim it by sending a header.
+    const db = seed();
+    calls = []; acctState = {};
+    // `staff_user_id` is a real `users` row -- the column is a foreign key,
+    // because a session whose actor cannot be named is the one thing that
+    // table exists to prevent.
+    db.exec(`INSERT INTO users(id,name,email) VALUES ('u_staff','Pat','pat@subsub.work')`);
+    db.prepare(`INSERT INTO impersonation_sessions
+      (token, account_id, act_as_user_id, staff_user_id, ended_at, expires_at)
+      VALUES (?, ?, ?, ?, NULL, datetime('now', '+1 hour'))`)
+      .run("imp_tok", "acc_sub", "u_ad", "u_staff");
+    failNext = new Response(
+      JSON.stringify({ error: { message: "Enable Accounts v1 in the Dashboard." } }),
+      { status: 400, headers: { "Content-Type": "application/json" } });
+    const r = await call(ENV(db), "/api/payouts/session", { method: "POST", imp: "imp_tok" });
+    ck("staff see it as ours too", r.body.error === "platform_not_ready", String(r.body.error));
+    ck("but with Stripe's own words on it",
+      /Enable Accounts v1/.test(r.body.detail || ""), JSON.stringify(r.body.detail || null));
+  }
+  {
+    // AND THE OTHER HALF, IN THE SAME PLACE. A refusal once the connected
+    // account EXISTS may well be about them -- a document Stripe would not
+    // take, an address it refused -- so Stripe's words still lead, which is
+    // what that branch was written for. A "fix" that routed every Stripe
+    // refusal through `platform_not_ready` would pass every assertion above
+    // and silence the one class of message the reader can act on: the
+    // diagonal coverage that left `hiresLabel` half-wired.
+    const db = seed();
+    db.exec(`INSERT OR IGNORE INTO companies(id,company) VALUES ('cmp_own_acc_sub','Bay Roofing')`);
+    db.prepare(`INSERT INTO payout_accounts
+      (id, company_id, processor, processor_account_id, kyc_status, payouts_enabled,
+       transfers_active, requirements, disabled_reason)
+      VALUES ('pa_1', ?, 'stripe', 'acct_bay1', 'pending', 0, 0, '[]', NULL)`)
+      .run("cmp_own_acc_sub");
+    calls = []; acctState = {};
+    failNext = new Response(
+      JSON.stringify({ error: { message: "We could not read that photo ID." } }),
+      { status: 400, headers: { "Content-Type": "application/json" } });
+    const r = await call(ENV(db), "/api/payouts/session", { method: "POST" });
+    ck("a refusal after the account exists is still reported as Stripe's",
+      r.body.error === "stripe_failed", String(r.body.error));
+    ck("and carries its words, because the reader can act on those",
+      /photo ID/.test(r.body.detail || ""), JSON.stringify(r.body.detail || null));
+    ck("and no second account was minted to get there",
+      calls.filter((x) => /\/accounts$/.test(x.url) && x.method === "POST").length === 0,
+      String(calls.filter((x) => /\/accounts$/.test(x.url)).length));
   }
   {
     // The race the retry has to survive: the press that got the refusal

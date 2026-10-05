@@ -18128,10 +18128,20 @@ function BillingManage({ accentHex, onFellBack }) {
 function PayoutSetup({ landed = false, onHandled, accentHex }) {
   const [st, setSt] = useState(null);
   const [secret, setSecret] = useState("");
-  const [err, setErr] = useState("");
+  // WHAT WENT WRONG, not what it reads as. The panel used to keep only the
+  // rendered sentence, which threw away the one thing the line above it needs:
+  // whose problem this is. So the heading went on saying "A few details before
+  // we can pay you" over a message saying the opposite -- two records of one
+  // fact, with the louder one wrong. One state, and both are derived from it.
+  const [failed, setFailed] = useState(null);
   const [fellBack, setFellBack] = useState(false);
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(true);
+  const err = failed ? (failed.text || payoutErrorText(failed)) : "";
+  // A refusal at mint time is SubSub's own Stripe configuration, never this
+  // company's paperwork -- `shared/pay.js` says why it can be known without
+  // reading an error code.
+  const oursToFix = failed?.body?.error === "platform_not_ready";
   const host = useRef(null);
 
   // One call does everything: mints the connected account if this company has
@@ -18143,7 +18153,7 @@ function PayoutSetup({ landed = false, onHandled, accentHex }) {
   // button saying "Connect a Stripe account" would be asking somebody to opt
   // in to plumbing.
   const open = async () => {
-    setChecking(true); setErr("");
+    setChecking(true); setFailed(null);
     try {
       // Coming back from anywhere asks the server what Stripe actually says,
       // because a return proves nothing about whether they finished.
@@ -18155,7 +18165,7 @@ function PayoutSetup({ landed = false, onHandled, accentHex }) {
       // A status read still works when a session cannot be minted, so the
       // panel can say where they are even when it cannot draw the form.
       try { setSt(await api.payoutStatus()); } catch { /* the error below says enough */ }
-      setErr(payoutErrorText(e));
+      setFailed(e);
     } finally {
       setChecking(false);
       if (landed && onHandled) onHandled();
@@ -18206,12 +18216,12 @@ function PayoutSetup({ landed = false, onHandled, accentHex }) {
 
   // Only reached when the embedded component could not load.
   const goHosted = async () => {
-    setBusy(true); setErr("");
+    setBusy(true); setFailed(null);
     try {
       const { url } = await api.payoutConnect();
       if (url) window.location.href = url;
-      else setErr("Stripe did not hand back a setup link. Try again in a moment.");
-    } catch (e) { setErr(payoutErrorText(e)); }
+      else setFailed({ text: "Stripe did not hand back a setup link. Try again in a moment." });
+    } catch (e) { setFailed(e); }
     finally { setBusy(false); }
   };
 
@@ -18234,6 +18244,11 @@ function PayoutSetup({ landed = false, onHandled, accentHex }) {
           <span className={`pay-dot pay-${ready ? "ok" : status === "rejected" ? "no" : status === "none" ? "off" : "wait"}`} />
           {ready ? "Ready to be paid"
             : status === "rejected" ? "We can't verify this business"
+            // NOT "a few details before we can pay you", which is a sentence
+            // about THEIR paperwork and was drawn over a message saying the
+            // hold-up is ours. The heading is the louder of the two and is
+            // what somebody reads first.
+            : oursToFix ? "Nothing needed from you yet"
             : "A few details before we can pay you"}
         </p>
 
@@ -18291,6 +18306,29 @@ function payoutErrorText(e) {
   // setting payouts up, who is the only one who can act on what Stripe
   // actually said. The route has always carried `detail`; the screen was
   // throwing it away.
+  // A REFUSAL THAT IS OURS READS AS OURS, AND NAMES NOTHING FOR THEM TO DO.
+  //
+  // Reported from this panel: "Stripe refused that: Stripe no longer
+  // recommends Accounts v1 for new Connect integrations ... enable Accounts v1
+  // support in the Dashboard: https://dashboard.stripe.com/settings/..."
+  // Every word of that is addressed to SubSub -- our endpoint choice, our
+  // dashboard -- and it was printed to somebody who runs a roofing company,
+  // under a heading reading "A few details before we can pay you". It reads as
+  // their application being rejected, and the instruction in it is one they
+  // cannot carry out.
+  //
+  // The route answers `platform_not_ready` for every refusal at mint time,
+  // because at that moment Stripe has been told nothing about this company and
+  // so has nothing of theirs to refuse -- see `shared/pay.js`. It carries the
+  // detail ONLY for staff standing in, who are the party who can act on it, so
+  // printing `detail` when it is there is right and it will not be there for a
+  // customer.
+  if (code === "platform_not_ready") {
+    return e?.body?.detail
+      ? `Stripe refused SubSub's request to set this up: ${e.body.detail}`
+      : "SubSub is finishing its payment setup with Stripe. There is nothing for "
+        + "you to do here — we have been told, and this page will work once it is done.";
+  }
   if (code === "stripe_failed") {
     if (!e?.body?.detail) return "Stripe couldn't be reached just now. Try again in a moment.";
     // STRIPE'S WORDS LEAD, because they are the only actionable thing here

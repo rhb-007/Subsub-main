@@ -144,6 +144,47 @@ export function rowFromStripe(acct) {
   };
 }
 
+// A REFUSAL AT MINT TIME IS NEVER ABOUT THE SUBCONTRACTOR, AND THAT IS
+// STRUCTURAL RATHER THAN A GUESS AT STRIPE'S ERROR CODES.
+//
+// Reported from Account -> Company -> Getting paid, under the heading "A few
+// details before we can pay you":
+//
+//   Stripe refused that: Stripe no longer recommends Accounts v1 for new
+//   Connect integrations. Create connected accounts with POST
+//   /v2/core/accounts instead ... If your integration requires v1 account
+//   creation for a supported compatibility scenario, enable Accounts v1
+//   support in the Dashboard: https://dashboard.stripe.com/settings/...
+//
+// Every word of that is addressed to SUBSUB -- it names our endpoint choice
+// and links to our Stripe dashboard. The person reading it runs a roofing
+// company. They were shown our configuration problem as though it were their
+// paperwork, with an instruction they cannot carry out and a link they cannot
+// open, on the one screen they cannot get paid without.
+//
+// The panel's own note used to say the opposite in so many words: "this panel
+// is read by exactly one person, the admin setting payouts up, who is the only
+// one who can act on what Stripe actually said." That is true of the refusals
+// it was written for -- a photo ID, an address Stripe would not take -- and
+// false for a whole class it did not anticipate.
+//
+// WHAT SEPARATES THE TWO IS NOT AN ERROR CODE, which is what makes this safe
+// to decide: at the moment the connected account is MINTED, Stripe has not
+// been told anything about this company beyond an email. There is no identity
+// to reject, no document outstanding, no bank account to refuse. So a refusal
+// there is about our request or our platform settings, by construction, and no
+// reading of `error.code` is needed to know it. After the account exists --
+// the session, the link, the refresh -- a refusal may well be theirs, and
+// Stripe's words lead exactly as before.
+export const PLATFORM_NOT_READY = "platform_not_ready";
+
+// The exception, and it uses machinery that already exists. Staff standing in
+// through impersonation ARE the party who can act on it, so they get Stripe's
+// sentence verbatim -- withholding it there would hide the one message that
+// says what to go and change. `impersonatedBy` comes off the session ROW, so
+// a customer cannot claim it.
+export const mintDetailFor = (auth) => !!auth?.impersonatedBy;
+
 // THE CONTROLLER EVERY CONNECTED ACCOUNT IS MINTED WITH, and the key that
 // request goes out under. They are one value because they are one fact, and
 // keeping them apart cost a day.

@@ -10148,3 +10148,85 @@ refactor.
   green the way the other three can. Worth a workflow of its own, for the reason
   the customer app got one: *a deploy nobody can press is a deploy nobody can
   fix*, and this one cannot even be watched.
+
+- **STRIPE CLOSED ACCOUNTS V1 TO NEW INTEGRATIONS, AND THE REFUSAL WAS PRINTED
+  TO A ROOFER.** Reported from Account → Company → **Getting paid**, under the
+  heading *A few details before we can pay you*:
+
+  > Stripe refused that: Stripe no longer recommends Accounts v1 for new
+  > Connect integrations. Create connected accounts with POST
+  > /v2/core/accounts instead … If your integration requires v1 account
+  > creation for a supported compatibility scenario, **enable Accounts v1
+  > support in the Dashboard: https://dashboard.stripe.com/settings/…**
+
+  **EVERY WORD OF THAT IS ADDRESSED TO SUBSUB** — our endpoint choice, our
+  dashboard, our API policy. The person reading it runs a roofing company. They
+  were shown our configuration problem as though it were their paperwork, with
+  an instruction they cannot carry out and a link to an account they cannot
+  open, on the one screen they cannot get paid without.
+
+  **THE PANEL'S OWN NOTE SAID THE OPPOSITE IN SO MANY WORDS**, which is why it
+  shipped: *"this panel is read by exactly one person, the admin setting
+  payouts up, who is the only one who can act on what Stripe actually said."*
+  True of the refusals it was written for — a photo ID, an address Stripe would
+  not take — and false for a whole class it did not anticipate. **A premise
+  that is true of every case you have seen is still a premise.**
+
+  **WHAT SEPARATES THE TWO IS NOT AN ERROR CODE, and that is what makes this
+  safe to decide.** At the moment the connected account is **minted**, Stripe
+  has been told nothing about this company beyond an email: no identity to
+  reject, no document outstanding, no bank account to refuse. So a refusal
+  there is about our request or our platform settings **by construction**, and
+  no reading of `error.code` is needed — which matters, because the codes are
+  Stripe's to change and a classifier built on them would be a second record of
+  a fact the call site already knows. After the account exists — the session,
+  the link, the refresh — a refusal may well be theirs, and Stripe's words lead
+  exactly as before. Both branches are asserted in the same place, because a
+  "fix" routing every Stripe refusal through the new code would pass every
+  assertion about the first and silence the only class the reader can act on.
+
+  **STAFF STANDING IN GET THE SENTENCE, because they ARE that party.**
+  `mintDetailFor` reads `impersonatedBy`, which comes off the session **row**,
+  so there is nothing a customer can send to claim it — the same property
+  `staffMayWriteShared` already relies on. Withholding it there would hide the
+  one message that says what to go and change.
+
+  **AND THE HEADING HAD TO FOLLOW, which my own new assertion caught.** The
+  first version fixed the sentence and left *A few details before we can pay
+  you* above it — so the panel said the hold-up was theirs in the larger type
+  and ours in the smaller. The cause is that the panel kept only the **rendered
+  sentence** and threw away what went wrong, so the line above it had nothing
+  to read: one state (`failed`) now holds the error and both are derived from
+  it. **Two records of one fact, with the louder one wrong**, found only by
+  driving the drawn panel.
+
+  **A BLANKET `replace` ACROSS `App.tsx` IS A REFACTOR OF EVERY COMPONENT.**
+  Renaming `setErr` inside `PayoutSetup` was done with a whole-file replace, and
+  `setBusy(true); setErr("");` appears in dozens of components — 45 `no-undef`
+  errors, and it also clobbered `ReportPhoto`'s own unrelated `setFailed`.
+  `npm run lint` named every one in a second, which is the entire argument for
+  the rule in `## Working here`. A rename inside one function is scoped to that
+  function's line range, and the diff is read back afterwards.
+
+  **WHAT THIS DELIBERATELY DOES NOT DO: migrate to `POST /v2/core/accounts`.**
+  `docs.stripe.com` is blocked by this session's egress proxy, so the v2
+  reference could not be read — and the doc URLs search returns carry
+  `?api-version=…preview`, so it is a **preview-versioned** API. Writing the
+  migration from search snippets would be exactly the confident-and-wrong
+  answer this file records twice about Stripe: *only Stripe knows which
+  combinations it accepts, so the first real press was always going to be the
+  test* — `losses.payments` and the controller shape both. Accounts v2 changes
+  the create body, the capability names, where requirements live and probably
+  how an Account Session is minted, and `rowFromStripe` reads **all** of that.
+  Guessing it would not be one wrong field, it would be a payments integration
+  that looks shipped.
+
+  **The immediate answer is the one Stripe's own message gives: enable Accounts
+  v1 support in the Dashboard.** One toggle, no code, and it is a supported
+  compatibility path rather than a workaround. The v2 migration is its own
+  piece, and it needs the reference open.
+
+  Three server mutations and two browser ones fire, each on its own assertion:
+  the mint refusal routed back through `stripe_failed` with the detail on it
+  (which reproduces the report exactly), the detail handed to everybody, the
+  detail withheld from staff, the heading reverted, and the sentence reverted.

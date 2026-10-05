@@ -99,7 +99,8 @@ import { canHandOver, awaitingFrom, canDecide as canDecideTransfer,
 import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 // Whether somebody can actually be paid, decided once and read by the
 // routes, the webhook and the browser.
-import { payoutSummary, rowFromStripe, PAYOUT_CONTROLLER, payoutAccountKey } from "../shared/pay.js";
+import { payoutSummary, rowFromStripe, PAYOUT_CONTROLLER, payoutAccountKey,
+  PLATFORM_NOT_READY, mintDetailFor } from "../shared/pay.js";
 import {
   AGREEMENT_SOURCES, TERM_FIELDS, STANDARD_AGREEMENT, validTerms, mergeTerms,
   renderAgreement, canonicalText, kindsFor, agreementDocShape, waitingOn,
@@ -396,9 +397,14 @@ app.use("/api/*", async (c, next) => {
       // because an auth context whose role is not the membership's role is
       // the one thing that would be unrecoverable afterwards.
       stoodInFor: runs ? seat.role : null,
-      // Who is really here. Nothing reads it yet; it is set because a
-      // session whose real actor is unrecoverable is the one thing this
-      // table exists to prevent.
+      // Who is really here. Read by `staffMayWriteShared`, which lets staff
+      // correct a company row an ordinary account may not, and by
+      // `mintDetailFor`, which hands Stripe's words about OUR configuration to
+      // the only party who can act on them. Set in the first place because a
+      // session whose real actor is unrecoverable is the one thing this table
+      // exists to prevent -- and the comment said "nothing reads it yet" for
+      // two features after that stopped being true, which is the
+      // screen-that-lies rule with nothing on screen to contradict it.
       impersonatedBy: sess.staff_user_id,
     });
     return next();
@@ -2119,32 +2125,54 @@ async function connectedAccount(c, companyId) {
     idempotencyKey: payoutAccountKey(companyId) + keySuffix,
   });
 
+  // EVERY WAY THIS CAN FAIL HERE IS OURS, which is why the whole block
+  // answers with one code rather than letting Stripe's sentence reach the
+  // screen. `shared/pay.js` says why at length: at mint time Stripe has been
+  // told nothing about this company, so there is nothing of theirs to refuse.
   let acct;
   try {
-    acct = await mint();
+    try {
+      acct = await mint();
+    } catch (err) {
+      // A REFUSAL CREATED NOTHING, SO REPLAYING IT PROTECTS NOTHING.
+      //
+      // Stripe replays the saved status and body for 24 hours, and the shape
+      // in the key only moves when OUR request changes. Half of what can
+      // refuse this call is not ours at all -- a Stripe account setting, an
+      // API policy, a capability being enabled -- and after fixing one of
+      // those the next press is still answered by the refusal from before the
+      // fix. That is a guaranteed day-long dead end on the one screen a
+      // subcontractor cannot get paid without, and it has happened twice.
+      //
+      // The retry is safe precisely because the saved answer was a refusal: a
+      // 4xx means Stripe created no account under that key, so a fresh key
+      // cannot duplicate one. A replayed SUCCESS never reaches here -- it is
+      // a 200, which is the double-press this mechanism exists to absorb.
+      //
+      // Re-read the row first: the press that got the refusal replayed to it
+      // may have been racing one that succeeded.
+      if (!err?.replayed || !(err?.status >= 400 && err?.status < 500)) throw err;
+      const raced = await payoutRow(c.env, companyId);
+      if (raced?.processor_account_id) return { acctId: raced.processor_account_id, row: raced };
+      console.error("[payouts] Stripe replayed a refusal; asking again under a fresh key:", err?.message || err);
+      acct = await mint(`:r${Date.now()}`);
+    }
   } catch (err) {
-    // A REFUSAL CREATED NOTHING, SO REPLAYING IT PROTECTS NOTHING.
-    //
-    // Stripe replays the saved status and body for 24 hours, and the shape in
-    // the key only moves when OUR request changes. Half of what can refuse
-    // this call is not ours at all -- a Stripe account setting, an API policy,
-    // a capability being enabled -- and after fixing one of those the next
-    // press is still answered by the refusal from before the fix. That is a
-    // guaranteed day-long dead end on the one screen a subcontractor cannot
-    // get paid without, and it has now happened twice in two days.
-    //
-    // The retry is safe precisely because the saved answer was a refusal: a
-    // 4xx means Stripe created no account under that key, so a fresh key
-    // cannot duplicate one. A replayed SUCCESS never reaches here -- it is a
-    // 200, which is the double-press this whole mechanism exists to absorb.
-    //
-    // Re-read the row first: the press that got the refusal replayed to it
-    // may have been racing one that succeeded.
-    if (!err?.replayed || !(err?.status >= 400 && err?.status < 500)) throw err;
-    const raced = await payoutRow(c.env, companyId);
-    if (raced?.processor_account_id) return { acctId: raced.processor_account_id, row: raced };
-    console.error("[payouts] Stripe replayed a refusal; asking again under a fresh key:", err?.message || err);
-    acct = await mint(`:r${Date.now()}`);
+    if (missingSchema(err)) return { res: c.json(payoutMigration(), 503) };
+    // Loud, and naming the company, because the person who CAN act on this is
+    // not the person looking at the screen -- so the log is the only place it
+    // lands for them.
+    console.error(`[payouts] PLATFORM CONFIGURATION refused the mint for company ${companyId}:`,
+      err?.message || err, err?.replayed ? "(idempotent replay)" : "");
+    return { res: c.json({
+      error: PLATFORM_NOT_READY,
+      // Staff standing in ARE the party who can go and change it. A
+      // subcontractor is not, and handing them a dashboard link for an account
+      // they have no access to is the screen-that-lies rule pointed at
+      // somebody else's settings page.
+      ...(mintDetailFor(c.get("auth")) ? { detail: String(err?.message || err) } : {}),
+      replayed: !!err?.replayed,
+    }, 502) };
   }
 
   await savePayoutRow(c.env, { companyId, acctId: acct.id, acct });
