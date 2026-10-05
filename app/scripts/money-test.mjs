@@ -77,11 +77,11 @@ console.log("\n-- and over ten thousand random ones --");
   ck("and no release comes out negative", negative === 0, String(negative));
 }
 
-console.log("\n-- the fee: 0.05%, at most $500 a payment, first $50,000 free, on top --");
+console.log("\n-- the fee: 0.5%, at most $500 a payment, first $50,000 free, on top --");
 {
   const { PLATFORM_FEE_BPS, PLATFORM_FEE_CAP_CENTS, PLATFORM_FEE_FREE_CENTS, feeFor, feeTerms,
     feeTermsRefusal, FEE_TERMS, feeTermsText, DEFAULT_FEE_TERMS } = await import("../shared/fee.js");
-  ck("the rate is five hundredths of a per cent", PLATFORM_FEE_BPS === 5, String(PLATFORM_FEE_BPS));
+  ck("the rate is half of one per cent", PLATFORM_FEE_BPS === 50, String(PLATFORM_FEE_BPS));
   ck("the cap is $500", PLATFORM_FEE_CAP_CENTS === 50000, String(PLATFORM_FEE_CAP_CENTS));
   ck("and the first $50,000 is free", PLATFORM_FEE_FREE_CENTS === 5_000_000, String(PLATFORM_FEE_FREE_CENTS));
   const fee = (gross, processedBefore = 10_000_000) => feeFor({ gross, processedBefore }).fee;
@@ -91,9 +91,9 @@ console.log("\n-- the fee: 0.05%, at most $500 a payment, first $50,000 free, on
   // the whole -- $45,000 sent and $10,000 more is a fee on $5,000.
   const cross = feeFor({ gross: 1_000_000, processedBefore: 4_500_000 });
   ck("a payment straddling the line is charged only past it",
-    cross.fee === 250 && cross.chargeable === 500_000 && cross.freeUsed === 500_000, JSON.stringify(cross));
-  ck("past the free amount, $10,000 pays $5", fee(1_000_000) === 500, String(fee(1_000_000)));
-  ck("$1,000,000 pays exactly the cap", fee(100_000_000) === 50000);
+    cross.fee === 2500 && cross.chargeable === 500_000 && cross.freeUsed === 500_000, JSON.stringify(cross));
+  ck("past the free amount, $10,000 pays $50", fee(1_000_000) === 5000, String(fee(1_000_000)));
+  ck("$100,000 pays exactly the cap", fee(10_000_000) === 50000);
   ck("$2,000,000 pays the cap and not a cent more", fee(200_000_000) === 50000, String(fee(200_000_000)));
   const a = releaseAmounts({ gross: 200_000_000, retainageBps: 500 });
   ck("and the fee never touches the subcontractor's net", a.net === 190_000_000, JSON.stringify(a));
@@ -108,9 +108,9 @@ console.log("\n-- the fee: 0.05%, at most $500 a payment, first $50,000 free, on
     feeFor({ gross: 1_000_000, processedBefore: 0, terms: { bps: 100, capCents: 50000, freeCents: 0 } }).fee === 10000);
   ck("a slipped decimal is refused -- 50% is not a rate anybody means",
     feeTermsRefusal({ bps: 5000, capCents: 50000, freeCents: 0 }) === "bad_rate");
-  ck("and sane terms are accepted", feeTermsRefusal({ bps: 5, capCents: 50000, freeCents: 5_000_000 }) === null);
+  ck("and sane terms are accepted", feeTermsRefusal({ bps: 50, capCents: 50000, freeCents: 5_000_000 }) === null);
   ck("the words say all three halves",
-    FEE_TERMS === "0.05% of each payment, at most $500 a payment, after the first $50,000 free", FEE_TERMS);
+    FEE_TERMS === "0.5% of each payment, at most $500 a payment, after the first $50,000 free", FEE_TERMS);
   ck("and follow an account's own terms",
     feeTermsText({ bps: 25, capCents: 25000, freeCents: 0 }) === "0.25% of each payment, at most $250 a payment");
 }

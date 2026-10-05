@@ -28,8 +28,8 @@ const BOOT = {
   users: [], memberships: [], companies: [], engagements: [],
   jobs: [], subEvents: [], activity: [], smsDaily: [],
 };
-let TERMS = { terms: { bps: 5, capCents: 50000, freeCents: 5_000_000 },
-  defaults: { bps: 5, capCents: 50000, freeCents: 5_000_000 }, custom: false, note: null,
+let TERMS = { terms: { bps: 50, capCents: 50000, freeCents: 5_000_000 },
+  defaults: { bps: 50, capCents: 50000, freeCents: 5_000_000 }, custom: false, note: null,
   processedCents: 2_000_000, freeLeftCents: 3_000_000 };
 const sent = [];
 
@@ -93,9 +93,9 @@ try {
     let r = await read(page);
     t.ck("the panel is on the account", !!r, JSON.stringify(r));
     t.ck("it says the standard terms and how much of the free amount is used",
-      /The standard terms: 0\.05% of each payment, at most \$500 a payment, after the first \$50,000 free/.test(r?.text || "")
+      /The standard terms: 0\.5% of each payment, at most \$500 a payment, after the first \$50,000 free/.test(r?.text || "")
       && /\$20,000\.00 sent through SubSub so far, \$30,000\.00 of the free amount left/.test(r?.text || ""), r?.text);
-    t.ck("the boxes are in percent and dollars", JSON.stringify(r?.inputs) === JSON.stringify(["0.05", "500", "50000"]),
+    t.ck("the boxes are in percent and dollars", JSON.stringify(r?.inputs) === JSON.stringify(["0.5", "500", "50000"]),
       JSON.stringify(r?.inputs));
     t.ck("Save waits until something changes", r?.save?.disabled === true);
 
@@ -135,7 +135,7 @@ try {
     STAFF = { ...STAFF, role: "standard", finance: false, impersonate: false };
     const { ctx, page, crashes } = await openAccount();
     const r = await read(page);
-    t.ck("the terms are shown", /0\.05% of each payment/.test(r?.text || ""), r?.text);
+    t.ck("the terms are shown", /0\.5% of each payment/.test(r?.text || ""), r?.text);
     t.ck("with no boxes and no buttons", r && r.inputs.length === 0 && r.buttons.length === 0, JSON.stringify(r));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();

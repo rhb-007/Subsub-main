@@ -1,6 +1,6 @@
 // SubSub's fee on a payment it moves, and the words for it.
 //
-// 0.05% of the payment, at most $500 a payment, charged to the HIRING account
+// 0.5% of the payment, at most $500 a payment, charged to the HIRING account
 // on top of what it pays -- never taken out of what the subcontractor receives
 // -- and NOTHING on the first $50,000 an account sends through SubSub. See
 // releaseAmounts in money.js for why it is on top, and why the cap is per
@@ -27,7 +27,7 @@
 // been processed by then. Those can differ -- a release stamped while another
 // was still owed, paid after it -- and the payment is the one that counts.
 
-export const PLATFORM_FEE_BPS = 5;               // 0.05%
+export const PLATFORM_FEE_BPS = 50;              // 0.5%
 export const PLATFORM_FEE_CAP_CENTS = 50_000;    // $500 per payment
 export const PLATFORM_FEE_FREE_CENTS = 5_000_000; // the first $50,000, free
 
@@ -86,7 +86,7 @@ const pct = (bps) => `${(bps / 100).toLocaleString("en-US", { maximumFractionDig
 const dollars = (cents) => "$" + (Math.round(cents) / 100).toLocaleString("en-US",
   { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
-// "0.05% of each payment, at most $500 a payment, and nothing on the first
+// "0.5% of each payment, at most $500 a payment, and nothing on the first
 // $50,000" -- one sentence, read by the fund form, the pay window and the
 // marketing test, so three screens cannot quote three fees. Takes the
 // account's own terms, because a sentence quoting the default to an account

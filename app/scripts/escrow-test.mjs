@@ -141,11 +141,11 @@ console.log("\n-- what to fund, derived from money.js and not reinvented --");
     String(fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000 }).topUpCents));
   ck("and past it, the fee is in the figure",
     fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000,
-      processedCents: 5_000_000 }).topUpCents === 300250);
+      processedCents: 5_000_000 }).topUpCents === 302500);
   // The free amount is used up in order, payment by payment.
   const straddle = fundSuggestion({ milestones: [{ amountCents: 3_000_000 }, { amountCents: 3_000_000 }] });
   ck("the second of two $30,000 draws is charged on the $10,000 past the free $50,000",
-    straddle.feeCents === 500, String(straddle.feeCents));
+    straddle.feeCents === 5000, String(straddle.feeCents));
   ck("and an account's own terms are used, not the default",
     fundSuggestion({ milestones: [{ amountCents: 1_000_000 }],
       terms: { bps: 100, capCents: 50000, freeCents: 0 } }).feeCents === 10000);
@@ -809,11 +809,11 @@ console.log("\n-- the first $50,000 is free, counted against what was actually s
   ck("and the free amount left goes down by what was sent",
     m.body.processedCents === 500000 && m.body.freeLeftCents === 4_500_000, JSON.stringify(m.body));
   ck("the account's terms are on the panel",
-    m.body.feeTerms?.bps === 5 && m.body.feeTerms?.freeCents === 5_000_000, JSON.stringify(m.body.feeTerms));
+    m.body.feeTerms?.bps === 50 && m.body.feeTerms?.freeCents === 5_000_000, JSON.stringify(m.body.feeTerms));
 }
 {
   // $48,000 already sent through SubSub, then a $5,000 release: $2,000 of it
-  // is free and $3,000 is charged -- $1.50 at 0.05%.
+  // is free and $3,000 is charged -- $15 at 0.5%.
   const db = seed();
   db.exec(`
     INSERT INTO wo_milestones(id,work_order_id,account_id,seq,label,amount_cents,status)
@@ -822,9 +822,9 @@ console.log("\n-- the first $50,000 is free, counted against what was actually s
       VALUES ('rel0','wo1','acc_gc','ms0','cmp_roof',4800000,4800000,'paid','stripe','tr_old');
     UPDATE wo_releases SET fee_cents = 0, net_cents = 500000 WHERE id = 'rel1';`);
   const env = ENV(db);
-  await fund(env, 500150);
+  await fund(env, 501500);
   const r = await call(env, "/api/releases/rel1/pay", { method: "POST" });
-  ck("the payment that crosses the line is charged only past it", r.status === 200 && r.body.feeCents === 150,
+  ck("the payment that crosses the line is charged only past it", r.status === 200 && r.body.feeCents === 1500,
     `${r.status} ${JSON.stringify(r.body)}`);
 }
 {

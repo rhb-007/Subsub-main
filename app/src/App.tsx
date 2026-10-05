@@ -10758,7 +10758,7 @@ function CompPanel({ account, onSave }) {
 // through SubSub is not something every console load needs to sum.
 //
 // IN THE UNITS PEOPLE SAY, NOT THE ONES STORED. A rate is typed as a percent
-// and a cap as dollars, because typing "5" meaning 0.05% is a slipped decimal
+// and a cap as dollars, because typing "50" meaning 0.5% is a slipped decimal
 // waiting to happen -- and this fee has already had one, the day it shipped.
 // The panel says back what a $10,000 payment would cost before the save, so
 // the figure is checked in a form nobody can misread.
@@ -18378,6 +18378,8 @@ function BillingManage({ accentHex, onFellBack }) {
 // that turns into a support call.
 function SmsUsage() {
   const [s, setS] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
   useEffect(() => {
     api.getBilling().then((b) => setS(b?.sms || null)).catch(() => setS(null));
   }, []);
@@ -18388,10 +18390,39 @@ function SmsUsage() {
   const monthName = (m) => new Date(`${m}-01T12:00:00Z`)
     .toLocaleString("en-US", { month: "long", timeZone: "UTC" });
 
+  // The way out of being charged for texts, which is what makes charging for
+  // them automatically fair. Awaited, and the switch follows the SERVER's
+  // answer: a toggle drawn as off over a write that did not happen is a bill
+  // somebody believes they turned off.
+  const setOff = async (off) => {
+    if (off === !!s.off) return;
+    setBusy(true); setErr("");
+    try {
+      const r = await api.setSmsOff(off);
+      setS((x) => ({ ...x, off: !!r.off }));
+    } catch (e) {
+      setErr(e?.body?.migration
+        ? `That needs migration ${e.body.migration} pasted first.`
+        : "That didn't save. Try again.");
+    } finally { setBusy(false); }
+  };
+
   return (
     <>
       <div className="form-sec">Text messages</div>
       <div className="sms-use">
+        <div className="picks sms-switch" role="group" aria-label="Text messages">
+          <button type="button" className={`pick ${s.off ? "" : "on"}`} aria-pressed={!s.off}
+            disabled={busy} onClick={() => setOff(false)}>On</button>
+          <button type="button" className={`pick ${s.off ? "on" : ""}`} aria-pressed={!!s.off}
+            disabled={busy} onClick={() => setOff(true)}>Off</button>
+        </div>
+        {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
+        {s.off && (
+          <p className="sms-off-note" role="status">
+            Text messages are off. Emails still go out, and emergency call-outs are still texted.
+          </p>
+        )}
         <div className="sms-use-line">{smsUsageText(s)}</div>
         <div className={`sms-bar ${over ? "over" : pct >= 80 ? "near" : ""}`}>
           <span style={{ width: `${pct}%` }} />
@@ -18402,15 +18433,15 @@ function SmsUsage() {
         <p className="fine">
           {s.included.toLocaleString("en-US")} a month come with Scale and the count starts again on the 1st.
           {" "}{s.billable
-            ? `Past that, texts keep going, and ${SMS_OVERAGE_TERMS} to the following month's bill, automatically.`
+            ? `Past that, texts keep going: ${SMS_OVERAGE_TERMS} — charged automatically on the 1st. Turn them off above if you would rather not.`
             : "Past that, texts pause until the 1st and emails still go out."}
           {" "}Emergency call-outs are always texted.
         </p>
         {s.lastMonth && s.lastMonth.blocks > 0 && (
           <p className="fine sms-last">
             {monthName(s.lastMonth.month)}: {s.lastMonth.used.toLocaleString("en-US")} sent,
-            {" "}{formatCents(s.lastMonth.amountCents)} for the extra
-            {s.lastMonth.status === "billed" ? " — on your bill." : " — being added to your bill."}
+            {" "}{formatCents(s.lastMonth.amountCents)}
+            {s.lastMonth.status === "billed" ? " — charged on the 1st." : " — being charged."}
           </p>
         )}
       </div>
@@ -33629,6 +33660,8 @@ p.fld-note{margin:6px 0 0}
 .sms-bar.over span{background:#C98A12}
 .sms-over{margin:0 0 6px;font-size:13px;font-weight:600;color:#8A5A00}
 .sms-last{margin-top:6px}
+.sms-switch{margin:0 0 10px}
+.sms-off-note{margin:0 0 8px;font-size:13px;color:var(--ink-soft)}
 .bm-invoices li{display:flex;align-items:center;gap:12px;padding:9px 2px;
   border-bottom:1px solid var(--line)}
 .bm-invoices li:last-child{border-bottom:0}

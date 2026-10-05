@@ -226,10 +226,12 @@ WITH spec(j) AS (SELECT
   -- presses ask a subcontractor for the same waiver twice.
   ',["m069_waiver_forms","col","waiver_forms",["waiver_id","source","template_id","template_version","parties","uploaded_side"]]' ||
   ',["m069_waiver_open_unique","index","ux_waiver_open",[]]' ||
-  -- 070. Texts past the included 2,500, billed on the following month. Until
-  -- it is run texts still go; the nightly sweep cannot record a bill and says so.
+  -- 070. Texts past the included 2,500, charged on the 1st, and the switch to
+  -- turn texts off. Until it is run texts still go; the nightly sweep cannot
+  -- record a bill and says so, and the switch answers migration_needed.
   ',["m070_sms_overage","col","sms_overage",["account_id","month","blocks","amount_cents","status","processor_ref"]]' ||
   ',["m070_sms_overage_unique","index","ux_sms_overage_month",[]]' ||
+  ',["m070_sms_settings","col","account_sms_settings",["account_id","sms_off","updated_by","updated_at"]]' ||
   -- 071. An account's own fee terms from the staff console. Until it is run
   -- every account is on the defaults and the console's fee panel says so.
   ',["m071_fee_terms","col","account_fee_terms",["account_id","fee_bps","cap_cents","free_cents","updated_by"]]' ||

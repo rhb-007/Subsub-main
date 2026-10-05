@@ -1,6 +1,6 @@
 // An account's own payment-fee terms, set from the staff console.
 //
-// SubSub's fee defaults to 0.05%, at most $500 a payment, with the first
+// SubSub's fee defaults to 0.5%, at most $500 a payment, with the first
 // $50,000 an account sends through SubSub free (shared/fee.js). Staff can set
 // a different rate, cap or free amount for one account; 071 holds it.
 //
@@ -79,7 +79,7 @@ try {
         ('r2','wo1','acc_gc','m2','cmp_roof',1000000,1000000,'paid','check');`);
     const [s, b] = await json(await call(env, URL_, {}, "plain"));
     ck("support can read them", s === 200, `${s} ${JSON.stringify(b)}`);
-    ck("the standard terms", b.terms?.bps === 5 && b.terms?.capCents === 50000 && b.terms?.freeCents === 5_000_000
+    ck("the standard terms", b.terms?.bps === 50 && b.terms?.capCents === 50000 && b.terms?.freeCents === 5_000_000
       && b.custom === false, JSON.stringify(b));
     ck("and what has gone through SubSub, checks excluded",
       b.processedCents === 2_000_000 && b.freeLeftCents === 3_000_000, JSON.stringify(b));
@@ -113,7 +113,7 @@ try {
     const ev = db.prepare(`SELECT payload FROM events WHERE kind = 'fee_terms_changed'`).all();
     const p = JSON.parse(ev[0]?.payload || "{}");
     ck("and the change is audited with the old terms and the new",
-      ev.length === 1 && p.from?.bps === 5 && p.to?.bps === 25 && p.note === "Design partner through 2027",
+      ev.length === 1 && p.from?.bps === 50 && p.to?.bps === 25 && p.note === "Design partner through 2027",
       JSON.stringify(ev));
 
     [s, b] = await json(await put(env, { bps: 10, capCents: 25000, freeCents: 0, note: "Renegotiated" }));
@@ -127,7 +127,7 @@ try {
     ck("back to standard deletes the row", s === 200 && b.custom === false
       && db.prepare(`SELECT COUNT(*) n FROM account_fee_terms`).get().n === 0, JSON.stringify(b));
     [s, b] = await json(await call(env, URL_));
-    ck("so the account follows the defaults again", b.custom === false && b.terms.bps === 5, JSON.stringify(b));
+    ck("so the account follows the defaults again", b.custom === false && b.terms.bps === 50, JSON.stringify(b));
     ck("and the reset is audited too",
       db.prepare(`SELECT COUNT(*) n FROM events WHERE kind = 'fee_terms_changed'`).get().n === 3);
     const [s404] = await json(await call(env, "/api/platform/accounts/nope/fee-terms"));
@@ -140,7 +140,7 @@ try {
     const { env } = seed({ migrated: false });
     let [s, b] = await json(await call(env, URL_));
     ck("reads as the standard terms and names the migration",
-      s === 200 && b.terms?.bps === 5 && b.migration === "071_fee_terms", `${s} ${JSON.stringify(b)}`);
+      s === 200 && b.terms?.bps === 50 && b.migration === "071_fee_terms", `${s} ${JSON.stringify(b)}`);
     [s, b] = await json(await put(env, { bps: 25, capCents: 25000, freeCents: 0, note: "x" }));
     ck("and setting them names the migration rather than failing", s === 503 && b.migration === "071_fee_terms",
       `${s} ${JSON.stringify(b)}`);

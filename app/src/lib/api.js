@@ -451,6 +451,8 @@ export const api = {
   // Billing. Checkout and portal both answer with a Stripe URL for the
   // browser to follow — card details never touch this app.
   getBilling: () => request("/billing"),
+  // Turn the account's text messages off, or back on (admin).
+  setSmsOff: (off) => request("/billing/sms", { method: "PUT", body: JSON.stringify({ off }) }),
   // mode "embedded" asks for a session we can mount inside our own page;
   // anything else gets a hosted one to redirect to.
   startCheckout: (cycle, mode) =>

@@ -1605,7 +1605,7 @@ app.get("/api/billing", requireRole("admin", "pm"), async (c) => {
       used: u.used, allowance: u.allowance, included: u.onScale ? SMS_INCLUDED_SCALE : 0,
       billable: u.billable, overageBlocks: blocks, overageCents: smsOverageCents(blocks),
       blockMessages: SMS_BLOCK_MESSAGES, blockPriceCents: SMS_BLOCK_PRICE_CENTS,
-      maxBlocks: SMS_OVERAGE_MAX_BLOCKS, configured: !!smsConfig(c.env),
+      maxBlocks: SMS_OVERAGE_MAX_BLOCKS, configured: !!smsConfig(c.env), off: u.off,
       lastMonth: last && last.status !== "not_billable" ? { month: last.month, used: last.used,
         blocks: last.blocks, amountCents: last.amount_cents, status: last.status } : null,
     };
@@ -1627,6 +1627,31 @@ app.get("/api/billing", requireRole("admin", "pm"), async (c) => {
     })),
   });
 });
+// Turn the account's text messages off, or back on. Admin only, because it is
+// a decision about what the account is charged for: past 2,500 a month texts
+// are billed automatically, and this is the way out of that. Emails are
+// untouched, and an emergency call-out still goes -- see shared/smsquota.js.
+app.put("/api/billing/sms", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  if (typeof b.off !== "boolean") return c.json({ error: "off_required" }, 400);
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO account_sms_settings (account_id, sms_off, updated_by, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(account_id) DO UPDATE SET sms_off = excluded.sms_off,
+         updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP`
+    ).bind(accountId, b.off ? 1 : 0, userId ?? null).run();
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "070_sms_overage" }, 503);
+    throw err;
+  }
+  await logActivity(c.env, accountId, userId ?? null, "sms_setting",
+    b.off ? "Turned text messages off. Emails still go, and emergency call-outs are still texted."
+      : "Turned text messages back on.").catch(() => {});
+  return c.json({ ok: true, off: b.off });
+});
+
 
 // Find the account a Stripe object belongs to. The metadata is stamped at
 // checkout, but a subscription changed from Stripe's own dashboard may
@@ -6344,6 +6369,7 @@ export function missingSchema(err) {
   if (/\binspection_summaries\b/i.test(m)) return "063_inspection_summary";
   if (/\bauto_turnaround\b/i.test(m)) return "065_auto_turnaround";
   if (/\bsms_overage\b/i.test(m)) return "070_sms_overage";
+  if (/\baccount_sms_settings\b/i.test(m)) return "070_sms_overage";
   if (/\baccount_fee_terms\b/i.test(m)) return "071_fee_terms";
   if (/\bmanager_at\b/i.test(m)) return "064_visit_manager";
   if (/contractor_(at|note)/i.test(m)) return "061_visit_contractor";
@@ -12869,7 +12895,7 @@ app.get("/api/work-orders/:id/funding", requireRole("admin", "pm"), async (c) =>
       onScale: await payingAccountOnScale(c.env, wo.account_id),
       // The account's fee terms and how much of its free allowance is left,
       // so the fund form and the pay window quote ITS price rather than the
-      // default -- a negotiated rate shown as 0.05% is the screen naming the
+      // default -- a negotiated rate shown as the default 0.5% is the screen naming the
       // wrong price.
       ...(await (async () => {
         const t = await accountFeeTerms(c.env, wo.account_id);
@@ -19484,7 +19510,22 @@ async function smsUsage(env, accountId, now = new Date()) {
     billable: onScale && a?.plan === "scale" && !!a?.stripe_customer_id && !!a?.stripe_subscription_id,
     allowance: smsAllowance({ onScale }),
     used: Number(used?.n) || 0,
+    off: await smsOff(env, accountId),
   };
+}
+
+// Whether the account has turned text messages off. A database without 070
+// reads as ON, which is what every account was before the switch existed --
+// a missing table must not silently stop every text in the product.
+async function smsOff(env, accountId) {
+  try {
+    const r = await env.DB.prepare(`SELECT sms_off FROM account_sms_settings WHERE account_id = ?`)
+      .bind(accountId).first();
+    return !!r?.sms_off;
+  } catch (err) {
+    if (missingSchema(err)) return false;
+    throw err;
+  }
 }
 
 // EVERY TEXT AN ACCOUNT SENDS GOES THROUGH HERE, which is what makes the
@@ -19493,10 +19534,11 @@ async function smsUsage(env, accountId, now = new Date()) {
 // seventh -- the emergency call-out -- was not even logged, so it was missing
 // from the console's figure and would have been missing from the bill.
 //
-// Past the included 2,500 a text STILL GOES on a billable account: the
-// overage is charged on the following month's bill by `smsOverageSweep`, in
-// $50 blocks of 5,000. What stops a text is only Basic (no texts), an account
-// with nothing to bill, or the runaway ceiling -- see shared/smsquota.js.
+// Past the included 2,500 a text STILL GOES on a billable account: the month
+// is charged on the 1st by `smsOverageSweep`, in $50 blocks of 5,000. What
+// stops a text is the account having turned texts off, Basic (no texts), an
+// account with nothing to bill, or the runaway ceiling -- see
+// shared/smsquota.js.
 //
 // The order is deliberate. Unconfigured first, because "texting isn't set up"
 // is the more useful answer and spending a database read to give a worse one
@@ -19513,7 +19555,7 @@ async function sendAccountSms(env, { accountId, companyId = null, to, body, kind
   if (accountId) {
     try {
       const u = await smsUsage(env, accountId);
-      verdict = smsVerdict({ allowance: u.allowance, used: u.used, kind, billable: u.billable });
+      verdict = smsVerdict({ allowance: u.allowance, used: u.used, kind, billable: u.billable, off: u.off });
     } catch (err) {
       // A count that cannot be read must not stop a text. Logged, and sent:
       // failing closed here would turn a database hiccup into nobody being
@@ -19535,23 +19577,26 @@ async function sendAccountSms(env, { accountId, companyId = null, to, body, kind
   // is not counted, so it opens nothing.
   if (result.ok && verdict.overage && verdict.startsBlock) {
     await logActivity(env, accountId, null, "sms_overage",
-      `Text messages passed ${(verdict.allowance + (verdict.blocks - 1) * SMS_BLOCK_MESSAGES).toLocaleString("en-US")} this month. `
-      + `Texts keep going; ${SMS_OVERAGE_TERMS} to next month's bill.`).catch(() => {});
+      `Text messages passed ${(verdict.blocks === 1 ? verdict.allowance : (verdict.blocks - 1) * SMS_BLOCK_MESSAGES).toLocaleString("en-US")} this month. `
+      + `Texts keep going and are charged on the 1st: ${SMS_OVERAGE_TERMS}. `
+      + `They can be turned off in Account, Subscription.`).catch(() => {});
   }
   return result;
 }
 
-// Bill last month's texts past the allowance. Nightly, and idempotent by
+// Bill last month's texts on the 1st. Nightly, and idempotent by
 // construction: one sms_overage row per account per month (the unique index),
 // written BEFORE Stripe is asked, so a night that dies halfway leaves a
 // pending row the next night finishes rather than a charge nobody recorded.
+// The 1st is simply the first night the month is over; a row that failed is
+// retried on the 2nd.
 //
-// HOW IT REACHES THE BILL. A Stripe invoice item on the customer, tied to the
-// Scale subscription, is pulled into that subscription's next invoice -- which
-// for a monthly plan IS the following month's bill. A yearly plan has no
-// monthly bill to ride on, and waiting up to eleven months to charge for
-// October's texts is not "the following month", so there the item is put on
-// an invoice of its own that Stripe charges to the card on file.
+// HOW IT REACHES THE BILL. An invoice item on the customer and an invoice of
+// its own, charged automatically to the card on file. The SAME shape for a
+// monthly and a yearly plan -- an earlier version rode a monthly plan's next
+// subscription invoice, which lands on whatever day the plan renews rather
+// than on the 1st, and gave a yearly one its own invoice. One path is one
+// thing to get right, and "charged on the 1st" is then true for everybody.
 //
 // Not exercised against live Stripe from here: the request shapes are the
 // documented ones, the suite asserts them at fetch, and the first real month
@@ -19599,36 +19644,33 @@ async function smsOverageSweep(env, now = new Date()) {
 
     const label = new Date(`${month}-01T12:00:00Z`).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
     const description = `Extra text messages, ${label}: ${row.used.toLocaleString("en-US")} sent, `
-      + `${row.allowance.toLocaleString("en-US")} included — ${row.blocks} × ${SMS_BLOCK_MESSAGES.toLocaleString("en-US")}`;
-    const yearly = a.billing === "annual";
+      + `${row.allowance.toLocaleString("en-US")} included — ${row.blocks} × ${SMS_BLOCK_MESSAGES.toLocaleString("en-US")} texts`;
     try {
+      // The invoice first, EXCLUDING whatever else is pending on the customer
+      // -- a proration from a plan change is not ours to charge on the 1st --
+      // then the one line put on it by id. auto_advance finalises it and
+      // charges the card on file within the hour.
+      const inv = await stripeCall(env, "/invoices", {
+        params: { customer: a.stripe_customer_id, collection_method: "charge_automatically",
+          auto_advance: true, pending_invoice_items_behavior: "exclude", description,
+          metadata: { account_id: a.id, sms_overage_id: row.id, month } },
+        idempotencyKey: `sms-overage-invoice:${a.id}:${month}`,
+      });
       const item = await stripeCall(env, "/invoiceitems", {
         params: {
-          customer: a.stripe_customer_id, amount: row.amount_cents, currency: "usd", description,
-          // On a monthly plan the line rides the subscription's next invoice.
-          // On a yearly one it goes on an invoice of its own, below.
-          ...(yearly ? {} : { subscription: a.stripe_subscription_id }),
+          customer: a.stripe_customer_id, invoice: inv.id, amount: row.amount_cents, currency: "usd", description,
           metadata: { account_id: a.id, sms_overage_id: row.id, month },
         },
         idempotencyKey: `sms-overage:${a.id}:${month}`,
       });
-      let ref = item.id;
-      if (yearly) {
-        const inv = await stripeCall(env, "/invoices", {
-          params: { customer: a.stripe_customer_id, collection_method: "charge_automatically",
-            auto_advance: true, pending_invoice_items_behavior: "include", description,
-            metadata: { account_id: a.id, sms_overage_id: row.id, month } },
-          idempotencyKey: `sms-overage-invoice:${a.id}:${month}`,
-        });
-        ref = `${item.id} ${inv.id}`;
-      }
+      const ref = `${item.id} ${inv.id}`;
       await env.DB.prepare(
         `UPDATE sms_overage SET status = 'billed', processor_ref = ?, error = NULL,
            billed_at = CURRENT_TIMESTAMP WHERE id = ?`
       ).bind(ref, row.id).run();
       await logActivity(env, a.id, null, "sms_overage_billed",
         `${label}: ${row.used.toLocaleString("en-US")} texts sent. `
-        + `$${(row.amount_cents / 100).toLocaleString("en-US")} for the extra added to your bill.`).catch(() => {});
+        + `$${(row.amount_cents / 100).toLocaleString("en-US")} charged to your card on file.`).catch(() => {});
       out.billed += 1;
     } catch (err) {
       console.error("[sms-overage] billing failed:", a.id, err?.message || err);

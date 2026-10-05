@@ -50,15 +50,15 @@ const PLAN = { workOrderId: "wo_1", valueCents: 1000000, scopeKind: "labor_mater
   milestones: [{ id: "ms_1", seq: 1, label: "Tear-off", amountCents: 400000, status: "verified",
     verifiedAt: "2026-10-02 10:00:00" }, { id: "ms_2", seq: 2, label: "Shingles", amountCents: 600000, status: "pending" }],
   releases: [{ id: "rel_1", workOrderId: "wo_1", milestoneId: "ms_1", grossCents: 400000, retainageCents: 20000,
-    feeBps: 5, feeCents: 2000, netCents: 380000, status: "due", createdAt: "2026-10-02 10:00:00" }] };
+    feeBps: 50, feeCents: 2000, netCents: 380000, status: "due", createdAt: "2026-10-02 10:00:00" }] };
 const FUNDING = { configured: true, onScale: true, payeeReady: true, payeeStatus: "verified",
   fundedCents: 380000, refundedCents: 0, transferredCents: 0, dueCents: 380000, feesTakenCents: 0,
   feesDueCents: 2000, owedCents: 382000, availableCents: 380000, shortfallCents: 2000, refundableCents: 0,
   fundings: [], transfers: [] };
 // Over the included 2,500 this month, and billed for last month.
-const SMS = { used: 3140, allowance: 2500, included: 2500, billable: true, overageBlocks: 1, overageCents: 5000,
+const SMS = { used: 7000, allowance: 2500, included: 2500, billable: true, overageBlocks: 2, overageCents: 10000, off: false,
   blockMessages: 5000, blockPriceCents: 5000, maxBlocks: 20, configured: true,
-  lastMonth: { month: "2026-09", used: 8000, blocks: 2, amountCents: 10000, status: "billed" } };
+  lastMonth: { month: "2026-09", used: 12000, blocks: 3, amountCents: 15000, status: "billed" } };
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
@@ -76,6 +76,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     waivers: [], chain: { clear: true, reasons: [] } }];
   if (path === "/api/billing" && method === "GET") return [200, { plan: "scale", cycle: "monthly", status: "active",
     currentPeriodEnd: null, hasCustomer: true, configured: true, invoices: [], sms: SMS }];
+  if (path === "/api/billing/sms" && method === "PUT") { sent.push({ path, body }); return [200, { ok: true, off: !!body?.off }]; }
   if (path === "/api/work-orders/wo_1/fund" && method === "POST") {
     sent.push({ path, body });
     return [200, { fundingId: "f_1", clientSecret: "pi_1_secret_x", amountCents: body.amountCents }];
@@ -122,7 +123,7 @@ try {
       refusal: document.querySelector(".cx-found-note")?.innerText || "",
     }));
     t.ck("the pay window names the fee before anybody presses anything",
-      /Plus SubSub's fee of \$20\.00 \(0\.05% of each payment, at most \$500 a payment, after the first \$50,000 free\)/.test(r.fee), r.fee);
+      /Plus SubSub's fee of \$20\.00 \(0\.5% of each payment, at most \$500 a payment, after the first \$50,000 free\)/.test(r.fee), r.fee);
     t.ck("and says the subcontractor receives the full amount", /They receive the full \$3,800\.00/.test(r.fee), r.fee);
     // Funded for the net and not the fee: the screen's own check agrees with
     // the route's, and says how much to add.
@@ -142,7 +143,7 @@ try {
       box === "$6,020.00", box);
     const fee = await page.evaluate(() => document.querySelector(".fund-fee")?.innerText || "");
     t.ck("and the form says the fee is included, with the free amount",
-      /0\.05% of each payment, at most \$500 a payment, after the first \$50,000 free/.test(fee), fee);
+      /0\.5% of each payment, at most \$500 a payment, after the first \$50,000 free/.test(fee), fee);
     sent.length = 0;
     await page.evaluate(() => [...document.querySelectorAll(".form-actions .btn-solid")]
       .find((b) => /Continue/.test(b.innerText))?.click());
@@ -190,15 +191,31 @@ try {
       buttons: [...document.querySelectorAll(".sms-use button")].map((b) => b.innerText),
     }));
     t.ck("the Subscription tab opened", tab);
-    t.ck("it says how many texts went and how far over", r.line === "3,140 text messages this month — 640 over the 2,500 included.", r.line);
-    t.ck("and what the next bill will carry for it, before the bill arrives",
-      r.over === "$50 for an extra block of 5,000 will be added to next month's bill.", r.over);
+    t.ck("it says how many texts went", r.line === "7,000 text messages this month — past the 2,500 included.", r.line);
+    t.ck("and what the 1st will charge for them, before it does -- 7,000 is $100",
+      r.over === "So far this month comes to $100 (2 blocks of 5,000), charged automatically on the 1st.", r.over);
     t.ck("and how going over works", /texts keep going/.test(r.fine)
-      && /each extra 5,000 texts, or part of 5,000, adds \$50 to the following month's bill/.test(r.fine), r.fine);
+      && /\$50 for every 5,000 texts sent in the month, or part of 5,000 — 7,000 is \$100, 12,000 is \$150 — charged automatically on the 1st/.test(r.fine), r.fine);
     t.ck("and that emergencies always go", /Emergency call-outs are always texted/.test(r.fine), r.fine);
-    t.ck("last month's charge is shown", /September: 8,000 sent, \$100\.00 for the extra — on your bill/.test(r.last), r.last);
+    t.ck("last month's charge is shown -- 12,000 is $150", /September: 12,000 sent, \$150\.00 — charged on the 1st/.test(r.last), r.last);
     t.ck("the bar is amber, not red -- going over is billed, not broken", /\bover\b/.test(r.bar), r.bar);
-    t.ck("and there is nothing to buy -- it happens by itself", r.buttons.length === 0, r.buttons.join(","));
+    t.ck("there is nothing to buy -- only the switch to turn texts off",
+      JSON.stringify(r.buttons) === JSON.stringify(["On", "Off"]), r.buttons.join(","));
+    // Off follows the SERVER's answer, and says what still goes.
+    sent.length = 0;
+    await page.evaluate(() => [...document.querySelectorAll(".sms-switch button")]
+      .find((b) => b.innerText.trim() === "Off")?.click());
+    await wait(700);
+    const put = sent.find((x) => x.path === "/api/billing/sms");
+    t.ck("pressing Off asks the server", put?.body?.off === true, JSON.stringify(sent));
+    const after = await page.evaluate(() => ({
+      pressed: [...document.querySelectorAll(".sms-switch button")].map((b) => b.getAttribute("aria-pressed")),
+      note: document.querySelector(".sms-off-note")?.innerText || "",
+    }));
+    t.ck("and the switch reads Off", JSON.stringify(after.pressed) === JSON.stringify(["false", "true"]),
+      JSON.stringify(after.pressed));
+    t.ck("and it says emails and emergencies still go",
+      /Emails still go out, and emergency call-outs are still texted/.test(after.note), after.note);
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

@@ -1,6 +1,7 @@
 // Text messages: 2,500 a month on Scale, none on Basic, and past 2,500 texts
-// keep going and each extra 5,000 (or part) is $50 on the following month's
-// bill. app/shared/smsquota.js holds the figures.
+// keep going and the month is $50 for every 5,000 sent, counted from the first
+// (7,000 is $100, 12,000 is $150), charged on the 1st. An account can turn
+// texts off. app/shared/smsquota.js holds the figures.
 //
 // The property worth checking is what actually LEAVES, so Twilio and Stripe
 // are stubbed at `fetch` and read back: what reaches Twilio past the
@@ -13,7 +14,7 @@ import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
 import { SMS_INCLUDED_SCALE, SMS_BLOCK_MESSAGES, SMS_BLOCK_PRICE_CENTS, SMS_UNCAPPED_KINDS,
-  SMS_OVERAGE_MAX_BLOCKS, SMS_OVERAGE_TERMS, smsAllowance, smsVerdict, smsOverageBlocks,
+  SMS_OVERAGE_MAX_BLOCKS, SMS_OVERAGE_TERMS, smsAllowance, smsVerdict, smsOverageBlocks, smsOverageCents,
   monthStart, previousMonth, smsUsageText, smsOverageText } from "../shared/smsquota.js";
 
 let pass = 0, fail = 0;
@@ -33,8 +34,12 @@ console.log("\n-- the figures --");
   ck("Basic is none -- texts are part of Scale", smsAllowance({ onScale: false }) === 0);
   ck("2,500 sent is no overage", smsOverageBlocks({ allowance: 2500, used: 2500 }) === 0);
   ck("2,501 is one block -- part of 5,000 is a block", smsOverageBlocks({ allowance: 2500, used: 2501 }) === 1);
-  ck("7,500 is still one", smsOverageBlocks({ allowance: 2500, used: 7500 }) === 1);
-  ck("7,501 is two", smsOverageBlocks({ allowance: 2500, used: 7501 }) === 2);
+  ck("5,000 is still one", smsOverageBlocks({ allowance: 2500, used: 5000 }) === 1);
+  ck("5,001 is two -- the blocks count from the first text, not from the 2,500th",
+    smsOverageBlocks({ allowance: 2500, used: 5001 }) === 2);
+  // The owner's own examples, in their words.
+  ck("7,000 texts is $100", smsOverageCents(smsOverageBlocks({ allowance: 2500, used: 7000 })) === 10000);
+  ck("12,000 texts is $150", smsOverageCents(smsOverageBlocks({ allowance: 2500, used: 12000 })) === 15000);
   ck("the runaway guard caps the bill", smsOverageBlocks({ allowance: 2500, used: 10_000_000 }) === SMS_OVERAGE_MAX_BLOCKS);
 
   ck("under the allowance it goes", smsVerdict({ allowance: 2500, used: 2499, billable: true }).ok);
@@ -43,15 +48,23 @@ console.log("\n-- the figures --");
   ck("and the first text past it opens a block", first.startsBlock === true && first.blocks === 1);
   ck("the next one does not open another",
     smsVerdict({ allowance: 2500, used: 2501, billable: true }).startsBlock === false);
-  ck("the 7,501st opens the second block",
-    (() => { const v = smsVerdict({ allowance: 2500, used: 7500, billable: true }); return v.startsBlock && v.blocks === 2; })());
+  ck("the 5,001st opens the second block",
+    (() => { const v = smsVerdict({ allowance: 2500, used: 5000, billable: true }); return v.startsBlock && v.blocks === 2; })());
+  ck("and the 5,000th does not",
+    smsVerdict({ allowance: 2500, used: 4999, billable: true }).startsBlock === false);
   const comped = smsVerdict({ allowance: 2500, used: 2500, billable: false });
   ck("with nothing to bill it pauses at the allowance", !comped.ok && comped.reason === "sms_quota", JSON.stringify(comped));
-  const runaway = smsVerdict({ allowance: 2500, used: 2500 + SMS_OVERAGE_MAX_BLOCKS * 5000, billable: true });
+  ck("the last text inside the ceiling goes",
+    smsVerdict({ allowance: 2500, used: SMS_OVERAGE_MAX_BLOCKS * 5000 - 1, billable: true }).ok);
+  const runaway = smsVerdict({ allowance: 2500, used: SMS_OVERAGE_MAX_BLOCKS * 5000, billable: true });
   ck("and a runaway stops at the ceiling", !runaway.ok && runaway.reason === "sms_overage_ceiling", JSON.stringify(runaway));
   ck("an emergency call-out goes whatever the count",
     smsVerdict({ allowance: 2500, used: 9_000_000, kind: "emergency_dispatch" }).ok
     && smsVerdict({ allowance: 2500, used: 9000, kind: "emergency_dispatch", billable: false }).ok);
+  const off = smsVerdict({ allowance: 2500, used: 10, billable: true, off: true });
+  ck("an account that turned texts off sends none", !off.ok && off.reason === "sms_off", JSON.stringify(off));
+  ck("except an emergency call-out, which goes whatever the switch says",
+    smsVerdict({ allowance: 2500, used: 10, billable: true, off: true, kind: "emergency_dispatch" }).ok);
   ck("and that is a named kind, not a flag anybody can pass", SMS_UNCAPPED_KINDS.join(",") === "emergency_dispatch");
   ck("Basic is refused by name", smsVerdict({ allowance: 0, used: 0, billable: true }).reason === "sms_not_on_plan");
   ck("the month starts on the 1st, in the shape sms_log.at sorts against",
@@ -60,12 +73,14 @@ console.log("\n-- the figures --");
   ck("last month across a year end", pm.month === "2025-12" && pm.from === "2025-12-01" && pm.to === "2026-01-01",
     JSON.stringify(pm));
   ck("the usage line under the allowance", smsUsageText({ allowance: 2500, used: 1234 }) === "1,234 of 2,500 text messages used this month.");
-  ck("and over it", smsUsageText({ allowance: 2500, used: 3140 }) === "3,140 text messages this month — 640 over the 2,500 included.",
+  ck("and over it", smsUsageText({ allowance: 2500, used: 3140 }) === "3,140 text messages this month — past the 2,500 included.",
     smsUsageText({ allowance: 2500, used: 3140 }));
-  ck("what the next bill carries, in words",
-    smsOverageText({ allowance: 2500, used: 3140 }) === "$50 for an extra block of 5,000 will be added to next month's bill.",
-    smsOverageText({ allowance: 2500, used: 3140 }));
-  ck("the price phrase", SMS_OVERAGE_TERMS === "each extra 5,000 texts, or part of 5,000, adds $50", SMS_OVERAGE_TERMS);
+  ck("what the 1st will charge, in words",
+    smsOverageText({ allowance: 2500, used: 7000 }) === "So far this month comes to $100 (2 blocks of 5,000), charged automatically on the 1st.",
+    smsOverageText({ allowance: 2500, used: 7000 }));
+  ck("the price phrase carries the owner's examples",
+    SMS_OVERAGE_TERMS === "$50 for every 5,000 texts sent in the month, or part of 5,000 — 7,000 is $100, 12,000 is $150",
+    SMS_OVERAGE_TERMS);
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +131,7 @@ const LAST = previousMonth();
 function seed({ plan = "scale", comped = 0, billing = "monthly", sentThisMonth = 0, sentLastMonth = 0,
                 failedThisMonth = 0, withSub = true, migrate = true } = {}) {
   const db = freshDb({ base: SCHEMA, migrations: migrate ? [M070] : [] });
-  if (!migrate) db.exec(`DROP TABLE IF EXISTS sms_overage`);
+  if (!migrate) db.exec(`DROP TABLE IF EXISTS sms_overage; DROP TABLE IF EXISTS account_sms_settings`);
   db.exec(`
     INSERT INTO accounts(id,name,subdomain,kind,plan,comped,billing,stripe_customer_id,stripe_subscription_id)
       VALUES ('acc1','Outerhome','outerhome','general_contractor','${plan}',${comped},'${billing}',
@@ -157,7 +172,8 @@ console.log("\n-- past the allowance, texts keep going --");
   ck("the 2,501st goes too", twilio.length === 1 && r2.body.texted === true, JSON.stringify(r2.body));
   const told = activity(db, "sms_overage");
   ck("and the account is told, once, that it opened a $50 block",
-    told.length === 1 && /passed 2,500/.test(told[0]) && /each extra 5,000 texts, or part of 5,000, adds \$50 to next month's bill/.test(told[0]), told.join(" | "));
+    told.length === 1 && /passed 2,500/.test(told[0]) && /charged on the 1st: \$50 for every 5,000 texts/.test(told[0])
+    && /can be turned off/.test(told[0]), told.join(" | "));
   twilio = [];
   await invite(env);
   ck("the 2,502nd goes and does not tell them again",
@@ -202,6 +218,31 @@ console.log("\n-- past the allowance, texts keep going --");
   ck("a runaway month stops at the ceiling rather than billing for ever", twilio.length === 0, String(twilio.length));
 }
 
+console.log("\n-- an account can turn texts off --");
+{
+  const db = seed({ sentThisMonth: 10 });
+  const env = ENV(db);
+  let r = await call(env, "/api/billing/sms", { method: "PUT", seat: { u: "u_pm", a: "acc1" }, body: { off: true } });
+  ck("a project manager cannot -- it decides what the account is charged for", r.status === 403, String(r.status));
+  r = await call(env, "/api/billing/sms", { method: "PUT", body: {} });
+  ck("a body with no answer is refused rather than read as off", r.status === 400 && r.body.error === "off_required",
+    JSON.stringify(r.body));
+  r = await call(env, "/api/billing/sms", { method: "PUT", body: { off: true } });
+  ck("an admin turns them off", r.status === 200 && r.body.off === true, JSON.stringify(r.body));
+  ck("and the billing panel says so", (await call(env, "/api/billing")).body.sms?.off === true);
+  twilio = [];
+  const inv = await invite(env);
+  ck("then nothing is texted", twilio.length === 0, String(twilio.length));
+  ck("logged with the reason", /^sms_off/.test(lastLog(db)?.error || ""), JSON.stringify(lastLog(db)));
+  ck("while the email still goes", inv.body.emailed === true, JSON.stringify(inv.body));
+  ck("and the change is on the feed", activity(db, "sms_setting").length === 1);
+  r = await call(env, "/api/billing/sms", { method: "PUT", body: { off: false } });
+  twilio = [];
+  await invite(env);
+  ck("turned back on, they go again", r.body.off === false && twilio.length === 1, String(twilio.length));
+  ck("one row per account", db.prepare(`SELECT COUNT(*) n FROM account_sms_settings`).get().n === 1);
+}
+
 console.log("\n-- every text goes through the one door --");
 {
   const raw = (WORKER.match(/\bsendSms\(/g) || []).length;
@@ -236,19 +277,27 @@ console.log("\n-- the sweep bills last month, once --");
   const r = await call(env, "/api/cron/sms-overage", { headers: { Authorization: "Bearer cron_x" } });
   ck("it runs", r.status === 200 && r.body.billed === 1 && r.body.month === LAST.month, JSON.stringify(r.body));
   const item = stripe.find((x) => /\/invoiceitems$/.test(x.url));
+  const inv = stripe.find((x) => /\/invoices$/.test(x.url));
   ck("as an invoice item on the customer", item?.body?.customer === "cus_1", JSON.stringify(item?.body));
-  ck("for two blocks -- 5,500 over is two -- at $50 each", item?.body?.amount === "10000", item?.body?.amount);
+  ck("for two blocks -- 8,000 sent is two -- at $50 each", item?.body?.amount === "10000", item?.body?.amount);
   ck("in dollars", item?.body?.currency === "usd");
-  ck("riding the subscription's next invoice, which is the following month's bill",
-    item?.body?.subscription === "sub_1", item?.body?.subscription);
+  ck("on an invoice of its own, charged on the 1st rather than whenever the plan renews",
+    inv?.body?.customer === "cus_1" && inv?.body?.collection_method === "charge_automatically"
+    && inv?.body?.auto_advance === "true", JSON.stringify(inv?.body));
+  ck("the invoice is made first and the line put on it by id",
+    stripe.indexOf(inv) >= 0 && stripe.indexOf(inv) < stripe.indexOf(item)
+    && item?.body?.invoice === `in_${stripe.indexOf(inv) + 1}`,
+    JSON.stringify(item?.body));
+  ck("and it leaves anything else pending on the customer alone -- a proration is not ours to charge",
+    inv?.body?.pending_invoice_items_behavior === "exclude", inv?.body?.pending_invoice_items_behavior);
+  ck("never tied to the subscription's renewal", !("subscription" in (item?.body || {})), JSON.stringify(item?.body));
   ck("and it says what it is for", /Extra text messages/.test(item?.body?.description || "")
     && /8,000 sent/.test(item?.body?.description || ""), item?.body?.description);
   ck("with an idempotency key on the account and month",
     item?.headers?.["Idempotency-Key"] === `sms-overage:acc1:${LAST.month}`, item?.headers?.["Idempotency-Key"]);
-  ck("a monthly plan gets no invoice of its own", !stripe.some((x) => /\/invoices$/.test(x.url)));
   const row = db.prepare(`SELECT * FROM sms_overage WHERE account_id='acc1'`).get();
-  ck("the month is recorded as billed, with Stripe's reference",
-    row?.status === "billed" && /^ii_/.test(row?.processor_ref || "") && row.blocks === 2 && row.amount_cents === 10000,
+  ck("the month is recorded as billed, with both of Stripe's references",
+    row?.status === "billed" && /^ii_\d+ in_\d+$/.test(row?.processor_ref || "") && row.blocks === 2 && row.amount_cents === 10000,
     JSON.stringify(row));
   ck("and the account is told it was billed", activity(db, "sms_overage_billed").length === 1);
   ck("the billed check reads zero", runCheck(db).m070_inv_billed_unrecorded === 0);
@@ -271,19 +320,23 @@ console.log("\n-- the sweep bills last month, once --");
   ck("exactly the allowance bills nothing", r.body.accounts === 0 && stripe.length === 0, JSON.stringify(r.body));
 }
 {
-  const db = seed({ sentLastMonth: 3000, billing: "annual" });
+  // 12,000 is three blocks, $150 -- and a yearly plan is charged the same way,
+  // on the 1st, because there is one path.
+  const db = seed({ sentLastMonth: 12000, billing: "annual" });
   stripe = [];
   await call(ENV(db), "/api/cron/sms-overage", { headers: { Authorization: "Bearer cron_x" } });
   const item = stripe.find((x) => /\/invoiceitems$/.test(x.url));
   const inv = stripe.find((x) => /\/invoices$/.test(x.url));
-  ck("a yearly plan's item is NOT left waiting on next year's renewal", item && !("subscription" in item.body),
-    JSON.stringify(item?.body));
-  ck("it goes on an invoice of its own, charged to the card on file",
-    inv?.body?.customer === "cus_1" && inv?.body?.collection_method === "charge_automatically"
-    && inv?.body?.auto_advance === "true" && inv?.body?.pending_invoice_items_behavior === "include",
+  ck("12,000 texts is $150", item?.body?.amount === "15000", item?.body?.amount);
+  ck("and a yearly plan is charged on the 1st exactly as a monthly one is",
+    inv?.body?.collection_method === "charge_automatically" && !("subscription" in (item?.body || {})),
     JSON.stringify(inv?.body));
-  ck("and both references are recorded",
-    /^ii_\d+ in_\d+$/.test(db.prepare(`SELECT processor_ref r FROM sms_overage`).get()?.r || ""));
+}
+{
+  const db = seed({ sentLastMonth: 7000 });
+  stripe = [];
+  await call(ENV(db), "/api/cron/sms-overage", { headers: { Authorization: "Bearer cron_x" } });
+  ck("7,000 texts is $100", stripe.find((x) => /\/invoiceitems$/.test(x.url))?.body?.amount === "10000");
 }
 {
   const db = seed({ sentLastMonth: 3000 });
@@ -315,6 +368,7 @@ console.log("\n-- migration 070 --");
   const db = seed();
   ck("CHECK.sql sees the table", runCheck(db).m070_sms_overage === 6, String(runCheck(db).m070_sms_overage));
   ck("and the one-row-per-month index", runCheck(db).m070_sms_overage_unique === 1);
+  ck("and the switch's table", runCheck(db).m070_sms_settings === 4, String(runCheck(db).m070_sms_settings));
   ck("the migration has no ALTER TABLE, so it can be pasted twice",
     !/ALTER TABLE/.test(M070.replace(/--.*$/gm, "")));
   const old = seed({ migrate: false, sentThisMonth: 2600, sentLastMonth: 3000 });
@@ -324,6 +378,9 @@ console.log("\n-- migration 070 --");
   const r = await call(ENV(old), "/api/cron/sms-overage", { headers: { Authorization: "Bearer cron_x" } });
   ck("and the sweep names the migration rather than charging what it cannot record",
     r.body.migration === "070_sms_overage", JSON.stringify(r.body));
+  const sw = await call(ENV(old), "/api/billing/sms", { method: "PUT", body: { off: true } });
+  ck("and the switch names it too, rather than claiming texts are off",
+    sw.status === 503 && sw.body.migration === "070_sms_overage", JSON.stringify(sw.body));
 }
 
 console.log("\n-- the marketing site quotes the same figures --");
@@ -337,7 +394,7 @@ console.log("\n-- the marketing site quotes the same figures --");
   const fee = `${PLATFORM_FEE_BPS / 100}% of each payment`;
   const cap = `never more than $${n(PLATFORM_FEE_CAP_CENTS / 100)}`;
   const sms = `${n(SMS_INCLUDED_SCALE)} a month`;
-  const over = `each extra ${n(SMS_BLOCK_MESSAGES)}, or part of ${n(SMS_BLOCK_MESSAGES)}, is $${SMS_BLOCK_PRICE_CENTS / 100}`;
+  const over = `$${SMS_BLOCK_PRICE_CENTS / 100} for every ${n(SMS_BLOCK_MESSAGES)} sent that month`;
   for (const page of ["index.html", "pricing.html"]) {
     const html = readFileSync(new URL(`../../${page}`, import.meta.url), "utf8");
     const visible = html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<!--[\s\S]*?-->/g, "");
@@ -349,7 +406,10 @@ console.log("\n-- the marketing site quotes the same figures --");
     ck(`${page}: and that the subcontractor receives the full amount`,
       /your subcontractor receives the full amount/.test(visible));
     ck(`${page}: the texts answer says ${sms}`, visible.includes(sms));
-    ck(`${page}: and how going over is billed`, visible.includes(over) && /following month's bill/.test(visible));
+    ck(`${page}: and how going over is billed`, visible.includes(over) && /charged automatically on the 1st/.test(visible));
+    ck(`${page}: with the owner's examples`, visible.includes("7,000 texts is $100, 12,000 is $150"));
+    ck(`${page}: and that texts can be turned off`, /turn text messages off/.test(visible));
+    ck(`${page}: and no longer the old rule`, !/each extra 5,000, or part of 5,000/.test(html) && !/following month's bill/.test(html));
     ck(`${page}: and nothing still sells a pre-bought add-on`, !/Add 5,000 more a month/.test(html));
     ck(`${page}: and both are in the structured data the crawler reads`,
       /What does SubSub charge to pay my subcontractors\?/.test(ld) && /How many text messages come with Scale\?/.test(ld));

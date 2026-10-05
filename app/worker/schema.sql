@@ -2148,6 +2148,14 @@ CREATE TABLE IF NOT EXISTS sms_overage (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_sms_overage_month ON sms_overage(account_id, month);
 
+-- 070: the account's own switch to turn text messages off.
+CREATE TABLE IF NOT EXISTS account_sms_settings (
+  account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  sms_off     INTEGER NOT NULL DEFAULT 0,
+  updated_by  TEXT,
+  updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 071. An account's own fee terms, set from the staff console. No row means
 -- the defaults in app/shared/fee.js; each figure falls back on its own.
 CREATE TABLE IF NOT EXISTS account_fee_terms (

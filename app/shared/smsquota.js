@@ -1,10 +1,25 @@
 // How many text messages an account may send in a month, and what happens
 // past that.
 //
-// Scale includes 2,500 a month. Past that, texts KEEP GOING and the account is
-// charged automatically: $50 for each extra 5,000, or part of 5,000, added to
-// the following month's bill. Basic includes none, which is what the pricing
-// page has always said ("SMS notifications — Scale").
+// Scale includes 2,500 a month. Past that, texts KEEP GOING and the month is
+// charged in blocks of 5,000 COUNTED FROM THE FIRST TEXT, not from the 2,500th:
+// a month that ends at 7,000 is two blocks, $100, and one that ends at 12,000
+// is three, $150. A month at or under 2,500 is nothing. The charge is an
+// invoice of its own on the 1st, charged to the card on file -- the same day
+// for every account, monthly or yearly, because "billed on the 1st" is the
+// promise and a yearly plan has no monthly bill to ride on. Basic includes
+// none, which is what the pricing page has always said.
+//
+// THE BLOCKS COUNT FROM ZERO, AND THAT IS THE OWNER'S CALL RATHER THAN AN
+// ARITHMETIC SLIP. "Each extra 5,000 past 2,500" would make 7,000 one block;
+// the stated price is two. So 2,501 to 5,000 is $50, 5,001 to 10,000 is $100,
+// and the 2,500 are included in the sense that a month under them costs
+// nothing at all. The examples are pinned in test:smsquota in those words.
+//
+// AN ACCOUNT CAN TURN TEXTS OFF, and that is what makes billing automatically
+// fair: nobody is charged for a channel they did not want. Off means off --
+// emails still go -- except an emergency call-out, which is the one text that
+// goes whatever the switch says (below).
 //
 // Here rather than in the Worker because the route that sends a text, the
 // nightly sweep that bills the overage, the billing panel and the pricing
@@ -15,9 +30,7 @@
 // first version paused texts at the cap and sold 5,000 more as a monthly line
 // somebody had to buy in advance. That makes the account guess its volume and
 // pay for the guess every month, and it makes running out a silent failure --
-// a work order not texted on the 28th because nobody topped up. Charging for
-// what was actually sent, in the same $50 blocks, is the shape that never
-// stops a notice and never bills for texts nobody sent.
+// a work order not texted on the 28th because nobody topped up.
 //
 // TWO PLACES THE CAP STILL PAUSES, both because there is nobody to charge or
 // something has gone wrong:
@@ -27,15 +40,15 @@
 //     with the email still going. Charging an account we gave the plan to is
 //     not a decision a sweep should make.
 //
-//   * A runaway. SMS_OVERAGE_MAX_BLOCKS extra blocks in one month is a loop,
-//     not a busy month, and a loop billing a customer $50 every 5,000 texts
-//     with nobody watching is the worst thing this file could do. Past it
-//     texts pause and the account is told why.
+//   * A runaway. SMS_OVERAGE_MAX_BLOCKS blocks in one month is a loop, not a
+//     busy month, and a loop billing a customer $50 every 5,000 texts with
+//     nobody watching is the worst thing this file could do. Past it texts
+//     pause and the account is told why.
 //
-// AN EMERGENCY CALL-OUT IS SENT WHATEVER THE COUNT. A tenant reporting a flood
-// at 2am and the emergency contractor not being told because of a cap is the
-// most expensive failure this file could produce. It still counts, so the
-// number on the screen and the bill are true.
+// AN EMERGENCY CALL-OUT IS SENT WHATEVER THE COUNT OR THE SWITCH. A tenant
+// reporting a flood at 2am and the emergency contractor not being told because
+// of a cap is the most expensive failure this file could produce. It still
+// counts, so the number on the screen and the bill are true.
 //
 // Counted in MESSAGES, not segments. Carriers bill per 160-character segment
 // and sms_log keeps that figure for the console, but a price people read in
@@ -44,8 +57,8 @@
 
 export const SMS_INCLUDED_SCALE = 2500;
 export const SMS_BLOCK_MESSAGES = 5000;
-export const SMS_BLOCK_PRICE_CENTS = 5000;          // $50 per extra 5,000
-export const SMS_OVERAGE_MAX_BLOCKS = 20;           // a runaway guard: 100,000 extra, $1,000
+export const SMS_BLOCK_PRICE_CENTS = 5000;          // $50 a block of 5,000
+export const SMS_OVERAGE_MAX_BLOCKS = 20;           // a runaway guard: 100,000 texts, $1,000
 
 // Kinds that are sent past every limit. Named, not a flag at the call site:
 // an "urgent" boolean anybody can pass is a cap anybody can switch off.
@@ -72,11 +85,14 @@ export function smsAllowance({ onScale = false } = {}) {
   return onScale ? SMS_INCLUDED_SCALE : 0;
 }
 
-// How many extra blocks a month's count comes to: every 5,000 over the
-// allowance, and any part of one, is a block. 2,501 sent is one block.
+// How many blocks a month's count comes to. Nothing at or under the
+// allowance; past it, one block for every 5,000 sent COUNTED FROM THE FIRST,
+// and any part of one: 2,501 is one, 7,000 is two, 12,000 is three.
+const blocksAt = (allowance, used) =>
+  allowance > 0 && used > allowance ? Math.ceil(used / SMS_BLOCK_MESSAGES) : 0;
+
 export function smsOverageBlocks({ allowance = 0, used = 0 } = {}) {
-  if (allowance <= 0 || used <= allowance) return 0;
-  return Math.min(SMS_OVERAGE_MAX_BLOCKS, Math.ceil((used - allowance) / SMS_BLOCK_MESSAGES));
+  return Math.min(SMS_OVERAGE_MAX_BLOCKS, blocksAt(allowance, used));
 }
 
 export const smsOverageCents = (blocks) => Math.max(0, Math.round(blocks)) * SMS_BLOCK_PRICE_CENTS;
@@ -85,46 +101,51 @@ export const smsOverageCents = (blocks) => Math.max(0, Math.round(blocks)) * SMS
 //
 //   allowance  what is included this month
 //   used       what has already been sent this month
-//   billable   whether there is a subscription to add an overage to
+//   billable   whether there is a card on a subscription to charge
+//   off        the account has turned text messages off
 //
 // `startsBlock` is true on the text that opens a new $50 block -- the moment
 // worth telling the account about, once, rather than on every text after it.
-export function smsVerdict({ allowance = 0, used = 0, kind = "", billable = false } = {}) {
+export function smsVerdict({ allowance = 0, used = 0, kind = "", billable = false, off = false } = {}) {
   const left = Math.max(0, allowance - used);
   if (SMS_UNCAPPED_KINDS.includes(kind)) return { ok: true, uncapped: true, allowance, used, left };
+  if (off) return { ok: false, reason: "sms_off", allowance, used, left };
   if (allowance <= 0) return { ok: false, reason: "sms_not_on_plan", allowance, used, left };
   if (used < allowance) return { ok: true, allowance, used, left };
   if (!billable) return { ok: false, reason: "sms_quota", allowance, used, left: 0 };
   // This text is message number used + 1.
-  const blocks = Math.ceil((used + 1 - allowance) / SMS_BLOCK_MESSAGES);
+  const blocks = blocksAt(allowance, used + 1);
   if (blocks > SMS_OVERAGE_MAX_BLOCKS) {
     return { ok: false, reason: "sms_overage_ceiling", allowance, used, left: 0 };
   }
-  return { ok: true, overage: true, blocks, startsBlock: (used - allowance) % SMS_BLOCK_MESSAGES === 0,
+  return { ok: true, overage: true, blocks, startsBlock: blocks > blocksAt(allowance, used),
     allowance, used, left: 0 };
 }
 
 const n = (x) => Math.round(x).toLocaleString("en-US");
 const usd = (cents) => `$${(Math.round(cents) / 100).toLocaleString("en-US")}`;
 
-// "each extra 5,000 texts, or part of 5,000, adds $50" -- one phrase, read by
-// the panel and the activity line, so the two cannot quote two prices.
+// One phrase for how going over is priced, read by the panel and the activity
+// line, so the two cannot quote two prices.
 export const SMS_OVERAGE_TERMS =
-  `each extra ${n(SMS_BLOCK_MESSAGES)} texts, or part of ${n(SMS_BLOCK_MESSAGES)}, adds ${usd(SMS_BLOCK_PRICE_CENTS)}`;
+  `${usd(SMS_BLOCK_PRICE_CENTS)} for every ${n(SMS_BLOCK_MESSAGES)} texts sent in the month, `
+  + `or part of ${n(SMS_BLOCK_MESSAGES)} — `
+  + `${n(7000)} is ${usd(smsOverageCents(2))}, ${n(12000)} is ${usd(smsOverageCents(3))}`;
 
 // The usage line on the billing panel, in words.
 export function smsUsageText({ allowance = 0, used = 0 } = {}) {
   if (allowance <= 0) return "Text messages are part of Scale.";
   if (used <= allowance) return `${n(used)} of ${n(allowance)} text messages used this month.`;
-  return `${n(used)} text messages this month — ${n(used - allowance)} over the ${n(allowance)} included.`;
+  return `${n(used)} text messages this month — past the ${n(allowance)} included.`;
 }
 
-// What the next bill will carry for this month so far, in words.
+// What the 1st will charge for this month so far, in words.
 export function smsOverageText({ allowance = 0, used = 0 } = {}) {
   const blocks = smsOverageBlocks({ allowance, used });
   if (!blocks) return "";
-  return `${usd(smsOverageCents(blocks))} for ${blocks === 1 ? "an extra" : `${blocks} extra`} `
-    + `block${blocks === 1 ? "" : "s"} of ${n(SMS_BLOCK_MESSAGES)} will be added to next month's bill.`;
+  return `So far this month comes to ${usd(smsOverageCents(blocks))} `
+    + `(${blocks === 1 ? "one block" : `${blocks} blocks`} of ${n(SMS_BLOCK_MESSAGES)}), `
+    + `charged automatically on the 1st.`;
 }
 
 // Why a text did not go, said where it shows up on a screen.
@@ -132,5 +153,6 @@ export function smsRefusalText(reason) {
   if (reason === "sms_quota") return "this month's included text messages are used up; they start again on the 1st";
   if (reason === "sms_overage_ceiling") return "this month's text messages hit the safety limit; contact SubSub";
   if (reason === "sms_not_on_plan") return "text messages are part of Scale";
+  if (reason === "sms_off") return "text messages are turned off for this account";
   return "";
 }

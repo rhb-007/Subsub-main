@@ -187,7 +187,7 @@ console.log("\n-- retainage and the fee, held back across milestones --");
   ck("and the rest went out -- none of it to SubSub", net === 95000, String(net));
   const rels = (await json(await call(env, ADMIN, "/api/work-orders/wo1/plan")))[1].releases;
   ck("the fee rate in force is stamped on every release",
-    rels.every((r) => r.feeBps === 5), rels.map((r) => r.feeBps).join(","));
+    rels.every((r) => r.feeBps === 50), rels.map((r) => r.feeBps).join(","));
   // $1,000 of work is inside the first $50,000, so nothing is charged on it.
   ck("and inside the free first $50,000 the fee is nothing",
     rels.reduce((n, r) => n + r.feeCents, 0) === 0, rels.map((r) => r.feeCents).join(","));

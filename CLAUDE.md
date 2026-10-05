@@ -2778,16 +2778,17 @@ refactor.
   issued, over a fault nobody told them about — the same silent failure one
   screen along. The modal says so, at the moment of closing.
 
-- **SUBSUB'S FEE IS 0.05% OF A PAYMENT, AT MOST $500 A PAYMENT, CHARGED TO
-  THE HIRING ACCOUNT ON TOP -- AND ONLY ON MONEY THAT GOES THROUGH SUBSUB.**
-  `app/shared/fee.js`. The rate is the owner's call and was corrected from
-  0.5% to 0.05% the day it shipped -- a "point oh five" said aloud is exactly
-  the figure that gets an extra zero, so the test pins the rate in words as
-  well as in basis points. Worth knowing beside it: at 0.05% a $4,000 payment
-  earns $2, and a Stripe bank transfer costs SubSub up to $5 before Connect's
-  payout fees, so on most payments this fee does not cover the rail. That is a
-  pricing decision, recorded rather than reopened. The cap is **per payment**
-  and only binds above $1,000,000.
+- **SUBSUB'S FEE IS 0.5% OF A PAYMENT -- HALF OF ONE PER CENT -- AT MOST $500
+  A PAYMENT, CHARGED TO THE HIRING ACCOUNT ON TOP, AND ONLY ON MONEY THAT GOES
+  THROUGH SUBSUB.** `app/shared/fee.js`. The rate is the owner's call and it
+  has moved twice: 0.5% when it shipped, 0.05% the same day, and back to 0.5%
+  ("1/2 of 1%") the day after. A "point five" said aloud is exactly the figure
+  that loses or gains a zero, so the test pins the rate **in words as well as
+  in basis points** (`PLATFORM_FEE_BPS === 50`, "half of one per cent"), and the
+  console panel takes a percent rather than basis points for the same reason.
+  At 0.5% a $4,000 payment earns $20 against a Stripe bank transfer that costs
+  up to $5 before Connect's payout fees. The cap is **per payment** and binds
+  from $100,000.
 
   **On top, never out of net, and that reverses what `money.js` did.** Net was
   gross less retainage less fee, so whatever SubSub charged came out of the
@@ -2872,9 +2873,42 @@ refactor.
   drawn fee and the amount on the wire, and undoing either half fails it.
 
 - **TEXT MESSAGES ARE 2,500 A MONTH ON SCALE, AND PAST THAT THEY KEEP GOING:
-  EACH EXTRA 5,000 (OR PART) IS $50 ON THE FOLLOWING MONTH'S BILL. NONE ON
-  BASIC.** `app/shared/smsquota.js`, migration 070 (`sms_overage`). Basic at
-  zero is what the pricing page always said; nothing enforced it until now.
+  $50 FOR EVERY 5,000 SENT, COUNTED FROM THE FIRST, CHARGED ON THE 1ST. AN
+  ACCOUNT CAN TURN TEXTS OFF. NONE ON BASIC.** `app/shared/smsquota.js`,
+  migration 070 (`sms_overage`, `account_sms_settings`). Basic at zero is what
+  the pricing page always said; nothing enforced it until now.
+
+  **THE BLOCKS COUNT FROM THE FIRST TEXT, NOT FROM THE 2,500TH, and that is
+  the owner's stated price rather than an arithmetic slip.** Asked for as
+  *"if they do 7k messages they will be charged $100, if 12k messages they will
+  be charged $150"*. "Each extra 5,000 past 2,500" makes 7,000 one block; the
+  price given is two. So a month at or under 2,500 is nothing, and past it the
+  month is `ceil(sent / 5,000)` blocks: 2,501 to 5,000 is $50, 5,001 to 10,000
+  is $100. The two examples are pinned in the test in those words, and the
+  mutation that counts from 2,500 fails eight assertions. A later pass that
+  "fixes" this to count from the allowance changes the price.
+
+  **CHARGED ON THE 1ST, ON AN INVOICE OF ITS OWN, FOR EVERY ACCOUNT.** The
+  previous version rode a monthly plan's next subscription invoice -- which
+  lands on whatever day the plan renews, not on the 1st -- and gave a yearly
+  plan an invoice of its own. One path now, the yearly one, because "billed on
+  the 1st" is the promise and two paths is two things to get right. The
+  invoice is created **first** with `pending_invoice_items_behavior: exclude`
+  and the line is put on it **by id**: `include` would sweep up anything else
+  pending on the customer, a plan-change proration most of all, and charge it
+  on the 1st under a description about text messages.
+
+  **TURNING TEXTS OFF IS WHAT MAKES CHARGING FOR THEM AUTOMATICALLY FAIR.**
+  *"They can always turn text notifications off"* -- so there is one switch,
+  on the account, admin only (`PUT /api/billing/sms`), because it decides what
+  the account is charged for. Off is `sms_off` in `smsVerdict`, logged as the
+  reason, with emails untouched. **An emergency call-out still goes**, for the
+  reason it goes past the cap: the switch exists to stop a bill, and a flood at
+  2am is not what anybody turning it off meant. No row is ON, and a database
+  without 070 reads as ON -- a missing table must not silently stop every text
+  in the product. The switch follows the **server's** answer, because a toggle
+  drawn as off over a write that did not happen is a bill somebody believes
+  they turned off.
 
   **It replaced a pre-bought add-on the same day, and the reason is the
   design.** The first version paused texts at 2,500 and sold 5,000 more as a
@@ -2903,18 +2937,16 @@ refactor.
   counts, so the bill is true.
 
   **The account is told when it happens, not when it is billed.** The text
-  that opens each new $50 block writes one activity line; the panel shows the
-  running overage and last month's charge. A charge nobody saw coming until the
+  that opens each new $50 block writes one activity line, which names the
+  switch; the panel shows what the 1st will charge so far and last month's
+  charge. A charge nobody saw coming until the
   invoice is the one that becomes a support call.
 
   **Billing is a nightly sweep of LAST month, idempotent by construction.**
   One `sms_overage` row per account per month (the unique index), written
   **before** Stripe is asked, so a night that dies halfway leaves a pending row
-  the next night finishes. A monthly plan gets a Stripe **invoice item tied to
-  the subscription**, which rides its next invoice -- the following month's
-  bill. A **yearly** plan has no monthly bill, and waiting up to eleven months
-  to charge for October is not "the following month", so its item goes on an
-  **invoice of its own** charged to the card on file. A refusal is `failed`
+  the next night finishes; the 1st is simply the first night the month is
+  over. A refusal is `failed`
   with Stripe's words and retried the next night; `m070_inv_billed_unrecorded`
   counts a month marked billed with no Stripe line behind it.
 
