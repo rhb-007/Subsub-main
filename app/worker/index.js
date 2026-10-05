@@ -105,11 +105,11 @@ import { SHARE_DAYS, PACK_KINDS, inLink, shareState, validRecipient,
 import { canHandOver, awaitingFrom, canDecide as canDecideTransfer,
   canCancel as canCancelTransfer, inheritedShape, openWorkText,
   canAppoint, canDeclareOwnership } from "../shared/handover.js";
-import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
+import { stripeCall, stripeV2Call, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 // Whether somebody can actually be paid, decided once and read by the
 // routes, the webhook and the browser.
-import { payoutSummary, rowFromStripe, PAYOUT_CONTROLLER, payoutAccountKey,
-  PLATFORM_NOT_READY, mintDetailFor } from "../shared/pay.js";
+import { payoutSummary, rowFromStripe, PAYOUT_ACCOUNT, payoutAccountKey,
+  PLATFORM_NOT_READY, mintDetailFor, STRIPE_V2_VERSION } from "../shared/pay.js";
 import {
   AGREEMENT_SOURCES, TERM_FIELDS, STANDARD_AGREEMENT, validTerms, mergeTerms,
   renderAgreement, canonicalText, kindsFor, agreementDocShape, waitingOn,
@@ -2138,6 +2138,24 @@ app.get("/api/payouts/status", requireRole("admin"), async (c) => {
   }
 });
 
+// Read a connected account as Stripe has it now, in whichever shape it was
+// minted. Accounts made since the move to v2 are read through v2; one minted
+// under v1 (test mode, before that move) answers v1's GET. A v2 read that
+// Stripe refuses as a client error is the signal to ask the old way -- a 5xx
+// is Stripe being down and is not retried, because asking a second endpoint
+// will not fix that and would hide it.
+async function readConnectedAccount(env, acctId) {
+  try {
+    return await stripeV2Call(env, `/v2/core/accounts/${acctId}`, {
+      method: "GET", version: STRIPE_V2_VERSION,
+      query: { include: ["configuration.recipient", "requirements"] },
+    });
+  } catch (err) {
+    if (!(err?.status >= 400 && err?.status < 500)) throw err;
+    return stripeCall(env, `/accounts/${acctId}`, { method: "GET" });
+  }
+}
+
 // The connected account for this company, minted if there is not one yet.
 //
 // NOBODY CONNECTS ANYTHING. A hireable company needs a payee record to be
@@ -2161,23 +2179,26 @@ async function connectedAccount(c, companyId) {
   }
   if (row?.processor_account_id) return { acctId: row.processor_account_id, row };
 
-  const co = await c.env.DB.prepare(`SELECT email FROM companies WHERE id = ?`)
+  const co = await c.env.DB.prepare(`SELECT email, company FROM companies WHERE id = ?`)
     .bind(companyId).first();
 
   // One request, built once, so the retry below cannot send a different one.
-  const mint = (keySuffix = "") => stripeCall(c.env, "/accounts", {
-    params: {
-      country: PAYOUT_COUNTRY,
-      ...(co?.email ? { email: co.email } : {}),
-      // Only `transfers`. The subcontractor receives money and never charges
-      // anybody, so `card_payments` would be asking them to be verified for
-      // something this product will never do with them.
-      capabilities: { transfers: { requested: "true" } },
-      // Who carries the losses is not free to choose here, and this shipped
-      // wrong in the only way Stripe refuses outright. The controller and the
-      // reasoning now live in `shared/pay.js` beside the key it is built
-      // into, because they are one fact -- see PAYOUT_CONTROLLER there.
-      controller: PAYOUT_CONTROLLER,
+  //
+  // ACCOUNTS V2. Stripe closed v1 account creation to new platforms in live
+  // mode; its API policy re-opening it reads "Available in test mode", which
+  // is not a door a live product can use. `shared/pay.js` says what each field
+  // carries over from the v1 controller, and `normalizeAccount` there reads
+  // the answer back into the shape everything else already understands.
+  const mint = (keySuffix = "") => stripeV2Call(c.env, "/v2/core/accounts", {
+    version: STRIPE_V2_VERSION,
+    body: {
+      ...PAYOUT_ACCOUNT,
+      ...(co?.email ? { contact_email: co.email } : {}),
+      ...(co?.company ? { display_name: String(co.company).trim().slice(0, 100) } : {}),
+      identity: { country: PAYOUT_COUNTRY.toLowerCase() },
+      // Asked for on the reply, or the reply carries none of what
+      // `rowFromStripe` reads and the first row written says nothing.
+      include: ["configuration.recipient", "requirements"],
       metadata: { company_id: companyId, account_id: c.get("auth").accountId },
     },
     // Two connected accounts for one company is two places money could go
@@ -2243,7 +2264,7 @@ async function connectedAccount(c, companyId) {
   }
 
   await savePayoutRow(c.env, { companyId, acctId: acct.id, acct });
-  return { acctId: acct.id, row: await payoutRow(c.env, companyId) };
+  return { acctId: acct.id, row: await payoutRow(c.env, companyId), minted: true };
 }
 
 // The embedded onboarding, which is the whole point: an Account Session is a
@@ -2260,8 +2281,22 @@ app.post("/api/payouts/session", requireRole("admin"), async (c) => {
   if (res) return res;
 
   try {
-    const { acctId, res: acctRes } = await connectedAccount(c, companyId);
+    const { acctId, minted, res: acctRes } = await connectedAccount(c, companyId);
     if (acctRes) return acctRes;
+
+    // Opening the screen re-reads where Stripe has got to. Without it the
+    // status here moves only on a webhook or a return from the hosted link --
+    // and a v2 account's events arrive in a different shape from v1's, so this
+    // is the reading that cannot be missed. Best effort: a failed read leaves
+    // the row as it was rather than costing somebody the form.
+    if (!minted) {
+      try {
+        const acct = await readConnectedAccount(c.env, acctId);
+        await savePayoutRow(c.env, { companyId, acctId, acct });
+      } catch (err) {
+        console.error("[payouts] status re-read failed:", err?.message || err);
+      }
+    }
 
     const session = await stripeCall(c.env, "/account_sessions", {
       params: {
@@ -2310,18 +2345,26 @@ app.post("/api/payouts/connect", requireRole("admin"), async (c) => {
 
     // Fresh every time, and never stored. Single-use, and it expires in
     // minutes.
-    const link = await stripeCall(c.env, "/account_links", {
-      params: {
-        account: acctId,
-        type: "account_onboarding",
-        // Stripe sends them here when the link has gone stale mid-flow. It
-        // lands on the same screen, which mints another one.
-        refresh_url: `${APP_ORIGIN}/?payouts=refresh`,
-        // And here when they come back -- finished or not, which is why the
-        // screen asks the server rather than believing this.
-        return_url: `${APP_ORIGIN}/?payouts=return`,
-      },
-    });
+    // v2's link for a v2 account, v1's for one minted before the move. Same
+    // two addresses either way: Stripe sends them back to `refresh_url` when
+    // the link has gone stale mid-flow (which lands on the same screen, which
+    // mints another), and to `return_url` when they come back -- finished or
+    // not, which is why the screen asks the server rather than believing it.
+    const refresh_url = `${APP_ORIGIN}/?payouts=refresh`;
+    const return_url = `${APP_ORIGIN}/?payouts=return`;
+    let link;
+    try {
+      link = await stripeV2Call(c.env, "/v2/core/account_links", {
+        version: STRIPE_V2_VERSION,
+        body: { account: acctId,
+          use_case: { type: "account_onboarding", account_onboarding: { refresh_url, return_url } } },
+      });
+    } catch (err) {
+      if (!(err?.status >= 400 && err?.status < 500)) throw err;
+      link = await stripeCall(c.env, "/account_links", {
+        params: { account: acctId, type: "account_onboarding", refresh_url, return_url },
+      });
+    }
     return c.json({ url: link.url });
   } catch (err) {
     if (missingSchema(err)) return c.json(payoutMigration(), 503);
@@ -2351,7 +2394,7 @@ app.post("/api/payouts/refresh", requireRole("admin"), async (c) => {
   if (!row) return c.json({ error: "not_started" }, 409);
 
   try {
-    const acct = await stripeCall(c.env, `/accounts/${row.processor_account_id}`, { method: "GET" });
+    const acct = await readConnectedAccount(c.env, row.processor_account_id);
     await savePayoutRow(c.env, { companyId, acctId: row.processor_account_id, acct });
     return c.json({ ...payoutSummary(await payoutRow(c.env, companyId)), configured: true });
   } catch (err) {
@@ -2388,7 +2431,20 @@ app.post("/api/stripe/connect-webhook", async (c) => {
   }
 
   try {
-    if (event.type === "account.updated") {
+    // A v2 account's changes arrive as a THIN event: a type and the id of what
+    // changed, with no object attached. So it is read back from Stripe rather
+    // than trusted from the payload, which is the safer reading anyway.
+    if (event.object === "v2.core.event" && /^v2\.core\.account/.test(event.type || "")
+        && event.related_object?.id) {
+      const acctId = event.related_object.id;
+      const row = await c.env.DB.prepare(
+        `SELECT company_id FROM payout_accounts WHERE processor = 'stripe' AND processor_account_id = ?`
+      ).bind(acctId).first();
+      if (row) {
+        const acct = await readConnectedAccount(c.env, acctId);
+        await savePayoutRow(c.env, { companyId: row.company_id, acctId, acct });
+      }
+    } else if (event.type === "account.updated") {
       const acct = event.data?.object || {};
       const row = acct.id ? await c.env.DB.prepare(
         `SELECT company_id FROM payout_accounts WHERE processor = 'stripe' AND processor_account_id = ?`

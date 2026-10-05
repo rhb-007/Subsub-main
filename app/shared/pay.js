@@ -13,6 +13,57 @@
 // -- and is never written to one.
 export const PAYOUT_STATES = ["none", "pending", "verified", "rejected"];
 
+// ACCOUNTS V2 IS HOW A CONNECTED ACCOUNT IS MINTED NOW, and Stripe answers in
+// a different shape. v1 said `payouts_enabled`, `capabilities.transfers` and
+// `requirements.currently_due` (a list of field keys); v2 says
+// `configuration.recipient.capabilities.stripe_balance.{stripe_transfers,
+// payouts}.status` and `requirements.entries` (a list of things to do, each
+// with Stripe's own `description`). Stripe closed v1 account creation to new
+// platforms in live mode -- the API policy that would re-open it reads
+// "Available in test mode" -- so this was not a choice.
+//
+// Every function below reads the v1 shape, and `normalizeAccount` is the one
+// place a v2 account is turned into it. One translation rather than every
+// reader learning both shapes, because a reader that learned only one would
+// answer "not payable" about an account Stripe had cleared -- silently, on the
+// one screen a subcontractor cannot be paid without. Accounts minted under v1
+// in test mode still arrive in the old shape and pass through untouched.
+//
+// Field names are read off Stripe's own SDK types (stripe-node 23, API version
+// STRIPE_V2_VERSION below), not written from memory -- the docs site is
+// unreachable from where this was built, and a guessed field name is a panel
+// that reads "pending" for ever.
+export const STRIPE_V2_VERSION = "2026-09-30.endive";
+
+const isV2 = (acct) => acct?.object === "v2.core.account" || (!!acct && "configuration" in acct);
+
+// A capability with no status reported is not the same as one refused. v2
+// reports `payouts` under the recipient configuration without it being
+// requestable there, so if Stripe has not said anything about it yet, being
+// able to receive transfers is the best available reading -- the alternative
+// is an account Stripe has fully cleared reading "pending" for ever.
+export function normalizeAccount(acct) {
+  if (!isV2(acct)) return acct;
+  const bal = acct.configuration?.recipient?.capabilities?.stripe_balance || {};
+  const transfers = bal.stripe_transfers?.status || "inactive";
+  const payouts = bal.payouts?.status || transfers;
+  const rejected = [bal.stripe_transfers, bal.payouts].find((c) => c?.status === "rejected");
+  const code = String(rejected?.status_details?.[0]?.code || "rejected_other").replace(/^rejected_/, "");
+  // Only what the subcontractor can act on, and only what is due now.
+  // `eventually_due` is left out for the reason it is left out of the v1 list.
+  const due = (acct.requirements?.entries || [])
+    .filter((e) => e?.awaiting_action_from !== "stripe")
+    .filter((e) => ["currently_due", "past_due"].includes(e?.minimum_deadline?.status))
+    .map((e) => e.description)
+    .filter(Boolean);
+  return {
+    id: acct.id,
+    payouts_enabled: payouts === "active",
+    capabilities: { transfers },
+    requirements: { currently_due: due, disabled_reason: rejected ? `rejected.${code}` : null },
+  };
+}
+
 // Two different capabilities, and the difference matters.
 //
 //   transfers active  -- money may move INTO their Stripe balance.
@@ -87,6 +138,10 @@ const LABELS = {
 
 export function requirementLabel(key) {
   if (LABELS[key]) return LABELS[key];
+  // A v2 requirement arrives as Stripe's own sentence rather than a field key,
+  // and a sentence is already in words -- running it through the key
+  // tidier below would strip its punctuation for nothing.
+  if (/\s/.test(String(key || "").trim())) return String(key).trim();
   // `individual.dob.year` and `individual.dob.day` are one thing to a person.
   const trimmed = String(key || "").replace(/\.(day|month|year)$/, "");
   if (LABELS[trimmed]) return LABELS[trimmed];
@@ -134,7 +189,8 @@ export function payoutSummary(row) {
 // What we write to the row, from what Stripe just told us. One function, so
 // the create path, the refresh path and the webhook cannot record three
 // different readings of the same account.
-export function rowFromStripe(acct) {
+export function rowFromStripe(raw) {
+  const acct = normalizeAccount(raw);
   return {
     kycStatus: payoutStatus(acct),
     payoutsEnabled: acct?.payouts_enabled ? 1 : 0,
@@ -185,23 +241,41 @@ export const PLATFORM_NOT_READY = "platform_not_ready";
 // a customer cannot claim it.
 export const mintDetailFor = (auth) => !!auth?.impersonatedBy;
 
-// THE CONTROLLER EVERY CONNECTED ACCOUNT IS MINTED WITH, and the key that
-// request goes out under. They are one value because they are one fact, and
-// keeping them apart cost a day.
+// THE SHAPE EVERY CONNECTED ACCOUNT IS MINTED WITH, and the key that request
+// goes out under. They are one value because they are one fact, and keeping
+// them apart cost a day.
 //
-// `losses.payments` is `stripe` because Stripe validates the COMBINATION:
-// with `stripe_dashboard: none` and `requirement_collection: stripe` it
-// refuses anything else outright. The two alternatives are both refused in
-// this product's own words -- `requirement_collection: "application"` moves
-// the compliance obligation, the disputes and the negative balances onto
-// SubSub, which is a different company; an Express dashboard hands the
-// subcontractor a Stripe-branded website to be sent to, which is the whole
-// thing the embedded onboarding exists to avoid.
-export const PAYOUT_CONTROLLER = {
-  fees: { payer: "application" },
-  losses: { payments: "stripe" },
-  requirement_collection: "stripe",
-  stripe_dashboard: { type: "none" },
+// This is the v1 `controller` carried into v2's words, decision for decision:
+//
+//   `dashboard: none` -- no Stripe-branded website to be sent to; SubSub is
+//     the only surface they see, which is what the embedded onboarding exists
+//     for. (v1: `stripe_dashboard.type: none`.)
+//
+//   `losses_collector: stripe` -- Stripe carries negative balances, refunds
+//     and chargebacks. v1 refused anything else alongside no dashboard and
+//     Stripe collecting the requirements, and the reasons to keep it are this
+//     product's own: carrying them is a different company.
+//
+//   `fees_collector: application` -- SubSub pays Stripe's fee. Who pays the
+//     fee and who eats a chargeback are separate questions.
+//
+//   The RECIPIENT configuration with `stripe_balance.stripe_transfers` -- they
+//     receive transfers and never charge anybody, so nothing merchant-shaped is
+//     requested (v1: `transfers` only, never `card_payments`). This is the
+//     configuration Stripe names for separate charges and transfers, which is
+//     how money moves here.
+//
+// Requirement collection is not a create field in v2: with no dashboard it
+// sits with Stripe, which is what v1's `requirement_collection: stripe` said.
+export const PAYOUT_ACCOUNT = {
+  dashboard: "none",
+  defaults: {
+    currency: "usd",
+    responsibilities: { fees_collector: "application", losses_collector: "stripe" },
+  },
+  configuration: {
+    recipient: { capabilities: { stripe_balance: { stripe_transfers: { requested: true } } } },
+  },
 };
 
 // Sorted, so reordering the literal above is not a change. Nested, so a
@@ -239,7 +313,17 @@ const flatten = (o, prefix = "") =>
 // which is the failure this is fixing. Only the controller goes in -- never
 // the company's email, which changes for its own reasons and would mint a
 // second connected account when it did.
-export function payoutAccountKey(companyId, controller = PAYOUT_CONTROLLER) {
-  const shape = flatten(controller).join(";").replace(/[^a-zA-Z0-9]+/g, "-");
-  return `payout-acct:${companyId}:${shape}`;
+//
+// HASHED, because the v2 shape spelled out runs past Stripe's 255-character
+// limit on its own once a company id is in front of it -- and a key Stripe
+// refuses is a mint that never happens, on the screen a subcontractor cannot
+// be paid without. FNV-1a, which is synchronous and the same in a Worker and a
+// browser, and only has to tell two shapes apart, not keep a secret.
+const fnv1a = (str) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, "0");
+};
+export function payoutAccountKey(companyId, shape = PAYOUT_ACCOUNT) {
+  return `payout-acct:${companyId}:${fnv1a(flatten(shape).join(";"))}`;
 }

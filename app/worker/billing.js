@@ -68,6 +68,42 @@ export async function stripeCall(env, path, { method = "POST", params, idempoten
   return json;
 }
 
+// The same call against Stripe's v2 API, which differs in exactly three ways:
+// the body is JSON rather than form-encoded, a `Stripe-Version` is required,
+// and arrays in a GET's query are indexed (`include[0]=`). Everything else --
+// the key, the idempotency key, the replayed-refusal flag -- is identical,
+// which is why this sits beside `stripeCall` rather than in a second client.
+//
+// The version is the one Stripe's own SDK pins for these field names
+// (STRIPE_V2_VERSION in shared/pay.js); sending a different one would be
+// asking for a shape this code was not written against.
+export async function stripeV2Call(env, path, { method = "POST", body, query, idempotencyKey, version } = {}) {
+  if (!env.STRIPE_SECRET_KEY) throw new Error("stripe_not_configured");
+  const headers = {
+    Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+    "Stripe-Version": version,
+    Accept: "application/json",
+  };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+  const qs = query ? "?" + encode(query).join("&") : "";
+  // The paths carry their own `/v2`, so the base is the host: `API` with its
+  // `/v1` taken off, and an override likewise.
+  const base = (env.STRIPE_API_BASE || API).replace(/\/+$/, "").replace(/\/v1$/, "");
+  const res = await fetch(`${base}${path}${qs}`, {
+    method, headers, body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(json?.error?.message || `stripe_${res.status}`);
+    err.stripeCode = json?.error?.code;
+    err.status = res.status;
+    err.replayed = res.headers.get("Idempotent-Replayed") === "true";
+    throw err;
+  }
+  return json;
+}
+
 // Constant-time compare. A webhook signature check that leaks timing is a
 // theoretical problem here rather than a practical one, but the fix is three
 // lines and the alternative is explaining why it was fine.

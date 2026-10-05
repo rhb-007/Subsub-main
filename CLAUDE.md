@@ -10582,3 +10582,69 @@ refactor.
   the mint refusal routed back through `stripe_failed` with the detail on it
   (which reproduces the report exactly), the detail handed to everybody, the
   detail withheld from staff, the heading reverted, and the sentence reverted.
+
+- **AND THE TOGGLE WAS NOT A DOOR: ACCOUNTS V1 IS "AVAILABLE IN TEST MODE",
+  SO CONNECTED ACCOUNTS ARE MINTED THROUGH V2.** The entry above ended on
+  *enable Accounts v1 support in the Dashboard*. Opened from the iPad, that
+  policy reads **Available in test mode** with its edit control greyed out —
+  Stripe will not re-open v1 creation for a new platform in live mode at all.
+  So the migration that entry deferred is done, and the reason it was deferred
+  is answered rather than ignored.
+
+  **THE FIELD NAMES COME OFF STRIPE'S OWN SDK, NOT OFF MEMORY OR A SEARCH
+  SNIPPET.** `docs.stripe.com` is still blocked from here, which was the whole
+  reason for not guessing last time. The npm registry is not: `stripe` 23's
+  type definitions are generated from Stripe's OpenAPI spec and name every
+  field on `POST /v2/core/accounts`, the v2 Account object and
+  `/v2/core/account_links`, with the API version they were generated against
+  (`2026-09-30.endive`, held as `STRIPE_V2_VERSION`). That is the same
+  authority the SDK itself sends, which is strictly better than a paraphrase —
+  and the first live press is still the real test, as with every Stripe call
+  here.
+
+  **THE V1 CONTROLLER CARRIED ACROSS DECISION FOR DECISION**, in
+  `PAYOUT_ACCOUNT`: `dashboard: none` (no Stripe-branded site), the
+  **recipient** configuration with `stripe_balance.stripe_transfers` only
+  (they receive transfers and never charge anybody — v2 names this
+  configuration for separate charges and transfers, which is how money moves
+  here), `losses_collector: stripe` and `fees_collector: application`.
+  Requirement collection is not a create field in v2; with no dashboard it sits
+  with Stripe.
+
+  **ONE TRANSLATION, NOT TWO READERS.** Every function in `shared/pay.js` reads
+  the v1 shape, and `normalizeAccount` is the one place a v2 account becomes it
+  — `stripe_transfers.status` and `payouts.status` for the two halves of
+  payable, a `rejected` capability for rejection, and `requirements.entries`
+  that are **currently or past due and awaiting the user** for what is owed. A
+  reader that learned only one shape would answer *not payable* about an
+  account Stripe had cleared, silently. A v2 requirement is Stripe's own
+  sentence rather than a field key, so `requirementLabel` passes a sentence
+  through instead of tidying it like a key.
+
+  **A PAYOUTS CAPABILITY STRIPE HAS NOT REPORTED FOLLOWS TRANSFERS**, which is
+  the one judgement in the translation. v2 reports `payouts` under the
+  recipient configuration without it being requestable there, and reading its
+  absence as *refused* would leave a fully cleared account pending for ever.
+
+  **THE IDEMPOTENCY KEY IS HASHED NOW.** The v2 shape spelled out runs past
+  Stripe's 255-character limit once a company id and the retry suffix are on
+  it, and a key Stripe refuses is a mint that never happens. FNV-1a of the same
+  flattened, sorted shape: still derived, still moves when the shape moves, and
+  the test pins the limit against a 68-character company id with the suffix.
+
+  **V1 ACCOUNTS STILL READ.** Anything minted under v1 in test mode answers
+  v1's GET; a v2 read Stripe refuses as a **client** error falls back to it,
+  and a 5xx does not, because asking a second endpoint will not fix Stripe
+  being down and would hide it. The hosted link falls back the same way.
+
+  **AND THE STATUS NO LONGER WAITS ON A WEBHOOK SHAPE.** A v2 account's changes
+  arrive as **thin** events — a type and an id, no object — so the Connect
+  webhook reads the account back on any `v2.core.account…` event rather than
+  trusting a payload that is not there; and opening the panel re-reads the
+  account before minting the session, best effort, so the reading that matters
+  most cannot be missed.
+
+  **Still open, and needs the dashboard rather than a build:** the Connect
+  webhook endpoint has to be subscribed to the v2 account events (an *event
+  destination* for thin events) as well as `account.updated`, or the row moves
+  only when somebody opens the panel or comes back from the hosted link.

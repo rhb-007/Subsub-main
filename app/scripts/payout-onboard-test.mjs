@@ -34,7 +34,7 @@ const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok 
 
 const { default: worker } = await import("../worker/index.js");
 const pay = await import("../shared/pay.js");
-const { PAYOUT_CONTROLLER, payoutAccountKey } = pay;
+const { PAYOUT_ACCOUNT, payoutAccountKey, STRIPE_V2_VERSION } = pay;
 // `ownCompanyId` in the Worker: the subcontractor account's own company row.
 const BAY_COMPANY = "cmp_own_acc_sub";
 const SCHEMA = readFileSync(new URL("../worker/schema.sql", import.meta.url), "utf8");
@@ -66,25 +66,76 @@ const realFetch = globalThis.fetch;
 let calls = [];
 let acctState = {};
 let failNext = null;
+// When set, `failNext` waits for a request whose URL matches -- so a test can
+// refuse the one call it is about rather than whichever call happens first.
+let failMatch = null;
+
+// ACCOUNTS V2. The tests below describe an account in the v1 shape they were
+// written in -- `payouts_enabled`, `capabilities.transfers`,
+// `requirements.currently_due` -- and the stub answers a v2 request with the
+// same account in v2's shape, field names as Stripe's own SDK types give them.
+// So every assertion about what a state MEANS is unchanged, and what changed
+// is only the wire, which is the half the new assertions pin.
+const DESCRIPTIONS = {
+  "individual.verification.document": "Provide a government-issued photo ID",
+  "external_account": "Add a bank account to receive payouts",
+  "company.tax_id": "Provide the company's tax ID",
+};
+const toV2 = (st, id = "acct_bay1") => {
+  const transfers = st.capabilities?.transfers || "inactive";
+  const rejected = /^rejected\./.test(st.requirements?.disabled_reason || "");
+  const code = rejected ? "rejected_" + st.requirements.disabled_reason.split(".")[1] : null;
+  const cap = (status) => ({ status: rejected ? "rejected" : status,
+    status_details: rejected ? [{ code, resolution: "contact_stripe" }] : [] });
+  const entry = (k, deadline) => ({ awaiting_action_from: "user", description: DESCRIPTIONS[k] || k,
+    errors: [], impact: {}, minimum_deadline: { status: deadline }, requested_reasons: [] });
+  return {
+    object: "v2.core.account", id,
+    configuration: { recipient: { applied: true, capabilities: { stripe_balance: {
+      stripe_transfers: cap(transfers === "active" ? "active" : transfers === "inactive" ? "restricted" : "pending"),
+      payouts: cap(st.payouts_enabled ? "active" : "pending"),
+    } } } },
+    requirements: { entries: [
+      ...(st.requirements?.past_due || []).map((k) => entry(k, "past_due")),
+      ...(st.requirements?.currently_due || []).map((k) => entry(k, "currently_due")),
+      ...(st.requirements?.eventually_due || []).map((k) => entry(k, "eventually_due")),
+    ] },
+  };
+};
 
 globalThis.fetch = async (url, init = {}) => {
   const u = String(url);
   if (!u.includes("stripe")) return realFetch(url, init);
-  const body = Object.fromEntries(new URLSearchParams(init.body || ""));
+  const isJson = /json/.test((init.headers || {})["Content-Type"] || "");
+  const body = isJson ? JSON.parse(init.body || "{}") : Object.fromEntries(new URLSearchParams(init.body || ""));
   calls.push({ url: u, method: init.method || "POST", headers: init.headers || {}, body });
 
   // A Response, or a function returning one -- the latter so a test can make
   // something happen at the moment Stripe refuses, which is the only way to
   // stage a race against a concurrent press.
-  if (failNext) { const f = failNext; failNext = null; return typeof f === "function" ? await f() : f; }
+  if (failNext && (!failMatch || failMatch.test(u))) {
+    const f = failNext; failNext = null; failMatch = null;
+    return typeof f === "function" ? await f() : f;
+  }
 
   const json = (o, status = 200) =>
     new Response(JSON.stringify(o), { status, headers: { "Content-Type": "application/json" } });
 
+  if (/\/v2\/core\/accounts$/.test(u) && (init.method || "POST") === "POST") return json(toV2(acctState));
+  // An account minted under v1, before the move: v2 does not answer for it
+  // here, and the old GET does.
+  const v2get = u.match(/\/v2\/core\/accounts\/(acct_\w+)/);
+  if (v2get) return v2get[1].startsWith("acct_old")
+    ? json({ error: { message: "No such account" } }, 404)
+    : json(toV2(acctState, v2get[1]));
+  if (/\/v2\/core\/account_links$/.test(u)) {
+    return json({ object: "v2.core.account_link",
+      url: `https://connect.stripe.com/setup/e/${Math.random().toString(16).slice(2)}` });
+  }
   if (/\/accounts$/.test(u) && (init.method || "POST") === "POST") {
     return json({ id: "acct_bay1", ...acctState });
   }
-  if (/\/accounts\/acct_\w+$/.test(u)) return json({ id: "acct_bay1", ...acctState });
+  if (/\/accounts\/acct_\w+$/.test(u)) return json({ id: u.split("/").pop(), ...acctState });
   if (/\/account_sessions$/.test(u)) {
     return json({ object: "account_session", account: "acct_bay1",
       client_secret: "acct_sess_secret_abc" });
@@ -166,6 +217,40 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
     pay.requirementLabel("individual.political_exposure"));
 }
 
+// ---- and v2's shape reads the same way ---------------------------------------
+{
+  console.log("\n-- an Accounts v2 reply means what a v1 one meant --");
+  const v2 = (o) => pay.rowFromStripe(o);
+  const ready = v2(toV2(READY));
+  ck("transfers and payouts both active is verified",
+    ready.kycStatus === "verified" && ready.transfersActive === 1 && ready.payoutsEnabled === 1, JSON.stringify(ready));
+  const half = v2(toV2({ payouts_enabled: false, capabilities: { transfers: "active" } }));
+  ck("transfers active with payouts pending is NOT payable -- both halves, as before",
+    half.kycStatus === "pending" && half.transfersActive === 1 && half.payoutsEnabled === 0, JSON.stringify(half));
+  const rej = v2(toV2({ requirements: { disabled_reason: "rejected.fraud" } }));
+  ck("a rejected capability reads rejected, with the reason carried",
+    rej.kycStatus === "rejected" && rej.disabledReason === "rejected.fraud", JSON.stringify(rej));
+  const due = JSON.parse(v2(toV2({ capabilities: { transfers: "pending" }, requirements: {
+    past_due: ["individual.verification.document"], currently_due: ["external_account"],
+    eventually_due: ["company.tax_id"] } })).requirements);
+  ck("what is due now is listed in Stripe's own words",
+    due.length === 2 && due.includes("Provide a government-issued photo ID"), JSON.stringify(due));
+  ck("and eventually-due is left out, as it is for v1", !due.includes("Provide the company's tax ID"));
+  const waiting = toV2({ capabilities: { transfers: "pending" }, requirements: { currently_due: ["external_account"] } });
+  waiting.requirements.entries[0].awaiting_action_from = "stripe";
+  ck("and a thing Stripe is doing is not put in front of the subcontractor",
+    JSON.parse(v2(waiting).requirements).length === 0);
+  ck("a sentence is shown as written rather than tidied like a field key",
+    pay.requirementLabel("Provide a government-issued photo ID.") === "Provide a government-issued photo ID.");
+  ck("and a v1 account still reads exactly as it did",
+    JSON.stringify(v2(READY)) === JSON.stringify(pay.rowFromStripe({ ...READY })) && v2(READY).kycStatus === "verified");
+  // Payouts not reported at all is not payouts refused.
+  const noPayouts = toV2(READY);
+  delete noPayouts.configuration.recipient.capabilities.stripe_balance.payouts;
+  ck("a payouts capability Stripe has not reported follows transfers rather than reading refused",
+    v2(noPayouts).kycStatus === "verified", JSON.stringify(v2(noPayouts)));
+}
+
 // ---- who may ask ----------------------------------------------------------
 {
   console.log("\n-- who may connect one --");
@@ -198,11 +283,19 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
 
   const made = calls.filter((x) => /\/accounts$/.test(x.url));
   ck("one connected account was created", made.length === 1, String(made.length));
-  ck("asking only for transfers, never card payments",
-    made[0]?.body["capabilities[transfers][requested]"] === "true"
-    && !Object.keys(made[0]?.body || {}).some((k) => k.startsWith("capabilities[card_payments]")));
-  ck("with Stripe collecting the identity data",
-    made[0]?.body["controller[requirement_collection]"] === "stripe");
+  ck("through Accounts v2, because v1 creation is closed to live platforms",
+    /\/v2\/core\/accounts$/.test(made[0]?.url || ""), made[0]?.url);
+  ck("as JSON with the API version Stripe's SDK pins for these field names",
+    made[0]?.headers["Stripe-Version"] === STRIPE_V2_VERSION
+    && /json/.test(made[0]?.headers["Content-Type"] || ""),
+    JSON.stringify(made[0]?.headers["Stripe-Version"]));
+  ck("asking only to receive transfers, never anything merchant-shaped",
+    made[0]?.body?.configuration?.recipient?.capabilities?.stripe_balance?.stripe_transfers?.requested === true
+    && !("merchant" in (made[0]?.body?.configuration || {})),
+    JSON.stringify(made[0]?.body?.configuration));
+  ck("and the reply carries what the row is written from",
+    JSON.stringify(made[0]?.body?.include) === JSON.stringify(["configuration.recipient", "requirements"]),
+    JSON.stringify(made[0]?.body?.include));
 
   // THE COMBINATION IS WHAT STRIPE VALIDATES, NOT THE FIELDS ONE AT A TIME.
   //
@@ -216,20 +309,20 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
   // Asserted as the RULE rather than as three separate values, because that is
   // the shape of the thing that can be wrong.
   ck("Stripe carries the negative balances, refunds and chargebacks",
-    made[0]?.body["controller[losses][payments]"] === "stripe",
-    made[0]?.body["controller[losses][payments]"]);
+    made[0]?.body?.defaults?.responsibilities?.losses_collector === "stripe",
+    made[0]?.body?.defaults?.responsibilities?.losses_collector);
   ck("and SubSub still pays Stripe's fee -- the two are separate questions",
-    made[0]?.body["controller[fees][payer]"] === "application",
-    made[0]?.body["controller[fees][payer]"]);
+    made[0]?.body?.defaults?.responsibilities?.fees_collector === "application",
+    made[0]?.body?.defaults?.responsibilities?.fees_collector);
   {
     const c0 = made[0]?.body || {};
-    const noDash = c0["controller[stripe_dashboard][type]"] === "none";
-    const stripeKyc = c0["controller[requirement_collection]"] === "stripe";
-    const stripeLoss = c0["controller[losses][payments]"] === "stripe";
-    ck("the combination is one Stripe actually accepts",
-      !(noDash && stripeKyc) || stripeLoss,
-      JSON.stringify({ noDash, stripeKyc, stripeLoss }));
+    const noDash = c0.dashboard === "none";
+    const stripeLoss = c0.defaults?.responsibilities?.losses_collector === "stripe";
+    ck("the combination is one Stripe actually accepts -- no dashboard means Stripe carries the loss",
+      !noDash || stripeLoss, JSON.stringify({ noDash, stripeLoss }));
   }
+  ck("and registered as a US account",
+    made[0]?.body?.identity?.country === "us", JSON.stringify(made[0]?.body?.identity));
   // THE KEY CARRIES THE CONTROLLER'S SHAPE, and that is not decoration.
   //
   // Stripe saves the status and body of the first request made under a key
@@ -249,11 +342,13 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
       key === payoutAccountKey(BAY_COMPANY), key);
     ck("it is keyed on the company, so a double press cannot mint two",
       key === payoutAccountKey(BAY_COMPANY) && key.includes(BAY_COMPANY), key);
-    ck("and on the controller, so a corrected controller is not answered by the old refusal",
-      key !== payoutAccountKey(BAY_COMPANY, { ...PAYOUT_CONTROLLER, losses: { payments: "application" } }),
+    ck("and on the shape, so a corrected shape is not answered by the old refusal",
+      key !== payoutAccountKey(BAY_COMPANY, { ...PAYOUT_ACCOUNT,
+        defaults: { ...PAYOUT_ACCOUNT.defaults, responsibilities: { fees_collector: "application", losses_collector: "application" } } }),
       key);
     // Stripe's limit. A company id is not short and neither is the shape.
-    ck("and it fits in an idempotency key", key.length > 0 && key.length <= 255, key.length);
+    ck("and it fits in an idempotency key, even a long company id with the retry suffix on it",
+      key.length > 0 && (payoutAccountKey("cmp_own_" + "x".repeat(60)) + ":r" + Date.now()).length <= 255, key.length);
   }
   // Two properties of the derivation itself, because the integration check
   // above holds for a key that is constant per company however it was built.
@@ -261,9 +356,9 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
     payoutAccountKey("cmp_x") === payoutAccountKey("cmp_x"));
   ck("two companies never share one",
     payoutAccountKey("cmp_x") !== payoutAccountKey("cmp_y"));
-  ck("and reordering the controller is not a change",
-    payoutAccountKey("cmp_x", PAYOUT_CONTROLLER)
-      === payoutAccountKey("cmp_x", Object.fromEntries(Object.entries(PAYOUT_CONTROLLER).reverse())));
+  ck("and reordering the shape is not a change",
+    payoutAccountKey("cmp_x", PAYOUT_ACCOUNT)
+      === payoutAccountKey("cmp_x", Object.fromEntries(Object.entries(PAYOUT_ACCOUNT).reverse())));
   ck("creating the account is the platform's own call, not one made AS them",
     !("Stripe-Account" in (made[0]?.headers || {})));
 
@@ -286,11 +381,14 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
     !JSON.stringify(db.prepare(`SELECT * FROM payout_accounts`).all()).includes("connect.stripe.com"));
   ck("still one row", db.prepare(`SELECT COUNT(*) AS n FROM payout_accounts`).get().n === 1);
 
-  const link = calls.find((x) => /\/account_links$/.test(x.url));
-  ck("the return comes back into the app", /\/\?payouts=return$/.test(link?.body.return_url || ""),
-    link?.body.return_url);
+  const link = calls.find((x) => /\/v2\/core\/account_links$/.test(x.url));
+  const onb = link?.body?.use_case?.account_onboarding || {};
+  ck("the link is a v2 onboarding link for that account",
+    link?.body?.account === "acct_bay1" && link?.body?.use_case?.type === "account_onboarding",
+    JSON.stringify(link?.body));
+  ck("the return comes back into the app", /\/\?payouts=return$/.test(onb.return_url || ""), onb.return_url);
   ck("and a stale link lands somewhere that mints another",
-    /\/\?payouts=refresh$/.test(link?.body.refresh_url || ""), link?.body.refresh_url);
+    /\/\?payouts=refresh$/.test(onb.refresh_url || ""), onb.refresh_url);
 }
 
 // ---- the embedded door, which is the one people use ------------------------
@@ -321,10 +419,7 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
   // means SubSub is the only surface they ever see.
   const made = calls.find((x) => /\/accounts$/.test(x.url));
   ck("and they get no Stripe dashboard to be sent to",
-    made?.body["controller[stripe_dashboard][type]"] === "none",
-    made?.body["controller[stripe_dashboard][type]"]);
-  ck("with Stripe still collecting the identity data rather than us",
-    made?.body["controller[requirement_collection]"] === "stripe");
+    made?.body?.dashboard === "none", made?.body?.dashboard);
 
   const sess = calls.find((x) => /\/account_sessions$/.test(x.url));
   ck("the session is scoped to that one account",
@@ -359,9 +454,8 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
   await call(env2, "/api/payouts/connect", { method: "POST" });
   const viaLink = calls.find((x) => /\/accounts$/.test(x.url));
   ck("and the fallback door mints the same kind of account",
-    viaLink?.body["controller[stripe_dashboard][type]"] === "none"
-    && viaLink?.body["controller[requirement_collection]"] === "stripe",
-    viaLink?.body["controller[stripe_dashboard][type]"]);
+    JSON.stringify(viaLink?.body?.defaults) === JSON.stringify(made?.body?.defaults)
+    && viaLink?.body?.dashboard === "none", viaLink?.body?.dashboard);
 }
 
 {
@@ -399,9 +493,12 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
   ck("an abandoned onboarding still reads pending",
     gaveUp.status === 200 && gaveUp.body.status === "pending" && gaveUp.body.ready === false,
     `${gaveUp.status} ${gaveUp.body.status}`);
-  ck("and it says what Stripe is waiting for, in words",
-    (gaveUp.body.requirements || [])[0]?.label === "A photo ID",
+  ck("and it says what Stripe is waiting for, in Stripe's own words",
+    (gaveUp.body.requirements || [])[0]?.label === "Provide a government-issued photo ID",
     JSON.stringify(gaveUp.body.requirements));
+  ck("read through v2, which is how the account was made",
+    calls.some((x) => /\/v2\/core\/accounts\/acct_bay1\?include\[0\]=configuration\.recipient&include\[1\]=requirements$/.test(x.url)),
+    calls.map((x) => x.url).filter((x) => /accounts\//.test(x)).join(" | "));
 
   acctState = READY;
   const done = await call(env, "/api/payouts/refresh", { method: "POST" });
@@ -476,6 +573,39 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
     db.prepare(`SELECT COUNT(*) AS n FROM payout_accounts`).get().n === 1);
 }
 
+// ---- a v2 account's changes arrive thin ----------------------------------
+{
+  console.log("\n-- a v2 thin event is read back from Stripe --");
+  const db = seed(); const env = ENV(db);
+  acctState = { payouts_enabled: false, capabilities: { transfers: "pending" }, requirements: {} };
+  await call(env, "/api/payouts/connect", { method: "POST" });
+  acctState = READY;
+  calls = [];
+  const thin = { id: "evt_v2_1", object: "v2.core.event",
+    type: "v2.core.account[configuration.recipient].capability_status_updated",
+    related_object: { id: "acct_bay1", type: "v2.core.account", url: "/v2/core/accounts/acct_bay1" } };
+  const r = await hook(env, thin);
+  ck("a thin event is accepted", r.status === 200, String(r.status));
+  ck("and the account is read back rather than trusted from the payload",
+    calls.some((x) => /\/v2\/core\/accounts\/acct_bay1/.test(x.url) && x.method === "GET"));
+  ck("so the row moves without anybody pressing anything",
+    db.prepare(`SELECT kyc_status FROM payout_accounts`).get().kyc_status === "verified");
+}
+{
+  console.log("\n-- an account minted under v1 still refreshes --");
+  const db = seed(); const env = ENV(db);
+  db.exec(`INSERT OR IGNORE INTO companies(id,company) VALUES ('cmp_own_acc_sub','Bay Roofing')`);
+  db.prepare(`INSERT INTO payout_accounts
+    (id, company_id, processor, processor_account_id, kyc_status, payouts_enabled,
+     transfers_active, requirements, disabled_reason)
+    VALUES ('pa_old', ?, 'stripe', 'acct_old1', 'pending', 0, 0, '[]', NULL)`).run("cmp_own_acc_sub");
+  acctState = READY; calls = [];
+  const r = await call(env, "/api/payouts/refresh", { method: "POST" });
+  ck("v2 not answering for it falls back to the v1 read",
+    calls.some((x) => /\/v1\/accounts\/acct_old1$/.test(x.url)), calls.map((x) => x.url).join(" | "));
+  ck("and it reads verified exactly as before", r.body.status === "verified", r.body.status);
+}
+
 // ---- when the pieces are not there ---------------------------------------
 {
   console.log("\n-- and when something is not configured --");
@@ -520,10 +650,10 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
     ck("under a DIFFERENT key, or Stripe replays the same refusal forever",
       mints[0]?.headers["Idempotency-Key"] !== mints[1]?.headers["Idempotency-Key"],
       mints[1]?.headers["Idempotency-Key"]);
-    ck("and the retry still carries the same controller, not a relaxed one",
-      mints[1]?.body["controller[losses][payments]"] === "stripe"
-        && mints[1]?.body["controller[stripe_dashboard][type]"] === "none",
-      JSON.stringify({ l: mints[1]?.body["controller[losses][payments]"] }));
+    ck("and the retry still carries the same shape, not a relaxed one",
+      JSON.stringify(mints[1]?.body?.defaults) === JSON.stringify(mints[0]?.body?.defaults)
+        && mints[1]?.body?.dashboard === "none",
+      JSON.stringify(mints[1]?.body?.defaults));
     ck("the account it did mint is the one recorded",
       db.prepare(`SELECT processor_account_id FROM payout_accounts`).all()
         .map((x) => x.processor_account_id).join(",") === "acct_bay1");
@@ -603,6 +733,7 @@ const READY = { payouts_enabled: true, capabilities: { transfers: "active" }, re
       VALUES ('pa_1', ?, 'stripe', 'acct_bay1', 'pending', 0, 0, '[]', NULL)`)
       .run("cmp_own_acc_sub");
     calls = []; acctState = {};
+    failMatch = /account_sessions/;
     failNext = new Response(
       JSON.stringify({ error: { message: "We could not read that photo ID." } }),
       { status: 400, headers: { "Content-Type": "application/json" } });
