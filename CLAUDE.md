@@ -9255,6 +9255,83 @@ refactor.
   already raised off the back of it. That is a merge policy, not an endpoint.
 
 
+- **A NOUN IS NOT A FAULT, AND A PHOTOGRAPH HAS NO STATUS OF ITS OWN.** Reported
+  against a move-out with ONE flagged hallway and four pictures: the only thing
+  wrong in the unit was a chipped door panel, and **Raise a job** came back with
+  Electrical, Painting, Finish Carpentry, Flooring, Final Clean, Concrete and
+  Windows/Doors ticked. *"Should only select trades for rooms/images that need
+  to be fixed or followed up on."*
+
+  Every extra trade was earned by a noun inside a sentence saying that thing was
+  **fine**. *"Black rubber base trim intact with no visible damage or separation
+  from flooring"* called a floor layer. Three of the four photographs recorded
+  nothing wrong at all, and all three contributed.
+
+  **THE ASYMMETRY IT TURNS ON IS A FACT ABOUT THE SCHEMA RATHER THAN A
+  PREFERENCE: a room carries a status and a photograph does not.** `suggestTrades`
+  already reads flagged rooms only, so the ROOM half of the report was already
+  right. A note sits on a room somebody flagged, which establishes it as being
+  about a problem, and its nouns are read as they were. A caption inherits
+  nothing — and on a thorough walk most pictures exist precisely to record that
+  something is fine. So **a photograph earns a trade only when its own words
+  name a fault.**
+
+  That is **one rule and not two**, which matters because this file already
+  insists the positional-preposition guard be applied to the note as well: a
+  trade is earned by a fault, and the two fields establish the fault differently
+  because only one of them has a flag above it. Applying the fault filter to the
+  note too is a mutation that fails three assertions, two of them pre-existing:
+  *"Carpet."* on a flagged room is somebody saying the carpet is the problem,
+  and a terse note has to keep working.
+
+  **CLAUSE BY CLAUSE, NEVER CAPTION BY CAPTION.** The reported caption is two
+  clauses — a chipped door panel and an intact trim — so dropping the whole
+  caption loses the door and keeping it calls the floor layer. Both halves are
+  asserted, because either alone passes with the other broken.
+
+  **NEGATION IS SCOPED TO THE END OF ITS CLAUSE**, which is the construction the
+  reported sentence actually used: *no visible damage **or separation from
+  flooring*** has to negate both, or the second noun walks through. And it stops
+  at the clause boundary, or one fine thing early in a caption would silence a
+  real fault later in it.
+
+  **CONTRAST SPLITS A CLAUSE; A COMMA DOES NOT.** *"Door panel, chipped"* is one
+  thought with the noun on one side of the comma and the fault on the other, so
+  splitting there would drop the door — which is the thing being reported. ` but `
+  and its friends do split, because that is where a sentence changes its mind.
+
+  **READ PER FIELD, NEVER AS ONE BLOB**, or a caption naming a fault keeps the
+  draft beside it saying the carpet is fine, and every noun in it. **The fixture
+  for that needed a caption with no full stop on it**, which is what somebody
+  typing into a box actually writes: with one, the clause splitter separates the
+  two fields by itself and the mutation survives. Found exactly that way, twice —
+  the first attempt at the mutation joined with `". "` and did the splitting for
+  itself, which is *check the change means something* in its subtlest form.
+
+  **THE COST IS STATED RATHER THAN HIDDEN: a real fault phrased in words the list
+  has not heard of earns nothing.** That is the right way round, because every
+  chip is one tap to add and the opposite error is the one that was reported —
+  seven trades on a job about a door is an electrician driving to a hallway. Bare
+  `paint` and bare `clean` are deliberately absent from the fault list for the
+  same reason: a painted finish in good order and a clean floor are not faults,
+  and `needs` carries *needs a clean* and *needs repainting* on its own.
+
+  **AND A PICTURE THAT WAS READ AND SAID NOTHING WRONG IS COUNTED.** Four
+  photographs producing one chip has to be distinguishable from four nobody
+  looked at, or the honest answer reads as the broken one — the same sentence
+  `unread` already exists for, with the other half now said. Deliberately **not**
+  folded into `unread`: *nobody has written about this* and *this was read and is
+  fine* are different facts needing different actions, which is `docs.js`'s
+  expired-and-never-added rule in a third place.
+
+  **It reaches the scope and the quote redaction too, and that is correct rather
+  than incidental.** `roomTrades` is the one matcher — `inspectionTradeScopes`
+  splits the scope text with it and `quoteInspectionShape` picks a quote
+  invitee's rooms with it — so a trade nothing faults no longer pulls a room into
+  a scope or a photograph into somebody's quote pack. Ten mutations fire, each on
+  its own assertion.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

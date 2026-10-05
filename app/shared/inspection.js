@@ -509,6 +509,98 @@ const dropWhere = (s) => String(s || "").replace(WHERE, " ");
 // `unread` counts photographs on flagged rooms that carry neither a caption
 // nor a draft, so the modal can offer the one press that fixes it instead of
 // quietly suggesting from half the evidence.
+// A NOUN IS NOT A FAULT, AND A PHOTOGRAPH HAS NO STATUS OF ITS OWN.
+//
+// Reported looking at a move-out with ONE flagged hallway and four pictures:
+// the only fault in the unit was a chipped door panel, and the grid came back
+// with Electrical, Painting, Finish Carpentry, Flooring, Final Clean, Concrete
+// and Windows/Doors ticked -- seven trades off four photographs, each earned by
+// a noun in a sentence saying that thing was FINE. "Black rubber base trim
+// intact with no visible damage or separation from flooring" called a floor
+// layer.
+//
+// THE ASYMMETRY THIS TURNS ON, and it is a fact about the schema rather than a
+// preference: **a room carries a status and a photograph does not.** A note
+// sits on a room somebody has flagged, so it is already established as being
+// about a problem and its nouns are read as now. A caption is about one
+// picture and inherits nothing -- and in a thorough walk most pictures record
+// that something is fine, which is the whole point of taking them. So a
+// photograph earns a trade only when its own words NAME A FAULT.
+//
+// That is one rule, not two: a trade is earned by a fault, and the two fields
+// establish the fault differently because only one of them has a flag above it.
+//
+// Clause by clause, never caption by caption. The reported sentence is two
+// clauses -- a chipped door panel and an intact trim -- so dropping the whole
+// caption loses the door, and keeping it calls the floor layer.
+//
+// AND THE COST IS STATED RATHER THAN HIDDEN: a real fault phrased in words this
+// list has not heard of earns nothing. That is the right way round, because
+// every chip is one tap to add and the opposite error is the one that was
+// reported -- seven trades on a job about a door, which is an electrician
+// driving to a hallway. `noFault` below is what keeps it honest on screen.
+const FAULT_WORDS = [
+  // What is wrong with it.
+  "damage", "damaged", "damages", "chip", "chips", "chipped", "scratch", "scratches",
+  "scratched", "crack", "cracks", "cracked", "cracking", "broke", "broken", "break",
+  "split", "splits", "hole", "holes", "tear", "torn", "rip", "ripped", "dent", "dents",
+  "dented", "scuff", "scuffs", "scuffed", "scuffing", "mark", "marks", "marked",
+  "stain", "stains", "stained", "staining", "burn", "burns", "burnt", "scorch",
+  "scorched", "warp", "warped", "bowed", "sag", "sagging", "rot", "rotten", "rotting",
+  "rust", "rusty", "rusted", "corroded", "corrosion", "mould", "mouldy", "mold",
+  "moldy", "mildew", "damp", "leak", "leaks", "leaking", "drip", "drips", "dripping",
+  "blocked", "blockage", "clogged", "loose", "wobbly", "sticking", "jammed", "stuck",
+  "missing", "gap", "gaps", "separation", "separated", "separating", "peeling", "peel",
+  "flaking", "bubbling", "blistered", "discoloured", "discolored", "faded", "worn",
+  "wear", "dirt", "dirty", "soiled", "grubby", "grimy", "greasy", "dusty", "smear",
+  "smears", "residue", "debris", "clutter", "cluttered", "messy", "mess", "odour",
+  "odor", "smelly", "exposed", "unsafe", "hazard", "faulty", "fault", "faults",
+  "defect", "defects", "inoperable", "tripped", "flickering", "draughty", "drafty",
+  "condensation", "overgrown", "snag", "snags",
+  // What has to be done about it. "needs" carries most of the real traffic --
+  // "needs attention", "needs a clean", "needs replacing" are all here through
+  // this one word, which is why bare "paint" and bare "clean" are deliberately
+  // absent: a painted finish in good order and a clean floor are not faults.
+  "needs", "need", "needed", "needing", "requires", "required", "require",
+  "repair", "repairs", "repaired", "replace", "replaced", "replacing", "replacement",
+  "fix", "fixed", "fixing", "repaint", "repainting", "reseal", "regrout", "renew",
+  "renewal", "rectify", "remedy", "attention", "outstanding", "incomplete",
+  "unfinished", "tighten", "adjust", "service",
+];
+
+// What makes a fault word stop counting. Scoped from the negator to the end of
+// its clause, so "no visible damage or separation from flooring" negates both
+// -- which is the construction the reported caption actually used.
+const NEGATORS = ["no", "not", "nil", "without", "free", "nothing", "never", "none"];
+
+// Clauses split on sentence enders and on contrast, NEVER on commas. "Door
+// panel, chipped" is one thought with the noun on one side of the comma and the
+// fault on the other, so splitting there would drop the door -- which is the
+// thing being reported.
+const CLAUSE_SPLIT = /[.;!?]+|\s+(?:but|however|though|although|whereas)\s+/i;
+
+// The clauses of a photograph's words that report something wrong, joined back
+// up for matching. Everything else contributes nothing.
+export function faultClauses(text) {
+  const out = [];
+  for (const raw of String(text || "").split(CLAUSE_SPLIT)) {
+    const words = flatten(raw).trim().split(" ").filter(Boolean);
+    if (!words.length) continue;
+    let negated = false;
+    let fault = false;
+    for (const w of words) {
+      if (NEGATORS.includes(w)) { negated = true; continue; }
+      if (!negated && FAULT_WORDS.includes(w)) { fault = true; break; }
+    }
+    if (fault) out.push(raw);
+  }
+  return out.join(". ");
+}
+
+// Read per FIELD and not as one blob: a caption naming a fault would otherwise
+// keep a draft saying the carpet is fine, and every noun in it with it.
+const photoFaults = (p) =>
+  [faultClauses(p?.caption), faultClauses(p?.draft)].filter(Boolean).join(". ").trim();
 const photoWords = (p) => `${p?.caption || ""} ${p?.draft || ""}`.trim();
 
 // WHICH TRADES ONE ROOM NAMES, which is the whole of the matching and is
@@ -525,6 +617,7 @@ function roomTrades(r) {
   const hits = {};
   const photo = new Set();
   let unread = 0;
+  let noFault = 0;
   const add = (trade, reason, fromPhoto = false) => {
     if (!trade || !reason) return;
     (hits[trade] ||= []);
@@ -547,8 +640,13 @@ function roomTrades(r) {
   // rather than as one blob, so a caption is never joined to the next one's
   // first word and matched across the seam.
   for (const pic of r?.photos || []) {
-    const text = photoWords(pic);
-    if (!text) { unread += 1; continue; }
+    if (!photoWords(pic)) { unread += 1; continue; }
+    // Only the clauses reporting something wrong. A picture that was read and
+    // records nothing wrong is counted rather than silently dropped: four
+    // photographs producing one trade has to be distinguishable from four
+    // photographs nobody looked at, or an honest grid reads as a broken one.
+    const text = photoFaults(pic);
+    if (!text) { noFault += 1; continue; }
     const shot = flatten(dropWhere(text));
     for (const [trade, words] of Object.entries(TRADE_HINTS)) {
       for (const w of words) {
@@ -556,23 +654,25 @@ function roomTrades(r) {
       }
     }
   }
-  return { hits, photo, unread };
+  return { hits, photo, unread, noFault };
 }
 
 export function suggestTrades(rooms = []) {
   const why = {};
   const fromPhoto = new Set();
   let unread = 0;
+  let noFault = 0;
   for (const r of (rooms || []).filter(isFlagged)) {
     const got = roomTrades(r);
     unread += got.unread;
+    noFault += got.noFault;
     for (const w of got.photo) fromPhoto.add(w);
     for (const [trade, words] of Object.entries(got.hits)) {
       (why[trade] ||= []);
       for (const w of words) if (!why[trade].includes(w)) why[trade].push(w);
     }
   }
-  return { trades: Object.keys(why), why, fromPhoto, unread };
+  return { trades: Object.keys(why), why, fromPhoto, unread, noFault };
 }
 
 // WHAT ONE TRADE IS BEING ASKED TO PRICE.

@@ -505,6 +505,97 @@ try {
   ck("an OK room's unread photos are not counted",
     suggestTrades([{ name: "Hall", status: "ok", photos: [{ id: "p1" }] }]).unread === 0);
 
+  // A NOUN IS NOT A FAULT, AND A PHOTOGRAPH HAS NO STATUS OF ITS OWN.
+  //
+  // Reported against a move-out with ONE flagged hallway and four pictures.
+  // The only fault in the unit was a chipped door panel; the grid came back
+  // with seven trades ticked, every extra one earned by a noun inside a
+  // sentence saying that thing was FINE.
+  //
+  // THE FIXTURE IS THE REPORTED CAPTIONS, verbatim, because a tidied-up one
+  // proves nothing: the whole difficulty is that three of these are fluent,
+  // correct condition statements that happen to contain trade nouns.
+  const REAL = { name: "Hallway", status: "follow_up", note: "", photos: [
+    { id: "p1", draft: "Polished concrete floor, clean with no visible cracking or staining." },
+    { id: "p2", draft: "Timber handrail on a steel bracket, intact and secure. No damage." },
+    { id: "p3", draft: "Carpet runner is clean and in good order." },
+    { id: "p4", caption: "Wood-grain door panel needs to be repaired - chipped and scratched. "
+      + "Black rubber base trim intact with no visible damage or separation from flooring." },
+  ] };
+  const real2 = suggestTrades([REAL]);
+  // The door is the fault, so the door earns its trade.
+  ck("the one thing that needs fixing still earns its trade",
+    real2.trades.includes("windows_doors"), JSON.stringify(real2.why));
+  // And the five that were earned by things reported as FINE do not. Named
+  // one at a time rather than by a count: a count passes if the right number
+  // of wrong trades comes back.
+  for (const gone of ["electrical", "concrete", "flooring", "final_clean", "finish_carpentry"]) {
+    ck(`a thing reported as fine earns nothing: ${gone}`,
+      !real2.trades.includes(gone), JSON.stringify(real2.trades));
+  }
+  // CLAUSE BY CLAUSE, NEVER CAPTION BY CAPTION. That last caption is two
+  // clauses -- a chipped door and an intact trim -- so dropping the whole
+  // caption loses the door and keeping it calls the floor layer. Both halves
+  // are asserted, because either one alone passes with the other broken.
+  ck("the fault clause of a mixed caption is kept",
+    real2.why.windows_doors?.includes("door"), JSON.stringify(real2.why));
+  // AND THE PICTURES THAT WERE READ AND SAID NOTHING WRONG ARE COUNTED, or
+  // four photographs producing one chip reads as four nobody looked at.
+  ck("photographs recording nothing wrong are counted", real2.noFault === 3, String(real2.noFault));
+  ck("and are not counted as unread", real2.unread === 0, String(real2.unread));
+  ck("while a photograph with no words at all still is",
+    suggestTrades([{ ...REAL, photos: [...REAL.photos, { id: "p5" }] }]).unread === 1);
+
+  // NEGATION IS SCOPED TO THE END OF ITS CLAUSE, which is the construction
+  // the reported caption actually used: "no visible damage or separation from
+  // flooring" has to negate BOTH, or the second noun walks through.
+  const neg = suggestTrades([{ name: "Hall", status: "fail", photos: [
+    { id: "p1", caption: "Trim intact with no visible damage or separation from the flooring." }] }]);
+  ck("a negator carries across an `or` to the end of its clause",
+    neg.trades.length === 0, JSON.stringify(neg.why));
+  // And stops at the clause boundary, or one fine thing in a sentence would
+  // silence a real fault later in the same caption.
+  const after = suggestTrades([{ name: "Hall", status: "fail", photos: [
+    { id: "p1", caption: "No damage to the walls. The carpet is badly stained." }] }]);
+  ck("and not past it", after.trades.includes("flooring"), JSON.stringify(after.why));
+  // CONTRAST SPLITS A CLAUSE; A COMMA DOES NOT. "Door panel, chipped" is one
+  // thought with the noun on one side of the comma and the fault on the
+  // other, so splitting there would drop the door -- which is the thing being
+  // reported.
+  const comma = suggestTrades([{ name: "Hall", status: "fail", photos: [
+    { id: "p1", caption: "Door panel, chipped." }] }]);
+  ck("a comma does not separate a noun from its fault",
+    comma.trades.includes("windows_doors"), JSON.stringify(comma.why));
+  const but = suggestTrades([{ name: "Hall", status: "fail", photos: [
+    { id: "p1", caption: "The carpet is stained but the door is undamaged." }] }]);
+  ck("a contrast does", but.trades.includes("flooring") && !but.trades.includes("windows_doors"),
+    JSON.stringify(but.why));
+
+  // READ PER FIELD, NEVER AS ONE BLOB. A caption naming a fault would
+  // otherwise keep a draft saying the carpet is fine, and every noun in it.
+  // NO FULL STOP ON THE CAPTION, deliberately: a manager typing into a box
+  // does not add one, and with one the clause splitter separates the fields by
+  // itself -- so a fixture that has one cannot tell per-field reading from a
+  // blob, and the mutation for it survives. Found exactly that way.
+  const twoFields = suggestTrades([{ name: "Hall", status: "fail", photos: [
+    { id: "p1", caption: "Door panel chipped", draft: "Carpet is clean and in good order" }] }]);
+  ck("a fault in the caption does not rescue the draft beside it",
+    twoFields.trades.includes("windows_doors") && !twoFields.trades.includes("flooring"),
+    JSON.stringify(twoFields.why));
+
+  // THE NOTE IS NOT SUBJECT TO THIS, and that is the asymmetry rather than an
+  // exemption: a room carries a STATUS and a photograph does not. A note sits
+  // on a room somebody flagged, so it is already established as being about a
+  // problem; a caption inherits nothing. Terse notes have to keep working --
+  // "Carpet" on a flagged room is somebody saying the carpet is the problem.
+  const terse = suggestTrades([{ name: "Hall", status: "fail", note: "Carpet.", photos: [] }]);
+  ck("a terse note on a flagged room still names its trade",
+    terse.trades.includes("flooring"), JSON.stringify(terse.why));
+  // The same words in a CAPTION, with no fault in them, earn nothing.
+  ck("the same word in a caption does not",
+    suggestTrades([{ name: "Hall", status: "fail", photos: [{ id: "p1", caption: "Carpet." }] }])
+      .trades.length === 0);
+
   // A WORD THAT ONLY SAYS WHERE THE DAMAGE IS, IS NOT THE DAMAGED THING.
   // "Scuff to the wall left of the door" is painting, and read whole-word it
   // also says `door` -- which called a glazier. Not a rare phrasing either:

@@ -28948,6 +28948,21 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
             Close this and press <b>Draft notes</b> on the room to read {suggested.unread === 1 ? "it" : "them"}.
           </p>
         )}
+        {/* AND A PHOTOGRAPH READ THAT RECORDS NOTHING WRONG IS COUNTED TOO.
+            Most pictures on a thorough walk say a thing is fine, and those
+            earn no trade -- which is the fix for seven trades coming back off
+            four photographs of one chipped door. But four pictures producing
+            one chip has to be distinguishable from four nobody read, or the
+            honest answer reads as the broken one. The line beside it already
+            covers the unread case; this is the other half of the same
+            sentence. */}
+        {suggested.noFault > 0 && (
+          <p className="insp-unread">
+            {suggested.noFault} photo{suggested.noFault === 1 ? "" : "s"} read as recording nothing
+            wrong, so {suggested.noFault === 1 ? "it is" : "they are"} not in this. Tick anything it
+            has missed.
+          </p>
+        )}
         <div className="chips">
           {TRADES.map((t) => {
             const on = trades.includes(t.id);
