@@ -53,7 +53,7 @@ import { KIND_WORDS, kindShort, kindRefusal, isConditional, formsReasonText, ren
 import { coverProblemText, fixableByUpload } from "../shared/paygate.js";
 import { MIN_FUND_CENTS, canPay, payRefusalText, fundSuggestion } from "../shared/escrow.js";
 import { FEE_TERMS } from "../shared/fee.js";
-import { smsUsageText, SMS_ADDON_MESSAGES, SMS_ADDON_PRICE_CENTS } from "../shared/smsquota.js";
+import { smsUsageText, smsOverageText, SMS_OVERAGE_TERMS } from "../shared/smsquota.js";
 import { INSURANCE_LINES, OPTIONAL_LINES, BOND_MIN, INSURANCE_MIN, checkItems, findingsFor,
   problemsIn, allConfirmed, reviewProgress, outcomeWords } from "../shared/doccheck.js";
 import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/autoschedule.js";
@@ -18232,93 +18232,54 @@ function BillingManage({ accentHex, onFellBack }) {
   );
 }
 
-// Text messages this month, and the add-on.
+// Text messages this month, and what going over will cost.
 //
 // The count is the server's, read off sms_log through the same function that
-// refuses a text at the cap, so the bar and the refusal cannot disagree.
+// decides whether a text goes, so the bar and the decision cannot disagree.
 //
-// BUYING ASKS FIRST. One tap that adds $50 a month to somebody's bill is a
-// charge they did not see coming; the first press names the price and the
-// second agrees. Removing one is reversible and costs nothing, so it does not
-// ask. And the control is only drawn where pressing it can work: a comped
-// account has no subscription to add a line to, and a button answering
-// no_subscription is the screen-that-lies rule pointed at a purchase.
+// THERE IS NOTHING TO BUY HERE, and that is the design. Past the included
+// 2,500 texts keep going and each extra 5,000 (or part) is added to the next
+// bill automatically, so the panel's job is to make that impossible to miss:
+// how many are used, what the next bill carries for it so far, and last
+// month's charge. A charge nobody was told about until the invoice is the one
+// that turns into a support call.
 function SmsUsage() {
   const [s, setS] = useState(null);
-  const [asking, setAsking] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const load = () => api.getBilling().then((b) => setS(b?.sms || null)).catch(() => setS(null));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    api.getBilling().then((b) => setS(b?.sms || null)).catch(() => setS(null));
+  }, []);
   if (!s || !(s.allowance > 0)) return null;
 
-  const blocks = s.addonBlocks || 0;
+  const over = s.used > s.allowance;
   const pct = Math.min(100, Math.round((s.used / s.allowance) * 100));
-  const per = `$${(SMS_ADDON_PRICE_CENTS / 100).toLocaleString("en-US")}`;
-  const msgs = SMS_ADDON_MESSAGES.toLocaleString("en-US");
-  const set = async (n) => {
-    setBusy(true); setErr("");
-    try { await api.setSmsAddon(n); setAsking(false); await load(); }
-    catch (e) {
-      console.error("[billing] sms add-on failed:", e);
-      setErr(e?.body?.error === "migration_needed" ? "This needs migration 070 run first."
-        : e?.body?.detail ? `Stripe refused that: ${e.body.detail}`
-        : "That didn't save. Try again in a moment.");
-    } finally { setBusy(false); }
-  };
+  const monthName = (m) => new Date(`${m}-01T12:00:00Z`)
+    .toLocaleString("en-US", { month: "long", timeZone: "UTC" });
 
   return (
     <>
       <div className="form-sec">Text messages</div>
       <div className="sms-use">
         <div className="sms-use-line">{smsUsageText(s)}</div>
-        <div className={`sms-bar ${pct >= 100 ? "full" : pct >= 80 ? "near" : ""}`}>
+        <div className={`sms-bar ${over ? "over" : pct >= 80 ? "near" : ""}`}>
           <span style={{ width: `${pct}%` }} />
         </div>
-        <p className="fine">
-          {s.included.toLocaleString("en-US")} a month come with Scale
-          {blocks ? `, plus ${(blocks * SMS_ADDON_MESSAGES).toLocaleString("en-US")} from ${blocks} add-on${blocks === 1 ? "" : "s"}` : ""}.
-          {" "}The count starts again on the 1st. At the limit texts pause and emails still go out;
-          emergency call-outs are always texted.
-        </p>
-        {s.addonAvailable && (
-          <div className="sms-addon">
-            {!asking ? (
-              <>
-                <span>{blocks
-                  ? `${blocks} add-on${blocks === 1 ? "" : "s"} · ${"$"}${(blocks * SMS_ADDON_PRICE_CENTS / 100).toLocaleString("en-US")} a month`
-                  : `Need more? ${msgs} more texts a month for ${per} a month.`}</span>
-                <span className="sms-addon-acts">
-                  {blocks > 0 && blocks < (s.maxBlocks || 20) && (
-                    <button className="pick" disabled={busy} onClick={() => setAsking(true)}>Add another</button>
-                  )}
-                  {blocks === 0 && (
-                    <button className="btn-ghost" disabled={busy} onClick={() => setAsking(true)}>
-                      Add {msgs} texts
-                    </button>
-                  )}
-                  {blocks > 0 && (
-                    <button className="pick" disabled={busy} onClick={() => set(blocks - 1)}>
-                      {busy ? "One moment…" : "Remove one"}
-                    </button>
-                  )}
-                </span>
-              </>
-            ) : (
-              <>
-                <span>{msgs} more texts a month for <b>{per} a month</b>, billed with your plan
-                  to your card on file. Charged from today for the rest of this billing period.</span>
-                <span className="sms-addon-acts">
-                  <button className="btn-ghost" disabled={busy} onClick={() => setAsking(false)}>Cancel</button>
-                  <button className="btn-solid" disabled={busy} onClick={() => set(blocks + 1)}>
-                    {busy ? "Adding…" : `Add for ${per} a month`}
-                  </button>
-                </span>
-              </>
-            )}
-          </div>
+        {over && s.billable && (
+          <p className="sms-over" role="status">{smsOverageText(s)}</p>
         )}
-        {err && <p className="billing-err" role="alert">{err}</p>}
+        <p className="fine">
+          {s.included.toLocaleString("en-US")} a month come with Scale and the count starts again on the 1st.
+          {" "}{s.billable
+            ? `Past that, texts keep going, and ${SMS_OVERAGE_TERMS} to the following month's bill, automatically.`
+            : "Past that, texts pause until the 1st and emails still go out."}
+          {" "}Emergency call-outs are always texted.
+        </p>
+        {s.lastMonth && s.lastMonth.blocks > 0 && (
+          <p className="fine sms-last">
+            {monthName(s.lastMonth.month)}: {s.lastMonth.used.toLocaleString("en-US")} sent,
+            {" "}{formatCents(s.lastMonth.amountCents)} for the extra
+            {s.lastMonth.status === "billed" ? " — on your bill." : " — being added to your bill."}
+          </p>
+        )}
       </div>
     </>
   );
@@ -33523,18 +33484,18 @@ p.fld-note{margin:6px 0 0}
 .bm-embed{margin:0}
 .bm-embed:empty{margin:0}
 .bm-invoices{list-style:none;margin:0;padding:0;font-size:13px}
-/* Text messages this month. The bar turns amber near the limit and red at
-   it, the same three colours the document dots use for the same meaning. */
+/* Text messages this month. The bar turns amber near the included amount
+   and stays amber past it: going over is billed, not broken, so it is not
+   drawn in the red that means something has failed. */
 .sms-use{border:1px solid var(--line);border-radius:12px;padding:13px 15px;margin:0 0 14px;
   font-size:14px}
 .sms-use-line{font-weight:600}
 .sms-bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin:9px 0 6px}
 .sms-bar span{display:block;height:100%;background:var(--brand);border-radius:99px}
 .sms-bar.near span{background:#C98A12}
-.sms-bar.full span{background:#B3261E}
-.sms-addon{display:flex;align-items:center;justify-content:space-between;gap:12px;
-  flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:13px}
-.sms-addon-acts{display:flex;gap:8px;flex-wrap:wrap}
+.sms-bar.over span{background:#C98A12}
+.sms-over{margin:0 0 6px;font-size:13px;font-weight:600;color:#8A5A00}
+.sms-last{margin-top:6px}
 .bm-invoices li{display:flex;align-items:center;gap:12px;padding:9px 2px;
   border-bottom:1px solid var(--line)}
 .bm-invoices li:last-child{border-bottom:0}

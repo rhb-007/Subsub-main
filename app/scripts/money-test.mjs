@@ -77,22 +77,22 @@ console.log("\n-- and over ten thousand random ones --");
   ck("and no release comes out negative", negative === 0, String(negative));
 }
 
-console.log("\n-- the fee: 0.5%, at most $500 a payment, on top --");
+console.log("\n-- the fee: 0.05%, at most $500 a payment, on top --");
 {
   const { PLATFORM_FEE_BPS, PLATFORM_FEE_CAP_CENTS, platformFee, FEE_TERMS } = await import("../shared/fee.js");
-  ck("the rate is half a per cent", PLATFORM_FEE_BPS === 50, String(PLATFORM_FEE_BPS));
+  ck("the rate is five hundredths of a per cent", PLATFORM_FEE_BPS === 5, String(PLATFORM_FEE_BPS));
   ck("and the cap is $500", PLATFORM_FEE_CAP_CENTS === 50000, String(PLATFORM_FEE_CAP_CENTS));
-  ck("$10,000 pays $50", platformFee({ gross: 1_000_000 }) === 5000, String(platformFee({ gross: 1_000_000 })));
-  ck("$100,000 pays exactly the cap", platformFee({ gross: 10_000_000 }) === 50000);
-  ck("$200,000 pays the cap and not a cent more", platformFee({ gross: 20_000_000 }) === 50000,
-    String(platformFee({ gross: 20_000_000 })));
+  ck("$10,000 pays $5", platformFee({ gross: 1_000_000 }) === 500, String(platformFee({ gross: 1_000_000 })));
+  ck("$1,000,000 pays exactly the cap", platformFee({ gross: 100_000_000 }) === 50000);
+  ck("$2,000,000 pays the cap and not a cent more", platformFee({ gross: 200_000_000 }) === 50000,
+    String(platformFee({ gross: 200_000_000 })));
   // Per PAYMENT: a second $200,000 draw is another capped fee, not credit
   // carried over from the first one.
   ck("each payment is capped on its own",
-    platformFee({ gross: 20_000_000, priorGross: 20_000_000 }) === 50000);
-  const a = releaseAmounts({ gross: 20_000_000, retainageBps: 500, feeBps: 50, feeCapCents: 50000 });
-  ck("the cap leaves the subcontractor's net alone", a.net === 19_000_000 && a.fee === 50000, JSON.stringify(a));
-  ck("the words say both halves", FEE_TERMS === "0.5% of each payment, at most $500 a payment", FEE_TERMS);
+    platformFee({ gross: 200_000_000, priorGross: 200_000_000 }) === 50000);
+  const a = releaseAmounts({ gross: 200_000_000, retainageBps: 500, feeBps: 5, feeCapCents: 50000 });
+  ck("the cap leaves the subcontractor's net alone", a.net === 190_000_000 && a.fee === 50000, JSON.stringify(a));
+  ck("the words say both halves", FEE_TERMS === "0.05% of each payment, at most $500 a payment", FEE_TERMS);
 }
 
 console.log("\n-- splitting a total --");

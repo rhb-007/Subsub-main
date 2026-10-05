@@ -187,9 +187,9 @@ console.log("\n-- retainage and the fee, held back across milestones --");
   ck("and the rest went out -- none of it to SubSub", net === 95000, String(net));
   const rels = (await json(await call(env, ADMIN, "/api/work-orders/wo1/plan")))[1].releases;
   ck("the fee rate in force is stamped on every release",
-    rels.every((r) => r.feeBps === 50), rels.map((r) => r.feeBps).join(","));
-  ck("and the fee is half a per cent of the whole, cumulatively",
-    rels.reduce((n, r) => n + r.feeCents, 0) === 500, rels.map((r) => r.feeCents).join(","));
+    rels.every((r) => r.feeBps === 5), rels.map((r) => r.feeBps).join(","));
+  ck("and the fee is 0.05% of the whole, cumulatively",
+    rels.reduce((n, r) => n + r.feeCents, 0) === 50, rels.map((r) => r.feeCents).join(","));
   ck("charged on top: net is gross less retainage, never less the fee",
     rels.every((r) => r.netCents === r.grossCents - r.retainageCents));
 }

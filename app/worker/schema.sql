@@ -82,10 +82,6 @@ CREATE TABLE accounts (
   -- it turns on the CHOOSING and the ASKING rather than the booking, which is
   -- still the crew's to grant.
   auto_turnaround   INTEGER,
-  -- 070. Text-message add-ons on the Scale subscription, each 5,000 a month
-  -- more than the 2,500 included. A cache of Stripe's last word, written by
-  -- the webhook -- see app/shared/smsquota.js.
-  sms_addon_blocks  INTEGER NOT NULL DEFAULT 0,
   created_at        TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -2131,3 +2127,23 @@ CREATE TABLE inspection_unmapped (
 );
 CREATE UNIQUE INDEX ux_inspection_unmapped
   ON inspection_unmapped(account_id, source, match_value);
+
+-- 070. Text messages past the included 2,500, billed on the following month:
+-- one row per account per month, written by the nightly sweep before Stripe
+-- is asked. See migrations/070_sms_overage.sql and app/shared/smsquota.js.
+CREATE TABLE IF NOT EXISTS sms_overage (
+  id            TEXT PRIMARY KEY,
+  account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  month         TEXT NOT NULL,
+  used          INTEGER NOT NULL,
+  allowance     INTEGER NOT NULL,
+  blocks        INTEGER NOT NULL,
+  amount_cents  INTEGER NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending','billed','failed','not_billable')),
+  processor_ref TEXT,
+  error         TEXT,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  billed_at     TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_sms_overage_month ON sms_overage(account_id, month);

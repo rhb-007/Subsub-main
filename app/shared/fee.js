@@ -1,6 +1,6 @@
 // SubSub's fee on a payment it moves, and the words for it.
 //
-// 0.5% of the payment, at most $500 a payment, charged to the HIRING account
+// 0.05% of the payment, at most $500 a payment, charged to the HIRING account
 // on top of what it pays -- never taken out of what the subcontractor receives.
 // See releaseAmounts in money.js for why it is on top, and why the cap is per
 // payment rather than per work order.
@@ -20,7 +20,7 @@
 
 import { releaseAmounts } from "./money.js";
 
-export const PLATFORM_FEE_BPS = 50;              // 0.5%
+export const PLATFORM_FEE_BPS = 5;               // 0.05%
 export const PLATFORM_FEE_CAP_CENTS = 50_000;    // $500 per payment
 
 // The fee on one release, with the cap, from the same arithmetic the release
@@ -35,7 +35,7 @@ const pct = (bps) => `${(bps / 100).toLocaleString("en-US", { maximumFractionDig
 const dollars = (cents) => "$" + (Math.round(cents) / 100).toLocaleString("en-US",
   { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
-// "0.5%, at most $500 a payment" -- one sentence, read by the fund form, the
+// "0.05%, at most $500 a payment" -- one sentence, read by the fund form, the
 // pay modal and the marketing copy's test, so the three cannot quote three
 // different fees.
 export const FEE_TERMS = `${pct(PLATFORM_FEE_BPS)} of each payment, at most ${dollars(PLATFORM_FEE_CAP_CENTS)} a payment`;

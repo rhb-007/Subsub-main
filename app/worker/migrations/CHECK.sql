@@ -226,9 +226,10 @@ WITH spec(j) AS (SELECT
   -- presses ask a subcontractor for the same waiver twice.
   ',["m069_waiver_forms","col","waiver_forms",["waiver_id","source","template_id","template_version","parties","uploaded_side"]]' ||
   ',["m069_waiver_open_unique","index","ux_waiver_open",[]]' ||
-  -- 070. Text-message add-ons on the Scale subscription. Until it is run the
-  -- included 2,500 still apply and buying an add-on answers migration_needed.
-  ',["m070_sms_addon","col","accounts",["sms_addon_blocks"]]' ||
+  -- 070. Texts past the included 2,500, billed on the following month. Until
+  -- it is run texts still go; the nightly sweep cannot record a bill and says so.
+  ',["m070_sms_overage","col","sms_overage",["account_id","month","blocks","amount_cents","status","processor_ref"]]' ||
+  ',["m070_sms_overage_unique","index","ux_sms_overage_month",[]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -657,6 +658,11 @@ WITH inv(j) AS (SELECT '['
     JOIN waiver_forms f ON f.waiver_id = w.id
     WHERE f.source = 'subsub_standard' AND f.template_id = 'subsub_standard_waiver'
       AND w.governing_state IN ('AZ','CA','FL','GA','MA','MI','MS','MO','NV','TX','UT','WY')))
+  -- Must read ZERO. A month marked billed with no Stripe line behind it is an
+  -- account told it was charged for texts with nothing anywhere carrying the
+  -- charge -- the sweep writes the reference in the same UPDATE as the status.
+  || ',' || json_array('m070_inv_billed_unrecorded', (SELECT COUNT(*) FROM sms_overage
+    WHERE status = 'billed' AND (processor_ref IS NULL OR processor_ref = '')))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

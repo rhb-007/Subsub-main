@@ -17,8 +17,9 @@ import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, app
   docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
   waiverRequestEmail } from "./mail.js";
 import { sendSms, toE164, smsConfig } from "./sms.js";
-import { monthStart, smsAllowance, smsVerdict, SMS_INCLUDED_SCALE, SMS_ADDON_MESSAGES,
-  SMS_ADDON_PRICE_CENTS, SMS_ADDON_MAX_BLOCKS } from "../shared/smsquota.js";
+import { monthStart, previousMonth, smsAllowance, smsVerdict, smsOverageBlocks, smsOverageCents,
+  SMS_INCLUDED_SCALE, SMS_BLOCK_MESSAGES, SMS_BLOCK_PRICE_CENTS, SMS_OVERAGE_MAX_BLOCKS,
+  SMS_OVERAGE_TERMS } from "../shared/smsquota.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
 // never taken from what the browser claims -- otherwise a dripping tap could
@@ -104,8 +105,7 @@ import { SHARE_DAYS, PACK_KINDS, inLink, shareState, validRecipient,
 import { canHandOver, awaitingFrom, canDecide as canDecideTransfer,
   canCancel as canCancelTransfer, inheritedShape, openWorkText,
   canAppoint, canDeclareOwnership } from "../shared/handover.js";
-import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED,
-  smsAddonPriceFor, isSmsAddonPrice } from "./billing.js";
+import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
 // Whether somebody can actually be paid, decided once and read by the
 // routes, the webhook and the browser.
 import { payoutSummary, rowFromStripe, PAYOUT_CONTROLLER, payoutAccountKey,
@@ -1526,78 +1526,6 @@ app.post("/api/billing/cancel", requireRole("admin"), async (c) => {
   }
 });
 
-// Text-message add-ons: set how many the account has, 0 to remove them.
-//
-// A LINE ON THE SCALE SUBSCRIPTION, not a second subscription. One bill, one
-// renewal date, one card -- and when the plan goes, the line goes with it,
-// which is the only behaviour anybody would expect. Prorated both ways,
-// Stripe's default, so adding one mid-month is charged for the rest of the
-// month and removing one is credited.
-//
-// The count is set rather than incremented: a double-pressed "add" must not
-// buy two, and "how many do I want" is the question anyway. Written through
-// from Stripe's own answer, and the webhook writes it again -- the column is
-// Stripe's last word, never the request's.
-app.post("/api/billing/sms-addon", requireRole("admin"), async (c) => {
-  const { accountId, userId } = c.get("auth");
-  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
-  const b = await c.req.json().catch(() => ({}));
-  const blocks = Math.floor(Number(b.blocks));
-  if (!Number.isFinite(blocks) || blocks < 0 || blocks > SMS_ADDON_MAX_BLOCKS) {
-    return c.json({ error: "bad_blocks", max: SMS_ADDON_MAX_BLOCKS }, 400);
-  }
-  const a = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
-  if (!a) return c.json({ error: "not_found" }, 404);
-  // Texts are Scale, so the add-on is too -- and a comped account has no
-  // subscription to put a line on.
-  if (!accountOnScale(a)) return scaleRequired(c);
-  if (!a.stripe_subscription_id) return c.json({ error: "no_subscription" }, 409);
-  const cycle = a.billing === "annual" ? "annual" : "monthly";
-  const price = smsAddonPriceFor(c.env, cycle);
-  if (!price) return c.json({ error: "billing_not_configured", detail: "no add-on price" }, 501);
-
-  // Before Stripe is asked anything: a database without 070 cannot record
-  // what was bought, and charging for an add-on the cap would then ignore is
-  // the worst order to find that out in.
-  try {
-    await c.env.DB.prepare(`SELECT sms_addon_blocks FROM accounts WHERE id = ?`).bind(accountId).first();
-  } catch (err) {
-    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "070_sms_addon" }, 503);
-    throw err;
-  }
-
-  try {
-    const sub = await stripeCall(c.env, `/subscriptions/${a.stripe_subscription_id}`, { method: "GET" });
-    const line = (sub.items?.data || []).find((i) => isSmsAddonPrice(c.env, i.price?.id));
-    // The same request within the same minute is one change, not two.
-    const key = `sms-addon:${accountId}:${blocks}:${Math.floor(Date.now() / 60000)}`;
-    if (blocks === 0) {
-      if (line) await stripeCall(c.env, `/subscription_items/${line.id}`, { method: "DELETE", idempotencyKey: key });
-    } else if (line) {
-      if (Number(line.quantity) !== blocks) {
-        await stripeCall(c.env, `/subscription_items/${line.id}`, {
-          params: { quantity: blocks }, idempotencyKey: key });
-      }
-    } else {
-      await stripeCall(c.env, "/subscription_items", {
-        params: { subscription: a.stripe_subscription_id, price, quantity: blocks },
-        idempotencyKey: key });
-    }
-    // Write through rather than waiting for the webhook: they are looking at
-    // the count now.
-    const fresh = await stripeCall(c.env, `/subscriptions/${a.stripe_subscription_id}`, { method: "GET" });
-    await applySubscription(c.env, a, fresh);
-    await logActivity(c.env, accountId, userId, "plan_changed", blocks
-      ? `Text messages: ${blocks} add-on${blocks === 1 ? "" : "s"} (${(blocks * SMS_ADDON_MESSAGES).toLocaleString("en-US")} more a month)`
-      : "Text message add-ons removed");
-    const u = await smsUsage(c.env, accountId);
-    return c.json({ ok: true, addonBlocks: u.addonBlocks, allowance: u.allowance, used: u.used });
-  } catch (err) {
-    console.error("[billing] sms add-on failed:", err?.message || err);
-    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
-  }
-});
-
 // And changing their mind, which is the same call in reverse. Worth having:
 // somebody who cancels by accident should not have to buy the plan again.
 app.post("/api/billing/resume", requireRole("admin"), async (c) => {
@@ -1650,8 +1578,7 @@ app.post("/api/billing/portal", requireRole("admin"), async (c) => {
 app.get("/api/billing", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   const a = await c.env.DB.prepare(
-    `SELECT plan, billing, subscription_status, current_period_end, stripe_customer_id,
-            stripe_subscription_id
+    `SELECT plan, billing, subscription_status, current_period_end, stripe_customer_id
      FROM accounts WHERE id = ?`).bind(accountId).first();
   if (!a) return c.json({ error: "not_found" }, 404);
 
@@ -1660,24 +1587,27 @@ app.get("/api/billing", requireRole("admin", "pm"), async (c) => {
      FROM invoices WHERE account_id = ? ORDER BY period_start DESC LIMIT 12`
   ).bind(accountId).all();
 
-  // Text messages: what is allowed this month, what is gone, and whether an
-  // add-on can be bought here -- read from the same function that refuses a
-  // text at the cap, so the panel and the refusal cannot disagree.
+  // Text messages: what is included this month, what is gone, what the next
+  // bill will carry for it so far, and last month's charge -- read from the
+  // same function that decides whether a text goes, so the panel and the
+  // decision cannot disagree.
   let sms = null;
   try {
     const u = await smsUsage(c.env, accountId);
-    const cycle = a.billing === "annual" ? "annual" : "monthly";
+    const blocks = u.billable ? smsOverageBlocks({ allowance: u.allowance, used: u.used }) : 0;
+    let last = null;
+    try {
+      last = await c.env.DB.prepare(
+        `SELECT month, used, blocks, amount_cents, status FROM sms_overage
+          WHERE account_id = ? AND month = ?`).bind(accountId, previousMonth().month).first();
+    } catch (err) { if (!missingSchema(err)) throw err; }
     sms = {
       used: u.used, allowance: u.allowance, included: u.onScale ? SMS_INCLUDED_SCALE : 0,
-      addonBlocks: u.addonBlocks, addonMessages: SMS_ADDON_MESSAGES,
-      addonPriceCents: SMS_ADDON_PRICE_CENTS, maxBlocks: SMS_ADDON_MAX_BLOCKS,
-      // Only where pressing it can work: on Scale, with a subscription to add
-      // a line to, and a price configured for this cycle. A comped account
-      // has no subscription, and a button that answers no_subscription is the
-      // screen-that-lies rule pointed at a purchase.
-      addonAvailable: u.onScale && !!a.stripe_subscription_id
-        && !!c.env.STRIPE_SECRET_KEY && !!smsAddonPriceFor(c.env, cycle),
-      configured: !!smsConfig(c.env),
+      billable: u.billable, overageBlocks: blocks, overageCents: smsOverageCents(blocks),
+      blockMessages: SMS_BLOCK_MESSAGES, blockPriceCents: SMS_BLOCK_PRICE_CENTS,
+      maxBlocks: SMS_OVERAGE_MAX_BLOCKS, configured: !!smsConfig(c.env),
+      lastMonth: last && last.status !== "not_billable" ? { month: last.month, used: last.used,
+        blocks: last.blocks, amountCents: last.amount_cents, status: last.status } : null,
     };
   } catch (err) {
     console.error("[billing] sms usage failed:", err?.message || err);
@@ -1720,15 +1650,7 @@ const accountRow = (env, id) =>
 async function applySubscription(env, account, sub) {
   const status = sub.status;
   const entitled = ENTITLED.has(status);
-  // THE PLAN'S LINE, not the first line. A subscription carrying the text
-  // add-on has two, in whatever order Stripe returns them, and reading the
-  // add-on's interval and period as the plan's would be right by luck.
-  const items = sub.items?.data || [];
-  const item = items.find((i) => !isSmsAddonPrice(env, i.price?.id)) || items[0];
-  const smsBlocks = entitled
-    ? items.filter((i) => isSmsAddonPrice(env, i.price?.id))
-        .reduce((n, i) => n + Math.max(0, Number(i.quantity) || 0), 0)
-    : 0;
+  const item = sub.items?.data?.[0];
   const cycle = item?.price?.recurring?.interval === "year" ? "annual" : "monthly";
   // A comped account keeps Scale whatever Stripe says. Somebody who was given
   // the plan should not lose it because a card they never entered expired,
@@ -1766,17 +1688,6 @@ async function applySubscription(env, account, sub) {
               subscription_status = ?, current_period_end = ?
        WHERE id = ?`
     ).bind(plan, cycle, sub.id, sub.customer, status, periodEnd, account.id).run();
-  }
-
-  // 070. The add-on count, in a write of its own for the reason the cancel
-  // flag has one: a database that has not run 070 must lose the add-on and
-  // keep the plan. Only Stripe writes this -- nothing an account sends can.
-  try {
-    await env.DB.prepare(`UPDATE accounts SET sms_addon_blocks = ? WHERE id = ?`)
-      .bind(smsBlocks, account.id).run();
-  } catch (err) {
-    if (!missingSchema(err)) throw err;
-    console.warn("[billing] sms_addon_blocks column missing -- run migration 070");
   }
 
   if (was !== plan) {
@@ -6432,7 +6343,7 @@ export function missingSchema(err) {
   if (/\bjob_endings\b/i.test(m)) return "066_job_endings";
   if (/\binspection_summaries\b/i.test(m)) return "063_inspection_summary";
   if (/\bauto_turnaround\b/i.test(m)) return "065_auto_turnaround";
-  if (/\bsms_addon_blocks\b/i.test(m)) return "070_sms_addon";
+  if (/\bsms_overage\b/i.test(m)) return "070_sms_overage";
   if (/\bmanager_at\b/i.test(m)) return "064_visit_manager";
   if (/contractor_(at|note)/i.test(m)) return "061_visit_contractor";
   if (/access_user_id/i.test(m)) return "062_job_access_user";
@@ -15321,6 +15232,15 @@ async function embedNudgeSweep(env) {
   return { accounts: (rows || []).length, sent };
 }
 
+// The overage sweep by hand, for the same reason the others have a route: a
+// month that failed to bill can be retried without waiting for 3am.
+app.get("/api/cron/sms-overage", async (c) => {
+  if (!c.env.CRON_SECRET || c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  return c.json(await smsOverageSweep(c.env));
+});
+
 app.get("/api/cron/retouch", async (c) => {
   if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
   return c.json(await retouchSweep(c.env));
@@ -19416,60 +19336,64 @@ async function logSms(env, { accountId, companyId, to, kind, result }) {
   }
 }
 
-// What this account may text this month, and how much of it is gone.
+// What this account may text this month, how much of it is gone, and whether
+// there is anything to bill an overage to.
 //
 // Read off the account row and sms_log every time rather than kept as a
 // counter: a counter is a second record of what sms_log already says, and the
-// one that drifts is the one that decides. `sms_addon_blocks` is 070's; a
-// database without it keeps the included allowance rather than refusing every
-// text, because a missing column must cost the add-on and never the channel.
-async function smsUsage(env, accountId) {
-  let a = null;
-  try {
-    a = await env.DB.prepare(`SELECT plan, comped, sms_addon_blocks FROM accounts WHERE id = ?`)
-      .bind(accountId).first();
-  } catch (err) {
-    if (!missingSchema(err)) throw err;
-    a = await env.DB.prepare(`SELECT plan, comped FROM accounts WHERE id = ?`).bind(accountId).first();
-  }
+// one that drifts is the one that decides.
+//
+// BILLABLE means a real subscription and customer at Stripe for the overage to
+// land on. A comped Scale account has the plan and no subscription, so it gets
+// the included 2,500 and then pauses -- charging an account we gave the plan
+// to is not a decision a sweep should make.
+async function smsUsage(env, accountId, now = new Date()) {
+  const a = await env.DB.prepare(
+    `SELECT plan, comped, stripe_customer_id, stripe_subscription_id, subscription_status
+       FROM accounts WHERE id = ?`).bind(accountId).first();
   const used = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM sms_log WHERE account_id = ? AND status = 'sent' AND at >= ?`
-  ).bind(accountId, monthStart()).first();
-  const addonBlocks = Math.max(0, Number(a?.sms_addon_blocks) || 0);
+  ).bind(accountId, monthStart(now)).first();
+  const onScale = accountOnScale(a);
   return {
-    onScale: accountOnScale(a), addonBlocks,
-    allowance: smsAllowance({ onScale: accountOnScale(a), addonBlocks }),
+    onScale,
+    billable: onScale && a?.plan === "scale" && !!a?.stripe_customer_id && !!a?.stripe_subscription_id,
+    allowance: smsAllowance({ onScale }),
     used: Number(used?.n) || 0,
   };
 }
 
-// EVERY TEXT AN ACCOUNT SENDS GOES THROUGH HERE, which is what makes the cap a
-// cap. Seven call sites used to pair sendSms with logSms by hand; a quota
-// checked at six of them is a quota with a door round it, and the seventh --
-// the emergency call-out -- was not even logged, so it was invisible to the
-// console's count as well.
+// EVERY TEXT AN ACCOUNT SENDS GOES THROUGH HERE, which is what makes the
+// allowance true. Seven call sites used to pair sendSms with logSms by hand; a
+// count checked at six of them is a count with a door round it, and the
+// seventh -- the emergency call-out -- was not even logged, so it was missing
+// from the console's figure and would have been missing from the bill.
+//
+// Past the included 2,500 a text STILL GOES on a billable account: the
+// overage is charged on the following month's bill by `smsOverageSweep`, in
+// $50 blocks of 5,000. What stops a text is only Basic (no texts), an account
+// with nothing to bill, or the runaway ceiling -- see shared/smsquota.js.
 //
 // The order is deliberate. Unconfigured first, because "texting isn't set up"
 // is the more useful answer and spending a database read to give a worse one
-// is backwards. Then the allowance. A refusal is LOGGED as failed with its
-// reason, because "did they get a text?" is the first thing support asks and
-// "no, the account had used its 2,500" is an answer; and a failed row is not
-// counted, so the refusal never eats into the allowance it is reporting.
+// is backwards. A refusal is LOGGED as failed with its reason, because "did
+// they get a text?" is the first thing support asks; and a failed row is not
+// counted, so a refusal is never billed.
 async function sendAccountSms(env, { accountId, companyId = null, to, body, kind }) {
   if (!smsConfig(env)) {
     const result = { ok: false, error: "sms_not_configured" };
     if (accountId) await logSms(env, { accountId, companyId, to, kind, result: { ...result, body } });
     return result;
   }
+  let verdict = { ok: true };
   if (accountId) {
-    let verdict = { ok: true };
     try {
       const u = await smsUsage(env, accountId);
-      verdict = smsVerdict({ allowance: u.allowance, used: u.used, kind });
+      verdict = smsVerdict({ allowance: u.allowance, used: u.used, kind, billable: u.billable });
     } catch (err) {
       // A count that cannot be read must not stop a text. Logged, and sent:
-      // the cap is a commercial limit, and failing closed here would turn a
-      // database hiccup into nobody being told their work order was issued.
+      // failing closed here would turn a database hiccup into nobody being
+      // told their work order was issued.
       console.error("[sms] usage read failed:", err?.message || err);
     }
     if (!verdict.ok) {
@@ -19481,7 +19405,115 @@ async function sendAccountSms(env, { accountId, companyId = null, to, body, kind
   }
   const result = await sendSms(env, { to, body });
   await logSms(env, { accountId, companyId, to, kind, result: { ...result, body } });
+  // The text that opens a new $50 block is the moment the account is told,
+  // once -- not on every text after it, and not at the end of the month when
+  // the charge has already happened. Only if it actually went: a failed send
+  // is not counted, so it opens nothing.
+  if (result.ok && verdict.overage && verdict.startsBlock) {
+    await logActivity(env, accountId, null, "sms_overage",
+      `Text messages passed ${(verdict.allowance + (verdict.blocks - 1) * SMS_BLOCK_MESSAGES).toLocaleString("en-US")} this month. `
+      + `Texts keep going; ${SMS_OVERAGE_TERMS} to next month's bill.`).catch(() => {});
+  }
   return result;
+}
+
+// Bill last month's texts past the allowance. Nightly, and idempotent by
+// construction: one sms_overage row per account per month (the unique index),
+// written BEFORE Stripe is asked, so a night that dies halfway leaves a
+// pending row the next night finishes rather than a charge nobody recorded.
+//
+// HOW IT REACHES THE BILL. A Stripe invoice item on the customer, tied to the
+// Scale subscription, is pulled into that subscription's next invoice -- which
+// for a monthly plan IS the following month's bill. A yearly plan has no
+// monthly bill to ride on, and waiting up to eleven months to charge for
+// October's texts is not "the following month", so there the item is put on
+// an invoice of its own that Stripe charges to the card on file.
+//
+// Not exercised against live Stripe from here: the request shapes are the
+// documented ones, the suite asserts them at fetch, and the first real month
+// past 2,500 is the real test -- the same thing this repository records about
+// every other Stripe call it could not see.
+async function smsOverageSweep(env, now = new Date()) {
+  const { month, from, to } = previousMonth(now);
+  let rows;
+  try {
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT account_id, COUNT(*) AS n FROM sms_log
+        WHERE status = 'sent' AND account_id IS NOT NULL AND at >= ? AND at < ?
+        GROUP BY account_id HAVING COUNT(*) > ?`
+    ).bind(from, to, SMS_INCLUDED_SCALE).all());
+  } catch (err) {
+    if (missingSchema(err)) return { month, skipped: "no sms_log" };
+    throw err;
+  }
+  const out = { month, accounts: (rows || []).length, billed: 0, notBillable: 0, failed: 0, already: 0 };
+  for (const r of rows || []) {
+    const a = await env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(r.account_id).first();
+    if (!a) continue;
+    const onScale = accountOnScale(a);
+    const allowance = smsAllowance({ onScale });
+    const blocks = smsOverageBlocks({ allowance, used: r.n });
+    if (!blocks) continue;
+    const amount = smsOverageCents(blocks);
+    const billable = onScale && a.plan === "scale" && !!a.stripe_customer_id && !!a.stripe_subscription_id;
+
+    let row;
+    try {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO sms_overage (id, account_id, month, used, allowance, blocks, amount_cents, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(uid(), a.id, month, r.n, allowance, blocks, amount, billable ? "pending" : "not_billable").run();
+      row = await env.DB.prepare(`SELECT * FROM sms_overage WHERE account_id = ? AND month = ?`)
+        .bind(a.id, month).first();
+    } catch (err) {
+      if (missingSchema(err)) return { ...out, migration: "070_sms_overage" };
+      throw err;
+    }
+    if (!row || row.status === "billed") { out.already += 1; continue; }
+    if (row.status === "not_billable") { out.notBillable += 1; continue; }
+    if (!env.STRIPE_SECRET_KEY) { out.failed += 1; continue; }
+
+    const label = new Date(`${month}-01T12:00:00Z`).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+    const description = `Extra text messages, ${label}: ${row.used.toLocaleString("en-US")} sent, `
+      + `${row.allowance.toLocaleString("en-US")} included — ${row.blocks} × ${SMS_BLOCK_MESSAGES.toLocaleString("en-US")}`;
+    const yearly = a.billing === "annual";
+    try {
+      const item = await stripeCall(env, "/invoiceitems", {
+        params: {
+          customer: a.stripe_customer_id, amount: row.amount_cents, currency: "usd", description,
+          // On a monthly plan the line rides the subscription's next invoice.
+          // On a yearly one it goes on an invoice of its own, below.
+          ...(yearly ? {} : { subscription: a.stripe_subscription_id }),
+          metadata: { account_id: a.id, sms_overage_id: row.id, month },
+        },
+        idempotencyKey: `sms-overage:${a.id}:${month}`,
+      });
+      let ref = item.id;
+      if (yearly) {
+        const inv = await stripeCall(env, "/invoices", {
+          params: { customer: a.stripe_customer_id, collection_method: "charge_automatically",
+            auto_advance: true, pending_invoice_items_behavior: "include", description,
+            metadata: { account_id: a.id, sms_overage_id: row.id, month } },
+          idempotencyKey: `sms-overage-invoice:${a.id}:${month}`,
+        });
+        ref = `${item.id} ${inv.id}`;
+      }
+      await env.DB.prepare(
+        `UPDATE sms_overage SET status = 'billed', processor_ref = ?, error = NULL,
+           billed_at = CURRENT_TIMESTAMP WHERE id = ?`
+      ).bind(ref, row.id).run();
+      await logActivity(env, a.id, null, "sms_overage_billed",
+        `${label}: ${row.used.toLocaleString("en-US")} texts sent. `
+        + `$${(row.amount_cents / 100).toLocaleString("en-US")} for the extra added to your bill.`).catch(() => {});
+      out.billed += 1;
+    } catch (err) {
+      console.error("[sms-overage] billing failed:", a.id, err?.message || err);
+      await env.DB.prepare(`UPDATE sms_overage SET status = 'failed', error = ? WHERE id = ?`)
+        .bind(String(err?.message || err).slice(0, 500), row.id).run();
+      out.failed += 1;
+    }
+  }
+  return out;
 }
 
 // Everything the document-request template needs, fetched once and shared by
@@ -19661,7 +19693,7 @@ export default {
     const jobs = nightly
       ? [["hostnames", hostnameSweep], ["licenses", licenseSweep],
          ["doc-expiry", docExpirySweep], ["retouch", retouchSweep],
-         ["embed-nudge", embedNudgeSweep]]
+         ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep]]
       : [["hostnames", hostnameSweep]];
 
     ctx.waitUntil((async () => {

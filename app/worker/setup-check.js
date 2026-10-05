@@ -37,12 +37,6 @@ const GROUPS = [
       + "Without the webhook secret, payments succeed at Stripe and never reach the account.",
   },
   {
-    id: "sms_addon", label: "Text message add-on (Stripe)",
-    vars: ["STRIPE_PRICE_SMS_MONTHLY", "STRIPE_PRICE_SMS_ANNUAL"],
-    matters: "Selling 5,000 more texts a month for $50 on top of Scale's 2,500. "
-      + "Unset, the add-on is simply not offered; the included 2,500 still work.",
-  },
-  {
     id: "sms", label: "Text messages (Twilio)",
     vars: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM"],
     matters: "Texting a tenant their invite. Unset, invites still go by email and "

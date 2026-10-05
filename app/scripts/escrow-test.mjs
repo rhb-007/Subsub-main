@@ -137,11 +137,11 @@ console.log("\n-- what to fund, derived from money.js and not reinvented --");
   ck("funding covers the GROSS, retainage included", s.grossCents === 500000, String(s.grossCents));
   ck("and the net is what would reach them", s.netCents === 475000, String(s.netCents));
   ck("the top-up is net of what is already there, and carries the fee",
-    fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000 }).topUpCents === 302500,
+    fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000 }).topUpCents === 300250,
     String(fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000 }).topUpCents));
   // The cap is per payment, so two capped draws are two fees. Suggested as one
   // lump it would be one, and the second draw could not be paid.
-  const big = fundSuggestion({ milestones: [{ amountCents: 20_000_000 }, { amountCents: 20_000_000 }] });
+  const big = fundSuggestion({ milestones: [{ amountCents: 200_000_000 }, { amountCents: 200_000_000 }] });
   ck("two capped draws are two capped fees", big.feeCents === 100000, String(big.feeCents));
   ck("and what is already owed is covered as well as what is to come",
     fundSuggestion({ milestones: [], owedCents: 40000 }).topUpCents === 40000);

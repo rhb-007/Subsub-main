@@ -2778,13 +2778,16 @@ refactor.
   issued, over a fault nobody told them about — the same silent failure one
   screen along. The modal says so, at the moment of closing.
 
-- **SUBSUB'S FEE IS 0.5% OF A PAYMENT, AT MOST $500 A PAYMENT, CHARGED TO THE
-  HIRING ACCOUNT ON TOP -- AND ONLY ON MONEY THAT GOES THROUGH SUBSUB.**
-  `app/shared/fee.js`. Decided as a take rate, not a guess: Procore charges
-  0.2% per invoice capped per commitment; vertical-software platforms net
-  roughly 0.35-1%; a bank transfer through Stripe costs SubSub at most $5. The
-  cap is **per payment**, because a percentage of a $200,000 draw is a number
-  nobody would agree to for sending a transfer.
+- **SUBSUB'S FEE IS 0.05% OF A PAYMENT, AT MOST $500 A PAYMENT, CHARGED TO
+  THE HIRING ACCOUNT ON TOP -- AND ONLY ON MONEY THAT GOES THROUGH SUBSUB.**
+  `app/shared/fee.js`. The rate is the owner's call and was corrected from
+  0.5% to 0.05% the day it shipped -- a "point oh five" said aloud is exactly
+  the figure that gets an extra zero, so the test pins the rate in words as
+  well as in basis points. Worth knowing beside it: at 0.05% a $4,000 payment
+  earns $2, and a Stripe bank transfer costs SubSub up to $5 before Connect's
+  payout fees, so on most payments this fee does not cover the rail. That is a
+  pricing decision, recorded rather than reopened. The cap is **per payment**
+  and only binds above $1,000,000.
 
   **On top, never out of net, and that reverses what `money.js` did.** Net was
   gross less retainage less fee, so whatever SubSub charged came out of the
@@ -2827,45 +2830,61 @@ refactor.
   is the whole of why it survived. `test:feesmsui` reads the drawn total, the
   drawn fee and the amount on the wire, and undoing either half fails it.
 
-- **TEXT MESSAGES ARE 2,500 A MONTH ON SCALE, 5,000 MORE FOR $50 A MONTH, AND
-  NONE ON BASIC.** `app/shared/smsquota.js`, migration 070. Basic at zero is
-  what the pricing page has always said; nothing enforced it until now.
+- **TEXT MESSAGES ARE 2,500 A MONTH ON SCALE, AND PAST THAT THEY KEEP GOING:
+  EACH EXTRA 5,000 (OR PART) IS $50 ON THE FOLLOWING MONTH'S BILL. NONE ON
+  BASIC.** `app/shared/smsquota.js`, migration 070 (`sms_overage`). Basic at
+  zero is what the pricing page always said; nothing enforced it until now.
 
-  **One door.** Seven call sites paired `sendSms` with `logSms` by hand; a cap
-  checked at six of them is a cap with a door round it, and the seventh -- the
-  emergency call-out -- was not even logged. `sendAccountSms` is the only
-  caller of `sendSms` and a test counts that. Unconfigured is answered first,
-  then the count; a refusal is logged as failed with its reason and a failed
-  row is not counted, so a refusal never eats the allowance it reports.
+  **It replaced a pre-bought add-on the same day, and the reason is the
+  design.** The first version paused texts at 2,500 and sold 5,000 more as a
+  monthly line bought in advance. That makes an account guess its volume and
+  pay for the guess every month, and it makes running out silent -- a work
+  order not texted on the 28th because nobody topped up. Billing what was
+  actually sent, in the same $50 blocks, never stops a notice and never
+  charges for texts nobody sent. 070 was rewritten rather than followed by a
+  071 because it had not been pasted; one that had is harmless, its column is
+  simply unused.
 
-  **At the cap the text pauses and the email still goes**, so running out
-  costs a channel and never the notice, and nothing is billed past the cap.
-  **An emergency call-out is texted whatever the count** -- a named kind in
-  `SMS_UNCAPPED_KINDS`, never a flag a caller can pass, because a flood at 2am
-  and a contractor not told over a quota is the most expensive failure this
-  could produce. It still counts, so the number on screen is true.
+  **One door.** Seven call sites paired `sendSms` with `logSms` by hand; a
+  count checked at six of them is a count with a door round it, and the
+  seventh -- the emergency call-out -- was not even logged, so it would have
+  been missing from the bill. `sendAccountSms` is the only caller of `sendSms`
+  and a test counts that. A refusal is logged as failed with its reason and a
+  failed row is not counted, so a refusal is never billed.
 
-  **Counted from `sms_log`, in messages, by calendar month**, never as a
-  counter: a counter is a second record of what the log already says. The
-  month boundary is `YYYY-MM-01` compared against `CURRENT_TIMESTAMP` text --
-  one format against itself, which is 057's lesson kept. A count that cannot
-  be read lets the text go, because the cap is commercial and failing closed
-  would turn a database hiccup into nobody being told their work order exists.
+  **Three things still stop a text, each for a reason.** Basic (no texts). An
+  account with **nothing to bill** -- a comped Scale account has the plan and
+  no subscription, so it pauses at 2,500 rather than running up a charge on an
+  account we gave the plan to. And a **runaway**: `SMS_OVERAGE_MAX_BLOCKS` is a
+  loop, not a busy month, and a loop billing $50 every 5,000 texts with nobody
+  watching is the worst thing this could do. **An emergency call-out goes
+  past all three** -- a named kind, never a flag a caller can pass -- and still
+  counts, so the bill is true.
 
-  **The add-on is a line on the Scale subscription**, not a second one: one
-  bill, one renewal, and it goes when the plan goes. Annual subscriptions take
-  a yearly add-on price ($600) because Stripe refuses mixed intervals on one
-  subscription. The count is **set, not incremented**, so a double press cannot
-  buy two; it is written through from Stripe's own answer and again by the
-  webhook, so the column is Stripe's last word. `applySubscription` reads the
-  plan's cycle off **the plan's line**, not `items.data[0]` -- with the add-on
-  present the first line may be the add-on, and the fixture puts it first.
-  **Buying asks first** on screen; removing does not, because it is reversible
-  and costs nothing.
+  **The account is told when it happens, not when it is billed.** The text
+  that opens each new $50 block writes one activity line; the panel shows the
+  running overage and last month's charge. A charge nobody saw coming until the
+  invoice is the one that becomes a support call.
 
-  Not verified here: the add-on needs two Stripe prices created and their ids
-  set as `STRIPE_PRICE_SMS_MONTHLY` and `STRIPE_PRICE_SMS_ANNUAL` on the API
-  Worker. Until then the panel shows the count and offers no button.
+  **Billing is a nightly sweep of LAST month, idempotent by construction.**
+  One `sms_overage` row per account per month (the unique index), written
+  **before** Stripe is asked, so a night that dies halfway leaves a pending row
+  the next night finishes. A monthly plan gets a Stripe **invoice item tied to
+  the subscription**, which rides its next invoice -- the following month's
+  bill. A **yearly** plan has no monthly bill, and waiting up to eleven months
+  to charge for October is not "the following month", so its item goes on an
+  **invoice of its own** charged to the card on file. A refusal is `failed`
+  with Stripe's words and retried the next night; `m070_inv_billed_unrecorded`
+  counts a month marked billed with no Stripe line behind it.
+
+  **Counted from `sms_log`, in messages, by calendar month (UTC)**, never as a
+  counter. The month boundary is `YYYY-MM-01` compared against
+  `CURRENT_TIMESTAMP` text -- one format against itself, 057's lesson kept.
+  A count that cannot be read lets the text go.
+
+  **Not verified here: live Stripe.** The invoice-item and invoice shapes are
+  the documented ones and the suite asserts them at `fetch`; the first real
+  month past 2,500 is the real test, as with every other Stripe call here.
 
 - **A lien waiver is a chain, and it rolls up as a status.** A waiver binds
   only the party that signs it, so one from your subcontractor does nothing

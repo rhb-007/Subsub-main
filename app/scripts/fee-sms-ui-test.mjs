@@ -50,13 +50,15 @@ const PLAN = { workOrderId: "wo_1", valueCents: 1000000, scopeKind: "labor_mater
   milestones: [{ id: "ms_1", seq: 1, label: "Tear-off", amountCents: 400000, status: "verified",
     verifiedAt: "2026-10-02 10:00:00" }, { id: "ms_2", seq: 2, label: "Shingles", amountCents: 600000, status: "pending" }],
   releases: [{ id: "rel_1", workOrderId: "wo_1", milestoneId: "ms_1", grossCents: 400000, retainageCents: 20000,
-    feeBps: 50, feeCents: 2000, netCents: 380000, status: "due", createdAt: "2026-10-02 10:00:00" }] };
+    feeBps: 5, feeCents: 2000, netCents: 380000, status: "due", createdAt: "2026-10-02 10:00:00" }] };
 const FUNDING = { configured: true, onScale: true, payeeReady: true, payeeStatus: "verified",
   fundedCents: 380000, refundedCents: 0, transferredCents: 0, dueCents: 380000, feesTakenCents: 0,
   feesDueCents: 2000, owedCents: 382000, availableCents: 380000, shortfallCents: 2000, refundableCents: 0,
   fundings: [], transfers: [] };
-let SMS = { used: 2140, allowance: 2500, included: 2500, addonBlocks: 0, addonMessages: 5000,
-  addonPriceCents: 5000, maxBlocks: 20, addonAvailable: true, configured: true };
+// Over the included 2,500 this month, and billed for last month.
+const SMS = { used: 3140, allowance: 2500, included: 2500, billable: true, overageBlocks: 1, overageCents: 5000,
+  blockMessages: 5000, blockPriceCents: 5000, maxBlocks: 20, configured: true,
+  lastMonth: { month: "2026-09", used: 8000, blocks: 2, amountCents: 10000, status: "billed" } };
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
@@ -74,11 +76,6 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     waivers: [], chain: { clear: true, reasons: [] } }];
   if (path === "/api/billing" && method === "GET") return [200, { plan: "scale", cycle: "monthly", status: "active",
     currentPeriodEnd: null, hasCustomer: true, configured: true, invoices: [], sms: SMS }];
-  if (path === "/api/billing/sms-addon" && method === "POST") {
-    sent.push({ path, body });
-    SMS = { ...SMS, addonBlocks: body.blocks, allowance: 2500 + body.blocks * 5000 };
-    return [200, { ok: true, addonBlocks: body.blocks, allowance: SMS.allowance, used: SMS.used }];
-  }
   if (path === "/api/work-orders/wo_1/fund" && method === "POST") {
     sent.push({ path, body });
     return [200, { fundingId: "f_1", clientSecret: "pi_1_secret_x", amountCents: body.amountCents }];
@@ -125,7 +122,7 @@ try {
       refusal: document.querySelector(".cx-found-note")?.innerText || "",
     }));
     t.ck("the pay window names the fee before anybody presses anything",
-      /Plus SubSub's fee of \$20\.00 \(0\.5% of each payment, at most \$500 a payment\)/.test(r.fee), r.fee);
+      /Plus SubSub's fee of \$20\.00 \(0\.05% of each payment, at most \$500 a payment\)/.test(r.fee), r.fee);
     t.ck("and says the subcontractor receives the full amount", /They receive the full \$3,800\.00/.test(r.fee), r.fee);
     // Funded for the net and not the fee: the screen's own check agrees with
     // the route's, and says how much to add.
@@ -139,19 +136,19 @@ try {
       .find((b) => /Add funds/.test(b.innerText))?.click());
     await wait(600);
     const box = await page.evaluate(() => document.querySelector(".modal .form .fld input")?.value || "");
-    // What is to come ($6,000 gross + $30 fee) and what is already owed
+    // What is to come ($6,000 gross + $3 fee) and what is already owed
     // ($3,800 + $20 fee), less the $3,800 already in.
     t.ck("the suggested figure covers the work to come, what is owed, and the fee",
-      box === "$6,050.00", box);
+      box === "$6,023.00", box);
     const fee = await page.evaluate(() => document.querySelector(".fund-fee")?.innerText || "");
-    t.ck("and the form says the fee is included", /0\.5% of each payment, at most \$500 a payment/.test(fee), fee);
+    t.ck("and the form says the fee is included", /0\.05% of each payment, at most \$500 a payment/.test(fee), fee);
     sent.length = 0;
     await page.evaluate(() => [...document.querySelectorAll(".form-actions .btn-solid")]
       .find((b) => /Continue/.test(b.innerText))?.click());
     await wait(800);
     const fund = sent.find((x) => /\/fund$/.test(x.path));
-    t.ck("and it sends that figure in CENTS -- $6,050 is 605000, not 6050",
-      fund?.body?.amountCents === 605000, JSON.stringify(fund?.body));
+    t.ck("and it sends that figure in CENTS -- $6,023 is 602300, not 6023",
+      fund?.body?.amountCents === 602300, JSON.stringify(fund?.body));
     await page.evaluate(() => [...document.querySelectorAll(".form-actions .btn-ghost")]
       .find((x) => /^Cancel$/.test((x.innerText || "").trim()))?.click());
     await wait(400);
@@ -171,7 +168,7 @@ try {
     await ctx.close();
   }
 
-  console.log("\n-- text messages, and buying more asks first --");
+  console.log("\n-- text messages: over the 2,500, said before the bill --");
   {
     const { ctx, page, crashes } = await visitApp(browser, { host: "alder", webPort: WEB,
       seat: { userId: "usr_a", accountId: "acc_gc" }, viewport: { width: 1340, height: 1500 } });
@@ -183,46 +180,24 @@ try {
     const tab = await page.evaluate(() => { const b = [...document.querySelectorAll(".seg-tabs button")]
       .find((x) => /^Subscription$/.test(x.innerText.trim())); b?.click(); return !!b; });
     await wait(1200);
-    let r = await page.evaluate(() => ({
+    const r = await page.evaluate(() => ({
       line: document.querySelector(".sms-use-line")?.innerText || "",
+      over: document.querySelector(".sms-over")?.innerText || "",
       fine: document.querySelector(".sms-use .fine")?.innerText || "",
+      last: document.querySelector(".sms-last")?.innerText || "",
       bar: document.querySelector(".sms-bar")?.className || "",
-      width: document.querySelector(".sms-bar span")?.style.width || "",
-      addon: document.querySelector(".sms-addon")?.innerText || "",
+      buttons: [...document.querySelectorAll(".sms-use button")].map((b) => b.innerText),
     }));
     t.ck("the Subscription tab opened", tab);
-    t.ck("it says how many texts are used out of what", r.line === "2,140 of 2,500 text messages used this month.", r.line);
-    t.ck("and says what happens at the limit", /texts pause and emails still go out/.test(r.fine)
-      && /emergency call-outs are always texted/.test(r.fine), r.fine);
-    t.ck("the bar is amber past 80%", /\bnear\b/.test(r.bar) && r.width === "86%", `${r.bar} ${r.width}`);
-    t.ck("and offers 5,000 more for $50 a month", /5,000 more texts a month for \$50 a month/.test(r.addon), r.addon);
-
-    sent.length = 0;
-    await page.evaluate(() => [...document.querySelectorAll(".sms-addon button")]
-      .find((b) => /Add 5,000 texts/.test(b.innerText))?.click());
-    await wait(400);
-    r = await page.evaluate(() => ({ addon: document.querySelector(".sms-addon")?.innerText || "" }));
-    t.ck("the first press only asks -- nothing is bought", sent.length === 0, JSON.stringify(sent));
-    t.ck("and names the price and where it is charged",
-      /\$50 a month/.test(r.addon) && /card on file/.test(r.addon), r.addon);
-    await page.evaluate(() => [...document.querySelectorAll(".sms-addon button")]
-      .find((b) => /Add for \$50 a month/.test(b.innerText))?.click());
-    await wait(900);
-    const buy = sent.find((x) => x.path === "/api/billing/sms-addon");
-    t.ck("agreeing buys one, sent as a COUNT so a double press cannot buy two",
-      buy?.body?.blocks === 1, JSON.stringify(buy?.body));
-    r = await page.evaluate(() => ({
-      line: document.querySelector(".sms-use-line")?.innerText || "",
-      addon: document.querySelector(".sms-addon")?.innerText || "",
-    }));
-    t.ck("the allowance goes up on screen", r.line === "2,140 of 7,500 text messages used this month.", r.line);
-    t.ck("and the add-on is named with its price", /1 add-on · \$50 a month/.test(r.addon), r.addon);
-    sent.length = 0;
-    await page.evaluate(() => [...document.querySelectorAll(".sms-addon button")]
-      .find((b) => /Remove one/.test(b.innerText))?.click());
-    await wait(900);
-    t.ck("removing one sends the lower count, without asking",
-      sent.find((x) => x.path === "/api/billing/sms-addon")?.body?.blocks === 0, JSON.stringify(sent));
+    t.ck("it says how many texts went and how far over", r.line === "3,140 text messages this month — 640 over the 2,500 included.", r.line);
+    t.ck("and what the next bill will carry for it, before the bill arrives",
+      r.over === "$50 for an extra block of 5,000 will be added to next month's bill.", r.over);
+    t.ck("and how going over works", /texts keep going/.test(r.fine)
+      && /each extra 5,000 texts, or part of 5,000, adds \$50 to the following month's bill/.test(r.fine), r.fine);
+    t.ck("and that emergencies always go", /Emergency call-outs are always texted/.test(r.fine), r.fine);
+    t.ck("last month's charge is shown", /September: 8,000 sent, \$100\.00 for the extra — on your bill/.test(r.last), r.last);
+    t.ck("the bar is amber, not red -- going over is billed, not broken", /\bover\b/.test(r.bar), r.bar);
+    t.ck("and there is nothing to buy -- it happens by itself", r.buttons.length === 0, r.buttons.join(","));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

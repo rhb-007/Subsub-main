@@ -451,10 +451,6 @@ export const api = {
   // Billing. Checkout and portal both answer with a Stripe URL for the
   // browser to follow — card details never touch this app.
   getBilling: () => request("/billing"),
-  // How many text-message add-ons to have, 0 to remove them. Set, not added,
-  // so a double press cannot buy two.
-  setSmsAddon: (blocks) =>
-    request("/billing/sms-addon", { method: "POST", body: JSON.stringify({ blocks }) }),
   // mode "embedded" asks for a session we can mount inside our own page;
   // anything else gets a hosted one to redirect to.
   startCheckout: (cycle, mode) =>
