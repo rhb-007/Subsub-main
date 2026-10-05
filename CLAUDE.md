@@ -9816,6 +9816,12 @@ refactor.
   **Exact strings in a code block**, because a secret name typed from prose gets
   typed wrong and the failure is silent.
 
+  **SQL GOES IN THE CHAT, NEVER IN AN ATTACHED FILE.** A file sent to the chat
+  could not be opened on the iPad, so the check statements arrived as two
+  things nobody could copy. Every migration and every CHECK.sql statement is
+  pasted into the reply as its own code block, one per paste, comments
+  stripped — even when that makes the reply long.
+
   **End with "tell me when you've done step N", and "if a step doesn't match,
   say which number and what you see instead."** That converts a wrong guess into
   one correction rather than a dead end.
