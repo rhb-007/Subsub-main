@@ -16,7 +16,9 @@ import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, app
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
   docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
   waiverRequestEmail } from "./mail.js";
-import { sendSms, toE164 } from "./sms.js";
+import { sendSms, toE164, smsConfig } from "./sms.js";
+import { monthStart, smsAllowance, smsVerdict, SMS_INCLUDED_SCALE, SMS_ADDON_MESSAGES,
+  SMS_ADDON_PRICE_CENTS, SMS_ADDON_MAX_BLOCKS } from "../shared/smsquota.js";
 // The same file the browser reads, so the two cannot disagree about what an
 // emergency is. Severity is decided here from the problem the tenant picked,
 // never taken from what the browser claims -- otherwise a dripping tap could
@@ -35,6 +37,7 @@ import { normalizeState, stateName } from "../shared/states.js";
 // Money, and whether a chain of waivers is clear. Shared with the browser
 // so a figure on screen and a figure written here cannot disagree.
 import { releaseAmounts, milestonesCover } from "../shared/money.js";
+import { PLATFORM_FEE_BPS, PLATFORM_FEE_CAP_CENTS } from "../shared/fee.js";
 import { chainStatus, SCOPE_KINDS, waiverKindFor } from "../shared/waivers.js";
 // The paper each link in that chain is made of, and which state takes which.
 import { formsFor, kindRefusal, generatedTemplateFor, renderWaiver, WAIVER_SOURCES,
@@ -101,7 +104,8 @@ import { SHARE_DAYS, PACK_KINDS, inLink, shareState, validRecipient,
 import { canHandOver, awaitingFrom, canDecide as canDecideTransfer,
   canCancel as canCancelTransfer, inheritedShape, openWorkText,
   canAppoint, canDeclareOwnership } from "../shared/handover.js";
-import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED } from "./billing.js";
+import { stripeCall, verifyStripeWebhook, priceFor, stripeTime, ENTITLED,
+  smsAddonPriceFor, isSmsAddonPrice } from "./billing.js";
 // Whether somebody can actually be paid, decided once and read by the
 // routes, the webhook and the browser.
 import { payoutSummary, rowFromStripe, PAYOUT_CONTROLLER, payoutAccountKey,
@@ -236,13 +240,12 @@ function parseJson(v, fallback = null) {
 
 const uid = () => crypto.randomUUID();
 
-// SubSub's cut of a release, in basis points.
-//
-// Zero, and here anyway. The rate is STAMPED onto each release at the moment
-// it is made rather than read at report time, so turning this on next year
-// cannot rewrite what was charged this year -- which is the only way a fee
-// on money that has already moved can be accounted for honestly.
-const PLATFORM_FEE_BPS = 0;
+// SubSub's cut of a release now lives in shared/fee.js -- 0.5%, at most $500 a
+// payment, charged to the hiring account on top -- because the screen that
+// shows it and the route that charges it must read one number. The rate is
+// still STAMPED onto each release at the moment it is made rather than read at
+// report time, so changing it next year cannot rewrite what was charged this
+// year.
 
 // Today, UTC, as an ISO day. Waivers cover work through a date and dates
 // compare as strings; no Date arithmetic, no timezone, no midnight bug.
@@ -1523,6 +1526,78 @@ app.post("/api/billing/cancel", requireRole("admin"), async (c) => {
   }
 });
 
+// Text-message add-ons: set how many the account has, 0 to remove them.
+//
+// A LINE ON THE SCALE SUBSCRIPTION, not a second subscription. One bill, one
+// renewal date, one card -- and when the plan goes, the line goes with it,
+// which is the only behaviour anybody would expect. Prorated both ways,
+// Stripe's default, so adding one mid-month is charged for the rest of the
+// month and removing one is credited.
+//
+// The count is set rather than incremented: a double-pressed "add" must not
+// buy two, and "how many do I want" is the question anyway. Written through
+// from Stripe's own answer, and the webhook writes it again -- the column is
+// Stripe's last word, never the request's.
+app.post("/api/billing/sms-addon", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  if (!c.env.STRIPE_SECRET_KEY) return c.json({ error: "billing_not_configured" }, 501);
+  const b = await c.req.json().catch(() => ({}));
+  const blocks = Math.floor(Number(b.blocks));
+  if (!Number.isFinite(blocks) || blocks < 0 || blocks > SMS_ADDON_MAX_BLOCKS) {
+    return c.json({ error: "bad_blocks", max: SMS_ADDON_MAX_BLOCKS }, 400);
+  }
+  const a = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!a) return c.json({ error: "not_found" }, 404);
+  // Texts are Scale, so the add-on is too -- and a comped account has no
+  // subscription to put a line on.
+  if (!accountOnScale(a)) return scaleRequired(c);
+  if (!a.stripe_subscription_id) return c.json({ error: "no_subscription" }, 409);
+  const cycle = a.billing === "annual" ? "annual" : "monthly";
+  const price = smsAddonPriceFor(c.env, cycle);
+  if (!price) return c.json({ error: "billing_not_configured", detail: "no add-on price" }, 501);
+
+  // Before Stripe is asked anything: a database without 070 cannot record
+  // what was bought, and charging for an add-on the cap would then ignore is
+  // the worst order to find that out in.
+  try {
+    await c.env.DB.prepare(`SELECT sms_addon_blocks FROM accounts WHERE id = ?`).bind(accountId).first();
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "070_sms_addon" }, 503);
+    throw err;
+  }
+
+  try {
+    const sub = await stripeCall(c.env, `/subscriptions/${a.stripe_subscription_id}`, { method: "GET" });
+    const line = (sub.items?.data || []).find((i) => isSmsAddonPrice(c.env, i.price?.id));
+    // The same request within the same minute is one change, not two.
+    const key = `sms-addon:${accountId}:${blocks}:${Math.floor(Date.now() / 60000)}`;
+    if (blocks === 0) {
+      if (line) await stripeCall(c.env, `/subscription_items/${line.id}`, { method: "DELETE", idempotencyKey: key });
+    } else if (line) {
+      if (Number(line.quantity) !== blocks) {
+        await stripeCall(c.env, `/subscription_items/${line.id}`, {
+          params: { quantity: blocks }, idempotencyKey: key });
+      }
+    } else {
+      await stripeCall(c.env, "/subscription_items", {
+        params: { subscription: a.stripe_subscription_id, price, quantity: blocks },
+        idempotencyKey: key });
+    }
+    // Write through rather than waiting for the webhook: they are looking at
+    // the count now.
+    const fresh = await stripeCall(c.env, `/subscriptions/${a.stripe_subscription_id}`, { method: "GET" });
+    await applySubscription(c.env, a, fresh);
+    await logActivity(c.env, accountId, userId, "plan_changed", blocks
+      ? `Text messages: ${blocks} add-on${blocks === 1 ? "" : "s"} (${(blocks * SMS_ADDON_MESSAGES).toLocaleString("en-US")} more a month)`
+      : "Text message add-ons removed");
+    const u = await smsUsage(c.env, accountId);
+    return c.json({ ok: true, addonBlocks: u.addonBlocks, allowance: u.allowance, used: u.used });
+  } catch (err) {
+    console.error("[billing] sms add-on failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+});
+
 // And changing their mind, which is the same call in reverse. Worth having:
 // somebody who cancels by accident should not have to buy the plan again.
 app.post("/api/billing/resume", requireRole("admin"), async (c) => {
@@ -1575,7 +1650,8 @@ app.post("/api/billing/portal", requireRole("admin"), async (c) => {
 app.get("/api/billing", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   const a = await c.env.DB.prepare(
-    `SELECT plan, billing, subscription_status, current_period_end, stripe_customer_id
+    `SELECT plan, billing, subscription_status, current_period_end, stripe_customer_id,
+            stripe_subscription_id
      FROM accounts WHERE id = ?`).bind(accountId).first();
   if (!a) return c.json({ error: "not_found" }, 404);
 
@@ -1584,12 +1660,36 @@ app.get("/api/billing", requireRole("admin", "pm"), async (c) => {
      FROM invoices WHERE account_id = ? ORDER BY period_start DESC LIMIT 12`
   ).bind(accountId).all();
 
+  // Text messages: what is allowed this month, what is gone, and whether an
+  // add-on can be bought here -- read from the same function that refuses a
+  // text at the cap, so the panel and the refusal cannot disagree.
+  let sms = null;
+  try {
+    const u = await smsUsage(c.env, accountId);
+    const cycle = a.billing === "annual" ? "annual" : "monthly";
+    sms = {
+      used: u.used, allowance: u.allowance, included: u.onScale ? SMS_INCLUDED_SCALE : 0,
+      addonBlocks: u.addonBlocks, addonMessages: SMS_ADDON_MESSAGES,
+      addonPriceCents: SMS_ADDON_PRICE_CENTS, maxBlocks: SMS_ADDON_MAX_BLOCKS,
+      // Only where pressing it can work: on Scale, with a subscription to add
+      // a line to, and a price configured for this cycle. A comped account
+      // has no subscription, and a button that answers no_subscription is the
+      // screen-that-lies rule pointed at a purchase.
+      addonAvailable: u.onScale && !!a.stripe_subscription_id
+        && !!c.env.STRIPE_SECRET_KEY && !!smsAddonPriceFor(c.env, cycle),
+      configured: !!smsConfig(c.env),
+    };
+  } catch (err) {
+    console.error("[billing] sms usage failed:", err?.message || err);
+  }
+
   return c.json({
     plan: a.plan, cycle: a.billing,
     status: a.subscription_status,
     currentPeriodEnd: a.current_period_end,
     hasCustomer: !!a.stripe_customer_id,
     configured: !!c.env.STRIPE_SECRET_KEY,
+    sms,
     invoices: invoices.map((i) => ({
       id: i.id, amountCents: i.amount_cents, status: i.status,
       periodStart: i.period_start, periodEnd: i.period_end,
@@ -1620,7 +1720,15 @@ const accountRow = (env, id) =>
 async function applySubscription(env, account, sub) {
   const status = sub.status;
   const entitled = ENTITLED.has(status);
-  const item = sub.items?.data?.[0];
+  // THE PLAN'S LINE, not the first line. A subscription carrying the text
+  // add-on has two, in whatever order Stripe returns them, and reading the
+  // add-on's interval and period as the plan's would be right by luck.
+  const items = sub.items?.data || [];
+  const item = items.find((i) => !isSmsAddonPrice(env, i.price?.id)) || items[0];
+  const smsBlocks = entitled
+    ? items.filter((i) => isSmsAddonPrice(env, i.price?.id))
+        .reduce((n, i) => n + Math.max(0, Number(i.quantity) || 0), 0)
+    : 0;
   const cycle = item?.price?.recurring?.interval === "year" ? "annual" : "monthly";
   // A comped account keeps Scale whatever Stripe says. Somebody who was given
   // the plan should not lose it because a card they never entered expired,
@@ -1658,6 +1766,17 @@ async function applySubscription(env, account, sub) {
               subscription_status = ?, current_period_end = ?
        WHERE id = ?`
     ).bind(plan, cycle, sub.id, sub.customer, status, periodEnd, account.id).run();
+  }
+
+  // 070. The add-on count, in a write of its own for the reason the cancel
+  // flag has one: a database that has not run 070 must lose the add-on and
+  // keep the plan. Only Stripe writes this -- nothing an account sends can.
+  try {
+    await env.DB.prepare(`UPDATE accounts SET sms_addon_blocks = ? WHERE id = ?`)
+      .bind(smsBlocks, account.id).run();
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    console.warn("[billing] sms_addon_blocks column missing -- run migration 070");
   }
 
   if (was !== plan) {
@@ -2438,8 +2557,8 @@ async function deliverSubInvite(env, { row, account, accountId, userId }) {
       subject: mail.subject, result: mailResult, sentBy: userId });
   }
   if (phone) {
-    smsResult = await sendSms(env, { to: phone, body: subInviteSms({ companyName: row.company_name, account, link, known }) });
-    await logSms(env, { accountId, companyId: null, to: phone, kind: "sub_invite", result: smsResult });
+    smsResult = await sendAccountSms(env, { accountId, to: phone, kind: "sub_invite",
+      body: subInviteSms({ companyName: row.company_name, account, link, known }) });
   }
   const emailed = !!mailResult?.ok, texted = !!smsResult?.ok;
   return {
@@ -3537,8 +3656,8 @@ app.post("/api/connect-requests", requireRole("admin", "pm"), async (c) => {
       subject: mail.subject, result: mailResult, sentBy: userId });
   }
   if (co.phone) {
-    smsResult = await sendSms(c.env, { to: co.phone, body: connectRequestSms({ account, link }) });
-    await logSms(c.env, { accountId, companyId: co.id, to: co.phone, kind: "connect_request", result: smsResult });
+    smsResult = await sendAccountSms(c.env, { accountId, companyId: co.id, to: co.phone,
+      kind: "connect_request", body: connectRequestSms({ account, link }) });
   }
   await logActivity(c.env, accountId, userId, "connect_requested",
     `Asked ${co.company} to connect`);
@@ -4209,8 +4328,8 @@ async function inviteAccountUser(c, { accountId, user, role, invitedBy }) {
   const phone = normalizePhone(user.phone) || null;
   let smsResult = null;
   if (phone) {
-    smsResult = await sendSms(c.env, { to: phone, body: userInviteSms({ account, role, link }) });
-    await logSms(c.env, { accountId, companyId: null, to: phone, kind: "user_invite", result: smsResult });
+    smsResult = await sendAccountSms(c.env, { accountId, to: phone, kind: "user_invite",
+      body: userInviteSms({ account, role, link }) });
   }
   const texted = !!smsResult?.ok;
 
@@ -6265,10 +6384,9 @@ async function issueTenantInvite(c, auth, t) {
     const body = t.draft?.sms
       ? withInviteLink(t.draft.sms, link)
       : tenantInviteSms({ account: t.account, propertyName: t.property.name, unit: t.unit, link });
-    const res = await sendSms(c.env, { to: t.phone, body });
+    const res = await sendAccountSms(c.env, { accountId: auth.accountId, to: t.phone,
+      kind: "tenant_invite", body });
     out.sms = res.ok ? "sent" : (res.error || "failed");
-    await logSms(c.env, { accountId: auth.accountId, to: t.phone, kind: "tenant_invite",
-      result: { ...res, body } });
   }
 
   // Only counted as sent if something actually went out. An invite recorded
@@ -6314,6 +6432,7 @@ export function missingSchema(err) {
   if (/\bjob_endings\b/i.test(m)) return "066_job_endings";
   if (/\binspection_summaries\b/i.test(m)) return "063_inspection_summary";
   if (/\bauto_turnaround\b/i.test(m)) return "065_auto_turnaround";
+  if (/\bsms_addon_blocks\b/i.test(m)) return "070_sms_addon";
   if (/\bmanager_at\b/i.test(m)) return "064_visit_manager";
   if (/contractor_(at|note)/i.test(m)) return "061_visit_contractor";
   if (/access_user_id/i.test(m)) return "062_job_access_user";
@@ -7465,9 +7584,8 @@ async function notifyTenant(c, jobId, stage, detail = null) {
     }
     if (prefs.sms && user.phone) {
       const body = tenantStatusSms({ account, title: job.title, stage, link, detail });
-      const result = await sendSms(c.env, { to: user.phone, body });
-      await logSms(c.env, { accountId: job.account_id, to: user.phone, kind: "tenant_status",
-        result: { ...result, body } });
+      await sendAccountSms(c.env, { accountId: job.account_id, to: user.phone,
+        kind: "tenant_status", body });
     }
   } catch (err) {
     console.error("[tenant-notify] failed:", err?.message || err);
@@ -9116,9 +9234,8 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
         if (!result?.ok) notified.emailError = result?.error || "send_failed";
       }
       if (sms) {
-        const result = await sendSms(c.env, {
-          to: sms, body: workOrderIssuedSms({ job, trade, woNumber, account, respondBy }) });
-        await logSms(c.env, { accountId, companyId, to: sms, kind: "wo_issued", result });
+        const result = await sendAccountSms(c.env, { accountId, companyId, to: sms, kind: "wo_issued",
+          body: workOrderIssuedSms({ job, trade, woNumber, account, respondBy }) });
         notified.texted = !!result?.ok;
         if (!result?.ok) notified.textError = result?.error || "send_failed";
       }
@@ -9291,7 +9408,10 @@ async function dispatchEmergency(c, jobId, accountId) {
         subject: `Emergency call-out — ${job.title}`, result, sentBy: null });
     }
     if (co?.phone) {
-      await sendSms(c.env, { to: co.phone, body: line.slice(0, 300) }).catch(() => {});
+      // Sent whatever the month's count says -- see SMS_UNCAPPED_KINDS -- and
+      // now logged, which it never was, so the console's count is true.
+      await sendAccountSms(c.env, { accountId, companyId, to: co.phone,
+        kind: "emergency_dispatch", body: line.slice(0, 300) }).catch(() => {});
     }
 
     await logEvent(c.env, accountId, null, "wo.emergency_dispatched", id, { jobId, companyId, woNumber });
@@ -11723,6 +11843,7 @@ app.post("/api/milestones/:id/verify", requireRole("admin", "pm"), async (c) => 
     priorGross: prior?.gross || 0,
     retainageBps: wo.retainage_bps || 0,
     feeBps: PLATFORM_FEE_BPS,
+    feeCapCents: PLATFORM_FEE_CAP_CENTS,
   });
 
   await c.env.DB.prepare(
@@ -12677,8 +12798,15 @@ app.post("/api/releases/:id/settle", requireRole("admin", "pm"), async (c) => {
       payload: { releaseId: r.id, reason: why, chain } });
   }
 
+  // NO FEE ON MONEY THAT DID NOT GO THROUGH SUBSUB. The fee was stamped when
+  // the release was verified, because that is when the account needs to see
+  // it -- before funding, before paying. Recorded as paid by cheque, nothing
+  // moved through us and nothing is charged, so it is zeroed in the same write
+  // that closes the release. Not a refund: it was never taken, since only a
+  // release paid by `stripe` counts its fee as spent (`woMoney`).
+  // `m033_inv_fee_off_platform` in CHECK.sql counts one that slipped past.
   const res = await c.env.DB.prepare(
-    `UPDATE wo_releases SET status = 'paid', method = ?, reference = ?,
+    `UPDATE wo_releases SET status = 'paid', method = ?, reference = ?, fee_cents = 0,
        settled_at = CURRENT_TIMESTAMP, settled_by = ?
      WHERE id = ? AND status = 'due'`
   ).bind(method, reference, userId, r.id).run();
@@ -12688,6 +12816,7 @@ app.post("/api/releases/:id/settle", requireRole("admin", "pm"), async (c) => {
 
   await woEvent(c, { workOrderId: wo.id, milestoneId: r.milestone_id, kind: "release.settled",
     payload: { releaseId: r.id, method, reference, netCents: r.net_cents,
+      feeCents: 0, feeWaivedCents: r.fee_cents || 0,
       chainClear: chain.clear, coverClear: cover.clear,
       coverProblems: cover.problems },
     idemKey: `settle:${r.id}` });
@@ -12711,12 +12840,12 @@ app.post("/api/releases/:id/settle", requireRole("admin", "pm"), async (c) => {
 // makes SubSub merchant of record, which is the open question rather than a
 // detail under it.
 //
-// THE FEE IS NOT A STRIPE CONCEPT HERE. The account funds the gross and the
-// subcontractor is sent the net; the difference stays where it already is.
-// `application_fee_amount` belongs to destination charges. So money.js's
-// cumulative cut, stamped onto the release at the moment it was made, is the
-// fee with nothing further to compute -- and `PLATFORM_FEE_BPS` is still zero,
-// which is a pricing decision and not this route's to make.
+// THE FEE IS NOT A STRIPE CONCEPT HERE. The account funds the gross plus the
+// fee and the subcontractor is sent the net; the fee is what stays where it
+// already is. `application_fee_amount` belongs to destination charges. So the
+// fee stamped onto the release when it was verified (shared/fee.js) is the
+// whole of it -- spent when that release is paid through here, and zeroed
+// when it is recorded as paid somewhere else.
 //
 // SETTLE AND PAY ARE TWO ROUTES ON PURPOSE. `settle` records money that moved
 // somewhere else -- a cheque, a bank transfer, whatever they already do -- and
@@ -12745,13 +12874,21 @@ async function woMoney(c, workOrderId) {
     `SELECT COALESCE(SUM(CASE WHEN status IN ('paid','pending') THEN amount_cents ELSE 0 END), 0) AS out
        FROM wo_transfers WHERE work_order_id = ?`
   ).bind(workOrderId).first();
+  // The fee, in two halves. A release paid through SubSub has SPENT its fee:
+  // that money is in the platform balance and is no longer the account's to
+  // refund or to spend on another release. A release still due will need its
+  // fee on hand before it can be sent. A release recorded as paid by cheque
+  // carries none -- settle zeroes it -- so it is in neither.
   const d = await c.env.DB.prepare(
-    `SELECT COALESCE(SUM(net_cents), 0) AS due FROM wo_releases
-      WHERE work_order_id = ? AND status = 'due'`
+    `SELECT COALESCE(SUM(CASE WHEN status = 'due' THEN net_cents ELSE 0 END), 0) AS due,
+            COALESCE(SUM(CASE WHEN status = 'due' THEN fee_cents ELSE 0 END), 0) AS fees_due,
+            COALESCE(SUM(CASE WHEN status = 'paid' AND method = 'stripe' THEN fee_cents ELSE 0 END), 0) AS fees_taken
+       FROM wo_releases WHERE work_order_id = ?`
   ).bind(workOrderId).first();
   return fundingState({
     fundedCents: f?.funded || 0, refundedCents: f?.refunded || 0,
     transferredCents: t?.out || 0, dueCents: d?.due || 0,
+    feesDueCents: d?.fees_due || 0, feesTakenCents: d?.fees_taken || 0,
   });
 }
 
@@ -12976,7 +13113,8 @@ app.post("/api/releases/:id/pay", requireRole("admin"), async (c) => {
   // THE AMOUNT IS THE RELEASE'S, never the body's. Same rule as the draft
   // route refusing `status`: a figure taken from the caller here is a figure
   // somebody chooses.
-  const verdict = canPay({ release: { status: r.status, netCents: r.net_cents },
+  const verdict = canPay({ release: { status: r.status, netCents: r.net_cents,
+      feeCents: r.fee_cents || 0 },
     funding: money, payable: payee.payable === true });
   if (!verdict.ok) {
     return c.json({ error: verdict.reason, ...verdict, funding: money,
@@ -13075,7 +13213,8 @@ app.post("/api/releases/:id/pay", requireRole("admin"), async (c) => {
         ...(orphan ? { orphan: true } : {}) },
       idemKey: `pay:${r.id}` });
     return c.json({ ok: true, status: "paid", reference: tr.id,
-      netCents: r.net_cents, chainClear: chain.clear, coverClear: cover.clear,
+      netCents: r.net_cents, feeCents: r.fee_cents || 0,
+      chainClear: chain.clear, coverClear: cover.clear,
       ...(orphan ? { alreadySettled: true } : {}),
       ...(await woMoney(c, wo.id)) });
   } catch (err) {
@@ -19275,6 +19414,74 @@ async function logSms(env, { accountId, companyId, to, kind, result }) {
   } catch (err) {
     console.error("[sms_log] write failed:", err?.message || err);
   }
+}
+
+// What this account may text this month, and how much of it is gone.
+//
+// Read off the account row and sms_log every time rather than kept as a
+// counter: a counter is a second record of what sms_log already says, and the
+// one that drifts is the one that decides. `sms_addon_blocks` is 070's; a
+// database without it keeps the included allowance rather than refusing every
+// text, because a missing column must cost the add-on and never the channel.
+async function smsUsage(env, accountId) {
+  let a = null;
+  try {
+    a = await env.DB.prepare(`SELECT plan, comped, sms_addon_blocks FROM accounts WHERE id = ?`)
+      .bind(accountId).first();
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    a = await env.DB.prepare(`SELECT plan, comped FROM accounts WHERE id = ?`).bind(accountId).first();
+  }
+  const used = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM sms_log WHERE account_id = ? AND status = 'sent' AND at >= ?`
+  ).bind(accountId, monthStart()).first();
+  const addonBlocks = Math.max(0, Number(a?.sms_addon_blocks) || 0);
+  return {
+    onScale: accountOnScale(a), addonBlocks,
+    allowance: smsAllowance({ onScale: accountOnScale(a), addonBlocks }),
+    used: Number(used?.n) || 0,
+  };
+}
+
+// EVERY TEXT AN ACCOUNT SENDS GOES THROUGH HERE, which is what makes the cap a
+// cap. Seven call sites used to pair sendSms with logSms by hand; a quota
+// checked at six of them is a quota with a door round it, and the seventh --
+// the emergency call-out -- was not even logged, so it was invisible to the
+// console's count as well.
+//
+// The order is deliberate. Unconfigured first, because "texting isn't set up"
+// is the more useful answer and spending a database read to give a worse one
+// is backwards. Then the allowance. A refusal is LOGGED as failed with its
+// reason, because "did they get a text?" is the first thing support asks and
+// "no, the account had used its 2,500" is an answer; and a failed row is not
+// counted, so the refusal never eats into the allowance it is reporting.
+async function sendAccountSms(env, { accountId, companyId = null, to, body, kind }) {
+  if (!smsConfig(env)) {
+    const result = { ok: false, error: "sms_not_configured" };
+    if (accountId) await logSms(env, { accountId, companyId, to, kind, result: { ...result, body } });
+    return result;
+  }
+  if (accountId) {
+    let verdict = { ok: true };
+    try {
+      const u = await smsUsage(env, accountId);
+      verdict = smsVerdict({ allowance: u.allowance, used: u.used, kind });
+    } catch (err) {
+      // A count that cannot be read must not stop a text. Logged, and sent:
+      // the cap is a commercial limit, and failing closed here would turn a
+      // database hiccup into nobody being told their work order was issued.
+      console.error("[sms] usage read failed:", err?.message || err);
+    }
+    if (!verdict.ok) {
+      const result = { ok: false, error: verdict.reason,
+        detail: `${verdict.used} of ${verdict.allowance} this month` };
+      await logSms(env, { accountId, companyId, to, kind, result: { ...result, body } });
+      return result;
+    }
+  }
+  const result = await sendSms(env, { to, body });
+  await logSms(env, { accountId, companyId, to, kind, result: { ...result, body } });
+  return result;
 }
 
 // Everything the document-request template needs, fetched once and shared by

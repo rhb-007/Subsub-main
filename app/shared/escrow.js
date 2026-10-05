@@ -18,10 +18,11 @@
 // WHAT FOLLOWS FROM THAT SHAPE, and it is why so little arithmetic is needed:
 //
 //   The FEE is not a Stripe concept here at all. The account funds the gross
-//   and the subcontractor is transferred the net; the difference stays where
-//   it already is. `application_fee_amount` belongs to destination charges,
-//   which is a different arrangement. So money.js's existing cumulative cut IS
-//   the fee, with nothing else to compute.
+//   AND the fee, the subcontractor is transferred the net, and the fee is
+//   simply what stays where it already is. `application_fee_amount` belongs to
+//   destination charges, which is a different arrangement. So the fee is a
+//   figure stamped on the release (shared/fee.js) and spent by the transfer
+//   going out, with nothing else to compute.
 //
 //   RETAINAGE is the same: it is money funded and not yet transferred. Which
 //   means it is held, for months, and that is the sharpest edge of the escrow
@@ -34,6 +35,7 @@
 // company. `available` is the whole of that guard.
 
 import { releaseAmounts } from "./money.js";
+import { PLATFORM_FEE_BPS, PLATFORM_FEE_CAP_CENTS } from "./fee.js";
 
 // The states each row may be in. These are the same list as the CHECK clauses
 // in migration 051, which makes them two records of one fact -- so a test
@@ -59,29 +61,49 @@ export const CURRENCY = "usd";
 //   fundedCents        every funding that landed
 //   refundedCents      every funding that went back
 //   transferredCents   every transfer that went out or is on its way
-//   dueCents           releases owed and not yet paid
+//   dueCents           releases owed and not yet paid -- the NET, what the
+//                      subcontractor will receive
+//   feesTakenCents     SubSub's fee on releases already paid through SubSub:
+//                      money that is in, and is no longer the account's
+//   feesDueCents       the fee on releases still owed, which the account has
+//                      to have on hand before each one can be sent
+//
+// The two fee figures are separate from the net on purpose. "$4,000 owed" over
+// a release that sends $3,980 is a screen arguing with itself; the sentence is
+// "$3,980 to them and $20 to SubSub", and only separate figures can say it.
 //
 // `available` is what may be transferred right now. `shortfall` is what the
 // account still has to put in to cover everything already owed -- which is the
 // number the screen leads with, because "you owe $4,000 and have funded
 // $1,500" is actionable and "insufficient funds" is not.
 export function fundingState({ fundedCents = 0, refundedCents = 0,
-                               transferredCents = 0, dueCents = 0 } = {}) {
+                               transferredCents = 0, dueCents = 0,
+                               feesTakenCents = 0, feesDueCents = 0 } = {}) {
   const inHand = Math.max(0, Math.round(fundedCents) - Math.round(refundedCents));
   const out = Math.round(transferredCents);
-  const available = Math.max(0, inHand - out);
+  const taken = Math.round(feesTakenCents);
+  const available = Math.max(0, inHand - out - taken);
   const due = Math.round(dueCents);
+  const feesDue = Math.round(feesDueCents);
+  const owed = due + feesDue;
   return {
     fundedCents: Math.round(fundedCents),
     refundedCents: Math.round(refundedCents),
     transferredCents: out,
     dueCents: due,
+    feesTakenCents: taken,
+    feesDueCents: feesDue,
+    // Everything the account still has to cover: what goes to the
+    // subcontractor and what goes to SubSub. The number the panel leads with.
+    owedCents: owed,
     availableCents: available,
-    shortfallCents: Math.max(0, due - available),
+    shortfallCents: Math.max(0, owed - available),
     // Money funded, not owed to anybody, and returnable. Retainage is NOT in
     // here: it is owed, it is simply not owed yet, and offering it back as
-    // "unspent" is how somebody refunds their way out of a holdback.
-    refundableCents: Math.max(0, available - due),
+    // "unspent" is how somebody refunds their way out of a holdback. Nor is
+    // the fee on a release still due: refunding it would leave that release
+    // unpayable through SubSub over money the account just took back.
+    refundableCents: Math.max(0, available - owed),
   };
 }
 
@@ -102,9 +124,14 @@ export function canPay({ release, funding, payable } = {}) {
   // Stripe refusal further down.
   if (net < MIN_FUND_CENTS) return { ok: false, reason: "below_minimum", net };
   if (!payable) return { ok: false, reason: "payee_not_ready" };
+  // The fee rides with the transfer, so the money behind it has to be there
+  // too. Read off the RELEASE, where it was stamped, never recomputed here --
+  // a rate changed since would otherwise ask for a figure the release never
+  // carried.
+  const fee = Math.max(0, Math.round(release.feeCents ?? release.fee_cents ?? 0));
   const avail = Math.round(funding?.availableCents ?? 0);
-  if (avail < net) return { ok: false, reason: "not_funded", net, available: avail };
-  return { ok: true, net };
+  if (avail < net + fee) return { ok: false, reason: "not_funded", net, fee, available: avail };
+  return { ok: true, net, fee };
 }
 
 const money = (cents) => "$" + (Math.round(cents) / 100).toLocaleString("en-US",
@@ -126,8 +153,11 @@ export function payRefusalText(r, { subName = "They" } = {}) {
       + " so there is nowhere to send it yet.";
   }
   if (r.reason === "not_funded") {
-    return `${money(r.available)} is funded and ${money(r.net)} is owed.`
-      + ` Add ${money(r.net - r.available)} to pay this one.`;
+    const fee = Math.round(r.fee || 0);
+    const need = r.net + fee;
+    return `${money(r.available)} is funded and ${money(need)} is needed`
+      + (fee ? ` -- ${money(r.net)} to them and SubSub's ${money(fee)} fee.` : ".")
+      + ` Add ${money(need - r.available)} to pay this one.`;
   }
   return "That cannot be paid yet.";
 }
@@ -138,23 +168,38 @@ export function payRefusalText(r, { subName = "They" } = {}) {
 // Derived from money.js rather than reimplemented: a second opinion on what a
 // release nets would put a figure on the fund screen that the release then
 // disagrees with by a cent.
+//
+// Milestone by milestone rather than as one lump, because the fee's cap is per
+// payment: two $100,000 draws are two $500 fees, and the lump would suggest
+// one -- an account told to fund a figure that then cannot pay the second
+// draw.
+//
+// `owedCents` is what is already owed and unpaid -- net and fee -- because the
+// top-up has to cover that as well as the work still to come, or funding to
+// the suggested figure leaves a release that was already due short.
 export function fundSuggestion({ milestones = [], priorGross = 0, retainageBps = 0,
-                                 feeBps = 0, alreadyAvailable = 0 } = {}) {
+                                 feeBps = PLATFORM_FEE_BPS, feeCapCents = PLATFORM_FEE_CAP_CENTS,
+                                 owedCents = 0, alreadyAvailable = 0 } = {}) {
   let running = Math.round(priorGross);
-  let gross = 0;
+  let gross = 0, net = 0, retainage = 0, fee = 0;
   for (const m of milestones) {
     if (m.status === "paid" || m.released) continue;
-    gross += Math.round(m.amountCents ?? m.amount_cents ?? 0);
+    const g = Math.round(m.amountCents ?? m.amount_cents ?? 0);
+    if (g <= 0) continue;
+    const a = releaseAmounts({ gross: g, priorGross: running, retainageBps, feeBps, feeCapCents });
+    gross += a.gross; net += a.net; retainage += a.retainage; fee += a.fee;
+    running += g;
   }
-  if (gross <= 0) return { grossCents: 0, netCents: 0, topUpCents: 0 };
-  const a = releaseAmounts({ gross, priorGross: running, retainageBps, feeBps });
+  const owed = Math.max(0, Math.round(owedCents));
+  if (gross <= 0 && owed <= 0) return { grossCents: 0, netCents: 0, feeCents: 0, topUpCents: 0 };
   // Funding covers the GROSS: the retainage has to be on hand too, or the
-  // final release has nothing behind it.
+  // final release has nothing behind it. And the fee, which is paid with
+  // each release rather than after.
   return {
-    grossCents: a.gross,
-    netCents: a.net,
-    retainageCents: a.retainage,
-    feeCents: a.fee,
-    topUpCents: Math.max(0, a.gross - Math.round(alreadyAvailable)),
+    grossCents: gross,
+    netCents: net,
+    retainageCents: retainage,
+    feeCents: fee,
+    topUpCents: Math.max(0, gross + fee + owed - Math.round(alreadyAvailable)),
   };
 }

@@ -52,6 +52,8 @@ import { KIND_WORDS, kindShort, kindRefusal, isConditional, formsReasonText, ren
   waiverStateText } from "../shared/waiverform.js";
 import { coverProblemText, fixableByUpload } from "../shared/paygate.js";
 import { MIN_FUND_CENTS, canPay, payRefusalText, fundSuggestion } from "../shared/escrow.js";
+import { FEE_TERMS } from "../shared/fee.js";
+import { smsUsageText, SMS_ADDON_MESSAGES, SMS_ADDON_PRICE_CENTS } from "../shared/smsquota.js";
 import { INSURANCE_LINES, OPTIONAL_LINES, BOND_MIN, INSURANCE_MIN, checkItems, findingsFor,
   problemsIn, allConfirmed, reviewProgress, outcomeWords } from "../shared/doccheck.js";
 import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/autoschedule.js";
@@ -1639,6 +1641,13 @@ function formatMoney(v) {
   if (!isFinite(n)) return "";
   return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+// The same, for a figure held in whole CENTS -- which is how every amount the
+// payment ledger, the funding panel and the lien waivers carry is stored.
+// formatMoney takes DOLLARS, and handing it cents printed every work order's
+// money a hundred times too large: a $3,800 release read "$380,000.00".
+// Nothing could see that statically -- the call reads exactly as intended --
+// so the two are named apart, and a test reads the drawn figure.
+const formatCents = (c) => (c === "" || c == null || !isFinite(Number(c)) ? "" : formatMoney(Number(c) / 100));
 // live-typing display: group digits, allow one decimal, no forced cents yet
 function moneyLive(v) {
   const raw = String(v).replace(/[^0-9.]/g, "");
@@ -17274,8 +17283,8 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
         <h4>Progress and payment</h4>
         {value != null && (
           <span className="wop-total">
-            {formatMoney(value)} · {done.length} of {plan.milestones.length || "—"} verified
-            {held ? <> · {formatMoney(held)} held back</> : null}
+            {formatCents(value)} · {done.length} of {plan.milestones.length || "—"} verified
+            {held ? <> · {formatCents(held)} held back</> : null}
           </span>
         )}
       </div>
@@ -17305,8 +17314,13 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
             <div key={i} className="wop-row-edit">
               <input value={r.label} maxLength={120} placeholder={`Draw ${i + 1}`}
                 onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} />
-              <MoneyInput cents={r.amountCents}
-                onChange={(amountCents) => setRows(rows.map((x, j) => j === i ? { ...x, amountCents } : x))} />
+              {/* MoneyInput takes a DOLLAR string. It was handed a `cents` prop
+                  it does not read, so the box drew empty over a real amount
+                  and typed dollars were stored as cents. The raw string is
+                  kept beside the cents so a half-typed "12." survives. */}
+              <MoneyInput value={r.raw ?? (r.amountCents ? String(r.amountCents / 100) : "")}
+                onChange={(raw) => setRows(rows.map((x, j) => j === i
+                  ? { ...x, raw, amountCents: Math.round(Number(raw || 0) * 100) } : x))} />
               <button type="button" className="pick" aria-label="Remove"
                 onClick={() => setRows(rows.filter((_, j) => j !== i))}><X size={13} /></button>
             </div>
@@ -17318,13 +17332,13 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
             </button>
             {/* The invariant, said before it is refused rather than after. */}
             <span className={balances ? "fld-note" : "fld-err"}>
-              {balances ? "Adds up." : `${formatMoney(planned)} of ${formatMoney(value)} — ${
-                planned < value ? `${formatMoney(value - planned)} short` : `${formatMoney(planned - value)} over`}`}
+              {balances ? "Adds up." : `${formatCents(planned)} of ${formatCents(value)} — ${
+                planned < value ? `${formatCents(value - planned)} short` : `${formatCents(planned - value)} over`}`}
             </span>
           </div>
           <div className="wop-acts">
             <button className="btn-solid sm" disabled={!balances || !rows.length || !!busy}
-              onClick={() => after(async () => { await api.setWoPlan(woId, rows); setEditing(false); }, "plan")}>
+              onClick={() => after(async () => { await api.setWoPlan(woId, rows.map((r) => ({ label: r.label, amountCents: r.amountCents }))); setEditing(false); }, "plan")}>
               <Check size={13} /> {busy === "plan" ? "Saving…" : "Save the plan"}
             </button>
             <button className="pick" onClick={() => setEditing(false)}>Cancel</button>
@@ -17350,6 +17364,10 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
                 priorGross: plan.releases.reduce(
                   (n, r) => n + (r.status === "void" ? 0 : r.grossCents), 0),
                 retainageBps: plan.retainageBps || 0,
+                // What is already owed and unpaid -- net and SubSub's fee --
+                // or funding to the suggested figure leaves a release that
+                // was due before it still short.
+                owedCents: money?.owedCents ?? money?.dueCents ?? 0,
                 alreadyAvailable: money?.availableCents || 0,
               }).topUpCents}
               onChanged={() => { load(); onChanged?.(); }} />
@@ -17362,14 +17380,14 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
                 <div className="wop-main">
                   <span className="wop-label">{m.label}</span>
                   <span className="wop-meta">
-                    {formatMoney(m.amountCents)}
+                    {formatCents(m.amountCents)}
                     {m.status === "verified" ? <> · verified {relTime(m.verifiedAt)}</>
                       : m.status === "reached" ? <> · marked done {relTime(m.reachedAt)}</>
                       : m.status === "rejected" ? <> · sent back</>
                       : <> · not started</>}
                     {rel ? <> · {rel.status === "paid"
                       ? `paid ${relTime(rel.settledAt)}`
-                      : `${formatMoney(rel.netCents)} due`}</> : null}
+                      : `${formatCents(rel.netCents)} due`}</> : null}
                   </span>
                   {m.note && <span className="wop-note">“{m.note}”</span>}
                 </div>
@@ -17426,7 +17444,7 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
                       {canPayOut && money?.configured && (
                         <button className="btn-solid sm"
                           onClick={() => { setSettleMode("pay"); setSettling(rel); }}>
-                          Pay {formatMoney(rel.netCents)}
+                          Pay {formatCents(rel.netCents)}
                         </button>
                       )}
                       <button className="pick"
@@ -17461,7 +17479,7 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
           <div className="form">
             <h2>Lien waiver</h2>
             <p className="form-sub">
-              For {formatMoney(waiverFor.netCents)} on this work order. Each payment gets its own.
+              For {formatCents(waiverFor.netCents)} on this work order. Each payment gets its own.
             </p>
             <ReleaseWaivers release={waiverFor} onChanged={() => { load(); onChanged?.(); }} />
           </div>
@@ -17542,7 +17560,8 @@ function SettleRelease({ release, mode = "record", money, onClose, onDone }) {
   // anybody: no reason makes an unverified payee reachable or makes money that
   // was never funded exist.
   const verdict = paying && money
-    ? canPay({ release: { status: release.status || "due", netCents: release.netCents },
+    ? canPay({ release: { status: release.status || "due", netCents: release.netCents,
+          feeCents: release.feeCents || 0 },
         funding: money, payable: money.payeeReady === true })
     : null;
   const payBlocked = paying && (!money || (verdict && !verdict.ok));
@@ -17582,10 +17601,27 @@ function SettleRelease({ release, mode = "record", money, onClose, onDone }) {
       <div className="form">
         <h2>{paying ? "Pay this release" : "Record payment"}</h2>
         <p className="form-sub">
-          {formatMoney(release.netCents)} to go out
-          {release.retainageCents ? <> · {formatMoney(release.retainageCents)} held back</> : null}.
+          {formatCents(release.netCents)} to go out
+          {release.retainageCents ? <> · {formatCents(release.retainageCents)} held back</> : null}.
           {paying ? " Straight to their bank through Stripe." : " Money you have already sent."}
         </p>
+        {/* SubSub's fee, said BEFORE the press and on the side that pays it.
+            It is charged on top, from the money on this work order, and never
+            comes out of what they receive -- which is the sentence that stops
+            somebody wondering whether the subcontractor is short-changed.
+            Recording a payment made elsewhere carries none, and saying so is
+            what makes the difference between the two buttons legible. */}
+        {paying && release.feeCents > 0 && (
+          <p className="cov-hint pay-fee">
+            Plus SubSub's fee of {formatCents(release.feeCents)} ({FEE_TERMS}), from the
+            funds on this work order. They receive the full {formatCents(release.netCents)}.
+          </p>
+        )}
+        {!paying && release.feeCents > 0 && (
+          <p className="cov-hint pay-fee">
+            No SubSub fee on a payment you made yourself.
+          </p>
+        )}
 
         {/* The facts before the judgements. Asking somebody to justify paying
             without cover, and only then telling them the money is not there,
@@ -17599,7 +17635,7 @@ function SettleRelease({ release, mode = "record", money, onClose, onDone }) {
         )}
         {paying && verdict?.ok && (
           <p className="cov-hint">
-            <Check size={12} /> {formatMoney(money.availableCents)} funded and ready.
+            <Check size={12} /> {formatCents(money.availableCents)} funded and ready.
           </p>
         )}
 
@@ -17699,7 +17735,7 @@ function SettleRelease({ release, mode = "record", money, onClose, onDone }) {
             onClick={settle}>
             <Check size={15} /> {busy ? (paying ? "Paying…" : "Recording…")
               : (blocked || coverBlocked) ? "Pay anyway"
-              : paying ? `Send ${formatMoney(release.netCents)}` : "Record it"}
+              : paying ? `Send ${formatCents(release.netCents)}` : "Record it"}
           </button>
         </div>
       </div>
@@ -17762,16 +17798,17 @@ function WoFunding({ woId, money: m, canPayOut, suggestCents, onChanged }) {
       <div className="wof-head">
         <span className="wof-title">Money</span>
         <span className="wof-figs">
-          {formatMoney(m.availableCents)} ready
-          {m.dueCents ? <> · {formatMoney(m.dueCents)} owed</> : null}
-          {m.transferredCents ? <> · {formatMoney(m.transferredCents)} paid out</> : null}
+          {formatCents(m.availableCents)} ready
+          {(m.owedCents ?? m.dueCents) ? <> · {formatCents(m.owedCents ?? m.dueCents)} owed
+            {m.feesDueCents ? <> (incl. {formatCents(m.feesDueCents)} SubSub fee)</> : null}</> : null}
+          {m.transferredCents ? <> · {formatCents(m.transferredCents)} paid out</> : null}
         </span>
       </div>
 
       {/* The one number that says what to do. */}
       {m.shortfallCents > 0 && (
         <p className="wof-short">
-          <AlertTriangle size={12} /> {formatMoney(m.shortfallCents)} short of what is owed.
+          <AlertTriangle size={12} /> {formatCents(m.shortfallCents)} short of what is owed.
         </p>
       )}
       {/* Their end of it, and only whether money can reach them. Which
@@ -17797,7 +17834,7 @@ function WoFunding({ woId, money: m, canPayOut, suggestCents, onChanged }) {
           )}
           {m.refundableCents > 0 && (
             <button className="pick" disabled={!!busy} onClick={refund}>
-              {busy === "refund" ? "Sending back…" : `Send back ${formatMoney(m.refundableCents)}`}
+              {busy === "refund" ? "Sending back…" : `Send back ${formatCents(m.refundableCents)}`}
             </button>
           )}
         </div>
@@ -17834,7 +17871,11 @@ function FundWorkOrder({ woId, suggestCents, onClose, onDone }) {
   const [err, setErr] = useState("");
   const host = useRef(null);
   const els = useRef(null);
-  const cents = Math.round(Number(moneyRaw(amount) || 0));
+  // The box holds DOLLARS and the route takes CENTS. This read the dollars
+  // straight through, so funding $3,820 asked Stripe for $38.20 -- and the
+  // confirm route then recorded what Stripe said landed, which made the
+  // mistake look like a short payment rather than a units error.
+  const cents = Math.round(Number(moneyRaw(amount) || 0) * 100);
 
   const start = async () => {
     setBusy(true); setErr("");
@@ -17904,6 +17945,13 @@ function FundWorkOrder({ woId, suggestCents, onClose, onDone }) {
             <label className="fld">How much
               <MoneyInput value={amount} onChange={setAmount} />
             </label>
+            {/* The fee is on top and the suggested figure already carries it,
+                so the number in the box is the number that pays everybody --
+                said here, where somebody decides how much to put in. */}
+            <p className="cov-hint fund-fee">
+              Includes SubSub's fee on payments sent through SubSub: {FEE_TERMS}.
+              Subcontractors receive their full amount.
+            </p>
             {err && <p className="fld-err" role="alert">{err}</p>}
             <div className="form-actions">
               <button className="btn-ghost" onClick={onClose}>Cancel</button>
@@ -17917,13 +17965,13 @@ function FundWorkOrder({ woId, suggestCents, onClose, onDone }) {
           </>
         ) : (
           <>
-            <p className="cov-hint">{formatMoney(cents)} to add.</p>
+            <p className="cov-hint">{formatCents(cents)} to add.</p>
             <div className="bm-embed" ref={host} />
             {err && <p className="fld-err" role="alert">{err}</p>}
             <div className="form-actions">
               <button className="btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
               <button className="btn-solid" disabled={busy} onClick={confirm}>
-                {busy ? "Paying…" : `Pay ${formatMoney(cents)}`}
+                {busy ? "Paying…" : `Pay ${formatCents(cents)}`}
               </button>
             </div>
           </>
@@ -18180,6 +18228,98 @@ function BillingManage({ accentHex, onFellBack }) {
           ))}
         </ul>
       )}
+    </>
+  );
+}
+
+// Text messages this month, and the add-on.
+//
+// The count is the server's, read off sms_log through the same function that
+// refuses a text at the cap, so the bar and the refusal cannot disagree.
+//
+// BUYING ASKS FIRST. One tap that adds $50 a month to somebody's bill is a
+// charge they did not see coming; the first press names the price and the
+// second agrees. Removing one is reversible and costs nothing, so it does not
+// ask. And the control is only drawn where pressing it can work: a comped
+// account has no subscription to add a line to, and a button answering
+// no_subscription is the screen-that-lies rule pointed at a purchase.
+function SmsUsage() {
+  const [s, setS] = useState(null);
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const load = () => api.getBilling().then((b) => setS(b?.sms || null)).catch(() => setS(null));
+  useEffect(() => { load(); }, []);
+  if (!s || !(s.allowance > 0)) return null;
+
+  const blocks = s.addonBlocks || 0;
+  const pct = Math.min(100, Math.round((s.used / s.allowance) * 100));
+  const per = `$${(SMS_ADDON_PRICE_CENTS / 100).toLocaleString("en-US")}`;
+  const msgs = SMS_ADDON_MESSAGES.toLocaleString("en-US");
+  const set = async (n) => {
+    setBusy(true); setErr("");
+    try { await api.setSmsAddon(n); setAsking(false); await load(); }
+    catch (e) {
+      console.error("[billing] sms add-on failed:", e);
+      setErr(e?.body?.error === "migration_needed" ? "This needs migration 070 run first."
+        : e?.body?.detail ? `Stripe refused that: ${e.body.detail}`
+        : "That didn't save. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <>
+      <div className="form-sec">Text messages</div>
+      <div className="sms-use">
+        <div className="sms-use-line">{smsUsageText(s)}</div>
+        <div className={`sms-bar ${pct >= 100 ? "full" : pct >= 80 ? "near" : ""}`}>
+          <span style={{ width: `${pct}%` }} />
+        </div>
+        <p className="fine">
+          {s.included.toLocaleString("en-US")} a month come with Scale
+          {blocks ? `, plus ${(blocks * SMS_ADDON_MESSAGES).toLocaleString("en-US")} from ${blocks} add-on${blocks === 1 ? "" : "s"}` : ""}.
+          {" "}The count starts again on the 1st. At the limit texts pause and emails still go out;
+          emergency call-outs are always texted.
+        </p>
+        {s.addonAvailable && (
+          <div className="sms-addon">
+            {!asking ? (
+              <>
+                <span>{blocks
+                  ? `${blocks} add-on${blocks === 1 ? "" : "s"} · ${"$"}${(blocks * SMS_ADDON_PRICE_CENTS / 100).toLocaleString("en-US")} a month`
+                  : `Need more? ${msgs} more texts a month for ${per} a month.`}</span>
+                <span className="sms-addon-acts">
+                  {blocks > 0 && blocks < (s.maxBlocks || 20) && (
+                    <button className="pick" disabled={busy} onClick={() => setAsking(true)}>Add another</button>
+                  )}
+                  {blocks === 0 && (
+                    <button className="btn-ghost" disabled={busy} onClick={() => setAsking(true)}>
+                      Add {msgs} texts
+                    </button>
+                  )}
+                  {blocks > 0 && (
+                    <button className="pick" disabled={busy} onClick={() => set(blocks - 1)}>
+                      {busy ? "One moment…" : "Remove one"}
+                    </button>
+                  )}
+                </span>
+              </>
+            ) : (
+              <>
+                <span>{msgs} more texts a month for <b>{per} a month</b>, billed with your plan
+                  to your card on file. Charged from today for the rest of this billing period.</span>
+                <span className="sms-addon-acts">
+                  <button className="btn-ghost" disabled={busy} onClick={() => setAsking(false)}>Cancel</button>
+                  <button className="btn-solid" disabled={busy} onClick={() => set(blocks + 1)}>
+                    {busy ? "Adding…" : `Add for ${per} a month`}
+                  </button>
+                </span>
+              </>
+            )}
+          </div>
+        )}
+        {err && <p className="billing-err" role="alert">{err}</p>}
+      </div>
     </>
   );
 }
@@ -19639,6 +19779,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               of SubSub in the middle of somebody's own account screen.
               Cancelling was already in the app; these are the rest of it.
               The door is kept below, and only for when this cannot load. */}
+          {(plan === "scale" || comped) && <SmsUsage />}
           {plan === "scale" && !comped && (
             <>
               <BillingManage accentHex={brand?.theme?.accent || null}
@@ -25627,7 +25768,7 @@ function WaiverSigner({ waiver, myName = "", token = null, onDone }) {
           <p className="cx-sub">
             Use the {KIND_WORDS[waiver.kind]?.title || "lien waiver"} form
             {waiver.governingState ? ` for ${stateName(waiver.governingState)}` : ""}, for
-            {waiver.amountCents ? ` ${formatMoney(waiver.amountCents)}` : " the amount you are owed"}
+            {waiver.amountCents ? ` ${formatCents(waiver.amountCents)}` : " the amount you are owed"}
             {waiver.kind?.endsWith("_progress") ? `, through ${niceDay(waiver.throughDate)}` : ""}.
           </p>
         </div>
@@ -25709,7 +25850,7 @@ function MyWaivers({ myName }) {
         {rows.map((r) => (
           <li key={r.id} className={`agr-row ${r.status === "requested" ? "agr-todo" : ""}`}>
             <div className="agr-row-main">
-              <b>{r.accountName} · {formatMoney(r.amountCents)}</b>
+              <b>{r.accountName} · {formatCents(r.amountCents)}</b>
               <span className="cx-sub">
                 {kindShort(r.kind)} · {r.job || "Job"}
                 {r.kind?.endsWith("_progress") ? ` · through ${niceDay(r.throughDate)}` : ""}
@@ -25743,7 +25884,7 @@ function MyWaivers({ myName }) {
           <div className="form">
             <h2>{open.title}</h2>
             <p className="form-sub">
-              {open.accountName} asked for this before paying you {formatMoney(open.amountCents)}.
+              {open.accountName} asked for this before paying you {formatCents(open.amountCents)}.
             </p>
             <WaiverSigner waiver={open} myName={myName} onDone={() => { setOpen(null); load(); }} />
           </div>
@@ -25779,7 +25920,7 @@ function WaiverLinkPage({ token }) {
         <h1>{w.title}</h1>
         <p className="pack-lede">
           {w.customer || "Your customer"} asked {w.claimant || "you"} for a lien waiver
-          {w.amountCents ? ` on a payment of ${formatMoney(w.amountCents)}` : ""}
+          {w.amountCents ? ` on a payment of ${formatCents(w.amountCents)}` : ""}
           {w.job ? ` for ${w.job}` : ""}.
         </p>
         {w.status === "requested"
@@ -25946,7 +26087,7 @@ function ReleaseWaivers({ release, onChanged }) {
               placeholder="their email" />
           </label>
           <p className="fld-note">
-            {formatMoney(d.amountCents)} to {d.claimant || "them"}
+            {formatCents(d.amountCents)} to {d.claimant || "them"}
             {kind.endsWith("_progress") ? `, for work through ${niceDay(d.throughDate)}` : ""}.
           </p>
           <div className="form-actions">
@@ -33382,6 +33523,18 @@ p.fld-note{margin:6px 0 0}
 .bm-embed{margin:0}
 .bm-embed:empty{margin:0}
 .bm-invoices{list-style:none;margin:0;padding:0;font-size:13px}
+/* Text messages this month. The bar turns amber near the limit and red at
+   it, the same three colours the document dots use for the same meaning. */
+.sms-use{border:1px solid var(--line);border-radius:12px;padding:13px 15px;margin:0 0 14px;
+  font-size:14px}
+.sms-use-line{font-weight:600}
+.sms-bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin:9px 0 6px}
+.sms-bar span{display:block;height:100%;background:var(--brand);border-radius:99px}
+.sms-bar.near span{background:#C98A12}
+.sms-bar.full span{background:#B3261E}
+.sms-addon{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:13px}
+.sms-addon-acts{display:flex;gap:8px;flex-wrap:wrap}
 .bm-invoices li{display:flex;align-items:center;gap:12px;padding:9px 2px;
   border-bottom:1px solid var(--line)}
 .bm-invoices li:last-child{border-bottom:0}

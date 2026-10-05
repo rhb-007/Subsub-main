@@ -42,18 +42,36 @@ export function cumulativeCut(priorGross, gross, bps) {
 
 // One release, broken into its parts.
 //
-// Retainage is held back and paid at the end; the fee is SubSub's, taken on
+// Retainage is held back and paid at the end; the fee is SubSub's, computed on
 // the gross. Both are computed cumulatively against what has already gone
 // out, so a work order's totals are exact however many milestones it has.
 //
+// THE FEE IS CHARGED ON TOP, TO THE PAYING SIDE, AND NEVER COMES OUT OF NET.
+// It used to: net was gross less retainage less fee, so whatever SubSub
+// charged came out of the subcontractor's cheque. That was harmless while the
+// rate was zero and is the wrong way round the moment it is not --
+// subcontractors are the growth loop, and a deduction from what a roofer is
+// paid is the one thing that would make them ask for a paper cheque instead.
+// The hiring account is the side on Scale, so the fee is theirs: they fund
+// gross plus fee, and the subcontractor is sent gross less retainage, exactly
+// as if SubSub were not there.
+//
+// A CAP PER RELEASE, because a percentage of a $200,000 draw is a number
+// nobody would agree to for sending a transfer. With a cap the cumulative
+// property only holds below it -- a capped release is capped, and the next one
+// is not credited with the difference -- which is the right trade: the cap is
+// a promise about each payment, and a cumulative cap would be a promise about
+// a work order that nobody reads.
+//
 // Net is what the subcontractor actually receives now. It is derived, never
 // stored independently: two numbers that should agree eventually will not.
-export function releaseAmounts({ gross, priorGross = 0, retainageBps = 0, feeBps = 0 }) {
+export function releaseAmounts({ gross, priorGross = 0, retainageBps = 0, feeBps = 0, feeCapCents = null }) {
   const g = Math.round(gross || 0);
   const prior = Math.round(priorGross || 0);
   const retainage = cumulativeCut(prior, g, retainageBps);
-  const fee = cumulativeCut(prior, g, feeBps);
-  return { gross: g, retainage, fee, net: g - retainage - fee };
+  let fee = cumulativeCut(prior, g, feeBps);
+  if (feeCapCents != null && fee > feeCapCents) fee = Math.max(0, Math.round(feeCapCents));
+  return { gross: g, retainage, fee, net: g - retainage };
 }
 
 // Split a total into n parts that sum to exactly the total.

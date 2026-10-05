@@ -82,6 +82,10 @@ CREATE TABLE accounts (
   -- it turns on the CHOOSING and the ASKING rather than the booking, which is
   -- still the crew's to grant.
   auto_turnaround   INTEGER,
+  -- 070. Text-message add-ons on the Scale subscription, each 5,000 a month
+  -- more than the 2,500 included. A cache of Stripe's last word, written by
+  -- the webhook -- see app/shared/smsquota.js.
+  sms_addon_blocks  INTEGER NOT NULL DEFAULT 0,
   created_at        TEXT DEFAULT CURRENT_TIMESTAMP
 );
 

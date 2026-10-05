@@ -66,6 +66,14 @@ console.log("\n-- what is available, owed and short --");
   ck("refundable excludes what is owed", r.refundableCents === 200000, String(r.refundableCents));
   ck("and never goes negative",
     fundingState({ fundedCents: 100, dueCents: 900000 }).refundableCents === 0);
+  // The fee, both halves. One already taken is no longer the account's; one
+  // still due has to stay on hand, or refunding it leaves that release
+  // unpayable through SubSub.
+  const fz = fundingState({ fundedCents: 500000, transferredCents: 200000, feesTakenCents: 1000,
+    dueCents: 100000, feesDueCents: 500 });
+  ck("a fee already taken is not available", fz.availableCents === 299000, String(fz.availableCents));
+  ck("owed is the net AND the fee", fz.owedCents === 100500, String(fz.owedCents));
+  ck("and a fee still due is not refundable", fz.refundableCents === 198500, String(fz.refundableCents));
 }
 
 console.log("\n-- the state lists match the migration's own CHECK clauses --");
@@ -96,6 +104,12 @@ console.log("\n-- the state lists match the migration's own CHECK clauses --");
 console.log("\n-- may this be paid --");
 {
   const funded = fundingState({ fundedCents: 500000 });
+  // The fee rides with the transfer, so it has to be funded too.
+  const tight = canPay({ release: { status: "due", netCents: 500000, feeCents: 2500 }, funding: funded, payable: true });
+  ck("net exactly funded but the fee not: no", !tight.ok && tight.reason === "not_funded", JSON.stringify(tight));
+  ck("and the words name both halves",
+    /\$5,000\.00 to them and SubSub's \$25\.00 fee/.test(payRefusalText(tight)) && /Add \$25\.00/.test(payRefusalText(tight)),
+    payRefusalText(tight));
   ck("funded, payable, due: yes",
     canPay({ release: { status: "due", netCents: 400000 }, funding: funded, payable: true }).ok);
   const short = canPay({ release: { status: "due", netCents: 600000 }, funding: funded, payable: true });
@@ -122,8 +136,15 @@ console.log("\n-- what to fund, derived from money.js and not reinvented --");
     retainageBps: 500 });
   ck("funding covers the GROSS, retainage included", s.grossCents === 500000, String(s.grossCents));
   ck("and the net is what would reach them", s.netCents === 475000, String(s.netCents));
-  ck("the top-up is net of what is already there",
-    fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000 }).topUpCents === 300000);
+  ck("the top-up is net of what is already there, and carries the fee",
+    fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000 }).topUpCents === 302500,
+    String(fundSuggestion({ milestones: [{ amountCents: 500000 }], alreadyAvailable: 200000 }).topUpCents));
+  // The cap is per payment, so two capped draws are two fees. Suggested as one
+  // lump it would be one, and the second draw could not be paid.
+  const big = fundSuggestion({ milestones: [{ amountCents: 20_000_000 }, { amountCents: 20_000_000 }] });
+  ck("two capped draws are two capped fees", big.feeCents === 100000, String(big.feeCents));
+  ck("and what is already owed is covered as well as what is to come",
+    fundSuggestion({ milestones: [], owedCents: 40000 }).topUpCents === 40000);
   // Milestones already released are not funded twice -- the money for them has
   // already gone.
   const some = fundSuggestion({ milestones: [
@@ -139,6 +160,19 @@ console.log("\n-- what to fund, derived from money.js and not reinvented --");
     /suggestCents=\{fundSuggestion\(\{/.test(APP));
   ck("and passes the retainage, or the final draw has nothing behind it",
     /retainageBps: plan\.retainageBps/.test(APP));
+  ck("and what is already owed, fee included, or a due release stays short",
+    /owedCents: money\?\.owedCents/.test(APP));
+  // The fee is said where it is paid, on the paying side only, in the one
+  // set of words the module holds -- three screens quoting three fees is how
+  // somebody is told 0.5% and charged something else.
+  ck("the pay window names the fee before the press",
+    /paying && release\.feeCents > 0 && \([\s\S]{0,200}Plus SubSub's fee of \{formatCents\(release\.feeCents\)\} \(\{FEE_TERMS\}\)/.test(APP));
+  ck("and the record window says a payment made elsewhere carries none",
+    /!paying && release\.feeCents > 0 && \([\s\S]{0,120}No SubSub fee/.test(APP));
+  ck("and the fund form says the figure includes it",
+    /Includes SubSub's fee on payments sent through SubSub: \{FEE_TERMS\}/.test(APP));
+  ck("the pay window's own check carries the fee, as the route's does",
+    /netCents: release\.netCents,\s*feeCents: release\.feeCents/.test(APP));
 }
 
 // ---------------------------------------------------------------------------
@@ -671,6 +705,75 @@ console.log("\n-- and the panel does not offer a rail that is not there --");
     f.status === 501 && f.body.error === "billing_not_configured", `${f.status} ${JSON.stringify(f.body)}`);
   const p = await call(noStripe, "/api/releases/rel1/pay", { method: "POST" });
   ck("as is paying", p.status === 501, `${p.status}`);
+}
+
+console.log("\n-- SubSub's fee: on top, spent by paying through SubSub, nothing on a cheque --");
+{
+  // The release carries a stamped fee of $20 on a $4,000 net. The account has
+  // to fund both; the subcontractor is sent the $4,000 and not a cent less;
+  // and the $20 stays, so it is neither available nor refundable afterwards.
+  const { runCheck } = await import("./lib/check-sql.mjs");
+  const db = seed();
+  db.exec(`UPDATE wo_releases SET fee_bps = 50, fee_cents = 2000 WHERE id = 'rel1'`);
+  const env = ENV(db);
+  await fund(env, 400000);
+  calls = [];
+  const short = await call(env, "/api/releases/rel1/pay", { method: "POST" });
+  ck("funding the net alone does not cover the fee",
+    short.status === 409 && short.body.error === "not_funded" && short.body.fee === 2000,
+    `${short.status} ${JSON.stringify(short.body)}`);
+  ck("and nothing went to Stripe", !calls.some((x) => /\/transfers$/.test(x.url)));
+  const m0 = await call(env, "/api/work-orders/wo1/funding");
+  ck("the panel says what is owed, fee included",
+    m0.body.owedCents === 402000 && m0.body.feesDueCents === 2000 && m0.body.shortfallCents === 2000,
+    JSON.stringify(m0.body));
+
+}
+{
+  // Funded with the fee as well. A fresh database rather than a second
+  // funding on the first: the Stripe stub answers one intent id, and two rows
+  // cannot share it.
+  const { runCheck } = await import("./lib/check-sql.mjs");
+  const db = seed();
+  db.exec(`UPDATE wo_releases SET fee_bps = 50, fee_cents = 2000 WHERE id = 'rel1'`);
+  const env = ENV(db);
+  await fund(env, 402000);
+  calls = [];
+  const ok = await call(env, "/api/releases/rel1/pay", { method: "POST" });
+  ck("with the fee funded it pays", ok.status === 200 && ok.body.feeCents === 2000,
+    `${ok.status} ${JSON.stringify(ok.body)}`);
+  const tr = calls.find((x) => /\/transfers$/.test(x.url));
+  ck("the subcontractor is sent the whole net -- the fee is never theirs to pay",
+    tr?.body?.amount === "400000", tr?.body?.amount);
+  const m1 = await call(env, "/api/work-orders/wo1/funding");
+  ck("the fee is spent: nothing left available", m1.body.availableCents === 0, String(m1.body.availableCents));
+  ck("and nothing to send back", m1.body.refundableCents === 0, String(m1.body.refundableCents));
+  ck("and it is counted as taken", m1.body.feesTakenCents === 2000, String(m1.body.feesTakenCents));
+  ck("the fee check reads zero over a fee that was really charged",
+    runCheck(db).m033_inv_fee_off_platform === 0, String(runCheck(db).m033_inv_fee_off_platform));
+}
+{
+  // Recorded as paid by cheque: nothing went through SubSub, so nothing is
+  // charged, and the money funded for the fee is the account's again.
+  const { runCheck } = await import("./lib/check-sql.mjs");
+  const db = seed();
+  db.exec(`UPDATE wo_releases SET fee_bps = 50, fee_cents = 2000 WHERE id = 'rel1'`);
+  const env = ENV(db);
+  await fund(env, 402000);
+  const r = await call(env, "/api/releases/rel1/settle", { method: "POST", body: { method: "check", reference: "1042" } });
+  ck("a cheque is recorded", r.status === 200, `${r.status} ${JSON.stringify(r.body)}`);
+  const rel = db.prepare(`SELECT fee_cents, fee_bps FROM wo_releases WHERE id='rel1'`).get();
+  ck("and carries no fee", rel.fee_cents === 0, JSON.stringify(rel));
+  const m = await call(env, "/api/work-orders/wo1/funding");
+  ck("so everything funded is the account's to send back",
+    m.body.refundableCents === 402000 && m.body.feesTakenCents === 0, JSON.stringify(m.body));
+  ck("the fee check reads zero after a cheque",
+    runCheck(db).m033_inv_fee_off_platform === 0, String(runCheck(db).m033_inv_fee_off_platform));
+  // And the check itself, against the row it exists to catch -- every
+  // invariant reads zero on an empty table, which proves nothing.
+  db.exec(`UPDATE wo_releases SET fee_cents = 2000 WHERE id = 'rel1'`);
+  ck("and it counts a fee on a release that never went through SubSub",
+    runCheck(db).m033_inv_fee_off_platform === 1, String(runCheck(db).m033_inv_fee_off_platform));
 }
 
 console.log("\n-- a database behind the code says so --");

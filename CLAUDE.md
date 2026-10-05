@@ -2778,6 +2778,95 @@ refactor.
   issued, over a fault nobody told them about — the same silent failure one
   screen along. The modal says so, at the moment of closing.
 
+- **SUBSUB'S FEE IS 0.5% OF A PAYMENT, AT MOST $500 A PAYMENT, CHARGED TO THE
+  HIRING ACCOUNT ON TOP -- AND ONLY ON MONEY THAT GOES THROUGH SUBSUB.**
+  `app/shared/fee.js`. Decided as a take rate, not a guess: Procore charges
+  0.2% per invoice capped per commitment; vertical-software platforms net
+  roughly 0.35-1%; a bank transfer through Stripe costs SubSub at most $5. The
+  cap is **per payment**, because a percentage of a $200,000 draw is a number
+  nobody would agree to for sending a transfer.
+
+  **On top, never out of net, and that reverses what `money.js` did.** Net was
+  gross less retainage less fee, so whatever SubSub charged came out of the
+  roofer's cheque. Harmless at zero and the wrong way round at anything else:
+  subcontractors are the growth loop, and a deduction from what they are paid
+  is the one thing that would make them ask for paper instead. The hiring side
+  is the side on Scale, so the fee is theirs -- they fund gross plus fee and the
+  subcontractor is sent exactly what they would have been sent without us. A
+  test pins it, and the test it replaced pinned the old answer.
+
+  **Stamped at verify, spent at pay, zeroed at settle.** The account must see
+  the fee before it funds or pays, so it is on the release from the moment the
+  milestone is verified. Paid through `/pay` it is spent: `woMoney` counts it
+  as taken, so it is neither available nor refundable afterwards. Recorded as
+  paid by check, nothing went through us -- `settle` writes `fee_cents = 0` in
+  the same UPDATE that closes the release, and `m033_inv_fee_off_platform`
+  counts one that slipped past. A fee still due is owed money: it is in
+  `owedCents` and out of `refundableCents`, or refunding it would leave that
+  release unpayable.
+
+  **The fund suggestion is computed milestone by milestone** because the cap
+  is per payment: two $100,000 draws are two $500 fees, and one lump would
+  suggest one and leave the second draw short.
+
+- **AND EVERY AMOUNT ON THE PAYMENT SCREENS HAD BEEN A HUNDRED TIMES TOO
+  LARGE, AND ADD FUNDS CHARGED A HUNDREDTH OF WHAT WAS TYPED.** Found by the
+  browser test for the fee line, which read "$380,000.00" where it expected
+  $3,800. `formatMoney` takes **dollars**; the work order's progress panel, the
+  funding panel, the pay window and every lien-waiver amount handed it
+  **cents** -- twenty-three call sites, all reading exactly as intended. And the
+  fund form read the dollars typed into it as cents, so funding $3,820 asked
+  Stripe for $38.20, and the confirm route faithfully recorded what Stripe
+  said landed -- which made a units error look like a short payment. The plan
+  editor passed MoneyInput a `cents` prop it does not read, so it drew empty
+  over a real amount.
+
+  `formatCents` is the second name, and the two are kept apart by name
+  because nothing static can tell which unit a variable holds. **No test had
+  ever drawn these figures** -- every money assertion was on the server -- which
+  is the whole of why it survived. `test:feesmsui` reads the drawn total, the
+  drawn fee and the amount on the wire, and undoing either half fails it.
+
+- **TEXT MESSAGES ARE 2,500 A MONTH ON SCALE, 5,000 MORE FOR $50 A MONTH, AND
+  NONE ON BASIC.** `app/shared/smsquota.js`, migration 070. Basic at zero is
+  what the pricing page has always said; nothing enforced it until now.
+
+  **One door.** Seven call sites paired `sendSms` with `logSms` by hand; a cap
+  checked at six of them is a cap with a door round it, and the seventh -- the
+  emergency call-out -- was not even logged. `sendAccountSms` is the only
+  caller of `sendSms` and a test counts that. Unconfigured is answered first,
+  then the count; a refusal is logged as failed with its reason and a failed
+  row is not counted, so a refusal never eats the allowance it reports.
+
+  **At the cap the text pauses and the email still goes**, so running out
+  costs a channel and never the notice, and nothing is billed past the cap.
+  **An emergency call-out is texted whatever the count** -- a named kind in
+  `SMS_UNCAPPED_KINDS`, never a flag a caller can pass, because a flood at 2am
+  and a contractor not told over a quota is the most expensive failure this
+  could produce. It still counts, so the number on screen is true.
+
+  **Counted from `sms_log`, in messages, by calendar month**, never as a
+  counter: a counter is a second record of what the log already says. The
+  month boundary is `YYYY-MM-01` compared against `CURRENT_TIMESTAMP` text --
+  one format against itself, which is 057's lesson kept. A count that cannot
+  be read lets the text go, because the cap is commercial and failing closed
+  would turn a database hiccup into nobody being told their work order exists.
+
+  **The add-on is a line on the Scale subscription**, not a second one: one
+  bill, one renewal, and it goes when the plan goes. Annual subscriptions take
+  a yearly add-on price ($600) because Stripe refuses mixed intervals on one
+  subscription. The count is **set, not incremented**, so a double press cannot
+  buy two; it is written through from Stripe's own answer and again by the
+  webhook, so the column is Stripe's last word. `applySubscription` reads the
+  plan's cycle off **the plan's line**, not `items.data[0]` -- with the add-on
+  present the first line may be the add-on, and the fixture puts it first.
+  **Buying asks first** on screen; removing does not, because it is reversible
+  and costs nothing.
+
+  Not verified here: the add-on needs two Stripe prices created and their ids
+  set as `STRIPE_PRICE_SMS_MONTHLY` and `STRIPE_PRICE_SMS_ANNUAL` on the API
+  Worker. Until then the panel shows the count and offers no button.
+
 - **A lien waiver is a chain, and it rolls up as a status.** A waiver binds
   only the party that signs it, so one from your subcontractor does nothing
   about the supply house they still owe. The useful object is the chain:

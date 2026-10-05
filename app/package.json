@@ -13,6 +13,8 @@
     "deploy": "wrangler deploy --config=./wrangler.toml",
     "test:paygate": "node --no-warnings scripts/paygate-test.mjs",
     "test:escrow": "node --no-warnings scripts/escrow-test.mjs",
+    "test:smsquota": "node --no-warnings scripts/sms-quota-test.mjs",
+    "test:feesmsui": "node --no-warnings scripts/fee-sms-ui-test.mjs",
     "test:agreement": "node --no-warnings scripts/agreement-test.mjs",
     "test:agrterms": "node --no-warnings scripts/agreement-terms-ui-test.mjs",
     "test:removesub": "node --no-warnings scripts/remove-sub-test.mjs",

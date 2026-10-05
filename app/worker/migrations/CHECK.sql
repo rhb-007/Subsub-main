@@ -226,6 +226,9 @@ WITH spec(j) AS (SELECT
   -- presses ask a subcontractor for the same waiver twice.
   ',["m069_waiver_forms","col","waiver_forms",["waiver_id","source","template_id","template_version","parties","uploaded_side"]]' ||
   ',["m069_waiver_open_unique","index","ux_waiver_open",[]]' ||
+  -- 070. Text-message add-ons on the Scale subscription. Until it is run the
+  -- included 2,500 still apply and buying an add-on answers migration_needed.
+  ',["m070_sms_addon","col","accounts",["sms_addon_blocks"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -362,6 +365,14 @@ WITH inv(j) AS (SELECT '['
   || ',' || json_array('m051_inv_transfer_without_paid', (SELECT COUNT(*) FROM wo_transfers t
     JOIN wo_releases r ON r.id = t.release_id
     WHERE t.status = 'paid' AND r.status <> 'paid'))
+  -- Must read ZERO. SubSub's fee is charged only on money that went through
+  -- SubSub, so a release recorded as paid any other way -- a cheque, a bank
+  -- transfer somebody made themselves -- must carry none. The settle route
+  -- zeroes it in the same write that closes the release; a row here is a
+  -- release whose fee the account would be told it paid and never did.
+  -- COALESCE, because a NULL method is "not stripe" and must be counted.
+  || ',' || json_array('m033_inv_fee_off_platform', (SELECT COUNT(*) FROM wo_releases
+    WHERE status = 'paid' AND COALESCE(method, '') <> 'stripe' AND fee_cents > 0))
   -- Invariants, both of which must read ZERO.
   --
   -- In force means BOTH signed. A row saying countersigned with either

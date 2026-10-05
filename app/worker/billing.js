@@ -119,6 +119,21 @@ export function priceFor(env, cycle) {
   return cycle === "annual" ? env.STRIPE_PRICE_SCALE_ANNUAL : env.STRIPE_PRICE_SCALE_MONTHLY;
 }
 
+// The text-message add-on's price, per billing cycle. A subscription's items
+// must all bill on one interval, so an annual Scale subscription cannot carry a
+// monthly add-on -- hence a yearly price beside the monthly one ($600/yr is the
+// same $50 a month). Configuration rather than code, for the reason above.
+export function smsAddonPriceFor(env, cycle) {
+  return cycle === "annual" ? env.STRIPE_PRICE_SMS_ANNUAL : env.STRIPE_PRICE_SMS_MONTHLY;
+}
+
+// Is this subscription line the add-on rather than the plan? Both configured
+// prices count, so a line bought on one cycle is still recognised after a
+// switch to the other.
+export function isSmsAddonPrice(env, priceId) {
+  return !!priceId && (priceId === env.STRIPE_PRICE_SMS_MONTHLY || priceId === env.STRIPE_PRICE_SMS_ANNUAL);
+}
+
 // Stripe timestamps are seconds; everything stored here is ISO 8601.
 export const stripeTime = (seconds) =>
   Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : null;

@@ -38,8 +38,12 @@ console.log("\n-- a rate taken over several releases --");
   ck("and the fee is exactly 2.5%", fees === Math.floor(100000 * 250 / BPS), String(fees));
   ck("the pennies are spread, not lost",
     parts.map((p) => p.retainage).join(",") === "1666,1667,1667", parts.map((p) => p.retainage).join(","));
-  ck("net is gross less both, every time",
-    parts.every((p) => p.net === p.gross - p.retainage - p.fee));
+  // The fee is charged ON TOP, to the paying side, and never comes out of what
+  // the subcontractor receives -- see releaseAmounts. A test can pin the old
+  // answer as firmly as the right one, and this one used to read
+  // "net is gross less both".
+  ck("net is gross less retainage, and the fee is never taken from it",
+    parts.every((p) => p.net === p.gross - p.retainage), JSON.stringify(parts));
   ck("nothing is taken at a zero rate",
     releaseAmounts({ gross: 12345 }).net === 12345);
 }
@@ -67,10 +71,28 @@ console.log("\n-- and over ten thousand random ones --");
     const wantHeld = Math.floor(total * retBps / BPS);
     const wantFees = Math.floor(total * feeBps / BPS);
     if (held !== wantHeld || fees !== wantFees) { drift++; worst = worst || ["cut", total, n, retBps, feeBps, held, wantHeld]; }
-    if (net + held + fees !== total) { drift++; worst = worst || ["sum", total, n]; }
+    if (net + held !== total) { drift++; worst = worst || ["sum", total, n]; }
   }
   ck("no case drifts by a cent", drift === 0, `${drift} of 10000 · ${JSON.stringify(worst)}`);
   ck("and no release comes out negative", negative === 0, String(negative));
+}
+
+console.log("\n-- the fee: 0.5%, at most $500 a payment, on top --");
+{
+  const { PLATFORM_FEE_BPS, PLATFORM_FEE_CAP_CENTS, platformFee, FEE_TERMS } = await import("../shared/fee.js");
+  ck("the rate is half a per cent", PLATFORM_FEE_BPS === 50, String(PLATFORM_FEE_BPS));
+  ck("and the cap is $500", PLATFORM_FEE_CAP_CENTS === 50000, String(PLATFORM_FEE_CAP_CENTS));
+  ck("$10,000 pays $50", platformFee({ gross: 1_000_000 }) === 5000, String(platformFee({ gross: 1_000_000 })));
+  ck("$100,000 pays exactly the cap", platformFee({ gross: 10_000_000 }) === 50000);
+  ck("$200,000 pays the cap and not a cent more", platformFee({ gross: 20_000_000 }) === 50000,
+    String(platformFee({ gross: 20_000_000 })));
+  // Per PAYMENT: a second $200,000 draw is another capped fee, not credit
+  // carried over from the first one.
+  ck("each payment is capped on its own",
+    platformFee({ gross: 20_000_000, priorGross: 20_000_000 }) === 50000);
+  const a = releaseAmounts({ gross: 20_000_000, retainageBps: 500, feeBps: 50, feeCapCents: 50000 });
+  ck("the cap leaves the subcontractor's net alone", a.net === 19_000_000 && a.fee === 50000, JSON.stringify(a));
+  ck("the words say both halves", FEE_TERMS === "0.5% of each payment, at most $500 a payment", FEE_TERMS);
 }
 
 console.log("\n-- splitting a total --");

@@ -184,9 +184,14 @@ console.log("\n-- retainage and the fee, held back across milestones --");
   }
   ck("five per cent held over three uneven parts is exactly five per cent",
     held === 5000, `${held} of 100000`);
-  ck("and the rest went out", net === 95000, String(net));
-  ck("the fee rate is recorded even at zero",
-    (await json(await call(env, ADMIN, "/api/work-orders/wo1/plan")))[1].releases.every((r) => r.feeBps === 0));
+  ck("and the rest went out -- none of it to SubSub", net === 95000, String(net));
+  const rels = (await json(await call(env, ADMIN, "/api/work-orders/wo1/plan")))[1].releases;
+  ck("the fee rate in force is stamped on every release",
+    rels.every((r) => r.feeBps === 50), rels.map((r) => r.feeBps).join(","));
+  ck("and the fee is half a per cent of the whole, cumulatively",
+    rels.reduce((n, r) => n + r.feeCents, 0) === 500, rels.map((r) => r.feeCents).join(","));
+  ck("charged on top: net is gross less retainage, never less the fee",
+    rels.every((r) => r.netCents === r.grossCents - r.retainageCents));
 }
 
 console.log("\n-- a plan cannot be re-cut once money is owed --");
