@@ -168,6 +168,7 @@
     "test:docviewui": "node scripts/doc-view-ui-test.mjs",
     "test:quotes": "node scripts/quotes-test.mjs",
     "test:quotesui": "node scripts/quotes-ui-test.mjs",
+    "test:cardlines": "node scripts/card-lines-ui-test.mjs",
     "test:quicksend": "node scripts/quicksend-ui-test.mjs",
     "test:embed": "node scripts/embed-test.mjs",
     "test:growth": "node scripts/growth-test.mjs",

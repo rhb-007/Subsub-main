@@ -33,7 +33,7 @@ import {
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
-  Maximize2, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles,
+  Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles,
   Info,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE } from "./lib/api";
@@ -2328,6 +2328,23 @@ export default function SubSub() {
   };
   const [jobDay, setJobDay] = useState("");    // the day open in the calendar
   const [focusJob, setFocusJob] = useState(""); // scrolled to and ringed, briefly
+  // WHICH JOB CARDS ARE OPEN. Asked for as "minimize these large cards into
+  // narrow lines ... minimized by default": a card carries the trade rows,
+  // the appointment block, the work orders and the closing controls, so
+  // forty of them were forty screens. Closed is a line -- the title, the
+  // phase, when and where, and the one thing that needs somebody -- and a
+  // tap opens it. In memory rather than remembered: every visit to the list
+  // starts as the list, which is what was asked.
+  const [openJobs, setOpenJobs] = useState(() => new Set());
+  // The roster the same way: a line per contractor unless somebody asks for
+  // the cards. Their full detail was always one tap away in the modal, so a
+  // card was a preview of a preview.
+  const [rosterCards, setRosterCards] = useState(false);
+  const toggleJobCard = (id, on) => setOpenJobs((cur) => {
+    const next = new Set(cur);
+    if (on ?? !next.has(id)) next.add(id); else next.delete(id);
+    return next;
+  });
   // Arriving from a property card: which building the contractor list and
   // the jobs list are narrowed to. Held here rather than inside each view
   // because the property page is what sets it, on the way out.
@@ -3394,6 +3411,9 @@ export default function SubSub() {
     setJobPhase("all");
     pickJobView("list");
     setFocusJob(id);
+    // Arriving at a job is arriving at the WHOLE of it. Ringing a closed line
+    // would answer "here it is" to somebody who came to act on it.
+    toggleJobCard(id, true);
     setTab("jobs");
   };
   const tryAddContractor = () => {
@@ -6048,15 +6068,65 @@ export default function SubSub() {
             </section>
           )}
 
-          <div className="result-meta">{filtered.length} {filtered.length === 1 ? "contractor" : "contractors"} match</div>
+          <div className="result-meta">
+            <span>{filtered.length} {filtered.length === 1 ? "contractor" : "contractors"} match</span>
+            {/* Lines are the default; the cards are one press away for
+                somebody who wants the capabilities and stats at a glance. */}
+            {filtered.length > 0 && (
+              <div className="seg-tabs sm roster-view">
+                {[[false, "Lines", Rows3], [true, "Cards", LayoutGrid]].map(([v, l, Icon]) => (
+                  <button key={l} className={rosterCards === v ? "on" : ""} aria-pressed={rosterCards === v}
+                    onClick={() => setRosterCards(v)}>
+                    <Icon size={13} /> {l}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           {filtered.length === 0 ? (
             <div className="empty"><Search size={28} /><p>No contractors match these filters.</p>
               <button onClick={clearFilters}>Reset filters</button></div>
           ) : (
-            <div className="grid">
+            <div className={`grid ${rosterCards ? "" : "rows"}`}>
               {filtered.map((s) => {
                 const ready = s.bond && s.insurance && s.contract;
+                // THE LINE. Same click, same modal and the same Assign as the
+                // card; what it drops is the reading matter -- capabilities,
+                // coverage, stats -- which the modal carries in full. Its
+                // identity block keeps the card's own classes so the name is
+                // still the first thing it says.
+                if (!rosterCards) {
+                  const gaps = complianceGaps(s).length;
+                  return (
+                    <div key={s.id} className="card card-row" onClick={() => setSelected(s)}>
+                      <div className="card-id">
+                        <div className="name-row">
+                          <h3>{s.company}</h3>
+                          <span className="nr-right">
+                            {s.rating > 0 && <Stars value={s.rating} />}
+                            <span className={`avail-dot ${s.available ? "up" : "down"}`} title={s.available ? "Available" : "Not available"} />
+                          </span>
+                        </div>
+                        <p className="contact">{s.contact}</p>
+                      </div>
+                      <div className="cat-row">
+                        {s.categories.slice(0, 3).map((c) => {
+                          const M = catMeta(c);
+                          return <span key={c} className={`cat-badge cat-${c}`}><M.icon size={11} /> {M.label}</span>;
+                        })}
+                        {s.categories.length > 3 && <span className="cap more">+{s.categories.length - 3}</span>}
+                      </div>
+                      <span className={`cr-docs ${ready ? "ok" : "gap"}`}>
+                        {ready ? <><CheckCircle2 size={12} /> Ready</>
+                          : <><AlertTriangle size={12} /> {gaps} gap{gaps === 1 ? "" : "s"}</>}
+                      </span>
+                      <div className="card-actions" onClick={(e) => e.stopPropagation()}>
+                        <button className="mini primary" onClick={() => setAssignSub({ sub: s })}><Calendar size={13} /> Assign</button>
+                      </div>
+                    </div>
+                  );
+                }
                 return (
                   <div key={s.id} className="card" onClick={() => setSelected(s)}>
                     {/* The same order the detail modal takes: whose card this
@@ -6301,6 +6371,19 @@ export default function SubSub() {
                     })}
                   </div>
                 )}
+                {/* All at once, because somebody reviewing a week's work wants
+                    every card open and somebody scanning wants every one
+                    shut, and forty taps is not a way to do either. */}
+                {jobView === "list" && shownJobs.length > 1 && (() => {
+                  const allOpen = shownJobs.every((x) => openJobs.has(x.id));
+                  return (
+                    <button className="jl-all" onClick={() =>
+                      setOpenJobs(allOpen ? new Set() : new Set(shownJobs.map((x) => x.id)))}>
+                      {allOpen ? <><ChevronsDownUp size={14} /> Minimize all</>
+                        : <><ChevronsUpDown size={14} /> Expand all</>}
+                    </button>
+                  );
+                })()}
                 <button className="add-btn small" onClick={() => tryAddJob()}><Plus size={14} /> New job</button>
               </div>
               {/* The grid takes every job at this building, whatever phase:
@@ -6323,12 +6406,58 @@ export default function SubSub() {
                 const allAssigned = filled === j.trades.length;
                 const done = isClosed(j);
                 const moved = movedAgo(j);
+                const phase = jobClosure(j).closed ? jobClosure(j).label.toLowerCase()
+                  : jobHold(j, todayKey).held ? "on hold" : "active";
+                // CLOSED, IT IS ONE LINE, AND THE LINE SAYS WHAT NEEDS
+                // SOMEBODY. A minimized card that hid an expired offer or an
+                // empty slot would be a list that reads as fine when it is
+                // not, so the line carries the one thing worth opening it for
+                // -- worked out from what the card itself would have drawn,
+                // never a second opinion about the job.
+                if (!openJobs.has(j.id)) {
+                  const slots = j.trades.map((t) => j.assignments[t]);
+                  const unfilled = j.trades.length - filled;
+                  const noReply = slots.some((a) => a && a.status === "pending" && isExpired(a, now));
+                  const waiting = slots.some((a) => a && a.status === "pending" && !isExpired(a, now));
+                  const flag = done || j.readOnly ? null
+                    : jobHold(j, todayKey).held ? null
+                    : noReply ? { tone: "bad", text: "No reply" }
+                    : unfilled > 0 ? { tone: "warn", text: `${unfilled} unassigned` }
+                    : waiting ? { tone: "wait", text: "Waiting on a reply" }
+                    : null;
+                  return (
+                    <div key={j.id} data-job-id={j.id}
+                      className={`job-card job-line ${done ? "done" : ""} ${moved ? "just-moved" : ""} ${focusJob === j.id ? "landed" : ""} ${j.readOnly ? "not-mine" : ""}`}>
+                      <button type="button" className="jl-btn" aria-expanded="false"
+                        onClick={() => toggleJobCard(j.id, true)} title="Open this job">
+                        <ChevronRight size={16} className="jl-chev" />
+                        <span className="jl-main">
+                          <span className="jl-title">{j.title}</span>
+                          <span className="jl-meta">
+                            <span className="jl-when"><Calendar size={11} /> {formatWhen(j.date, j.time) || j.date || "No date"}</span>
+                            <span className="jl-where"><MapPin size={11} /> {[j.address, j.area].filter(Boolean).join(", ") || "No address"}</span>
+                          </span>
+                        </span>
+                        <span className="jl-side">
+                          <span className={`job-phase ${done ? "done" : ""}`}>{phase}</span>
+                          {flag && <span className={`jl-flag jl-${flag.tone}`}>{flag.text}</span>}
+                          <span className={`fill-badge ${allAssigned ? "full" : ""}`}>{filled}/{j.trades.length}</span>
+                        </span>
+                      </button>
+                    </div>
+                  );
+                }
                 return (
                   <div key={j.id} data-job-id={j.id}
                     className={`job-card ${done ? "done" : ""} ${moved ? "just-moved" : ""} ${focusJob === j.id ? "landed" : ""} ${j.readOnly ? "not-mine" : ""}`}>
                     <div className="job-card-head">
                       <div>
                         <div className="job-title-row">
+                          <button type="button" className="jl-close" aria-expanded="true"
+                            onClick={() => toggleJobCard(j.id, false)} title="Minimize this job"
+                            aria-label="Minimize this job">
+                            <ChevronDown size={16} />
+                          </button>
                           {/* THE TITLE IS THE WAY IN. Asked for as *"when you
                               click on a job card it should open to edit"*.
                               The title and not the whole tile, for the reason
@@ -6378,9 +6507,7 @@ export default function SubSub() {
                               never say -- and "active" over a cancelled one.
                               A held job keeps its phase: it is not finished
                               with, which is the whole difference. */}
-                          <span className={`job-phase ${done ? "done" : ""}`}>{
-                            jobClosure(j).closed ? jobClosure(j).label.toLowerCase()
-                              : jobHold(j, todayKey).held ? "on hold" : "active"}</span>
+                          <span className={`job-phase ${done ? "done" : ""}`}>{phase}</span>
                           {/* Only while it is genuinely news. A badge that
                               never expires is wallpaper. */}
                           {moved && <span className="job-moved"><Zap size={11} /> Updated {moved}</span>}
@@ -26799,6 +26926,38 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
   // one tap that gets them to where they can.
   const mustAnswer = !past && when.visitId && when.kind === "proposed" && onAnswerVisit
     && (when.turn ? when.turn === "contractor" : !when.mine);
+  // MINIMIZED BY DEFAULT, and the line names the thing to do. A closed card
+  // that hid an offer running out, or a time waiting on this crew, would be a
+  // list that reads as quiet when it is not -- so the flag on the line is
+  // worked out from the same two facts the open card draws its buttons from.
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    const asked = (showActions || away) && awaitingReply(a);
+    const flag = mustAnswer ? { tone: "warn", text: "Confirm the time" }
+      : asked && expired ? { tone: "bad", text: "Expired" }
+      : asked ? { tone: urgency === "ok" ? "wait" : "warn", text: `Reply · ${countdown(left)} left` }
+      : null;
+    return (
+      <div className={`job-card jr-card job-line ${past ? "past" : ""} ${away ? "jr-away" : ""}`}>
+        <button type="button" className="jl-btn" aria-expanded="false" onClick={() => setOpen(true)}
+          title="Open this job">
+          <ChevronRight size={16} className="jl-chev" />
+          <span className="jl-main">
+            <span className="jl-title">{job.title}</span>
+            <span className="jl-meta">
+              <span className={`jl-when jrw-${W.tone}`}><Calendar size={11} /> {when.date ? visitWhen(when) : "No date yet"}</span>
+              <span className="jl-where"><MapPin size={11} /> {[job.address, job.area].filter(Boolean).join(", ") || "No address"}</span>
+              {away && <span className="jl-client"><Building2 size={11} /> {elsewhere.name}</span>}
+            </span>
+          </span>
+          <span className="jl-side">
+            <span className={`cat-badge cat-${trade}`}><M.icon size={11} /> {M.label}</span>
+            {flag && <span className={`jl-flag jl-${flag.tone}`}>{flag.text}</span>}
+          </span>
+        </button>
+      </div>
+    );
+  }
   return (
     <div className={`job-card jr-card ${past ? "past" : ""} ${away ? "jr-away" : ""}`}>
       {away && (
@@ -26814,7 +26973,13 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
       )}
       <div className="job-card-head">
         <div>
-          <h3>{job.title}</h3>
+          <div className="job-title-row">
+            <button type="button" className="jl-close" aria-expanded="true"
+              onClick={() => setOpen(false)} title="Minimize this job" aria-label="Minimize this job">
+              <ChevronDown size={16} />
+            </button>
+            <h3>{job.title}</h3>
+          </div>
           <div className="job-meta">
             <span className={`jr-when jrw-${W.tone}`}><Calendar size={12} />
               {when.date
@@ -28472,6 +28637,9 @@ function QuoteAskCard({ items, onAnswer }) {
   const unanswered = items.filter((q) => !vals[q.inviteId]?.pass && !(cents(vals[q.inviteId]) > 0));
   const priced = items.filter((q) => !vals[q.inviteId]?.pass && cents(vals[q.inviteId]) > 0);
   const dueAt = items.map((q) => q.dueAt).filter(Boolean).sort()[0];
+  // Minimized like every other card on the page; the line says it is a
+  // price somebody is waiting on, and for how many items.
+  const [shown, setShown] = useState(false);
 
   const send = async (passAll) => {
     setBusy(true); setErr("");
@@ -28490,6 +28658,31 @@ function QuoteAskCard({ items, onAnswer }) {
     }
   };
 
+  if (!shown) {
+    return (
+      <div className="job-card jr-card qask job-line">
+        <button type="button" className="jl-btn" aria-expanded="false" onClick={() => setShown(true)}
+          title="Open this quote request">
+          <ChevronRight size={16} className="jl-chev" />
+          <span className="jl-main">
+            <span className="jl-title">{q0.job.title}</span>
+            <span className="jl-meta">
+              <span className="jl-client"><Building2 size={11} /> {q0.accountName}</span>
+              <span className="jl-where"><MapPin size={11} /> {[q0.job.address, q0.job.area].filter(Boolean).join(", ") || "No address"}</span>
+              {dueAt && <span className="jl-when">Wanted by {dueAt}</span>}
+            </span>
+          </span>
+          <span className="jl-side">
+            {items.map((q) => {
+              const M = catMeta(q.trade);
+              return <span key={q.inviteId} className={`cat-badge cat-${q.trade}`}><M.icon size={11} /> {M.label}</span>;
+            })}
+            <span className="jl-flag jl-warn">{many ? `Price ${items.length} items` : "Price it"}</span>
+          </span>
+        </button>
+      </div>
+    );
+  }
   return (
     <div className="job-card jr-card qask">
       <div className="jr-client">
@@ -28499,7 +28692,13 @@ function QuoteAskCard({ items, onAnswer }) {
       </div>
       <div className="job-card-head">
         <div>
-          <h3>{q0.job.title}</h3>
+          <div className="job-title-row">
+            <button type="button" className="jl-close" aria-expanded="true"
+              onClick={() => setShown(false)} title="Minimize" aria-label="Minimize this quote request">
+              <ChevronDown size={16} />
+            </button>
+            <h3>{q0.job.title}</h3>
+          </div>
           <div className="job-meta">
             <span><Calendar size={12} /> {formatWhen(q0.job.date, q0.job.time) || q0.job.date || "No date"}</span>
             <span><MapPin size={12} /> {[q0.job.address, q0.job.area, q0.job.zip].filter(Boolean).join(", ") || "No address"}</span>
@@ -38059,4 +38258,53 @@ iframe.dv-frame{display:block}
   box-shadow:0 8px 22px rgba(26,43,35,.25)}
 .pf-chart-tip b{font-size:13.5px;font-weight:800}
 .pf-chart-tip span{font-size:11px;opacity:.72}
+
+/* MINIMIZED CARDS. A job, a job request and a quote request draw as one line
+   until somebody opens them: the title, when and where, and the single thing
+   that needs somebody. The whole line is the button, so it is one thumb-sized
+   target on an iPad rather than a chevron to aim at. Declared last so the
+   card padding above cannot win by ordering. */
+.job-card.job-line{padding:0;overflow:hidden}
+.jobs-list > .job-card.job-line + .job-card.job-line{margin-top:0}
+.jl-btn{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:10px;width:100%;min-height:52px;padding:10px 14px;cursor:pointer;font:inherit;color:var(--ink)}
+.jl-btn:hover{background:var(--paper)}
+.jl-btn:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
+.jl-chev{flex:none;color:var(--ink-soft)}
+.jl-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px}
+.jl-title{font-size:14.5px;font-weight:700;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jl-meta{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:12px;color:var(--ink-soft);min-width:0}
+.jl-meta > span{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jl-side{flex:none;display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap;max-width:46%}
+.jl-flag{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.jl-warn{background:#fbf0dd;color:#a86a18}
+.jl-bad{background:#fbe5e2;color:#b3261e}
+.jl-wait{background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
+.jl-close{all:unset;box-sizing:border-box;flex:none;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;margin-left:-6px;border-radius:8px;cursor:pointer;color:var(--ink-soft)}
+.jl-close:hover{background:var(--paper);color:var(--ink)}
+.jl-close:focus-visible{outline:2px solid var(--brand)}
+.jobs-head{flex-wrap:wrap;gap:8px}
+.jl-all{display:inline-flex;align-items:center;gap:6px;margin-left:auto;padding:7px 11px;font-size:12.5px;font-weight:600;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+.jl-all:hover{border-color:var(--brand)}
+.jl-all + .add-btn{margin-left:0}
+@media (max-width:600px){
+  .jl-btn{flex-wrap:wrap}
+  .jl-side{max-width:none;width:100%;justify-content:flex-start;padding-left:26px}
+}
+/* The roster as lines: the same card, laid flat. */
+.result-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.grid.rows{grid-template-columns:1fr;gap:8px}
+.card.card-row{display:flex;align-items:center;gap:14px;padding:10px 14px}
+.card.card-row:hover{transform:none}
+.card-row .card-id{flex:1 1 220px;min-width:0;padding:0;margin:0;border:0}
+.card-row .name-row h3{font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-row .card-id .contact{margin:1px 0 0;font-size:12px}
+.card.card-row > .cat-row{flex:0 1 auto;margin:0}
+.card-row .card-actions{margin:0;flex:none}
+.cr-docs{flex:none;display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:20px}
+.cr-docs.ok{background:#e8f2ea;color:#1f6b4a}
+.cr-docs.gap{background:#fbf0dd;color:#a86a18}
+@media (max-width:640px){
+  .card.card-row{flex-wrap:wrap;gap:8px 12px}
+  .card-row .card-id{flex-basis:100%}
+}
 `;

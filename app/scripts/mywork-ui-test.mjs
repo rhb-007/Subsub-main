@@ -18,7 +18,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-mywork-test");
@@ -106,6 +106,7 @@ const open = async () => {
   const v = await visitApp(browser, { host: "alder", webPort: WEB,
     seat: { userId: "u_bay", accountId: "acc_a" }, viewport: { width: 1200, height: 1800 } });
   await wait(2900);
+  await openCards(v.page);
   return v;
 };
 

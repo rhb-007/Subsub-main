@@ -19,7 +19,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-assignref-test");
@@ -120,6 +120,7 @@ const pressIssue = async () => {
   await page.evaluate(() => [...document.querySelectorAll("nav button")]
     .find((b) => /^Jobs/i.test((b.innerText || "").trim()))?.click());
   await wait(800);
+  await openCards(page);
   const opened = await page.evaluate(() => { const b = document.querySelector(".trade-assign"); b?.click(); return !!b; });
   await wait(800);
   const picked = await page.evaluate(() => {

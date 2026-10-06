@@ -31,7 +31,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-workwhen-test");
@@ -326,6 +326,7 @@ try {
   const { ctx, page } = await visitApp(browser, { host: "soundpm", webPort: WEB,
     seat: { userId: "u_juan", accountId: "acc_pm" }, viewport: { width: 1340, height: 1600 } });
   await wait(2900);
+  await openCards(page);
 
   const all = await cards(page);
   t.ck("the portal rendered its cards", all.length >= 3, JSON.stringify(all.map((c) => c.title)));

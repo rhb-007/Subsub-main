@@ -119,6 +119,9 @@ try {
   console.log("\n-- getting to the assign screen --");
   await hit(/^Jobs/, "button,a");
   await wait(1200);
+  // Job cards draw as one line until opened; this reads what is inside them.
+  await page.evaluate(() => document.querySelectorAll('.jl-btn[aria-expanded="false"]').forEach((b) => b.click()));
+  await new Promise((r) => setTimeout(r, 400));
   ck("the fixture job is on the jobs list", await seen(new RegExp(TITLE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")), TITLE);
   const assignBtn = await hit(/Assign/, ".trade-assign");
   await wait(1000);
@@ -261,6 +264,9 @@ try {
   await wait(2000);
   await hit(/^Jobs/, "button,a");
   await wait(1200);
+  // Job cards draw as one line until opened; this reads what is inside them.
+  await page.evaluate(() => document.querySelectorAll('.jl-btn[aria-expanded="false"]').forEach((b) => b.click()));
+  await new Promise((r) => setTimeout(r, 400));
   await page.evaluate((title) => {
     const card = [...document.querySelectorAll(".job-card")].find((c) => c.innerText.includes(title));
     card?.querySelector(".trade-assign")?.click();

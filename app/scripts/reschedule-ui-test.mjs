@@ -32,7 +32,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-resched-test");
@@ -215,6 +215,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll("nav button")]
     .find((b) => /^jobs/i.test(b.innerText.trim()))?.click());
   await wait(1600);
+  await openCards(page);
 
   t.ck("the Jobs screen opened",
     await page.evaluate(() => document.querySelectorAll(".job-card").length > 0),

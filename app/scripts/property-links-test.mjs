@@ -87,7 +87,7 @@ try {
   ck("it lands on the jobs list", await page.evaluate(() => !!document.querySelector(".jobs-list")));
   ck("and the list says which building it is showing",
     scoped.includes(A.name), scoped || "nothing said");
-  const titles = await page.evaluate(() => [...document.querySelectorAll(".job-card h3")].map((h) => h.textContent.trim()));
+  const titles = await page.evaluate(() => [...document.querySelectorAll(".job-card h3, .job-card .jl-title")].map((h) => h.textContent.trim()));
   // Checked against what the API says rather than against the titles looking
   // plausible: the count matching is the whole point of the filter.
   const apiJobs = await (await fetch(`${API}/jobs`, { headers: H })).json();

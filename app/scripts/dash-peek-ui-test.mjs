@@ -16,7 +16,7 @@
 //   - "Open the inspection" lands on that inspection, not on the list.
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-dash-peek-test");
@@ -241,6 +241,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll("button,a")]
     .find((b) => /^Jobs/i.test((b.innerText || "").trim()))?.click());
   await wait(900);
+  await openCards(page);
   const drops = await page.evaluate(() => [...document.querySelectorAll(".trade-drop")].length);
   t.ck("each unbooked trade row offers Remove", drops === 2, String(drops));
   await page.evaluate(() => {

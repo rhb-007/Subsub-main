@@ -143,6 +143,9 @@ try {
   await new Promise((r) => setTimeout(r, 3500));
   await page.evaluate(() => [...document.querySelectorAll("button,a")].find((e) => /^Jobs/.test(e.textContent.trim()))?.click());
   await new Promise((r) => setTimeout(r, 2200));
+  // Job cards draw as one line until opened; this reads what is inside them.
+  await page.evaluate(() => document.querySelectorAll('.jl-btn[aria-expanded="false"]').forEach((b) => b.click()));
+  await new Promise((r) => setTimeout(r, 400));
   // Keyed by id, not by title: the seed data is full of jobs sharing a
   // title, and matching on those compared a badge against some other job's
   // timestamp.

@@ -23,7 +23,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-woinsp-test");
@@ -159,6 +159,7 @@ buildApp({ outDir: OUT, apiPort: API });
 const browser = await launch();
 
 const openWO = async (page, title) => {
+  await openCards(page);
   await page.evaluate((tt) => [...document.querySelectorAll(".jr-card")]
     .find((el) => (el.querySelector("h3")?.innerText || "").toUpperCase()
       .includes(tt.toUpperCase()))

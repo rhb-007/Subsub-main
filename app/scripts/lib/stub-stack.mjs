@@ -179,3 +179,19 @@ export async function signedInPage(browser, { host, webPort, userId, accountId, 
   await page.goto(`http://${host}.subsub.work:${webPort}${path}`, { waitUntil: "domcontentloaded" });
   return { ctx, page, crashes };
 }
+
+// Open every minimized card on the page -- a job, a job request, a quote
+// request. They draw as one line until opened, so a suite asserting what is
+// INSIDE a card opens it first, the way a person would. A suite about the
+// line itself does not call this.
+export async function openCards(page) {
+  for (let n = 0; n < 4; n++) {
+    const shut = await page.evaluate(() => {
+      const btns = [...document.querySelectorAll('.jl-btn[aria-expanded="false"]')];
+      btns.forEach((b) => b.click());
+      return btns.length;
+    });
+    if (!shut) return;
+    await wait(250);
+  }
+}

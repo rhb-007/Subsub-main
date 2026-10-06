@@ -21,7 +21,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-quotes-test");
@@ -151,6 +151,7 @@ try {
     await page.evaluate(() => [...document.querySelectorAll("nav button")]
       .find((b) => /^Jobs/.test(b.innerText.trim()))?.click());
     await wait(1200);
+    await openCards(page);
     // Open the job so its trade rows render.
     await page.evaluate(() => [...document.querySelectorAll(".job-card h3, .job-card button")]
       .find((e) => /Re-roof the mill/i.test(e.innerText))?.click());
@@ -225,6 +226,7 @@ try {
     await page.evaluate(() => [...document.querySelectorAll("nav button")]
       .find((b) => /^Jobs/.test(b.innerText.trim()))?.click());
     await wait(1200);
+    await openCards(page);
     await page.evaluate(() => [...document.querySelectorAll(".job-card h3, .job-card button")]
       .find((e) => /Re-roof the mill/i.test(e.innerText))?.click());
     await wait(900);
@@ -280,6 +282,7 @@ try {
     inspAsks.length = 0;
     const { ctx, page, crashes } = await open("u_bay");
     await wait(3100);
+    await openCards(page);
 
     const card = await page.evaluate(() => {
       const c = document.querySelector(".qask");
@@ -408,6 +411,7 @@ try {
     inspAsks.length = 0;
     const { ctx, page, crashes } = await open("u_bay");
     await wait(3100);
+    await openCards(page);
     const got = await page.evaluate(() => ({
       card: !!document.querySelector(".qask"),
       panel: !!document.querySelector(".qask .woi"),
@@ -444,6 +448,7 @@ try {
     await page.evaluate(() => [...document.querySelectorAll("nav button")]
       .find((b) => /^Jobs/.test(b.innerText.trim()))?.click());
     await wait(1200);
+    await openCards(page);
     await page.evaluate(() => [...document.querySelectorAll(".job-card h3, .job-card button")]
       .find((e) => /unit 32/i.test(e.innerText))?.click());
     await wait(900);
@@ -520,6 +525,16 @@ try {
     answers.length = 0; answerPaths.length = 0; inspAsks.length = 0;
     const { ctx, page, crashes } = await open("u_bay");
     await wait(3100);
+    // MINIMIZED FIRST, and the line still says it is a price somebody is
+    // waiting on, and for how many items -- a closed card that read as
+    // quiet would be a request nobody answers.
+    const line = await page.evaluate(() => {
+      const el = document.querySelector(".qask.job-line");
+      return el ? el.innerText.replace(/\s+/g, " ") : null;
+    });
+    t.ck("it arrives as one line", !!line, String(line));
+    t.ck("which says how many items are waiting on a price", /Price 2 items/.test(line || ""), String(line));
+    await openCards(page);
     const c = await page.evaluate(() => ({
       cards: document.querySelectorAll(".qask").length,
       items: [...document.querySelectorAll(".qask .qask-item")].map((i) => i.innerText.replace(/\s+/g, " ")),

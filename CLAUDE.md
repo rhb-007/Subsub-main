@@ -9708,6 +9708,66 @@ refactor.
   and reported the product as refusing to send -- it now finds the line by its
   own heading.
 
+- **BIG CARDS ARE LINES UNTIL SOMEBODY OPENS THEM.** Asked for as *"need to
+  be able to minimize these large cards into more narrow lines on jobs ui and
+  on any ui within all accounts that have large cards ... should be minimized
+  by default"*. A job card carries the trade rows, the appointment block, the
+  work orders and the closing controls, so forty jobs were forty screens --
+  and the contractor's job requests, the quote requests and the roster were
+  the same shape.
+
+  **Four surfaces, and each is minimized by default:** the Jobs list, the
+  roster (Contractors / Subcontractors), the contractor's own job requests and
+  the quote requests on their dashboard. The properties tiles, the inspections
+  list and the dashboard rows were already lines and are untouched.
+
+  **THE LINE SAYS WHAT NEEDS SOMEBODY, which is the whole of why a minimized
+  list is safe.** A closed card that hid an empty slot, an offer nobody
+  answered or a time waiting on this crew would be a list that reads as fine
+  when it is not. So a job's line carries `2 unassigned`, `No reply` or
+  `Waiting on a reply`; a job request carries `Reply · 5h left`, `Expired` or
+  `Confirm the time`; a quote request says how many items wait on a price; a
+  roster line says `Ready` or how many document gaps. Each is worked out from
+  the same facts the open card draws its buttons from, never a second opinion
+  -- and a finished job or one on hold carries none, because a flag on work
+  nobody can act on is the red number that never clears.
+
+  **THE WHOLE LINE IS THE BUTTON**, so it is one thumb-sized target on an iPad
+  rather than a chevron to aim at, and the open card has a minimize control at
+  the head. The Jobs list has **Expand all / Minimize all**, because somebody
+  reviewing a week wants every card open and forty taps is not a way to do
+  that. The roster has **Lines / Cards**, because a contractor's full detail
+  was always one tap away in the modal and the card was a preview of it.
+
+  **ARRIVING AT A JOB OPENS IT.** `openJob` -- the dashboard's *Open in Jobs*,
+  the schedule panel, the calendar -- adds the job to the open set as well as
+  ringing it, because ringing a closed line answers "here it is" to somebody
+  who came to act on it. Pinned in the suite through the dashboard.
+
+  **In memory, not remembered.** Every visit to a list starts as the list,
+  which is what was asked; a remembered expanded state would quietly undo the
+  default for whoever pressed Expand all once.
+
+  **The roster's line keeps the card's own identity block** (`.card-id`,
+  `.name-row h3`), so the name is still the first thing it says and every
+  suite that finds a contractor by `.grid .card` still finds them.
+
+  **Seventeen suites read what is inside a card, and each now opens the cards
+  first**, the way a person would -- `openCards` in `scripts/lib/stub-stack.mjs`
+  for the stubbed ones and the same two lines inline in the full-stack ones.
+  Deliberately not a test-only switch that draws them open: that would be a
+  suite testing a default nobody sees. And one negative assertion had to be
+  re-earned by it: *a job nobody walked gets no inspection panel* passed
+  loudest on a closed card, so it now opens the card before looking.
+  `test:cardlines` is the suite for the lines themselves: the default, the
+  measured height, each flag on the job that should carry it and its absence
+  on the one that should not, open and minimize, all at once, landing open,
+  the roster both ways, and a contractor's request.
+
+  One harness trap worth keeping, and it is this file's own: the open job
+  request's heading is text-transformed and Chrome's `innerText` applies it,
+  so a case-sensitive title match found the line and lost the card.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

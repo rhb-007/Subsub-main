@@ -65,6 +65,11 @@ try {
   // ---- 1. whose card is this -------------------------------------------
   console.log("\n-- a contractor card says whose it is first --");
   await goTab(page, "Contractors");
+  // The roster opens as lines; this block is about the CARD layout, so it asks
+  // for the cards the way a person would.
+  await page.evaluate(() => [...document.querySelectorAll(".roster-view button")]
+    .find((b) => /Cards/.test(b.innerText))?.click());
+  await wait(500);
   const cards = await page.evaluate(() => [...document.querySelectorAll(".grid .card")].slice(0, 8).map((c) => {
     const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) }; };
     return {

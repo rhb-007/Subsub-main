@@ -33,7 +33,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-jobend-test");
@@ -260,6 +260,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll("nav button")]
     .find((b) => /^jobs/i.test(b.innerText.trim()))?.click());
   await wait(1500);
+  await openCards(page);
   // ALL, not Active. A cancelled job IS closed, so the Active tab correctly
   // hides it -- which is the phase filter doing its job and is itself worth
   // asserting before switching.
@@ -272,6 +273,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll(".seg-tabs.sm button")]
     .find((b) => /^All/i.test(b.innerText.trim()))?.click());
   await wait(900);
+  await openCards(page);
   t.ck("the Jobs screen opened",
     await page.evaluate(() => document.querySelectorAll(".job-card").length >= 4),
     String(await page.evaluate(() => document.querySelectorAll(".job-card").length)));

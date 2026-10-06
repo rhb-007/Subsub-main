@@ -16,7 +16,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-handover-test");
@@ -309,6 +309,7 @@ console.log("\n-- and they can watch the work at it, without touching it --");
     await page.evaluate(() => [...document.querySelectorAll("button")]
       .find((b) => /^Jobs/.test(b.innerText.trim().split("\n")[0]))?.click());
     await wait(1100);
+    await openCards(page);
     const card = await page.evaluate(() => {
       const c = [...document.querySelectorAll(".job-card")].find((x) => /Boiler service/.test(x.innerText));
       if (!c) return null;
@@ -491,6 +492,7 @@ console.log("\n-- and they can watch the work at it, without touching it --");
     await page.evaluate(() => [...document.querySelectorAll("button")]
       .find((b) => /^Jobs/.test(b.innerText.trim().split("\n")[0]))?.click());
     await wait(1100);
+    await openCards(page);
     const cards = await page.evaluate(() => [...document.querySelectorAll(".job-card")].map((c) => ({
       text: c.innerText.replace(/\s+/g, " ").trim(),
       notMine: c.className.includes("not-mine"),

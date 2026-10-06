@@ -34,7 +34,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 import { jobIsClosed, jobClosure, completionEffects, CLOSED_REASONS } from "../shared/jobstate.js";
 import { canRequestQuotes } from "../shared/quotes.js";
 
@@ -190,6 +190,8 @@ const openJobs = async (page) => {
   await page.evaluate(() => [...document.querySelectorAll("button")]
     .find((b) => /^All\b/.test((b.innerText || "").trim()))?.click());
   await wait(900);
+  // Minimized by default; the assertions below are about what is inside.
+  await openCards(page);
 };
 
 const readCard = (page, id) => page.evaluate((jid) => {
