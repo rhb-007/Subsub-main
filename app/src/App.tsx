@@ -39,6 +39,7 @@ import {
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE } from "./lib/api";
 // The same file the Worker imports, so a problem cannot be an emergency in
 // the browser and ordinary work on the server, or the other way round.
+import { HEALTH_HOSTS, LIGHTS } from "../shared/syshealth.js";
 import { severityOf, severityRank } from "../shared/emergency.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 // One list of states, shared with the Worker, so the two cannot disagree
@@ -5270,6 +5271,7 @@ export default function SubSub() {
           onCheckHostnameSetup={() => api.platform.hostnameCheck()}
           onMailLog={(id) => api.platform.mailLog(id)}
           onSetupCheck={() => api.platform.setupCheck()}
+          onSystemHealth={() => api.platform.systemHealth()}
           onDeleteAccount={async (id, confirmName) => {
             await platformWrite(() => api.platform.deleteAccount(id, confirmName),
               "Could not delete that account.");
@@ -8825,7 +8827,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onSetUserRole, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
   onSetEngagedAs,
-  onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck }) {
+  onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck, onSystemHealth }) {
   const [screen, setScreen] = useState("dashboard");
   const [openId, setOpenId] = useState(null);
   const [menu, setMenu] = useState(false);
@@ -10419,45 +10421,23 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                   ? Math.round(live.filter((r) => r.mrr > 0 && r.a.billing === "annual").length / live.filter((r) => r.mrr > 0).length * 100) : 0}%`} />
               </div>
 
-              <div className="pf-panel">
-                <h3>MRR movement by month</h3>
-                <p className="pf-note">From the append-only subscription log, not current account state — which is why months don't drift.</p>
-                <div className="pf-table-wrap">
-                  <table className="pf-table pf-num pf-table-responsive">
-                    <thead><tr><th>Month</th><th>Signups</th><th>Conversions</th><th>New</th><th>Expansion</th><th>Contraction</th><th>Churn</th><th>Net new</th><th>Ending MRR</th></tr></thead>
-                    <tbody>
-                      {running.map((r) => (
-                        <tr key={r.m}>
-                          <td data-label="Month"><b>{r.m}</b></td>
-                          <td data-label="Signups">{r.signups}</td>
-                          <td data-label="Conversions">{r.conversions}</td>
-                          <td data-label="New" className="up">{r.newMrr ? "+" + fmtC(r.newMrr) : "—"}</td>
-                          <td data-label="Expansion" className="up">{r.expansion ? "+" + fmtC(r.expansion) : "—"}</td>
-                          <td data-label="Contraction" className="down">{r.contraction ? "−" + fmtC(Math.abs(r.contraction)) : "—"}</td>
-                          <td data-label="Churn" className="down">{r.churn ? "−" + fmtC(Math.abs(r.churn)) : "—"}</td>
-                          <td data-label="Net new"><b className={(r.newMrr + r.expansion + r.contraction + r.churn) >= 0 ? "up" : "down"}>
-                            {(r.newMrr + r.expansion + r.contraction + r.churn) >= 0 ? "+" : "−"}{fmtC(Math.abs(r.newMrr + r.expansion + r.contraction + r.churn))}</b></td>
-                          <td data-label="Ending MRR"><b>{fmtC(r.mrr)}</b></td>
-                        </tr>
-                      ))}
-                      {running.length === 0 && (
-                        <tr><td data-label="" colSpan={9}>No subscription activity yet.</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+              {/* The table that stood here was one row per month with nine
+                  columns, which on a phone became one card per month to
+                  scroll through. Same figures, drawn: the table is still one
+                  press away below the chart for anybody who wants the cents. */}
+              <MrrChart rows={running} through={monthKey(new Date().toISOString())}>
                 {/* The log and the accounts should agree. When they don't, a plan
-                    was changed somewhere the webhook never saw, and the table
-                    above is the number that is wrong -- say so rather than
-                    letting two figures quietly disagree across the page. */}
+                    was changed somewhere the webhook never saw, and the chart
+                    is the number that is wrong -- say so rather than letting
+                    two figures quietly disagree across the page. */}
                 {running.length > 0 && loggedMrr !== mrr && (
                   <p className="pf-note pf-reconcile">
-                    Ending MRR above is {fmtC(loggedMrr)}, but the accounts currently bill {fmtC(mrr)}.
+                    Ending MRR in the chart is {fmtC(loggedMrr)}, but the accounts currently bill {fmtC(mrr)}.
                     A plan was changed without a subscription event — usually an edit made directly
                     in the database, or a Stripe change that arrived before the webhook was connected.
                   </p>
                 )}
-              </div>
+              </MrrChart>
 
               <div className="pf-panel">
                 <h3>GMV through the platform</h3>
@@ -10485,6 +10465,9 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               <Kpi label="Duplicate companies" value={health.dups} warn={health.dups > 0} />
               <Kpi label="Inactive 14+ days" value={health.inactive14} warn={health.inactive14 > 0} sub="churn risk" />
             </div>
+            {/* Above the integrations, because whether the three sites answer
+                is the first question and the settings behind them the second. */}
+            <SystemHealth load={onSystemHealth} />
             <SetupCheck load={onSetupCheck} />
 
             <div className="pf-panel">
@@ -10930,6 +10913,252 @@ function TrendChart({ series, from, to, projectTo, finance, metric: metricProp, 
   );
 }
 
+// ---- revenue: where the month's MRR came from, and where it ended ---------
+//
+// Read off the same append-only log as the table it replaced, so nothing here
+// is a second opinion about a figure. Two plots on one month axis: what MRR
+// ended each month at, and the movement that got it there -- new and expansion
+// above the line, contraction and churn below it. Ending MRR dwarfs a month's
+// movement, so putting both on one scale would flatten the movement to a
+// hairline; two plots sharing the x axis keep each readable without a second
+// y axis, which is a chart nobody reads correctly.
+
+// Months with no subscription event still happened. The log only has rows for
+// months something changed, so a gap is filled with no movement and the MRR
+// carried forward -- otherwise three quiet months vanish from the axis and the
+// line jumps across them as though they were one.
+function fillMonths(rows, through) {
+  if (!rows.length) return [];
+  const next = (m) => {
+    const [y, mo] = m.split("-").map(Number);
+    return mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, "0")}`;
+  };
+  const by = Object.fromEntries(rows.map((r) => [r.m, r]));
+  const last = through && through > rows[rows.length - 1].m ? through : rows[rows.length - 1].m;
+  const out = [];
+  let mrr = 0;
+  for (let m = rows[0].m; m <= last; m = next(m)) {
+    const r = by[m] || { m, signups: 0, conversions: 0, newMrr: 0, expansion: 0, contraction: 0, churn: 0, mrr };
+    mrr = r.mrr;
+    out.push(r);
+    if (out.length > 600) break;           // fifty years: a malformed key, not a business
+  }
+  return out;
+}
+
+const MRR_PARTS = [
+  { id: "newMrr",      label: "New",         color: "var(--brand)", up: true },
+  { id: "expansion",   label: "Expansion",   color: "#7fb898",      up: true },
+  { id: "contraction", label: "Contraction", color: "var(--amber)" },
+  { id: "churn",       label: "Churn",       color: "var(--red)" },
+];
+const monthShort = (m) => {
+  const [y, mo] = m.split("-").map(Number);
+  return new Date(Date.UTC(y, mo - 1, 15)).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+};
+const monthLong = (m) => {
+  const [y, mo] = m.split("-").map(Number);
+  return new Date(Date.UTC(y, mo - 1, 15)).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+};
+
+function MrrChart({ rows, through, children }) {
+  const all = useMemo(() => fillMonths(rows, through), [rows, through]);
+  const [span, setSpan] = useState(12);
+  const [hover, setHover] = useState(null);
+  const [table, setTable] = useState(false);
+  const wrap = useRef(null);
+  const [w, setW] = useState(760);
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([e]) => setW(Math.max(280, e.contentRect.width)));
+    ro.observe(el);
+    setW(Math.max(280, el.clientWidth || 760));
+    return () => ro.disconnect();
+  }, [all.length]);
+
+  const shown = span && all.length > span ? all.slice(-span) : all;
+  const net = (r) => r.newMrr + r.expansion + r.contraction + r.churn;
+  const signed = (c) => (c >= 0 ? "+" : "−") + fmtC(Math.abs(c));
+
+  // One tick step for a scale, rounded to something a person would say.
+  const niceStep = (peak, n) => {
+    const raw = Math.max(1, peak) / n;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    return [1, 2, 2.5, 5, 10].map((f) => f * mag).find((t) => t >= raw) || raw;
+  };
+
+  const padL = 62, padR = 12, plotW = Math.max(60, w - padL - padR);
+  const n = shown.length;
+  const band = plotW / Math.max(1, n);
+  // A single month is one bar, not a slab the width of the panel.
+  const barW = Math.max(6, Math.min(44, band * 0.62));
+  const cx = (i) => padL + band * i + band / 2;
+
+  // Top: ending MRR.
+  const H1 = 132, t1 = 12;
+  const peak1 = Math.max(1, ...shown.map((r) => r.mrr));
+  const step1 = niceStep(peak1, 3);
+  const hi1 = Math.ceil(peak1 / step1) * step1;
+  const y1 = (v) => t1 + H1 - (Math.max(0, v) / hi1) * H1;
+  const ticks1 = [];
+  for (let t = 0; t <= hi1 + 1e-9; t += step1) ticks1.push(t);
+
+  // Bottom: movement, diverging from zero.
+  const H2 = 132, t2 = t1 + H1 + 34;
+  const ups = shown.map((r) => r.newMrr + r.expansion);
+  const downs = shown.map((r) => -(r.contraction + r.churn));
+  const step2 = niceStep(Math.max(1, ...ups, ...downs), 2);
+  const top2 = Math.max(step2, Math.ceil(Math.max(0, ...ups) / step2) * step2);
+  const bot2 = Math.ceil(Math.max(0, ...downs) / step2) * step2;
+  const span2 = top2 + bot2 || 1;
+  const y2 = (v) => t2 + ((top2 - v) / span2) * H2;
+  const ticks2 = [];
+  for (let t = -bot2; t <= top2 + 1e-9; t += step2) ticks2.push(t);
+
+  const H = t2 + H2 + 24;
+  // Every label when there is room, every other one when there is not.
+  const every = band >= 34 ? 1 : band >= 17 ? 2 : 3;
+
+  const onMove = (e) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const i = Math.floor((e.clientX - box.left - padL) / band);
+    setHover(i >= 0 && i < n ? i : null);
+  };
+
+  const totals = Object.fromEntries(MRR_PARTS.map((p) => [p.id, shown.reduce((s, r) => s + r[p.id], 0)]));
+  const h = hover !== null ? shown[hover] : null;
+
+  return (
+    <div className="pf-panel pf-mrr">
+      <div className="pf-panel-hd">
+        <h3>MRR by month</h3>
+        {all.length > 12 && (
+          <div className="pf-mrr-span" role="group" aria-label="Months shown">
+            <button type="button" className={span === 12 ? "on" : ""} onClick={() => setSpan(12)}>12 months</button>
+            <button type="button" className={!span ? "on" : ""} onClick={() => setSpan(0)}>All {all.length}</button>
+          </div>
+        )}
+      </div>
+      <p className="pf-note">From the append-only subscription log, not current account state — which is why months don't drift.</p>
+
+      {!n ? (
+        <p className="pf-note">No subscription activity yet.</p>
+      ) : (
+        <>
+          <ul className="pf-mrr-legend">
+            <li><i className="sw-mrr" /> Ending MRR <b>{fmtC(shown[n - 1].mrr)}</b></li>
+            {MRR_PARTS.map((p) => (
+              <li key={p.id} data-part={p.id}><i style={{ background: p.color }} /> {p.label} <b>{totals[p.id] ? signed(totals[p.id]) : "—"}</b></li>
+            ))}
+          </ul>
+
+          <div className="pf-chart-wrap pf-mrr-wrap" ref={wrap}>
+            <svg width={w} height={H} role="img"
+              aria-label={`Ending MRR and its movement by month, ${monthLong(shown[0].m)} to ${monthLong(shown[n - 1].m)}`}
+              onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
+              <text x={padL} y={t1 - 2} className="pf-mrr-cap">Ending MRR</text>
+              {ticks1.map((t) => (
+                <g key={"a" + t}>
+                  <line x1={padL} x2={w - padR} y1={y1(t)} y2={y1(t)} stroke="var(--line)" strokeWidth="1" />
+                  <text x={padL - 8} y={y1(t) + 4} textAnchor="end" className="pf-chart-tick">{fmtC(t)}</text>
+                </g>
+              ))}
+              {shown.map((r, i) => (
+                <rect key={"m" + r.m} className="pf-mrr-end" data-month={r.m}
+                  x={cx(i) - barW / 2} y={y1(r.mrr)} width={barW} height={Math.max(0, y1(0) - y1(r.mrr))}
+                  rx="2" fill="var(--brand)" opacity={hover === null || hover === i ? 0.9 : 0.45} />
+              ))}
+
+              <text x={padL} y={t2 - 8} className="pf-mrr-cap">Movement</text>
+              {ticks2.map((t) => (
+                <g key={"b" + t}>
+                  <line x1={padL} x2={w - padR} y1={y2(t)} y2={y2(t)}
+                    stroke={t === 0 ? "var(--ink-soft)" : "var(--line)"} strokeWidth="1" opacity={t === 0 ? 0.6 : 1} />
+                  <text x={padL - 8} y={y2(t) + 4} textAnchor="end" className="pf-chart-tick">{t < 0 ? "−" + fmtC(-t) : fmtC(t)}</text>
+                </g>
+              ))}
+              {shown.map((r, i) => {
+                // Stacked away from zero in each direction: new nearest the
+                // line, then expansion; contraction nearest, then churn.
+                let up = 0, down = 0;
+                return (
+                  <g key={"v" + r.m} className="pf-mrr-move" data-month={r.m} opacity={hover === null || hover === i ? 1 : 0.45}>
+                    {MRR_PARTS.map((p) => {
+                      const v = Math.abs(r[p.id]);
+                      if (!v) return null;
+                      const from = p.up ? up : -down;
+                      const to = p.up ? up + v : -(down + v);
+                      if (p.up) up += v; else down += v;
+                      return <rect key={p.id} data-part={p.id} x={cx(i) - barW / 2} width={barW}
+                        y={y2(Math.max(from, to))} height={Math.max(1, Math.abs(y2(from) - y2(to)))} fill={p.color} />;
+                    })}
+                    {/* Net new, as a tick across the bar: what the month did
+                        once the ups and downs are netted. */}
+                    <line className="pf-mrr-net" x1={cx(i) - barW / 2 - 3} x2={cx(i) + barW / 2 + 3}
+                      y1={y2(net(r))} y2={y2(net(r))} stroke="var(--ink)" strokeWidth="2" />
+                  </g>
+                );
+              })}
+
+              {shown.map((r, i) => (i % every === (n - 1) % every) && (
+                <text key={"l" + r.m} x={cx(i)} y={H - 6} textAnchor="middle" className="pf-chart-tick">
+                  {monthShort(r.m)}{(i === 0 || r.m.endsWith("-01")) ? " '" + r.m.slice(2, 4) : ""}
+                </text>
+              ))}
+              {hover !== null && (
+                <rect x={padL + band * hover} y={t1} width={band} height={H - t1 - 20}
+                  fill="var(--ink)" opacity=".04" pointerEvents="none" />
+              )}
+            </svg>
+
+            {h && (
+              <div className="pf-chart-tip pf-mrr-tip" style={{ left: Math.min(Math.max(cx(hover), 96), w - 96) }}>
+                <b>{monthLong(h.m)}</b>
+                <span>Ending MRR <em>{fmtC(h.mrr)}</em></span>
+                <span>Net new <em>{signed(net(h))}</em></span>
+                {MRR_PARTS.map((p) => h[p.id] ? <span key={p.id}>{p.label} <em>{signed(h[p.id])}</em></span> : null)}
+                <span>{h.signups} signup{h.signups === 1 ? "" : "s"} · {h.conversions} conversion{h.conversions === 1 ? "" : "s"}</span>
+              </div>
+            )}
+          </div>
+
+          <p className="pf-note">
+            {monthLong(shown[n - 1].m)} ended at {fmtC(shown[n - 1].mrr)}, {signed(net(shown[n - 1]))} on the month.
+            The black tick on each bar is the month's net. Point at a month for the detail.
+          </p>
+          {children}
+          <button type="button" className="pf-mini pf-mrr-tablebtn" onClick={() => setTable((v) => !v)}>
+            {table ? "Hide the table" : "Show as a table"}
+          </button>
+          {table && (
+            <div className="pf-table-wrap">
+              <table className="pf-table pf-num pf-table-responsive">
+                <thead><tr><th>Month</th><th>Signups</th><th>Conversions</th><th>New</th><th>Expansion</th><th>Contraction</th><th>Churn</th><th>Net new</th><th>Ending MRR</th></tr></thead>
+                <tbody>
+                  {[...shown].reverse().map((r) => (
+                    <tr key={r.m}>
+                      <td data-label="Month"><b>{r.m}</b></td>
+                      <td data-label="Signups">{r.signups}</td>
+                      <td data-label="Conversions">{r.conversions}</td>
+                      <td data-label="New" className="up">{r.newMrr ? "+" + fmtC(r.newMrr) : "—"}</td>
+                      <td data-label="Expansion" className="up">{r.expansion ? "+" + fmtC(r.expansion) : "—"}</td>
+                      <td data-label="Contraction" className="down">{r.contraction ? "−" + fmtC(Math.abs(r.contraction)) : "—"}</td>
+                      <td data-label="Churn" className="down">{r.churn ? "−" + fmtC(Math.abs(r.churn)) : "—"}</td>
+                      <td data-label="Net new"><b className={net(r) >= 0 ? "up" : "down"}>{signed(net(r))}</b></td>
+                      <td data-label="Ending MRR"><b>{fmtC(r.mrr)}</b></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---- dashboard: one period's numbers -------------------------------------
 // Both sections render through this, which is what makes them comparable:
 // the same metric means the same thing in both, computed the same way.
@@ -11132,6 +11361,67 @@ function MailLog({ accountId, load }) {
   );
 }
 
+// Three lights, one per front door: is admin., api. and app.subsub.work each
+// answering, and how fast. The rule for a light is shared/syshealth.js and the
+// measuring is on the API, so the browser draws what it is told. Re-asked
+// every minute while the screen is open, because a light that was green when
+// the page loaded an hour ago is a claim about an hour ago.
+function SystemHealth({ load }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setBusy(true);
+    try { setData(await load()); setErr(""); }
+    catch (e) { setErr(e?.body?.detail || e?.message || "no answer"); }
+    finally { setBusy(false); }
+  };
+  useEffect(() => {
+    run();
+    const t = setInterval(run, 60000);
+    return () => clearInterval(t);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, []);
+
+  // If the check itself could not be asked, that IS the API not answering the
+  // console -- red for the API, and the other two honestly unknown rather
+  // than drawn as down over sites nobody looked at.
+  const hosts = err
+    ? HEALTH_HOSTS.map((h) => ({
+        id: h.id, host: h.host, label: h.label,
+        light: h.id === "api" ? "red" : "unknown",
+        say: h.id === "api" ? `The console could not reach the API: ${err}` : "Not checked — the check runs on the API.",
+      }))
+    : data?.hosts || HEALTH_HOSTS.map((h) => ({ id: h.id, host: h.host, label: h.label, light: "unknown", say: "Checking…" }));
+
+  return (
+    <section className="pf-sys" aria-label="System health">
+      <div className="pf-sys-hd">
+        <h3>System</h3>
+        <span className="pf-sys-when">
+          {data?.checkedAt && !err ? `Checked ${niceWhen(data.checkedAt)}` : busy ? "Checking…" : ""}
+        </span>
+        <button className="pf-mini" onClick={run} disabled={busy}>
+          <RefreshCw size={13} /> {busy ? "Checking…" : "Re-check"}
+        </button>
+      </div>
+      <div className="pf-sys-grid">
+        {hosts.map((h) => (
+          <div key={h.id} className={`pf-sys-box l-${h.light}`} data-host={h.id}>
+            <span className="pf-sys-light" aria-hidden="true" />
+            <div className="pf-sys-body">
+              <b className="pf-sys-host">{h.host}</b>
+              <span className="pf-sys-label">{h.label} · <em>{(LIGHTS[h.light] || LIGHTS.unknown).label}</em></span>
+              <span className="pf-sys-say">{h.say}</span>
+              {h.db && <span className="pf-sys-say">{h.db.ok ? `Database answered in ${Math.round(h.db.ms)} ms.` : "Database did not answer."}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // What the API can actually see.
 //
 // The half-configured state is the one worth showing: a missing
@@ -11149,6 +11439,7 @@ const SETUP_STATE = {
 
 function SetupCheck({ load }) {
   const [data, setData] = useState(null);
+  const [open, setOpen] = useState({});
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -11175,32 +11466,52 @@ function SetupCheck({ load }) {
       {err && <p className="pf-host-err">{err}</p>}
       {!data && !err && <p className="pf-note">Checking…</p>}
 
-      {data && data.groups.map((g) => {
-        const st = SETUP_STATE[g.state] || SETUP_STATE.off;
-        return (
-          <div key={g.id} className="pf-setup">
-            <div className="pf-setup-hd">
-              <b>{g.label}</b>
-              <span className={`pf-host-pill t-${st.tone}`}>{st.label}</span>
-            </div>
-            <div className="pf-setup-vars">
-              {g.vars.map((v) => (
-                <span key={v.name} className={v.set ? "on" : "off"}>
-                  {v.set ? "✓" : "✕"} {v.name}
-                </span>
-              ))}
-            </div>
-            {/* The whole reason this screen exists. */}
-            {g.vars.filter((v) => v.suggestion).map((v) => (
-              <p key={v.name} className="pf-setup-hint">
-                <b>{v.name}</b> is missing, but <b>{v.suggestion.name}</b> is set —
-                {" "}that looks like the same name misspelled. Rename it and redeploy.
-              </p>
-            ))}
-            {g.state !== "ok" && <p className="pf-note">{g.matters}</p>}
-          </div>
-        );
-      })}
+      {/* One thin bar per integration, closed: the bar carries what is
+          scanned for -- the name, the state, how many of its settings are
+          there, and a flag when one looks misspelled -- and opening it shows
+          the names themselves. Eight open panels was a screen of monospace
+          most visits did not need. */}
+      {data && (
+        <div className="pf-setup-list">
+          {data.groups.map((g) => {
+            const st = SETUP_STATE[g.state] || SETUP_STATE.off;
+            const set = g.vars.filter((v) => v.set).length;
+            const typo = g.vars.some((v) => v.suggestion);
+            const isOpen = !!open[g.id];
+            return (
+              <div key={g.id} className={`pf-setup${isOpen ? " open" : ""}`} data-group={g.id}>
+                <button type="button" className="pf-setup-bar" aria-expanded={isOpen}
+                  onClick={() => setOpen((o) => ({ ...o, [g.id]: !o[g.id] }))}>
+                  <ChevronRight size={14} className="pf-setup-chev" />
+                  <b>{g.label}</b>
+                  <span className="pf-setup-count">{set} of {g.vars.length} set</span>
+                  {typo && <span className="pf-setup-typo">looks misspelled</span>}
+                  <span className={`pf-host-pill t-${st.tone}`}>{st.label}</span>
+                </button>
+                {isOpen && (
+                  <div className="pf-setup-body">
+                    <div className="pf-setup-vars">
+                      {g.vars.map((v) => (
+                        <span key={v.name} className={v.set ? "on" : "off"}>
+                          {v.set ? "✓" : "✕"} {v.name}
+                        </span>
+                      ))}
+                    </div>
+                    {/* The whole reason this screen exists. */}
+                    {g.vars.filter((v) => v.suggestion).map((v) => (
+                      <p key={v.name} className="pf-setup-hint">
+                        <b>{v.name}</b> is missing, but <b>{v.suggestion.name}</b> is set —
+                        {" "}that looks like the same name misspelled. Rename it and redeploy.
+                      </p>
+                    ))}
+                    {g.state !== "ok" && <p className="pf-note">{g.matters}</p>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {data && data.unused.length > 0 && (
         <p className="pf-note">
@@ -38718,10 +39029,42 @@ iframe.dv-frame{display:block}
 .addr-state p{font-size:13px;color:var(--ink-soft);line-height:1.55;margin:0}
 
 /* ---- console: which settings the API has ------------------------------ */
-.pf-setup{border-top:1px solid var(--line);padding:13px 0 3px}
-.pf-setup:first-of-type{border-top:0;padding-top:4px}
-.pf-setup-hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
-.pf-setup-hd b{font-size:14px}
+.pf-setup-list{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+/* One thin bar per integration, closed by default. */
+.pf-setup{border:1px solid var(--line);border-radius:10px;background:var(--card)}
+.pf-setup.open{border-color:#c9d8cf}
+.pf-setup-bar{all:unset;box-sizing:border-box;width:100%;display:flex;align-items:center;gap:10px;
+  padding:9px 12px;cursor:pointer;min-height:42px;flex-wrap:wrap}
+.pf-setup-bar:focus-visible{outline:2px solid var(--brand);outline-offset:-2px;border-radius:10px}
+.pf-setup-bar b{font-size:13.5px;flex:1 1 180px;min-width:0}
+.pf-setup-chev{flex:none;color:var(--ink-soft);transition:transform .15s}
+.pf-setup.open .pf-setup-chev{transform:rotate(90deg)}
+.pf-setup-count{font-size:12px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.pf-setup-typo{font-size:11px;font-weight:700;color:#8a5a12;background:#fbf0dd;border-radius:999px;padding:2px 8px}
+.pf-setup-body{padding:2px 12px 12px 36px}
+/* THE THREE LIGHTS. A box per host, three across where there is room. The
+   light is the colour AND a word beside it, because a red that cannot be told
+   from a green by about one man in twelve is not a status. */
+.pf-sys{margin:0 0 18px}
+.pf-sys-hd{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.pf-sys-hd h3{margin:0;font-size:15px}
+.pf-sys-when{font-size:12px;color:var(--ink-soft);margin-right:auto}
+.pf-sys-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.pf-sys-box{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
+  border-radius:12px;padding:14px;box-shadow:var(--shadow);min-width:0}
+.pf-sys-light{flex:none;width:16px;height:16px;border-radius:50%;margin-top:2px;background:#b9c2bd}
+.pf-sys-box.l-green .pf-sys-light{background:#2f9e5f;box-shadow:0 0 0 4px #e3f2e8}
+.pf-sys-box.l-amber .pf-sys-light{background:#e0a020;box-shadow:0 0 0 4px #fbf0dd}
+.pf-sys-box.l-red .pf-sys-light{background:#c8432c;box-shadow:0 0 0 4px #faece7}
+.pf-sys-box.l-unknown .pf-sys-light{background:#b9c2bd;box-shadow:0 0 0 4px #eef0ef}
+.pf-sys-box.l-red{border-color:#e9c4bd}
+.pf-sys-box.l-amber{border-color:#ecd3a4}
+.pf-sys-body{display:flex;flex-direction:column;gap:3px;min-width:0}
+.pf-sys-host{font-size:14px;overflow-wrap:anywhere}
+.pf-sys-label{font-size:12px;color:var(--ink-soft)}
+.pf-sys-label em{font-style:normal;font-weight:700;color:var(--ink)}
+.pf-sys-say{font-size:12px;color:var(--ink-soft);line-height:1.4}
+@media (max-width:720px){.pf-sys-grid{grid-template-columns:1fr}}
 .pf-setup-vars{display:flex;flex-wrap:wrap;gap:6px}
 .pf-setup-vars span{font:600 11.5px ui-monospace,monospace;padding:4px 9px;border-radius:7px;
   border:1px solid var(--line);background:var(--paper);white-space:nowrap}
@@ -38815,6 +39158,23 @@ iframe.dv-frame{display:block}
   box-shadow:0 8px 22px rgba(26,43,35,.25)}
 .pf-chart-tip b{font-size:13.5px;font-weight:800}
 .pf-chart-tip span{font-size:11px;opacity:.72}
+/* MRR BY MONTH. Two plots on one month axis, legend first so the colours are
+   known before the bars are read. */
+.pf-mrr .pf-panel-hd{display:flex;align-items:center;gap:10px}
+.pf-mrr-span{display:flex;gap:4px;margin-left:auto}
+.pf-mrr-span button{all:unset;cursor:pointer;font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;
+  border:1px solid var(--line);color:var(--ink-soft)}
+.pf-mrr-span button.on{border-color:var(--brand);color:var(--brand-dk);background:#eef5f1}
+.pf-mrr-legend{list-style:none;margin:8px 0 2px;padding:0;display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px}
+.pf-mrr-legend li{display:flex;align-items:center;gap:6px;color:var(--ink-soft)}
+.pf-mrr-legend li b{color:var(--ink);font-variant-numeric:tabular-nums}
+.pf-mrr-legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+.pf-mrr-legend i.sw-mrr{background:var(--brand);opacity:.9}
+.pf-mrr-cap{font-size:11px;font-weight:700;fill:var(--ink-soft);letter-spacing:.03em;text-transform:uppercase}
+.pf-mrr-tip{align-items:flex-start;gap:1px}
+.pf-mrr-tip span{display:flex;justify-content:space-between;gap:14px;width:100%;opacity:.85}
+.pf-mrr-tip em{font-style:normal;font-weight:700;font-variant-numeric:tabular-nums}
+.pf-mrr-tablebtn{margin-top:4px}
 
 /* MINIMIZED CARDS. A job, a job request and a quote request draw as one line
    until somebody opens them: the title, when and where, and the single thing

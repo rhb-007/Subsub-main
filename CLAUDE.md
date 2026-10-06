@@ -10048,6 +10048,59 @@ refactor.
   `test:consolelists` drives all of it. Dropping the invite rows fails twelve
   assertions, ignoring *Joined* fails one, and losing the row tag fails one.
 
+- **REVENUE IS A CHART, AND HEALTH LEADS WITH THREE LIGHTS.** Asked for with
+  the Revenue screen's *MRR movement by month* boxed in red (*"should be a
+  graph -- correct? It's an odd data visualization"*) and, on Health, *"the
+  api integrations should be minimized thin bars ... that expand when needed
+  - add 3 system health boxes above with green, yellow, red light:
+  admin.subsub.work, api.subsub.work and app.subsub.work"*.
+
+  **`MrrChart` is two plots on one month axis**: ending MRR as columns, and
+  the movement under it diverging from zero (new and expansion above;
+  contraction and churn below; a black tick for the month's net). Two plots
+  rather than one, because ending MRR dwarfs a month's movement and one scale
+  flattens the movement to a hairline, and a second y axis is a chart nobody
+  reads correctly. **The log only has rows for months something changed**, so
+  `fillMonths` puts the quiet months back with nothing moved and the MRR
+  carried. Without it three silent months vanish and the columns jump across
+  them. The fixture's silent April is what pins that: the mutation that drops
+  the fill fails six assertions. The hover carries every figure the table
+  did, and the table is one press away (*Show as a table*) for the cents. The
+  reconcile note now sits inside the chart's panel.
+
+  **The integrations are closed bars.** Each bar shows the name, *N of M
+  set*, the state pill and a *looks misspelled* flag. The flag shows while
+  the bar is closed, because a typo in a name is the whole reason that panel
+  exists and must not hide behind a press. Opening a bar shows the names.
+
+  **The lights are measured on the API over the PUBLIC internet**
+  (`GET /api/platform/system-health`, superadmin like the settings check;
+  `shared/syshealth.js` is the rule, `worker/syshealth.js` the probes). The
+  console's own `/api` calls arrive over a service binding and say nothing
+  about whether `api.subsub.work` answers from outside, so the API probe asks
+  its own `/api/ping` by hostname. That ping is a new public route that
+  carries nothing about anybody. Same-zone Worker-to-Worker fetches are
+  refused by Cloudflare (error 1042) unless `global_fetch_strictly_public`
+  is set, so `wrangler.toml` now sets it. `looksBlocked` still reads that
+  refusal as **Not checked** rather than **Down**, because a red light over a
+  site that is up is how people learn to ignore the light. Two other cases
+  are not failures. The console is behind Access, so a 401/403/302 with no
+  Access cookie IS it answering. Redirects are not followed, or the probe
+  would time the login page.
+
+  **What each light means.** Green is a 2xx or 3xx under `SLOW_MS`. Amber is
+  slow, or an unexpected 4xx. Red is a 5xx, a timeout or no answer, and also
+  an API whose database did not answer. The light comes with a word, so the
+  colour is never the only signal. **If the check itself cannot be asked**,
+  that is the API not answering the console: the API box is red and the
+  other two say *Not checked* rather than drawing three reds over sites
+  nobody looked at. The lights re-check every minute while Health is open.
+
+  **Not verified here: a live probe.** The suites stub `fetch` and the page,
+  so whether Cloudflare accepts the flag and answers each host as expected is
+  for the first look at the deployed console. If a box reads *Not checked*,
+  the flag is the thing to look at.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

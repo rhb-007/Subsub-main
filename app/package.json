@@ -221,7 +221,9 @@
     "test:scopeseed": "node --no-warnings scripts/scope-seed-ui-test.mjs",
     "test:quoteinsp": "node --no-warnings scripts/quote-inspection-test.mjs",
     "test:inspingest": "node --no-warnings scripts/inspect-ingest-test.mjs",
-    "test:inspingestui": "node scripts/inspect-ingest-ui-test.mjs"
+    "test:inspingestui": "node scripts/inspect-ingest-ui-test.mjs",
+    "test:syshealth": "node scripts/syshealth-test.mjs",
+    "test:revhealthui": "node scripts/console-revhealth-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

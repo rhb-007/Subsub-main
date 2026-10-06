@@ -125,6 +125,7 @@ import {
   hostnameConfig, brandedHost, provisionHostname, deprovisionHostname, checkHostname, diagnose,
 } from "./hostnames.js";
 import { setupCheck } from "./setup-check.js";
+import { systemHealth } from "./syshealth.js";
 import { verifyWithFallback, configuredProviders, askProvider, PROVIDERS } from "./licenses.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 
@@ -363,6 +364,10 @@ app.use("/api/*", async (c, next) => {
     // signature over the raw body is the whole of the authentication.
     || c.req.path === "/api/stripe/connect-webhook"
     || c.req.path === "/api/impersonation/end"
+    // A liveness answer and nothing else: no database, no account, nothing
+    // about anybody. The console's health light reads it through the public
+    // hostname, and an uptime monitor can too.
+    || c.req.path === "/api/ping"
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
 
   // Staff sitting in a customer's seat. Checked before anything else and
@@ -19218,6 +19223,19 @@ app.get("/api/platform/setup-check", async (c) => {
   if (denied) return denied;
   return c.json(setupCheck(c.env));
 });
+
+// Whether admin., api. and app.subsub.work are each answering, for the three
+// lights on the console's Health screen. Superadmin, like the settings check
+// beside it: it is the same screen.
+app.get("/api/platform/system-health", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+  return c.json(await systemHealth(c.env));
+});
+
+app.get("/api/ping", (c) => c.json({ ok: true }));
 
 // Every mail this account has been sent, and whether it went. The schema
 // has recorded this from the start and nothing ever showed it, so "did they

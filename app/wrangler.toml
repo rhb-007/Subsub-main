@@ -1,6 +1,12 @@
 name = "subsub-api"
 main = "worker/index.js"
 compatibility_date = "2026-01-01"
+# The console's health lights ask api., app. and admin.subsub.work over the
+# public internet, which is what a customer's browser does. Without this,
+# Cloudflare refuses a Worker's fetch to another Worker on the same zone
+# (error 1042) and the check would report its own restriction as an outage.
+# Nothing else here fetches a subsub.work address, so nothing else changes.
+compatibility_flags = ["global_fetch_strictly_public"]
 
 # Keep variables set in the Cloudflare dashboard.
 #
