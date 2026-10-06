@@ -8882,8 +8882,6 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   const gmvTotal = rows.reduce((n, r) => n + r.gmv, 0);
   // Paying is a Scale account that is billed: a comped one is on the plan and
   // pays nothing, which mrrOf alone cannot see.
-  const payingNow = live.filter((r) => r.mrr > 0 && !r.a.comped).length;
-  const canceledNow = rows.filter((r) => r.a.status === "canceled").length;
 
   // ---- the two lists, narrowed by their filter bars ----
   const shownAccounts = rows.filter((r) => {
@@ -9176,6 +9174,98 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   const [navOpen, setNavOpen] = useState(false);
   const go = (id) => { setScreen(id); setOpenId(null); setEditCompanyId(null); setNavOpen(false); setMenu(false); };
 
+  // ---- what is, under every tab -----------------------------------------
+  // Not measured over a window -- what kind of business each live account is,
+  // where the companies are, what is hired for, and what needs somebody -- so
+  // it reads the same on MTD, Total and Range and is drawn INSIDE each of them
+  // rather than as a section of its own. There used to be a "Right now"
+  // section here, and its Accounts, Free to paid, Cancellations and Revenue
+  // cards are gone: MTD's chart and tiles answer each of those, and two places
+  // carrying one figure is how the two come to disagree.
+  const standing = (
+    <div className="pf-standing">
+      <div className="pf-dash-grid">
+        {/* WHAT KIND OF BUSINESS EACH LIVE ACCOUNT IS. A row is the way into
+            the Accounts list narrowed to that kind, so the count and the list
+            behind it cannot disagree. The live total and the plan split ride
+            on top, because they were the whole of the Accounts card. */}
+        <div className="pf-panel pf-dash-card pf-dash-kinds">
+          <h3><Layers size={15} /> Account types</h3>
+          <p className="pf-note pf-kind-total">
+            {live.length} live · {live.filter((r) => r.a.plan === "scale").length} on Scale ·{" "}
+            {live.filter((r) => r.a.plan === "basic").length} on Basic
+          </p>
+          <ul className="pf-kind-list">
+            {CONSOLE_KINDS.map(([k, label]) => (
+              <li key={k}>
+                <button type="button" data-kind={k}
+                  onClick={() => { setAcctFilters({ ...EMPTY_ACCT_FILTERS, kind: k }); go("accounts"); }}>
+                  <span>{label}</span><b>{live.filter((r) => kindOf(r.a) === k).length}</b>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {health.atLimit > 0 && <p className="pf-dash-flag">● {health.atLimit} at a plan limit — upgrade candidates</p>}
+        </div>
+
+        <div className="pf-panel pf-dash-card pf-dash-companies" onClick={() => go("companies")}>
+          <h3><Users size={15} /> Companies</h3>
+          <div className="pf-dash-stat"><b>{companies.length}</b><span>on the platform</span></div>
+          <p className="pf-note">
+            {compRows.filter((r) => r.accts.length > 1).length} serving 2+ accounts ·{" "}
+            {compRows.filter((r) => (r.c.status || "active") !== "active").length} inactive
+          </p>
+          {health.licFail > 0 && <p className="pf-dash-flag">● {health.licFail} with a failing license check</p>}
+          {health.dups > 0 && <p className="pf-dash-flag">● {health.dups} possible duplicate{health.dups === 1 ? "" : "s"}</p>}
+        </div>
+
+        <div className="pf-panel pf-dash-card pf-dash-health" onClick={() => go(isSuper ? "health" : "accounts")}>
+          <h3><Activity size={15} /> Health</h3>
+          <div className="pf-dash-stat"><b>{attention}</b><span>needing attention</span></div>
+          <p className="pf-note">
+            {health.signups7d} signup{health.signups7d === 1 ? "" : "s"} in 7 days ·{" "}
+            {health.inactive14} inactive 14+ days
+          </p>
+        </div>
+      </div>
+
+      {/* TRADES AND PLACES, COMPACT: three rows each, six on request -- a
+          ranked list that takes half a screen pushes everything else off an
+          iPad. */}
+      <div className="pf-split pf-split-compact">
+        <div className="pf-panel">
+          <h3><MapPin size={15} /> Top locations <span className="pf-rank-sub">companies, by city</span></h3>
+          <RankList {...topLocations} rows={ranksOpen ? topLocations.rows : topLocations.rows.slice(0, 3)}
+            total={ranksOpen ? topLocations.total : topLocations.rows.slice(0, 3).length}
+            empty="No company addresses on file yet." />
+        </div>
+        <div className="pf-panel">
+          <h3><Hammer size={15} /> Top trades <span className="pf-rank-sub">accounts hiring each</span></h3>
+          <RankList {...topTrades} rows={ranksOpen ? topTrades.rows : topTrades.rows.slice(0, 3)}
+            total={ranksOpen ? topTrades.total : topTrades.rows.slice(0, 3).length}
+            label={(id) => TRADE_LABEL[id] || id}
+            empty="No account has chosen its trades yet." />
+        </div>
+      </div>
+      {(topLocations.rows.length > 3 || topTrades.rows.length > 3) && (
+        <button type="button" className="pf-rank-more" aria-expanded={ranksOpen}
+          onClick={() => setRanksOpen((o) => !o)}>
+          {ranksOpen ? "Show fewer" : "Show the top six"}
+        </button>
+      )}
+
+      {attention > 0 && (
+        <div className="pf-panel pf-attention">
+          <h3>What needs attention</h3>
+          {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} at a plan limit — <a onClick={() => { setAcctFilters({ ...EMPTY_ACCT_FILTERS, flag: "limit" }); go("accounts"); }}>view them</a></p>}
+          {health.licFail > 0 && <p className="pf-act">▸ {health.licFail} compan{health.licFail === 1 ? "y" : "ies"} with a failing license check — <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, lic: "issue" }); go("companies"); }}>view them</a></p>}
+          {health.dups > 0 && <p className="pf-act">▸ {health.dups} possible duplicate compan{health.dups === 1 ? "y" : "ies"} — <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, reach: "dup" }); go("companies"); }}>view them</a></p>}
+          {health.expired > 0 && <p className="pf-act">▸ {health.expired} expired work-order offer{health.expired === 1 ? "" : "s"} with no reply</p>}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="pf-root">
       <header className="pf-top">
@@ -9285,6 +9375,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               <TrendChart series={dailySeries} from={monthStart} to={today} projectTo={monthEnd}
                 finance={admin.finance} metric={chartMetric} onMetric={setChartMetric} />
               <PeriodStats m={thisMonthM} finance={admin.finance} showSms />
+              {standing}
             </section>
             )}
 
@@ -9300,6 +9391,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               <TrendChart series={dailySeries} from={totalFrom} to={today} projectTo={monthEnd}
                 finance={admin.finance} metric={chartMetric} onMetric={setChartMetric} />
               <PeriodStats m={totalM} finance={admin.finance} showSms allTime />
+              {standing}
             </section>
             )}
 
@@ -9317,150 +9409,10 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 projectTo={range.to >= today ? monthEnd : null}
                 finance={admin.finance} metric={chartMetric} onMetric={setChartMetric} />
               <PeriodStats m={rangeM} finance={admin.finance} showSms />
+              {standing}
             </section>
             )}
 
-            {/* WHERE THINGS STAND, UNDER EVERY TAB. These are not measured
-                over a window -- how many accounts are live, who pays, what
-                kind of business each is -- so they read the same on MTD,
-                Total and Range and sit below whichever is open rather than
-                being a tab of their own. The tab above answers what moved;
-                this answers what is. The cards are also the way in to each
-                screen. */}
-            <section className="pf-section">
-              <div className="pf-section-hd"><h3>Right now</h3><span>current state</span></div>
-              <div className="pf-dash-grid">
-                <div className="pf-panel pf-dash-card" onClick={() => go("accounts")}>
-                  <h3><Building2 size={15} /> Accounts</h3>
-                  <div className="pf-dash-stat"><b>{live.length}</b><span>live</span></div>
-                  <p className="pf-note">
-                    {live.filter((r) => r.a.plan === "scale").length} on Scale ·{" "}
-                    {live.filter((r) => r.a.plan === "basic").length} on Basic
-                  </p>
-                  {health.atLimit > 0 && <p className="pf-dash-flag">● {health.atLimit} at a plan limit — upgrade candidates</p>}
-                </div>
-
-                {/* FREE TO PAID, AS A STANDING. The period tiles below say how
-                    many converted in a window; this says where the book stands
-                    -- how many live accounts pay, and what share of everybody
-                    who ever signed up went on to. */}
-                <div className="pf-panel pf-dash-card pf-dash-conv"
-                  onClick={() => go(admin.finance ? "revenue" : "accounts")}>
-                  <h3><TrendingUp size={15} /> Free → paid</h3>
-                  <div className="pf-dash-stat"><b>{payingNow}</b><span>of {live.length} live paying</span></div>
-                  <p className="pf-note">
-                    {conv}% of signups converted · {thisMonthM.conversions} this month
-                    {daysToConvert !== null ? ` · ${daysToConvert} day${daysToConvert === 1 ? "" : "s"} median` : ""}
-                  </p>
-                </div>
-
-                {/* CANCELLATIONS, AS A STANDING. How many accounts have gone,
-                    and what left this month -- a cancellation and a drop back
-                    to Basic both lose revenue, so both are counted, and the
-                    rate is against who was paying when the month opened, the
-                    same denominator the period tiles use. The row is the way
-                    into the canceled accounts themselves. */}
-                <div className="pf-panel pf-dash-card pf-dash-churn"
-                  onClick={() => { if (canceledNow) setAcctFilters({ ...EMPTY_ACCT_FILTERS, status: "canceled" }); go("accounts"); }}>
-                  <h3><UserX size={15} /> Cancellations</h3>
-                  <div className="pf-dash-stat"><b>{canceledNow}</b><span>canceled account{canceledNow === 1 ? "" : "s"}</span></div>
-                  <p className="pf-note">
-                    {thisMonthM.canceled} canceled · {thisMonthM.downgraded} downgraded this month ·{" "}
-                    {thisMonthM.churnRate === null ? "no churn rate yet" : `${Math.round(thisMonthM.churnRate * 100)}% churn`}
-                  </p>
-                  {thisMonthM.lost > 0 && <p className="pf-dash-flag">● {thisMonthM.lost} lost this month</p>}
-                </div>
-
-                {/* WHAT KIND OF BUSINESS EACH LIVE ACCOUNT IS. A row is the way
-                    into the Accounts list narrowed to that kind, so the count
-                    and the list behind it cannot disagree. */}
-                <div className="pf-panel pf-dash-card pf-dash-kinds">
-                  <h3><Layers size={15} /> Account types</h3>
-                  <ul className="pf-kind-list">
-                    {CONSOLE_KINDS.map(([k, label]) => (
-                      <li key={k}>
-                        <button type="button" data-kind={k}
-                          onClick={() => { setAcctFilters({ ...EMPTY_ACCT_FILTERS, kind: k }); go("accounts"); }}>
-                          <span>{label}</span><b>{live.filter((r) => kindOf(r.a) === k).length}</b>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="pf-panel pf-dash-card" onClick={() => go("companies")}>
-                  <h3><Users size={15} /> Companies</h3>
-                  <div className="pf-dash-stat"><b>{companies.length}</b><span>on the platform</span></div>
-                  <p className="pf-note">
-                    {compRows.filter((r) => r.accts.length > 1).length} serving 2+ accounts ·{" "}
-                    {compRows.filter((r) => (r.c.status || "active") !== "active").length} inactive
-                  </p>
-                  {health.licFail > 0 && <p className="pf-dash-flag">● {health.licFail} with a failing license check</p>}
-                  {health.dups > 0 && <p className="pf-dash-flag">● {health.dups} possible duplicate{health.dups === 1 ? "" : "s"}</p>}
-                </div>
-
-                {admin.finance && (
-                  <div className="pf-panel pf-dash-card" onClick={() => go("revenue")}>
-                    <h3><TrendingUp size={15} /> Revenue</h3>
-                    <div className="pf-dash-stat"><b>{fmtC(mrr)}</b><span>MRR</span></div>
-                    <p className="pf-note">
-                      {fmtC(mrr * 12)} ARR ·{" "}
-                      {/* The same count the Free → paid card shows beside it.
-                          Reading mrr alone counted a comped account as paying,
-                          and two cards a few inches apart disagreed. */}
-                      {payingNow} paying account{payingNow === 1 ? "" : "s"} ·{" "}
-                      {fmtC(gmvTotal)} GMV to date
-                    </p>
-                  </div>
-                )}
-
-                <div className="pf-panel pf-dash-card" onClick={() => go("health")}>
-                  <h3><Activity size={15} /> Health</h3>
-                  <div className="pf-dash-stat"><b>{attention}</b><span>needing attention</span></div>
-                  <p className="pf-note">
-                    {health.signups7d} signup{health.signups7d === 1 ? "" : "s"} in 7 days ·{" "}
-                    {health.inactive14} inactive 14+ days
-                  </p>
-                </div>
-              </div>
-
-              {/* TRADES AND PLACES, COMPACT. They are context for the cards
-                  above rather than the reason anybody opens the console, so
-                  they sit directly under them at three rows each and open to
-                  six on request -- a ranked list that takes half a screen
-                  pushes the period figures off an iPad entirely. */}
-              <div className="pf-split pf-split-compact">
-                <div className="pf-panel">
-                  <h3><MapPin size={15} /> Top locations <span className="pf-rank-sub">companies, by city</span></h3>
-                  <RankList {...topLocations} rows={ranksOpen ? topLocations.rows : topLocations.rows.slice(0, 3)}
-                    total={ranksOpen ? topLocations.total : topLocations.rows.slice(0, 3).length}
-                    empty="No company addresses on file yet." />
-                </div>
-                <div className="pf-panel">
-                  <h3><Hammer size={15} /> Top trades <span className="pf-rank-sub">accounts hiring each</span></h3>
-                  <RankList {...topTrades} rows={ranksOpen ? topTrades.rows : topTrades.rows.slice(0, 3)}
-                    total={ranksOpen ? topTrades.total : topTrades.rows.slice(0, 3).length}
-                    label={(id) => TRADE_LABEL[id] || id}
-                    empty="No account has chosen its trades yet." />
-                </div>
-              </div>
-              {(topLocations.rows.length > 3 || topTrades.rows.length > 3) && (
-                <button type="button" className="pf-rank-more" aria-expanded={ranksOpen}
-                  onClick={() => setRanksOpen((o) => !o)}>
-                  {ranksOpen ? "Show fewer" : "Show the top six"}
-                </button>
-              )}
-            </section>
-
-            {attention > 0 && (
-              <div className="pf-panel">
-                <h3>What needs attention</h3>
-                {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} at a plan limit — <a onClick={() => { setAcctFilters({ ...EMPTY_ACCT_FILTERS, flag: "limit" }); go("accounts"); }}>view them</a></p>}
-                {health.licFail > 0 && <p className="pf-act">▸ {health.licFail} compan{health.licFail === 1 ? "y" : "ies"} with a failing license check — <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, lic: "issue" }); go("companies"); }}>view them</a></p>}
-                {health.dups > 0 && <p className="pf-act">▸ {health.dups} possible duplicate compan{health.dups === 1 ? "y" : "ies"} — <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, reach: "dup" }); go("companies"); }}>view them</a></p>}
-                {health.expired > 0 && <p className="pf-act">▸ {health.expired} expired work-order offer{health.expired === 1 ? "" : "s"} with no reply</p>}
-              </div>
-            )}
           </>
         )}
 
@@ -38939,6 +38891,9 @@ button.job-insp:hover{border-color:#2f5577}
 .pf-kind-list button:hover{background:var(--paper)}
 .pf-kind-list b{font-variant-numeric:tabular-nums;font-size:14px}
 .pf-split-compact > .pf-panel{margin-top:12px;padding:12px 16px}
+.pf-standing{margin-top:20px;padding-top:4px;border-top:1px solid var(--line)}
+.pf-standing .pf-attention{margin-top:12px}
+.pf-kind-total{margin:0 0 8px}
 .pf-split-compact h3{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;margin:0 0 10px;font-size:14px}
 .pf-split-compact h3 .pf-rank-sub{margin:0;font-size:11.5px;font-weight:500;color:var(--ink-soft)}
 .pf-split-compact .pf-rank{gap:6px}

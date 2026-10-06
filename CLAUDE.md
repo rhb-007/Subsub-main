@@ -9983,6 +9983,30 @@ refactor.
   list are not measured over a window. They read the same on every tab, so they
   sit under whichever tab is open.
 
+- **AND "RIGHT NOW" IS GONE: WHAT IS NOT A WINDOW IS DRAWN INSIDE EVERY
+  WINDOW.** Asked for as *"Right now should be removed from all tabs, it was
+  replaced by MTD; include the types, locations and trades stats on all
+  sections; include anything from Right now that isn't overlapping, ie.
+  Health."* A section under the tabs headed Right now read as a fourth tab
+  that could not be selected, and four of its seven cards said again what MTD
+  already says.
+
+  **What overlapped went.** Free → paid, Cancellations, Revenue (MRR, ARR,
+  paying) and the Accounts card are each a button on MTD's chart or a tile
+  under it, and two places carrying one figure is how the two came to disagree
+  once already (the Revenue card counting a comped account as paying beside a
+  box that did not). **What did not overlap stays, inside each of MTD, Total
+  and Range**: Account types, Companies, Health, the compact locations and
+  trades, and What needs attention. One `standing` block rendered in all
+  three, so the tabs cannot drift apart. The Accounts card's live count and
+  Scale/Basic split ride on Account types, because they were all it said.
+
+  These are standing counts and read the same on every tab, which is
+  deliberate: a building's kind or a company's city is not something that
+  happened in a window. `test:consolelists` reads the blocks out of the open
+  window itself, on all three tabs. Drawing them beside the tab instead of
+  inside it fails three assertions, and dropping them from Range fails one.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

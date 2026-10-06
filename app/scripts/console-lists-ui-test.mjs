@@ -157,6 +157,15 @@ try {
     range: !!document.querySelector('.pf-section[data-period="range"] .pf-section-hd .pf-range-btn'),
     sections: [...document.querySelectorAll(".pf-section")].map((sec) =>
       sec.querySelector(".pf-section-hd h3")?.innerText.trim().toLowerCase()),
+    // What sits inside the open window, read from the window itself: a block
+    // drawn beside the tab rather than in it is the old Right now again.
+    standing: (() => {
+      const sec = document.querySelector(".pf-section[data-period]");
+      if (!sec) return null;
+      return [".pf-dash-kinds", ".pf-dash-companies", ".pf-dash-health", ".pf-split-compact", ".pf-attention"]
+        .filter((q) => sec.querySelector(q));
+    })(),
+    cards: [...document.querySelectorAll(".pf-dash-card h3")].map((h) => h.innerText.trim()),
     chart: (() => {
       const sec = document.querySelector(".pf-section[data-period]");
       const ch = sec?.querySelector(".pf-chart");
@@ -173,6 +182,7 @@ try {
       };
     })(),
   }));
+  const EVERY = [".pf-dash-kinds", ".pf-dash-companies", ".pf-dash-health", ".pf-split-compact", ".pf-attention"];
   const metricMap = (c) => Object.fromEntries((c?.metrics || []).map((x) => [x.id, x]));
   const num = (v) => Number(String(v || "").replace(/[^0-9.]/g, ""));
   let ts = await tabState();
@@ -180,10 +190,14 @@ try {
     JSON.stringify(ts.tabs.map((x) => x.label)) === JSON.stringify(["MTD", "Total", "Range"]), JSON.stringify(ts.tabs));
   t.ck("MTD is the one open", ts.tabs.find((x) => x.on)?.id === "mtd", JSON.stringify(ts.tabs));
   // Stacked, every window was on the page at once; the property is that only
-  // the chosen one is, with Right now under it.
+  // the chosen one is -- and there is no Right now section under it any more.
   t.ck("only the MTD window is on the page", JSON.stringify(ts.periods) === JSON.stringify(["mtd"]), JSON.stringify(ts.periods));
-  t.ck("with Right now below it, not a tab of its own",
-    JSON.stringify(ts.sections) === JSON.stringify(["month to date", "right now"]), JSON.stringify(ts.sections));
+  t.ck("and no Right now section anywhere",
+    JSON.stringify(ts.sections) === JSON.stringify(["month to date"]), JSON.stringify(ts.sections));
+  t.ck("the standing blocks are INSIDE the MTD window", JSON.stringify(ts.standing) === JSON.stringify(EVERY),
+    JSON.stringify(ts.standing));
+  t.ck("and the cards MTD answers are gone (Accounts, Free → paid, Cancellations, Revenue)",
+    JSON.stringify(ts.cards) === JSON.stringify(["Account types", "Companies", "Health"]), JSON.stringify(ts.cards));
 
   console.log("\n-- every tab has the same chart: Users, Subscribers, MRR, ARR, Cancellations --");
   const FIVE = JSON.stringify(["Users", "Subscribers", "MRR", "ARR", "Cancellations"]);
@@ -226,6 +240,9 @@ try {
   t.ck("Users and Subscribers end where MTD's do", mm.users?.v === "7" && mm.paid?.v === "2",
     `${mm.users?.v} / ${mm.paid?.v}`);
   t.ck("the metric pressed on MTD is still the one drawn", mm.canceled?.on === true, JSON.stringify(ts.chart?.metrics));
+  t.ck("Total carries the same standing blocks inside it", JSON.stringify(ts.standing) === JSON.stringify(EVERY),
+    JSON.stringify(ts.standing));
+  t.ck("and no Right now section", JSON.stringify(ts.sections) === JSON.stringify(["total"]), JSON.stringify(ts.sections));
 
   await page.evaluate(() => document.querySelector('.pf-dash-tabs [data-tab="range"]')?.click());
   await wait(300);
@@ -233,37 +250,19 @@ try {
   t.ck("Range shows the range and nothing else", JSON.stringify(ts.periods) === JSON.stringify(["range"]),
     JSON.stringify(ts.periods));
   t.ck("with its picker", ts.range === true);
+  t.ck("Range carries the same standing blocks inside it", JSON.stringify(ts.standing) === JSON.stringify(EVERY),
+    JSON.stringify(ts.standing));
   t.ck("and the same chart", JSON.stringify((ts.chart?.metrics || []).map((x) => x.label)) === FIVE,
     JSON.stringify(ts.chart?.metrics));
   await page.evaluate(() => document.querySelector('.pf-chart-metrics [data-metric="users"]')?.click());
   await page.evaluate(() => document.querySelector('.pf-dash-tabs [data-tab="mtd"]')?.click());
   await wait(300);
 
-  const cards = await page.evaluate(() => [...document.querySelectorAll(".pf-dash-card")]
-    .map((c) => ({ h: c.querySelector("h3")?.innerText.trim(), text: c.innerText.replace(/\s+/g, " ") })));
-  const conv = cards.find((c) => /free\s*→\s*paid/i.test(c.h || ""));
-  t.ck("there is a Free → paid box in it", !!conv, cards.map((c) => c.h).join(" | "));
-  // Six live accounts; Outerhome and Sound bill, Northline is comped. A box
-  // counting the plan would say 3.
-  t.ck("it counts accounts that PAY, not accounts on Scale -- 2 of 6",
-    /\b2\s*of 6 live paying/.test(conv?.text || ""), conv?.text);
-  // And the Revenue card beside it agrees: it read mrr alone and said 3.
-  const rev = cards.find((c) => /^revenue/i.test(c.h || ""));
-  t.ck("the Revenue card names the same number of paying accounts",
-    /\b2 paying accounts\b/.test(rev?.text || ""), rev?.text);
-
-  console.log("\n-- and cancellations are part of Right now --");
-  const churn = cards.find((c) => /cancellations/i.test(c.h || ""));
-  t.ck("there is a Cancellations box", !!churn, cards.map((c) => c.h).join(" | "));
-  t.ck("counting the canceled account", /\b1 canceled account\b/.test(churn?.text || ""), churn?.text);
-  t.ck("and what left this month", /\b1 canceled · 0 downgraded this month\b/.test(churn?.text || ""), churn?.text);
-  const accCard = cards.find((c) => /^accounts/i.test(c.h || ""));
-  t.ck("the Accounts box no longer says it a second time", !/canceled/i.test(accCard?.text || ""), accCard?.text);
-  await page.evaluate(() => document.querySelector(".pf-dash-churn")?.click());
-  await wait(500);
-  t.ck("pressing it lists the canceled accounts",
-    JSON.stringify(await rowNames()) === JSON.stringify(["Gone Exteriors"]), JSON.stringify(await rowNames()));
-  await nav("Dashboard"); await wait(400);
+  // The live total and the plan split were the whole of the Accounts card,
+  // so they ride on Account types now rather than disappearing with it.
+  const kindTotal = await page.evaluate(() => document.querySelector(".pf-kind-total")?.innerText.replace(/\s+/g, " ").trim());
+  t.ck("Account types says how many are live and on which plan -- 6 · 3 · 3",
+    kindTotal === "6 live · 3 on Scale · 3 on Basic", kindTotal);
 
   const kinds = await page.evaluate(() => {
     const c = document.querySelector(".pf-dash-kinds");
@@ -294,7 +293,7 @@ try {
       more: !!document.querySelector(".pf-rank-more"),
     } : null;
   });
-  t.ck("they are in Right now, under the tab", !!ranks, JSON.stringify(ranks));
+  t.ck("they are under the tab, inside it", !!ranks, JSON.stringify(ranks));
   t.ck("each starts at three rows", JSON.stringify(ranks?.lists) === "[3,3]", JSON.stringify(ranks?.lists));
   t.ck("and the pair is short", (ranks?.height || 999) < 190, `${ranks?.height}px`);
   t.ck("with a way to see more", ranks?.more === true);
