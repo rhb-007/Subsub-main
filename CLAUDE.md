@@ -10015,6 +10015,39 @@ refactor.
   inside it fails three assertions, dropping them from Range fails one, and
   handing Total the month's figures fails two.
 
+- **"NOT ARRIVED" WAS THE COMPANIES LIST A SECOND TIME, SO IT IS A FILTER ON
+  IT.** Reported with the screen open: *"this 'not arrived' section is strange,
+  it really just belongs within accounts that have not fully joined yet,
+  differentiate them somehow and add them into a filter on that page."* Every
+  row on it was a subcontractor, and every subcontractor already has a row on
+  Companies, so the same roofer was on two pages under two headings, and one of
+  the two said nothing about not having joined.
+
+  **The nav entry is gone and `GET /api/platform/stuck-subs` feeds Companies.**
+  `app/shared/stuck.js` still decides what counts and which stage it is. That
+  rule did not change, only where it is drawn. A company that has not finished
+  joining carries a **not joined** tag naming the most actionable stage. The
+  **Sign-up** filter offers *Invited, not joined yet*, *Joined*, or one stage.
+  A **Not joined yet** tile and a *show them* link sit under the KPIs. The
+  company's own window carries the detail per account that asked: the stage,
+  the address, and whether the mail went.
+
+  **An invite with no company row is a row too, drawn dashed.** An invite from
+  the blank form makes no `companies` row until it is opened, so those people
+  had no line on Companies at all. They are drawn as a line because they are
+  the people the page was for. They are dashed and open the outstanding detail
+  rather than the company form, because there is no record yet that anybody
+  could edit. Every filter about a company record (a licence, a city, a login,
+  being an account) leaves them out rather than pretending to answer for them.
+
+  **Ours and theirs survive the move.** A failed or never-sent invitation is
+  tinted, and *mail is not configured* is said once at the top. Those are
+  SubSub owing somebody an email, which is a different job from a customer
+  nudging a contractor.
+
+  `test:consolelists` drives all of it. Dropping the invite rows fails twelve
+  assertions, ignoring *Joined* fails one, and losing the row tag fails one.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

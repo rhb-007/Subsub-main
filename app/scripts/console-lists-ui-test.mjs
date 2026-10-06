@@ -100,11 +100,35 @@ const BOOT = {
   ], activity: [], smsDaily: [],
 };
 
+// Who was asked and has not finished joining. Two invites with no company
+// row behind them yet (one of them ours to fix, a send that failed), and one
+// company on the roster that nobody can sign in as. They used to be a screen
+// of their own; they are rows and a filter on Companies now.
+const LATER = new Date(Date.now() + 19 * 86400000).toISOString();
+const STUCK = {
+  mailConfigured: true,
+  rows: [
+    { accountId: "acc_gc", account: "Outerhome", company: "Enterprise Roofing", contact: "Rodolfo Mendoza",
+      email: "er@roofing.test", phone: null, stage: "invite_open", inviteId: "inv1", companyId: null,
+      since: "2026-09-25T10:00:00Z", sentAt: "2026-09-30T10:00:00Z", expiresAt: LATER,
+      lastEmail: { status: "sent", at: "2026-09-30T10:00:00Z" } },
+    { accountId: "acc_pm", account: "Sound Property Management", company: "Modern Exteriors", contact: "Vlad M",
+      email: "vm@modern.test", phone: null, stage: "send_failed", inviteId: "inv2", companyId: null,
+      since: "2026-09-25T10:00:00Z", sentAt: "2026-09-30T10:00:00Z", expiresAt: LATER,
+      lastEmail: { status: "failed", error: "bounced", at: "2026-09-30T10:00:00Z" } },
+    { accountId: "acc_gc", account: "Outerhome", company: "Skagit Framing", contact: "Jo Skagit",
+      email: "jo@skagit.test", phone: null, stage: "no_login", inviteId: null, companyId: "cmp_far",
+      since: "2026-09-22T10:00:00Z", lastEmail: null },
+  ],
+  summary: { total: 3, ours: 1, accounts: 2, byStage: { invite_open: 1, send_failed: 1, no_login: 1 } },
+};
+
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path) => {
   if (path === "/api/platform/me") return [200, STAFF()];
   if (path === "/api/platform/bootstrap") return [200, BOOT];
   if (path === "/api/platform/companies") return [200, []];
+  if (path === "/api/platform/stuck-subs") return [200, STUCK];
   if (path.startsWith("/api/platform/activity/")) return [200, []];
   if (path.startsWith("/api/platform/accounts/") && path.endsWith("/fee-terms"))
     return [200, { terms: { bps: 50, capCents: 50000, freeCents: 5_000_000 },
@@ -403,8 +427,10 @@ try {
     !document.querySelector(".modal-acct") && document.querySelectorAll(".pf-rows .pf-row").length === 7));
 
   console.log("\n-- Companies: rows, a window, and filters --");
-  await nav("Companies"); await wait(600);
-  const coRows = await page.evaluate(() => [...document.querySelectorAll(".pf-rows .pf-row")]
+  t.ck("there is no Not arrived page any more", await page.evaluate(() =>
+    ![...document.querySelectorAll(".pf-nav button")].some((b) => /Not arrived/i.test(b.innerText))));
+  await nav("Companies"); await wait(800);
+  const coRows = await page.evaluate(() => [...document.querySelectorAll(".pf-rows .pf-row:not(.pf-row-invite)")]
     .map((r) => Math.round(r.getBoundingClientRect().height)));
   t.ck("every company is a row", coRows.length === 5, `${coRows.length}`);
   t.ck("a thin one", coRows.length > 0 && coRows.every((h) => h <= 72), JSON.stringify(coRows));
@@ -414,7 +440,8 @@ try {
   t.ck("Type: Accounts lists only the account's own company row",
     JSON.stringify(await rowNames()) === JSON.stringify(["Outerhome"]), JSON.stringify(await rowNames()));
   await setFilter("type", "contractor"); await wait(300);
-  t.ck("and Contractors leaves it out", !(await rowNames()).includes("Outerhome") && (await rowNames()).length === 4,
+  // Four contractor companies and the two invites, which are contractors too.
+  t.ck("and Contractors leaves it out", !(await rowNames()).includes("Outerhome") && (await rowNames()).length === 6,
     JSON.stringify(await rowNames()));
   await setFilter("type", ""); await setFilter("lic", "issue"); await wait(300);
   t.ck("Licences: Failing check finds the suspended one",
@@ -446,6 +473,78 @@ try {
   t.ck("for the row that was pressed", cw?.h2 === "Skagit Framing", cw?.h2);
   t.ck("with its detail", cw?.detail === true);
   t.ck("and its edit form, in the same window", cw?.edit === true);
+  await page.evaluate(() => document.querySelector(".modal-co .modal-close")?.click());
+  await wait(300);
+
+  console.log("\n-- who has not finished joining is on this list, not a page of its own --");
+  const nj = await page.evaluate(() => ({
+    invites: [...document.querySelectorAll(".pf-rows .pf-row-invite")].map((r) => ({
+      name: r.querySelector(".pf-row-name b")?.innerText.trim(),
+      tag: r.querySelector(".pf-join")?.innerText.trim(), ours: r.classList.contains("ours"),
+      h: Math.round(r.getBoundingClientRect().height), border: getComputedStyle(r).borderTopStyle })),
+    skagit: [...document.querySelectorAll(".pf-rows .pf-row")].find((r) => /Skagit/.test(r.innerText))
+      ?.querySelector(".pf-join")?.innerText.trim() || null,
+    others: [...document.querySelectorAll(".pf-rows .pf-row:not(.pf-row-invite)")]
+      .filter((r) => !/Skagit/.test(r.innerText) && r.querySelector(".pf-join")).length,
+    kpi: [...document.querySelectorAll(".kpi")].find((k) => /Not joined yet/.test(k.innerText))?.querySelector(".kpi-v")?.innerText.trim(),
+    ours: [...document.querySelectorAll(".pf-act")].some((p) => /1 invitation is ours/.test(p.innerText)),
+  }));
+  t.ck("an invite with no company yet is a row on Companies",
+    JSON.stringify(nj.invites.map((x) => x.name).sort()) === JSON.stringify(["Enterprise Roofing", "Modern Exteriors"]),
+    JSON.stringify(nj.invites));
+  t.ck("drawn differently from a company: dashed", nj.invites.length === 2 && nj.invites.every((x) => x.border === "dashed"),
+    JSON.stringify(nj.invites.map((x) => x.border)));
+  t.ck("and as thin as one", nj.invites.length === 2 && nj.invites.every((x) => x.h <= 72), JSON.stringify(nj.invites.map((x) => x.h)));
+  t.ck("each says it has not joined, and why",
+    nj.invites.some((x) => /not joined/i.test(x.tag || "") && /waiting on them/i.test(x.tag || "")), JSON.stringify(nj.invites));
+  t.ck("the failed send is tinted as ours", nj.invites.find((x) => x.name === "Modern Exteriors")?.ours === true
+    && nj.invites.find((x) => x.name === "Enterprise Roofing")?.ours === false, JSON.stringify(nj.invites));
+  t.ck("a company on the roster with no login carries the tag on its own row",
+    /not joined/i.test(nj.skagit || "") && /no login/i.test(nj.skagit || ""), nj.skagit);
+  t.ck("and a company that has joined carries none", nj.others === 0, `${nj.others}`);
+  t.ck("the count is a tile -- 3", nj.kpi === "3", nj.kpi);
+  t.ck("and what is ours to fix is said once", nj.ours === true);
+
+  await setFilter("join", "notjoined"); await wait(300);
+  t.ck("Sign-up: Invited, not joined yet lists exactly those three",
+    JSON.stringify((await rowNames()).sort()) === JSON.stringify(["Enterprise Roofing", "Modern Exteriors", "Skagit Framing"]),
+    JSON.stringify(await rowNames()));
+  await setFilter("join", "joined"); await wait(300);
+  t.ck("and Joined is everybody else",
+    JSON.stringify((await rowNames()).sort()) === JSON.stringify(["Ace Gutters", "Ace Gutters LLC", "Outerhome", "San Juan Exteriors"]),
+    JSON.stringify(await rowNames()));
+  await setFilter("join", "invite_open"); await wait(300);
+  t.ck("a single reason narrows to it",
+    JSON.stringify(await rowNames()) === JSON.stringify(["Enterprise Roofing"]), JSON.stringify(await rowNames()));
+  await setFilter("join", ""); await wait(300);
+  await page.evaluate(() => document.querySelector(".pf-join-link")?.click());
+  await wait(300);
+  t.ck("the line under the tiles opens the filter",
+    await page.evaluate(() => document.querySelector('.fbar [data-filter="join"] select')?.value === "notjoined")
+      && (await rowNames()).length === 3, JSON.stringify(await rowNames()));
+  await page.evaluate(() => document.querySelector(".fbar-clear")?.click());
+  await wait(300);
+
+  await page.evaluate(() => [...document.querySelectorAll(".pf-rows .pf-row-invite")]
+    .find((r) => /Modern/.test(r.innerText))?.click());
+  await wait(500);
+  const iw = await page.evaluate(() => {
+    const m = document.querySelector(".modal.modal-invite");
+    return m ? { h2: m.querySelector("h2")?.innerText.trim(), text: m.innerText.replace(/\s+/g, " "),
+      edit: !!m.querySelector(".pfe-open input") } : null;
+  });
+  t.ck("an invite opens in a window", iw?.h2 === "Modern Exteriors", JSON.stringify(iw));
+  t.ck("saying what is outstanding and who asked", /email failed/i.test(iw?.text || "")
+    && /asked by Sound Property Management/.test(iw?.text || "") && /bounced/.test(iw?.text || ""), iw?.text);
+  t.ck("and no company form, because there is no company yet", iw && !iw.edit);
+  await page.evaluate(() => document.querySelector(".modal-invite .modal-close")?.click());
+  await wait(300);
+  await page.evaluate(() => [...document.querySelectorAll(".pf-rows .pf-row")]
+    .find((r) => /Skagit/.test(r.innerText))?.click());
+  await wait(500);
+  const sw = await page.evaluate(() => document.querySelector(".modal-co .pfc-notjoined")?.innerText.replace(/\s+/g, " ") || null);
+  t.ck("a company's own window says it has not joined, and where",
+    /on the roster, no login/i.test(sw || "") && /asked by Outerhome/.test(sw || ""), sw);
   await page.evaluate(() => document.querySelector(".modal-co .modal-close")?.click());
   await wait(300);
 

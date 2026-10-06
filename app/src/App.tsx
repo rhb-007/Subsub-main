@@ -8851,6 +8851,25 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   const [chartMetric, setChartMetric] = useState(null);
   const [acctFilters, setAcctFilters] = useState(EMPTY_ACCT_FILTERS);
   const [coFilters, setCoFilters] = useState(EMPTY_CO_FILTERS);
+  // WHO WAS ASKED AND NEVER JOINED, read on the Companies screen. It had a
+  // screen of its own ("Not arrived") listing companies the screen beside it
+  // already listed, so the same roofer was on two pages under two headings.
+  // They are companies that have not finished joining, so they are rows on
+  // the Companies list with a tag and a filter -- and the invites with no
+  // company row yet (an invite from the blank form makes none until it is
+  // opened) are rows there too, drawn differently because they are not a
+  // company record yet. Fetched on arriving at the screen, so a resend done
+  // on an account shows by the next visit.
+  const [stuck, setStuck] = useState(null);
+  const [openInvite, setOpenInvite] = useState(null);
+  useEffect(() => {
+    if (screen !== "companies") return;
+    let live = true;
+    api.platform.stuckSubs()
+      .then((d) => { if (live) setStuck(d); })
+      .catch(() => { if (live) setStuck((v) => v || { rows: [], summary: { total: 0, ours: 0 }, mailConfigured: true, failed: true }); });
+    return () => { live = false; };
+  }, [screen]);
   const [confirmDelete, setConfirmDelete] = useState(null); // { kind: "account"|"company", id, name }
   const [resetFor, setResetFor] = useState(null);        // { userId, name, email }
   const [resetLink, setResetLink] = useState(null);      // { email } once the API confirms it sent
@@ -8960,7 +8979,11 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
         acct: accounts.find((a) => a.id === m.accountId),
       }))
       .filter((x) => x.u && x.acct);
-    return { c, accts, engs: engRows, seats, lic, licOk: !lic || String(lic.status).toLowerCase() === "active",
+    // What is outstanding before this company has fully joined, per account
+    // that asked them. Most actionable first, which is the order STAGES is in.
+    const notJoined = (stuck?.rows || []).filter((x) => x.companyId === c.id)
+      .sort((x, y) => STAGE_ORDER[x.stage] - STAGE_ORDER[y.stage]);
+    return { c, accts, engs: engRows, seats, notJoined, lic, licOk: !lic || String(lic.status).toLowerCase() === "active",
       dup: companies.filter((x) => x.license && x.license.toUpperCase().trim() === (c.license || "").toUpperCase().trim()).length > 1 };
   });
 
@@ -8977,9 +9000,25 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     if (f.city && coCity(r.c) !== f.city) return false;
     if (f.reach === "multi" && r.accts.length < 2) return false;
     if (f.reach === "dup" && !r.dup) return false;
+    if (f.join === "joined" && r.notJoined.length) return false;
+    if (f.join === "notjoined" && !r.notJoined.length) return false;
+    if (f.join && f.join !== "joined" && f.join !== "notjoined" && !r.notJoined.some((x) => x.stage === f.join)) return false;
     return matchesQuery(f.q, r.c.company, r.c.contact, r.c.email, r.c.phone, r.c.license,
       coCity(r.c), r.accts.map((a) => a.name));
   }).sort((x, y) => y.accts.length - x.accts.length || String(x.c.company).localeCompare(String(y.c.company)));
+  // Invites with no company row behind them yet. Not a company, so every
+  // filter about a company record (a licence, a city, a login, being an
+  // account) leaves them out rather than pretending to answer for them.
+  const inviteRows = (stuck?.rows || []).filter((x) => !x.companyId || !companies.some((c) => c.id === x.companyId));
+  const shownInvites = inviteRows.filter((x) => {
+    const f = coFilters;
+    if (f.join === "joined") return false;
+    if (f.join && f.join !== "notjoined" && x.stage !== f.join) return false;
+    if (f.type === "account" || f.login === "yes" || (f.lic && f.lic !== "none")
+      || f.status === "inactive" || f.city || f.reach) return false;
+    return matchesQuery(f.q, x.company, x.contact, x.email, x.phone, x.account);
+  });
+  const notJoinedCount = compRows.filter((r) => r.notJoined.length).length + inviteRows.length;
 
   // ---- health counters ----
   const weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
@@ -9167,9 +9206,6 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     ["dashboard", "Dashboard", LayoutGrid],
     ["accounts", "Accounts", Building2],
     ["companies", "Companies", Users],
-    // A roster row and a login are different records, and the gap between them
-    // was invisible from every screen. This is the one that shows it.
-    ["stuck", "Not arrived", UserX],
     ...(admin.finance ? [["revenue", "Revenue", TrendingUp]] : []),
     ...(isSuper ? [["health", "Health", Activity]] : []),
   ];
@@ -9460,7 +9496,6 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
           </>
         )}
 
-        {screen === "stuck" && <StuckSubs />}
 
         {/* ===== ACCOUNTS ===== */}
         {screen === "accounts" && (
@@ -10040,6 +10075,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               <Kpi label="Serving 2+ accounts" value={compRows.filter((r) => r.accts.length > 1).length} />
               <Kpi label="License issues" value={health.licFail} warn={health.licFail > 0} />
               <Kpi label="Possible duplicates" value={health.dups} warn={health.dups > 0} />
+              <Kpi label="Not joined yet" value={notJoinedCount} warn={notJoinedCount > 0} />
             </div>
             {/* The commonest support question about a company is "can they
                 get in", and the answer was nowhere on this screen. A company
@@ -10049,7 +10085,25 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
             <p className="pf-note">
               {compRows.filter((r) => !r.seats.length).length} of {companies.length} have
               nobody signed in — typed in by an account, never claimed.
+              {notJoinedCount > 0 && <>{" "}<b>{notJoinedCount}</b> were asked to join and have not finished —{" "}
+                <button type="button" className="pf-linkbtn pf-join-link"
+                  onClick={() => setCoFilters({ ...EMPTY_CO_FILTERS, join: "notjoined" })}>show them</button>.</>}
             </p>
+            {/* One cause explains every failed send, so it is said once at the
+                top rather than as fifteen identical row errors. */}
+            {stuck && stuck.mailConfigured === false && (
+              <div className="pf-host-err">
+                <AlertTriangle size={14} /> <b>Mail is not configured on the Worker.</b> No
+                invitation, reset or notification has been sent by SubSub at all. Set
+                RESEND_API_KEY and MAIL_FROM before chasing anybody who has not joined.
+              </div>
+            )}
+            {stuck?.summary?.ours > 0 && (
+              <p className="pf-act">
+                ▸ <b>{stuck.summary.ours}</b> invitation{stuck.summary.ours === 1 ? " is" : "s are"} ours
+                to fix, not theirs to chase — SubSub never sent {stuck.summary.ours === 1 ? "it" : "them"} or the send failed.
+              </p>
+            )}
             {newCompany && (
               <div className="pf-panel pf-newform">
                 <h3>New company</h3>
@@ -10091,9 +10145,15 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 window holds both where the press was made. */}
             <FilterBar q={coFilters.q} onQ={(q) => setCoFilters((f) => ({ ...f, q }))}
               placeholder="Search company, contact, email, licence…"
-              shown={shownCompanies.length} total={compRows.length}
+              shown={shownCompanies.length + shownInvites.length} total={compRows.length + inviteRows.length}
               onClear={() => setCoFilters(EMPTY_CO_FILTERS)}
               filters={[
+                // Joined or not first, because "who has not finished signing
+                // up" is the question support is rung about.
+                { id: "join", label: "Sign-up", all: "Joined or not", value: coFilters.join,
+                  onChange: (v) => setCoFilters((f) => ({ ...f, join: v })),
+                  options: [["notjoined", "Invited, not joined yet"], ["joined", "Joined"],
+                    ...STAGES.map(([k, label]) => [k, `Not joined: ${label}`])] },
                 { id: "type", label: "Types", value: coFilters.type,
                   onChange: (v) => setCoFilters((f) => ({ ...f, type: v })),
                   options: [["contractor", "Contractors"], ["account", "Accounts"]] },
@@ -10138,6 +10198,11 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                       {r.lic && String(r.lic.status).toLowerCase() !== "active" &&
                         <span className="pf-status suspended" title="State license status">{r.lic.status}</span>}
                       {r.dup && <span className="pf-flag" title="Same license number on another record">dup</span>}
+                      {r.notJoined.length > 0 && (
+                        <span className={`pf-join ${isOurs(r.notJoined[0].stage) ? "ours" : ""}`}
+                          title={STAGE_NOTE[r.notJoined[0].stage]}>
+                          not joined · {STAGE_LABEL[r.notJoined[0].stage]}</span>
+                      )}
                       {r.seats.length
                         ? <span className="pf-flag is-seat" title="Somebody can sign in as this company">
                             {r.seats.length === 1 ? "1 login" : `${r.seats.length} logins`}</span>
@@ -10151,11 +10216,45 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                   </button>
                 );
               })}
-              {compRows.length === 0 && <p className="pf-note">No companies yet.</p>}
-              {compRows.length > 0 && shownCompanies.length === 0 && (
+              {/* AN INVITE WITH NO COMPANY BEHIND IT YET. Same line, drawn
+                  dashed: it is somebody asked to join, not a record anybody
+                  can edit, so it opens what is outstanding rather than the
+                  company form. */}
+              {shownInvites.map((x) => (
+                <button type="button" key={`inv-${x.accountId}-${x.inviteId || x.email}`}
+                  data-invite={x.inviteId || x.email}
+                  className={`pf-row pf-row-invite ${isOurs(x.stage) ? "ours" : ""}`}
+                  onClick={() => setOpenInvite(x)}>
+                  <span className="pf-row-name">
+                    <b>{x.company || x.email || "Unnamed invite"}</b>
+                    <span className="pf-sub">{[x.contact, x.email].filter(Boolean).join(" · ") || "No contact details"}</span>
+                  </span>
+                  <span className="pf-row-tags">
+                    <span className="pf-flag is-invite">invite</span>
+                    <span className={`pf-join ${isOurs(x.stage) ? "ours" : ""}`} title={STAGE_NOTE[x.stage]}>
+                      not joined · {STAGE_LABEL[x.stage] || x.stage}</span>
+                  </span>
+                  <span className="pf-row-figs">
+                    <span>on <b>{x.account}</b></span>
+                    <span className="pf-row-lic">{x.since ? `asked ${relTime(x.since)}` : ""}</span>
+                  </span>
+                  <ChevronRight size={16} className="pf-row-chev" />
+                </button>
+              ))}
+              {compRows.length === 0 && inviteRows.length === 0 && <p className="pf-note">No companies yet.</p>}
+              {compRows.length + inviteRows.length > 0 && shownCompanies.length + shownInvites.length === 0 && (
                 <p className="pf-note">Nothing matches. <button type="button" className="pf-linkbtn" onClick={() => setCoFilters(EMPTY_CO_FILTERS)}>Clear the filters</button></p>
               )}
             </div>
+            {openInvite && (
+              <Modal className="modal-invite" onClose={() => setOpenInvite(null)}>
+                <div className="pf-co-hd">
+                  <h2>{openInvite.company || openInvite.email || "Unnamed invite"}</h2>
+                  <p className="pf-sub">Invited, not joined yet. There is no company record until they open the link.</p>
+                </div>
+                <NotJoinedDetail rows={[openInvite]} />
+              </Modal>
+            )}
             {editCompanyId && (() => {
               const r = compRows.find((x) => x.c.id === editCompanyId);
               if (!r) return null;
@@ -10184,6 +10283,12 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                           <span>Engaged by</span>
                           <span>{r.accts.map((a) => a.name).join(", ") || "—"}</span>
                         </div>
+                        {r.notJoined.length > 0 && (
+                          <div className="pfc-row pfc-notjoined">
+                            <span>Not joined yet</span>
+                            <span><NotJoinedDetail rows={r.notJoined} /></span>
+                          </div>
+                        )}
                         <div className="pfc-row">
                           <span>Warranty</span>
                           <span>{warrantyLabel(r.c).replace(" labor warranty", "")}</span>
@@ -29721,153 +29826,62 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
   );
 }
 
-// Subcontractors who were asked to join and never arrived.
-//
-// The console read accounts and their own users; sub invites were in neither.
-// So when a contractor could not get in, staff had exactly the visibility the
-// customer had -- none -- and the only way to find out was SQL against D1.
+// What is outstanding for somebody who was asked and has not finished
+// joining -- one block per account that asked. It was a screen of its own
+// ("Not arrived") until staff pointed out it was the Companies list again; it
+// is now the detail inside a company's window and an invite's.
 //
 // The column staff actually arrive wanting is "did the email go", so it is on
-// every row rather than a detail behind a tap. And the split that decides what
-// to do with a row is OURS versus THEIRS: a send that failed is SubSub owing
-// somebody an email, while an invite nobody has opened is a customer nudging a
-// contractor. Those are listed together because they look identical from the
-// outside, and separated by tint because they are not the same job.
-function StuckSubs() {
-  const [data, setData] = useState(null);
-  const [err, setErr] = useState("");
-  const [only, setOnly] = useState("");
-  const [sq, setSq] = useState("");
-  const [sAcct, setSAcct] = useState("");
+// every block. And the split that decides what to do with one is OURS versus
+// THEIRS: a send that failed is SubSub owing somebody an email, while an
+// invite nobody has opened is a customer nudging a contractor. Same shape from
+// the outside, different jobs, so ours is tinted.
+function NotJoinedDetail({ rows }) {
   const [copied, setCopied] = useState("");
-
-  useEffect(() => {
-    let live = true;
-    api.platform.stuckSubs()
-      .then((d) => { if (live) setData(d); })
-      .catch((e) => { if (live) setErr(e?.body?.error || "Could not load that."); });
-    return () => { live = false; };
-  }, []);
-
-  if (err) return <div className="pf-panel"><h3>Not arrived</h3><p className="pf-note">{err}</p></div>;
-  if (!data) return <div className="pf-panel"><h3>Not arrived</h3><p className="pf-note">Loading…</p></div>;
-
-  // The stage chips narrow by WHY somebody has not arrived; the bar narrows
-  // by WHO, which is the question support is asked on the phone.
-  const rows = data.rows.filter((r) => (!only || r.stage === only)
-    && (!sAcct || r.account === sAcct)
-    && matchesQuery(sq, r.company, r.account, r.email));
-  const { summary } = data;
-
-  const copy = async (text, id) => {
+  const copy = async (text) => {
     try {
       await navigator.clipboard.writeText(text);
-      setCopied(id); setTimeout(() => setCopied(""), 1800);
-    } catch { setCopied("no"); setTimeout(() => setCopied(""), 2500); }
+      setCopied(text); setTimeout(() => setCopied(""), 1800);
+    } catch { /* nothing to copy into */ }
   };
-
   return (
-    <>
-      <div className="pf-panel">
-        <h3>Subcontractors who never arrived</h3>
-        <p className="pf-note">
-          Being on a roster and being able to sign in are two different records. A company
-          can sit on an account&rsquo;s contractor list with nobody behind it who can log in,
-          and until this screen nothing said so.
-        </p>
-
-        {/* One cause explains every failed row, so say it once at the top
-            rather than making somebody read fifteen identical errors. */}
-        {!data.mailConfigured && (
-          <div className="pf-host-err">
-            <AlertTriangle size={14} /> <b>Mail is not configured on the Worker.</b> No
-            invitation, reset or notification has been sent by SubSub at all. Set
-            RESEND_API_KEY and MAIL_FROM before chasing anything below.
+    <div className="stk-rows">
+      {rows.map((r) => (
+        <div key={`${r.accountId}-${r.inviteId || r.companyId}-${r.stage}`}
+          className={`stk-row ${isOurs(r.stage) ? "ours" : ""}`}>
+          <div className="stk-main">
+            <span className={`stk-stage ${isOurs(r.stage) ? "ours" : ""}`}>{STAGE_LABEL[r.stage] || r.stage}</span>
+            <span className="stk-acct">asked by <b>{r.account}</b></span>
           </div>
-        )}
-
-        <div className="stk-tally">
-          <button className={`stk-chip ${only === "" ? "on" : ""}`} onClick={() => setOnly("")}>
-            All <b>{summary.total}</b>
-          </button>
-          {STAGES.filter(([k]) => summary.byStage[k]).map(([k, label]) => (
-            <button key={k} className={`stk-chip ${isOurs(k) ? "ours" : ""} ${only === k ? "on" : ""}`}
-              onClick={() => setOnly(only === k ? "" : k)} title={STAGE_NOTE[k]}>
-              {label} <b>{summary.byStage[k]}</b>
-            </button>
-          ))}
-        </div>
-        <FilterBar q={sq} onQ={setSq} placeholder="Search company, account or email…"
-          shown={rows.length} total={data.rows.length}
-          onClear={() => { setSq(""); setSAcct(""); setOnly(""); }}
-          filters={[{ id: "account", label: "Accounts", value: sAcct, onChange: setSAcct,
-            options: [...new Set(data.rows.map((r) => r.account).filter(Boolean))].sort().map((a) => [a, a]) }]} />
-        {summary.ours > 0 && (
-          <p className="pf-act">
-            ▸ <b>{summary.ours}</b> of these are ours, not theirs — SubSub either never sent
-            the message or the send failed.
-          </p>
-        )}
-      </div>
-
-      {rows.length === 0 ? (
-        <div className="pf-panel"><p className="pf-note">
-          {only || sq || sAcct ? "Nothing matches." : "Nobody is stuck. Every invited subcontractor has arrived."}
-        </p></div>
-      ) : (
-        <div className="pf-panel">
-          <div className="stk-rows">
-            {rows.map((r) => (
-              <div key={`${r.accountId}-${r.inviteId || r.companyId}-${r.stage}`}
-                className={`stk-row ${isOurs(r.stage) ? "ours" : ""}`}>
-                <div className="stk-main">
-                  <b className="stk-co">{r.company}</b>
-                  <span className={`stk-stage ${isOurs(r.stage) ? "ours" : ""}`}>
-                    {STAGE_LABEL[r.stage] || r.stage}
-                  </span>
-                  <span className="stk-acct">on {r.account}</span>
-                </div>
-
-                <div className="stk-meta">
-                  {r.contact && <span>{r.contact}</span>}
-                  {r.email
-                    ? <button className="stk-mail" onClick={() => copy(r.email, r.email)}>
-                        {copied === r.email ? "Copied" : r.email}
-                      </button>
-                    : <span className="stk-none">no address on the record</span>}
-                  {r.phone && <span>{r.phone}</span>}
-                </div>
-
-                <div className="stk-facts">
-                  <span>{STAGE_NOTE[r.stage]}</span>
-                  {r.since && <span>Added {relTime(r.since)}</span>}
-                  {r.sentAt && <span>Last sent {relTime(r.sentAt)}</span>}
-                  {r.expiresAt && <span>
-                    {new Date(r.expiresAt) < new Date()
-                      ? `Expired ${relTime(r.expiresAt)}`
-                      : `Expires ${relTime(r.expiresAt)}`}
-                  </span>}
-                  {/* The question staff arrive with. A row with no attempt at
-                      all reads differently from one that was tried and bounced,
-                      and both read differently from one that went. */}
-                  {r.lastEmail
-                    ? <span className={r.lastEmail.status === "failed" ? "stk-bad" : "stk-good"}>
-                        Mail {r.lastEmail.status}
-                        {r.lastEmail.error ? `: ${r.lastEmail.error}` : ""} ({relTime(r.lastEmail.at)})
-                      </span>
-                    : <span className="stk-bad">No email ever attempted to this address</span>}
-                </div>
-              </div>
-            ))}
+          <div className="stk-meta">
+            {r.contact && <span>{r.contact}</span>}
+            {r.email
+              ? <button type="button" className="stk-mail" onClick={() => copy(r.email)}>
+                  {copied === r.email ? "Copied" : r.email}
+                </button>
+              : <span className="stk-none">no address on the record</span>}
+            {r.phone && <span>{r.phone}</span>}
           </div>
-          <p className="pf-note stk-foot">
-            Acting on one of these means opening the account — the resend and re-issue
-            controls live on its Contractors screen, where the audit trail says who pressed
-            them. This screen is for finding them.
-          </p>
+          <div className="stk-facts">
+            <span>{STAGE_NOTE[r.stage]}</span>
+            {r.since && <span>Added {relTime(r.since)}</span>}
+            {r.sentAt && <span>Last sent {relTime(r.sentAt)}</span>}
+            {r.expiresAt && <span>
+              {new Date(r.expiresAt) < new Date() ? `Expired ${relTime(r.expiresAt)}` : `Expires ${relTime(r.expiresAt)}`}
+            </span>}
+            {r.lastEmail
+              ? <span className={r.lastEmail.status === "failed" ? "stk-bad" : "stk-good"}>
+                  Mail {r.lastEmail.status}{r.lastEmail.error ? `: ${r.lastEmail.error}` : ""} ({relTime(r.lastEmail.at)})
+                </span>
+              : <span className="stk-bad">No email ever attempted to this address</span>}
+          </div>
         </div>
-      )}
-    </>
+      ))}
+      <p className="pf-note">
+        Resending and re-issuing live on that account&rsquo;s Contractors screen, where the
+        audit trail says who pressed them.
+      </p>
+    </div>
   );
 }
 
@@ -29897,7 +29911,8 @@ const CONSOLE_KINDS = [
 const CONSOLE_KIND_LABEL = Object.fromEntries(CONSOLE_KINDS);
 const DASH_TABS = [["mtd", "MTD", "Month to date"], ["total", "Total", "All time"], ["range", "Range", "A range you pick"]];
 const EMPTY_ACCT_FILTERS = { q: "", plan: "", kind: "", status: "", flag: "" };
-const EMPTY_CO_FILTERS = { q: "", type: "", login: "", lic: "", status: "", city: "", reach: "" };
+const EMPTY_CO_FILTERS = { q: "", type: "", login: "", lic: "", status: "", city: "", reach: "", join: "" };
+const STAGE_ORDER = Object.fromEntries(STAGES.map(([k], i) => [k, i]));
 // What an account row can be flagged for. Each test reads the same derived
 // row the line draws its tags from, so a flag and its filter cannot disagree.
 const ACCT_FLAGS = [
@@ -38203,16 +38218,6 @@ iframe.dv-frame{display:block}
   background:var(--amber);color:#1a1207;padding:3px 8px;border-radius:20px}
 /* Not arrived. Ours versus theirs is the split that decides what to do with a
    row, so it is carried by tint rather than by reading each line. */
-.stk-tally{display:flex;flex-wrap:wrap;gap:7px;margin:14px 0 4px}
-.stk-chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);
-  background:var(--card);border-radius:20px;padding:6px 13px;font-size:12.5px;cursor:pointer;
-  color:var(--ink-soft)}
-.stk-chip b{color:var(--ink);font-weight:700}
-.stk-chip:hover{border-color:var(--brand)}
-.stk-chip.on{border-color:var(--brand);background:#eef5f1;color:var(--ink)}
-.stk-chip.ours{border-color:#e6cfc8;background:#fbf1ee;color:#8a3c22}
-.stk-chip.ours b{color:#8a3c22}
-.stk-chip.ours.on{border-color:#c5735a}
 .stk-rows{display:flex;flex-direction:column;gap:9px;margin-top:4px}
 .stk-row{border:1px solid var(--line);border-left:3px solid var(--line);border-radius:10px;
   padding:12px 14px;background:var(--card)}
@@ -38230,7 +38235,6 @@ iframe.dv-frame{display:block}
 .stk-facts{display:flex;flex-wrap:wrap;gap:12px;margin-top:7px;font-size:12px;color:var(--ink-soft)}
 .stk-bad{color:#8a3c22;font-weight:600}
 .stk-good{color:var(--brand-dk)}
-.stk-foot{margin-top:14px}
 @media (max-width:560px){
   .stk-meta,.stk-facts{gap:4px 10px}
   .stk-row{padding:11px 12px}
@@ -38903,6 +38907,13 @@ button.job-insp:hover{border-color:#2f5577}
 .pf-row-name .pf-sub{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pf-row-tags{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;flex:0 1 auto}
 .pf-row-tags .pf-flag{font-size:10.5px}
+.pf-join{font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
+  padding:2px 7px;border-radius:999px;background:#f6efdf;color:#7a5a12;white-space:nowrap}
+.pf-join.ours{background:#f5ded6;color:#8a3c22}
+.pf-flag.is-invite{color:var(--ink-soft)}
+.pf-row.pf-row-invite{border-style:dashed;background:var(--paper)}
+.pf-row.pf-row-invite.ours{border-left:3px solid #c5735a}
+.pfc-notjoined .stk-rows{margin-top:0}
 .pf-row-figs{display:flex;align-items:baseline;gap:14px;flex:none;font-size:12px;color:var(--ink-soft);
   font-variant-numeric:tabular-nums;white-space:nowrap}
 .pf-row-figs b{color:var(--ink);font-weight:700}
