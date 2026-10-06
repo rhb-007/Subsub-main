@@ -9919,6 +9919,29 @@ refactor.
   each on its own assertion. `test:consolerosterui` and `test:feetermsui` open
   an account through `.pf-row` now.
 
+- **THE CONSOLE DASHBOARD IS THREE TABS, AND CANCELLATIONS ARE PART OF RIGHT
+  NOW.** Asked for with arrows from *This month* and *Range* up to the *Right
+  now* header: *"add tabs ... instead of having them viewable by scrolling down
+  page, add cancellations / churn ... to right now"*. Stacked, the period figures
+  sat a screen and a half below the cards on an iPad, and every visit was a
+  scroll to reach the one somebody came for.
+
+  **Each tab is the whole of its own section**: the range picker travels with
+  the range it scopes, and *What needs attention* lives on Right now, because
+  it is current state. In memory, opening on Right now every time. The property
+  the suite pins is that **only the chosen section is on the page** — a tab bar
+  over three sections still all drawn is the old page with a decoration on it,
+  and that mutation fails three assertions.
+
+  **The Cancellations box is a standing, not a period.** The big number is
+  accounts canceled now; under it, what was canceled and what dropped back to
+  Basic this month, and the churn rate against who was paying when the month
+  opened — the same denominator the period tiles use, read off the same
+  `metricsFor`, so the box and the This month tab cannot disagree. Pressing it
+  opens Accounts filtered to the canceled ones. The Accounts box stopped saying
+  *N canceled* in the same change, because two boxes a few inches apart
+  carrying one count is how they come to disagree.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

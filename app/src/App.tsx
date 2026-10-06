@@ -8844,6 +8844,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   // scrolled to and rung for a while; it now opens in a window over the row
   // that was pressed, which is in view by construction and needs neither.
   const [ranksOpen, setRanksOpen] = useState(false);
+  const [dashTab, setDashTab] = useState("now");
   const [acctFilters, setAcctFilters] = useState(EMPTY_ACCT_FILTERS);
   const [coFilters, setCoFilters] = useState(EMPTY_CO_FILTERS);
   const [confirmDelete, setConfirmDelete] = useState(null); // { kind: "account"|"company", id, name }
@@ -8878,6 +8879,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   // Paying is a Scale account that is billed: a comped one is on the plan and
   // pays nothing, which mrrOf alone cannot see.
   const payingNow = live.filter((r) => r.mrr > 0 && !r.a.comped).length;
+  const canceledNow = rows.filter((r) => r.a.status === "canceled").length;
 
   // ---- the two lists, narrowed by their filter bars ----
   const shownAccounts = rows.filter((r) => {
@@ -9240,10 +9242,24 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               </div>
             </div>
 
+            {/* THREE TABS, BECAUSE THEY ARE THREE QUESTIONS. Stacked, the
+                period figures sat a screen and a half below the cards on an
+                iPad, and every visit was a scroll to reach the one somebody
+                came for. Each tab is the whole of its own section -- the
+                range picker travels with the range it scopes. */}
+            <div className="seg-tabs pf-dash-tabs" role="tablist" aria-label="Dashboard view">
+              {DASH_TABS.map(([id, label]) => (
+                <button key={id} type="button" role="tab" data-tab={id}
+                  aria-selected={dashTab === id} className={dashTab === id ? "on" : ""}
+                  onClick={() => setDashTab(id)}>{label}</button>
+              ))}
+            </div>
+
             {/* Where things stand right now, which is a different question
                 from what moved. FIRST, because it is what somebody opening the
                 console is asking; the period figures below answer the next
                 question. These cards are also the way in to each screen. */}
+            {dashTab === "now" && (<>
             <section className="pf-section">
               <div className="pf-section-hd"><h3>Right now</h3><span>current state</span></div>
               <div className="pf-dash-grid">
@@ -9253,7 +9269,6 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                   <p className="pf-note">
                     {live.filter((r) => r.a.plan === "scale").length} on Scale ·{" "}
                     {live.filter((r) => r.a.plan === "basic").length} on Basic
-                    {rows.length > live.length ? ` · ${rows.length - live.length} canceled` : ""}
                   </p>
                   {health.atLimit > 0 && <p className="pf-dash-flag">● {health.atLimit} at a plan limit — upgrade candidates</p>}
                 </div>
@@ -9270,6 +9285,23 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                     {conv}% of signups converted · {thisMonthM.conversions} this month
                     {daysToConvert !== null ? ` · ${daysToConvert} day${daysToConvert === 1 ? "" : "s"} median` : ""}
                   </p>
+                </div>
+
+                {/* CANCELLATIONS, AS A STANDING. How many accounts have gone,
+                    and what left this month -- a cancellation and a drop back
+                    to Basic both lose revenue, so both are counted, and the
+                    rate is against who was paying when the month opened, the
+                    same denominator the period tiles use. The row is the way
+                    into the canceled accounts themselves. */}
+                <div className="pf-panel pf-dash-card pf-dash-churn"
+                  onClick={() => { if (canceledNow) setAcctFilters({ ...EMPTY_ACCT_FILTERS, status: "canceled" }); go("accounts"); }}>
+                  <h3><UserX size={15} /> Cancellations</h3>
+                  <div className="pf-dash-stat"><b>{canceledNow}</b><span>canceled account{canceledNow === 1 ? "" : "s"}</span></div>
+                  <p className="pf-note">
+                    {thisMonthM.canceled} canceled · {thisMonthM.downgraded} downgraded this month ·{" "}
+                    {thisMonthM.churnRate === null ? "no churn rate yet" : `${Math.round(thisMonthM.churnRate * 100)}% churn`}
+                  </p>
+                  {thisMonthM.lost > 0 && <p className="pf-dash-flag">● {thisMonthM.lost} lost this month</p>}
                 </div>
 
                 {/* WHAT KIND OF BUSINESS EACH LIVE ACCOUNT IS. A row is the way
@@ -9353,6 +9385,18 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               )}
             </section>
 
+            {attention > 0 && (
+              <div className="pf-panel">
+                <h3>What needs attention</h3>
+                {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} at a plan limit — <a onClick={() => { setAcctFilters({ ...EMPTY_ACCT_FILTERS, flag: "limit" }); go("accounts"); }}>view them</a></p>}
+                {health.licFail > 0 && <p className="pf-act">▸ {health.licFail} compan{health.licFail === 1 ? "y" : "ies"} with a failing license check — <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, lic: "issue" }); go("companies"); }}>view them</a></p>}
+                {health.dups > 0 && <p className="pf-act">▸ {health.dups} possible duplicate compan{health.dups === 1 ? "y" : "ies"} — <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, reach: "dup" }); go("companies"); }}>view them</a></p>}
+                {health.expired > 0 && <p className="pf-act">▸ {health.expired} expired work-order offer{health.expired === 1 ? "" : "s"} with no reply</p>}
+              </div>
+            )}
+            </>)}
+
+            {dashTab === "month" && (<>
             {/* What moved this month. Kept apart from the window below,
                 because a number that resets on the 1st and one measured over
                 an arbitrary window are not comparable at a glance. */}
@@ -9363,7 +9407,9 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               </div>
               <PeriodStats m={thisMonthM} finance={admin.finance} showSms />
             </section>
+            </>)}
 
+            {dashTab === "range" && (<>
             {/* One picker, above everything it scopes -- the chart and the
                 tiles under it are the same window, so the two cannot
                 disagree about what period is being read. */}
@@ -9383,16 +9429,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
 
               <PeriodStats m={rangeM} finance={admin.finance} showSms />
             </section>
-
-            {attention > 0 && (
-              <div className="pf-panel">
-                <h3>What needs attention</h3>
-                {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} at a plan limit — <a onClick={() => { setAcctFilters({ ...EMPTY_ACCT_FILTERS, flag: "limit" }); go("accounts"); }}>view them</a></p>}
-                {health.licFail > 0 && <p className="pf-act">▸ {health.licFail} compan{health.licFail === 1 ? "y" : "ies"} with a failing license check — <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, lic: "issue" }); go("companies"); }}>view them</a></p>}
-                {health.dups > 0 && <p className="pf-act">▸ {health.dups} possible duplicate compan{health.dups === 1 ? "y" : "ies"} — <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, reach: "dup" }); go("companies"); }}>view them</a></p>}
-                {health.expired > 0 && <p className="pf-act">▸ {health.expired} expired work-order offer{health.expired === 1 ? "" : "s"} with no reply</p>}
-              </div>
-            )}
+            </>)}
           </>
         )}
 
@@ -29787,6 +29824,7 @@ const CONSOLE_KINDS = [
   ["building_owner", "Building owner"],
 ];
 const CONSOLE_KIND_LABEL = Object.fromEntries(CONSOLE_KINDS);
+const DASH_TABS = [["now", "Right now"], ["month", "This month"], ["range", "Range"]];
 const EMPTY_ACCT_FILTERS = { q: "", plan: "", kind: "", status: "", flag: "" };
 const EMPTY_CO_FILTERS = { q: "", type: "", login: "", lic: "", status: "", city: "", reach: "" };
 // What an account row can be flagged for. Each test reads the same derived
@@ -38810,6 +38848,8 @@ button.job-insp:hover{border-color:#2f5577}
 }
 /* The console dashboard's account types and its compact ranked lists. */
 .pf-dash-kinds{cursor:default}
+.pf-dash-tabs{margin:4px 0 4px}
+.pf-dash-tabs button{padding:9px 18px;font-size:14px}
 .pf-kind-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px}
 .pf-kind-list button{display:flex;justify-content:space-between;align-items:center;gap:10px;
   width:calc(100% + 12px);margin:0 -6px;padding:4px 6px;background:none;border:0;border-radius:6px;

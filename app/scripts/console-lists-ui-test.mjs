@@ -82,7 +82,11 @@ const BOOT = {
     { id: "en2", accountId: "acc_pm", companyId: "cmp_sj", status: "active", categories: ["roofing"], docReview: {} },
     { id: "en3", accountId: "acc_gc", companyId: "cmp_dup1", status: "active", categories: ["gutters"], docReview: {} },
   ],
-  jobs: [], subEvents: [], activity: [], smsDaily: [],
+  // One cancellation inside this month, so the box can be told from a
+  // lifetime count: one account is canceled, and the month counts it too.
+  jobs: [], subEvents: [
+    { id: "ev1", accountId: "acc_gone", kind: "canceled", at: new Date().toISOString().slice(0, 10) + "T09:00:00Z", mrrDelta: 0 },
+  ], activity: [], smsDaily: [],
 };
 
 const web = serveApp({ dir: OUT, port: WEB });
@@ -134,16 +138,34 @@ try {
     await page.evaluate(() => document.body.innerText.slice(0, 160).replace(/\s+/g, " ")));
   if (!gotIn) throw new Error("console never opened");
 
-  console.log("\n-- the dashboard leads with Right now --");
-  const order = await page.evaluate(() => [...document.querySelectorAll(".pf-section")]
-    .map((sec) => ({ h: sec.querySelector(".pf-section-hd h3")?.innerText.trim(),
-      top: Math.round(sec.getBoundingClientRect().top) })));
-  const rn = order.find((o) => /right now/i.test(o.h || ""));
-  const tm = order.find((o) => /this month/i.test(o.h || ""));
-  const rg = order.find((o) => /range/i.test(o.h || ""));
-  t.ck("Right now is on the dashboard", !!rn, JSON.stringify(order));
-  t.ck("and above This month and the range", !!rn && !!tm && !!rg && rn.top < tm.top && rn.top < rg.top,
-    JSON.stringify(order));
+  console.log("\n-- the dashboard is three tabs, opening on Right now --");
+  const tabState = () => page.evaluate(() => ({
+    tabs: [...document.querySelectorAll(".pf-dash-tabs [role=tab]")].map((b) => ({
+      id: b.dataset.tab, label: b.innerText.trim(), on: b.getAttribute("aria-selected") === "true" })),
+    sections: [...document.querySelectorAll(".pf-section")].map((sec) =>
+      sec.querySelector(".pf-section-hd h3")?.innerText.trim().toLowerCase()),
+    range: !!document.querySelector(".pf-section .pf-section-hd select, .pf-section-hd .range-picker, .pf-section-hd button"),
+  }));
+  let ts = await tabState();
+  t.ck("there are three tabs, in order: Right now, This month, Range",
+    JSON.stringify(ts.tabs.map((x) => x.label)) === JSON.stringify(["Right now", "This month", "Range"]), JSON.stringify(ts.tabs));
+  t.ck("Right now is the one open", ts.tabs.find((x) => x.on)?.id === "now", JSON.stringify(ts.tabs));
+  // Stacked, all three were on the page at once; the property is that only
+  // the chosen one is.
+  t.ck("and it is the only section on the page", JSON.stringify(ts.sections) === JSON.stringify(["right now"]),
+    JSON.stringify(ts.sections));
+  await page.evaluate(() => document.querySelector('.pf-dash-tabs [data-tab="month"]')?.click());
+  await wait(300);
+  ts = await tabState();
+  t.ck("This month shows this month and nothing else", JSON.stringify(ts.sections) === JSON.stringify(["this month"]),
+    JSON.stringify(ts.sections));
+  await page.evaluate(() => document.querySelector('.pf-dash-tabs [data-tab="range"]')?.click());
+  await wait(300);
+  ts = await tabState();
+  t.ck("Range shows the range, with its picker", JSON.stringify(ts.sections) === JSON.stringify(["range"]),
+    JSON.stringify(ts.sections));
+  await page.evaluate(() => document.querySelector('.pf-dash-tabs [data-tab="now"]')?.click());
+  await wait(300);
 
   const cards = await page.evaluate(() => [...document.querySelectorAll(".pf-dash-card")]
     .map((c) => ({ h: c.querySelector("h3")?.innerText.trim(), text: c.innerText.replace(/\s+/g, " ") })));
@@ -157,6 +179,19 @@ try {
   const rev = cards.find((c) => /^revenue/i.test(c.h || ""));
   t.ck("the Revenue card names the same number of paying accounts",
     /\b2 paying accounts\b/.test(rev?.text || ""), rev?.text);
+
+  console.log("\n-- and cancellations are part of Right now --");
+  const churn = cards.find((c) => /cancellations/i.test(c.h || ""));
+  t.ck("there is a Cancellations box", !!churn, cards.map((c) => c.h).join(" | "));
+  t.ck("counting the canceled account", /\b1 canceled account\b/.test(churn?.text || ""), churn?.text);
+  t.ck("and what left this month", /\b1 canceled · 0 downgraded this month\b/.test(churn?.text || ""), churn?.text);
+  const accCard = cards.find((c) => /^accounts/i.test(c.h || ""));
+  t.ck("the Accounts box no longer says it a second time", !/canceled/i.test(accCard?.text || ""), accCard?.text);
+  await page.evaluate(() => document.querySelector(".pf-dash-churn")?.click());
+  await wait(500);
+  t.ck("pressing it lists the canceled accounts",
+    JSON.stringify(await rowNames()) === JSON.stringify(["Gone Exteriors"]), JSON.stringify(await rowNames()));
+  await nav("Dashboard"); await wait(400);
 
   const kinds = await page.evaluate(() => {
     const c = document.querySelector(".pf-dash-kinds");
@@ -174,7 +209,7 @@ try {
     JSON.stringify((kinds || []).map((k) => k.n)) === JSON.stringify(["1", "2", "1", "1", "1"]),
     JSON.stringify((kinds || []).map((k) => k.n)));
 
-  if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT + "/console-dash.png", clip: { x: 0, y: 0, width: 1280, height: 900 } });
+  if (process.env.SHOT) { await page.setViewport({ width: 820, height: 1180 }); await wait(300); await page.screenshot({ path: process.env.SHOT + "/console-dash.png" }); await page.setViewport({ width: 1280, height: 1600 }); await wait(300); }
   console.log("\n-- trades and locations are up top, and small --");
   const ranks = await page.evaluate(() => {
     const split = document.querySelector(".pf-split-compact");
@@ -187,8 +222,7 @@ try {
       more: !!document.querySelector(".pf-rank-more"),
     } : null;
   });
-  t.ck("they sit above the period figures", !!ranks && ranks.thisMonthTop !== null && ranks.top < ranks.thisMonthTop,
-    JSON.stringify(ranks));
+  t.ck("they are on the Right now tab", !!ranks, JSON.stringify(ranks));
   t.ck("each starts at three rows", JSON.stringify(ranks?.lists) === "[3,3]", JSON.stringify(ranks?.lists));
   t.ck("and the pair is short", (ranks?.height || 999) < 190, `${ranks?.height}px`);
   t.ck("with a way to see more", ranks?.more === true);
