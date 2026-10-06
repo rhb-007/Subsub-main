@@ -9991,21 +9991,29 @@ refactor.
   that could not be selected, and four of its seven cards said again what MTD
   already says.
 
-  **What overlapped went.** Free → paid, Cancellations, Revenue (MRR, ARR,
-  paying) and the Accounts card are each a button on MTD's chart or a tile
-  under it, and two places carrying one figure is how the two came to disagree
-  once already (the Revenue card counting a comped account as paying beside a
-  box that did not). **What did not overlap stays, inside each of MTD, Total
-  and Range**: Account types, Companies, Health, the compact locations and
-  trades, and What needs attention. One `standing` block rendered in all
-  three, so the tabs cannot drift apart. The Accounts card's live count and
-  Scale/Basic split ride on Account types, because they were all it said.
+  **What was not a figure on the chart stayed, inside each of MTD, Total and
+  Range.** The first pass dropped Free → paid, Cancellations and Revenue as
+  overlapping, and they were asked straight back: the chart and tiles count
+  conversions and cancellations *in a window*, and none of them says how many
+  live accounts pay, what share of every signup converted, the median days to
+  convert, how many accounts have gone in total, or GMV to date. So all three
+  are back. **Only the Accounts card went**, and its live count and
+  Scale/Basic split now ride on Account types, because they were all it said.
+  The rest is Companies, Health, the compact locations and trades, and What
+  needs attention. One `standing(m, when)` is rendered in all three tabs, so
+  the tabs cannot drift apart.
 
-  These are standing counts and read the same on every tab, which is
-  deliberate: a building's kind or a company's city is not something that
+  **The second line of a card follows the tab it sits under**: *1 canceled ·
+  0 downgraded this month* on MTD, *2 canceled ... all time* on Total, *in
+  this range* on Range. A card under Total that said "this month" would be the
+  one figure on that tab measured over a different window.
+
+  The headline numbers are standing counts and read the same on every tab, which
+  is deliberate: a business's kind or a company's city is not something that
   happened in a window. `test:consolelists` reads the blocks out of the open
   window itself, on all three tabs. Drawing them beside the tab instead of
-  inside it fails three assertions, and dropping them from Range fails one.
+  inside it fails three assertions, dropping them from Range fails one, and
+  handing Total the month's figures fails two.
 
 ## Working here
 

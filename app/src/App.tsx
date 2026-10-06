@@ -8924,6 +8924,8 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   const conv = subEvents.filter((e) => e.kind === "created").length
     ? Math.round(subEvents.filter((e) => e.kind === "upgraded").length /
         subEvents.filter((e) => e.kind === "created").length * 100) : 0;
+  const payingNow = live.filter((r) => r.mrr > 0 && !r.a.comped).length;
+  const canceledNow = rows.filter((r) => r.a.status === "canceled").length;
   const daysToConvert = (() => {
     const pairs = subEvents.filter((e) => e.kind === "upgraded").map((u) => {
       const c = subEvents.find((e) => e.accountId === u.accountId && e.kind === "created");
@@ -9182,7 +9184,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   // section here, and its Accounts, Free to paid, Cancellations and Revenue
   // cards are gone: MTD's chart and tiles answer each of those, and two places
   // carrying one figure is how the two come to disagree.
-  const standing = (
+  const standing = (m, when) => (
     <div className="pf-standing">
       <div className="pf-dash-grid">
         {/* WHAT KIND OF BUSINESS EACH LIVE ACCOUNT IS. A row is the way into
@@ -9208,6 +9210,35 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
           {health.atLimit > 0 && <p className="pf-dash-flag">● {health.atLimit} at a plan limit — upgrade candidates</p>}
         </div>
 
+        {/* FREE TO PAID, AS A STANDING: how many live accounts pay -- not how
+            many are on Scale, which counts a comped one -- and what share of
+            everybody who ever signed up went on to. The second line follows
+            the tab it sits under. */}
+        <div className="pf-panel pf-dash-card pf-dash-conv"
+          onClick={() => go(admin.finance ? "revenue" : "accounts")}>
+          <h3><TrendingUp size={15} /> Free → paid</h3>
+          <div className="pf-dash-stat"><b>{payingNow}</b><span>of {live.length} live paying</span></div>
+          <p className="pf-note">
+            {conv}% of signups converted · {m.conversions} {when}
+            {daysToConvert !== null ? ` · ${daysToConvert} day${daysToConvert === 1 ? "" : "s"} median` : ""}
+          </p>
+        </div>
+
+        {/* CANCELLATIONS, AS A STANDING: how many accounts have gone, then
+            what left in this tab's window -- a cancellation and a drop back
+            to Basic both lose revenue. The card is the way into the canceled
+            accounts themselves. */}
+        <div className="pf-panel pf-dash-card pf-dash-churn"
+          onClick={() => { if (canceledNow) setAcctFilters({ ...EMPTY_ACCT_FILTERS, status: "canceled" }); go("accounts"); }}>
+          <h3><UserX size={15} /> Cancellations</h3>
+          <div className="pf-dash-stat"><b>{canceledNow}</b><span>canceled account{canceledNow === 1 ? "" : "s"}</span></div>
+          <p className="pf-note">
+            {m.canceled} canceled · {m.downgraded} downgraded {when}
+            {m.churnRate === null ? "" : ` · ${Math.round(m.churnRate * 100)}% churn`}
+          </p>
+          {m.lost > 0 && <p className="pf-dash-flag">● {m.lost} lost {when}</p>}
+        </div>
+
         <div className="pf-panel pf-dash-card pf-dash-companies" onClick={() => go("companies")}>
           <h3><Users size={15} /> Companies</h3>
           <div className="pf-dash-stat"><b>{companies.length}</b><span>on the platform</span></div>
@@ -9218,6 +9249,19 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
           {health.licFail > 0 && <p className="pf-dash-flag">● {health.licFail} with a failing license check</p>}
           {health.dups > 0 && <p className="pf-dash-flag">● {health.dups} possible duplicate{health.dups === 1 ? "" : "s"}</p>}
         </div>
+
+        {admin.finance && (
+          <div className="pf-panel pf-dash-card pf-dash-revenue" onClick={() => go("revenue")}>
+            <h3><TrendingUp size={15} /> Revenue</h3>
+            <div className="pf-dash-stat"><b>{fmtC(mrr)}</b><span>MRR</span></div>
+            <p className="pf-note">
+              {/* The same paying count the Free → paid card shows beside it.
+                  Reading mrr alone counted a comped account as paying. */}
+              {fmtC(mrr * 12)} ARR · {payingNow} paying account{payingNow === 1 ? "" : "s"} ·{" "}
+              {fmtC(gmvTotal)} GMV to date
+            </p>
+          </div>
+        )}
 
         <div className="pf-panel pf-dash-card pf-dash-health" onClick={() => go(isSuper ? "health" : "accounts")}>
           <h3><Activity size={15} /> Health</h3>
@@ -9375,7 +9419,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               <TrendChart series={dailySeries} from={monthStart} to={today} projectTo={monthEnd}
                 finance={admin.finance} metric={chartMetric} onMetric={setChartMetric} />
               <PeriodStats m={thisMonthM} finance={admin.finance} showSms />
-              {standing}
+              {standing(thisMonthM, "this month")}
             </section>
             )}
 
@@ -9391,7 +9435,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               <TrendChart series={dailySeries} from={totalFrom} to={today} projectTo={monthEnd}
                 finance={admin.finance} metric={chartMetric} onMetric={setChartMetric} />
               <PeriodStats m={totalM} finance={admin.finance} showSms allTime />
-              {standing}
+              {standing(totalM, "all time")}
             </section>
             )}
 
@@ -9409,7 +9453,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 projectTo={range.to >= today ? monthEnd : null}
                 finance={admin.finance} metric={chartMetric} onMetric={setChartMetric} />
               <PeriodStats m={rangeM} finance={admin.finance} showSms />
-              {standing}
+              {standing(rangeM, "in this range")}
             </section>
             )}
 
