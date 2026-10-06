@@ -9942,6 +9942,47 @@ refactor.
   *N canceled* in the same change, because two boxes a few inches apart
   carrying one count is how they come to disagree.
 
+- **THE CONSOLE'S TABS ARE WINDOWS -- MTD, TOTAL, RANGE -- AND EACH DRAWS THE
+  SAME FIVE LINES.** Asked for as *"MTD: stats from the first day of the month
+  to current; Total: all stats, total running, the same exact stats as MTD;
+  Range: whatever range is selected; each tab should have a relevant graph
+  with Users, Subscribers, MRR, ARR projection, cancellations."*
+
+  **One measure, three windows.** MTD, Total and Range all go through
+  `metricsFor` and `PeriodStats`, so a tile means the same thing on every tab
+  and the suite asserts the label set is identical. Total runs from the first
+  day anything was recorded. Its churn tile shows counts rather than a rate,
+  because nobody was paying at the start of all time and a rate against zero
+  is not a rate.
+
+  **The chart is one component on every tab, and each metric is a button that
+  carries its own figure.** `chartLine` computes both the line and the button
+  value, so a button and the chart it draws cannot disagree. *Users*, *Subscribers*,
+  *MRR* and *ARR* are levels: they carry in from the day before the window, so
+  the line has somewhere to start on the 1st. *Cancellations* is a count within
+  the window: 1 on MTD and 2 on Total in the fixture, which is the only pair that
+  tells the two readings apart. ARR's button names its straight-line projection
+  to the month's end, which is the "ARR projection" asked for. MRR and ARR are
+  offered only with finance access, because the route omits money for anyone
+  else. The chosen metric survives a tab change, since comparing one line
+  across two windows is the reason to switch.
+
+  **Users is people with a login**, so the bootstrap now carries
+  `users.created_at`. That column has been on the table since the start, so no
+  migration is needed. A user row with no date counts from the first day rather
+  than being dropped.
+
+  **The projection now starts at today's point.** `projectLine` used to
+  continue the least-squares line itself, which begins below the last real
+  value whenever the window ends on a rise. The dashed line then opened with a
+  dip that never happened. It now keeps the fitted slope and starts at the last
+  measured value.
+
+  **Right now is no longer a tab.** Live accounts, who pays, account types,
+  cancellations to date, companies, health, trades, places and the attention
+  list are not measured over a window. They read the same on every tab, so they
+  sit under whichever tab is open.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -8844,7 +8844,11 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   // scrolled to and rung for a while; it now opens in a window over the row
   // that was pressed, which is in view by construction and needs neither.
   const [ranksOpen, setRanksOpen] = useState(false);
-  const [dashTab, setDashTab] = useState("now");
+  const [dashTab, setDashTab] = useState("mtd");
+  // Which line the chart draws, held here rather than in the chart so moving
+  // from MTD to Total keeps the same line -- comparing one metric across two
+  // windows is the reason to switch tab at all.
+  const [chartMetric, setChartMetric] = useState(null);
   const [acctFilters, setAcctFilters] = useState(EMPTY_ACCT_FILTERS);
   const [coFilters, setCoFilters] = useState(EMPTY_CO_FILTERS);
   const [confirmDelete, setConfirmDelete] = useState(null); // { kind: "account"|"company", id, name }
@@ -9000,7 +9004,12 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   const today = now.toISOString().slice(0, 10);
   const dailySeries = useMemo(() => {
     const evs = [...subEvents].filter((e) => e.at).sort((x, y) => (x.at < y.at ? -1 : 1));
-    if (!evs.length) return [];
+    // People with a login, by the day their record was made. A record with no
+    // date is counted from the first day rather than dropped: it exists, and a
+    // Users line that leaves it out never reaches the figure on the cards.
+    const userDays = users.filter((u) => !u.platform).map((u) => (u.createdAt || "").slice(0, 10)).sort();
+    const firstDay = [evs[0]?.at.slice(0, 10), userDays.find(Boolean)].filter(Boolean).sort()[0];
+    if (!firstDay) return [];
 
     // Per-account paying state, not a running +1/-1: a comp moves an account
     // onto Scale without paying, and counting the plan change would report a
@@ -9009,16 +9018,20 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     const paidNow = () => Object.values(paying).filter(Boolean).length;
 
     const out = [];
-    let mrr = 0, i = 0;
-    const start = new Date(evs[0].at.slice(0, 10) + "T00:00:00Z");
+    let mrr = 0, i = 0, u = 0;
+    const start = new Date(firstDay + "T00:00:00Z");
     const end = new Date(today + "T00:00:00Z");
     for (let d = start; d <= end; d = new Date(d.getTime() + 86400000)) {
       const day = d.toISOString().slice(0, 10);
-      let newAccounts = 0, conversions = 0, churned = 0;
+      let newAccounts = 0, conversions = 0, churned = 0, canceled = 0;
+      while (u < userDays.length && userDays[u] <= day) u++;
       while (i < evs.length && evs[i].at.slice(0, 10) <= day) {
         const e = evs[i++];
         mrr += e.mrrDelta || 0;
         if (e.kind === "created") newAccounts++;
+        // Every cancellation, paying or not -- the same count metricsFor
+        // calls canceled, so the chart's total for a window is the tile's.
+        if (e.kind === "canceled") canceled++;
         if (e.kind === "upgraded" || e.kind === "reactivated") { paying[e.accountId] = true; conversions++; }
         else if (e.kind === "comped") paying[e.accountId] = false;
         else if (e.kind === "downgraded" || e.kind === "canceled") {
@@ -9026,10 +9039,10 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
           paying[e.accountId] = false;
         }
       }
-      out.push({ day, mrr, paid: paidNow(), newAccounts, conversions, churned });
+      out.push({ day, mrr, paid: paidNow(), users: u, newAccounts, conversions, churned, canceled });
     }
     return out;
-  }, [subEvents, today]);
+  }, [subEvents, users, today]);
 
   const seriesAt = (day) => {
     // The last point on or before `day` -- the level carries forward on a
@@ -9097,6 +9110,13 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0))
     .toISOString().slice(0, 10);
   const thisMonthM = metricsFor(monthStart, today);
+  // ALL TIME, measured exactly as a month is. The Total tab has to carry the
+  // same figures as MTD, so it goes through the same metricsFor from the
+  // first day anything was recorded -- an account, a person or a billing
+  // event, whichever came first.
+  const totalFrom = [dailySeries[0]?.day, ...accounts.map((a) => a.createdAt)]
+    .filter(Boolean).sort()[0] || today;
+  const totalM = metricsFor(totalFrom, today);
   const moNow = running.find((r) => r.m === thisMonth)
     || { signups: 0, conversions: 0, newMrr: 0, expansion: 0, contraction: 0, churn: 0 };
   const lostMrr = moNow.contraction + moNow.churn;            // already negative
@@ -9248,18 +9268,65 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 came for. Each tab is the whole of its own section -- the
                 range picker travels with the range it scopes. */}
             <div className="seg-tabs pf-dash-tabs" role="tablist" aria-label="Dashboard view">
-              {DASH_TABS.map(([id, label]) => (
-                <button key={id} type="button" role="tab" data-tab={id}
+              {DASH_TABS.map(([id, label, title]) => (
+                <button key={id} type="button" role="tab" data-tab={id} title={title}
                   aria-selected={dashTab === id} className={dashTab === id ? "on" : ""}
                   onClick={() => setDashTab(id)}>{label}</button>
               ))}
             </div>
 
-            {/* Where things stand right now, which is a different question
-                from what moved. FIRST, because it is what somebody opening the
-                console is asking; the period figures below answer the next
-                question. These cards are also the way in to each screen. */}
-            {dashTab === "now" && (<>
+            {/* MONTH TO DATE: the 1st to today, projected to the month's end. */}
+            {dashTab === "mtd" && (
+            <section className="pf-section" data-period="mtd">
+              <div className="pf-section-hd">
+                <h3>Month to date</h3>
+                <span>{monthLabel} · day {Number(today.slice(8))} of {Number(monthEnd.slice(8))}</span>
+              </div>
+              <TrendChart series={dailySeries} from={monthStart} to={today} projectTo={monthEnd}
+                finance={admin.finance} metric={chartMetric} onMetric={setChartMetric} />
+              <PeriodStats m={thisMonthM} finance={admin.finance} showSms />
+            </section>
+            )}
+
+            {/* TOTAL: the same figures as MTD, from the first day anything
+                was recorded. Same chart, same tiles, so a number on one tab
+                means exactly what it means on the other. */}
+            {dashTab === "total" && (
+            <section className="pf-section" data-period="total">
+              <div className="pf-section-hd">
+                <h3>Total</h3>
+                <span>since {niceDay(totalFrom)}</span>
+              </div>
+              <TrendChart series={dailySeries} from={totalFrom} to={today} projectTo={monthEnd}
+                finance={admin.finance} metric={chartMetric} onMetric={setChartMetric} />
+              <PeriodStats m={totalM} finance={admin.finance} showSms allTime />
+            </section>
+            )}
+
+            {/* One picker, above everything it scopes -- the chart and the
+                tiles under it are the same window, so the two cannot
+                disagree about what period is being read. */}
+            {dashTab === "range" && (
+            <section className="pf-section" data-period="range">
+              <div className="pf-section-hd">
+                <h3>Range</h3>
+                <RangePicker value={range} onChange={setRange} />
+                <span>{niceDay(range.from)} — {niceDay(range.to)}</span>
+              </div>
+              <TrendChart series={dailySeries} from={range.from} to={range.to}
+                projectTo={range.to >= today ? monthEnd : null}
+                finance={admin.finance} metric={chartMetric} onMetric={setChartMetric} />
+              <PeriodStats m={rangeM} finance={admin.finance} showSms />
+            </section>
+            )}
+
+            {/* WHERE THINGS STAND, UNDER EVERY TAB. These are not measured
+                over a window -- how many accounts are live, who pays, what
+                kind of business each is -- so they read the same on MTD,
+                Total and Range and sit below whichever is open rather than
+                being a tab of their own. The tab above answers what moved;
+                this answers what is. The cards are also the way in to each
+                screen. */}
             <section className="pf-section">
               <div className="pf-section-hd"><h3>Right now</h3><span>current state</span></div>
               <div className="pf-dash-grid">
@@ -9394,42 +9461,6 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 {health.expired > 0 && <p className="pf-act">▸ {health.expired} expired work-order offer{health.expired === 1 ? "" : "s"} with no reply</p>}
               </div>
             )}
-            </>)}
-
-            {dashTab === "month" && (<>
-            {/* What moved this month. Kept apart from the window below,
-                because a number that resets on the 1st and one measured over
-                an arbitrary window are not comparable at a glance. */}
-            <section className="pf-section">
-              <div className="pf-section-hd">
-                <h3>This month</h3>
-                <span>{monthLabel} · day {Number(today.slice(8))} of {Number(monthEnd.slice(8))}</span>
-              </div>
-              <PeriodStats m={thisMonthM} finance={admin.finance} showSms />
-            </section>
-            </>)}
-
-            {dashTab === "range" && (<>
-            {/* One picker, above everything it scopes -- the chart and the
-                tiles under it are the same window, so the two cannot
-                disagree about what period is being read. */}
-            <section className="pf-section">
-              <div className="pf-section-hd">
-                <h3>Range</h3>
-                <RangePicker value={range} onChange={setRange} />
-                <span>{niceDay(range.from)} — {niceDay(range.to)}</span>
-              </div>
-
-              {/* The only place a projection belongs: a level over time is
-                  the shape a tile cannot show. */}
-              {admin.finance && (
-                <TrendChart series={dailySeries} from={range.from} to={range.to}
-                  projectTo={range.to >= today ? monthEnd : null} />
-              )}
-
-              <PeriodStats m={rangeM} finance={admin.finance} showSms />
-            </section>
-            </>)}
           </>
         )}
 
@@ -10597,20 +10628,56 @@ function projectLine(points, steps) {
   const slope = den ? num / den : 0;
   const out = [];
   for (let k = 1; k <= steps; k++) {
-    // A projection below zero is arithmetic, not a prediction: nobody has
-    // negative MRR or minus two customers.
-    out.push(Math.max(0, my + slope * (n - 1 + k - mx)));
+    // From the last measured point, not from the fitted line: a projection
+    // that starts below today's figure draws a dip nobody had. And never
+    // below zero, which is arithmetic rather than a prediction.
+    out.push(Math.max(0, points[n - 1].v + slope * k));
   }
   return out;
 }
 
+// The five lines the dashboard is read for, in the order they were asked for.
+// Levels carry forward from the day before the window, so the line has
+// somewhere to start on the 1st of a month; cancellations are a count WITHIN
+// the window, so they start from nothing whatever came before. Money is for
+// staff with finance access only -- the route omits it for everybody else,
+// and a line drawn from a figure the screen does not hold would be a line at
+// zero.
 const CHART_METRICS = [
-  { id: "mrr",  label: "MRR",           money: true,  pick: (p) => p.mrr },
-  { id: "paid", label: "Paying accounts", money: false, pick: (p) => p.paid },
+  { id: "users",    label: "Users",         pick: (p) => p.users },
+  { id: "paid",     label: "Subscribers",   pick: (p) => p.paid },
+  { id: "mrr",      label: "MRR",           money: true, pick: (p) => p.mrr },
+  { id: "arr",      label: "ARR",           money: true, pick: (p) => p.mrr * 12, projectedLabel: true },
+  { id: "canceled", label: "Cancellations", cumulative: true, pick: (p) => p.canceled },
 ];
 
-function TrendChart({ series, from, to, projectTo, money }) {
-  const [metric, setMetric] = useState("mrr");
+const dayBefore = (day) => isoDay(new Date(new Date(day + "T00:00:00Z").getTime() - 86400000));
+
+// One metric's line over a window, and its straight-line projection. Read by
+// the chart AND by the metric buttons above it, so the figure on a button is
+// the end of the line it draws.
+function chartLine(series, m, from, to, projectTo) {
+  const base = dayBefore(from);
+  const inWin = series.filter((p) => p.day >= base && p.day <= to);
+  let run = 0;
+  const pts = inWin.map((p) => {
+    if (!m.cumulative) return { day: p.day, v: m.pick(p) };
+    if (p.day >= from) run += m.pick(p) || 0;
+    return { day: p.day, v: run };
+  });
+  const steps = projectTo && pts.length
+    ? Math.max(0, Math.round((new Date(projectTo + "T00:00:00Z") - new Date(pts[pts.length - 1].day + "T00:00:00Z")) / 86400000))
+    : 0;
+  const proj = projectLine(pts, steps);
+  const last = pts.length ? pts[pts.length - 1].v : 0;
+  return { pts, proj, last, end: proj.length ? proj[proj.length - 1] : last };
+}
+
+function TrendChart({ series, from, to, projectTo, finance, metric: metricProp, onMetric }) {
+  const metrics = CHART_METRICS.filter((c) => finance || !c.money);
+  const [own, setOwn] = useState(metrics[0].id);
+  const metric = metrics.some((c) => c.id === (metricProp ?? own)) ? (metricProp ?? own) : metrics[0].id;
+  const setMetric = onMetric || setOwn;
   const [hover, setHover] = useState(null);
   const wrap = useRef(null);
   const [w, setW] = useState(760);
@@ -10626,19 +10693,15 @@ function TrendChart({ series, from, to, projectTo, money }) {
     return () => ro.disconnect();
   }, []);
 
-  const m = CHART_METRICS.find((x) => x.id === metric) || CHART_METRICS[0];
-  const fmt = (v) => (m.money ? fmtC(v) : Math.round(v).toLocaleString());
+  const m = metrics.find((x) => x.id === metric) || metrics[0];
+  const fmtFor = (c, v) => (c.money ? fmtC(v) : Math.round(v).toLocaleString());
+  const fmt = (v) => fmtFor(m, v);
 
-  const pts = series.filter((p) => p.day >= from && p.day <= to).map((p) => ({ day: p.day, v: m.pick(p) }));
+  const { pts, proj, last, end } = chartLine(series, m, from, to, projectTo);
+
 
   const H = 210, padL = 54, padR = 58, padT = 14, padB = 26;
   const plotW = Math.max(40, w - padL - padR), plotH = H - padT - padB;
-
-  // How many days are left to project, and how far along the period we are.
-  const steps = projectTo && pts.length
-    ? Math.max(0, Math.round((new Date(projectTo + "T00:00:00Z") - new Date(pts[pts.length - 1].day + "T00:00:00Z")) / 86400000))
-    : 0;
-  const proj = projectLine(pts, steps);
 
   const all = [...pts.map((p) => p.v), ...proj];
   const peak = Math.max(1, ...all);
@@ -10658,9 +10721,6 @@ function TrendChart({ series, from, to, projectTo, money }) {
   const y = (v) => padT + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
   const path = (vals, i0) => vals.map((v, k) => `${k ? "L" : "M"}${x(i0 + k).toFixed(1)},${y(v).toFixed(1)}`).join("");
 
-  const last = pts.length ? pts[pts.length - 1].v : 0;
-  const end = proj.length ? proj[proj.length - 1] : last;
-
   const onMove = (e) => {
     const box = e.currentTarget.getBoundingClientRect();
     const px = e.clientX - box.left;
@@ -10679,15 +10739,26 @@ function TrendChart({ series, from, to, projectTo, money }) {
   return (
     <div className="pf-panel pf-chart">
       <div className="pf-panel-hd">
-        <h3>{m.label} over time</h3>
-        <div className="pf-chart-tabs" role="tablist">
-          {CHART_METRICS.map((c) => (
-            <button key={c.id} role="tab" aria-selected={metric === c.id}
+        <h3>{m.label}{m.cumulative ? " in this period" : " over time"}</h3>
+      </div>
+      {/* Each metric is a button carrying its own figure at the end of the
+          window, so all five are read at a glance and the chart draws the one
+          pressed. The figure is the end of the very line drawn -- chartLine
+          computes both -- so a button and its chart cannot disagree. */}
+      <div className="pf-chart-metrics" role="tablist" aria-label="Metric">
+        {metrics.map((c) => {
+          const l = chartLine(series, c, from, to, projectTo);
+          return (
+            <button key={c.id} type="button" role="tab" data-metric={c.id} aria-selected={metric === c.id}
               className={metric === c.id ? "on" : ""} onClick={() => { setMetric(c.id); setHover(null); }}>
-              {c.label}
+              <span>{c.label}</span>
+              <b>{fmtFor(c, l.last)}</b>
+              {c.projectedLabel && l.proj.length > 0 && (
+                <small>{fmtFor(c, l.end)} projected</small>
+              )}
             </button>
-          ))}
-        </div>
+          );
+        })}
       </div>
 
       {pts.length < 2 ? (
@@ -10749,7 +10820,7 @@ function TrendChart({ series, from, to, projectTo, money }) {
           </div>
 
           <p className="pf-note">
-            {fmt(last)} today.
+            {fmt(last)} {m.cumulative ? "so far in this period" : `on ${niceDay(pts[pts.length - 1].day)}`}.
             {proj.length > 0 && ` On the last ${pts.length} days' trend, ${fmt(end)} by ${niceDay(projectTo)} — a straight line through what has happened, not a forecast.`}
           </p>
         </>
@@ -10761,7 +10832,7 @@ function TrendChart({ series, from, to, projectTo, money }) {
 // ---- dashboard: one period's numbers -------------------------------------
 // Both sections render through this, which is what makes them comparable:
 // the same metric means the same thing in both, computed the same way.
-function PeriodStats({ m, finance, showSms }) {
+function PeriodStats({ m, finance, showSms, allTime }) {
   const signed = (c) => (c >= 0 ? "+" : "−") + fmtC(Math.abs(c));
   const pct = (r) => (r === null ? "—" : `${Math.round(r * 100)}%`);
   return (
@@ -10769,7 +10840,11 @@ function PeriodStats({ m, finance, showSms }) {
       <Kpi label="New accounts" value={m.signups} />
       <Kpi label="Free → paid" value={m.conversions} sub={`${pct(m.convRate)} of ${m.signups} signup${m.signups === 1 ? "" : "s"}`} />
       <Kpi label="Churned" value={m.lost} warn={m.lost > 0}
-        sub={`${pct(m.churnRate)} of ${m.paidAtStart} paying at start`} />
+        sub={allTime
+          // Over all time nobody was paying at the start, so a rate against
+          // that is not a rate. The count is the honest figure.
+          ? `${m.canceled} canceled · ${m.downgraded} downgraded`
+          : `${pct(m.churnRate)} of ${m.paidAtStart} paying at start`} />
       {finance && <Kpi label="Net new MRR" value={signed(m.netMrr)} accent />}
       {finance && <Kpi label="ARR contribution" value={signed(m.netMrr * 12)} sub="net new MRR × 12" />}
       <Kpi label="GMV" value={fmtC(m.gmv)} sub="work-order value accepted" />
@@ -29824,7 +29899,7 @@ const CONSOLE_KINDS = [
   ["building_owner", "Building owner"],
 ];
 const CONSOLE_KIND_LABEL = Object.fromEntries(CONSOLE_KINDS);
-const DASH_TABS = [["now", "Right now"], ["month", "This month"], ["range", "Range"]];
+const DASH_TABS = [["mtd", "MTD", "Month to date"], ["total", "Total", "All time"], ["range", "Range", "A range you pick"]];
 const EMPTY_ACCT_FILTERS = { q: "", plan: "", kind: "", status: "", flag: "" };
 const EMPTY_CO_FILTERS = { q: "", type: "", login: "", lic: "", status: "", city: "", reach: "" };
 // What an account row can be flagged for. Each test reads the same derived
@@ -38721,11 +38796,18 @@ iframe.dv-frame{display:block}
 .pf-chart-wrap svg{display:block;max-width:100%;cursor:crosshair}
 .pf-chart-tick{font:500 10.5px Inter,sans-serif;fill:var(--ink-soft)}
 .pf-chart-proj{font:700 11px Inter,sans-serif;fill:var(--ink-soft)}
-.pf-chart-tabs{display:flex;gap:3px;background:var(--paper);border:1px solid var(--line);
-  border-radius:9px;padding:3px}
-.pf-chart-tabs button{border:0;background:none;padding:6px 12px;border-radius:6px;cursor:pointer;
-  font:600 12.5px Inter,sans-serif;color:var(--ink-soft)}
-.pf-chart-tabs button.on{background:var(--card);color:var(--ink);box-shadow:var(--shadow)}
+/* The metric buttons carry their own figures, so all five read at a glance
+   and the chart below draws whichever is pressed. */
+.pf-section .pf-chart{margin-top:0;margin-bottom:14px}
+.pf-chart-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(124px,1fr));gap:8px;margin:10px 0 4px}
+.pf-chart-metrics button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;
+  border:1px solid var(--line);background:var(--paper);border-radius:10px;padding:9px 12px;cursor:pointer;
+  font:600 12px Inter,sans-serif;color:var(--ink-soft);min-height:44px}
+.pf-chart-metrics button b{font:700 19px Inter,sans-serif;color:var(--ink);letter-spacing:-.01em}
+.pf-chart-metrics button small{font:600 11px Inter,sans-serif;color:var(--ink-soft)}
+.pf-chart-metrics button.on{border-color:var(--brand);background:var(--card);
+  box-shadow:inset 0 0 0 1px var(--brand)}
+.pf-chart-metrics button.on span{color:var(--brand)}
 /* Value leads, date follows: the reader already knows which line they are on. */
 .pf-chart-tip{position:absolute;top:2px;transform:translateX(-50%);pointer-events:none;
   background:var(--ink);color:#fff;border-radius:8px;padding:6px 10px;

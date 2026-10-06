@@ -92,8 +92,10 @@ const type = (page, text) => page.evaluate((v) => {
   return true;
 }, text);
 
+// The confirmation is the LAST window on the page: a company now opens in a
+// window of its own, and the typed-name box is drawn over it.
 const modal = (page) => page.evaluate(() => {
-  const m = document.querySelector(".modal");
+  const m = [...document.querySelectorAll(".modal")].pop();
   if (!m) return null;
   const btn = [...m.querySelectorAll("button")].find((b) => /Delete (company|account)/i.test(b.innerText || ""));
   return {
@@ -138,14 +140,19 @@ try {
     if (nav) nav.click();
   });
   await wait(800);
-  // The trash on the card itself, which is the control in the report. The
-  // edit panel has a second button that opens the same modal.
-  const opened = await page.evaluate(() => {
-    const btn = [...document.querySelectorAll("button")]
-      .find((b) => (b.title || "") === "Delete company");
-    if (btn) { btn.click(); return true; }
-    return false;
-  });
+  // A company is a row now, and its window carries the edit form and the
+  // Delete company button -- the control in the report, one press further in.
+  const openDelete = async () => {
+    await page.evaluate(() => document.querySelector(".pf-rows .pf-row[data-company]")?.click());
+    await wait(500);
+    return page.evaluate(() => {
+      const btn = [...document.querySelectorAll(".modal button")]
+        .find((b) => /Delete company/i.test(b.innerText || "") || (b.title || "") === "Delete company");
+      if (btn) { btn.click(); return true; }
+      return false;
+    });
+  };
+  const opened = await openDelete();
   t.ck("the delete confirmation opens", opened, String(opened));
   await wait(500);
 
@@ -182,7 +189,7 @@ try {
   t.ck("typing it as the label shows it enables the button", m?.off === false, JSON.stringify(m));
   t.ck("and the reason goes away", !!m && !m.hint, JSON.stringify(m));
 
-  await page.evaluate(() => [...document.querySelectorAll(".modal button")]
+  await page.evaluate(() => [...[...document.querySelectorAll(".modal")].pop().querySelectorAll("button")]
     .find((b) => /Delete company/i.test(b.innerText || ""))?.click());
   await wait(900);
   t.ck("pressing it actually deletes", deletes.length === 1, JSON.stringify(deletes));
@@ -200,8 +207,7 @@ try {
     if (nav) nav.click();
   });
   await wait(700);
-  await page.evaluate(() => [...document.querySelectorAll("button")]
-    .find((b) => (b.title || "") === "Delete company")?.click());
+  await openDelete();
   await wait(500);
   await type(page, "roundhouse kick consgruction");
   await wait(250);

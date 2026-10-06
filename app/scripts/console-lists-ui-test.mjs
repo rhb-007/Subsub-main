@@ -21,8 +21,10 @@ const t = tally();
 console.log("\n-- building the console --");
 buildApp({ outDir: OUT, apiPort: API, platform: true });
 
-const STAFF = { userId: "u_staff", name: "Staff Person", email: "staff@subsub.test",
-  role: "superadmin", finance: true, impersonate: true };
+let FINANCE = true;
+const STAFF = () => ({ userId: "u_staff", name: "Staff Person", email: "staff@subsub.test",
+  role: "superadmin", finance: FINANCE, impersonate: true });
+const TODAY = new Date().toISOString().slice(0, 10);
 
 const acct = (id, name, kind, plan, extra = {}) => ({ id, name, subdomain: id, kind, plan,
   billing: "monthly", comped: false, compNote: null, trades: [], hostnameStatus: "active",
@@ -45,14 +47,16 @@ const BOOT = {
     // Canceled: off every live count, still in the list.
     acct("acc_gone", "Gone Exteriors", "general_contractor", "basic", { status: "canceled" }),
   ],
+  // Dated, so the Users line has a shape: six people before this month and
+  // one today, seven in all.
   users: [
-    { id: "u_a1", name: "Rae Admin", email: "rae@outerhome.test", phone: null },
-    { id: "u_a2", name: "Juan Soto", email: "juan@pacific.test", phone: null },
-    { id: "u_pm", name: "Priya Manager", email: "priya@harbor.test", phone: null },
-    { id: "u_a3", name: "Sam Sound", email: "sam@sound.test", phone: null },
-    { id: "u_a4", name: "Nell North", email: "nell@northline.test", phone: null },
-    { id: "u_a5", name: "Ruth Owner", email: "ruth@ruston.test", phone: null },
-    { id: "u_a6", name: "Gina Gone", email: "gina@gone.test", phone: null },
+    { id: "u_a1", createdAt: "2026-01-04", name: "Rae Admin", email: "rae@outerhome.test", phone: null },
+    { id: "u_a2", createdAt: "2026-02-10", name: "Juan Soto", email: "juan@pacific.test", phone: null },
+    { id: "u_pm", createdAt: "2026-03-01", name: "Priya Manager", email: "priya@harbor.test", phone: null },
+    { id: "u_a3", createdAt: "2026-04-02", name: "Sam Sound", email: "sam@sound.test", phone: null },
+    { id: "u_a4", createdAt: "2026-05-05", name: "Nell North", email: "nell@northline.test", phone: null },
+    { id: "u_a5", createdAt: "2026-06-06", name: "Ruth Owner", email: "ruth@ruston.test", phone: null },
+    { id: "u_a6", createdAt: TODAY, name: "Gina Gone", email: "gina@gone.test", phone: null },
   ],
   memberships: [
     { userId: "u_a1", accountId: "acc_gc", role: "admin", companyId: null },
@@ -84,14 +88,21 @@ const BOOT = {
   ],
   // One cancellation inside this month, so the box can be told from a
   // lifetime count: one account is canceled, and the month counts it too.
+  // Two accounts begin paying before this month, so Subscribers and MRR are
+  // levels that carry INTO the month; and a second cancellation sits in
+  // April, so the MTD count (1) and the Total count (2) can be told apart.
   jobs: [], subEvents: [
-    { id: "ev1", accountId: "acc_gone", kind: "canceled", at: new Date().toISOString().slice(0, 10) + "T09:00:00Z", mrrDelta: 0 },
+    { id: "ev0", accountId: "acc_gc", kind: "created", at: "2026-01-04T09:00:00Z", mrrDelta: 0 },
+    { id: "ev2", accountId: "acc_gc", kind: "upgraded", fromPlan: "basic", at: "2026-02-01T09:00:00Z", mrrDelta: 9900 },
+    { id: "ev3", accountId: "acc_pm", kind: "upgraded", fromPlan: "basic", at: "2026-03-01T09:00:00Z", mrrDelta: 9900 },
+    { id: "ev4", accountId: "acc_old", kind: "canceled", at: "2026-04-10T09:00:00Z", mrrDelta: 0 },
+    { id: "ev1", accountId: "acc_gone", kind: "canceled", at: TODAY + "T09:00:00Z", mrrDelta: 0 },
   ], activity: [], smsDaily: [],
 };
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path) => {
-  if (path === "/api/platform/me") return [200, STAFF];
+  if (path === "/api/platform/me") return [200, STAFF()];
   if (path === "/api/platform/bootstrap") return [200, BOOT];
   if (path === "/api/platform/companies") return [200, []];
   if (path.startsWith("/api/platform/activity/")) return [200, []];
@@ -138,33 +149,94 @@ try {
     await page.evaluate(() => document.body.innerText.slice(0, 160).replace(/\s+/g, " ")));
   if (!gotIn) throw new Error("console never opened");
 
-  console.log("\n-- the dashboard is three tabs, opening on Right now --");
+  console.log("\n-- the dashboard is MTD, Total and Range, opening on MTD --");
   const tabState = () => page.evaluate(() => ({
     tabs: [...document.querySelectorAll(".pf-dash-tabs [role=tab]")].map((b) => ({
       id: b.dataset.tab, label: b.innerText.trim(), on: b.getAttribute("aria-selected") === "true" })),
+    periods: [...document.querySelectorAll(".pf-section[data-period]")].map((sec) => sec.dataset.period),
+    range: !!document.querySelector('.pf-section[data-period="range"] .pf-section-hd .pf-range-btn'),
     sections: [...document.querySelectorAll(".pf-section")].map((sec) =>
       sec.querySelector(".pf-section-hd h3")?.innerText.trim().toLowerCase()),
-    range: !!document.querySelector(".pf-section .pf-section-hd select, .pf-section-hd .range-picker, .pf-section-hd button"),
+    chart: (() => {
+      const sec = document.querySelector(".pf-section[data-period]");
+      const ch = sec?.querySelector(".pf-chart");
+      if (!ch) return null;
+      return {
+        metrics: [...ch.querySelectorAll(".pf-chart-metrics [role=tab]")].map((b) => ({
+          id: b.dataset.metric, label: b.querySelector("span")?.innerText.trim(),
+          v: b.querySelector("b")?.innerText.trim(), proj: b.querySelector("small")?.innerText.trim() || null,
+          on: b.getAttribute("aria-selected") === "true" })),
+        line: !!ch.querySelector("svg path"),
+        kpis: [...sec.querySelectorAll(".pf-kpis-period .kpi .kpi-l")].map((k) => k.innerText.trim()),
+        kv: Object.fromEntries([...sec.querySelectorAll(".pf-kpis-period .kpi")].map((k) =>
+          [k.querySelector(".kpi-l")?.innerText.trim(), k.querySelector(".kpi-v")?.innerText.trim()])),
+      };
+    })(),
   }));
+  const metricMap = (c) => Object.fromEntries((c?.metrics || []).map((x) => [x.id, x]));
+  const num = (v) => Number(String(v || "").replace(/[^0-9.]/g, ""));
   let ts = await tabState();
-  t.ck("there are three tabs, in order: Right now, This month, Range",
-    JSON.stringify(ts.tabs.map((x) => x.label)) === JSON.stringify(["Right now", "This month", "Range"]), JSON.stringify(ts.tabs));
-  t.ck("Right now is the one open", ts.tabs.find((x) => x.on)?.id === "now", JSON.stringify(ts.tabs));
-  // Stacked, all three were on the page at once; the property is that only
-  // the chosen one is.
-  t.ck("and it is the only section on the page", JSON.stringify(ts.sections) === JSON.stringify(["right now"]),
-    JSON.stringify(ts.sections));
-  await page.evaluate(() => document.querySelector('.pf-dash-tabs [data-tab="month"]')?.click());
+  t.ck("there are three tabs, in order: MTD, Total, Range",
+    JSON.stringify(ts.tabs.map((x) => x.label)) === JSON.stringify(["MTD", "Total", "Range"]), JSON.stringify(ts.tabs));
+  t.ck("MTD is the one open", ts.tabs.find((x) => x.on)?.id === "mtd", JSON.stringify(ts.tabs));
+  // Stacked, every window was on the page at once; the property is that only
+  // the chosen one is, with Right now under it.
+  t.ck("only the MTD window is on the page", JSON.stringify(ts.periods) === JSON.stringify(["mtd"]), JSON.stringify(ts.periods));
+  t.ck("with Right now below it, not a tab of its own",
+    JSON.stringify(ts.sections) === JSON.stringify(["month to date", "right now"]), JSON.stringify(ts.sections));
+
+  console.log("\n-- every tab has the same chart: Users, Subscribers, MRR, ARR, Cancellations --");
+  const FIVE = JSON.stringify(["Users", "Subscribers", "MRR", "ARR", "Cancellations"]);
+  t.ck("MTD's chart offers the five metrics, in the order asked for",
+    JSON.stringify((ts.chart?.metrics || []).map((x) => x.label)) === FIVE, JSON.stringify(ts.chart?.metrics));
+  t.ck("and draws a line", ts.chart?.line === true, JSON.stringify(ts.chart));
+  let mm = metricMap(ts.chart);
+  // Levels carry into the month; a count starts in it.
+  t.ck("Users is everybody to date -- 7", mm.users?.v === "7", mm.users?.v);
+  t.ck("Subscribers carry in from before the month -- 2", mm.paid?.v === "2", mm.paid?.v);
+  t.ck("ARR is MRR × 12", num(mm.arr?.v) === num(mm.mrr?.v) * 12 && num(mm.mrr?.v) > 0,
+    `${mm.mrr?.v} / ${mm.arr?.v}`);
+  const lastOfMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  if (TODAY === lastOfMonth) console.log("  (today is the month's last day: there is nothing left to project)");
+  else t.ck("and ARR carries its projection to the month's end", /projected/.test(mm.arr?.proj || ""), JSON.stringify(mm.arr));
+  t.ck("Cancellations count only this month's -- 1", mm.canceled?.v === "1", mm.canceled?.v);
+  const mtdKpis = ts.chart?.kpis || [];
+  t.ck("and the period tiles are under it", mtdKpis.length >= 5, JSON.stringify(mtdKpis));
+  t.ck("MTD's Churned tile counts this month's loss -- 1", ts.chart?.kv?.Churned === "1", JSON.stringify(ts.chart?.kv));
+
+  // The chart keeps the metric across tabs: comparing one line over two
+  // windows is the reason to switch.
+  await page.evaluate(() => document.querySelector('.pf-chart-metrics [data-metric="canceled"]')?.click());
+  await wait(200);
+  await page.evaluate(() => document.querySelector('.pf-dash-tabs [data-tab="total"]')?.click());
   await wait(300);
   ts = await tabState();
-  t.ck("This month shows this month and nothing else", JSON.stringify(ts.sections) === JSON.stringify(["this month"]),
-    JSON.stringify(ts.sections));
+  t.ck("Total shows the all-time window and nothing else", JSON.stringify(ts.periods) === JSON.stringify(["total"]),
+    JSON.stringify(ts.periods));
+  t.ck("with the same chart", JSON.stringify((ts.chart?.metrics || []).map((x) => x.label)) === FIVE,
+    JSON.stringify(ts.chart?.metrics));
+  t.ck("and the same tiles as MTD", JSON.stringify(ts.chart?.kpis) === JSON.stringify(mtdKpis),
+    `${JSON.stringify(ts.chart?.kpis)} vs ${JSON.stringify(mtdKpis)}`);
+  mm = metricMap(ts.chart);
+  // The tiles are measured over all time, not a copy of the month's: April's
+  // cancellation is on Total and nowhere on MTD.
+  t.ck("Total's Churned tile counts both -- 2", ts.chart?.kv?.Churned === "2", JSON.stringify(ts.chart?.kv));
+  t.ck("and its Free → paid counts both conversions -- 2", ts.chart?.kv?.["Free → paid"] === "2", JSON.stringify(ts.chart?.kv));
+  t.ck("Cancellations over all time -- 2", mm.canceled?.v === "2", mm.canceled?.v);
+  t.ck("Users and Subscribers end where MTD's do", mm.users?.v === "7" && mm.paid?.v === "2",
+    `${mm.users?.v} / ${mm.paid?.v}`);
+  t.ck("the metric pressed on MTD is still the one drawn", mm.canceled?.on === true, JSON.stringify(ts.chart?.metrics));
+
   await page.evaluate(() => document.querySelector('.pf-dash-tabs [data-tab="range"]')?.click());
   await wait(300);
   ts = await tabState();
-  t.ck("Range shows the range, with its picker", JSON.stringify(ts.sections) === JSON.stringify(["range"]),
-    JSON.stringify(ts.sections));
-  await page.evaluate(() => document.querySelector('.pf-dash-tabs [data-tab="now"]')?.click());
+  t.ck("Range shows the range and nothing else", JSON.stringify(ts.periods) === JSON.stringify(["range"]),
+    JSON.stringify(ts.periods));
+  t.ck("with its picker", ts.range === true);
+  t.ck("and the same chart", JSON.stringify((ts.chart?.metrics || []).map((x) => x.label)) === FIVE,
+    JSON.stringify(ts.chart?.metrics));
+  await page.evaluate(() => document.querySelector('.pf-chart-metrics [data-metric="users"]')?.click());
+  await page.evaluate(() => document.querySelector('.pf-dash-tabs [data-tab="mtd"]')?.click());
   await wait(300);
 
   const cards = await page.evaluate(() => [...document.querySelectorAll(".pf-dash-card")]
@@ -222,7 +294,7 @@ try {
       more: !!document.querySelector(".pf-rank-more"),
     } : null;
   });
-  t.ck("they are on the Right now tab", !!ranks, JSON.stringify(ranks));
+  t.ck("they are in Right now, under the tab", !!ranks, JSON.stringify(ranks));
   t.ck("each starts at three rows", JSON.stringify(ranks?.lists) === "[3,3]", JSON.stringify(ranks?.lists));
   t.ck("and the pair is short", (ranks?.height || 999) < 190, `${ranks?.height}px`);
   t.ck("with a way to see more", ranks?.more === true);
@@ -370,6 +442,24 @@ try {
   t.ck("nothing scrolls sideways", phone.over <= 0, `${phone.over}px`);
   t.ck("and every row ends inside the screen", phone.rows.length === 7 && phone.rows.every((r) => r <= 390),
     JSON.stringify(phone.rows));
+
+  await nav("Dashboard"); await wait(600);
+  const phoneDash = await page.evaluate(() => ({
+    over: document.documentElement.scrollWidth - window.innerWidth,
+    btns: [...document.querySelectorAll(".pf-chart-metrics button")].map((b) => Math.round(b.getBoundingClientRect().right)),
+  }));
+  t.ck("the dashboard chart fits a phone too", phoneDash.over <= 0 && phoneDash.btns.length === 5
+    && phoneDash.btns.every((r) => r <= 390), JSON.stringify(phoneDash));
+
+  console.log("\n-- without finance access the money lines are not offered --");
+  FINANCE = false;
+  await page.setViewport({ width: 1280, height: 1600 });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await wait(2600);
+  const noFin = await page.evaluate(() => [...document.querySelectorAll(".pf-chart-metrics [role=tab] span")]
+    .map((x) => x.innerText.trim()));
+  t.ck("the chart offers Users, Subscribers and Cancellations only",
+    JSON.stringify(noFin) === JSON.stringify(["Users", "Subscribers", "Cancellations"]), JSON.stringify(noFin));
 
   t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
   await ctx.close();

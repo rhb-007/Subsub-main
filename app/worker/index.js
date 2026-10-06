@@ -18467,7 +18467,9 @@ app.get("/api/platform/bootstrap", async (c) => {
   const [accounts, users, memberships, companies, engagements, jobs, subEvents, activity] =
     await Promise.all([
       c.env.DB.prepare(`SELECT * FROM accounts`).all(),
-      c.env.DB.prepare(`SELECT id, name, email, phone FROM users`).all(),
+      // created_at so the dashboard can draw how many people have a login
+      // over time -- the Users line. It has been on the table since the start.
+      c.env.DB.prepare(`SELECT id, name, email, phone, created_at FROM users`).all(),
       c.env.DB.prepare(`SELECT user_id, account_id, role, company_id FROM memberships`).all(),
       // contact/phone/email so staff answering "who do I call about this
       // company" do not have to sit in somebody's account to find out. This
@@ -18544,7 +18546,7 @@ app.get("/api/platform/bootstrap", async (c) => {
       createdAt: (a.created_at || "").slice(0, 10),
       status: "active",
     })),
-    users: users.results,
+    users: users.results.map(({ created_at, ...u }) => ({ ...u, createdAt: (created_at || "").slice(0, 10) })),
     memberships: memberships.results.map((m) => ({
       userId: m.user_id, accountId: m.account_id, role: m.role, companyId: m.company_id,
     })),
