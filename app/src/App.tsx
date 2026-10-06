@@ -3750,6 +3750,17 @@ export default function SubSub() {
   }, [role, account, myCompany]);
   // What the portal is handed, whichever way in it was reached.
   const portalSub = mySub || ownSub;
+  // WHETHER THE ACCOUNT'S OWN ADMIN IS SHOWN "MY JOBS" AT ALL. A subcontractor
+  // account exists to be hired, so the entries are its whole point and are
+  // always there. A general contractor is hireable too -- another GC can hand
+  // it overflow -- but that is the odd case, and two nav entries opening onto
+  // an empty schedule, an upload banner and "Working for Outerhome" read to the
+  // GC as a second dashboard that is about them working for themselves.
+  // Reported in exactly those words. So for any other kind they appear the
+  // moment another account has given them work or asked them to quote, and not
+  // before -- the work is the reason for the screen.
+  const ownWork = ownSub && (kindOf(account) === "subcontractor"
+    || myWork.length > 0 || myQuotes.length > 0) ? ownSub : null;
   const packSource = role === "contractor" ? mySub : myCompany?.docs;
   const packOnFile = !!packSource && PACK_KINDS.some((k) => packSource[k]);
   const canQuickSend = canShowQr && packOnFile;
@@ -5749,7 +5760,7 @@ export default function SubSub() {
               Job Settings are engagement-shaped and there is no engagement
               with yourself; Connect is on the dashboard, which is where it
               was moved for exactly this reason. */}
-          {!can("portal") && ownSub && [["jobs", "My Jobs"], ["schedule", "My calendar"]]
+          {!can("portal") && ownWork && [["jobs", "My Jobs"], ["schedule", "My calendar"]]
             .map(([id, label]) => (
               <button key={id} className={tab === "portal" && pane === id ? "on" : ""}
                 onClick={() => { setPane(id); setTab("portal"); }}>
@@ -7164,7 +7175,7 @@ export default function SubSub() {
           portal under every screen: a general contractor's Contractors roster
           and Dashboard each had a second greeting, a second schedule and an
           upload banner stacked below them. */}
-      {(can("portal") ? tab !== "account" : ownSub && tab === "portal") && (
+      {(can("portal") ? tab !== "account" : ownWork && tab === "portal") && (
         portalSub ? (
           <ContractorPortal weather={weather} sub={portalSub} jobs={jobs} pane={pane}
             /* NOTHING FROM THIS ACCOUNT'S OWN JOB LIST when the seat IS the
@@ -25147,9 +25158,15 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   // Pacific apartment maintenance" to Pacific, which is working for yourself.
   // The same was already true of a contractor seat at one account holding
   // work only at another.
+  // AND WITH NO CLIENT AT ALL, NOBODY IS NAMED. On the account's own seat
+  // `brand.name` is the account itself, so the fallback printed "Outerhome --
+  // Working for Outerhome": a sentence about working for yourself, on a GC's
+  // screen. A contractor seat with no work yet still names the account it sits
+  // in, because that account engaged them; the account's own team has nobody
+  // to name until somebody hires them, and says so.
   const soleClient = mine.length
     ? brand.name
-    : (elsewhere[0]?.elsewhere?.name || brand.name);
+    : (elsewhere[0]?.elsewhere?.name || (sub.ownAccount ? null : brand.name));
 
   // Still being asked. An answered one drops out of the list rather than
   // sitting there looking like it still needs something.
@@ -25270,7 +25287,9 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                 <span className="who-for">
                   {clientCount > 1
                     ? `${workingForVerb(clientKinds)} ${clientCount} companies`
-                    : `${workingForVerb(clientKinds)} ${soleClient}`}
+                    : soleClient
+                      ? `${workingForVerb(clientKinds)} ${soleClient}`
+                      : "No clients yet"}
                 </span>
               </div>
             </div>

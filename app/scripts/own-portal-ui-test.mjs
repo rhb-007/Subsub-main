@@ -43,6 +43,9 @@ const WEB = 5337, API = 9035;
 const t = tally();
 
 let KIND = "subcontractor";
+// Whether anybody has given this account work. Off, the account has a company
+// row and nothing on it -- which is every general contractor nobody has hired.
+let NO_WORK = false;
 const acct = () => ({
   id: "acc_pac", name: "Pacific apartment maintenance", subdomain: "pacific",
   kind: KIND, plan: "basic", billing: "monthly", useDefaultMark: true, theme: null,
@@ -85,7 +88,7 @@ const api = serveApi({ port: API, routes: (path) => {
     return KIND === "subcontractor" || KIND === "general_contractor"
       ? [200, MY_COMPANY] : [409, { error: "not_hireable" }];
   }
-  if (path === "/api/my-work") return [200, MY_WORK()];
+  if (path === "/api/my-work") return [200, NO_WORK ? { work: [] } : MY_WORK()];
   if (path === "/api/account-users") return [200, [
     { id: "u_juan", name: "Juan Soto", email: "juan@pacific.test", phone: null,
       role: "admin", subId: null, propertyIds: [], unit: null, hasLogin: true,
@@ -214,6 +217,36 @@ try {
       JSON.stringify(mine));
     await cx.close().catch(() => {});
   }
+  KIND = "subcontractor";
+
+  console.log("\n-- NOBODY HAS GIVEN THEM WORK: a GC gets no My Jobs, a subcontractor names no client --");
+  // Reported from Outerhome, a general contractor nobody had hired: My Jobs and
+  // My calendar in the nav opened onto an empty schedule, an upload banner and
+  // "Outerhome -- Working for Outerhome". Both kinds in the same place, because
+  // the subcontractor's entries must survive the fix: being hired is the whole
+  // reason that kind exists.
+  NO_WORK = true;
+  for (const kind of ["general_contractor", "subcontractor"]) {
+    KIND = kind;
+    const { ctx: cx, page: px } = await visitApp(browser, { host: "pacific", webPort: WEB,
+      seat: { userId: "u_juan", accountId: "acc_pac" }, viewport: { width: 1340, height: 1800 } });
+    await wait(2800);
+    const its = await nav(px);
+    t.ck(`${kind}: the app rendered`, its.some((x) => /^Dashboard/.test(x)), JSON.stringify(its));
+    if (kind === "general_contractor") {
+      t.ck("a GC nobody has hired has no My Jobs", !its.some((x) => /^My Jobs/.test(x)), JSON.stringify(its));
+      t.ck("and no My calendar", !its.some((x) => /^My calendar/.test(x)), JSON.stringify(its));
+    } else {
+      t.ck("a subcontractor keeps My Jobs with nothing on it", its.some((x) => /^My Jobs/.test(x)), JSON.stringify(its));
+      await open(px, "My Jobs");
+      const who = await px.evaluate(() => (document.querySelector(".who-bar")?.innerText || "").replace(/\s+/g, " ").trim());
+      t.ck("the bar is drawn", who.length > 0, who);
+      t.ck("and does not say they work for themselves", !/for Pacific/i.test(who), who);
+      t.ck("it says there are no clients yet", /No clients yet/.test(who), who);
+    }
+    await cx.close().catch(() => {});
+  }
+  NO_WORK = false;
   KIND = "subcontractor";
 
   console.log("\n-- and an account nobody can hire gets neither --");

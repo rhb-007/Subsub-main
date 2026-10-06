@@ -9850,6 +9850,26 @@ refactor.
   not for a job on another account. Blue-grey, because amber already means
   waiting and green means done; a kind of job is not a state.
 
+- **"OUTERHOME -- WORKING FOR OUTERHOME": A GENERAL CONTRACTOR NOBODY HAS
+  HIRED GETS NO MY JOBS, AND NOBODY IS EVER NAMED AS THEIR OWN CLIENT.**
+  Reported with the GC's My Jobs on screen and the question *"what is this"*.
+  It was the hireable account's own portal: since 031 a general contractor is
+  hireable, so it had My Jobs and My calendar in the nav -- and with no work
+  from anybody they opened onto an empty schedule, an upload banner and a bar
+  saying it worked for itself.
+
+  Two faults. `soleClient` fell back to `brand.name`, which on the account's
+  own seat **is the account** -- right for a contractor seat with no work yet,
+  because the account it sits in engaged it, and wrong for `sub.ownAccount`,
+  where it now says *No clients yet*. And the entries were unconditional for
+  every hireable kind. `ownWork` keeps them **always** for a `subcontractor`
+  account, whose whole reason to exist is being hired, and for any other kind
+  only once another account has given it work or asked it to quote. The
+  general rule: **a screen that is about a relationship has nothing to show
+  before the relationship exists**, and drawing it empty reads as a second,
+  broken copy of the screen beside it. `test:ownportal` drives both kinds with
+  no work, and undoing either half fails two assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
