@@ -260,6 +260,54 @@ try {
     await ctx.close();
   }
 
+  console.log("\n-- and on a phone, which is where it was reported --");
+  {
+    // The roster was reported from a phone showing full cards. At 390px a line
+    // must still be a line: short, nothing running off the right, and the
+    // job list the same.
+    const { ctx, page, crashes } = await visitApp(browser, { host: "soundpm", webPort: WEB,
+      seat: { userId: "u_mgr", accountId: "acc_pm" }, viewport: { width: 390, height: 900 } });
+    await wait(2800);
+    const openNav = async (re) => {
+      await page.evaluate(() => document.querySelector(".menu-btn, .hamburger, [aria-label='Menu']")?.click());
+      await wait(400);
+      await page.evaluate((src) => [...document.querySelectorAll("nav button, .drawer button")]
+        .find((b) => new RegExp(src, "i").test(b.innerText.trim()))?.click(), re);
+      await wait(1200);
+    };
+    await openNav("^(Sub)?contractors");
+    const r = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll(".grid .card")];
+      return {
+        n: rows.length,
+        lines: rows.filter((c) => c.classList.contains("card-row")).length,
+        hs: rows.map((c) => Math.round(c.getBoundingClientRect().height)),
+        over: rows.some((c) => c.getBoundingClientRect().right > window.innerWidth + 1),
+        scrollX: document.documentElement.scrollWidth > window.innerWidth + 1,
+      };
+    });
+    t.ck("the roster rendered on a phone", r.n === 3, JSON.stringify(r));
+    t.ck("as lines there too", r.lines === 3, JSON.stringify(r));
+    t.ck("each phone line is short", r.hs.length === 3 && r.hs.every((h) => h > 0 && h <= 130), JSON.stringify(r.hs));
+    t.ck("nothing runs off the right", !r.over && !r.scrollX, JSON.stringify(r));
+    await openNav("^Jobs");
+    const j = await page.evaluate(() => {
+      const cards = [...document.querySelectorAll(".job-card")];
+      return {
+        n: cards.length,
+        lines: cards.filter((c) => c.classList.contains("job-line")).length,
+        hs: cards.map((c) => Math.round(c.getBoundingClientRect().height)),
+        scrollX: document.documentElement.scrollWidth > window.innerWidth + 1,
+      };
+    });
+    t.ck("the jobs rendered on a phone", j.n > 0, JSON.stringify(j));
+    t.ck("every job is a line on a phone", j.n > 0 && j.lines === j.n, JSON.stringify(j));
+    t.ck("and each is short", j.hs.every((h) => h > 0 && h <= 130), JSON.stringify(j.hs));
+    t.ck("and the page does not scroll sideways", !j.scrollX, JSON.stringify(j));
+    t.ck("nothing crashed on a phone", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
   console.log("\n-- the contractor's own job requests open as lines --");
   {
     SEAT = "contractor";

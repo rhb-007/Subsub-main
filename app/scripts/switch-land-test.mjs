@@ -127,7 +127,11 @@ try {
     t.ck("Cascade is offered in the switcher",
       rows.some((r) => /Cascade Management/.test(r)), JSON.stringify(rows));
     t.ck("named as what we are over there",
-      rows.some((r) => /Cascade Management/.test(r) && /subcontractor/.test(r)),
+      // Cascade is a PROPERTY MANAGER, so we are their contractor, not their
+      // subcontractor: `seatDescription` takes the hirer's kind and a
+      // managing agent holds no prime contract for anybody to be sub to. The
+      // old expectation pinned the wrong word as firmly as the right one.
+      rows.some((r) => /Cascade Management/.test(r) && /their contractor/.test(r)),
       JSON.stringify(rows));
 
     await page.evaluate(() => [...document.querySelectorAll(".drawer-actions button")]

@@ -7075,7 +7075,14 @@ export default function SubSub() {
           onReport={(r) => createJob({ ...r, trades: r.trades || [] })} />
       )}
 
-      {(can("portal") || ownSub) && tab !== "account" && (
+      {/* ONE DASHBOARD PER SCREEN. A contractor seat lives in the portal, so
+          it draws on every tab that seat has. A hireable account's OWN admin
+          has the portal as two nav entries (My Jobs, My calendar), not as a
+          layer -- this read `ownSub` beside `can("portal")` and drew the whole
+          portal under every screen: a general contractor's Contractors roster
+          and Dashboard each had a second greeting, a second schedule and an
+          upload banner stacked below them. */}
+      {(can("portal") ? tab !== "account" : ownSub && tab === "portal") && (
         portalSub ? (
           <ContractorPortal weather={weather} sub={portalSub} jobs={jobs} pane={pane}
             /* NOTHING FROM THIS ACCOUNT'S OWN JOB LIST when the seat IS the
@@ -7087,7 +7094,12 @@ export default function SubSub() {
                the client count follows who is hiring. Off `account` rather
                than `brand`: brand is what gets shown and is stripped on
                Basic, account is what is true. */
-            hostKind={kindOf(account)} onGoDocs={() => setPane("docs")} onViewWO={setViewWO}
+            hostKind={kindOf(account)} onViewWO={setViewWO}
+            /* The account's own documents live in Account -> Compliance pack;
+               the portal's docs pane is the contractor seat's copy. Two
+               screens for one pack is how somebody concludes there are two. */
+            onGoDocs={can("portal") ? () => setPane("docs")
+              : () => { setTab("account"); setOpenPane({ pane: "docs", focus: "docs", n: Date.now() }); }}
             /* One way to change pane, so the nav and every in-page pointer
                land on the same screen. */
             onGoPane={(id) => { setPane(id); setTab("portal"); }}

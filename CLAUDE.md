@@ -9768,6 +9768,41 @@ refactor.
   request's heading is text-transformed and Chrome's `innerText` applies it,
   so a case-sensitive title match found the line and lost the card.
 
+- **ONE DASHBOARD PER SCREEN: A HIREABLE ACCOUNT'S OWN PORTAL IS TWO NAV
+  ENTRIES, NOT A LAYER UNDER EVERYTHING.** Reported from Outerhome, a general
+  contractor, with the Contractors roster on screen and a whole second
+  dashboard below it -- an upload banner, *Good morning*, a *Working for
+  Outerhome* bar and a second schedule -- and the same stacked under the
+  account's own Dashboard, which is the "multiple calendars".
+
+  The gate was `(can("portal") || ownSub) && tab !== "account"`. That is right
+  for a **contractor seat**, which has `portal` and `account` and nothing else,
+  so "every tab but account" is one screen. It is wrong for `ownSub`, which an
+  **admin** of a hireable account carries on top of the eight tabs their role
+  already has: the portal was drawn beneath every one of them. The entry that
+  added `ownSub` said in so many words *"two of the entries, not the portal"*,
+  and the render gate did not agree with it. It is
+  `can("portal") ? tab !== "account" : ownSub && tab === "portal"` now, and
+  *Upload documents* on that portal goes to Account -> Compliance pack rather
+  than the contractor seat's own docs pane, because two screens for one pack is
+  how somebody concludes there are two.
+
+  **Counted, not looked for.** `test:ownportal` counts `main.ss-main` elements,
+  greetings and who-bars on the Dashboard, the roster and My Jobs, for a
+  general contractor and a subcontractor in the same place. A text search finds
+  the first copy whether or not there is a second, and the duplicate is the
+  whole fault. Reverting the gate reproduces the report exactly: two mains, two
+  greetings, eight failures.
+
+  **The roster screenshot showing full cards was the build before lines
+  shipped.** `test:cardlines` now also drives the roster and the Jobs list at
+  **390px**, where it was reported: every row a line, none taller than 130px,
+  nothing running off the right.
+
+  And `test:switchland` had been red for a stale reason: it expected the
+  switcher to call us Cascade's *subcontractor*, and Cascade is a property
+  manager, so `seatDescription` correctly says *contractor*.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

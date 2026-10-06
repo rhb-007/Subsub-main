@@ -176,6 +176,46 @@ try {
   t.ck("and the harness saw no crash", crashes.length === 0, crashes.join(" | "));
   await ctx.close().catch(() => {});
 
+  console.log("\n-- ONE DASHBOARD PER SCREEN, on both hireable kinds --");
+  // Reported from Outerhome, a general contractor: the Contractors roster had
+  // a whole second dashboard under it -- an upload banner, a greeting, a
+  // "Working for Outerhome" bar and a second schedule. The portal was drawn
+  // under EVERY screen for an account's own admin, because the gate read
+  // `ownSub` beside `can("portal")`. Counted as <main> elements and greetings
+  // rather than looked for by text, because the duplicate is the whole fault
+  // and a text search finds the first copy whether or not there is a second.
+  // Both kinds in the same place: the report was a GC and the code path is the
+  // same for a subcontractor.
+  const screens = async (page) => page.evaluate(() => ({
+    mains: document.querySelectorAll("main.ss-main").length,
+    greetings: [...document.querySelectorAll("main.ss-main h2")]
+      .filter((h) => /^Good (morning|afternoon|evening)/.test(h.innerText.trim())).length,
+    whoBar: document.querySelectorAll(".who-bar").length,
+    onNav: (document.querySelector("nav button.on")?.innerText || "").trim(),
+  }));
+  for (const kind of ["general_contractor", "subcontractor"]) {
+    KIND = kind;
+    const { ctx: cx, page: px } = await visitApp(browser, { host: "pacific", webPort: WEB,
+      seat: { userId: "u_juan", accountId: "acc_pac" }, viewport: { width: 1340, height: 1800 } });
+    await wait(2800);
+    const dash = await screens(px);
+    t.ck(`${kind}: the dashboard rendered`, /^Dashboard/.test(dash.onNav) && dash.mains >= 1, JSON.stringify(dash));
+    t.ck(`${kind}: one screen on the dashboard, not two`, dash.mains === 1, JSON.stringify(dash));
+    t.ck(`${kind}: one greeting on it`, dash.greetings <= 1, JSON.stringify(dash));
+    t.ck(`${kind}: no portal who-bar under the dashboard`, dash.whoBar === 0, JSON.stringify(dash));
+    await open(px, "Subcontractors");
+    const roster = await screens(px);
+    t.ck(`${kind}: the roster screen opened`, /contractors/i.test(roster.onNav), JSON.stringify(roster));
+    t.ck(`${kind}: one screen under the roster, not a dashboard below it`,
+      roster.mains === 1 && roster.whoBar === 0 && roster.greetings === 0, JSON.stringify(roster));
+    await open(px, "My Jobs");
+    const mine = await screens(px);
+    t.ck(`${kind}: My Jobs still draws the portal`, /^My Jobs/.test(mine.onNav) && mine.mains === 1,
+      JSON.stringify(mine));
+    await cx.close().catch(() => {});
+  }
+  KIND = "subcontractor";
+
   console.log("\n-- and an account nobody can hire gets neither --");
   {
     // ASSERTED IN THE SAME PLACE. A change that showed these to everybody
