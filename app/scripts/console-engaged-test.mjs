@@ -206,21 +206,19 @@ try {
     // A disabled control with no reason beside it is indistinguishable from a
     // broken one -- and this button had none.
     ck("and the reason is said beside the button", /\{problem && <p className="pf-note pfe-why">/.test(src));
-    // Landing somewhere is not the same as pointing at something.
-    //
-    // SCOPED TO THIS EFFECT. A bare /scrollIntoView/ over App.tsx finds the
-    // compliance pack's focus ring and the inspection walkthrough's, and
-    // passes with this panel doing nothing at all -- the whichever-one-exists
-    // trap this repository already records twice, and the first version of
-    // this assertion was exactly that: it survived the mutation untouched.
-    const eff = src.slice(src.indexOf("const editPanelRef"),
-      src.indexOf("const editPanelRef") + 900);
-    ck("the edit panel scrolls itself into view",
-      /useEffect\(\(\) => \{[\s\S]*?scrollIntoView/.test(eff), eff.slice(0, 80));
-    ck("and rings, because arriving silently is not being pointed at",
-      /classList\.add\("pfe-ring"\)/.test(eff));
-    ck("keyed on which company is being edited", /\}, \[editCompanyId\]\)/.test(eff));
-    ck("and the ring has a rule of its own", /\.pfe-ring\{box-shadow/.test(src));
+    // Landing somewhere is not the same as pointing at something. The form
+    // used to render below the whole company grid and be scrolled to and
+    // rung; it now opens in a window over the row that was pressed, which is
+    // in view by construction. So the property is that the edit form lives
+    // INSIDE that window, keyed on which company is being edited -- read
+    // from that block alone, because a bare search for CompanyEditFields
+    // finds it whichever place it is drawn.
+    const winAt = src.indexOf("{editCompanyId && (() => {");
+    const win = src.slice(winAt, src.indexOf("})()}", winAt));
+    ck("the company opens in a window", /<Modal wide className="modal-co" onClose=\{\(\) => setEditCompanyId\(null\)\}>/.test(win),
+      win.slice(0, 80));
+    ck("and the edit form is inside it",
+      win.indexOf("<CompanyEditFields") > win.indexOf("<Modal") && win.indexOf("<CompanyEditFields") < win.indexOf("</Modal>"));
     // Offered only where the server would accept it: a control whose save is
     // refused is the screen-that-lies rule pointed at a picker.
     ck("the relationship control reads the same gate as the route",

@@ -64,7 +64,7 @@ async function openAccount() {
   await page.evaluate(() => [...document.querySelectorAll("button, a")]
     .find((b) => /^\s*accounts\s*$/i.test(b.innerText || ""))?.click());
   await wait(700);
-  await page.evaluate(() => [...document.querySelectorAll(".pfc-top")]
+  await page.evaluate(() => [...document.querySelectorAll(".pf-row")]
     .find((c) => /Outerhome/.test(c.innerText))?.click());
   await wait(1200);
   return { ctx, page, crashes };

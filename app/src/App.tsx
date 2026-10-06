@@ -8838,28 +8838,14 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   const [newAccount, setNewAccount] = useState(null);   // form data while open
   const [newCompany, setNewCompany] = useState(null);
   const [editCompanyId, setEditCompanyId] = useState(null);
-  // THE FORM OPENED WHERE NOBODY COULD SEE IT. It renders after the whole
-  // company grid, so on ten companies at an iPad's width the pencil scrolled
-  // nothing, drew nothing in view, and read as a button that does not work --
-  // which is half of what "won't let me edit" described.
-  //
-  // Scrolls AND rings, the rule the compliance pack already paid for: landing
-  // somewhere is not the same as pointing at something, and a panel that
-  // arrives silently at the foot of a long page has not been pointed at. A
-  // box-shadow rather than a border, because a border that thickens moves
-  // everything beside it by a pixel.
-  const editPanelRef = useRef(null);
-  useEffect(() => {
-    if (!editCompanyId) return;
-    const el = editPanelRef.current;
-    if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    el.classList.add("pfe-ring");
-    const t = setTimeout(() => el.classList.remove("pfe-ring"), 1600);
-    return () => clearTimeout(t);
-  }, [editCompanyId]);
-  const [expandedCompanyId, setExpandedCompanyId] = useState(null);
-  const [expandedAccountId, setExpandedAccountId] = useState(null);
+  // THE FORM OPENED WHERE NOBODY COULD SEE IT. It rendered after the whole
+  // company grid, so on ten companies at an iPad's width the pencil drew
+  // nothing in view -- half of what "won't let me edit" described. It was
+  // scrolled to and rung for a while; it now opens in a window over the row
+  // that was pressed, which is in view by construction and needs neither.
+  const [ranksOpen, setRanksOpen] = useState(false);
+  const [acctFilters, setAcctFilters] = useState(EMPTY_ACCT_FILTERS);
+  const [coFilters, setCoFilters] = useState(EMPTY_CO_FILTERS);
   const [confirmDelete, setConfirmDelete] = useState(null); // { kind: "account"|"company", id, name }
   const [resetFor, setResetFor] = useState(null);        // { userId, name, email }
   const [resetLink, setResetLink] = useState(null);      // { email } once the API confirms it sent
@@ -8880,12 +8866,34 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     const cur = PLANS[a.plan] || PLANS.basic;
     const atLimit = a.plan === "basic" && (engs.length >= cur.limit || jobsMo >= cur.jobsPerMonth);
     return { a, users: mems.length, subs: engs.length, jobsMo, gmv, mrr: mrrOf(a), atLimit,
+      // The same predicate the account window's Team panel reads, so a row
+      // flagged here is the account that panel warns about.
+      noAdmin: !hasAdminSeat(mems),
       pendingDocs: engs.reduce((n, e) => n + DOC_KINDS.filter((k) =>
         e.docReview?.[k]?.status === "pending").length, 0) };
   });
   const live = rows.filter((r) => r.a.status !== "canceled");
   const mrr = live.reduce((n, r) => n + r.mrr, 0);
   const gmvTotal = rows.reduce((n, r) => n + r.gmv, 0);
+  // Paying is a Scale account that is billed: a comped one is on the plan and
+  // pays nothing, which mrrOf alone cannot see.
+  const payingNow = live.filter((r) => r.mrr > 0 && !r.a.comped).length;
+
+  // ---- the two lists, narrowed by their filter bars ----
+  const shownAccounts = rows.filter((r) => {
+    const f = acctFilters;
+    if (f.plan && r.a.plan !== f.plan) return false;
+    if (f.kind && kindOf(r.a) !== f.kind) return false;
+    if (f.status && (r.a.status || "active") !== f.status) return false;
+    if (f.flag && !ACCT_FLAGS.find((x) => x.id === f.flag)?.test(r)) return false;
+    if (f.q.trim()) {
+      const people = memberships.filter((m) => m.accountId === r.a.id)
+        .map((m) => users.find((u) => u.id === m.userId)).filter(Boolean);
+      if (!matchesQuery(f.q, r.a.name, r.a.subdomain, CONSOLE_KIND_LABEL[kindOf(r.a)],
+        people.map((u) => [u.name, u.email]))) return false;
+    }
+    return true;
+  }).sort((x, y) => y.mrr - x.mrr || y.gmv - x.gmv || x.a.name.localeCompare(y.a.name));
 
   // ---- revenue movement by month, from the append-only event log ----
   const months = [...new Set(subEvents.map((e) => monthKey(e.at)))].sort();
@@ -8949,6 +8957,23 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     return { c, accts, engs: engRows, seats, lic, licOk: !lic || String(lic.status).toLowerCase() === "active",
       dup: companies.filter((x) => x.license && x.license.toUpperCase().trim() === (c.license || "").toUpperCase().trim()).length > 1 };
   });
+
+  const shownCompanies = compRows.filter((r) => {
+    const f = coFilters;
+    if (f.type === "account" && !r.c.accountName) return false;
+    if (f.type === "contractor" && r.c.accountName) return false;
+    if (f.login === "yes" && !r.seats.length) return false;
+    if (f.login === "no" && r.seats.length) return false;
+    if (f.lic === "issue" && r.licOk) return false;
+    if (f.lic === "ok" && !(r.lic && r.licOk)) return false;
+    if (f.lic === "none" && r.lic) return false;
+    if (f.status && (r.c.status || "active") !== f.status) return false;
+    if (f.city && coCity(r.c) !== f.city) return false;
+    if (f.reach === "multi" && r.accts.length < 2) return false;
+    if (f.reach === "dup" && !r.dup) return false;
+    return matchesQuery(f.q, r.c.company, r.c.contact, r.c.email, r.c.phone, r.c.license,
+      coCity(r.c), r.accts.map((a) => a.name));
+  }).sort((x, y) => y.accts.length - x.accts.length || String(x.c.company).localeCompare(String(y.c.company)));
 
   // ---- health counters ----
   const weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
@@ -9127,22 +9152,10 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     ...(isSuper ? [["health", "Health", Activity]] : []),
   ];
   const [navOpen, setNavOpen] = useState(false);
-  const go = (id) => { setScreen(id); setOpenId(null); setNavOpen(false); setMenu(false); };
+  const go = (id) => { setScreen(id); setOpenId(null); setEditCompanyId(null); setNavOpen(false); setMenu(false); };
 
   return (
     <div className="pf-root">
-      {confirmDelete && (
-        <DeleteConfirmModal item={confirmDelete}
-          // The typed name travels to the server, which checks it against the
-          // row it is about to delete. A browser-side comparison alone would
-          // stop a slip of the finger but not a stale id.
-          onConfirm={async (confirmName) => {
-            const go = confirmDelete.kind === "account" ? onDeleteAccount : onDeleteCompany;
-            await go(confirmDelete.id, confirmName);
-            setConfirmDelete(null);
-          }}
-          onCancel={() => setConfirmDelete(null)} />
-      )}
       <header className="pf-top">
         {/* Same rule as the customer header: the mark goes back to the top
             of the console. Staff live on the accounts list and end up deep in
@@ -9227,6 +9240,119 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               </div>
             </div>
 
+            {/* Where things stand right now, which is a different question
+                from what moved. FIRST, because it is what somebody opening the
+                console is asking; the period figures below answer the next
+                question. These cards are also the way in to each screen. */}
+            <section className="pf-section">
+              <div className="pf-section-hd"><h3>Right now</h3><span>current state</span></div>
+              <div className="pf-dash-grid">
+                <div className="pf-panel pf-dash-card" onClick={() => go("accounts")}>
+                  <h3><Building2 size={15} /> Accounts</h3>
+                  <div className="pf-dash-stat"><b>{live.length}</b><span>live</span></div>
+                  <p className="pf-note">
+                    {live.filter((r) => r.a.plan === "scale").length} on Scale ·{" "}
+                    {live.filter((r) => r.a.plan === "basic").length} on Basic
+                    {rows.length > live.length ? ` · ${rows.length - live.length} canceled` : ""}
+                  </p>
+                  {health.atLimit > 0 && <p className="pf-dash-flag">● {health.atLimit} at a plan limit — upgrade candidates</p>}
+                </div>
+
+                {/* FREE TO PAID, AS A STANDING. The period tiles below say how
+                    many converted in a window; this says where the book stands
+                    -- how many live accounts pay, and what share of everybody
+                    who ever signed up went on to. */}
+                <div className="pf-panel pf-dash-card pf-dash-conv"
+                  onClick={() => go(admin.finance ? "revenue" : "accounts")}>
+                  <h3><TrendingUp size={15} /> Free → paid</h3>
+                  <div className="pf-dash-stat"><b>{payingNow}</b><span>of {live.length} live paying</span></div>
+                  <p className="pf-note">
+                    {conv}% of signups converted · {thisMonthM.conversions} this month
+                    {daysToConvert !== null ? ` · ${daysToConvert} day${daysToConvert === 1 ? "" : "s"} median` : ""}
+                  </p>
+                </div>
+
+                {/* WHAT KIND OF BUSINESS EACH LIVE ACCOUNT IS. A row is the way
+                    into the Accounts list narrowed to that kind, so the count
+                    and the list behind it cannot disagree. */}
+                <div className="pf-panel pf-dash-card pf-dash-kinds">
+                  <h3><Layers size={15} /> Account types</h3>
+                  <ul className="pf-kind-list">
+                    {CONSOLE_KINDS.map(([k, label]) => (
+                      <li key={k}>
+                        <button type="button" data-kind={k}
+                          onClick={() => { setAcctFilters({ ...EMPTY_ACCT_FILTERS, kind: k }); go("accounts"); }}>
+                          <span>{label}</span><b>{live.filter((r) => kindOf(r.a) === k).length}</b>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="pf-panel pf-dash-card" onClick={() => go("companies")}>
+                  <h3><Users size={15} /> Companies</h3>
+                  <div className="pf-dash-stat"><b>{companies.length}</b><span>on the platform</span></div>
+                  <p className="pf-note">
+                    {compRows.filter((r) => r.accts.length > 1).length} serving 2+ accounts ·{" "}
+                    {compRows.filter((r) => (r.c.status || "active") !== "active").length} inactive
+                  </p>
+                  {health.licFail > 0 && <p className="pf-dash-flag">● {health.licFail} with a failing license check</p>}
+                  {health.dups > 0 && <p className="pf-dash-flag">● {health.dups} possible duplicate{health.dups === 1 ? "" : "s"}</p>}
+                </div>
+
+                {admin.finance && (
+                  <div className="pf-panel pf-dash-card" onClick={() => go("revenue")}>
+                    <h3><TrendingUp size={15} /> Revenue</h3>
+                    <div className="pf-dash-stat"><b>{fmtC(mrr)}</b><span>MRR</span></div>
+                    <p className="pf-note">
+                      {fmtC(mrr * 12)} ARR ·{" "}
+                      {/* The same count the Free → paid card shows beside it.
+                          Reading mrr alone counted a comped account as paying,
+                          and two cards a few inches apart disagreed. */}
+                      {payingNow} paying account{payingNow === 1 ? "" : "s"} ·{" "}
+                      {fmtC(gmvTotal)} GMV to date
+                    </p>
+                  </div>
+                )}
+
+                <div className="pf-panel pf-dash-card" onClick={() => go("health")}>
+                  <h3><Activity size={15} /> Health</h3>
+                  <div className="pf-dash-stat"><b>{attention}</b><span>needing attention</span></div>
+                  <p className="pf-note">
+                    {health.signups7d} signup{health.signups7d === 1 ? "" : "s"} in 7 days ·{" "}
+                    {health.inactive14} inactive 14+ days
+                  </p>
+                </div>
+              </div>
+
+              {/* TRADES AND PLACES, COMPACT. They are context for the cards
+                  above rather than the reason anybody opens the console, so
+                  they sit directly under them at three rows each and open to
+                  six on request -- a ranked list that takes half a screen
+                  pushes the period figures off an iPad entirely. */}
+              <div className="pf-split pf-split-compact">
+                <div className="pf-panel">
+                  <h3><MapPin size={15} /> Top locations <span className="pf-rank-sub">companies, by city</span></h3>
+                  <RankList {...topLocations} rows={ranksOpen ? topLocations.rows : topLocations.rows.slice(0, 3)}
+                    total={ranksOpen ? topLocations.total : topLocations.rows.slice(0, 3).length}
+                    empty="No company addresses on file yet." />
+                </div>
+                <div className="pf-panel">
+                  <h3><Hammer size={15} /> Top trades <span className="pf-rank-sub">accounts hiring each</span></h3>
+                  <RankList {...topTrades} rows={ranksOpen ? topTrades.rows : topTrades.rows.slice(0, 3)}
+                    total={ranksOpen ? topTrades.total : topTrades.rows.slice(0, 3).length}
+                    label={(id) => TRADE_LABEL[id] || id}
+                    empty="No account has chosen its trades yet." />
+                </div>
+              </div>
+              {(topLocations.rows.length > 3 || topTrades.rows.length > 3) && (
+                <button type="button" className="pf-rank-more" aria-expanded={ranksOpen}
+                  onClick={() => setRanksOpen((o) => !o)}>
+                  {ranksOpen ? "Show fewer" : "Show the top six"}
+                </button>
+              )}
+            </section>
+
             {/* What moved this month. Kept apart from the window below,
                 because a number that resets on the 1st and one measured over
                 an arbitrary window are not comparable at a glance. */}
@@ -9258,77 +9384,12 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               <PeriodStats m={rangeM} finance={admin.finance} showSms />
             </section>
 
-            {/* Where things stand right now, which is a different question
-                from what moved. These four are also the way in to each
-                screen, so they carry the totals the tiles above do not. */}
-            <section className="pf-section">
-              <div className="pf-section-hd"><h3>Right now</h3><span>current state</span></div>
-              <div className="pf-dash-grid">
-                <div className="pf-panel pf-dash-card" onClick={() => go("accounts")}>
-                  <h3><Building2 size={15} /> Accounts</h3>
-                  <div className="pf-dash-stat"><b>{live.length}</b><span>live</span></div>
-                  <p className="pf-note">
-                    {live.filter((r) => r.a.plan === "scale").length} on Scale ·{" "}
-                    {live.filter((r) => r.a.plan === "basic").length} on Basic
-                    {rows.length > live.length ? ` · ${rows.length - live.length} canceled` : ""}
-                  </p>
-                  {health.atLimit > 0 && <p className="pf-dash-flag">● {health.atLimit} at a plan limit — upgrade candidates</p>}
-                </div>
-
-                <div className="pf-panel pf-dash-card" onClick={() => go("companies")}>
-                  <h3><Users size={15} /> Companies</h3>
-                  <div className="pf-dash-stat"><b>{companies.length}</b><span>on the platform</span></div>
-                  <p className="pf-note">
-                    {compRows.filter((r) => r.accts.length > 1).length} serving 2+ accounts ·{" "}
-                    {compRows.filter((r) => (r.c.status || "active") !== "active").length} inactive
-                  </p>
-                  {health.licFail > 0 && <p className="pf-dash-flag">● {health.licFail} with a failing license check</p>}
-                  {health.dups > 0 && <p className="pf-dash-flag">● {health.dups} possible duplicate{health.dups === 1 ? "" : "s"}</p>}
-                </div>
-
-                {admin.finance && (
-                  <div className="pf-panel pf-dash-card" onClick={() => go("revenue")}>
-                    <h3><TrendingUp size={15} /> Revenue</h3>
-                    <div className="pf-dash-stat"><b>{fmtC(mrr)}</b><span>MRR</span></div>
-                    <p className="pf-note">
-                      {fmtC(mrr * 12)} ARR ·{" "}
-                      {live.filter((r) => r.mrr > 0).length} paying account{live.filter((r) => r.mrr > 0).length === 1 ? "" : "s"} ·{" "}
-                      {fmtC(gmvTotal)} GMV to date
-                    </p>
-                  </div>
-                )}
-
-                <div className="pf-panel pf-dash-card" onClick={() => go("health")}>
-                  <h3><Activity size={15} /> Health</h3>
-                  <div className="pf-dash-stat"><b>{attention}</b><span>needing attention</span></div>
-                  <p className="pf-note">
-                    {health.signups7d} signup{health.signups7d === 1 ? "" : "s"} in 7 days ·{" "}
-                    {health.inactive14} inactive 14+ days
-                  </p>
-                </div>
-              </div>
-
-              <div className="pf-split">
-                <div className="pf-panel">
-                  <h3><MapPin size={15} /> Top locations</h3>
-                  <p className="pf-note pf-rank-sub">Subcontractor companies, by city.</p>
-                  <RankList {...topLocations} empty="No company addresses on file yet." />
-                </div>
-                <div className="pf-panel">
-                  <h3><Hammer size={15} /> Top trades</h3>
-                  <p className="pf-note pf-rank-sub">Accounts hiring each trade.</p>
-                  <RankList {...topTrades} label={(id) => TRADE_LABEL[id] || id}
-                    empty="No account has chosen its trades yet." />
-                </div>
-              </div>
-            </section>
-
             {attention > 0 && (
               <div className="pf-panel">
                 <h3>What needs attention</h3>
-                {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} at a plan limit — <a onClick={() => go("accounts")}>view accounts</a></p>}
-                {health.licFail > 0 && <p className="pf-act">▸ {health.licFail} compan{health.licFail === 1 ? "y" : "ies"} with a failing license check — <a onClick={() => go("companies")}>view companies</a></p>}
-                {health.dups > 0 && <p className="pf-act">▸ {health.dups} possible duplicate compan{health.dups === 1 ? "y" : "ies"} — <a onClick={() => go("companies")}>view companies</a></p>}
+                {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} at a plan limit — <a onClick={() => { setAcctFilters({ ...EMPTY_ACCT_FILTERS, flag: "limit" }); go("accounts"); }}>view them</a></p>}
+                {health.licFail > 0 && <p className="pf-act">▸ {health.licFail} compan{health.licFail === 1 ? "y" : "ies"} with a failing license check — <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, lic: "issue" }); go("companies"); }}>view them</a></p>}
+                {health.dups > 0 && <p className="pf-act">▸ {health.dups} possible duplicate compan{health.dups === 1 ? "y" : "ies"} — <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, reach: "dup" }); go("companies"); }}>view them</a></p>}
                 {health.expired > 0 && <p className="pf-act">▸ {health.expired} expired work-order offer{health.expired === 1 ? "" : "s"} with no reply</p>}
               </div>
             )}
@@ -9338,7 +9399,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
         {screen === "stuck" && <StuckSubs />}
 
         {/* ===== ACCOUNTS ===== */}
-        {screen === "accounts" && !openId && (
+        {screen === "accounts" && (
           <>
             <div className="pf-head">
               <div><h2>Accounts</h2></div>
@@ -9433,74 +9494,84 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 </div>
               </div>
             )}
-            <div className="pf-account-grid">
-              {rows.sort((x, y) => y.mrr - x.mrr || y.gmv - x.gmv).map((r) => {
-                const isExpanded = expandedAccountId === r.a.id;
+            {/* ONE ACCOUNT PER LINE, AND THE LINE OPENS THE ACCOUNT IN A
+                WINDOW. The grid of cards was two columns of name, pills and
+                three icon buttons, with the figures behind a chevron -- so
+                twenty accounts were several screens and the numbers staff
+                actually compare were hidden on every one of them. The line
+                carries those numbers in a column of their own, and everything
+                else is one tap away without leaving the list. */}
+            <FilterBar q={acctFilters.q} onQ={(q) => setAcctFilters((f) => ({ ...f, q }))}
+              placeholder="Search name, subdomain or person…"
+              shown={shownAccounts.length} total={rows.length}
+              onClear={() => setAcctFilters(EMPTY_ACCT_FILTERS)}
+              filters={[
+                { id: "plan", label: "Plans", value: acctFilters.plan,
+                  onChange: (v) => setAcctFilters((f) => ({ ...f, plan: v })),
+                  options: [["basic", "Basic"], ["scale", "Scale"]] },
+                { id: "kind", label: "Types", value: acctFilters.kind,
+                  onChange: (v) => setAcctFilters((f) => ({ ...f, kind: v })),
+                  options: CONSOLE_KINDS },
+                { id: "status", label: "Statuses", value: acctFilters.status,
+                  onChange: (v) => setAcctFilters((f) => ({ ...f, status: v })),
+                  options: [...new Set(rows.map((r) => r.a.status || "active"))].sort().map((v) => [v, v[0].toUpperCase() + v.slice(1)]) },
+                { id: "flag", label: "Flags", all: "Anything", value: acctFilters.flag,
+                  onChange: (v) => setAcctFilters((f) => ({ ...f, flag: v })),
+                  options: ACCT_FLAGS.map((x) => [x.id, x.label]) },
+              ]} />
+            <div className="pf-rows">
+              {shownAccounts.map((r) => {
                 const status = r.a.status || "active";
                 return (
-                  <div key={r.a.id} className={`pf-company-card pf-account-card ${status === "canceled" ? "muted" : ""} ${isExpanded ? "is-open" : ""}`}>
-                    <div className="pfc-top" onClick={() => setOpenId(r.a.id)}>
-                      <div className="pfc-name">
-                        <b>{r.a.name}</b>
-                        <span className="pf-sub">{r.a.subdomain}.subsub.work</span>
-                      </div>
-                      <div className="pfc-summary">
-                        <span className={`plan-pill ${r.a.plan}`}>{PLANS[r.a.plan].name}</span>
-                        {/* Otherwise a Scale account with no revenue reads as
-                            a billing fault rather than a decision. */}
-                        {r.a.comped && <span className="pf-comp-tag" title={r.a.compNote || ""}>Comped</span>}
-                        {/* A Scale account whose address is not live is the
-                            one failure a customer notices before we do. */}
-                        {r.a.plan === "scale" && r.a.hostnameStatus !== "active" && (
-                          <span className={`pf-host-pill t-${r.a.hostnameStatus === "failed" ? "bad" : "wait"}`}
-                            title={r.a.hostnameError || "Branded address is not live yet"}>
-                            {r.a.hostnameStatus === "failed" ? "Address failed" : "Address setting up"}
-                          </span>
-                        )}
-                        <span className={`pf-status ${status}`}>{status}</span>
-                        {r.atLimit && <span className="pf-flag" title="At a Basic plan limit">●</span>}
-                      </div>
-                      <div className="pfc-actions" onClick={(e) => e.stopPropagation()}>
-                        {isSuper && (
-                          <>
-                            <button className="pf-mini" title="Edit account"
-                              onClick={() => setOpenId(r.a.id)}><Pencil size={13} /></button>
-                            <button className="pf-mini pf-mini-danger" title="Delete account"
-                              onClick={() => setConfirmDelete({ kind: "account", id: r.a.id, name: r.a.name })}>
-                              <Trash2 size={13} /></button>
-                          </>
-                        )}
-                        <button className="pf-mini" title={isExpanded ? "Collapse" : "Expand"}
-                          onClick={() => setExpandedAccountId(isExpanded ? null : r.a.id)}>
-                          <ChevronDown size={13} style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
-                        </button>
-                      </div>
-                    </div>
-                    {isExpanded && (
-                      <div className="pfc-rows">
-                        <div className="pfc-row"><span>Billing</span><span>{r.a.billing}</span></div>
-                        <div className="pfc-row"><span>Users</span><span>{r.users}</span></div>
-                        <div className="pfc-row"><span>Subs</span>
-                          <span>{r.subs}{r.atLimit && <span className="pf-flag" title="At a Basic plan limit"> ●</span>}</span></div>
-                        <div className="pfc-row"><span>Jobs / mo</span><span>{r.jobsMo}</span></div>
-                        {admin.finance && <div className="pfc-row"><span>MRR</span><span>{r.mrr ? fmtC(r.mrr) : "—"}</span></div>}
-                        {admin.finance && <div className="pfc-row"><span>GMV</span><span>{r.gmv ? fmtC(r.gmv) : "—"}</span></div>}
-                        <div className="pfc-row"><span>Last active</span><span>{r.a.lastActive || "—"}</span></div>
-                      </div>
-                    )}
-                  </div>
+                  <button type="button" key={r.a.id} data-account={r.a.id}
+                    className={`pf-row ${status === "canceled" ? "muted" : ""} ${r.atLimit ? "warn" : ""}`}
+                    onClick={() => setOpenId(r.a.id)}>
+                    <span className="pf-row-name">
+                      <b>{r.a.name}</b>
+                      <span className="pf-sub">{CONSOLE_KIND_LABEL[kindOf(r.a)] || kindOf(r.a)} · {r.a.subdomain}.subsub.work</span>
+                    </span>
+                    <span className="pf-row-tags">
+                      <span className={`plan-pill ${r.a.plan}`}>{PLANS[r.a.plan].name}</span>
+                      {/* Otherwise a Scale account with no revenue reads as
+                          a billing fault rather than a decision. */}
+                      {r.a.comped && <span className="pf-comp-tag" title={r.a.compNote || ""}>Comped</span>}
+                      {/* A Scale account whose address is not live is the
+                          one failure a customer notices before we do. */}
+                      {r.a.plan === "scale" && r.a.hostnameStatus !== "active" && (
+                        <span className={`pf-host-pill t-${r.a.hostnameStatus === "failed" ? "bad" : "wait"}`}
+                          title={r.a.hostnameError || "Branded address is not live yet"}>
+                          {r.a.hostnameStatus === "failed" ? "Address failed" : "Address setting up"}
+                        </span>
+                      )}
+                      {status !== "active" && <span className={`pf-status ${status}`}>{status}</span>}
+                      {r.noAdmin && <span className="pf-flag" title="Nobody on this account is an Admin">no admin</span>}
+                      {r.atLimit && <span className="pf-flag" title="At a Basic plan limit">●</span>}
+                    </span>
+                    <span className="pf-row-figs">
+                      <span><b>{r.users}</b> user{r.users === 1 ? "" : "s"}</span>
+                      <span><b>{r.subs}</b> sub{r.subs === 1 ? "" : "s"}</span>
+                      <span><b>{r.jobsMo}</b> jobs/mo</span>
+                      {admin.finance && <span className="pf-row-money"><b>{r.mrr ? fmtC(r.mrr) : "—"}</b> MRR</span>}
+                    </span>
+                    <ChevronRight size={16} className="pf-row-chev" />
+                  </button>
                 );
               })}
               {rows.length === 0 && <p className="pf-note">No accounts yet.</p>}
+              {rows.length > 0 && shownAccounts.length === 0 && (
+                <p className="pf-note">Nothing matches. <button type="button" className="pf-linkbtn" onClick={() => setAcctFilters(EMPTY_ACCT_FILTERS)}>Clear the filters</button></p>
+              )}
             </div>
             <p className="pf-note">● = Basic account at its subcontractor or monthly-job limit. That's an upgrade conversation.</p>
           </>
         )}
 
         {/* ===== ACCOUNT DETAIL ===== */}
+        {/* THE ACCOUNT OPENS OVER ITS LIST, not instead of it, so closing it
+            puts staff back on the row they came from with the filters they
+            had set -- which a separate screen and a back link never did. */}
         {open && (
-          <>
-            <button className="pf-back" onClick={() => setOpenId(null)}>‹ All accounts</button>
+          <Modal wide className="modal-acct" onClose={() => setOpenId(null)}>
             <div className="pf-head">
               <div>
                 <h2>{open.a.name}</h2>
@@ -9806,7 +9877,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                               </span>
                             ))}
                           <button className="pf-mini" title="Open this company on the Companies screen"
-                            onClick={() => { go("companies"); setExpandedCompanyId(co.id); }}>
+                            onClick={() => { go("companies"); setEditCompanyId(co.id); }}>
                             Company ›
                           </button>
                         </div>
@@ -9885,7 +9956,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 </div>
               </div>
             )}
-          </>
+          </Modal>
         )}
 
         {/* ===== COMPANIES ===== */}
@@ -9949,56 +10020,92 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               </div>
             )}
             <p className="pf-note">One company can serve many hiring accounts. A lapsed license here affects every account engaging them — this is the only place that's visible.</p>
-            <div className="pf-company-grid">
-              {compRows.sort((x, y) => y.accts.length - x.accts.length).map((r) => {
-                const isExpanded = expandedCompanyId === r.c.id;
+            {/* ONE COMPANY PER LINE, AND THE LINE OPENS IT IN A WINDOW with
+                the detail and the edit form together. The cards hid the
+                detail behind a chevron and put the edit form below the whole
+                grid, which on an iPad was off the screen entirely -- the
+                window holds both where the press was made. */}
+            <FilterBar q={coFilters.q} onQ={(q) => setCoFilters((f) => ({ ...f, q }))}
+              placeholder="Search company, contact, email, licence…"
+              shown={shownCompanies.length} total={compRows.length}
+              onClear={() => setCoFilters(EMPTY_CO_FILTERS)}
+              filters={[
+                { id: "type", label: "Types", value: coFilters.type,
+                  onChange: (v) => setCoFilters((f) => ({ ...f, type: v })),
+                  options: [["contractor", "Contractors"], ["account", "Accounts"]] },
+                { id: "login", label: "Logins", all: "Any login", value: coFilters.login,
+                  onChange: (v) => setCoFilters((f) => ({ ...f, login: v })),
+                  options: [["yes", "Somebody signed in"], ["no", "No login"]] },
+                { id: "lic", label: "Licences", value: coFilters.lic,
+                  onChange: (v) => setCoFilters((f) => ({ ...f, lic: v })),
+                  options: [["issue", "Failing check"], ["ok", "Active"], ["none", "Not checked"]] },
+                { id: "status", label: "Statuses", value: coFilters.status,
+                  onChange: (v) => setCoFilters((f) => ({ ...f, status: v })),
+                  options: [["active", "Active"], ["inactive", "Inactive"]] },
+                { id: "city", label: "Cities", value: coFilters.city,
+                  onChange: (v) => setCoFilters((f) => ({ ...f, city: v })),
+                  options: [...new Set(companies.map(coCity).filter(Boolean))].sort().map((c) => [c, c]) },
+                { id: "reach", label: "Flags", all: "Anything", value: coFilters.reach,
+                  onChange: (v) => setCoFilters((f) => ({ ...f, reach: v })),
+                  options: [["multi", "Serving 2+ accounts"], ["dup", "Possible duplicate"]] },
+              ]} />
+            <div className="pf-rows">
+              {shownCompanies.map((r) => {
                 const coStatus = r.c.status || "active";
                 return (
-                  <div key={r.c.id} className={`pf-company-card ${r.licOk ? "" : "warn"} ${coStatus !== "active" ? "muted" : ""} ${isExpanded ? "is-open" : ""}`}>
-                    <div className="pfc-top" onClick={() => setEditCompanyId(r.c.id)}>
-                      <div className="pfc-name">
-                        <b>{r.c.company}</b>
-                        <span className="pf-sub">
-                          {[r.c.contact, [r.c.city, r.c.state].filter(Boolean).join(", ")]
-                            .filter(Boolean).join(" · ") || "No contact details"}
-                        </span>
-                      </div>
-                      <div className="pfc-summary">
-                        {/* Every account is a company since 031, so this list
-                            holds customers as well as the contractors they
-                            typed in. Reading it without knowing which is which
-                            is how somebody deletes a customer. */}
-                        {r.c.accountName && (
-                          <span className="pf-flag is-acct" title={`This is the account "${r.c.accountName}"`}>account</span>
-                        )}
-                        <span className={`pf-status ${coStatus === "active" ? "active" : "canceled"}`}>{coStatus}</span>
-                        {r.lic && String(r.lic.status).toLowerCase() !== "active" &&
-                          <span className="pf-status suspended" title="State license status">{r.lic.status}</span>}
-                        {r.accts.length > 1 && <span className="pf-multi">×{r.accts.length}</span>}
-                        {r.dup && <span className="pf-flag" title="Same license number on another record">dup</span>}
-                        {r.seats.length
-                          ? <span className="pf-flag is-seat" title="Somebody can sign in as this company">
-                              {r.seats.length === 1 ? "1 login" : `${r.seats.length} logins`}</span>
-                          : <span className="pf-sub pfc-noseat" title="Typed in by an account; nobody has claimed it">no login</span>}
-                      </div>
-                      <div className="pfc-actions" onClick={(e) => e.stopPropagation()}>
-                        {isSuper && (
-                          <>
-                            <button className="pf-mini" title="Edit company"
-                              onClick={() => setEditCompanyId(r.c.id)}><Pencil size={13} /></button>
-                            <button className="pf-mini pf-mini-danger" title="Delete company"
-                              onClick={() => setConfirmDelete({ kind: "company", id: r.c.id, name: r.c.company })}>
-                              <Trash2 size={13} /></button>
-                          </>
-                        )}
-                        <button className="pf-mini" title={isExpanded ? "Collapse" : "Expand"}
-                          onClick={() => setExpandedCompanyId(isExpanded ? null : r.c.id)}>
-                          <ChevronDown size={13} style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
-                        </button>
-                      </div>
-                    </div>
-                    {isExpanded && (
-                      <div className="pfc-rows">
+                  <button type="button" key={r.c.id} data-company={r.c.id}
+                    className={`pf-row ${r.licOk ? "" : "warn"} ${coStatus !== "active" ? "muted" : ""}`}
+                    onClick={() => setEditCompanyId(r.c.id)}>
+                    <span className="pf-row-name">
+                      <b>{r.c.company}</b>
+                      <span className="pf-sub">
+                        {[r.c.contact, coCity(r.c)].filter(Boolean).join(" · ") || "No contact details"}
+                      </span>
+                    </span>
+                    <span className="pf-row-tags">
+                      {/* Every account is a company since 031, so this list
+                          holds customers as well as the contractors they
+                          typed in. Reading it without knowing which is which
+                          is how somebody deletes a customer. */}
+                      {r.c.accountName && (
+                        <span className="pf-flag is-acct" title={`This is the account "${r.c.accountName}"`}>account</span>
+                      )}
+                      {coStatus !== "active" && <span className="pf-status canceled">{coStatus}</span>}
+                      {r.lic && String(r.lic.status).toLowerCase() !== "active" &&
+                        <span className="pf-status suspended" title="State license status">{r.lic.status}</span>}
+                      {r.dup && <span className="pf-flag" title="Same license number on another record">dup</span>}
+                      {r.seats.length
+                        ? <span className="pf-flag is-seat" title="Somebody can sign in as this company">
+                            {r.seats.length === 1 ? "1 login" : `${r.seats.length} logins`}</span>
+                        : <span className="pf-sub pfc-noseat" title="Typed in by an account; nobody has claimed it">no login</span>}
+                    </span>
+                    <span className="pf-row-figs">
+                      <span><b>{r.accts.length}</b> account{r.accts.length === 1 ? "" : "s"}</span>
+                      <span className="pf-row-lic">{r.c.license || "no licence"}</span>
+                    </span>
+                    <ChevronRight size={16} className="pf-row-chev" />
+                  </button>
+                );
+              })}
+              {compRows.length === 0 && <p className="pf-note">No companies yet.</p>}
+              {compRows.length > 0 && shownCompanies.length === 0 && (
+                <p className="pf-note">Nothing matches. <button type="button" className="pf-linkbtn" onClick={() => setCoFilters(EMPTY_CO_FILTERS)}>Clear the filters</button></p>
+              )}
+            </div>
+            {editCompanyId && (() => {
+              const r = compRows.find((x) => x.c.id === editCompanyId);
+              if (!r) return null;
+              const co = r.c;
+              const coStatus = co.status || "active";
+              return (
+                <Modal wide className="modal-co" onClose={() => setEditCompanyId(null)}>
+                  <div className="pf-co-hd">
+                    <h2>{co.company}</h2>
+                    <p className="pf-sub">
+                      {[co.contact, co.email, co.phone, coCity(co)].filter(Boolean).join(" · ") || "No contact details"}
+                    </p>
+                  </div>
+                  <div className="pfc-rows">
                         <div className="pfc-row">
                           <span>License</span>
                           <span><code>{r.c.license || "—"}</code></span>
@@ -10093,28 +10200,19 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                           </div>
                         )}
                       </div>
-                    )}
+                  <div className="pf-panel pf-newform pfe-open">
+                    <div className="pf-panel-hd">
+                      <h3>Edit details</h3>
+                      {isSuper && (
+                        <button className="pf-mini pf-mini-danger"
+                          onClick={() => setConfirmDelete({ kind: "company", id: co.id, name: co.company })}>
+                          <Trash2 size={12} /> Delete company
+                        </button>
+                      )}
+                    </div>
+                    <CompanyEditFields co={co} onSave={(patch) => onEditCompany(co.id, patch)} onCancel={() => setEditCompanyId(null)} />
                   </div>
-                );
-              })}
-              {compRows.length === 0 && <p className="pf-note">No companies yet.</p>}
-            </div>
-            {editCompanyId && (() => {
-              const co = companies.find((c) => c.id === editCompanyId);
-              if (!co) return null;
-              return (
-                <div className="pf-panel pf-newform pfe-open" ref={editPanelRef}>
-                  <div className="pf-panel-hd">
-                    <h3>Edit {co.company}</h3>
-                    {isSuper && (
-                      <button className="pf-mini pf-mini-danger"
-                        onClick={() => setConfirmDelete({ kind: "company", id: co.id, name: co.company })}>
-                        <Trash2 size={12} /> Delete company
-                      </button>
-                    )}
-                  </div>
-                  <CompanyEditFields co={co} onSave={(patch) => onEditCompany(co.id, patch)} onCancel={() => setEditCompanyId(null)} />
-                </div>
+                </Modal>
               );
             })()}
           </>
@@ -10222,15 +10320,29 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
 
             <div className="pf-panel">
               <h3>What to act on</h3>
-              {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} sitting at a plan limit — they've hit the wall and haven't upgraded. Worth a call.</p>}
-              {health.licFail > 0 && <p className="pf-act">▸ {health.licFail} compan{health.licFail === 1 ? "y" : "ies"} with a failing state license check, affecting every account that engages them.</p>}
+              {health.atLimit > 0 && <p className="pf-act">▸ {health.atLimit} Basic account{health.atLimit === 1 ? "" : "s"} sitting at a plan limit — they've hit the wall and haven't upgraded. Worth a call. <a onClick={() => { setAcctFilters({ ...EMPTY_ACCT_FILTERS, flag: "limit" }); go("accounts"); }}>View them</a></p>}
+              {health.licFail > 0 && <p className="pf-act">▸ {health.licFail} compan{health.licFail === 1 ? "y" : "ies"} with a failing state license check, affecting every account that engages them. <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, lic: "issue" }); go("companies"); }}>View them</a></p>}
               {health.inactive14 > 0 && <p className="pf-act">▸ {health.inactive14} live account{health.inactive14 === 1 ? "" : "s"} with no activity in two weeks.</p>}
-              {health.dups > 0 && <p className="pf-act">▸ {health.dups} company record{health.dups === 1 ? "" : "s"} sharing a license number — merge before documents attach to both.</p>}
+              {health.dups > 0 && <p className="pf-act">▸ {health.dups} company record{health.dups === 1 ? "" : "s"} sharing a license number — merge before documents attach to both. <a onClick={() => { setCoFilters({ ...EMPTY_CO_FILTERS, reach: "dup" }); go("companies"); }}>View them</a></p>}
               {!health.atLimit && !health.licFail && !health.inactive14 && !health.dups && <p className="pf-note">Nothing needs attention.</p>}
             </div>
           </>
         )}
       </main>
+      {/* After everything else, so it draws OVER the account window it
+          is usually opened from rather than underneath it. */}
+      {confirmDelete && (
+        <DeleteConfirmModal item={confirmDelete}
+          // The typed name travels to the server, which checks it against the
+          // row it is about to delete. A browser-side comparison alone would
+          // stop a slip of the finger but not a stale id.
+          onConfirm={async (confirmName) => {
+            const go = confirmDelete.kind === "account" ? onDeleteAccount : onDeleteCompany;
+            await go(confirmDelete.id, confirmName);
+            setConfirmDelete(null);
+          }}
+          onCancel={() => setConfirmDelete(null)} />
+      )}
     </div>
   );
 }
@@ -29517,6 +29629,8 @@ function StuckSubs() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [only, setOnly] = useState("");
+  const [sq, setSq] = useState("");
+  const [sAcct, setSAcct] = useState("");
   const [copied, setCopied] = useState("");
 
   useEffect(() => {
@@ -29530,7 +29644,11 @@ function StuckSubs() {
   if (err) return <div className="pf-panel"><h3>Not arrived</h3><p className="pf-note">{err}</p></div>;
   if (!data) return <div className="pf-panel"><h3>Not arrived</h3><p className="pf-note">Loading…</p></div>;
 
-  const rows = only ? data.rows.filter((r) => r.stage === only) : data.rows;
+  // The stage chips narrow by WHY somebody has not arrived; the bar narrows
+  // by WHO, which is the question support is asked on the phone.
+  const rows = data.rows.filter((r) => (!only || r.stage === only)
+    && (!sAcct || r.account === sAcct)
+    && matchesQuery(sq, r.company, r.account, r.email));
   const { summary } = data;
 
   const copy = async (text, id) => {
@@ -29571,6 +29689,11 @@ function StuckSubs() {
             </button>
           ))}
         </div>
+        <FilterBar q={sq} onQ={setSq} placeholder="Search company, account or email…"
+          shown={rows.length} total={data.rows.length}
+          onClear={() => { setSq(""); setSAcct(""); setOnly(""); }}
+          filters={[{ id: "account", label: "Accounts", value: sAcct, onChange: setSAcct,
+            options: [...new Set(data.rows.map((r) => r.account).filter(Boolean))].sort().map((a) => [a, a]) }]} />
         {summary.ours > 0 && (
           <p className="pf-act">
             ▸ <b>{summary.ours}</b> of these are ours, not theirs — SubSub either never sent
@@ -29581,7 +29704,7 @@ function StuckSubs() {
 
       {rows.length === 0 ? (
         <div className="pf-panel"><p className="pf-note">
-          {only ? "None in that state." : "Nobody is stuck. Every invited subcontractor has arrived."}
+          {only || sq || sAcct ? "Nothing matches." : "Nobody is stuck. Every invited subcontractor has arrived."}
         </p></div>
       ) : (
         <div className="pf-panel">
@@ -29652,6 +29775,31 @@ function StuckSubs() {
 // A select with fewer than two answers is not drawn: a property filter on an
 // account with one building is a control that can only ever say the same
 // thing. It stays while it holds a value, so a filter can always be undone.
+// ---- the staff console's lists ----
+// The five kinds of account, in the order staff asked to read them. Named here
+// rather than read off ACCOUNT_KINDS because the console's words are shorter:
+// "Portfolio manager" fits a stat row where the full label wraps.
+const CONSOLE_KINDS = [
+  ["subcontractor", "Subcontractor"],
+  ["general_contractor", "General contractor"],
+  ["property_manager", "Property manager"],
+  ["portfolio_manager", "Portfolio manager"],
+  ["building_owner", "Building owner"],
+];
+const CONSOLE_KIND_LABEL = Object.fromEntries(CONSOLE_KINDS);
+const EMPTY_ACCT_FILTERS = { q: "", plan: "", kind: "", status: "", flag: "" };
+const EMPTY_CO_FILTERS = { q: "", type: "", login: "", lic: "", status: "", city: "", reach: "" };
+// What an account row can be flagged for. Each test reads the same derived
+// row the line draws its tags from, so a flag and its filter cannot disagree.
+const ACCT_FLAGS = [
+  { id: "limit", label: "At a plan limit", test: (r) => r.atLimit },
+  { id: "noadmin", label: "No admin", test: (r) => r.noAdmin },
+  { id: "address", label: "Address not live", test: (r) => r.a.plan === "scale" && r.a.hostnameStatus !== "active" },
+  { id: "comped", label: "Comped", test: (r) => !!r.a.comped },
+  { id: "docs", label: "Docs waiting on review", test: (r) => r.pendingDocs > 0 },
+];
+const coCity = (c) => [c.city, c.state].filter(Boolean).join(", ").trim();
+
 function FilterBar({ q = "", onQ, placeholder = "Search…", filters = [], shown, total, onClear }) {
   const live = filters.filter((f) => f.value || (f.options || []).length > 1);
   const active = live.filter((f) => f.value).length + (q.trim() ? 1 : 0);
@@ -38300,7 +38448,7 @@ iframe.dv-frame{display:block}
 .pf-write-err{margin:0 0 16px;padding:12px 14px;border-radius:10px;background:#fdf1ef;
   border:1px solid #e9c4bd;color:#8a2f1c;font-size:13.5px}
 .pf-account-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px;margin-top:16px}
-.pf-dash-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:16px}
+.pf-dash-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-top:16px}
 .pf-dash-card{cursor:pointer;transition:border-color .12s}
 .pf-dash-card:hover{border-color:var(--brand)}
 .pf-dash-card h3{display:flex;align-items:center;gap:8px;margin:0 0 12px}
@@ -38626,4 +38774,53 @@ button.job-insp:hover{border-color:#2f5577}
   .fbar .fbar-sel{flex:1 1 calc(50% - 4px)}
   .fbar .fbar-sel select{max-width:none;width:100%}
 }
+/* The staff console's lists: one record per line, opened in a window. */
+.pf-rows{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.pf-row{display:flex;align-items:center;gap:8px 14px;width:100%;text-align:left;background:var(--card);
+  border:1px solid var(--line);border-radius:10px;padding:10px 14px;cursor:pointer;font:inherit;color:inherit;
+  transition:border-color .12s}
+.pf-row:hover{border-color:var(--brand)}
+.pf-row.warn{border-left:3px solid var(--red)}
+.pf-row.muted{opacity:.62}
+.pf-row-name{display:flex;flex-direction:column;min-width:0;flex:1 1 220px}
+.pf-row-name b{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pf-row-name .pf-sub{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pf-row-tags{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;flex:0 1 auto}
+.pf-row-tags .pf-flag{font-size:10.5px}
+.pf-row-figs{display:flex;align-items:baseline;gap:14px;flex:none;font-size:12px;color:var(--ink-soft);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.pf-row-figs b{color:var(--ink);font-weight:700}
+.pf-row-lic{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;min-width:96px;text-align:right}
+.pf-row-chev{flex:none;color:var(--ink-soft)}
+.pf-linkbtn{background:none;border:0;padding:0;color:var(--brand);font:inherit;font-weight:600;
+  text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.modal.modal-acct{max-width:1040px}
+.modal.modal-co{max-width:720px}
+.modal-acct .pf-head{padding-right:34px}
+.pf-co-hd{margin:0 34px 4px 0}
+.pf-co-hd h2{margin:0 0 4px}
+.modal-co .pfc-rows{border-top:0;padding:0 0 4px}
+@media (max-width:700px){
+  .pf-row{flex-wrap:wrap}
+  .pf-row-tags{justify-content:flex-start;order:3}
+  .pf-row-figs{order:4;width:100%;gap:12px}
+  .pf-row-chev{position:absolute;right:12px;top:14px}
+  .pf-row{position:relative;padding-right:34px}
+  .pf-row-lic{min-width:0;text-align:left}
+}
+/* The console dashboard's account types and its compact ranked lists. */
+.pf-dash-kinds{cursor:default}
+.pf-kind-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px}
+.pf-kind-list button{display:flex;justify-content:space-between;align-items:center;gap:10px;
+  width:calc(100% + 12px);margin:0 -6px;padding:4px 6px;background:none;border:0;border-radius:6px;
+  font:inherit;font-size:13px;color:inherit;cursor:pointer;text-align:left}
+.pf-kind-list button:hover{background:var(--paper)}
+.pf-kind-list b{font-variant-numeric:tabular-nums;font-size:14px}
+.pf-split-compact > .pf-panel{margin-top:12px;padding:12px 16px}
+.pf-split-compact h3{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;margin:0 0 10px;font-size:14px}
+.pf-split-compact h3 .pf-rank-sub{margin:0;font-size:11.5px;font-weight:500;color:var(--ink-soft)}
+.pf-split-compact .pf-rank{gap:6px}
+.pf-split-compact .pf-rank-track{height:7px}
+.pf-rank-more{margin-top:8px;background:none;border:0;padding:4px 0;color:var(--brand);font:inherit;
+  font-size:12.5px;font-weight:600;cursor:pointer}
 `;

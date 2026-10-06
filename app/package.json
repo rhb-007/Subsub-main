@@ -55,6 +55,7 @@
     "test:autoschedui": "node scripts/autoschedule-ui-test.mjs",
     "test:consoleroster": "node --no-warnings scripts/console-roster-test.mjs",
     "test:consolerosterui": "node scripts/console-roster-ui-test.mjs",
+    "test:consolelists": "node scripts/console-lists-ui-test.mjs",
     "test:docwire": "node --no-warnings scripts/doc-expiry-wire-test.mjs",
     "test:docwireui": "node scripts/doc-expiry-ui-test.mjs",
     "test:overflow": "node --no-warnings scripts/overflow-test.mjs",

@@ -174,7 +174,7 @@ try {
   await cp.evaluate(() => [...document.querySelectorAll(".pf-nav button, nav button")]
     .find((b) => /^Accounts/i.test(b.innerText.trim()))?.click());
   await wait(2000);
-  await cp.evaluate(() => document.querySelector(".pf-company-card .pfc-top, .pfc-top")?.click());
+  await cp.evaluate(() => document.querySelector(".pf-rows .pf-row")?.click());
   await wait(2500);
 
   const folds = await cp.evaluate(() => {
@@ -229,7 +229,7 @@ try {
   await cp.evaluate(() => [...document.querySelectorAll(".pf-nav button, nav button")]
     .find((b) => /^Accounts/i.test(b.innerText.trim()))?.click());
   await wait(1800);
-  await cp.evaluate(() => document.querySelector(".pf-company-card .pfc-top, .pfc-top")?.click());
+  await cp.evaluate(() => document.querySelector(".pf-rows .pf-row")?.click());
   await wait(2500);
   const remembered = await cp.evaluate(() => {
     const f = [...document.querySelectorAll(".pf-fold")];

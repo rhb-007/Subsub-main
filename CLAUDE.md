@@ -9870,6 +9870,55 @@ refactor.
   broken copy of the screen beside it. `test:ownportal` drives both kinds with
   no work, and undoing either half fails two assertions.
 
+- **THE CONSOLE LEADS WITH WHERE THINGS STAND, AND ITS LISTS ARE LINES THAT
+  OPEN A WINDOW.** Asked for as: move *Right now* to the top with a free-to-paid
+  box and an account-types box; bring trades and locations up and make them
+  smaller; make the sub pages thin rows that open into a modal; filter
+  Accounts and Companies.
+
+  **Right now comes first** because it is what somebody opening the console is
+  asking; *This month* and the range answer the next question. **Free → paid
+  counts accounts that PAY, not accounts on Scale**: `mrrOf` reads the plan and
+  not `comped`, so a comped account would have counted. And the Revenue card
+  beside it said *3 paying* while the new box said *2*. Two cards a few inches
+  apart disagreeing is the two-records-of-one-fact shape, so both read
+  `payingNow`. **Still open:** MRR itself still counts a comped account's $99,
+  because changing that moves every revenue figure and is its own decision.
+
+  **Account types lists the five kinds in the order asked, live accounts
+  only**, and each row is the way into Accounts already filtered to that kind.
+  The count and the list behind it come from the same rows. Top locations and
+  Top trades show **three rows each** under the cards, with one button to show
+  six.
+
+  **Accounts and Companies are one line per record across the page.** The
+  figures staff compare (users, subs, jobs, MRR; accounts engaged, licence) sit
+  in a column of their own instead of behind a chevron. **The account opens in
+  a window over its list, not instead of it**, so closing it puts staff back on
+  the row with their filters intact. **The company window holds the detail and
+  the edit form together.** The form used to render below the whole grid,
+  which on an iPad was off screen. That is why it had been scrolled to and
+  rung; a window over the pressed row needs neither, and the static check now
+  pins the form being inside the window. **The typed-name delete confirmation
+  is drawn after `</main>`**, because opened from inside the account window it
+  sat at the same z-index underneath it. The suite proves this with
+  `elementFromPoint`, not by finding the box in the DOM.
+
+  **Filters.** Accounts: plan, type, status, and a Flags select (at a plan
+  limit, **no admin**, address not live, comped, docs waiting). Search covers
+  the name, the subdomain and every person's name and email on the account.
+  `noAdmin` is `hasAdminSeat`, the same predicate as the Team panel.
+  Companies: type (contractors or accounts' own rows), logins, licence check,
+  status, city, and serving 2+ accounts or possible duplicate. Search covers
+  the licence number. Not arrived gets search and an account select beside its
+  stage chips. And **every "view them" on the dashboard and Health opens the
+  list already narrowed** to what it counted.
+
+  `test:consolelists` measures order, row heights, counts, filters, both
+  windows, the delete box's stacking and a 390px phone. Ten mutations fire,
+  each on its own assertion. `test:consolerosterui` and `test:feetermsui` open
+  an account through `.pf-row` now.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

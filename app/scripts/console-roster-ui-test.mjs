@@ -122,7 +122,7 @@ try {
   });
   await wait(700);
   const opened = await page.evaluate(() => {
-    const card = [...document.querySelectorAll(".pfc-top")]
+    const card = [...document.querySelectorAll(".pf-row")]
       .find((c) => /Cascade Management/.test(c.innerText));
     if (!card) return false;
     card.click();
