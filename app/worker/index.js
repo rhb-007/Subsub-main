@@ -10797,64 +10797,103 @@ const requestToJs = (r) => ({
 // Ask. The invitees are checked against the caller's OWN engagements here, not
 // trusted from the request -- a company id in the body is a claim, and the
 // roster is the only thing that makes it true.
+// SEVERAL TRADES IN ONE PRESS, and that is the shape somebody asking actually
+// has. Reported as *"I requested a quote for 2 issues ... it sent one separate
+// quote request for each one ... it should be together sent, but quoted
+// individually for each item"*. A move-out with a scratched floor and a
+// scuffed wall is one conversation with the same two or three contractors,
+// and making the account open it twice made the contractor read it twice.
+//
+// IT STAYS ONE REQUEST PER TRADE UNDERNEATH, which is the half "quoted
+// individually" is about. A request is what gets awarded, and the floor and
+// the wall may go to different people at different prices -- so `items` makes
+// several rows in one press, and the contractor's screen groups them back
+// into one card. No new column: the job and the account already say which
+// requests belong together.
+//
+// EACH COMPANY IS ASKED ONLY ABOUT WHAT IT COVERS. A painter ticked beside a
+// flooring item is invited to the paint and not the floor -- the same
+// `validInvitees` rule the single-trade path always ran, applied per item --
+// and an item nobody picked can price is refused BY NAME before anything is
+// written, so a press never sends half a question.
 app.post("/api/jobs/:id/quote-requests", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId, role } = c.get("auth");
   const jobId = c.req.param("id");
   const b = await c.req.json().catch(() => ({}));
-  const trade = String(b.trade || "").trim();
-  if (!trade) return c.json({ error: "trade_required" }, 400);
+  const batch = Array.isArray(b.items);
+  const raw = batch ? b.items : [{ trade: b.trade, scope: b.scope }];
+  const items = [];
+  for (const it of raw) {
+    const trade = String(it?.trade || "").trim();
+    if (!trade) return c.json({ error: "trade_required" }, 400);
+    if (items.some((x) => x.trade === trade)) continue;
+    items.push({ trade, scope: String(it?.scope || "").trim() || null });
+  }
+  if (!items.length) return c.json({ error: "trade_required" }, 400);
 
   const job = await jobWithEnding(c.env, await c.env.DB.prepare(
     `SELECT * FROM jobs WHERE id = ? AND account_id = ?`).bind(jobId, accountId).first());
   if (!job) return c.json({ error: "not_found" }, 404);
-  if (!parseJson(job.trades, []).includes(trade)) return c.json({ error: "not_a_trade_on_this_job" }, 400);
+  const onJob = parseJson(job.trades, []);
+  const notOn = items.find((it) => !onJob.includes(it.trade));
+  if (notOn) return c.json({ error: "not_a_trade_on_this_job", trade: notOn.trade }, 400);
 
   try {
-    const live = await c.env.DB.prepare(
-      `SELECT 1 AS yes FROM work_orders
-        WHERE job_id = ? AND trade = ? AND voided_at IS NULL LIMIT 1`).bind(jobId, trade).first();
-    const open = await c.env.DB.prepare(
-      `SELECT 1 AS yes FROM quote_requests
-        WHERE job_id = ? AND trade = ? AND status = 'open' LIMIT 1`).bind(jobId, trade).first();
-    const may = canRequestQuotes(
-      { ...jobRowToJs(job, []), requestedBy: job.requested_by, approvedAt: job.approved_at,
-        withdrawnAt: job.withdrawn_at },
-      // 066. `today` so a hold whose date has passed does not refuse. The job
-      // comes off hold by itself when that day arrives -- which is what
-      // "defer until March" says -- and a route that ignored the date would
-      // keep refusing work that is live again.
-      { role, hasOpenRequest: !!open, liveWorkOrder: !!live, today: dayKeyUtc() });
-    if (!may.ok) return c.json({ error: may.reason }, 409);
-
-    // The roster, for this trade. Their engagement is what makes them askable;
-    // nothing here searches or looks anybody up.
+    // The roster. Their engagement is what makes them askable; nothing here
+    // searches or looks anybody up.
     const { results: roster } = await c.env.DB.prepare(
       `SELECT en.company_id AS id, en.status, en.categories
          FROM engagements en WHERE en.account_id = ? AND en.status != 'ended'`
     ).bind(accountId).all();
     const subs = (roster || []).map((r) => ({ id: r.id, status: r.status,
       categories: parseJson(r.categories, []) }));
-    const picked = validInvitees(b.companyIds || [], subs, trade);
-    if (!picked.ok) return c.json({ error: picked.reason, max: MAX_INVITES }, 400);
 
-    const id = uid();
-    await c.env.DB.prepare(
-      `INSERT INTO quote_requests (id, account_id, job_id, trade, scope, due_at, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, accountId, jobId, trade, (b.scope || "").trim() || null,
-      isoDay(b.dueAt), userId).run();
-    for (const companyId of picked.companyIds) {
-      await c.env.DB.prepare(
-        `INSERT INTO quote_invites (id, request_id, company_id) VALUES (?, ?, ?)`
-      ).bind(uid(), id, companyId).run();
+    // EVERY ITEM IS CHECKED BEFORE ANY IS WRITTEN.
+    for (const it of items) {
+      const live = await c.env.DB.prepare(
+        `SELECT 1 AS yes FROM work_orders
+          WHERE job_id = ? AND trade = ? AND voided_at IS NULL LIMIT 1`).bind(jobId, it.trade).first();
+      const open = await c.env.DB.prepare(
+        `SELECT 1 AS yes FROM quote_requests
+          WHERE job_id = ? AND trade = ? AND status = 'open' LIMIT 1`).bind(jobId, it.trade).first();
+      const may = canRequestQuotes(
+        { ...jobRowToJs(job, []), requestedBy: job.requested_by, approvedAt: job.approved_at,
+          withdrawnAt: job.withdrawn_at },
+        // 066. `today` so a hold whose date has passed does not refuse. The job
+        // comes off hold by itself when that day arrives -- which is what
+        // "defer until March" says -- and a route that ignored the date would
+        // keep refusing work that is live again.
+        { role, hasOpenRequest: !!open, liveWorkOrder: !!live, today: dayKeyUtc() });
+      if (!may.ok) return c.json({ error: may.reason, trade: it.trade }, 409);
+      const picked = validInvitees(b.companyIds || [], subs, it.trade);
+      if (!picked.ok) return c.json({ error: picked.reason, trade: it.trade, max: MAX_INVITES }, 400);
+      it.companyIds = picked.companyIds;
     }
 
-    await logEvent(c.env, accountId, userId, "quotes.requested", id,
-      { jobId, trade, asked: picked.companyIds.length });
+    const made = [];
+    for (const it of items) {
+      const id = uid();
+      await c.env.DB.prepare(
+        `INSERT INTO quote_requests (id, account_id, job_id, trade, scope, due_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(id, accountId, jobId, it.trade, it.scope, isoDay(b.dueAt), userId).run();
+      for (const companyId of it.companyIds) {
+        await c.env.DB.prepare(
+          `INSERT INTO quote_invites (id, request_id, company_id) VALUES (?, ?, ?)`
+        ).bind(uid(), id, companyId).run();
+      }
+      await logEvent(c.env, accountId, userId, "quotes.requested", id,
+        { jobId, trade: it.trade, asked: it.companyIds.length });
+      made.push({ id, trade: it.trade, asked: it.companyIds.length });
+    }
+    const people = new Set(items.flatMap((it) => it.companyIds)).size;
     await logActivity(c.env, accountId, userId, "quotes_requested",
-      `Asked ${picked.companyIds.length} contractor${picked.companyIds.length === 1 ? "" : "s"} to price ${trade} on "${job.title}"`);
+      `Asked ${people} contractor${people === 1 ? "" : "s"} to price ${
+        items.map((it) => tradeLabel(it.trade)).join(", ")} on "${job.title}"`);
     await touchJob(c.env, jobId);
-    return c.json({ id, asked: picked.companyIds.length }, 201);
+    return batch
+      ? c.json({ requests: made, asked: people }, 201)
+      : c.json({ id: made[0].id, asked: made[0].asked }, 201);
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;

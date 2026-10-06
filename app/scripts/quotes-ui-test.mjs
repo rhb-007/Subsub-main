@@ -59,9 +59,10 @@ const JOB = {
   approvedAt: null, severity: null, notes: null,
 };
 
+let JOBS = [JOB];
 let REQS = [];
 let MY_QUOTES = [];
-const asks = [], awards = [], answers = [];
+const asks = [], awards = [], answers = [], answerPaths = [];
 
 // WHAT THEY ARE BEING ASKED TO PRICE, WITH THE PICTURES. Narrowed by the
 // SERVER to the rooms this trade was asked about, which is why the stub answers
@@ -107,7 +108,7 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, GC];
   if (path === "/api/account") return [200, GC];
   if (path === "/api/subs") return [200, SUBS];
-  if (path === "/api/jobs") return [200, [JOB]];
+  if (path === "/api/jobs") return [200, JOBS];
   if (path === "/api/my-work") return [200, { work: [] }];
   if (path === "/api/my-quotes") return [200, MY_QUOTES];
   if (/^\/api\/jobs\/[^/]+\/quote-requests$/.test(path)) {
@@ -118,7 +119,7 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
     awards.push(body); return [200, { ok: true, woId: "wo1", woNumber: "WO-1" }];
   }
   if (/^\/api\/quotes\/[^/]+$/.test(path) && method === "POST") {
-    answers.push(body); return [200, { ok: true }];
+    answers.push(body); answerPaths.push(path); return [200, { ok: true }];
   }
   // Keyed by the INVITE. `qi_bare` is an invite on a job nobody walked, which
   // is the ordinary case -- the route answers 404 and the panel draws nothing.
@@ -194,11 +195,14 @@ try {
       .find((b) => /^Ask 2 contractors$/.test(b.innerText.trim()))?.click());
     await wait(900);
     t.ck("the ask reaches the server", asks.length === 1, JSON.stringify(asks));
-    t.ck("naming the trade", asks[0]?.trade === "roofing");
+    // One item, carried in the same shape a several-item ask uses -- so the
+    // route has one door, not a single-trade one beside a batch one.
+    t.ck("naming the trade", asks[0]?.items?.length === 1 && asks[0]?.items?.[0]?.trade === "roofing",
+      JSON.stringify(asks[0]?.items));
     t.ck("and exactly who was picked", (asks[0]?.companyIds || []).length === 2,
       JSON.stringify(asks[0]?.companyIds));
     t.ck("carrying the scope everybody reads",
-      /400sqm/.test(asks[0]?.scope || ""), String(asks[0]?.scope));
+      /400sqm/.test(asks[0]?.items?.[0]?.scope || ""), String(asks[0]?.items?.[0]?.scope));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -377,7 +381,7 @@ try {
     await wait(500);
     await page.evaluate(() => {
       const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-      const el = document.querySelector(".qask-form input[inputmode=decimal]");
+      const el = document.querySelector(".qask input[inputmode=decimal]");
       set.call(el, "4800");
       el.dispatchEvent(new Event("input", { bubbles: true }));
     });
@@ -413,6 +417,167 @@ try {
     t.ck("and carries no inspection panel", got.panel === false, JSON.stringify(got));
     t.ck("nor the line about which rooms", got.only === false, JSON.stringify(got));
     t.ck("but it did ask", inspAsks.length === 1, JSON.stringify(inspAsks));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  // ---- SEVERAL ITEMS, SENT TOGETHER, PRICED ONE BY ONE --------------------
+  //
+  // Reported as "it sent one separate quote request for each one plus one
+  // together ... it should be together sent, but quoted individually for each
+  // item". Two halves, and each is driven here rather than read off the
+  // source: the ask is one press carrying every item, and the company asked
+  // about two of them gets ONE card with a price box per item.
+  const UNIT = {
+    id: "j_unit", accountId: "acc_a", title: "Move-out work, unit 32", address: "4 Pier St",
+    area: null, zip: null, date: "2026-11-09", time: null, trades: ["roofing", "electrical"],
+    scope: "From the move-out inspection of unit 32", status: "active", assignments: {},
+    photos: [], measurementDocs: [], propertyId: null, requestedBy: null,
+    approvedAt: null, severity: null, notes: null,
+  };
+
+  console.log("\n-- one ask carries every item on the job --");
+  {
+    JOBS = [UNIT]; REQS = []; asks.length = 0;
+    const { ctx, page, crashes } = await open("u_boss");
+    await wait(3000);
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^Jobs/.test(b.innerText.trim()))?.click());
+    await wait(1200);
+    await page.evaluate(() => [...document.querySelectorAll(".job-card h3, .job-card button")]
+      .find((e) => /unit 32/i.test(e.innerText))?.click());
+    await wait(900);
+    // Opened from ONE slot, which is how anybody arrives at it.
+    await page.evaluate(() => [...document.querySelectorAll(".trade-actions button")]
+      .find((b) => /Ask for quotes/i.test(b.innerText))?.click());
+    await wait(800);
+    const m = await page.evaluate(() => ({
+      items: [...document.querySelectorAll(".qa-trade")].map((b) => ({
+        name: b.innerText.trim(), on: b.classList.contains("on") })),
+      people: [...document.querySelectorAll(".qa-pick:not(.qa-trade) .qa-name")]
+        .map((n) => n.innerText.replace(/\s+/g, " ").trim()),
+    }));
+    t.ck("every open item on the job is offered", m.items.length === 2, JSON.stringify(m.items));
+    t.ck("and both are ticked from the start", m.items.every((i) => i.on), JSON.stringify(m.items));
+    t.ck("everybody who covers either item can be asked",
+      m.people.length === 4 && m.people.some((p) => /Volt Electric/.test(p)), JSON.stringify(m.people));
+    t.ck("each says which items it would price",
+      m.people.some((p) => /Volt Electric/.test(p) && /Electrical/.test(p))
+      && m.people.some((p) => /Bay Roofing/.test(p) && /Roofing/.test(p)), JSON.stringify(m.people));
+
+    // Picking only a roofer leaves the electrical item going to nobody.
+    await page.evaluate(() => [...document.querySelectorAll(".qa-pick:not(.qa-trade)")]
+      .find((b) => /Bay Roofing/.test(b.innerText))?.click());
+    await wait(300);
+    const half = await page.evaluate(() => ({
+      note: [...document.querySelectorAll(".fld-note")].map((n) => n.innerText)
+        .find((x) => /Nobody you picked/.test(x)) || null,
+      dead: [...document.querySelectorAll(".form-actions .btn-solid")]
+        .find((b) => /Ask/.test(b.innerText))?.disabled ?? null,
+    }));
+    t.ck("an item nobody picked can price is named", /electrical/i.test(half.note || ""), String(half.note));
+    t.ck("and it will not send yet", half.dead === true, String(half.dead));
+
+    await page.evaluate(() => [...document.querySelectorAll(".qa-pick:not(.qa-trade)")]
+      .find((b) => /Volt Electric/.test(b.innerText))?.click());
+    await wait(300);
+    const btn = await page.evaluate(() => [...document.querySelectorAll(".form-actions .btn-solid")]
+      .map((b) => b.innerText.trim()).find((x) => /^Ask/.test(x)) || null);
+    t.ck("the button says it is one ask about two items",
+      btn === "Ask 2 contractors about 2 items", String(btn));
+    await page.evaluate(() => [...document.querySelectorAll(".form-actions .btn-solid")]
+      .find((b) => /^Ask 2 contractors/.test(b.innerText.trim()))?.click());
+    await wait(900);
+    t.ck("ONE request reaches the server, not one per item", asks.length === 1, JSON.stringify(asks));
+    t.ck("carrying both items",
+      (asks[0]?.items || []).map((i) => i.trade).sort().join(",") === "electrical,roofing",
+      JSON.stringify(asks[0]?.items));
+    t.ck("to the two who were picked", (asks[0]?.companyIds || []).length === 2,
+      JSON.stringify(asks[0]?.companyIds));
+    // The job's own scope is the whole walk; under each of two items it is
+    // exactly the text the per-item split exists to replace.
+    t.ck("and neither item is seeded with the whole job's scope",
+      (asks[0]?.items || []).every((i) => !/move-out inspection of unit 32/.test(i.scope || "")),
+      JSON.stringify(asks[0]?.items));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+    JOBS = [JOB];
+  }
+
+  console.log("\n-- the company asked about both gets one card, a price per item --");
+  {
+    const q = (inviteId, requestId, trade, scope) => ({
+      inviteId, requestId, status: "invited", requestStatus: "open",
+      wonIt: false, priceCents: null, canStart: null, note: null,
+      invitedAt: "2026-10-01", answeredAt: null, dueAt: null, trade,
+      accountId: "acc_a", accountName: "Alder Construction", accountSubdomain: "alder",
+      job: { id: "j_unit", title: "Move-out work, unit 32", address: "4 Pier St",
+        area: null, zip: null, date: "2026-11-09", time: null, severity: null,
+        trades: [trade], scope, assignments: {}, quoting: true, readOnly: true },
+    });
+    MY_QUOTES = [q("i_roof", "qr_roof", "roofing", "Ridge flashing lifted"),
+      q("i_elec", "qr_elec", "electrical", "Loft light dead")];
+    answers.length = 0; answerPaths.length = 0; inspAsks.length = 0;
+    const { ctx, page, crashes } = await open("u_bay");
+    await wait(3100);
+    const c = await page.evaluate(() => ({
+      cards: document.querySelectorAll(".qask").length,
+      items: [...document.querySelectorAll(".qask .qask-item")].map((i) => i.innerText.replace(/\s+/g, " ")),
+      count: document.querySelector(".qask .qask-count")?.innerText || null,
+    }));
+    t.ck("two invites on one job are ONE card", c.cards === 1, String(c.cards));
+    t.ck("with a line per item", c.items.length === 2, JSON.stringify(c.items));
+    t.ck("each carrying its own scope",
+      c.items.some((x) => /Ridge flashing/.test(x)) && c.items.some((x) => /Loft light/.test(x)),
+      JSON.stringify(c.items));
+    t.ck("and saying how many there are", /2 items/.test(c.count || ""), String(c.count));
+    // Each line's rooms are narrowed per trade on the server, so each asks for
+    // its own -- under its own invite.
+    t.ck("each item's rooms are asked for under its own invite",
+      inspAsks.some((p) => /i_roof/.test(p)) && inspAsks.some((p) => /i_elec/.test(p)),
+      JSON.stringify(inspAsks));
+
+    await page.evaluate(() => [...document.querySelectorAll(".qask button")]
+      .find((b) => /Price these/i.test(b.innerText))?.click());
+    await wait(500);
+    const boxes = await page.evaluate(() => document.querySelectorAll(".qask input[inputmode=decimal]").length);
+    t.ck("a price box per item", boxes === 2, String(boxes));
+    await page.evaluate(() => {
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      const el = document.querySelector(".qask input[inputmode=decimal]");
+      set.call(el, "2100");
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await wait(300);
+    // Half answered is not answered: silence about the second item would read
+    // on the other side as that item still pending.
+    const half = await page.evaluate(() => ({
+      dead: [...document.querySelectorAll(".qask-form .form-actions .btn-solid")][0]?.disabled ?? null,
+      note: [...document.querySelectorAll(".qask-form .fld-note")].map((n) => n.innerText)
+        .find((x) => /Give a price/.test(x)) || null,
+    }));
+    t.ck("one price of two does not send", half.dead === true, String(half.dead));
+    t.ck("and names the item still unanswered", /Electrical/.test(half.note || ""), String(half.note));
+
+    // The ELECTRICAL line's own control -- each line carries one, and the
+    // first in the card is the roofing line's.
+    await page.evaluate(() => [...document.querySelectorAll(".qask .qask-item")]
+      .find((i) => /Electrical/.test(i.querySelector(".qask-item-head")?.innerText || ""))
+      ?.querySelector(".qask-skip")?.click());
+    await wait(300);
+    const ready = await page.evaluate(() => ({
+      btn: [...document.querySelectorAll(".qask-form .form-actions .btn-solid")].map((b) => [b.innerText, b.disabled]),
+      skips: [...document.querySelectorAll(".qask .qask-skip")].map((b) => b.innerText),
+    }));
+    t.ck("passing on the second makes it sendable, as one quote",
+      ready.btn[0]?.[0] === "Send quote" && ready.btn[0]?.[1] === false, JSON.stringify(ready));
+    await page.evaluate(() => [...document.querySelectorAll(".qask-form .form-actions .btn-solid")][0]?.click());
+    await wait(900);
+    const by = Object.fromEntries(answerPaths.map((p, i) => [p.split("/").pop(), answers[i]]));
+    t.ck("each item is answered on its own", answers.length === 2, JSON.stringify(answerPaths));
+    t.ck("the priced one carries its price", by.i_roof?.priceCents === 210000, JSON.stringify(by.i_roof));
+    t.ck("and the other is a pass, not a zero", by.i_elec?.pass === true && !by.i_elec?.priceCents,
+      JSON.stringify(by.i_elec));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

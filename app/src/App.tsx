@@ -6980,9 +6980,14 @@ export default function SubSub() {
             /* 061. Answering the time, from the side that drives to it. */
             onAnswerVisit={answerVisit} onProposeVisit={setProposeWO}
             quotes={myQuotes}
-            onAnswerQuote={async (inviteId, body) => {
-              await api.answerQuote(inviteId, body);
-              await refreshQuotes();
+            // A whole card at once: every line it priced or passed on, then ONE
+            // re-read. Re-reading after each would drop the answered line out
+            // from under the card while the rest were still going. A failure
+            // part-way still re-reads, so the card shows what actually went.
+            onAnswerQuote={async (answers) => {
+              try {
+                for (const a of answers) await api.answerQuote(a.inviteId, a.body);
+              } finally { await refreshQuotes(); }
             }}
             connectRequests={connectIn || []}
             onRespondConnect={async (id, accept) => {
@@ -7181,16 +7186,18 @@ export default function SubSub() {
           is nothing to search, because there is nothing here but people they
           already work with. */}
       {askQuotes && (() => {
-        const eligible = quotableSubs(
-          subs.filter((sb) => (sb.categories || []).includes(askQuotes.trade))
-            .map((sb) => ({ ...sb, status: sb.status || "active" })), askQuotes.trade);
+        // The whole roster: which of them can price which item is the
+        // modal's question now, since one press may cover several trades.
+        const eligible = subs.map((sb) => ({ ...sb, status: sb.status || "active" }));
+        const openTrades = quoteReqs
+          .filter((r) => r.jobId === askQuotes.job.id && r.status === "open").map((r) => r.trade);
         return (
           <Modal onClose={() => setAskQuotes(null)}>
             <AskQuotes job={askQuotes.job} trade={askQuotes.trade} subs={eligible}
-              tradeScopes={tradeScopes}
+              tradeScopes={tradeScopes} openTrades={openTrades}
               onCancel={() => setAskQuotes(null)}
               onSend={async (body) => {
-                await api.askForQuotes(askQuotes.job.id, { trade: askQuotes.trade, ...body });
+                await api.askForQuotes(askQuotes.job.id, body);
                 setAskQuotes(null);
                 await refreshQuotes();
               }} />
@@ -25041,8 +25048,9 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                 Nothing is committed by answering. If they pick you, you get a work
                 order at the price you gave and you still accept or decline it.
               </p>
-              {openQuotes.map((q) => (
-                <QuoteAskCard key={q.inviteId} q={q} onAnswer={onAnswerQuote} />
+              {quoteGroups(openQuotes).map((items) => (
+                <QuoteAskCard key={`${items[0].accountId}:${items[0].job.id}`} items={items}
+                  onAnswer={onAnswerQuote} />
               ))}
             </section>
           )}
@@ -28154,63 +28162,103 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
 //
 // The list is the roster for that trade and nothing else. There is nothing to
 // search here, because there is nobody here they do not already work with.
-function AskQuotes({ job, trade, subs, onSend, onCancel, tradeScopes = {} }) {
-  const M = catMeta(trade);
+function AskQuotes({ job, trade, subs, onSend, onCancel, tradeScopes = {}, openTrades = [] }) {
+  // EVERY TRADE ON THE JOB THAT CAN STILL BE ASKED ABOUT, ticked from the
+  // start. A move-out with a scratched floor and a scuffed wall is one
+  // conversation with the same contractors, and asking it one trade at a time
+  // sent the same company two cards about one unit. The trade this was opened
+  // from leads; the rest are one tap to leave out. Underneath it is still one
+  // request per trade, because each is awarded on its own -- the floor and the
+  // wall may go to different people at different prices.
+  const candidates = [trade, ...(job.trades || []).filter((t) => t !== trade)]
+    .filter((t) => t === trade || (!job.assignments?.[t] && !openTrades.includes(t)));
+  const [ticked, setTicked] = useState(candidates);
+  const covers = (sb, t) => quotableSubs([{ ...sb, status: sb.status || "active" }], t).length > 0;
+  const askable = subs.filter((sb) => ticked.some((t) => covers(sb, t)));
   const [picked, setPicked] = useState([]);
-  // THE ROOMS THAT NAMED THIS TRADE, not the whole walk.
-  //
-  // It seeded `job.scope`, which on a move-out is every flagged room in the
-  // unit -- so a plumber being asked for a number on the toilet was handed
-  // eleven rooms and left to work out which line was theirs. A scope somebody
-  // has to filter before they can price it is a scope that comes back as a
-  // telephone call.
-  //
-  // The job's own scope is still the fallback, because a job nobody walked has
-  // no per-trade answer and the whole scope is then the honest one.
-  const seeded = tradeScopes[trade] || "";
-  const [scope, setScope] = useState(seeded || job.scope || "");
-  // The answer arrives after the modal opens, so the box takes it when it
-  // lands -- but never over typing somebody has already done, which is the
-  // rule the photo drafts follow about not overwriting a kept caption.
-  const touched = useRef(false);
+  // THE ROOMS THAT NAMED EACH TRADE, not the whole walk -- one box per item,
+  // because what a contractor prices is what this box says. The job's own
+  // scope is the fallback only when a single trade is being asked about: with
+  // two, the whole walk under each is the very text the per-trade split
+  // exists to replace.
+  const [scopes, setScopes] = useState({});
+  const touched = useRef({});
+  const seedFor = (t) => tradeScopes[t] || (ticked.length === 1 ? job.scope || "" : "");
   useEffect(() => {
-    if (seeded && !touched.current) setScope(seeded);
-  }, [seeded]);
+    setScopes((cur) => {
+      const next = { ...cur };
+      for (const t of ticked) if (!touched.current[t]) next[t] = seedFor(t);
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tradeScopes, ticked.join(",")]);
   const [dueAt, setDueAt] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const toggle = (id) => setPicked((p) =>
     p.includes(id) ? p.filter((x) => x !== id) : p.length >= MAX_INVITES ? p : [...p, id]);
+  const tick = (t) => setTicked((cur) =>
+    cur.includes(t) ? (cur.length > 1 ? cur.filter((x) => x !== t) : cur) : [...cur, t]);
+  // An item nobody picked can price is a question that would go to nobody,
+  // which the server refuses by name. Said here first, naming the trade.
+  const orphan = ticked.find((t) => !picked.some((id) => {
+    const sb = subs.find((x) => x.id === id);
+    return sb && covers(sb, t);
+  }));
+  const label = (t) => catMeta(t).label;
 
   return (
     <>
       <h3>Ask for quotes</h3>
-      <p className="qa-sub">
-        <span className={`cat-badge cat-${trade}`}><M.icon size={12} /> {M.label}</span>
-        {" "}on <strong>{job.title}</strong>
-      </p>
+      <p className="qa-sub">on <strong>{job.title}</strong></p>
       <p className="panel-note">
-        Nobody is committed by this. They see the job and what you want priced, and
-        answer with a number and a date &mdash; then you pick one, and that is when
+        Nobody is committed by this. They see the job and each item you want priced, and
+        answer with a price for each &mdash; then you pick, item by item, and that is when
         the work order is issued, at the price they gave.
       </p>
 
-      {subs.length === 0 ? (
+      {candidates.length > 1 && (
+        <>
+          <div className="form-sec">What to price</div>
+          <div className="qa-picks">
+            {candidates.map((t) => {
+              const M = catMeta(t);
+              const on = ticked.includes(t);
+              return (
+                <button key={t} type="button" className={`qa-pick qa-trade${on ? " on" : ""}`}
+                  aria-pressed={on} onClick={() => tick(t)}>
+                  <span className="qa-name"><M.icon size={13} /> {M.label}</span>
+                  {on ? <Check size={14} /> : <Plus size={14} />}
+                </button>
+              );
+            })}
+          </div>
+          <p className="fld-note">Sent together, and each one is priced on its own.</p>
+        </>
+      )}
+
+      {askable.length === 0 ? (
         <p className="qa-none">
-          Nobody on your roster covers {M.label.toLowerCase()} yet. Add a contractor for
-          this trade, or use Overflow if you have nobody at all.
+          Nobody on your roster covers {ticked.map((t) => label(t).toLowerCase()).join(" or ")} yet.
+          Add a contractor for it, or use Overflow if you have nobody at all.
         </p>
       ) : (
         <>
           <div className="form-sec">Who to ask</div>
           <div className="qa-picks">
-            {subs.map((sb) => {
+            {askable.map((sb) => {
               const on = picked.includes(sb.id);
               const full = !on && picked.length >= MAX_INVITES;
+              const theirs = ticked.filter((t) => covers(sb, t));
               return (
                 <button key={sb.id} type="button" disabled={full}
                   className={`qa-pick${on ? " on" : ""}`} onClick={() => toggle(sb.id)}>
-                  <span className="qa-name">{sb.company}</span>
+                  <span className="qa-name">{sb.company}
+                    {ticked.length > 1 && (
+                      <em className="qa-covers">{theirs.length === ticked.length
+                        ? "prices all of it" : theirs.map(label).join(", ")}</em>
+                    )}
+                  </span>
                   {on ? <Check size={14} /> : <Plus size={14} />}
                 </button>
               );
@@ -28220,21 +28268,23 @@ function AskQuotes({ job, trade, subs, onSend, onCancel, tradeScopes = {} }) {
               overflow: they never find out about each other. */}
           <p className="qa-priv">
             <Lock size={12} /> None of them will see who else you asked, or what
-            anybody else quoted.
+            anybody else quoted. Each is asked only about the items they cover.
           </p>
 
-          <label className="fld">
-            <span>What they are pricing</span>
-            <textarea rows={3} value={scope}
-              onChange={(e) => { touched.current = true; setScope(e.target.value); }}
-              placeholder="Strip and re-cover, 400sqm. Skip hire included." />
-            <em className="fld-note">
-              {seeded && !touched.current
-                ? <>Filled in from the {M.label.toLowerCase()} rooms on the inspection. Edit it if you want.</>
-                : <>Everybody asked reads this same text &mdash; a scope that
-                  differs per contractor is not a comparison.</>}
-            </em>
-          </label>
+          {ticked.map((t) => (
+            <label key={t} className="fld">
+              <span>{ticked.length > 1 ? `What they are pricing — ${label(t)}` : "What they are pricing"}</span>
+              <textarea rows={3} value={scopes[t] ?? ""}
+                onChange={(e) => { touched.current[t] = true; const v = e.target.value; setScopes((cur) => ({ ...cur, [t]: v })); }}
+                placeholder="Strip and re-cover, 400sqm. Skip hire included." />
+              <em className="fld-note">
+                {tradeScopes[t] && !touched.current[t]
+                  ? <>Filled in from the {label(t).toLowerCase()} rooms on the inspection. Edit it if you want.</>
+                  : <>Everybody asked reads this same text &mdash; a scope that
+                    differs per contractor is not a comparison.</>}
+              </em>
+            </label>
+          ))}
           <label className="fld">
             <span>Quotes wanted by <em className="opt">(optional)</em></span>
             <input type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
@@ -28242,22 +28292,32 @@ function AskQuotes({ job, trade, subs, onSend, onCancel, tradeScopes = {} }) {
           </label>
 
           {err && <p className="form-err">{err}</p>}
+          {picked.length > 0 && orphan && (
+            <p className="fld-note">Nobody you picked does {label(orphan).toLowerCase()} &mdash;
+              pick somebody who does, or untick it above.</p>
+          )}
           <div className="form-actions">
             <button className="btn-ghost" onClick={onCancel}>Cancel</button>
-            <button className="btn-solid" disabled={busy || picked.length === 0}
+            <button className="btn-solid" disabled={busy || picked.length === 0 || !!orphan}
               onClick={async () => {
                 setBusy(true); setErr("");
-                try { await onSend({ companyIds: picked, scope, dueAt: dueAt || null }); }
-                catch (ex) {
+                try {
+                  await onSend({ items: ticked.map((t) => ({ trade: t, scope: scopes[t] || "" })),
+                    companyIds: picked, dueAt: dueAt || null });
+                } catch (ex) {
                   console.error("[quotes] ask failed:", ex);
+                  const t = ex?.body?.trade ? ` (${label(ex.body.trade)})` : "";
                   setErr(ex?.body?.error === "already_issued"
-                    ? "Somebody has already been issued this trade."
-                    : "That didn't send. Try again in a moment.");
+                    ? `Somebody has already been issued that trade${t}.`
+                    : ex?.body?.error === "already_asking"
+                      ? `Quotes are already out for that trade${t}.`
+                      : "That didn't send. Try again in a moment.");
                   setBusy(false);
                 }
               }}>
               {busy ? "Sending\u2026" : picked.length
-                ? `Ask ${picked.length} contractor${picked.length === 1 ? "" : "s"}`
+                ? `Ask ${picked.length} contractor${picked.length === 1 ? "" : "s"}${
+                  ticked.length > 1 ? ` about ${ticked.length} items` : ""}`
                 : "Pick who to ask"}
             </button>
           </div>
@@ -28347,28 +28407,82 @@ function QuotePanel({ req, job, onAward, onCancelRequest }) {
 // Deliberately NOT shaped like a job request: there is no deadline clock, no
 // accept and no decline, because nothing is on offer yet. What they are being
 // asked for is a number.
-function QuoteAskCard({ q, onAnswer }) {
+//
+// ONE CARD PER JOB, ONE PRICE PER ITEM. Reported from this card: a property
+// manager asked about a scratched floor and a scuffed wall on one unit, and
+// the contractor got a separate card for each -- the same address, the same
+// date, the same client, twice. Underneath it is still one request per trade,
+// because each is awarded on its own and may go to somebody else; so the
+// card groups them back together and asks for a price against each line.
+// Grouped by the client AND the job, never by job alone, so two clients'
+// questions can never share a card.
+function quoteGroups(quotes = []) {
+  const by = new Map();
+  for (const q of quotes) {
+    const k = `${q.accountId}:${q.job?.id}`;
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(q);
+  }
+  return [...by.values()];
+}
+
+// One line of a grouped quote: the trade, what is to be priced, the rooms and
+// photographs THAT trade was asked about, and its own price. The inspection is
+// fetched per invite because the server narrows it per trade -- the painter's
+// line shows the wall, the floor layer's shows the floor.
+function QuoteAskItem({ q, open, value = {}, onChange, many }) {
   const M = catMeta(q.trade);
-  // WHAT THEY ARE ACTUALLY PRICING, WITH THE PICTURES. The scope line says a
-  // basin is cracked; the photograph says how. Narrowed by the server to the
-  // rooms this trade was asked about, and absent on a job nobody walked --
-  // which is most of them, so the panel draws nothing rather than a heading
-  // over an empty space.
   const insp = useRemoteInspection("quote", q.inviteId);
+  return (
+    <div className={`qask-item${many ? " many" : ""}`}>
+      <div className="qask-item-head">
+        <span className={`cat-badge cat-${q.trade}`}><M.icon size={12} /> {M.label}</span>
+        {open && (value.pass
+          ? <button type="button" className="qask-skip on" onClick={() => onChange({ ...value, pass: false })}>
+              Not quoting this one &middot; undo</button>
+          : many && <button type="button" className="qask-skip" onClick={() => onChange({ ...value, pass: true })}>
+              Can't do this one</button>)}
+      </div>
+      {q.job.scope && <p className="job-scope">{q.job.scope}</p>}
+      {insp && <JobInspection kind="quote" id={q.inviteId} data={insp} />}
+      {open && !value.pass && (
+        <label className="fld qask-price">
+          <span>{many ? `Your price for ${M.label.toLowerCase()}` : "Your price"}</span>
+          <input inputMode="decimal" value={value.price || ""} placeholder="4,125.00"
+            onChange={(e) => onChange({ ...value, price: e.target.value })} />
+        </label>
+      )}
+    </div>
+  );
+}
+
+function QuoteAskCard({ items, onAnswer }) {
+  const q0 = items[0];
+  const many = items.length > 1;
   const [open, setOpen] = useState(false);
-  const [price, setPrice] = useState("");
+  const [vals, setVals] = useState({});
   const [canStart, setCanStart] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const cents = (v) => Math.round(Number(moneyRaw(v?.price || "") || 0) * 100);
+  // Every line answered -- a price or "can't do this one" -- and at least one
+  // price. A half-answered card would send a quote for the floor and silence
+  // about the wall, which reads on the other side as the wall still pending.
+  const unanswered = items.filter((q) => !vals[q.inviteId]?.pass && !(cents(vals[q.inviteId]) > 0));
+  const priced = items.filter((q) => !vals[q.inviteId]?.pass && cents(vals[q.inviteId]) > 0);
+  const dueAt = items.map((q) => q.dueAt).filter(Boolean).sort()[0];
 
-  const send = async (pass) => {
+  const send = async (passAll) => {
     setBusy(true); setErr("");
     try {
-      if (pass) { await onAnswer(q.inviteId, { pass: true, note: note || null }); return; }
-      const cents = Math.round(Number(moneyRaw(price) || 0) * 100);
-      if (!cents || cents <= 0) { setErr("Give a price to send."); setBusy(false); return; }
-      await onAnswer(q.inviteId, { priceCents: cents, canStart: canStart || null, note: note || null });
+      const answers = items.map((q) => {
+        const v = vals[q.inviteId] || {};
+        return passAll || v.pass
+          ? { inviteId: q.inviteId, body: { pass: true, note: note || null } }
+          : { inviteId: q.inviteId, body: { priceCents: cents(v), canStart: canStart || null, note: note || null } };
+      });
+      await onAnswer(answers);
     } catch (ex) {
       console.error("[quotes] answer failed:", ex);
       setErr("That didn't send. Try again in a moment.");
@@ -28380,41 +28494,39 @@ function QuoteAskCard({ q, onAnswer }) {
     <div className="job-card jr-card qask">
       <div className="jr-client">
         <Building2 size={12} />
-        <span>For <strong>{q.accountName}</strong></span>
-        {q.dueAt && <span className="qask-due">Wanted by {q.dueAt}</span>}
+        <span>For <strong>{q0.accountName}</strong></span>
+        {dueAt && <span className="qask-due">Wanted by {dueAt}</span>}
       </div>
       <div className="job-card-head">
         <div>
-          <h3>{q.job.title}</h3>
+          <h3>{q0.job.title}</h3>
           <div className="job-meta">
-            <span><Calendar size={12} /> {formatWhen(q.job.date, q.job.time) || q.job.date || "No date"}</span>
-            <span><MapPin size={12} /> {[q.job.address, q.job.area, q.job.zip].filter(Boolean).join(", ") || "No address"}</span>
+            <span><Calendar size={12} /> {formatWhen(q0.job.date, q0.job.time) || q0.job.date || "No date"}</span>
+            <span><MapPin size={12} /> {[q0.job.address, q0.job.area, q0.job.zip].filter(Boolean).join(", ") || "No address"}</span>
           </div>
         </div>
-        <span className={`cat-badge cat-${q.trade}`}><M.icon size={12} /> {M.label}</span>
+        {many && <span className="qask-count">{items.length} items to price</span>}
       </div>
-      {q.job.scope && <p className="job-scope">{q.job.scope}</p>}
-      {insp && <JobInspection kind="quote" id={q.inviteId} data={insp} />}
+
+      {items.map((q) => (
+        <QuoteAskItem key={q.inviteId} q={q} open={open} many={many}
+          value={vals[q.inviteId]} onChange={(v) => setVals((cur) => ({ ...cur, [q.inviteId]: v }))} />
+      ))}
 
       {!open ? (
         <div className="portal-respond">
-          <span className="respond-label">What would you charge for this?</span>
+          <span className="respond-label">{many ? "What would you charge for each?" : "What would you charge for this?"}</span>
           <div className="respond-btns">
             <button className="resp accept" onClick={() => setOpen(true)}>
-              <FileText size={13} /> Send a quote
+              <FileText size={13} /> {many ? "Price these" : "Send a quote"}
             </button>
             <button className="resp decline" disabled={busy} onClick={() => send(true)}>
-              <X size={13} /> Pass
+              <X size={13} /> {many ? "Pass on all" : "Pass"}
             </button>
           </div>
         </div>
       ) : (
         <div className="qask-form">
-          <label className="fld">
-            <span>Your price</span>
-            <input inputMode="decimal" value={price} placeholder="4,125.00"
-              onChange={(e) => setPrice(e.target.value)} />
-          </label>
           <label className="fld">
             <span>Earliest you could start <em className="opt">(optional)</em></span>
             <input type="date" value={canStart} onChange={(e) => setCanStart(e.target.value)} />
@@ -28427,10 +28539,16 @@ function QuoteAskCard({ q, onAnswer }) {
               placeholder="Price assumes we can park on site." />
           </label>
           {err && <p className="form-err">{err}</p>}
+          {unanswered.length > 0 && (
+            <p className="fld-note">{many
+              ? `Give a price, or mark "Can't do this one", for: ${unanswered.map((q) => catMeta(q.trade).label).join(", ")}.`
+              : "Give a price to send."}</p>
+          )}
           <div className="form-actions">
             <button className="btn-ghost" onClick={() => setOpen(false)}>Back</button>
-            <button className="btn-solid" disabled={busy} onClick={() => send(false)}>
-              {busy ? "Sending\u2026" : "Send quote"}
+            <button className="btn-solid" disabled={busy || unanswered.length > 0 || priced.length === 0}
+              onClick={() => send(false)}>
+              {busy ? "Sending\u2026" : priced.length > 1 ? `Send ${priced.length} quotes` : "Send quote"}
             </button>
           </div>
         </div>
@@ -35215,6 +35333,19 @@ strong.insp-name{background:none;border:0;padding:0}
 .qa-pick.on{border-color:var(--brand);background:#eef5f1;color:var(--brand-dk);font-weight:600}
 .qa-pick:disabled{opacity:.45;cursor:default}
 .qa-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Which items a contractor can price, under their name, when one press asks
+   about several. A trade pick carries its icon inline with the label. */
+/* A grouped quote: one card, one line per trade, a price against each. */
+.qask-item{margin-top:10px}
+.qask-item.many{padding:12px 0 2px;border-top:1px solid var(--line)}
+.qask-item-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.qask-count{font-size:12px;font-weight:700;color:var(--ink-soft);white-space:nowrap}
+.qask-skip{border:1px solid var(--line);background:var(--card);color:var(--ink-soft);font-size:12px;
+  font-weight:600;padding:5px 10px;border-radius:7px;cursor:pointer}
+.qask-skip.on{border-style:dashed}
+.qask-price{margin-top:8px;max-width:260px}
+.qa-covers{display:block;font-style:normal;font-size:11.5px;font-weight:500;color:var(--ink-soft)}
+.qa-trade .qa-name{display:inline-flex;align-items:center;gap:6px}
 /* The difference between this and overflow, said rather than assumed. */
 .qa-priv{display:flex;align-items:center;gap:6px;margin:0 0 14px;font-size:11.5px;
   color:var(--ink-soft);line-height:1.45}

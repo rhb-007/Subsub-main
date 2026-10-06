@@ -9653,6 +9653,61 @@ refactor.
   its own assertion.
 
 
+- **A QUOTE REQUEST ABOUT TWO ITEMS IS ONE ASK, AND EACH ITEM IS STILL PRICED
+  AND AWARDED ON ITS OWN.** Reported as *"I requested a quote for 2 issues and
+  it sent [the contractor] one separate quote request for each one plus one
+  together … it should be together sent, but quoted individually for each
+  item"*. Ask for quotes was opened from one trade slot and asked about that
+  trade only, so a move-out with a floor and a wall was two presses, two
+  modals and two cards on the contractor's screen about one unit -- and the
+  modal seeded each with the **job's** whole scope, so each card described both
+  items while asking for one price. That is the "plus one together".
+
+  **UNDERNEATH IT IS STILL ONE `quote_requests` ROW PER TRADE, which is the
+  half that must not be merged.** Each item is awarded on its own -- the floor
+  and the wall may go to different people at different prices -- and every
+  award, ranking and work-order rule already reads one trade per request. So
+  "together" lives at the two edges: the ask is one press carrying `items`,
+  and the contractor's portal groups invites by account and job into one card.
+  No migration.
+
+  **ONE DOOR, NOT A BATCH ONE BESIDE A SINGLE ONE.** The screen always sends
+  `items`, a one-item ask included; the old `{trade, scope}` body is still
+  read as one item so nothing already calling it breaks.
+
+  **EVERY ITEM IS CHECKED BEFORE ANY IS WRITTEN.** An item already out, already
+  issued, not on the job, or with nobody picked who covers it refuses the whole
+  ask **by name** (`trade` on the reply), and nothing is inserted -- otherwise
+  the other item goes out alone and the second press is refused as already
+  asking, which is the duplicate-card mess from the other direction.
+
+  **EACH COMPANY IS ASKED ONLY ABOUT WHAT IT COVERS**, through the same
+  `validInvitees` per item. Picking a roofer and an electrician for a roof and
+  a light sends the roofer one invite and the electrician one; a company doing
+  both gets two invites, which the portal draws as one card. The modal says
+  which items each company would price beside their name, and names an item
+  nobody picked covers before the press rather than after it.
+
+  **EACH ITEM GETS ITS OWN SCOPE BOX**, seeded from the trade's slice of the
+  inspection. The job's whole scope is the fallback **only when one item is
+  asked about**: under each of two items it is exactly the text the per-trade
+  split exists to replace.
+
+  **ON THE CONTRACTOR'S SIDE, ONE CARD, A PRICE PER ITEM, AND HALF ANSWERED IS
+  NOT ANSWERED.** Every line needs a price or *Can't do this one*, and at least
+  one price, before it sends -- silence about the wall beside a quote for the
+  floor reads on the other side as the wall still pending. A pass is sent as a
+  pass, never as a zero. Each line asks for its own rooms under its own invite,
+  because the server narrows the inspection per trade. The start date and the
+  note are shared, because they are one visit's answers.
+
+  Three mutations fire, each on its own assertions: inviting everybody to every
+  item, writing a request before the whole ask is checked, and drawing a card
+  per invite again. One harness trap worth keeping: the card has a *Can't do
+  this one* on every line, so the suite first pressed the **roofing** line's
+  and reported the product as refusing to send -- it now finds the line by its
+  own heading.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

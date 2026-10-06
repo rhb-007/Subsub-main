@@ -265,19 +265,17 @@ try {
       /typed\.current\[t\]/.test(woEffect) && /\(l\[t\]\?\.scope \|\| ""\)\.trim\(\)/.test(woEffect),
       woEffect ? "guard missing" : "effect not found");
     ck("and it is the press that marks it typed", /typed\.current\[t\] = true/.test(src));
-    const qEffect = (src.match(/useEffect\(\(\) => \{\s*if \(seeded[\s\S]*?\}, \[seeded\]\);/) || [""])[0];
+    // The quote ask now carries one scope PER ITEM, because one request can
+    // ask about several trades at once -- so the guard is per trade too.
+    const qEffect = (src.match(/useEffect\(\(\) => \{\s*setScopes\(\(cur\) => \{[\s\S]*?\}, \[tradeScopes, ticked\.join\(","\)\]\);/) || [""])[0];
     ck("the quote ask's effect skips a typed scope",
-      /!touched\.current/.test(qEffect), qEffect ? "guard missing" : "effect not found");
-    ck("and it is the press that marks it typed there too", /touched\.current = true/.test(src));
-    // SAID RATHER THAN CLAIMED: what a static check cannot see is the box
-    // actually filling. The effect runs on an answer that arrives after the
-    // modal opens, so the only real proof is a drawn modal -- which is a
-    // browser suite this change does not add.
+      /if \(!touched\.current\[t\]\)/.test(qEffect), qEffect ? "guard missing" : "effect not found");
+    ck("and it is the press that marks it typed there too", /touched\.current\[t\] = true/.test(src));
     // The quote ask previously seeded the WHOLE job scope. That stays as the
-    // fallback for a job nobody walked and must not be what a walked job gets.
+    // fallback for a job nobody walked and a single item -- and must not be
+    // what a walked job gets, nor what each of several items gets.
     ck("the quote ask prefers the trade's slice over the job's",
-      /const seeded = tradeScopes\[trade\] \|\| "";/.test(src)
-      && /useState\(seeded \|\| job\.scope \|\| ""\)/.test(src));
+      /const seedFor = \(t\) => tradeScopes\[t\] \|\| \(ticked\.length === 1 \? job\.scope \|\| "" : ""\);/.test(src));
   }
 } catch (e) {
   fail += 1;

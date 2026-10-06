@@ -171,6 +171,96 @@ console.log("\n-- asking the roster, and nobody else --");
   ck("and a contractor cannot ask at all", nope === 403, String(nope));
 }
 
+console.log("\n-- several items, sent together and priced one by one --");
+{
+  // Reported as "it sent one separate quote request for each one plus one
+  // together". A move-out with a floor and a wall is one conversation, so the
+  // ask is one press -- but each item is still its own request, because each
+  // is awarded on its own and may go to different people at different prices.
+  const { db, env } = seed();
+  // Bay does both here, which is the company the report was about.
+  db.exec(`UPDATE engagements SET categories = '["roofing","electrical"]' WHERE id = 'en_bay';`);
+  const [s, made] = await json(await call(env, "u_boss", "acc_a", "/jobs/j_mill/quote-requests",
+    "POST", { items: [
+      { trade: "roofing", scope: "Ridge flashing lifted" },
+      { trade: "electrical", scope: "Loft light dead" },
+      { trade: "roofing", scope: "a duplicate line is one item, not two" },
+    ], companyIds: ["cmp_bay", "cmp_pine", "cmp_volt"] }));
+  ck("one press makes a request per item", s === 201 && made.requests?.length === 2,
+    `${s} ${JSON.stringify(made)}`);
+  ck("naming each trade", made.requests?.map((r) => r.trade).join(",") === "roofing,electrical",
+    JSON.stringify(made.requests));
+  ck("and counting people, not invites", made.asked === 3, String(made.asked));
+  const rows = db.prepare(`SELECT qr.trade, qr.scope, qi.company_id FROM quote_requests qr
+    JOIN quote_invites qi ON qi.request_id = qr.id ORDER BY qr.trade, qi.company_id`).all();
+  const who = (t) => rows.filter((r) => r.trade === t).map((r) => r.company_id).join(",");
+  ck("each company is asked only about what it does",
+    who("roofing") === "cmp_bay,cmp_pine" && who("electrical") === "cmp_bay,cmp_volt",
+    JSON.stringify(rows));
+  ck("each item carries its own scope, not the whole job's",
+    rows.find((r) => r.trade === "electrical")?.scope === "Loft light dead"
+    && rows.find((r) => r.trade === "roofing")?.scope === "Ridge flashing lifted",
+    JSON.stringify(rows));
+
+  // What the company doing both sees: two invites on ONE job, which is what
+  // the portal draws as one card with a price per item.
+  const [, mine] = await json(await call(env, "u_bay", "acc_a", "/my-quotes"));
+  ck("the company doing both holds one invite per item",
+    mine.length === 2 && new Set(mine.map((q) => q.job.id)).size === 1,
+    JSON.stringify(mine.map((q) => [q.trade, q.job.id])));
+  ck("and each is narrowed to its own trade",
+    mine.every((q) => q.job.trades.length === 1 && q.job.trades[0] === q.trade));
+  // Answered individually: a price on one and a pass on the other.
+  const inv = (t) => mine.find((q) => q.trade === t).inviteId;
+  const [a1] = await json(await call(env, "u_bay", "acc_a", `/quotes/${inv("roofing")}`,
+    "POST", { priceCents: 210000 }));
+  const [a2] = await json(await call(env, "u_bay", "acc_a", `/quotes/${inv("electrical")}`,
+    "POST", { pass: true }));
+  ck("and each is answered on its own", a1 === 200 && a2 === 200, `${a1} ${a2}`);
+  const after = db.prepare(`SELECT qr.trade, qi.status, qi.price_cents FROM quote_invites qi
+    JOIN quote_requests qr ON qr.id = qi.request_id WHERE qi.company_id = 'cmp_bay'
+    ORDER BY qr.trade`).all();
+  ck("a price on one item does not answer the other",
+    after[0].trade === "electrical" && after[0].status === "passed"
+    && after[1].trade === "roofing" && after[1].price_cents === 210000,
+    JSON.stringify(after));
+}
+
+console.log("\n-- a batch is checked whole before any of it is written --");
+{
+  // An item nobody picked can price would go to nobody. Refused BY NAME, and
+  // nothing else in the batch is written -- or the other item goes out alone
+  // and the second press is refused as already asking.
+  const { db, env } = seed();
+  const [s, body] = await json(await call(env, "u_boss", "acc_a", "/jobs/j_mill/quote-requests",
+    "POST", { items: [{ trade: "roofing" }, { trade: "electrical" }],
+      companyIds: ["cmp_bay", "cmp_pine"] }));
+  ck("an item nobody picked covers is refused", s === 400 && body.error === "nobody_to_ask",
+    `${s} ${JSON.stringify(body)}`);
+  ck("naming the item", body.trade === "electrical", String(body.trade));
+  ck("and nothing at all is written",
+    one(db, `SELECT COUNT(*) AS n FROM quote_requests`).n === 0);
+
+  const [s2, b2] = await json(await call(env, "u_boss", "acc_a", "/jobs/j_mill/quote-requests",
+    "POST", { items: [{ trade: "roofing" }, { trade: "plumbing" }], companyIds: ["cmp_bay"] }));
+  ck("an item that is not on the job is refused by name",
+    s2 === 400 && b2.error === "not_a_trade_on_this_job" && b2.trade === "plumbing",
+    `${s2} ${JSON.stringify(b2)}`);
+
+  // One item already out: the batch is refused naming it, and the other
+  // item is not sent on its own.
+  await json(await call(env, "u_boss", "acc_a", "/jobs/j_mill/quote-requests",
+    "POST", { trade: "roofing", companyIds: ["cmp_bay"] }));
+  const [s3, b3] = await json(await call(env, "u_boss", "acc_a", "/jobs/j_mill/quote-requests",
+    "POST", { items: [{ trade: "electrical" }, { trade: "roofing" }],
+      companyIds: ["cmp_bay", "cmp_volt"] }));
+  ck("an item already out refuses the batch by name",
+    s3 === 409 && b3.error === "already_asking" && b3.trade === "roofing",
+    `${s3} ${JSON.stringify(b3)}`);
+  ck("and the other item was not sent alone",
+    one(db, `SELECT COUNT(*) AS n FROM quote_requests WHERE trade = 'electrical'`).n === 0);
+}
+
 console.log("\n-- what somebody asked to quote can see --");
 {
   const { env } = seed();
