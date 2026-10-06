@@ -848,6 +848,7 @@ export const api = {
     // Which settings the Worker actually has. Names only, never values.
     setupCheck: () => request("/platform/setup-check"),
     systemHealth: () => request("/platform/system-health"),
+    integrationHealth: () => request("/platform/integration-health"),
 
     // What this account has been sent, and whether it went out.
     mailLog: (accountId) => request(`/platform/accounts/${needId(accountId, "account_id")}/mail`),

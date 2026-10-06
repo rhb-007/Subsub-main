@@ -39,7 +39,7 @@ import {
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE } from "./lib/api";
 // The same file the Worker imports, so a problem cannot be an emergency in
 // the browser and ordinary work on the server, or the other way round.
-import { HEALTH_HOSTS, LIGHTS } from "../shared/syshealth.js";
+import { HEALTH_HOSTS, LIGHTS, integrationLight } from "../shared/syshealth.js";
 import { severityOf, severityRank } from "../shared/emergency.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 // One list of states, shared with the Worker, so the two cannot disagree
@@ -5272,6 +5272,7 @@ export default function SubSub() {
           onMailLog={(id) => api.platform.mailLog(id)}
           onSetupCheck={() => api.platform.setupCheck()}
           onSystemHealth={() => api.platform.systemHealth()}
+          onIntegrationHealth={() => api.platform.integrationHealth()}
           onDeleteAccount={async (id, confirmName) => {
             await platformWrite(() => api.platform.deleteAccount(id, confirmName),
               "Could not delete that account.");
@@ -8827,7 +8828,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onSetUserRole, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
   onSetEngagedAs,
-  onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck, onSystemHealth }) {
+  onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck, onSystemHealth, onIntegrationHealth }) {
   const [screen, setScreen] = useState("dashboard");
   const [openId, setOpenId] = useState(null);
   const [menu, setMenu] = useState(false);
@@ -10468,7 +10469,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
             {/* Above the integrations, because whether the three sites answer
                 is the first question and the settings behind them the second. */}
             <SystemHealth load={onSystemHealth} />
-            <SetupCheck load={onSetupCheck} />
+            <SetupCheck load={onSetupCheck} probe={onIntegrationHealth} />
 
             <div className="pf-panel">
               <h3>What to act on</h3>
@@ -11431,23 +11432,23 @@ function SystemHealth({ load }) {
 // comparing a dashboard screenshot against a list of names by eye is how an
 // afternoon goes -- a name one letter wrong looks exactly like a name that
 // is right.
-const SETUP_STATE = {
-  ok: { tone: "ok", label: "Configured" },
-  partial: { tone: "bad", label: "Half configured" },
-  off: { tone: "off", label: "Not set up" },
-};
 
-function SetupCheck({ load }) {
+function SetupCheck({ load, probe }) {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState({});
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  // The live answers, asked beside the settings rather than after them: a
+  // provider that is slow to answer must not hold up the names.
+  const [live, setLive] = useState(null);
+  const [liveErr, setLiveErr] = useState("");
 
   const run = async () => {
-    setBusy(true); setErr("");
+    setBusy(true); setErr(""); setLive(null); setLiveErr("");
+    const asking = probe ? probe().then(setLive, (e) => setLiveErr(e?.body?.detail || e?.message || "no answer")) : null;
     try { setData(await load()); }
     catch (e) { setErr(e?.body?.detail || e?.message || "Could not read the settings."); }
-    finally { setBusy(false); }
+    try { await asking; } finally { setBusy(false); }
   };
   useEffect(() => { run(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
@@ -11474,22 +11475,30 @@ function SetupCheck({ load }) {
       {data && (
         <div className="pf-setup-list">
           {data.groups.map((g) => {
-            const st = SETUP_STATE[g.state] || SETUP_STATE.off;
             const set = g.vars.filter((v) => v.set).length;
+            // The live answer when there is one; `undefined` means this
+            // integration has no read-only call to make, and `null` that it is
+            // still being asked. A check that failed outright is said rather
+            // than drawn as every provider failing.
+            const lt = liveErr && g.state === "ok"
+              ? { light: "unknown", word: "Not checked", say: `The live check did not run: ${liveErr}` }
+              : integrationLight(g.state, live ? live.probes[g.id] : (probe && g.state === "ok" ? null : undefined));
             const typo = g.vars.some((v) => v.suggestion);
             const isOpen = !!open[g.id];
             return (
               <div key={g.id} className={`pf-setup${isOpen ? " open" : ""}`} data-group={g.id}>
-                <button type="button" className="pf-setup-bar" aria-expanded={isOpen}
+                <button type="button" className="pf-setup-bar" aria-expanded={isOpen} title={lt.say}
                   onClick={() => setOpen((o) => ({ ...o, [g.id]: !o[g.id] }))}>
                   <ChevronRight size={14} className="pf-setup-chev" />
+                  <span className={`pf-int-light l-${lt.light}`} aria-hidden="true" />
                   <b>{g.label}</b>
                   <span className="pf-setup-count">{set} of {g.vars.length} set</span>
                   {typo && <span className="pf-setup-typo">looks misspelled</span>}
-                  <span className={`pf-host-pill t-${st.tone}`}>{st.label}</span>
+                  <span className={`pf-int-word l-${lt.light}`}>{lt.word}</span>
                 </button>
                 {isOpen && (
                   <div className="pf-setup-body">
+                    <p className="pf-int-say">{lt.say}</p>
                     <div className="pf-setup-vars">
                       {g.vars.map((v) => (
                         <span key={v.name} className={v.set ? "on" : "off"}>
@@ -39042,6 +39051,20 @@ iframe.dv-frame{display:block}
 .pf-setup-count{font-size:12px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
 .pf-setup-typo{font-size:11px;font-weight:700;color:#8a5a12;background:#fbf0dd;border-radius:999px;padding:2px 8px}
 .pf-setup-body{padding:2px 12px 12px 36px}
+/* A light per integration, the same three colours as the system boxes and
+   with a word beside it, because the colour alone is not a status. Grey is
+   "not set up", which for an optional integration is not a fault. */
+.pf-int-light{flex:none;width:11px;height:11px;border-radius:50%;background:#b9c2bd}
+.pf-int-light.l-green{background:#2f9e5f;box-shadow:0 0 0 3px #e3f2e8}
+.pf-int-light.l-amber{background:#e0a020;box-shadow:0 0 0 3px #fbf0dd}
+.pf-int-light.l-red{background:#c8432c;box-shadow:0 0 0 3px #faece7}
+.pf-int-light.l-unknown,.pf-int-light.l-off{background:#b9c2bd;box-shadow:0 0 0 3px #eef0ef}
+.pf-int-word{font-size:10.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px;background:var(--line);color:var(--ink-soft)}
+.pf-int-word.l-green{background:#e8f2ea;color:#1f6b4a}
+.pf-int-word.l-amber{background:#fbf0dd;color:#8a5a12}
+.pf-int-word.l-red{background:#faece7;color:var(--red)}
+.pf-int-say{font-size:12.5px;color:var(--ink-soft);margin:0 0 8px;line-height:1.45}
 /* THE THREE LIGHTS. A box per host, three across where there is room. The
    light is the colour AND a word beside it, because a red that cannot be told
    from a green by about one man in twelve is not a status. */

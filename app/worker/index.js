@@ -126,6 +126,7 @@ import {
 } from "./hostnames.js";
 import { setupCheck } from "./setup-check.js";
 import { systemHealth } from "./syshealth.js";
+import { integrationHealth } from "./integrationhealth.js";
 import { verifyWithFallback, configuredProviders, askProvider, PROVIDERS } from "./licenses.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 
@@ -19233,6 +19234,18 @@ app.get("/api/platform/system-health", async (c) => {
   const denied = requireSuperadmin(c, staff);
   if (denied) return denied;
   return c.json(await systemHealth(c.env));
+});
+
+// A light per integration: one read-only call to each provider with the
+// credentials this Worker holds. Separate from the settings check, which says
+// whether the names are there, because a revoked key and a test-mode key both
+// pass that. Superadmin, same screen.
+app.get("/api/platform/integration-health", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+  return c.json(await integrationHealth(c.env, setupCheck(c.env).groups));
 });
 
 app.get("/api/ping", (c) => c.json({ ok: true }));

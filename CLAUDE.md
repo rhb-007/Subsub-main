@@ -10101,6 +10101,42 @@ refactor.
   for the first look at the deployed console. If a box reads *Not checked*,
   the flag is the thing to look at.
 
+  **AND EACH INTEGRATION HAS A LIGHT OF ITS OWN, because "configured" and
+  "working" are different facts.** A revoked key, a key with a stray space
+  and a Stripe key from test mode all read *Configured* on the settings
+  check. `GET /api/platform/integration-health` (`worker/integrationhealth.js`)
+  makes one **read-only** call per provider with the credentials the Worker
+  holds:
+  - Supabase: `/auth/v1/health` with the anon key.
+  - Resend: `/domains`.
+  - Stripe: `/v1/balance`.
+  - Twilio: the account record.
+  - Cloudflare: the branded-address `diagnose` probes.
+  - Access: its published certs.
+  - Cal: the demo form's own week of slots.
+
+  `integrationLight` turns each answer into a light. **Nothing is created,
+  sent or charged**, and the suite asserts every call is a GET. **The licence
+  verifiers and the cron secret get no probe**, because one bills per lookup
+  and the other has nothing upstream to ask. They read *Configured*, never
+  *Working*, so a green there does not claim a test that never ran.
+
+  Three answers are the traps:
+  - **A sending-only Resend key** answers `/domains` with a 401 named
+    `restricted_api_key`. That is Resend recognising the key, so it is
+    green. Reading it as refused would draw red over the safest key to hold.
+  - **A test-mode Stripe key** is amber, because every call succeeds and no
+    real money moves, which is the one failure nothing else would show.
+  - **A suspended Twilio account** answers 200, so its `status` is read.
+
+  Half configured stays red whatever a probe says. Not set up is grey,
+  because an optional integration that is off is not a fault. Nobody is
+  asked with half a credential.
+
+  **Not verified here: live provider answers.** Each probe is the
+  provider's documented read, but the first press on the deployed console is
+  the real test.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

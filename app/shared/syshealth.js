@@ -64,3 +64,39 @@ export function lightFor(host, r) {
 export function looksBlocked(status, body) {
   return status >= 400 && /error code:\s*10(?:42|19|16)\b/i.test(String(body || ""));
 }
+
+// ---- a light per integration --------------------------------------------
+//
+// The settings check says whether the NAMES are there; this says whether the
+// thing behind them works. They are different facts -- a key copied with a
+// stray space, a revoked token and a Stripe key from test mode all read
+// "Configured" -- so each integration that has a safe, read-only call gets
+// asked it, and the light is the answer.
+//
+// `state` is the settings check's own verdict for the group; `probe` is what
+// the live call came back with, `undefined` when there is no call to make for
+// that integration, and `null` while it is still being asked.
+export const INTEGRATION_WORDS = {
+  green: "Working", amber: "Check", red: "Failing", unknown: "Not checked", off: "Not set up",
+};
+
+export function integrationLight(state, probe) {
+  if (state === "off") return { light: "off", word: "Not set up", say: "None of its settings are present." };
+  // Half a setup is broken rather than absent: half a Stripe setup takes
+  // payments it cannot record. Red whatever a probe would say.
+  if (state === "partial") return { light: "red", word: "Half configured", say: "Some of its settings are missing." };
+  if (probe === null) return { light: "unknown", word: "Checking", say: "Asking it now." };
+  if (probe === undefined) {
+    return { light: "green", word: "Configured",
+      say: "Its settings are present. There is no safe read-only call to test it with, so it is not tested live." };
+  }
+  if (probe.blocked) return { light: "unknown", word: "Not checked", say: probe.say || "The check could not be made." };
+  if (probe.error !== undefined || probe.timedOut) {
+    return { light: "red", word: "Not answering",
+      say: probe.timedOut ? `No answer within ${TIMEOUT_MS / 1000} seconds.` : `Did not answer${probe.error ? `: ${probe.error}` : "."}` };
+  }
+  if (probe.refused) return { light: "red", word: "Refused", say: probe.say || "It refused the credentials." };
+  if (probe.warn) return { light: "amber", word: "Check", say: probe.say };
+  if (probe.ms >= SLOW_MS) return { light: "amber", word: "Slow", say: `Answered in ${(probe.ms / 1000).toFixed(1)} seconds.${probe.say ? " " + probe.say : ""}` };
+  return { light: "green", word: "Working", say: probe.say || `Answered in ${Math.round(probe.ms)} ms.` };
+}

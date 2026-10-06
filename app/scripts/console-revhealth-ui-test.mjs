@@ -72,6 +72,16 @@ let HEALTH = {
   ],
 };
 let healthFails = false;
+// Supabase works, Resend's half configured (red by the settings alone), and
+// Twilio is not set up (grey). Added: Stripe on a TEST key (amber).
+SETUP.groups.push({ id: "billing", label: "Billing (Stripe)", state: "ok", matters: "b",
+  vars: [{ name: "STRIPE_SECRET_KEY", set: true }] });
+SETUP.groups.push({ id: "cron", label: "Scheduled jobs", state: "ok", matters: "c",
+  vars: [{ name: "CRON_SECRET", set: true }] });
+const INTEGRATIONS = { checkedAt: new Date().toISOString(), probes: {
+  auth: { ms: 120, say: "Supabase answered and accepted the key." },
+  billing: { warn: true, ms: 200, say: "Stripe accepted the key, but it is a TEST-mode key: no real payment can be taken." },
+} };
 let healthAsks = 0;
 
 const web = serveApp({ dir: OUT, port: WEB });
@@ -82,6 +92,7 @@ const api = serveApi({ port: API, routes: (path) => {
   if (path === "/api/platform/companies") return [200, []];
   if (path === "/api/platform/stuck-subs") return [200, { mailConfigured: true, rows: [], summary: { total: 0 } }];
   if (path === "/api/platform/setup-check") return [200, SETUP];
+  if (path === "/api/platform/integration-health") return [200, INTEGRATIONS];
   if (path === "/api/platform/system-health") {
     healthAsks++;
     return healthFails ? [502, { error: "bad_gateway" }] : [200, HEALTH];
@@ -190,6 +201,21 @@ try {
   t.ck("the green one is green", /rgb\(47, 158, 95\)/.test(cols[0]), cols[0]);
   t.ck("the red one is red", /rgb\(200, 67, 44\)/.test(cols[2]), cols[2]);
 
+  const lights = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll(".pf-setup")].map((sx) => [
+    sx.dataset.group, { cls: sx.querySelector(".pf-int-light")?.className || "",
+      color: sx.querySelector(".pf-int-light") ? getComputedStyle(sx.querySelector(".pf-int-light")).backgroundColor : null,
+      word: sx.querySelector(".pf-int-word")?.innerText.trim() }])));
+  t.ck("every integration bar carries a light", Object.values(lights).length === 5 && Object.values(lights).every((l) => l.color),
+    JSON.stringify(lights));
+  t.ck("a provider that answered is green, Working", /l-green/.test(lights.auth?.cls) && /working/i.test(lights.auth?.word || ""));
+  t.ck("a test-mode Stripe key is amber", /l-amber/.test(lights.billing?.cls));
+  t.ck("half configured is red", /l-red/.test(lights.mail?.cls) && /half configured/i.test(lights.mail?.word || ""));
+  t.ck("not set up is grey, not red", /l-off/.test(lights.sms?.cls) && /not set up/i.test(lights.sms?.word || ""));
+  t.ck("nothing to test reads Configured, never Working", /l-green/.test(lights.cron?.cls) && /^configured$/i.test(lights.cron?.word || ""),
+    JSON.stringify(lights.cron));
+  t.ck("green, amber and red are drawn differently",
+    new Set([lights.auth?.color, lights.billing?.color, lights.mail?.color]).size === 3);
+  h.bars = h.bars.filter((b) => ["auth", "mail", "sms"].includes(b.id));
   t.ck("every integration is a closed bar", h.bars.length === 3 && h.bars.every((b) => !b.open && b.vars === 0),
     JSON.stringify(h.bars));
   t.ck("each bar is thin", h.bars.every((b) => b.h <= 56), JSON.stringify(h.bars.map((b) => b.h)));
@@ -206,6 +232,13 @@ try {
   const openMail = h.bars.find((b) => b.id === "mail");
   t.ck("pressing a bar opens it to the names", openMail?.open && openMail.vars === 2);
   const hint = await page.evaluate(() => document.querySelector('.pf-setup[data-group="mail"] .pf-setup-hint')?.innerText);
+  const billSay = await page.evaluate(() => {
+    document.querySelector('.pf-setup[data-group="billing"] .pf-setup-bar').click();
+    return new Promise((res) => setTimeout(() => res(document.querySelector('.pf-setup[data-group="billing"] .pf-int-say')?.innerText), 150));
+  });
+  t.ck("opening a bar says what its light means", /TEST-mode/.test(billSay || ""), billSay);
+  await page.evaluate(() => document.querySelector('.pf-setup[data-group="billing"] .pf-setup-bar').click());
+  await wait(100);
   t.ck("with the misspelling explained", /RESEND_APIKEY/.test(hint || ""), hint);
   t.ck("and only that one opens", h.bars.filter((b) => b.open).length === 1);
 

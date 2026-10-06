@@ -2,7 +2,8 @@
 // the probes ask the right addresses the right way.
 //
 //   node scripts/syshealth-test.mjs
-import { lightFor, looksBlocked, HEALTH_HOSTS, SLOW_MS } from "../shared/syshealth.js";
+import { lightFor, looksBlocked, HEALTH_HOSTS, SLOW_MS, integrationLight } from "../shared/syshealth.js";
+import { integrationHealth } from "../worker/integrationhealth.js";
 import { systemHealth } from "../worker/syshealth.js";
 import { readFileSync } from "node:fs";
 
@@ -93,4 +94,84 @@ const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
 ok("the API fetches same-zone hosts over the public internet",
   /compatibility_flags\s*=\s*\[[^\]]*"global_fetch_strictly_public"/.test(toml));
 
+
+console.log("integrationLight");
+const IL = (st, p) => integrationLight(st, p);
+ok("no settings is grey, not red", IL("off", undefined).light === "off" && IL("off", undefined).word === "Not set up");
+ok("half the settings is red whatever a probe says", IL("partial", { ms: 10 }).light === "red");
+ok("still being asked is unknown", IL("ok", null).light === "unknown");
+ok("configured with nothing to test says Configured, not Working",
+  IL("ok", undefined).light === "green" && IL("ok", undefined).word === "Configured");
+ok("a quick read is Working", IL("ok", { ms: 90 }).word === "Working" && IL("ok", { ms: 90 }).light === "green");
+ok("refused credentials are red", IL("ok", { refused: true, say: "no" }).light === "red");
+ok("no answer is red", IL("ok", { error: "x" }).light === "red");
+ok("a warning is amber", IL("ok", { warn: true, ms: 5, say: "test mode" }).light === "amber");
+ok("slow is amber", IL("ok", { ms: SLOW_MS + 5 }).light === "amber");
+
+console.log("integrationHealth");
+const ENV = {
+  SUPABASE_URL: "https://sb.test", SUPABASE_ANON_KEY: "anon",
+  RESEND_API_KEY: "re_x", STRIPE_SECRET_KEY: "sk_x",
+  TWILIO_ACCOUNT_SID: "AC1", TWILIO_AUTH_TOKEN: "tok", TWILIO_FROM: "+15550000000",
+  ACCESS_TEAM_DOMAIN: "team.cloudflareaccess.com",
+};
+let replies;
+const calls = [];
+const stub = async (url, init = {}) => {
+  calls.push({ url: String(url), method: init.method || "GET", headers: init.headers || {} });
+  const u = new URL(url);
+  const key = u.hostname + u.pathname;
+  const hit = Object.entries(replies).find(([k]) => key.startsWith(k));
+  if (!hit) throw new Error("unexpected " + key);
+  const [status, body] = typeof hit[1] === "function" ? hit[1](init) : hit[1];
+  if (status === "throw") throw new Error(body);
+  return new Response(JSON.stringify(body), { status });
+};
+const groups = (ids, state = "ok") => ids.map((id) => ({ id, state }));
+replies = {
+  "sb.test/auth/v1/health": [200, { name: "GoTrue" }],
+  "api.resend.com/domains": [401, { name: "restricted_api_key", message: "This API key is restricted to only send emails" }],
+  "api.stripe.com/v1/balance": [200, { object: "balance", livemode: true }],
+  "api.twilio.com/2010-04-01/Accounts/AC1.json": [200, { sid: "AC1", status: "active" }],
+  "team.cloudflareaccess.com/cdn-cgi/access/certs": [200, { keys: [{ kid: "a" }] }],
+};
+let ih = await integrationHealth(ENV, groups(["auth", "mail", "billing", "sms", "staff", "licenses", "cron"]), { fetchImpl: stub, now: () => Date.now() });
+const L = (id) => integrationLight("ok", ih.probes[id]);
+ok("Supabase answering is Working", L("auth").word === "Working", JSON.stringify(ih.probes.auth));
+ok("the anon key travels as apikey", calls.some((c) => /auth\/v1\/health/.test(c.url) && c.headers.apikey === "anon"));
+ok("a sending-only Resend key is a recognised key, not a refusal", L("mail").light === "green", JSON.stringify(ih.probes.mail));
+ok("Stripe live key is Working", L("billing").word === "Working");
+ok("Twilio active is Working", L("sms").word === "Working");
+ok("Access publishing keys is Working", L("staff").word === "Working");
+ok("no probe for the licence verifiers -- they bill per lookup", ih.probes.licenses === undefined);
+ok("and none for the cron secret", ih.probes.cron === undefined);
+ok("every call READS", calls.every((c) => c.method === "GET"), JSON.stringify(calls.map((c) => c.method)));
+ok("no Stripe call creates anything", !calls.some((c) => /stripe/.test(c.url) && !/\/v1\/balance/.test(c.url)));
+
+calls.length = 0;
+replies = {
+  "sb.test/auth/v1/health": [401, { message: "Invalid API key" }],
+  "api.resend.com/domains": [401, { name: "validation_error", message: "API key is invalid" }],
+  "api.stripe.com/v1/balance": [200, { object: "balance", livemode: false }],
+  "api.twilio.com/2010-04-01/Accounts/AC1.json": [200, { sid: "AC1", status: "suspended" }],
+  "team.cloudflareaccess.com/cdn-cgi/access/certs": [200, { keys: [] }],
+};
+ih = await integrationHealth(ENV, groups(["auth", "mail", "billing", "sms", "staff"]), { fetchImpl: stub, now: () => Date.now() });
+ok("a refused Supabase key is red", L("auth").light === "red" && /SUPABASE_ANON_KEY/.test(L("auth").say), L("auth").say);
+ok("an invalid Resend key is red", L("mail").light === "red");
+ok("a TEST-mode Stripe key in production is amber", L("billing").light === "amber" && /TEST/.test(L("billing").say));
+ok("a suspended Twilio account is red", L("sms").light === "red" && /suspended/.test(L("sms").say));
+ok("Access with no keys is red", L("staff").light === "red");
+
+replies = { "sb.test/auth/v1/health": ["throw", "getaddrinfo ENOTFOUND"] };
+ih = await integrationHealth(ENV, groups(["auth"]), { fetchImpl: stub, now: () => Date.now() });
+ok("a provider that cannot be reached is red", L("auth").light === "red" && L("auth").word === "Not answering");
+
+calls.length = 0;
+ih = await integrationHealth(ENV, [{ id: "auth", state: "partial" }, { id: "mail", state: "off" }], { fetchImpl: stub, now: () => Date.now() });
+ok("half or no settings: nobody is asked", calls.length === 0 && Object.keys(ih.probes).length === 0);
+
+const routeIH = worker.slice(worker.indexOf('app.get("/api/platform/integration-health"'));
+ok("the integration route is staff and superadmin",
+  /requireStaff\(c\)/.test(routeIH.slice(0, 400)) && /requireSuperadmin\(c, staff\)/.test(routeIH.slice(0, 400)));
 console.log(failed ? `\n${failed} failed` : "\nall passed");
