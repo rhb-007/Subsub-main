@@ -120,7 +120,7 @@ try {
   await hit(/^Jobs/, "button,a");
   await wait(1200);
   // Job cards draw as one line until opened; this reads what is inside them.
-  await page.evaluate(() => document.querySelectorAll('.jl-btn[aria-expanded="false"]').forEach((b) => b.click()));
+  await page.evaluate(() => [...document.querySelectorAll('.jobs-view button')].find((b) => /Cards/.test(b.innerText))?.click());
   await new Promise((r) => setTimeout(r, 400));
   ck("the fixture job is on the jobs list", await seen(new RegExp(TITLE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")), TITLE);
   const assignBtn = await hit(/Assign/, ".trade-assign");
@@ -265,7 +265,7 @@ try {
   await hit(/^Jobs/, "button,a");
   await wait(1200);
   // Job cards draw as one line until opened; this reads what is inside them.
-  await page.evaluate(() => document.querySelectorAll('.jl-btn[aria-expanded="false"]').forEach((b) => b.click()));
+  await page.evaluate(() => [...document.querySelectorAll('.jobs-view button')].find((b) => /Cards/.test(b.innerText))?.click());
   await new Promise((r) => setTimeout(r, 400));
   await page.evaluate((title) => {
     const card = [...document.querySelectorAll(".job-card")].find((c) => c.innerText.includes(title));

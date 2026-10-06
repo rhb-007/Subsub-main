@@ -185,6 +185,16 @@ export async function signedInPage(browser, { host, webPort, userId, accountId, 
 // INSIDE a card opens it first, the way a person would. A suite about the
 // line itself does not call this.
 export async function openCards(page) {
+  // The Jobs list has a Lines / Cards switch: Cards draws every job's card on
+  // the page, which is what a suite reading several jobs at once wants. A line
+  // pressed on its own opens a window instead, and several windows stacked is
+  // not how anybody reads the list.
+  const switched = await page.evaluate(() => {
+    const b = [...document.querySelectorAll(".jobs-view button")].find((x) => /Cards/.test(x.innerText));
+    if (b && b.getAttribute("aria-pressed") !== "true") { b.click(); return true; }
+    return false;
+  });
+  if (switched) await wait(300);
   for (let n = 0; n < 4; n++) {
     const shut = await page.evaluate(() => {
       const btns = [...document.querySelectorAll('.jl-btn[aria-expanded="false"]')];

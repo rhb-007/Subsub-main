@@ -226,7 +226,7 @@ try {
     .find((b) => /^All/i.test(b.innerText.trim()))?.click());
   await wait(2200);
   // Job cards draw as one line until opened; this reads what is inside them.
-  await mp.evaluate(() => document.querySelectorAll('.jl-btn[aria-expanded="false"]').forEach((b) => b.click()));
+  await mp.evaluate(() => [...document.querySelectorAll('.jobs-view button')].find((b) => /Cards/.test(b.innerText))?.click());
   await new Promise((r) => setTimeout(r, 400));
 
   const warned = await mp.evaluate((t) => {

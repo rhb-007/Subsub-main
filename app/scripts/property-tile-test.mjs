@@ -111,20 +111,21 @@ try {
     })));
     t.ck("all eight are drawn", tiles.length === 8, String(tiles.length));
 
-    // TIGHTER COLUMNS. Three or four across at 1280, where 330px columns gave
-    // three at most and each one was tall enough to push the rest under.
+    // ONE BUILDING PER LINE. This read "four to a row at 1280", and that tile
+    // grid is what was then reported -- three or four tiles across, each
+    // building's counts at a different x and clipped by the tile's bottom
+    // border on a tablet -- with "minimized information thinly laid across the
+    // page, each that opens to a modal". So every row starts at the same x,
+    // which a grid of any column count fails.
     const rowTop = tiles[0].top;
     const perRow = tiles.filter((x) => x.top === rowTop).length;
-    // Exactly four at this viewport, which is what discriminates: 330px columns
-    // -- what this screen had -- give three, and "three or four" would have
-    // passed on the layout being replaced.
-    t.ck("four to a row at 1280", perRow === 4, String(perRow));
+    t.ck("one building per row at 1280", perRow === 1, String(perRow));
     // The real measure of the complaint: how much screen one building costs.
     // Set just above what the tile actually measures, so anything moving back
     // onto it -- a vendor list, the handover panel, a button row -- trips this
     // rather than quietly costing another screenful.
     const tall = Math.max(...tiles.map((x) => x.height));
-    t.ck("and no tile is more than 120px tall", tall <= 120, `${tall}px`);
+    t.ck("and no row is more than 70px tall", tall <= 70, `${tall}px`);
     // Eight buildings inside two screens rather than five.
     const lastBottom = Math.max(...tiles.map((x) => x.top + x.height));
     t.ck("eight buildings fit within two screens", lastBottom < 2000, `${lastBottom}px`);

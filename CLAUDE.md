@@ -9803,6 +9803,53 @@ refactor.
   switcher to call us Cascade's *subcontractor*, and Cascade is a property
   manager, so `seatDescription` correctly says *contractor*.
 
+- **EVERY LIST IS THIN ROWS ACROSS THE PAGE, A ROW OPENS A WINDOW, AND ONE
+  FILTER BAR SITS ON TOP.** Asked for with the Properties screen on screen --
+  three tiles to a row, the counts clipped by each tile's bottom border on a
+  tablet -- as *"organize pages like this with minimized information thinly laid
+  across the page with each that opens to a modal ... do it on all account
+  types"*, plus *"standard filters on top of each of these pages"* and *"a quick
+  design reference to created from an inspection"*.
+
+  **A line opens a window, not a card pushed into the list.** Jobs, the
+  contractor's job requests and quote requests all opened inline, so opening one
+  shoved everything below it down a screen. The window takes the line's place in
+  the DOM, so each job is on the page **once** whichever way it is drawn -- the
+  suite counts that -- and every card's markup is unchanged inside it, which is
+  why one wrapper reached three screens. Properties and the roster already
+  opened windows; Properties became one building per full-width row with the
+  counts in a fixed column on the right, and the whole row is the way in, with
+  the counts' own clicks stopped so they still lead where they lead. Inspections
+  stay a screen of their own: an inspection is a walk with a camera, not
+  something read in a window.
+
+  **Expand all became Lines / Cards**, the switch the roster already had.
+  Somebody reviewing a week wants every card on the page, and forty stacked
+  windows is not that. `openCards` in the stub harness presses Cards for the
+  same reason, so suites reading several jobs at once read them the way a
+  person reviewing them would.
+
+  **`FilterBar` is the one component**: a search box, a compact select per
+  question reading *All <things>* when it narrows nothing, then Clear and *N of
+  M* **only while something narrows** -- a narrowed list that does not say so is
+  how somebody concludes they have three jobs when they have thirty. A select
+  with fewer than two answers is not drawn (a property filter over one building
+  can only ever say one thing) unless it holds a value, so a filter can always
+  be undone. On Jobs (what it needs, property, trade), Properties (open work,
+  no vendors, run by someone else, city), Inspections (stage, kind, property)
+  and the contractor's My Jobs (which list, which client). The Jobs filter's
+  *Needs a contractor* reads the same facts the line draws its flag from, so it
+  lists exactly the lines that say *2 unassigned*. The contractor's strip of
+  counts stays whole: it describes their book, not the view. Search is local,
+  over the account's own rows -- matching across companies is still refused.
+
+  **A job raised from an inspection carries its walk**: *Move-out inspection ·
+  unit 14b* on the line and on the card, where it opens the inspection.
+  `/api/jobs` stitches it from this account's **own** inspections in one query,
+  never for a tenant (an inspection is not shown to the tenant it is about) and
+  not for a job on another account. Blue-grey, because amber already means
+  waiting and green means done; a kind of job is not a state.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

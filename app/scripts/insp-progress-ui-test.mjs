@@ -194,6 +194,38 @@ try {
     /Scheduled/.test((schRow?.chips || []).map((c) => c.text).join(" ")),
     JSON.stringify(schRow?.chips));
 
+  // THE FILTER BAR ON TOP OF THE LIST. "Flagged, no job raised" is the one
+  // question this list is opened to answer, so it is asserted on the one row
+  // that should match and the six that should not.
+  const sels = await page.evaluate(() => [...document.querySelectorAll(".fbar select")].map((x) => x.getAttribute("aria-label")));
+  t.ck("the inspections list has the filter bar", sels.includes("Inspections") && sels.includes("Kinds"), JSON.stringify(sels));
+  t.ck("with no property filter over one building", !sels.includes("Properties"), JSON.stringify(sels));
+  await page.evaluate(() => {
+    const sel = [...document.querySelectorAll(".fbar select")].find((x) => x.getAttribute("aria-label") === "Inspections");
+    const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
+    set.call(sel, "nojob"); sel.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await wait(300);
+  const nojob = await rows(page);
+  t.ck("Flagged, no job raised lists exactly that one",
+    nojob.length === 1 && /unit 18/i.test(nojob[0]?.title || ""), JSON.stringify(nojob.map((r) => r.title)));
+  await page.evaluate(() => {
+    document.querySelector(".fbar-clear")?.click();
+  });
+  await wait(300);
+  await page.evaluate(() => {
+    const i = document.querySelector(".fbar input");
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    set.call(i, "16"); i.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await wait(300);
+  const found = await rows(page);
+  t.ck("and the search finds a unit", found.length === 1 && /unit 16/i.test(found[0]?.title || ""),
+    JSON.stringify(found.map((r) => r.title)));
+  await page.evaluate(() => document.querySelector(".fbar-clear")?.click());
+  await wait(300);
+  t.ck("Clear brings every inspection back", (await rows(page)).length === 7);
+
   // THE DETAIL SCREEN SAYS THE SAME THING, beside the button into the job.
   // One rule, two screens: a second derivation is how the list and the thing
   // it opens come to disagree about one job.

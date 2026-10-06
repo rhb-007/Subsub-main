@@ -69,7 +69,8 @@ const PAST = new Date(Date.now() - 3 * 3600000).toISOString();
 const FUTURE = new Date(Date.now() + 30 * 3600000).toISOString();
 const JOBS = [
   // Two slots, nobody on either.
-  base("j_open", "Move-out work — unit 14", ["plumbing", "painting"]),
+  base("j_open", "Move-out work — unit 14", ["plumbing", "painting"],
+    { fromInspection: { id: "insp_1", kind: "move_out", unit: "14" } }),
   // An offer that ran out with no answer.
   base("j_noreply", "Gutter run at the back", ["gutters"], { assignments: {
     gutters: { id: "wo_1", subId: "cmp_bay", company: "Bay Roofing", wo: "WO-1001", status: "pending",
@@ -112,6 +113,9 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
   if (/^\/api\/jobs\/[^/]+\/trade-scope$/.test(path)) return [200, { scopes: {} }];
   if (path === "/api/properties") return [200, [{ id: "prop_1", accountId: "acc_pm", name: "Press Apartments",
     address: "1620 Belmont Ave", city: "Seattle", state: "WA", zip: "98122", units: 20, notes: "",
+    vendorIds: [], ownerIds: [], tenantIds: [], ownerAccountId: "acc_pm", ownedNotOperated: false, readOnly: false },
+  { id: "prop_2", accountId: "acc_pm", name: "North Highland LLC",
+    address: "4915 North Highland St", city: "Ruston", state: "WA", zip: "98407", units: 2, notes: "",
     vendorIds: [], ownerIds: [], tenantIds: [], ownerAccountId: "acc_pm", ownedNotOperated: false, readOnly: false }]];
   if (path === "/api/invites" || path === "/api/clients" || path === "/api/connect-requests"
     || path === "/api/my-connect-requests" || path === "/api/doc-shares"
@@ -134,6 +138,8 @@ const readJobs = (page) => page.evaluate(() => [...document.querySelectorAll(".j
     text: c.innerText.replace(/\s+/g, " ").trim(),
     flag: c.querySelector(".jl-flag")?.innerText || null,
     trades: c.querySelectorAll(".trade-row").length,
+    inModal: !!c.closest(".modal.modal-job"),
+    insp: c.querySelector(".job-insp")?.innerText.trim() || null,
   })));
 const byId = (rows, id) => rows.find((r) => r.id === id) || {};
 
@@ -163,31 +169,97 @@ try {
       String(byId(rows, "j_noreply").flag));
     t.ck("and a finished job carries no flag", byId(rows, "j_done").flag === null, String(byId(rows, "j_done").flag));
 
-    console.log("\n-- one opens, and closes again --");
+    console.log("\n-- a job raised from an inspection says so on its line --");
+    // Asked for as "a quick design reference to created from an inspection to
+    // differentiate them from other jobs". Asserted on the job that carries it
+    // AND its absence on the ones that do not, because a badge on every line
+    // differentiates nothing.
+    t.ck("the inspection job's line carries the badge",
+      /Move-out/.test(byId(rows, "j_open").insp || "") && /unit 14/.test(byId(rows, "j_open").insp || ""),
+      String(byId(rows, "j_open").insp));
+    t.ck("and the others do not", byId(rows, "j_noreply").insp === null && byId(rows, "j_done").insp === null,
+      JSON.stringify([byId(rows, "j_noreply").insp, byId(rows, "j_done").insp]));
+
+    console.log("\n-- a line opens its job in a window, and closes again --");
     await page.evaluate(() => document.querySelector('[data-job-id="j_open"] .jl-btn')?.click());
     await wait(400);
     rows = await readJobs(page);
-    t.ck("pressing the line opens that card", byId(rows, "j_open").line === false && byId(rows, "j_open").trades === 2,
+    t.ck("pressing the line opens that job", byId(rows, "j_open").line === false && byId(rows, "j_open").trades === 2,
       JSON.stringify(byId(rows, "j_open")));
-    t.ck("and it is a card again, not a line", byId(rows, "j_open").h > 140, String(byId(rows, "j_open").h));
-    t.ck("the others stay minimized", byId(rows, "j_noreply").line && byId(rows, "j_done").line);
-    await page.evaluate(() => document.querySelector('[data-job-id="j_open"] .jl-close')?.click());
+    t.ck("in a window, not pushed into the list", byId(rows, "j_open").inModal === true, JSON.stringify(byId(rows, "j_open")));
+    t.ck("once -- the line is not still drawn behind it",
+      rows.filter((r) => r.id === "j_open").length === 1, JSON.stringify(rows.map((r) => r.id)));
+    t.ck("the window says where the job came from",
+      /Move-out inspection/.test(byId(rows, "j_open").insp || ""), String(byId(rows, "j_open").insp));
+    t.ck("the others stay lines", byId(rows, "j_noreply").line && byId(rows, "j_done").line);
+    await page.evaluate(() => document.querySelector(".modal.modal-job")?.parentElement?.querySelector(".modal-close")?.click());
     await wait(400);
     rows = await readJobs(page);
-    t.ck("the minimize button puts it back", byId(rows, "j_open").line === true, JSON.stringify(byId(rows, "j_open")));
+    t.ck("closing the window puts it back to a line", byId(rows, "j_open").line === true,
+      JSON.stringify(byId(rows, "j_open")));
+    t.ck("and no window is left open", await page.evaluate(() => !document.querySelector(".modal.modal-job")));
 
-    console.log("\n-- all at once --");
-    const label = () => page.evaluate(() => document.querySelector(".jl-all")?.innerText.trim() || null);
-    t.ck("the list offers Expand all", /Expand all/.test(await label() || ""), String(await label()));
-    await page.evaluate(() => document.querySelector(".jl-all")?.click());
+    console.log("\n-- every card on the page at once --");
+    const pick = (l) => page.evaluate((x) => [...document.querySelectorAll(".jobs-view button")]
+      .find((b) => b.innerText.trim() === x)?.click(), l);
+    t.ck("the list offers Lines and Cards",
+      (await page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].map((b) => b.innerText.trim())))
+        .join("|") === "Lines|Cards");
+    await pick("Cards");
     await wait(400);
     rows = await readJobs(page);
-    t.ck("which opens every card", rows.length === 3 && rows.every((r) => !r.line), JSON.stringify(rows.map((r) => r.line)));
-    t.ck("and then offers Minimize all", /Minimize all/.test(await label() || ""), String(await label()));
-    await page.evaluate(() => document.querySelector(".jl-all")?.click());
+    t.ck("Cards draws every card", rows.length === 3 && rows.every((r) => !r.line && r.trades > 0), JSON.stringify(rows.map((r) => [r.line, r.trades])));
+    t.ck("on the page, not in windows", rows.every((r) => !r.inModal));
+    await pick("Lines");
     await wait(400);
     rows = await readJobs(page);
-    t.ck("which shuts them again", rows.length === 3 && rows.every((r) => r.line));
+    t.ck("Lines shuts them again", rows.length === 3 && rows.every((r) => r.line));
+
+    console.log("\n-- the filter bar narrows the list --");
+    const bar = () => page.evaluate(() => ({
+      has: !!document.querySelector(".jobs-list .fbar"),
+      selects: [...document.querySelectorAll(".jobs-list .fbar select")].map((x) => x.getAttribute("aria-label")),
+      n: document.querySelector(".jobs-list .fbar-n")?.innerText || null,
+    }));
+    const setSel = (label, v) => page.evaluate(([l, val]) => {
+      const sel = [...document.querySelectorAll(".jobs-list .fbar select")].find((x) => x.getAttribute("aria-label") === l);
+      if (!sel) return false;
+      const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
+      set.call(sel, val); sel.dispatchEvent(new Event("change", { bubbles: true })); return true;
+    }, [label, v]);
+    const typeQ = (v) => page.evaluate((val) => {
+      const i = document.querySelector(".jobs-list .fbar input");
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+      set.call(i, val); i.dispatchEvent(new Event("input", { bubbles: true }));
+    }, v);
+    let b0 = await bar();
+    t.ck("there is a filter bar on top of the jobs", b0.has, JSON.stringify(b0));
+    t.ck("with a search box and the job and trade filters", b0.selects.includes("Jobs") && b0.selects.includes("Trades"), JSON.stringify(b0.selects));
+    t.ck("and no count while nothing narrows", b0.n === null, String(b0.n));
+    t.ck("a property filter is not offered over a single property", !b0.selects.includes("Properties"), JSON.stringify(b0.selects));
+    await setSel("Jobs", "unassigned");
+    await wait(300);
+    rows = await readJobs(page);
+    t.ck("Needs a contractor lists exactly the job with empty slots",
+      rows.map((r) => r.id).join() === "j_open", JSON.stringify(rows.map((r) => r.id)));
+    t.ck("and says how many of how many", /^1 of 3$/.test((await bar()).n || ""), String((await bar()).n));
+    await setSel("Jobs", "inspection");
+    await wait(300);
+    rows = await readJobs(page);
+    t.ck("Raised from an inspection lists only that job", rows.map((r) => r.id).join() === "j_open", JSON.stringify(rows.map((r) => r.id)));
+    await setSel("Jobs", "");
+    await typeQ("gutter");
+    await wait(300);
+    rows = await readJobs(page);
+    t.ck("the search finds a job by its words", rows.map((r) => r.id).join() === "j_noreply", JSON.stringify(rows.map((r) => r.id)));
+    await setSel("Trades", "painting");
+    await wait(300);
+    rows = await readJobs(page);
+    t.ck("and filters stack", rows.length === 0, JSON.stringify(rows.map((r) => r.id)));
+    await page.evaluate(() => document.querySelector(".jobs-list .fbar-clear")?.click());
+    await wait(300);
+    rows = await readJobs(page);
+    t.ck("Clear puts every job back", rows.length === 3 && (await bar()).n === null, JSON.stringify(rows.map((r) => r.id)));
 
     console.log("\n-- arriving at a job opens it --");
     await nav(page, "^Dashboard");
@@ -210,7 +282,71 @@ try {
     t.ck("Open in Jobs is pressable", went);
     t.ck("and the job it lands on is open, not a line",
       byId(rows, "j_open").line === false && byId(rows, "j_open").trades === 2, JSON.stringify(byId(rows, "j_open")));
+    t.ck("in its window", byId(rows, "j_open").inModal === true, JSON.stringify(byId(rows, "j_open")));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- properties are thin rows across the page, each opening a window --");
+  for (const width of [1280, 390]) {
+    const { ctx, page, crashes } = await visitApp(browser, { host: "soundpm", webPort: WEB,
+      seat: { userId: "u_mgr", accountId: "acc_pm" }, viewport: { width, height: 1400 } });
+    await wait(2800);
+    if (width < 600) {
+      await page.evaluate(() => document.querySelector("[aria-label='Menu']")?.click());
+      await wait(400);
+    }
+    await nav(page, "^Properties");
+    await wait(1200);
+    const read = () => page.evaluate(() => {
+      const main = document.querySelector("main.ss-main");
+      const mr = main?.getBoundingClientRect();
+      return [...document.querySelectorAll(".prop-grid .prop-card")].map((c) => {
+        const r = c.getBoundingClientRect();
+        const st = c.querySelector(".prop-stats")?.getBoundingClientRect();
+        return {
+          name: c.querySelector("h3")?.innerText.trim(),
+          w: Math.round(r.width), mainW: Math.round(mr?.width || 0), h: Math.round(r.height),
+          top: Math.round(r.top),
+          // THE CLIP IN THE REPORT: the counts ran into the tile's bottom border.
+          statsInside: !!st && st.bottom <= r.bottom - 2 && st.right <= r.right + 1,
+        };
+      });
+    });
+    let rows = await read();
+    const tag = `(${width}px)`;
+    t.ck(`both properties are listed ${tag}`, rows.length === 2, JSON.stringify(rows));
+    // One per line: each row nearly the width of the page, stacked rather than
+    // side by side.
+    t.ck(`each is a full-width row ${tag}`, rows.length === 2 && rows.every((r) => r.w >= r.mainW - 60),
+      JSON.stringify(rows.map((r) => [r.w, r.mainW])));
+    t.ck(`stacked, one under the other ${tag}`, rows.length === 2 && rows[1].top > rows[0].top + rows[0].h - 2,
+      JSON.stringify(rows.map((r) => [r.top, r.h])));
+    t.ck(`each row is thin ${tag}`, rows.every((r) => r.h > 0 && r.h <= (width < 600 ? 110 : 70)),
+      JSON.stringify(rows.map((r) => r.h)));
+    t.ck(`and the counts sit inside the row ${tag}`, rows.length === 2 && rows.every((r) => r.statsInside),
+      JSON.stringify(rows));
+    await page.evaluate(() => [...document.querySelectorAll(".prop-grid .prop-card")]
+      .find((c) => /North Highland/.test(c.innerText))?.querySelector(".prop-addr")?.click());
+    await wait(500);
+    t.ck(`pressing anywhere on a row opens its window ${tag}`, await page.evaluate(() =>
+      [...document.querySelectorAll(".modal .prop-detail h2")].some((h) => /North Highland/.test(h.innerText))));
+    await page.evaluate(() => { for (const b of document.querySelectorAll(".modal-close")) b.click(); });
+    await wait(400);
+    if (width > 600) {
+      const sels = await page.evaluate(() => [...document.querySelectorAll(".fbar select")].map((x) => x.getAttribute("aria-label")));
+      t.ck("the properties page has the filter bar", sels.includes("Cities") && sels.includes("Properties"), JSON.stringify(sels));
+      await page.evaluate(() => {
+        const sel = [...document.querySelectorAll(".fbar select")].find((x) => x.getAttribute("aria-label") === "Cities");
+        const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
+        set.call(sel, "Ruston"); sel.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await wait(300);
+      rows = await read();
+      t.ck("a city narrows it to that city", rows.map((r) => r.name).join() === "North Highland LLC", JSON.stringify(rows.map((r) => r.name)));
+      t.ck("and says so", await page.evaluate(() => document.querySelector(".fbar-n")?.innerText) === "1 of 2");
+    }
+    t.ck(`nothing crashed ${tag}`, crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
 
@@ -335,6 +471,32 @@ try {
     // Chrome's innerText applies it.
     const open = cards.find((x) => /Gutter run/i.test(x.text));
     t.ck("opened, it is the full card with its answer", !!open && !open.line && open.accept, JSON.stringify(open));
+    t.ck("in a window over the list", await page.evaluate(() =>
+      !!document.querySelector(".modal.modal-job .jr-card")));
+    await page.evaluate(() => { for (const b of document.querySelectorAll(".modal-close")) b.click(); });
+    await wait(400);
+
+    console.log("\n-- and their list has the same filter bar --");
+    const pick = (v) => page.evaluate((val) => {
+      const sel = [...document.querySelectorAll(".fbar select")].find((x) => x.getAttribute("aria-label") === "Work");
+      if (!sel) return false;
+      const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
+      set.call(sel, val); sel.dispatchEvent(new Event("change", { bubbles: true })); return true;
+    }, v);
+    t.ck("My Jobs has a filter bar with the Work filter", await pick("reply"));
+    await wait(300);
+    cards = await read();
+    t.ck("Waiting on my reply keeps the request", cards.some((x) => /Gutter run/i.test(x.text)), JSON.stringify(cards.map((x) => x.text.slice(0, 30))));
+    await pick("completed");
+    await wait(300);
+    cards = await read();
+    t.ck("Completed hides it", !cards.some((x) => /Gutter run/i.test(x.text)), JSON.stringify(cards.map((x) => x.text.slice(0, 30))));
+    t.ck("while the counts above stay whole", await page.evaluate(() =>
+      [...document.querySelectorAll(".dash-card")].some((c) => /^1\s*Job request/i.test(c.innerText.trim()))));
+    await page.evaluate(() => document.querySelector(".fbar-clear")?.click());
+    await wait(300);
+    cards = await read();
+    t.ck("Clear brings it back", cards.some((x) => /Gutter run/i.test(x.text)));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

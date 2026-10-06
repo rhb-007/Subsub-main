@@ -24,7 +24,7 @@ const BUILD = import.meta.env.VITE_BUILD === "platform" ? "platform" : "tenant";
 import {
   Search, Phone, Mail, MapPin, FileText, FileWarning, Shield, ScrollText, Calendar,
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
-  Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList,
+  Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList, ClipboardCheck,
   Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, UserX, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, ArrowRightLeft, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck, Ban, PlayCircle,
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
@@ -2340,6 +2340,8 @@ export default function SubSub() {
   // the cards. Their full detail was always one tap away in the modal, so a
   // card was a preview of a preview.
   const [rosterCards, setRosterCards] = useState(false);
+  // Jobs the same way: lines that open a window, or every card on the page.
+  const [jobCards, setJobCards] = useState(false);
   const toggleJobCard = (id, on) => setOpenJobs((cur) => {
     const next = new Set(cur);
     if (on ?? !next.has(id)) next.add(id); else next.delete(id);
@@ -2350,6 +2352,10 @@ export default function SubSub() {
   // because the property page is what sets it, on the way out.
   const [fProperty, setFProperty] = useState("");
   const [jobProperty, setJobProperty] = useState("");
+  // The Jobs filter bar: free text, a trade, and what the job needs.
+  const [jobQ, setJobQ] = useState("");
+  const [jobTrade, setJobTrade] = useState("");
+  const [jobNeed, setJobNeed] = useState("");
 
   const [uniformOrders, setUniformOrders] = useState([]);
   const [upgradePrompt, setUpgradePrompt] = useState(null); // { kind: "contractor" | "user" }
@@ -3405,6 +3411,13 @@ export default function SubSub() {
   // one twice opens it twice, the rule the compliance pack's focus follows.
   const [inspectionFocus, setInspectionFocus] = useState(null);
   const openInspection = (id) => { setInspectionFocus({ id, n: Date.now() }); setTab("inspections"); };
+  // "Move-out · unit 14b" -- the walk a job was raised from, in the words the
+  // Inspections list already uses for it.
+  // The line carries the short form so it stays one line on a phone; the card
+  // says it in full.
+  const inspTag = (fi, short = false) => [
+    INSPECTION_KINDS[fi.kind] ? `${INSPECTION_KINDS[fi.kind].label}${short ? "" : " inspection"}` : "Inspection",
+    fi.unit ? `unit ${fi.unit}` : null].filter(Boolean).join(" \u00b7 ");
   const openJob = (id) => {
     const j = jobs.find((x) => x.id === id);
     if (j && jobProperty && j.propertyId !== jobProperty) setJobProperty("");
@@ -6301,8 +6314,31 @@ export default function SubSub() {
       // filtered and re-derived here, and a sort that lives in only one of
       // the two places is a sort that disagrees with itself the first time
       // anything is added optimistically.
-      const shownJobs = jobs
+      // WHAT A JOB NEEDS, for the filter: the same facts the line draws its
+      // flag from, so "Needs a contractor" lists exactly the lines that say
+      // "2 unassigned".
+      const needsOf = (j) => {
+        const slots = j.trades.map((t) => j.assignments[t]);
+        const live = !isClosed(j) && !j.readOnly && !jobHold(j, todayKey).held;
+        return {
+          unassigned: live && slots.some((a) => !a),
+          waiting: live && slots.some((a) => a && a.status === "pending" && !isExpired(a, now)),
+          noreply: live && slots.some((a) => a && a.status === "pending" && isExpired(a, now)),
+          undated: live && !j.date,
+          inspection: !!j.fromInspection,
+          request: !!j.requestedBy,
+          hold: jobHold(j, todayKey).held,
+        };
+      };
+      const filteredJobs = jobs
         .filter((j) => !jobProperty || j.propertyId === jobProperty)
+        .filter((j) => !jobTrade || j.trades.includes(jobTrade))
+        .filter((j) => !jobNeed || needsOf(j)[jobNeed])
+        .filter((j) => matchesQuery(jobQ, j.title, j.address, j.area, j.zip, j.scope, j.client,
+          j.requestedByName, propName(j.propertyId),
+          j.trades.map((t) => catMeta(t).label),
+          Object.values(j.assignments || {}).map((a) => subName(allSubs, a?.subId))));
+      const shownJobs = filteredJobs
         .filter((j) => jobPhase === "all" || isClosed(j) === (jobPhase === "completed"))
         .slice()
         .sort((a, b) => String(b.updatedAtIso || b.createdAtIso || "")
@@ -6361,7 +6397,7 @@ export default function SubSub() {
                     {[["active", "Active"], ["completed", "Completed"], ["all", "All"]].map(([id, l]) => {
                       // Counted within the building being looked at, so the tab
                       // numbers agree with the list underneath them.
-                      const here = jobs.filter((x) => !jobProperty || x.propertyId === jobProperty);
+                      const here = filteredJobs;
                       const n = id === "all" ? here.length : here.filter((x) => isClosed(x) === (id === "completed")).length;
                       return (
                         <button key={id} className={jobPhase === id ? "on" : ""} onClick={() => setJobPhase(id)}>
@@ -6371,21 +6407,41 @@ export default function SubSub() {
                     })}
                   </div>
                 )}
-                {/* All at once, because somebody reviewing a week's work wants
-                    every card open and somebody scanning wants every one
-                    shut, and forty taps is not a way to do either. */}
-                {jobView === "list" && shownJobs.length > 1 && (() => {
-                  const allOpen = shownJobs.every((x) => openJobs.has(x.id));
-                  return (
-                    <button className="jl-all" onClick={() =>
-                      setOpenJobs(allOpen ? new Set() : new Set(shownJobs.map((x) => x.id)))}>
-                      {allOpen ? <><ChevronsDownUp size={14} /> Minimize all</>
-                        : <><ChevronsUpDown size={14} /> Expand all</>}
-                    </button>
-                  );
-                })()}
+                {/* LINES OR CARDS. A line opens its job in a window, which is
+                    how every list in the product reads now; Cards is for
+                    somebody reviewing a week's work who wants every card on
+                    the page at once rather than forty windows. The same
+                    switch the roster carries, so one gesture means one thing. */}
+                {jobView === "list" && shownJobs.length > 0 && (
+                  <div className="seg-tabs sm jobs-view" role="group" aria-label="Show jobs as">
+                    {[[false, "Lines", Rows3], [true, "Cards", LayoutGrid]].map(([v, l, Icon]) => (
+                      <button key={l} className={jobCards === v ? "on" : ""} aria-pressed={jobCards === v}
+                        onClick={() => setJobCards(v)}><Icon size={13} /> {l}</button>
+                    ))}
+                  </div>
+                )}
                 <button className="add-btn small" onClick={() => tryAddJob()}><Plus size={14} /> New job</button>
               </div>
+              {jobView === "list" && (
+                <FilterBar q={jobQ} onQ={setJobQ}
+                  placeholder="Search title, address, trade, contractor…"
+                  shown={shownJobs.length}
+                  total={jobs.filter((x) => jobPhase === "all" || isClosed(x) === (jobPhase === "completed")).length}
+                  onClear={() => { setJobQ(""); setJobTrade(""); setJobNeed(""); setJobProperty(""); }}
+                  filters={[
+                    { id: "need", label: "Jobs", all: "Everything", icon: Filter, value: jobNeed, onChange: setJobNeed,
+                      options: [["unassigned", "Needs a contractor"], ["waiting", "Waiting on a reply"],
+                        ["noreply", "Offer expired, no reply"], ["undated", "No date yet"],
+                        ["inspection", "Raised from an inspection"], ["request", "Asked for by an owner or tenant"],
+                        ["hold", "On hold"]] },
+                    { id: "property", label: "Properties", icon: Building2, value: jobProperty, onChange: setJobProperty,
+                      options: [...new Set(jobs.map((x) => x.propertyId).filter(Boolean))]
+                        .map((id) => [id, propName(id)]).sort((a, b) => a[1].localeCompare(b[1])) },
+                    { id: "trade", label: "Trades", icon: Wrench, value: jobTrade, onChange: setJobTrade,
+                      options: [...new Set(jobs.flatMap((x) => x.trades))]
+                        .map((t) => [t, catMeta(t).label]).sort((a, b) => a[1].localeCompare(b[1])) },
+                  ]} />
+              )}
               {/* The grid takes every job at this building, whatever phase:
                   it has a key of its own for done and not done, and hiding
                   last month's finished work would make it lie about the
@@ -6399,7 +6455,8 @@ export default function SubSub() {
               <>
               {shownJobs.length === 0 && (
                 <div className="dash-empty"><ClipboardList size={24} />
-                  <p>No {jobPhase === "all" ? "" : jobPhase} jobs{jobProperty ? ` at ${propName(jobProperty)}` : ""}.</p></div>
+                  <p>No {jobPhase === "all" ? "" : jobPhase} jobs{jobProperty ? ` at ${propName(jobProperty)}` : ""}{
+                    jobQ || jobTrade || jobNeed ? " match these filters" : ""}.</p></div>
               )}
               {shownJobs.map((j) => {
                 const filled = j.trades.filter((t) => j.assignments[t]).length;
@@ -6414,7 +6471,7 @@ export default function SubSub() {
                 // not, so the line carries the one thing worth opening it for
                 // -- worked out from what the card itself would have drawn,
                 // never a second opinion about the job.
-                if (!openJobs.has(j.id)) {
+                if (!jobCards && !openJobs.has(j.id)) {
                   const slots = j.trades.map((t) => j.assignments[t]);
                   const unfilled = j.trades.length - filled;
                   const noReply = slots.some((a) => a && a.status === "pending" && isExpired(a, now));
@@ -6439,6 +6496,18 @@ export default function SubSub() {
                           </span>
                         </span>
                         <span className="jl-side">
+                          {/* RAISED FROM A WALK. A different kind of job -- a
+                              list of rooms in a unit turning round -- and in a
+                              list of forty it read exactly like a leak somebody
+                              phoned in. Among the chips rather than under the
+                              address, so on a phone it rides the row those
+                              already take instead of adding one. */}
+                          {j.fromInspection && (
+                            <span className="job-insp" title={`Raised from the ${inspTag(j.fromInspection)}`}>
+                              <ClipboardCheck size={11} /> {INSPECTION_KINDS[j.fromInspection.kind]?.label || "Inspection"}
+                              {j.fromInspection.unit && <span className="ji-unit">{" \u00b7 "}unit {j.fromInspection.unit}</span>}
+                            </span>
+                          )}
                           <span className={`job-phase ${done ? "done" : ""}`}>{phase}</span>
                           {flag && <span className={`jl-flag jl-${flag.tone}`}>{flag.text}</span>}
                           <span className={`fill-badge ${allAssigned ? "full" : ""}`}>{filled}/{j.trades.length}</span>
@@ -6447,17 +6516,12 @@ export default function SubSub() {
                     </div>
                   );
                 }
-                return (
+                const card = (
                   <div key={j.id} data-job-id={j.id}
                     className={`job-card ${done ? "done" : ""} ${moved ? "just-moved" : ""} ${focusJob === j.id ? "landed" : ""} ${j.readOnly ? "not-mine" : ""}`}>
                     <div className="job-card-head">
                       <div>
                         <div className="job-title-row">
-                          <button type="button" className="jl-close" aria-expanded="true"
-                            onClick={() => toggleJobCard(j.id, false)} title="Minimize this job"
-                            aria-label="Minimize this job">
-                            <ChevronDown size={16} />
-                          </button>
                           {/* THE TITLE IS THE WAY IN. Asked for as *"when you
                               click on a job card it should open to edit"*.
                               The title and not the whole tile, for the reason
@@ -6508,6 +6572,15 @@ export default function SubSub() {
                               A held job keeps its phase: it is not finished
                               with, which is the whole difference. */}
                           <span className={`job-phase ${done ? "done" : ""}`}>{phase}</span>
+                          {/* The walk it came from, and the way back to it. */}
+                          {j.fromInspection && (can("inspections") ? (
+                            <button type="button" className="job-insp" title="Open the inspection this job was raised from"
+                              onClick={() => { toggleJobCard(j.id, false); openInspection(j.fromInspection.id); }}>
+                              <ClipboardCheck size={11} /> {inspTag(j.fromInspection)}
+                            </button>
+                          ) : (
+                            <span className="job-insp"><ClipboardCheck size={11} /> {inspTag(j.fromInspection)}</span>
+                          ))}
                           {/* Only while it is genuinely news. A badge that
                               never expires is wallpaper. */}
                           {moved && <span className="job-moved"><Zap size={11} /> Updated {moved}</span>}
@@ -6971,6 +7044,15 @@ export default function SubSub() {
                       </div>
                     )}
                   </div>
+                );
+                // A LINE OPENS A WINDOW, not a card pushed down the list: the
+                // list keeps its place, and the job is read on its own. The
+                // window takes the line's place in the DOM, so there is one
+                // copy of each job on the page whichever way it is drawn.
+                return jobCards ? card : (
+                  <Modal key={j.id} className="modal-job" onClose={() => toggleJobCard(j.id, false)}>
+                    {card}
+                  </Modal>
                 );
               })}
               </>
@@ -14856,6 +14938,9 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
   const [form, setForm] = useState(null);   // null | {} | property
   const [assigning, setAssigning] = useState(null);   // the property whose vendor list is open
   const [detail, setDetail] = useState(null);         // the property whose panel is open
+  const [pq, setPq] = useState("");
+  const [pCity, setPCity] = useState("");
+  const [pShow, setPShow] = useState("");
   const vendorsFor = (pid) => subs.filter((s) => (s.propertyIds || []).includes(pid));
   // Who owns this building. The grant itself lives on the person's membership
   // (membership_properties), which is the right place for it -- a building can
@@ -14970,9 +15055,35 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
               Two buttons doing one thing, one of them only sometimes, is
               two things to read before deciding there is only one. */}
         </div>
-      ) : (
+      ) : (() => {
+        const openAt = (pid) => jobsFor(pid).filter((j) => j.status !== "completed").length;
+        const shownProps = properties
+          .filter((p) => !pCity || (p.city || "").trim() === pCity)
+          .filter((p) => !pShow
+            || (pShow === "open" && openAt(p.id) > 0)
+            || (pShow === "quiet" && openAt(p.id) === 0)
+            || (pShow === "novendors" && !p.ownedNotOperated && vendorsFor(p.id).length === 0)
+            || (pShow === "others" && p.ownedNotOperated))
+          .filter((p) => matchesQuery(pq, p.name, p.address, p.city, p.state, p.zip, p.managedBy));
+        return (
+        <>
+        <FilterBar q={pq} onQ={setPq} placeholder="Search name, address, city…"
+          shown={shownProps.length} total={properties.length}
+          onClear={() => { setPq(""); setPCity(""); setPShow(""); }}
+          filters={[
+            { id: "show", label: "Properties", all: "Every property", icon: Filter, value: pShow, onChange: setPShow,
+              options: [["open", "With open jobs"], ["quiet", "Nothing open"],
+                ...(canManage ? [["novendors", "No vendors scoped"]] : []),
+                ...(properties.some((p) => p.ownedNotOperated) ? [["others", "Run by another manager"]] : [])] },
+            { id: "city", label: "Cities", icon: MapPin, value: pCity, onChange: setPCity,
+              options: [...new Set(properties.map((p) => (p.city || "").trim()).filter(Boolean))]
+                .sort().map((c) => [c, c]) },
+          ]} />
+        {shownProps.length === 0 && (
+          <div className="dash-empty"><Building2 size={24} /><p>No properties match these filters.</p></div>
+        )}
         <div className="prop-grid">
-          {properties.map((p) => {
+          {shownProps.map((p) => {
             const js = jobsFor(p.id);
             const open = js.filter((j) => j.status !== "completed").length;
             const vs = vendorsFor(p.id);
@@ -14986,7 +15097,14 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
               // filled the screen and the answer to "which of these needs me"
               // was somewhere below the fold. What is left is what you scan
               // FOR; everything else is one tap away in the detail panel.
-              <div key={p.id} className="prop-card tile">
+              // A ROW, AND THE WHOLE ROW OPENS IT. One building per line across
+              // the page, the way every list in the product reads now: three
+              // tiles to a row put a building's counts at a different x on
+              // every card and clipped them at the bottom border on a tablet.
+              // The counts inside still lead where they lead, so their clicks
+              // stop here rather than also opening the panel.
+              <div key={p.id} className="prop-card tile prop-row"
+                onClick={() => setDetail(p)}>
                 <div className="prop-top">
                   <div className="pt-id">
                     <h3>
@@ -15010,7 +15128,7 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                     jobs" with nowhere to go was the original complaint about
                     this screen; the numbers lead to the list they count,
                     narrowed to this building. */}
-                <div className="prop-stats">
+                <div className="prop-stats" onClick={(e) => e.stopPropagation()}>
                   <span><strong>{p.units || "\u2014"}</strong> units</span>
                   {open > 0 ? (
                     <button className="stat-link" onClick={() => onGoJobs(p)}>
@@ -15035,11 +15153,14 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                     )
                   )}
                 </div>
+                <ChevronRight size={16} className="prop-chev" aria-hidden="true" />
               </div>
             );
           })}
         </div>
-      )}
+        </>
+        );
+      })()}
 
       {/* Everything the tile no longer carries. Opened from the name, wide
           enough that the handover conversation and the owner list are not
@@ -24978,6 +25099,10 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow,
   onAnswerVisit, onProposeVisit, onGoPane }) {
   const [sub2, setSub2] = useState("trades");
+  // My Jobs filter bar: free text, which client, and which list.
+  const [wq, setWq] = useState("");
+  const [wClient, setWClient] = useState("");
+  const [wShow, setWShow] = useState("");
   const caps = [...new Set(sub.categories.flatMap((c) => CAP_LIBRARY[c] || []))];
   const miss = missingDocs(sub);
   // Two questions, two answers: what stops a work order, and what stops the
@@ -25031,6 +25156,26 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   const openQuotes = quotes.filter((q) =>
     q.requestStatus === "open" && q.status === "invited");
   const sentQuotes = quotes.filter((q) => q.status === "quoted" || q.status === "passed");
+
+  // THE SAME LISTS, NARROWED BY THE FILTER BAR. The counts in the strip above
+  // stay whole -- they describe the book, not the view -- and only what is
+  // drawn below follows the filters.
+  const clientOf = (m) => (m.elsewhere ? m.elsewhere.name : brand.name);
+  const keepM = (m) => (!wClient || clientOf(m) === wClient)
+    && matchesQuery(wq, m.job.title, m.job.address, m.job.area, m.job.zip, catMeta(m.trade).label, clientOf(m));
+  const keepQ = (q) => (!wClient || q.accountName === wClient)
+    && matchesQuery(wq, q.job.title, q.job.address, q.job.area, catMeta(q.trade).label, q.accountName);
+  const showing = (id) => !wShow || wShow === id;
+  const fPending = showing("reply") ? pending.filter(keepM) : [];
+  const fUpcoming = showing("upcoming") ? upcoming.filter(keepM) : [];
+  const fPast = showing("completed") ? past.filter(keepM) : [];
+  const fDeclined = showing("declined") ? declined.filter(keepM) : [];
+  const fOpenQuotes = showing("quotes") ? openQuotes.filter(keepQ) : [];
+  const fSentQuotes = showing("quotes") ? sentQuotes.filter(keepQ) : [];
+  const workClients = [...new Set([...all.map(clientOf), ...quotes.map((q) => q.accountName)].filter(Boolean))].sort();
+  const workTotal = pending.length + upcoming.length + past.length + declined.length + openQuotes.length + sentQuotes.length;
+  const workShown = fPending.length + fUpcoming.length + fPast.length + fDeclined.length + fOpenQuotes.length + fSentQuotes.length;
+  const narrowed = !!(wq.trim() || wClient || wShow);
 
   return (
     <main className="ss-main">
@@ -25176,46 +25321,61 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           )}
 
 
+          {workTotal > 0 && (
+            <FilterBar q={wq} onQ={setWq} placeholder="Search job, address, trade, client…"
+              shown={workShown} total={workTotal}
+              onClear={() => { setWq(""); setWClient(""); setWShow(""); }}
+              filters={[
+                { id: "show", label: "Work", all: "All my work", icon: Filter, value: wShow, onChange: setWShow,
+                  options: [["reply", "Waiting on my reply"], ["quotes", "Quotes"], ["upcoming", "Upcoming"],
+                    ["completed", "Completed"], ["declined", "Declined"]] },
+                { id: "client", label: "Clients", icon: Building2, value: wClient, onChange: setWClient,
+                  options: workClients.map((c) => [c, c]) },
+              ]} />
+          )}
+
           {/* Asked to price something, which is not the same as being offered
               it. Above job requests because it is the earlier conversation --
               and because a quote nobody sent is work that went elsewhere. */}
-          {openQuotes.length > 0 && (
+          {fOpenQuotes.length > 0 && (
             <section className="dash-sec">
               <h3><FileText size={15} /> Asked to quote
-                <span className="sec-count amber">{openQuotes.length}</span></h3>
+                <span className="sec-count amber">{fOpenQuotes.length}</span></h3>
               <p className="portal-sec-note">
                 Nothing is committed by answering. If they pick you, you get a work
                 order at the price you gave and you still accept or decline it.
               </p>
-              {quoteGroups(openQuotes).map((items) => (
+              {quoteGroups(fOpenQuotes).map((items) => (
                 <QuoteAskCard key={`${items[0].accountId}:${items[0].job.id}`} items={items}
                   onAnswer={onAnswerQuote} />
               ))}
             </section>
           )}
 
-          {pending.length > 0 && (
+          {fPending.length > 0 && (
             <section className="dash-sec">
-              <h3><Clock size={15} /> Job requests <span className="sec-count amber">{pending.length}</span></h3>
-              {pending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} showActions />)}
+              <h3><Clock size={15} /> Job requests <span className="sec-count amber">{fPending.length}</span></h3>
+              {fPending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} showActions />)}
             </section>
           )}
 
+          {showing("upcoming") && (
           <section className="dash-sec">
-            <h3><Calendar size={15} /> Current &amp; upcoming {upcoming.length > 0 && <span className="sec-count">{upcoming.length}</span>}</h3>
-            {upcoming.length === 0
-              ? <div className="dash-empty"><ClipboardList size={24} /><p>No upcoming jobs booked.</p></div>
-              : upcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} />)}
+            <h3><Calendar size={15} /> Current &amp; upcoming {fUpcoming.length > 0 && <span className="sec-count">{fUpcoming.length}</span>}</h3>
+            {fUpcoming.length === 0
+              ? <div className="dash-empty"><ClipboardList size={24} /><p>{narrowed ? "No upcoming jobs match these filters." : "No upcoming jobs booked."}</p></div>
+              : fUpcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} />)}
           </section>
+          )}
 
           {/* What we already answered. A quote that vanishes the moment it is
               sent is indistinguishable from one that never went, and "did I
               price that?" is the question this list exists to answer. */}
-          {sentQuotes.length > 0 && (
+          {fSentQuotes.length > 0 && (
             <section className="dash-sec">
               <h3><FileText size={15} /> Quotes you sent
-                <span className="sec-count">{sentQuotes.length}</span></h3>
-              {sentQuotes.map((q) => (
+                <span className="sec-count">{fSentQuotes.length}</span></h3>
+              {fSentQuotes.map((q) => (
                 <div key={q.inviteId} className={`qs-row${q.wonIt ? " won" : ""}`}>
                   <div className="qs-main">
                     <span className="qs-title">{q.job.title}</span>
@@ -25240,17 +25400,17 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
             </section>
           )}
 
-          {past.length > 0 && (
+          {fPast.length > 0 && (
             <section className="dash-sec">
-              <h3><CheckCircle2 size={15} /> Completed <span className="sec-count">{past.length}</span></h3>
-              {past.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} past />)}
+              <h3><CheckCircle2 size={15} /> Completed <span className="sec-count">{fPast.length}</span></h3>
+              {fPast.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} past />)}
             </section>
           )}
 
-          {declined.length > 0 && (
+          {fDeclined.length > 0 && (
             <section className="dash-sec">
-              <h3><XCircle size={15} /> Declined <span className="sec-count">{declined.length}</span></h3>
-              {declined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} />)}
+              <h3><XCircle size={15} /> Declined <span className="sec-count">{fDeclined.length}</span></h3>
+              {fDeclined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} />)}
             </section>
           )}
         </>
@@ -26970,7 +27130,11 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
       </div>
     );
   }
+  // OPEN, IT IS A WINDOW over the list rather than a card pushed into it, the
+  // way every list in the product opens now. It takes the line's place, so the
+  // job is on the page once whichever way it is drawn.
   return (
+    <Modal className="modal-job" onClose={() => setOpen(false)}>
     <div className={`job-card jr-card ${past ? "past" : ""} ${away ? "jr-away" : ""}`}>
       {away && (
         <div className="jr-client">
@@ -26986,10 +27150,6 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
       <div className="job-card-head">
         <div>
           <div className="job-title-row">
-            <button type="button" className="jl-close" aria-expanded="true"
-              onClick={() => setOpen(false)} title="Minimize this job" aria-label="Minimize this job">
-              <ChevronDown size={16} />
-            </button>
             <h3>{job.title}</h3>
           </div>
           <div className="job-meta">
@@ -27122,6 +27282,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
         </div>
       )}
     </div>
+    </Modal>
   );
 }
 
@@ -28696,6 +28857,7 @@ function QuoteAskCard({ items, onAnswer }) {
     );
   }
   return (
+    <Modal className="modal-job" onClose={() => setShown(false)}>
     <div className="job-card jr-card qask">
       <div className="jr-client">
         <Building2 size={12} />
@@ -28705,10 +28867,6 @@ function QuoteAskCard({ items, onAnswer }) {
       <div className="job-card-head">
         <div>
           <div className="job-title-row">
-            <button type="button" className="jl-close" aria-expanded="true"
-              onClick={() => setShown(false)} title="Minimize" aria-label="Minimize this quote request">
-              <ChevronDown size={16} />
-            </button>
             <h3>{q0.job.title}</h3>
           </div>
           <div className="job-meta">
@@ -28765,6 +28923,7 @@ function QuoteAskCard({ items, onAnswer }) {
         </div>
       )}
     </div>
+    </Modal>
   );
 }
 
@@ -29462,10 +29621,63 @@ function StuckSubs() {
   );
 }
 
-function Modal({ children, onClose, wide }) {
+// ONE FILTER BAR, the same on every list page. The roster had a search box and
+// a row of controls and nothing else had either, so the same question -- show
+// me only the ones at Ballard, only the ones nobody is on -- was answerable on
+// one screen in five. Search first because searching is what somebody came to
+// do; then a compact select per question, each reading "All <things>" when it
+// is not narrowing anything; then Clear and "3 of 12" ONLY while something is
+// narrowed, because a narrowed list that does not say so is how somebody
+// concludes they have three jobs when they have thirty.
+//
+// A select with fewer than two answers is not drawn: a property filter on an
+// account with one building is a control that can only ever say the same
+// thing. It stays while it holds a value, so a filter can always be undone.
+function FilterBar({ q = "", onQ, placeholder = "Search…", filters = [], shown, total, onClear }) {
+  const live = filters.filter((f) => f.value || (f.options || []).length > 1);
+  const active = live.filter((f) => f.value).length + (q.trim() ? 1 : 0);
+  return (
+    <div className="fbar" role="search">
+      {onQ && (
+        <div className="search-input fbar-q">
+          <Search size={16} />
+          <input placeholder={placeholder} value={q} aria-label="Search"
+            onChange={(e) => onQ(e.target.value)} />
+          {q && <button className="clear-x" onClick={() => onQ("")} aria-label="Clear search"><X size={14} /></button>}
+        </div>
+      )}
+      {live.map((f) => (
+        <label key={f.id} className={`sort-ctl fbar-sel ${f.value ? "on" : ""}`} data-filter={f.id}>
+          {f.icon ? <f.icon size={13} /> : <Filter size={13} />}
+          <select value={f.value || ""} aria-label={f.label} onChange={(e) => f.onChange(e.target.value)}>
+            {!f.noAll && <option value="">{f.all || `All ${f.label.toLowerCase()}`}</option>}
+            {f.options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </label>
+      ))}
+      {active > 0 && onClear && (
+        <button className="clear-filters fbar-clear" onClick={onClear}>Clear</button>
+      )}
+      {active > 0 && total != null && (
+        <span className="fbar-n">{shown} of {total}</span>
+      )}
+    </div>
+  );
+}
+
+// Whole-word-ish search across whatever text a row carries. Every term has to
+// be found somewhere, so "ballard roof" narrows rather than widens.
+const matchesQuery = (q, ...fields) => {
+  const terms = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
+  const hay = fields.flat().filter(Boolean).join(" ").toLowerCase();
+  return terms.every((t) => hay.includes(t));
+};
+
+function Modal({ children, onClose, wide, className = "" }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className={`modal ${wide ? "modal-wide" : ""}`} onClick={(e) => e.stopPropagation()}>
+      <div className={`modal ${wide ? "modal-wide" : ""} ${className}`} onClick={(e) => e.stopPropagation()}>
         <button className="modal-close" onClick={onClose}><X size={18} /></button>
         {children}
       </div>
@@ -30766,6 +30978,10 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
   unitWord = "Unit", canEdit = true, onAddOwner, focus = null }) {
   const [form, setForm] = useState(null);
   const [open, setOpen] = useState(null);   // the loaded inspection
+  const [iq, setIq] = useState("");
+  const [iKind, setIKind] = useState("");
+  const [iShow, setIShow] = useState("");
+  const [iProp, setIProp] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -30819,6 +31035,17 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
     await load(id); await onReload();
     onGoJobs(made.jobId);
   };
+
+  const shownInsp = inspections
+    .filter((i) => !iKind || i.kind === iKind)
+    .filter((i) => !iProp || i.propertyId === iProp)
+    .filter((i) => !iShow
+      || (iShow === "draft" && i.status !== "finished")
+      || (iShow === "finished" && i.status === "finished")
+      || (iShow === "flagged" && i.flagged > 0)
+      || (iShow === "nojob" && i.flagged > 0 && !i.jobId))
+    .filter((i) => matchesQuery(iq, i.unit, i.tenantName, INSPECTION_KINDS[i.kind]?.label,
+      properties.find((x) => x.id === i.propertyId)?.name));
 
   if (open) {
     return (
@@ -30895,8 +31122,28 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
         </div>
       )}
 
+      {inspections.length > 0 && (
+        <FilterBar q={iq} onQ={setIq} placeholder={`Search ${unitWord.toLowerCase()}, tenant, building…`}
+          shown={shownInsp.length} total={inspections.length}
+          onClear={() => { setIq(""); setIKind(""); setIShow(""); setIProp(""); }}
+          filters={[
+            { id: "show", label: "Inspections", all: "Every inspection", icon: Filter, value: iShow, onChange: setIShow,
+              options: [["draft", "Still being walked"], ["finished", "Finished"], ["flagged", "With flagged rooms"],
+                ...(canEdit ? [["nojob", "Flagged, no job raised"]] : [])] },
+            { id: "kind", label: "Kinds", all: "Move-in and move-out", icon: ClipboardCheck, value: iKind, onChange: setIKind,
+              options: Object.entries(INSPECTION_KINDS).map(([k, v]) => [k, v.label]) },
+            { id: "property", label: "Properties", icon: Building2, value: iProp, onChange: setIProp,
+              options: [...new Set(inspections.map((i) => i.propertyId).filter(Boolean))]
+                .map((id) => [id, properties.find((x) => x.id === id)?.name || "A building"])
+                .sort((a, b) => a[1].localeCompare(b[1])) },
+          ]} />
+      )}
+      {inspections.length > 0 && shownInsp.length === 0 && (
+        <div className="dash-empty"><ClipboardList size={24} /><p>No inspections match these filters.</p></div>
+      )}
+
       <div className="insp-list">
-        {inspections.map((i) => {
+        {shownInsp.map((i) => {
           const p = properties.find((x) => x.id === i.propertyId);
           return (
             <button key={i.id} className="insp-row" onClick={() => load(i.id)}>
@@ -36743,10 +36990,22 @@ iframe.dv-frame{display:block}
    330px columns with everything on the card meant four buildings filled a
    screen; the tile carries what a portfolio is scanned for and the rest opens
    in .prop-detail. */
-.prop-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:12px}
+.prop-grid{display:flex;flex-direction:column;gap:8px}
 .prop-card{background:var(--card);border:1px solid var(--line);border-radius:12px;
   padding:18px 20px;display:flex;flex-direction:column;box-shadow:var(--shadow)}
-.prop-card.tile{padding:13px 15px;gap:0;transition:border-color .12s,box-shadow .12s}
+.prop-card.tile{padding:11px 14px;gap:0;transition:border-color .12s,box-shadow .12s}
+/* One building per line: identity on the left, the counts on the right in a
+   column that lines up from row to row, and a chevron saying it opens. */
+.prop-card.prop-row{flex-direction:row;align-items:center;gap:14px;cursor:pointer}
+.prop-row .prop-top{flex:1 1 auto;min-width:0}
+.prop-row .prop-stats{flex:none;margin:0;padding:0;border:0;gap:14px;flex-wrap:nowrap;
+  white-space:nowrap}
+.prop-chev{flex:none;color:var(--ink-soft)}
+@media (max-width:600px){
+  .prop-card.prop-row{flex-wrap:wrap;row-gap:6px}
+  .prop-row .prop-top{flex-basis:calc(100% - 30px)}
+  .prop-row .prop-stats{order:3;flex-basis:100%;flex-wrap:wrap}
+}
 .prop-card.tile:hover,.prop-card.tile:focus-within{border-color:var(--brand)}
 .pt-id{min-width:0}
 /* The name is the way in. A button rather than the whole tile, so the counts
@@ -36760,8 +37019,7 @@ iframe.dv-frame{display:block}
 .prop-card.tile h3{font-size:15px;line-height:1.25}
 .prop-card.tile .prop-addr{font-size:11.5px;margin-top:2px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
-.prop-card.tile .prop-stats{margin-top:10px;padding:8px 0 0;border-bottom:0;gap:12px;
-  font-size:11.5px}
+.prop-card.tile .prop-stats{font-size:11.5px}
 .prop-card.tile .prop-stats strong{font-size:13px}
 .prop-card.tile .ph-managed{font-size:9.5px;padding:2px 6px;max-width:46%;
   overflow:hidden;text-overflow:ellipsis}
@@ -38291,9 +38549,6 @@ iframe.dv-frame{display:block}
 .jl-warn{background:#fbf0dd;color:#a86a18}
 .jl-bad{background:#fbe5e2;color:#b3261e}
 .jl-wait{background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
-.jl-close{all:unset;box-sizing:border-box;flex:none;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;margin-left:-6px;border-radius:8px;cursor:pointer;color:var(--ink-soft)}
-.jl-close:hover{background:var(--paper);color:var(--ink)}
-.jl-close:focus-visible{outline:2px solid var(--brand)}
 .jobs-head{flex-wrap:wrap;gap:8px}
 .jl-all{display:inline-flex;align-items:center;gap:6px;margin-left:auto;padding:7px 11px;font-size:12.5px;font-weight:600;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
 .jl-all:hover{border-color:var(--brand)}
@@ -38318,5 +38573,38 @@ iframe.dv-frame{display:block}
 @media (max-width:640px){
   .card.card-row{flex-wrap:wrap;gap:8px 12px}
   .card-row .card-id{flex-basis:100%}
+}
+/* A line opens its job in a window. Wide, because a job carries trade rows,
+   the visit block and the closing controls; the card inside drops its own
+   border and shadow, which inside a window are a frame round a frame. */
+.modal.modal-job{max-width:880px;padding:22px 22px 18px}
+.modal.modal-job > .job-card{border:0;box-shadow:none;padding:0;margin:0;background:none}
+.modal.modal-job .job-card-head{padding-right:32px}
+@media (max-width:600px){ .modal.modal-job{padding:18px 14px 14px} }
+/* The walk a job came from. Blue-grey, so it reads as a kind of job rather
+   than a state: amber already means waiting and green means done. */
+.job-insp{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;
+  color:#2f5577;background:#e8f0f7;border:1px solid #cfe0ee;border-radius:20px;padding:2px 8px;
+  white-space:nowrap;font-family:inherit;line-height:1.3}
+button.job-insp{cursor:pointer}
+button.job-insp:hover{border-color:#2f5577}
+.jl-side > .job-insp{padding:2px 8px;font-size:10.5px}
+/* On a phone the line's chips share one row; the unit is in the title and on
+   the card, so the badge keeps only the kind of walk. */
+@media (max-width:600px){ .jl-side > .job-insp .ji-unit{display:none} }
+/* THE FILTER BAR, one row on top of every list: a search box, then a compact
+   select per question, then Clear and the count while anything narrows. */
+.fbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
+.fbar .fbar-q{flex:1 1 260px;min-width:0;box-shadow:none;border-radius:10px;padding:0 12px}
+.fbar .fbar-q input{padding:9px 0;font-size:14px}
+.fbar .fbar-sel{flex:0 1 auto;min-width:0}
+.fbar .fbar-sel select{max-width:220px}
+.fbar .fbar-sel.on{border-color:var(--brand);background:#eef6f1;color:var(--brand)}
+.fbar-clear{height:auto;padding:6px 4px}
+.fbar-n{font-size:12px;color:var(--ink-soft);font-weight:600}
+@media (max-width:600px){
+  .fbar .fbar-q{flex-basis:100%}
+  .fbar .fbar-sel{flex:1 1 calc(50% - 4px)}
+  .fbar .fbar-sel select{max-width:none;width:100%}
 }
 `;

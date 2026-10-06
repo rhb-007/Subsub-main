@@ -430,6 +430,33 @@ try {
       runCheck(db).m062_inv_access_not_a_tenant === 1,
       String(runCheck(db).m062_inv_access_not_a_tenant));
   }
+
+  console.log("\n-- the jobs list says which job came from a walk --");
+  {
+    // Asked for as "a quick design reference to created from an inspection to
+    // differentiate them from other jobs". The list is where it has to be
+    // known, so the route answers it rather than the browser guessing.
+    const { db, env } = seed();
+    const [, made] = await json(await raise(env, "ins_out"));
+    const [st, list] = await json(await get(env, "/api/jobs", "u_mgr"));
+    const raised = (list || []).find((j) => j.id === made.jobId);
+    const plain = (list || []).find((j) => j.id === "job_plain");
+    ck("the list loads", st === 200 && !!raised && !!plain, String(st));
+    ck("the walk-raised job names its inspection, kind and unit",
+      raised?.fromInspection?.id === "ins_out" && raised?.fromInspection?.kind === "move_out"
+        && raised?.fromInspection?.unit === "3B", JSON.stringify(raised?.fromInspection));
+    ck("and a job nobody walked carries nothing", plain && !("fromInspection" in plain),
+      JSON.stringify(plain?.fromInspection));
+    // A TENANT IS NEVER TOLD. An inspection is deliberately not shown to the
+    // tenant it is about, and "this came from your move-out walk" is that
+    // inspection by another name. Only a job the tenant can actually SEE can
+    // check it, so the raised job is made theirs.
+    db.prepare(`UPDATE jobs SET requested_by = 'u_t3b' WHERE id = ?`).run(made.jobId);
+    const [, tl] = await json(await get(env, "/api/jobs", "u_t3b"));
+    const theirs = (tl || []).find((j) => j.id === made.jobId);
+    ck("a tenant sees the job", !!theirs, JSON.stringify((tl || []).map((j) => j.id)));
+    ck("without the inspection on it", theirs && !("fromInspection" in theirs), JSON.stringify(theirs?.fromInspection));
+  }
 } catch (err) {
   fail++; console.log("FAIL  threw:", err?.stack || err);
 }

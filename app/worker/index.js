@@ -7074,6 +7074,28 @@ app.get("/api/jobs", async (c) => {
       ending_until: e.until, ending_at: e.at } : j;
   };
 
+  // WHICH OF THESE WAS RAISED FROM AN INSPECTION, so the list can mark them.
+  // A walk-raised job is a different kind of work -- a list of rooms, an empty
+  // unit, a tenancy turning round -- and in a list of forty it read exactly like
+  // a leak somebody phoned in. One query, this account's OWN inspections only:
+  // an inspection is the team's record, so a job on somebody else's account
+  // (owned-not-operated, inherited) is not marked from here, and a TENANT is
+  // never told, because an inspection is deliberately not shown to the tenant
+  // it is about. A database without 055 marks nothing.
+  const inspByJob = await (async () => {
+    if (auth.role === "tenant" || !jobs.length) return {};
+    const out = {};
+    try {
+      const ids = jobs.map((j) => j.id);
+      const { results } = await c.env.DB.prepare(
+        `SELECT i.id, i.job_id, i.kind, i.unit FROM inspections i
+          WHERE i.account_id = ? AND i.job_id IN (${ids.map(() => "?").join(",")})`
+      ).bind(accountId, ...ids).all();
+      for (const r of results || []) out[r.job_id] = { id: r.id, kind: r.kind, unit: r.unit || null };
+    } catch (err) { if (!missingSchema(err)) throw err; }
+    return out;
+  })();
+
   // Every job leaving this route goes through the same two redactions, rather
   // than each list remembering to apply them.
   const forCaller = (j) => stripOtherTrades(auth,
@@ -7082,6 +7104,7 @@ app.get("/api/jobs", async (c) => {
     ...jobs.map((j) => ({
       ...forCaller(j),
       ...(j.requested_by_name ? { requestedByName: j.requested_by_name } : {}),
+      ...(inspByJob[j.id] ? { fromInspection: inspByJob[j.id] } : {}),
     })),
     ...ownedJobs.map((j) => ({
       ...forCaller(j),
