@@ -115,12 +115,20 @@ export function rankCandidates(cands = [], { trade, from } = {}) {
     // The same two questions the assign route asks, asked here first so a
     // candidate is not put forward only to be refused -- the screen-looser-
     // than-the-route lie, pointed at a machine.
+    // Which of the two it was rides along, because the way out differs: a
+    // trade missing from their card is one tick on Edit, a handyman cannot be
+    // given the trade at all.
     if (!(cnd.categories || []).includes(trade) || !mayCover(cnd.engagedAs, trade)) {
-      skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "not_this_trade" });
+      skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "not_this_trade",
+        handyman: !mayCover(cnd.engagedAs, trade) });
       continue;
     }
+    // And WHICH documents, because "documents outstanding" sends somebody to
+    // chase a contractor for a certificate this account has simply not
+    // verified yet -- the two need opposite actions.
     if ((cnd.blockers || []).length) {
-      skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "documents" });
+      skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "documents",
+        kinds: [...cnd.blockers] });
       continue;
     }
     const day = slotFor({ from, busy: cnd.busy, unavailable: cnd.unavailable });

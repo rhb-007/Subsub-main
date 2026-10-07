@@ -6301,6 +6301,16 @@ export default function SubSub() {
             setTab("account"); setOpenPane({ pane: "company", focus: "auto", n: Date.now() });
           } : null}
           onNote={setBillingNote}
+          /* THE SAME ASSIGN FORM THE JOB CARD OPENS, over the inspection, so a
+             turnaround auto-schedule could not place is one tap from a
+             contractor rather than a hunt through the Jobs list. The list is
+             re-read first, because the job was raised a moment ago. */
+          onAssign={can("jobs") ? async (jobId, trade) => {
+            const js = await api.listJobs().catch(() => null);
+            if (Array.isArray(js)) setJobs(js);
+            const j = (Array.isArray(js) ? js : jobs).find((x) => x.id === jobId);
+            if (j) setAssigning({ job: j, trade: trade || (j.trades || [])[0] });
+          } : null}
           unitWord={tenantWhere(kindOf(account)) === "office" ? "Suite" : "Unit"}
           /* AN OWNER READS. The capability gets them the tab -- a move-out
              report is theirs to produce in a deposit argument -- and every
@@ -30951,7 +30961,8 @@ function InspectionSummaryPanel({ inspection, rooms = [], onReload }) {
 
 function InspectionDetail({ inspection, property, onReload, onClose, onRaise, onGoJobs,
   subs = [], unitWord = "Unit", canEdit = true, onAddOwner,
-  autoTurnaround = false, onGoAutoSetting, onRooms }) {
+  autoTurnaround = false, onGoAutoSetting, onRooms, autoMiss = null, onAssign,
+  onDismissAutoMiss }) {
   const [adding, setAdding] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -31006,7 +31017,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
   // those routes is admin/pm, so a form offered here would be a form the
   // server refuses.
   const locked = inspection.status === "finished" || !canEdit;
-  const why = whyNotFinish(rooms);
+  const why = whyNotFinish(rooms, { jobId: inspection.jobId });
   // WHERE THE WALK HAS GOT TO. One rule, read by the strip and the card, so
   // they cannot disagree about which step is current.
   const step = inspectionStep({
@@ -31028,6 +31039,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
       setErr(code === "rooms_unchecked"
         ? `${e.body.unchecked} room${e.body.unchecked === 1 ? " has" : "s have"} not been marked yet.`
         : code === "no_rooms" ? "Add at least one room first."
+        : code === "job_not_raised" ? "Raise the job for the flagged rooms first, then finish."
         : code === "already_finished" ? "This inspection is finished, so it cannot be changed."
         : code === "nothing_flagged" ? "Nothing was flagged, so there is no work to raise."
         : code === "already_raised" ? "A job has already been raised from this one."
@@ -31377,6 +31389,15 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
         </div>
       )}
 
+      {/* A miss is drawn only while the job still has nobody on it. Once a
+          contractor is assigned by hand the reason is history, and a panel
+          saying "could not match" over a matched job is a screen that lies. */}
+      {autoMiss && canEdit && (!inspection.job || inspection.job.id === "unassigned") && (
+        <AutoMissPanel miss={autoMiss} onDismiss={onDismissAutoMiss}
+          onAssign={onAssign ? () => onAssign(autoMiss.jobId, autoMiss.auto.trade) : null}
+          onOpenJob={() => onGoJobs(autoMiss.jobId)} />
+      )}
+
       {/* WHY THERE IS NO RAISE A JOB, said where the button would be. Reported
           as the feature having disappeared: it is offered only once a room is
           Follow-up or Fail, and a walk with every room marked OK showed
@@ -31416,7 +31437,10 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
 
       <div className="pd-acts">
         <button className="btn-ghost small" onClick={onClose}>Close</button>
-        {!locked && canEdit && (
+        {/* ONE NEXT STEP AT A TIME. With something flagged and no job yet,
+            Raise a job is the only way on and Finish is not drawn at all --
+            a greyed Finish beside it would read as two choices. */}
+        {!locked && canEdit && why !== "job_not_raised" && (
           <button className="btn-solid small" disabled={!!busy || !!why}
             onClick={() => run("finish", async () => {
               await api.patchInspection(inspection.id, { finish: true }); await onReload();
@@ -31457,6 +31481,8 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
       {!locked && canEdit && why && (
         <p className="fld-note">
           {why === "no_rooms" ? "Add a room before finishing."
+            : why === "job_not_raised"
+              ? `Raise the job for the ${tally.flagged === 1 ? "flagged room" : `${tally.flagged} flagged rooms`} first — the inspection can be finished once the work is on its way.`
             : `${tally.unchecked} room${tally.unchecked === 1 ? "" : "s"} still to mark. A room nobody has walked and a room that was fine must not read the same, so an unmarked one stops this being finished.`}
         </p>
       )}
@@ -31688,6 +31714,72 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise,
   );
 }
 
+// The outcomes that leave a turnaround with nobody on it, which are the ones
+// that keep the manager on the inspection rather than sending them to Jobs.
+const AUTO_MISSES = ["no_candidate", "assign_refused", "threw"];
+
+// WHY AUTO-SCHEDULE COULD NOT PLACE IT, AND THE WAY ON FROM HERE.
+//
+// Reported as a dead end: "it told me it could not auto match ... I have to
+// pick them manually, it needs to be on that interface when it tells you this".
+// The ranking always knew why each company was out; the reply now carries it,
+// and this names them -- because "nobody could take it" is a mystery and
+// "Pacific: you have not verified their insurance" is one tap on their card.
+// Names are off this account's own roster, so nothing here belongs to anybody
+// else.
+function AutoMissPanel({ miss, onAssign, onOpenJob, onDismiss }) {
+  const a = miss?.auto || {};
+  const trade = a.trade ? catMeta(a.trade).label : "this trade";
+  const docs = (kinds) => (kinds || []).map((k) => DOC_LABELS[k] || k).join(", ");
+  const why = (x) => {
+    if (x.why === "not_this_trade") {
+      return x.handyman
+        ? `engaged as a handyman, who can't take ${trade} work`
+        : `not set up for ${trade} on their card`;
+    }
+    if (x.why === "documents") return `documents not verified yet (${docs(x.kinds)})`;
+    if (x.why === "no_slot") return "no free working day in the next few weeks";
+    return x.why;
+  };
+  let head = "Auto-schedule could not place this one, so it needs you.";
+  let lines = [];
+  if (a.skipped === "no_candidate") {
+    head = a.considered
+      ? `Auto-schedule looked at ${a.considered} on your roster and none could take ${trade}.`
+      : `Auto-schedule found nobody on your roster to ask about ${trade}.`;
+    lines = (a.passedOver || []).map((x) => `${x.company}: ${why(x)}`);
+  } else if (a.skipped === "assign_refused") {
+    head = `Auto-schedule picked ${a.company || "a contractor"} for ${trade}, and the work order was refused.`;
+    if (a.error === "documents_incomplete") {
+      if ((a.absent || []).length) lines.push(`Not on file: ${docs(a.absent)} — ask them to upload.`);
+      if ((a.unreviewed || []).length) lines.push(`On file but not verified by you: ${docs(a.unreviewed)}.`);
+    } else if (a.error) {
+      lines.push(`The refusal was: ${String(a.error).replace(/_/g, " ")}.`);
+    }
+  } else if (a.skipped === "threw") {
+    head = "Auto-schedule did not run this time.";
+  }
+  return (
+    <div className="insp-automiss" role="status">
+      <p className="iam-head"><AlertTriangle size={15} /> <b>{head}</b></p>
+      {lines.length > 0 && (
+        <ul className="iam-why">{lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
+      )}
+      <p className="iam-note">The job is raised. Pick somebody for {trade} now and the
+        rest of the scheduling carries on as usual.</p>
+      <div className="iam-acts">
+        {onAssign && (
+          <button className="btn-solid small" onClick={onAssign}>
+            <Users size={14} /> Pick a contractor</button>
+        )}
+        <button className="btn-ghost small" onClick={onOpenJob}>
+          <ArrowRight size={13} /> Open the job</button>
+        <button className="btn-ghost small" onClick={onDismiss}>Not now</button>
+      </div>
+    </div>
+  );
+}
+
 // What auto-schedule did with a job just raised, in one sentence, or nothing
 // when it was not asked to do anything.
 function autoRaiseText(auto) {
@@ -31852,9 +31944,13 @@ function InspectionSend({ inspection, onReload, onAddOwner }) {
 
 function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
   unitWord = "Unit", canEdit = true, onAddOwner, focus = null,
-  autoTurnaround = false, onGoAutoSetting, onNote }) {
+  autoTurnaround = false, onGoAutoSetting, onNote, onAssign }) {
   const [form, setForm] = useState(null);
   const [open, setOpen] = useState(null);   // the loaded inspection
+  // What auto-schedule could not do with the job just raised, kept on THIS
+  // screen with the way forward beside it. It used to be a one-line note and
+  // a jump to the Jobs list, which is a refusal with no reason and no door.
+  const [autoMiss, setAutoMiss] = useState(null);   // { inspectionId, jobId, auto }
   const [iq, setIq] = useState("");
   const [iKind, setIKind] = useState("");
   const [iShow, setIShow] = useState("");
@@ -31926,6 +32022,14 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
     // WHAT AUTO-SCHEDULE DID, said once the job exists. The route has always
     // answered it and nothing drew it, so a manager who switched it on could
     // not tell "it put Pacific on it" from "nobody could take it".
+    // A MISS STAYS HERE. Leaving for the Jobs list on the back of "assign it
+    // by hand" hands somebody a list to search for the job they were just
+    // looking at; staying puts the reason and the button in the same place.
+    if (made.auto && !made.auto.ok && AUTO_MISSES.includes(made.auto.skipped)) {
+      setAutoMiss({ inspectionId: id, jobId: made.jobId, auto: made.auto });
+      return;
+    }
+    setAutoMiss(null);
     const said = autoRaiseText(made.auto);
     if (said && onNote) onNote(said);
     onGoJobs(made.jobId);
@@ -31965,7 +32069,10 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
           onRaise={raise}
           autoTurnaround={autoTurnaround} onGoAutoSetting={onGoAutoSetting}
           onGoJobs={onGoJobs}
-          onClose={() => { setOpen(null); onReload(); }} />
+          autoMiss={autoMiss && autoMiss.inspectionId === open.id ? autoMiss : null}
+          onAssign={onAssign}
+          onDismissAutoMiss={() => setAutoMiss(null)}
+          onClose={() => { setOpen(null); setAutoMiss(null); onReload(); }} />
       </main>
     );
   }
@@ -35684,6 +35791,15 @@ p.fld-note{margin:6px 0 0}
 .insp-nojob-room{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;
   margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
 .insp-nojob-room span{flex:1 1 240px;line-height:1.45;color:var(--ink-soft)}
+/* What auto-schedule could not do, with the way on. Amber edge for the same
+   reason as the panel above: work is waiting on somebody here. */
+.insp-automiss{margin:14px 0 0;padding:12px 14px;border:1px solid var(--line);border-left:4px solid var(--amber);
+  border-radius:10px;background:var(--paper);font-size:14px;color:var(--ink)}
+.insp-automiss p{margin:0;line-height:1.5}
+.insp-automiss .iam-head svg{vertical-align:-2px}
+.iam-why{margin:8px 0 0;padding-left:20px;color:var(--ink-soft);line-height:1.45}
+.iam-note{margin-top:8px !important;color:var(--ink-soft)}
+.iam-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 /* The job details opened from a dashboard row. What needs doing, the rooms and
    photographs it came from, and every trade on the job, above the same action
    the row offers. */

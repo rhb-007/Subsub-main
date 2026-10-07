@@ -282,6 +282,15 @@ try {
   }
 
   console.log("\n-- finishing the walk writes one, which is the earliest honest moment --");
+  // A FLAGGED WALK FINISHES ONLY ONCE ITS JOB IS RAISED, and raising writes
+  // the summary itself -- so the case this door still exists for is a job
+  // that was raised and got NO paragraph: raised before 063, or whose call
+  // failed. That is what this seeds, deliberately not through the raise route,
+  // which would write the paragraph and leave nothing for finishing to do.
+  const jobWithoutSummary = (db, inspId) => db.exec(
+    `INSERT INTO jobs(id,account_id,property_id,title,status,trades,approved_at)
+       VALUES ('job_${inspId}','acc_pm','prop_1','Raised earlier','active','["flooring"]',CURRENT_TIMESTAMP);
+     UPDATE inspections SET job_id = 'job_${inspId}' WHERE id = '${inspId}'`);
   {
     // Asked for as *"write a summary automatically when inspection is done"*,
     // and finishing is the earliest moment it can be true: it is the one-way
@@ -294,6 +303,7 @@ try {
     // flagged room with nothing written on it is a refusal rather than a
     // prompt and would be testing `no_comments` instead.
     db.prepare(`UPDATE inspection_rooms SET note = 'Cracked tile by the door' WHERE id = 'r_bare'`).run();
+    jobWithoutSummary(db, "ins_bare");
     resetStub();
     ck("nothing is stored before it is finished", !stored(db, "ins_bare"));
     const [s, b] = await json(await call(env, "/api/inspections/ins_bare",
@@ -333,6 +343,7 @@ try {
     // somebody unable to close a walk they have finished walking.
     const { db, env } = seed();
     db.prepare(`UPDATE inspection_rooms SET note = 'Cracked tile by the door' WHERE id = 'r_bare'`).run();
+    jobWithoutSummary(db, "ins_bare");
     resetStub(() => new Response(JSON.stringify({ error: { type: "overloaded_error", message: "slow" } }),
       { status: 529, headers: { "Content-Type": "application/json" } }));
     const [s, b] = await json(await call(env, "/api/inspections/ins_bare",
@@ -360,6 +371,7 @@ try {
         inspection_id TEXT PRIMARY KEY,
         summary TEXT NOT NULL CHECK (summary = 'nothing will ever equal this'),
         source TEXT NOT NULL, model TEXT, written_at TEXT, written_by TEXT)`);
+    jobWithoutSummary(db, "ins_bare");
     resetStub();
     const [s, b] = await json(await call(env, "/api/inspections/ins_bare",
       { finish: true }, "u_mgr", "PATCH"));

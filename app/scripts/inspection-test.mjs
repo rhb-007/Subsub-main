@@ -56,8 +56,18 @@ console.log("\n-- the rules, before anything is driven --");
     JSON.stringify(inspectionTally(rooms)));
   ck("an unwalked room stops it being finished", whyNotFinish(rooms) === "rooms_unchecked");
   ck("so does having no rooms at all", whyNotFinish([]) === "no_rooms");
-  ck("and a fully marked one may finish",
-    whyNotFinish([{ status: "ok" }, { status: "fail" }]) === null);
+  ck("an all-clear walk may finish with no job",
+    whyNotFinish([{ status: "ok" }, { status: "ok" }]) === null);
+  // A FLAGGED WALK IS FINISHED ONCE ITS JOB IS RAISED: one next step at a
+  // time. Both directions, because pinning one passes with the job ignored.
+  ck("a flagged walk with no job may not finish",
+    whyNotFinish([{ status: "ok" }, { status: "fail" }]) === "job_not_raised");
+  ck("a follow-up counts as flagged too",
+    whyNotFinish([{ status: "follow_up" }]) === "job_not_raised");
+  ck("and once the job is raised it may finish",
+    whyNotFinish([{ status: "ok" }, { status: "fail" }], { jobId: "job_1" }) === null);
+  ck("an unwalked room still comes first",
+    whyNotFinish([{ status: "unchecked" }, { status: "fail" }]) === "rooms_unchecked");
   // PHOTOS ARE NUDGED AND NEVER DEMANDED: a room with nothing wrong needs no
   // picture, and a gate that insists is answered with a photo of the floor.
   ck("photos are not required to finish",
@@ -181,8 +191,16 @@ try {
     ck("and says how many", after.unchecked === 1, String(after.unchecked));
 
     await call(env, `/api/inspections/${id}/rooms/${shed}`, { method: "PATCH", body: { status: "ok" } });
+    // A FLAGGED WALK IS FINISHED ONCE ITS JOB IS RAISED, on the route as well
+    // as the screen -- a gate that lives only in the browser is a suggestion.
     [s, after] = await json(await call(env, `/api/inspections/${id}`, { method: "PATCH", body: { finish: true } }));
-    ck("once every room is marked it finishes", s === 200 && after.status === "finished",
+    ck("with a room flagged and no job, it will not finish",
+      s === 409 && after.error === "job_not_raised", `${s} ${after.error}`);
+    [s, after] = await json(await call(env, `/api/inspections/${id}/job`,
+      { method: "POST", body: { trades: ["painting"] } }));
+    ck("so the job is raised first", s === 201 && !!after.jobId, `${s} ${JSON.stringify(after)}`);
+    [s, after] = await json(await call(env, `/api/inspections/${id}`, { method: "PATCH", body: { finish: true } }));
+    ck("once every room is marked and the work raised, it finishes", s === 200 && after.status === "finished",
       `${s} ${after.status}`);
 
     // ONE-WAY. This is the half that makes it worth anything in an argument.
@@ -668,6 +686,9 @@ console.log("\n-- sending the finished report to the building's owner --");
       { method: "POST", body: { name: "Kitchen" } }));
     await call(env, `/api/inspections/${insp.id}/rooms/${r1.rooms[0].id}`,
       { method: "PATCH", body: { status: "fail", note: "Cracked basin" } });
+    // The flagged room's job is raised first, because that is now what
+    // finishing a flagged walk takes -- through the route, as a person would.
+    await call(env, `/api/inspections/${insp.id}/job`, { method: "POST", body: { trades: ["plumbing"] } });
     if (finish) await call(env, `/api/inspections/${insp.id}`, { method: "PATCH", body: { finish: true } });
     return insp.id;
   };
@@ -980,8 +1001,10 @@ console.log("\n-- the shared rule is the one the routes read --");
     ck("and so does the browser", /from "\.\.\/shared\/inspection\.js"/.test(APP));
     // The finish gate specifically: a route that restated it would be a
     // second answer to what a finished inspection is.
-    ck("the finish gate is the shared predicate", /whyNotFinish\(rooms\)/.test(W));
-    ck("and the screen asks the same one", /whyNotFinish\(rooms\)/.test(APP));
+    ck("the finish gate is the shared predicate, told about the job",
+      /whyNotFinish\(rooms, \{ jobId: row\.job_id \}\)/.test(W));
+    ck("and the screen asks the same one",
+      /whyNotFinish\(rooms, \{ jobId: inspection\.jobId \}\)/.test(APP));
     // And the statuses are not spelled out a second time in SQL beyond the
     // one list query that counts them.
     ck("the browser does not keep its own status list",

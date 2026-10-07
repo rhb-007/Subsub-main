@@ -114,6 +114,7 @@
     "test:inspectionui": "node --no-warnings scripts/inspection-ui-test.mjs",
     "test:photoshrink": "node --no-warnings scripts/photo-shrink-ui-test.mjs",
     "test:nojobwhy": "node --no-warnings scripts/no-job-why-ui-test.mjs",
+    "test:inspfinishgate": "node --no-warnings scripts/insp-finish-gate-ui-test.mjs",
     "test:propscope": "node --no-warnings scripts/propscope-test.mjs",
     "test:dashreq": "node --no-warnings scripts/dash-requests-test.mjs",
     "test:lightbox": "node --no-warnings scripts/photo-lightbox-test.mjs",

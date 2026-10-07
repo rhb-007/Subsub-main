@@ -10410,6 +10410,50 @@ refactor.
   (Reopen, and nothing written), and a flagged walk (no note beside the
   button). Offering *Mark* on a finished walk fails three assertions.
 
+- **A FLAGGED WALK IS FINISHED ONLY ONCE ITS JOB IS RAISED, AND
+  AUTO-SCHEDULE SAYS WHO IT PASSED OVER AND WHY.** Asked for as *"if there is
+  an issue, it should not let you finish, only raise one; if there is no issue
+  it should only allow you to finish"*, and *"it told me it could not auto
+  match ... it needs to be on that interface instead of a dead end. Also, why
+  did the automatic match get rejected?"*
+
+  **One next step at a time.** `whyNotFinish` takes the job now and answers
+  `job_not_raised` for a flagged walk with none, on the route as well as the
+  screen. The screen does not grey Finish out, it does not draw it: a greyed
+  Finish beside Raise reads as two choices, which is what was asked to go. The
+  order matches the walkthrough's own steps, work then finish. A raised job
+  keeps the gate open, so reopening and re-finishing are unaffected, and an
+  all-clear walk still finishes with no job at all.
+
+  **The consequence for the summary, said rather than discovered.** Raising
+  writes the paragraph, so a flagged walk now always has one by the time it
+  can be finished. Summarise-on-finish stays as the retry for a job that got
+  none: raised before 063, or whose call failed. `inspect-summary-test` seeds
+  exactly that job directly, because going through the raise route would
+  write the paragraph and leave the door under test nothing to do.
+
+  **The ranking always knew why each company was out, and the reply threw it
+  away.** `no_candidate` now carries `passedOver` (company, reason, and which
+  documents or that a handyman cannot take the trade), and `assign_refused`
+  carries the company and the `absent` and `unreviewed` lists the assign route
+  already returns. These are names off this account's own roster, so nothing
+  here belongs to anybody else. *Documents outstanding* is split because the
+  two need opposite actions: not on file is the contractor's to upload, while
+  on file and unverified is this account's own review.
+
+  **A miss stays on the inspection.** It used to be a one-line note and a jump
+  to the Jobs list. `AutoMissPanel` names each company and reason, and offers
+  **Pick a contractor**, which opens the same assign form the job card opens,
+  over the inspection. It disappears once anybody is on the job, because
+  *could not match* over a matched job is a screen that lies. `test:inspfinishgate`
+  drives both halves, and two UI mutations fail nine assertions between them.
+
+  **Still open, and a decision rather than a build:** a flagged room the
+  manager does not want a job for (damage charged to the deposit and repaired
+  by the owner's own people) now cannot be finished without raising one. If
+  that case is real, the answer is a recorded *finish without a job, because*
+  reason, the shape the cover override already has, not loosening the gate.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

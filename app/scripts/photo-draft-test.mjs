@@ -306,6 +306,9 @@ try {
     await call(env, `/api/inspections/${id}/rooms/${roomId}/photos/${photos[0].id}`,
       { method: "PATCH", body: { caption: "Hairline crack across the basin." } });
     await call(env, `/api/inspections/${id}/rooms/${roomId}`, { method: "PATCH", body: { status: "fail" } });
+    // A flagged walk is finished once its job is raised, so the job goes
+    // first -- through the route, the way a manager does it.
+    await call(env, `/api/inspections/${id}/job`, { method: "POST", body: { trades: ["plumbing"] } });
     await call(env, `/api/inspections/${id}`, { method: "PATCH", body: { finish: true } });
 
     const [s, mine] = await json(await call(env, `/api/inspections/${id}`, { who: "u_own" }));

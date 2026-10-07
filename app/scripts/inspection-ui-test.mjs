@@ -260,8 +260,13 @@ try {
     t.ck("one tap sends one patch", sent.length === 1, JSON.stringify(sent));
     t.ck("carrying the verdict", sent[0]?.body?.status === "ok", JSON.stringify(sent[0]));
     v = await read(page);
-    t.ck("and Finish comes alive", v.acts.find((a) => /finish/i.test(a.label))?.off === false,
+    // THE WALK IS DONE AND A ROOM IS FLAGGED, so the next step is the job,
+    // not the finish: Raise a job is the one way on and Finish is not drawn.
+    // This used to assert Finish came alive here, which was the old rule.
+    t.ck("the next step is raising the job, so Finish is not drawn",
+      !v.acts.some((a) => /finish/i.test(a.label)) && v.acts.some((a) => /Raise a job/.test(a.label)),
       JSON.stringify(v.acts));
+    t.ck("and the screen says why", /Raise the job for the flagged room/.test(v.note), v.note);
     t.ck("with the reason gone from beside it", !/still to mark/i.test(v.note), v.note);
     await ctx.close().catch(() => {});
   }

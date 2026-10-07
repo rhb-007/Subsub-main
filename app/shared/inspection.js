@@ -94,13 +94,23 @@ export const flaggedRooms = (rooms = []) => (Array.isArray(rooms) ? rooms : []).
 // Photos are NOT required. They are nudged everywhere in this product and
 // demanded nowhere: a room with nothing wrong in it needs no picture, and a
 // gate that insists would be answered with a photo of the floor.
-export function whyNotFinish(rooms = []) {
+//
+// AND A FLAGGED WALK IS FINISHED ONLY ONCE ITS JOB IS RAISED. Asked for in
+// those words: *"if there is an issue, it should not let you finish, only
+// raise one; if there is no issue it should only allow you to finish"*. One
+// next step at a time -- a flagged room with no job behind it is work nobody
+// has been asked to do, and finishing first is how it is forgotten. The
+// order matches the walkthrough's own steps (the work, then finish), and a
+// job raised from it keeps the gate open for ever after, so reopening and
+// re-finishing is unaffected.
+export function whyNotFinish(rooms = [], { jobId = null } = {}) {
   const t = inspectionTally(rooms);
   if (!t.rooms) return "no_rooms";
   if (t.unchecked) return "rooms_unchecked";
+  if (t.flagged && !jobId) return "job_not_raised";
   return null;
 }
-export const canFinish = (rooms = []) => whyNotFinish(rooms) === null;
+export const canFinish = (rooms = [], opts = {}) => whyNotFinish(rooms, opts) === null;
 
 // The job raised off the back of one.
 //

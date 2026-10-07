@@ -84,7 +84,7 @@ import { visitParties, waitingOn as visitWaitingOn,
 // the first and two copies of that arithmetic is two records of one fact.
 import { windowEnd, othersMustAgree, workWhen } from "../shared/schedule.js";
 import { AUTO_TRIES, AUTO_START, AUTO_END, autoPickText, isTurnaroundKind,
-  rankCandidates, slotFor, whyNotAuto } from "../shared/autopick.js";
+  rankCandidates, slotFor, whyNotAuto, AUTO_SKIP } from "../shared/autopick.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -13922,7 +13922,7 @@ app.patch("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async 
     const rooms = await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) });
     // The gate is the shared one, so the screen and the route cannot
     // disagree about what a finished inspection is.
-    const why = whyNotFinish(rooms);
+    const why = whyNotFinish(rooms, { jobId: row.job_id });
     if (why) return c.json({ error: why, unchecked: inspectionTally(rooms).unchecked }, 409);
     await c.env.DB.prepare(
       `UPDATE inspections SET status = 'finished', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
@@ -14883,8 +14883,14 @@ async function autoTurnaround(c, { jobId, kind, trades, job }) {
   const { picked, skipped } = rankCandidates(cands, { trade, from });
   if (!picked) {
     await logActivity(c.env, auth.accountId, auth.userId, "auto_turnaround",
-      `Nobody on the roster could take the ${trade} turnaround — assign it by hand.`);
-    return { skipped: "no_candidate", considered: cands.length };
+      `Nobody on the roster could take the ${trade} turnaround — assign it by hand.`
+      + (skipped.length ? ` ${skipped.map((x) => `${x.company}: ${AUTO_SKIP[x.why] || x.why}`).join("; ")}.` : ""));
+    // WHO WAS LOOKED AT AND WHY EACH WAS OUT. The ranking always worked this
+    // out and the reply threw it away, so the screen could only say "assign it
+    // by hand" -- reported as a dead end with no reason. Names off this
+    // account's own roster, so nothing here is anybody else's to know.
+    return { skipped: "no_candidate", considered: cands.length, trade,
+      passedOver: skipped.slice(0, 12) };
   }
 
   const got = await asSelf(c, `/api/jobs/${jobId}/assign`, {
@@ -14894,7 +14900,9 @@ async function autoTurnaround(c, { jobId, kind, trades, job }) {
   if (got.status >= 300) {
     await logActivity(c.env, auth.accountId, auth.userId, "auto_turnaround",
       `Could not put ${picked.company} on the ${trade} turnaround (${got.body?.error || got.status}).`);
-    return { skipped: "assign_refused", error: got.body?.error || null };
+    return { skipped: "assign_refused", error: got.body?.error || null, trade,
+      companyId: picked.companyId, company: picked.company,
+      absent: got.body?.absent || [], unreviewed: got.body?.unreviewed || [] };
   }
 
   // THE WINDOW WAITS UNTIL THEY HAVE TAKEN THE JOB, and getting this wrong is

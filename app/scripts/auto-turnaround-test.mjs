@@ -189,6 +189,11 @@ try {
       out.skipped.find((x) => x.companyId === "a")?.why === "not_this_trade");
     ck("and one with documents outstanding",
       out.skipped.find((x) => x.companyId === "b")?.why === "documents");
+    // WHICH documents, because "documents outstanding" sends somebody to
+    // chase a contractor for a certificate this account has not verified yet.
+    ck("naming which documents hold it up",
+      JSON.stringify(out.skipped.find((x) => x.companyId === "b")?.kinds) === '["insurance"]',
+      JSON.stringify(out.skipped.find((x) => x.companyId === "b")));
     ck("leaving the one that can take it", out.picked.companyId === "c");
     // THE MANAGER HANDED A DECISION OVER. The least it owes them is what it
     // chose and why.
@@ -333,8 +338,15 @@ try {
     // assume it worked.
     ck("it says nobody could take it", b.auto?.skipped === "no_candidate",
       JSON.stringify(b.auto));
+    // AND WHO WAS PASSED OVER, AND WHY. The ranking always knew; the reply
+    // threw it away, so the screen could only say "assign it by hand".
+    const po = b.auto?.passedOver || [];
+    ck("it names every company it looked at",
+      po.length === b.auto?.considered && po.every((x) => x.company && x.why), JSON.stringify(po));
+    ck("with the trade it was looking for", b.auto?.trade === "cleaning", String(b.auto?.trade));
     const act = db.prepare(`SELECT * FROM activity WHERE kind = 'auto_turnaround'`).get();
     ck("and the trail says so too", /Nobody on the roster/.test(act?.text || ""), String(act?.text));
+    ck("naming who and why", /Fast Turnarounds: not engaged for this trade/.test(act?.text || ""), String(act?.text));
   }
 
   console.log("\n-- the back and forth, which is bounded --");
