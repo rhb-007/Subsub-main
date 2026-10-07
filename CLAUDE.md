@@ -10137,6 +10137,37 @@ refactor.
   provider's documented read, but the first press on the deployed console is
   the real test.
 
+  **AND THE TWO-PLOT CHART WAS READ AS TWO GRAPHS, BECAUSE IT WAS.** *"I don't
+  understand why it's 2 separate graphs, make it tabbed out if need to have 2
+  separate, but make it more clear of our revenue current and growth."* Ending
+  MRR over net movement on one month axis was right about the scales and wrong
+  about the reader: two plots in one panel read as two things to compare, and
+  nothing on it said what revenue IS now or whether it is growing.
+
+  **So it leads with the answer and shows one chart at a time.** The headline is
+  *MRR now* (and a year of it) beside *this month so far*: the change in money,
+  the change in percent against what the month started at, and that starting
+  figure. Under it, two tabs. **Revenue** is ending MRR by month. **Growth** is
+  net new MRR by month, a gain up in the brand colour and a loss down in red,
+  with the month's new, expansion, contraction and churn under it. Pointing at a
+  bar moves that breakdown to its month. One axis per chart, which is still the
+  rule the stacked version was written to keep; it just no longer needs two
+  plots to keep it.
+
+  **The percentage is against the start of the month, and there is none off
+  zero.** Against today's figure it under-reports growth (+33% for a month that
+  took $198 to $297), which is the mutation that proves it. Off nothing it would
+  be infinite, so the first month with revenue says so in words. **Only the
+  latest bar carries a number**; every other figure is a point away, and a value
+  on every bar is a table drawn badly. A quiet month is a sliver on the zero
+  line rather than a gap, so it reads as nothing happening rather than as a
+  missing month.
+
+  Three mutations fire, each on its own assertion: the percentage against the
+  current figure, the breakdown ignoring the pointer, and a losing month drawn
+  upward.
+
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

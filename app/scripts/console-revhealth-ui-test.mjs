@@ -43,6 +43,9 @@ const BOOT = {
     { id: "e2", accountId: "acc_pm", kind: "upgraded", fromPlan: "basic", at: "2026-03-01T09:00:00Z", mrrDelta: 9900 },
     { id: "e3", accountId: "acc_b", kind: "upgraded", fromPlan: "basic", at: "2026-03-05T09:00:00Z", mrrDelta: 9900 },
     { id: "e4", accountId: "acc_b", kind: "downgraded", at: "2026-05-10T09:00:00Z", mrrDelta: -9900 },
+    // One upgrade on the 1st of THIS month, so the headline has growth to
+    // report: $198 at the start of the month, $297 now, +$99 (+50%).
+    { id: "e5", accountId: "acc_b", kind: "upgraded", fromPlan: "basic", at: THIS_MONTH + "-01T00:00:00Z", mrrDelta: 9900 },
   ],
 };
 const monthsBetween = (a, b) => {
@@ -118,51 +121,89 @@ try {
   t.ck("the console loaded past its sign-in", gotIn);
   if (!gotIn) throw new Error("console never opened");
 
-  console.log("\n-- Revenue: the month table is a chart --");
+  console.log("\n-- Revenue: a headline, then one chart at a time --");
   await nav("Revenue");
   await wait(500);
   const rev = () => page.evaluate(() => {
     const p = document.querySelector(".pf-mrr");
     if (!p) return null;
-    const box = (el) => { const r = el.getBoundingClientRect(); return { h: r.height, w: r.width }; };
+    const box = (el) => { const r = el.getBoundingClientRect(); return { h: r.height, top: r.top, bottom: r.bottom }; };
     return {
       title: p.querySelector("h3")?.innerText.trim(),
-      ends: [...p.querySelectorAll(".pf-mrr-end")].map((r) => ({ m: r.dataset.month, ...box(r) })),
-      parts: [...p.querySelectorAll(".pf-mrr-move rect")].map((r) => ({ part: r.dataset.part, m: r.closest("g").dataset.month, ...box(r) })),
-      nets: p.querySelectorAll(".pf-mrr-net").length,
-      legend: [...p.querySelectorAll(".pf-mrr-legend li")].map((li) => li.innerText.replace(/\s+/g, " ").trim()),
+      svgs: p.querySelectorAll("svg").length,
+      view: p.querySelector("svg")?.dataset.view,
+      tabs: [...p.querySelectorAll(".pf-mrr-tabs [role=tab]")].map((b) => ({ id: b.dataset.view, on: b.getAttribute("aria-selected") === "true" })),
+      now: p.querySelector(".pf-mrr-now")?.innerText.trim(),
+      hero: p.querySelector(".pf-mrr-hero")?.innerText.replace(/\s+/g, " "),
+      delta: p.querySelector(".pf-mrr-delta")?.innerText.replace(/\s+/g, " "),
+      deltaCls: p.querySelector(".pf-mrr-delta")?.className,
+      bars: [...p.querySelectorAll(".pf-mrr-bar")].map((r) => ({ m: r.dataset.month, ...box(r) })),
+      nets: [...p.querySelectorAll(".pf-mrr-net-bar")].map((r) => ({ m: r.dataset.month, v: Number(r.dataset.value), cls: r.getAttribute("class"), ...box(r) })),
+      zeroY: (() => { const l = [...p.querySelectorAll("svg line")].find((x) => x.getAttribute("opacity") === "0.5"); return l ? l.getBoundingClientRect().top : null; })(),
+      vals: [...p.querySelectorAll(".pf-mrr-val")].map((t) => t.textContent),
+      parts: Object.fromEntries([...p.querySelectorAll(".pf-mrr-break li")].map((li) => [li.dataset.part, li.querySelector("b")?.innerText.trim()])),
+      breakHd: p.querySelector(".pf-mrr-break-hd")?.innerText.trim(),
       table: !!p.querySelector("table"),
-      oldTable: [...document.querySelectorAll(".pf-panel h3")].some((h) => /MRR movement by month/.test(h.innerText)),
+      oldTwoPlots: !!p.querySelector(".pf-mrr-move, .pf-mrr-end"),
       tip: document.querySelector(".pf-mrr-tip")?.innerText.replace(/\s+/g, " "),
     };
   });
   let r = await rev();
-  t.ck("the panel is a chart, not the old table", !!r && !r.table && !r.oldTable, JSON.stringify(r && { table: r.table, old: r.oldTable }));
-  t.ck(`one ending-MRR bar per month, quiet months included (${EXPECT_MONTHS})`, r?.ends.length === EXPECT_MONTHS,
-    JSON.stringify(r?.ends.map((e) => e.m)));
-  t.ck("April, which had no events, is on the axis", r?.ends.some((e) => e.m === "2026-04"));
-  const end = (m) => r?.ends.find((e) => e.m === m)?.h || 0;
-  t.ck("ending MRR is drawn to scale: March ($297) is taller than February ($99)",
-    end("2026-03") > end("2026-02") * 2.5 && end("2026-03") < end("2026-02") * 3.5, `${end("2026-02")} ${end("2026-03")}`);
-  t.ck("April carries March's MRR forward", Math.abs(end("2026-04") - end("2026-03")) < 0.5);
-  t.ck("May drops after the downgrade", end("2026-05") < end("2026-04"));
-  t.ck("new MRR is a bar above the line in February", r?.parts.some((p) => p.m === "2026-02" && p.part === "newMrr" && p.h > 5));
-  t.ck("the downgrade is a contraction bar in May", r?.parts.some((p) => p.m === "2026-05" && p.part === "contraction" && p.h > 5));
-  t.ck("no movement bar on a silent month", !r?.parts.some((p) => p.m === "2026-04"));
-  t.ck("a net tick per month", r?.nets === EXPECT_MONTHS);
-  t.ck("the legend names the four parts and the total", r?.legend.length === 5 && /New \+\$297/.test(r.legend.join("|"))
-    && /Contraction −\$99/.test(r.legend.join("|")), JSON.stringify(r?.legend));
+  t.ck("the panel is there, called what it is", r?.title === "Recurring revenue", r?.title);
+  t.ck("ONE chart on screen, not two stacked plots", r?.svgs === 1 && !r.oldTwoPlots, JSON.stringify({ svgs: r?.svgs, old: r?.oldTwoPlots }));
+  t.ck("two tabs, Revenue chosen first", JSON.stringify(r?.tabs) === JSON.stringify([{ id: "revenue", on: true }, { id: "growth", on: false }]),
+    JSON.stringify(r?.tabs));
+  t.ck("the headline says MRR now", r?.now === "$297", r?.now);
+  t.ck("and what that is a year", /\$3,564 a year/.test(r?.hero || ""), r?.hero);
+  t.ck("and this month's growth in money and percent", /\+\$99/.test(r?.delta || "") && /\(\+50%\)/.test(r?.delta || ""), r?.delta);
+  t.ck("growth is drawn as growth", /t-up/.test(r?.deltaCls || ""), r?.deltaCls);
+  t.ck("from what it started the month at", /from \$198 at the start of the month/.test(r?.hero || ""), r?.hero);
 
-  // Point at May: the detail the table used to carry is in the tooltip.
+  t.ck(`one MRR bar per month, quiet months included (${EXPECT_MONTHS})`, r?.bars.length === EXPECT_MONTHS,
+    JSON.stringify(r?.bars.map((e) => e.m)));
+  t.ck("April, which had no events, is on the axis", r?.bars.some((e) => e.m === "2026-04"));
+  const bar = (m) => r?.bars.find((e) => e.m === m)?.h || 0;
+  t.ck("drawn to scale: March ($297) is three times February ($99)",
+    bar("2026-03") > bar("2026-02") * 2.5 && bar("2026-03") < bar("2026-02") * 3.5, `${bar("2026-02")} ${bar("2026-03")}`);
+  t.ck("April carries March's MRR forward", Math.abs(bar("2026-04") - bar("2026-03")) < 0.5);
+  t.ck("May drops after the downgrade", bar("2026-05") < bar("2026-04"));
+  t.ck("only the latest month carries a number", r?.vals.length === 1 && r.vals[0] === "$297", JSON.stringify(r?.vals));
+
   const mayBox = await page.evaluate(() => {
-    const el = document.querySelector('.pf-mrr-end[data-month="2026-05"]');
-    const b = el?.getBoundingClientRect();
+    const b = document.querySelector('.pf-mrr-bar[data-month="2026-05"]')?.getBoundingClientRect();
     return b ? { x: b.left + b.width / 2, y: b.top + 4 } : null;
   });
   if (mayBox) { await page.mouse.move(mayBox.x, mayBox.y); await wait(200); }
   r = await rev();
-  t.ck("pointing at a month shows its figures", /May 2026/.test(r?.tip || "") && /Contraction −\$99/.test(r?.tip || "")
-    && /Ending MRR \$198/.test(r?.tip || ""), r?.tip);
+  t.ck("pointing at a month shows its figures", /May 2026/.test(r?.tip || "") && /MRR \$198/.test(r?.tip || "")
+    && /Net new −\$99/.test(r?.tip || ""), r?.tip);
+  await page.mouse.move(5, 5);
+
+  await page.evaluate(() => document.querySelector('.pf-mrr-tabs [data-view="growth"]')?.click());
+  await wait(250);
+  r = await rev();
+  t.ck("Growth swaps the chart rather than adding one", r?.svgs === 1 && r.view === "growth" && r.bars.length === 0,
+    JSON.stringify({ svgs: r?.svgs, view: r?.view, bars: r?.bars.length }));
+  t.ck("one net-new bar per month", r?.nets.length === EXPECT_MONTHS);
+  const nb = (m) => r?.nets.find((e) => e.m === m);
+  t.ck("a month that added is drawn up, in the brand colour", /pos/.test(nb("2026-03")?.cls || "") && nb("2026-03").bottom <= r.zeroY + 1,
+    JSON.stringify(nb("2026-03")));
+  t.ck("a month that lost is drawn DOWN, in red", /neg/.test(nb("2026-05")?.cls || "") && nb("2026-05").top >= r.zeroY - 1,
+    JSON.stringify({ may: nb("2026-05"), zero: r?.zeroY }));
+  t.ck("a quiet month is a sliver on the line, not a gap", /zero/.test(nb("2026-04")?.cls || "") && nb("2026-04").h < 3);
+  t.ck("the breakdown names the latest month", r?.breakHd === "October 2026", r?.breakHd);
+  t.ck("and splits it into new, expansion, contraction, churn and net",
+    r?.parts.newMrr === "+$99" && r.parts.expansion === "—" && r.parts.contraction === "—" && r.parts.churn === "—" && r.parts.net === "+$99",
+    JSON.stringify(r?.parts));
+  const may2 = await page.evaluate(() => {
+    const b = document.querySelector('.pf-mrr-net-bar[data-month="2026-05"]')?.getBoundingClientRect();
+    return b ? { x: b.left + b.width / 2, y: b.top + 2 } : null;
+  });
+  if (may2) { await page.mouse.move(may2.x, may2.y); await wait(200); }
+  r = await rev();
+  t.ck("pointing at a month moves the breakdown to it", r?.breakHd === "May 2026" && r.parts.contraction === "−$99"
+    && r.parts.net === "−$99", JSON.stringify({ hd: r?.breakHd, parts: r?.parts }));
+  await page.mouse.move(5, 5);
 
   await page.evaluate(() => [...document.querySelectorAll(".pf-mrr button")].find((b) => /table/.test(b.innerText))?.click());
   await wait(200);
