@@ -26278,6 +26278,25 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
         <>
           <PageHead title="Job settings"
             sub="What you work in, where you go, and when you are free" />
+          {/* AUTO-SCHEDULE LEADS THE PAGE, above the tabs, on every one of
+              them. It sat under two chip grids at the foot of the Trades tab
+              -- the one setting here that decides whether work lands on this
+              calendar without being asked, and the last thing on the page.
+              Same sentence source as the hiring side's card, so the two
+              descriptions of one switch cannot drift apart. */}
+          <div className={`auto-card my-auto ${sub.autoSchedule ? "on" : ""}`}>
+            <Zap size={18} />
+            <div className="auto-card-main">
+              <span className="auto-title">Auto-schedule</span>
+              <span className="auto-desc">
+                {autoStateText({ on: !!sub.autoSchedule, portal: true, side: "contractor" })}
+              </span>
+            </div>
+            <label className="auto-toggle">
+              <input type="checkbox" checked={!!sub.autoSchedule} onChange={(e) => onSetAutoSchedule(e.target.checked)} />
+              <span>{sub.autoSchedule ? "On" : "Off"}</span>
+            </label>
+          </div>
           <div className="seg-tabs">
             {[["trades", "Trades"], ["coverage", "Coverage"], ["availability", "Availability"],
               ["overflow", "Overflow work"]].map(([id, l]) => (
@@ -26325,21 +26344,6 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                   <button key={c} type="button" className={`pick ${sub.caps.includes(c) ? "on" : ""}`}
                     onClick={() => onSetCaps(sub.caps.includes(c) ? sub.caps.filter((x) => x !== c) : [...sub.caps, c])}>{c}</button>
                 ))}
-              </div>
-              <div className={`auto-card ${sub.autoSchedule ? "on" : ""}`} style={{ marginTop: 20, marginBottom: 0 }}>
-                <Zap size={18} />
-                <div className="auto-card-main">
-                  <span className="auto-title">Auto-schedule</span>
-                  {/* Same sentence source as the hiring side's card, so the
-                      two descriptions of one switch cannot drift apart. */}
-                  <span className="auto-desc">
-                    {autoStateText({ on: !!sub.autoSchedule, portal: true, side: "contractor" })}
-                  </span>
-                </div>
-                <label className="auto-toggle">
-                  <input type="checkbox" checked={!!sub.autoSchedule} onChange={(e) => onSetAutoSchedule(e.target.checked)} />
-                  <span>{sub.autoSchedule ? "On" : "Off"}</span>
-                </label>
               </div>
             </div>
           )}
@@ -32629,6 +32633,11 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
         <button className="edit-btn" onClick={onEdit}><Pencil size={13} /> Edit</button>
       </div>
 
+      {/* Auto-schedule straight under who they are and what they do, rather
+          than below the capabilities and the stats: it is the one switch on
+          this card that changes what happens next time a job is assigned. */}
+      {onSetAuto && <AutoScheduleCard sub={sub} onSet={onSetAuto} onAsk={onAskAuto} />}
+
       {(() => { const st = contractorStats(sub, jobs); return (
         <div className="stat-cards">
           <div className="stat-card"><span className="sc-num">{st.completed}</span><span className="sc-lab"><CheckCircle2 size={12} /> Jobs done</span></div>
@@ -32638,8 +32647,6 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
       ); })()}
 
       <section><h4>Capabilities</h4><div className="caps">{sub.caps.map((c) => <span key={c} className="cap">{c}</span>)}</div></section>
-
-      {onSetAuto && <AutoScheduleCard sub={sub} onSet={onSetAuto} onAsk={onAskAuto} />}
 
       <section>
         <h4>Coverage</h4>
