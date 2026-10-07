@@ -148,6 +148,21 @@ ok("and none for the cron secret", ih.probes.cron === undefined);
 ok("every call READS", calls.every((c) => c.method === "GET"), JSON.stringify(calls.map((c) => c.method)));
 ok("no Stripe call creates anything", !calls.some((c) => /stripe/.test(c.url) && !/\/v1\/balance/.test(c.url)));
 
+// Claude: the free model list, with the key and the version header.
+calls.length = 0;
+replies = { "api.anthropic.com/v1/models": [200, { data: [] }] };
+ih = await integrationHealth({ ANTHROPIC_API_KEY: "sk-ant" }, groups(["ai"]), { fetchImpl: stub, now: () => Date.now() });
+ok("Anthropic accepting the key is Working", L("ai").word === "Working", JSON.stringify(ih.probes.ai));
+ok("it asks the model list, never the paid call", calls.length === 1 && /\/v1\/models\?limit=1$/.test(calls[0].url) && !/messages/.test(calls[0].url),
+  JSON.stringify(calls.map((c) => c.url)));
+ok("with the key and the version header", calls[0]?.headers["x-api-key"] === "sk-ant" && !!calls[0]?.headers["anthropic-version"]);
+replies = { "api.anthropic.com/v1/models": [401, { type: "error", error: { type: "authentication_error" } }] };
+ih = await integrationHealth({ ANTHROPIC_API_KEY: "bad" }, groups(["ai"]), { fetchImpl: stub, now: () => Date.now() });
+ok("a refused Claude key is red and named", L("ai").light === "red" && /ANTHROPIC_API_KEY/.test(L("ai").say), L("ai").say);
+ih = await integrationHealth({}, groups(["payouts"]), { fetchImpl: stub, now: () => Date.now() });
+ok("Connect's webhook secret has no probe, so it reads Configured, never Working",
+  ih.probes.payouts === undefined && integrationLight("ok", ih.probes.payouts).word === "Configured");
+
 calls.length = 0;
 replies = {
   "sb.test/auth/v1/health": [401, { message: "Invalid API key" }],

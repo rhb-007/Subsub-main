@@ -42,3 +42,28 @@ eq("bindings ignored", r.unused, []);
 // Values never come back.
 r = setupCheck({ SUPABASE_URL: "https://secret.example", STRIPE_SECRET_KEY: "sk_live_TOPSECRET" });
 eq("no values anywhere", /secret\.example|TOPSECRET/.test(JSON.stringify(r)), false);
+
+// EVERY SETTING THE WORKER READS IS ON THIS PANEL. ANTHROPIC_API_KEY and
+// STRIPE_CONNECT_WEBHOOK_SECRET were read by the Worker and listed by nobody,
+// so the panel could not say whether they were set and called them "unread"
+// when they were. A hand-kept list is the same record twice, so the names are
+// read off the Worker's own source here. Exempt: bindings, test-only *_API_BASE
+// overrides, and the few that are switches rather than integrations.
+{
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const dir = new URL("../worker/", import.meta.url);
+  const read = new Set();
+  for (const f of readdirSync(dir).filter((f) => f.endsWith(".js"))) {
+    for (const m of readFileSync(new URL(f, dir), "utf8").matchAll(/\benv\.([A-Z][A-Z0-9_]+)/g)) read.add(m[1]);
+  }
+  const BINDINGS = ["DB", "FILES", "API"];
+  const SWITCHES = ["APP_DOMAIN", "STAFF_EMAIL_DOMAIN", "STAFF_ALLOW_PASSWORD"];
+  const listed = new Set(setupCheck({}).groups.flatMap((g) => g.vars.map((v) => v.name)));
+  const missing = [...read].filter((n) => !BINDINGS.includes(n) && !SWITCHES.includes(n)
+    && !/_API_BASE$/.test(n) && !listed.has(n)).sort();
+  eq("every setting the Worker reads is on the panel", missing, []);
+  eq("the Claude key is one of them", listed.has("ANTHROPIC_API_KEY"), true);
+  eq("so is Connect's webhook secret", listed.has("STRIPE_CONNECT_WEBHOOK_SECRET"), true);
+  const r2 = setupCheck({ ANTHROPIC_API_KEY: "sk-ant", STRIPE_CONNECT_WEBHOOK_SECRET: "whsec" });
+  eq("and neither is called unread when set", r2.unused, []);
+}

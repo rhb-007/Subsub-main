@@ -36,6 +36,24 @@ const GROUPS = [
     matters: "Checkout, the billing portal, and the webhook that tells SubSub somebody paid. "
       + "Without the webhook secret, payments succeed at Stripe and never reach the account.",
   },
+  // Its own group rather than one more name in Billing, because it is its own
+  // endpoint with its own signing secret, and Billing reading "Configured"
+  // said nothing about whether a subcontractor's payout status could ever
+  // move. Both names were read by the Worker and listed by nothing here, so
+  // the panel called them "set but unread" -- the opposite of the truth.
+  {
+    id: "payouts", label: "Paying subcontractors (Stripe Connect)",
+    vars: ["STRIPE_SECRET_KEY", "STRIPE_CONNECT_WEBHOOK_SECRET"],
+    matters: "The webhook that tells SubSub a subcontractor's payout account was verified or changed. "
+      + "Without its signing secret every Connect event is refused, so a payout status only moves "
+      + "when somebody opens the panel.",
+  },
+  {
+    id: "ai", label: "AI photo notes (Claude)",
+    vars: ["ANTHROPIC_API_KEY"],
+    matters: "Drafting the note on an inspection photograph and the summary on a work order. "
+      + "Unset, the Draft notes button is not shown and notes are typed by hand -- nothing else needs it.",
+  },
   {
     id: "sms", label: "Text messages (Twilio)",
     vars: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM"],

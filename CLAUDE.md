@@ -10137,6 +10137,25 @@ refactor.
   provider's documented read, but the first press on the deployed console is
   the real test.
 
+  **AND TWO SETTINGS THE WORKER READS WERE ON NO LIST, so the panel called them
+  unread.** Asked as *"why aren't you adding ANTHROPIC_API_KEY,
+  STRIPE_CONNECT_WEBHOOK_SECRET"*. `setup-check.js` is a hand-kept list, and
+  both names arrived after it was written: the photo drafts and the Connect
+  webhook each added an `env.` read and nobody added a row. So with both set,
+  the screen said *"Set but unread by the API"*, the opposite of the truth.
+  They are two groups now: **Paying subcontractors (Stripe Connect)**, and
+  **AI photo notes (Claude)**, which is probed with Anthropic's free model
+  list and never the paid call. Connect's signing secret has no probe, because
+  only Stripe signing an event can prove it.
+
+  **The list is checked against the Worker's own source now**, which is the
+  fix for the class. `setup-check-test` collects every `env.NAME` in
+  `worker/*.js` and requires each to be on the panel, apart from bindings, the
+  test-only `*_API_BASE` overrides and three switches. A setting added
+  tomorrow fails the suite until it has a row, and removing the Claude group is
+  the mutation that proves it.
+
+
   **AND THE TWO-PLOT CHART WAS READ AS TWO GRAPHS, BECAUSE IT WAS.** *"I don't
   understand why it's 2 separate graphs, make it tabbed out if need to have 2
   separate, but make it more clear of our revenue current and growth."* Ending

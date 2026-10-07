@@ -15,10 +15,12 @@
 // and a state -- so it is a decision taken out loud, said on the screen
 // where the button is, and never a default.
 
-const API = "https://api.anthropic.com/v1";
+export const ANTHROPIC_API = "https://api.anthropic.com/v1";
+const API = ANTHROPIC_API;
 // Anthropic's version header, which is not a model version: it pins the
 // shape of the request and response, so it must not follow the model.
-const VERSION = "2023-06-01";
+export const ANTHROPIC_VERSION = "2023-06-01";
+const VERSION = ANTHROPIC_VERSION;
 
 export const aiConfigured = (env) => !!env?.ANTHROPIC_API_KEY;
 

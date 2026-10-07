@@ -5,12 +5,14 @@
 // Every call here READS. Nothing is created, sent or charged: a check that
 // texted somebody or opened a Stripe object every time Health was opened would
 // be worse than no check. That is why some integrations have no probe at all
-// -- the licence verifiers bill per lookup and the cron secret has nothing
-// upstream to ask -- and those report "Configured" rather than "Working".
+// -- the licence verifiers bill per lookup, the cron secret has nothing
+// upstream to ask, and Connect's webhook secret is only ever proven by Stripe
+// signing an event with it -- and those report "Configured", not "Working".
 import { TIMEOUT_MS } from "../shared/syshealth.js";
 import { smsConfig } from "./sms.js";
 import { diagnose } from "./hostnames.js";
 import { calConfigured, fetchSlots } from "./demo.js";
+import { ANTHROPIC_API, ANTHROPIC_VERSION } from "./ai.js";
 
 const clean = (v) => String(v ?? "").trim();
 
@@ -102,6 +104,15 @@ export const PROBES = {
       return { refused: true, ms: r.ms, say: "That team domain published no signing keys. ACCESS_TEAM_DOMAIN may be wrong." };
     }
     return p;
+  },
+  // The model list: free, read-only, and refused outright for a bad key. The
+  // drafting call itself costs money per press, so it is never the probe.
+  ai: async (env, f, now) => {
+    const base = (env.ANTHROPIC_API_BASE || ANTHROPIC_API).replace(/\/+$/, "");
+    const r = await timed(f, now, `${base}/models?limit=1`, {
+      headers: { "x-api-key": clean(env.ANTHROPIC_API_KEY), "anthropic-version": ANTHROPIC_VERSION },
+    });
+    return asProbe(r, "Anthropic accepted the key.", "Anthropic refused ANTHROPIC_API_KEY.");
   },
   // The very call the demo form makes: a week of real availability. It
   // creates nothing.
