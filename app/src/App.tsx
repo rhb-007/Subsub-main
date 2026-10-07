@@ -75,7 +75,7 @@ import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { SUMMARY_REFUSALS, countComments, whyNotSummary } from "../shared/inspectsummary.js";
-import { AUTO_TRIES } from "../shared/autopick.js";
+import { AUTO_TRIES, isTurnaroundKind } from "../shared/autopick.js";
 import { agreementStateText, renderAgreement } from "../shared/agreement.js";
 import { typedNameMatches, typedNameHint } from "../shared/typedname.js";
 import { ENGAGED_AS, engagedAs, isHandyman, engagedSeatLabel, jobHiresWord,
@@ -5517,6 +5517,15 @@ export default function SubSub() {
                   if (can("properties")) actions.push(["property", "Property", "New property", Building2, tryAddProperty]);
                 }
                 actions.push(["job", "Job", "New job", Calendar, () => tryAddJob()]);
+                // AN INSPECTION IS SOMETHING A MANAGING AGENT ADDS, so it is
+                // in the Add menu beside the job it so often turns into. The
+                // same two gates as the tab and the routes: an account with
+                // buildings, and a seat that may write one.
+                if (can("inspections") && mayWriteInspection(role)) {
+                  actions.push(["inspection", "Inspection", "New inspection", ClipboardList, () => {
+                    setInspectionFocus({ newForm: true, n: Date.now() }); setTab("inspections");
+                  }]);
+                }
               }
               if (actions.length === 1) {
                 // ON THE DASHBOARD THIS IS THE SECOND COPY OF THE SAME BUTTON.
@@ -6286,6 +6295,11 @@ export default function SubSub() {
       {tab === "inspections" && can("inspections") && (
         <InspectionsView inspections={inspections} properties={accountProperties} subs={subs}
           focus={inspectionFocus}
+          autoTurnaround={!!account.autoTurnaround}
+          onGoAutoSetting={can("account") && role === "admin" ? () => {
+            setTab("account"); setOpenPane({ pane: "company", focus: "auto", n: Date.now() });
+          } : null}
+          onNote={setBillingNote}
           unitWord={tenantWhere(kindOf(account)) === "office" ? "Suite" : "Unit"}
           /* AN OWNER READS. The capability gets them the tab -- a move-out
              report is theirs to produce in a deposit argument -- and every
@@ -20070,7 +20084,7 @@ function AutoTurnaroundPanel({ on, onSave }) {
     finally { setBusy(false); }
   };
   return (
-    <div className="portal-panel settings-panel">
+    <div className="portal-panel settings-panel" id="auto-turnaround">
       <h4>Auto-schedule turnarounds</h4>
       <p className="panel-note">
         When you raise a job from a move-in or move-out inspection, SubSub puts
@@ -20164,6 +20178,20 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // plain value, so asking for the same pane twice opens it twice instead
   // of the second request doing nothing.
   useEffect(() => { if (openPane) setPane(openPane.pane); }, [openPane]);
+  // POINTING, NOT ONLY LANDING: the raise form's "turn it on" goes to the
+  // Company tab, and the switch is the third panel down it. Scroll and ring,
+  // the rule the compliance pack's Manage already follows.
+  useEffect(() => {
+    if (openPane?.focus !== "auto") return undefined;
+    const t = setTimeout(() => {
+      const el = document.getElementById("auto-turnaround");
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("pane-ring");
+      setTimeout(() => el.classList.remove("pane-ring"), 2400);
+    }, 120);
+    return () => clearTimeout(t);
+  }, [openPane]);
   // "Compliance pack" in the nav opens THIS panel rather than a second copy of
   // it, so it has to land on the right part of a long page. One
   // implementation, two ways in -- the same call the embed snippet makes,
@@ -23194,6 +23222,32 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
   // it is, and the server refuses one without.
   const valid = f.title && f.trades.length && f.address && (!asOwner || f.propertyId);
 
+  // FOUR STEPS RATHER THAN ONE LONG PAGE. Asked for as *"add steps to add
+  // jobs instead of long list"*: on an iPad the form was five sections and
+  // two screens of scrolling, with the button that saves it below all of it.
+  // Each step is one question -- where, when, which trades, what materials --
+  // and the bar across the top is also the way back to any of them.
+  //
+  // `stepOk` is the whole job's `valid` split by the step its fields are on,
+  // so a step and the final save cannot disagree about what is required.
+  const STEPS = [
+    { n: 1, label: "Where" },
+    { n: 2, label: "When" },
+    { n: 3, label: "Trades" },
+    { n: 4, label: "Materials" },
+  ];
+  const [step, setStep] = useState(1);
+  const stepOk = (n) => n === 1 ? !!(f.title && f.address && (!asOwner || f.propertyId))
+    : n === 3 ? f.trades.length > 0 : true;
+  // A tab is reachable when every step before it is answered; editing an
+  // existing job, every tab is, because nothing on it is unanswered.
+  const reachable = (n) => edit || STEPS.slice(0, n - 1).every((x) => stepOk(x.n));
+  const stepWhy = step === 1
+    ? (asOwner && !f.propertyId ? "Choose the building."
+      : !f.title ? "Give the job a name." : !f.address ? "Add the service address." : "")
+    : step === 3 && !f.trades.length ? "Pick at least one trade — each becomes a slot a contractor fills."
+    : "";
+
   const save = async () => {
     setSaving(true); setSaveErr("");
     try { await onSubmit(f); }
@@ -23252,7 +23306,20 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
         </div>
       )}
 
-      <div className="form-sec">1 · Project</div>
+      <div className="steps-bar sf-steps job-steps">
+        {STEPS.map((st) => (
+          <button key={st.n} type="button"
+            data-state={st.n === step ? "now" : st.n < step && stepOk(st.n) ? "done" : undefined}
+            disabled={!reachable(st.n)}
+            onClick={() => setStep(st.n)}>
+            <span className="sb-n">{st.n < step && stepOk(st.n) ? <Check size={12} /> : st.n}</span>
+            {st.label}
+          </button>
+        ))}
+      </div>
+
+      {step === 1 && (<>
+      <div className="form-sec">Where is the work</div>
       {(properties || []).length > 0 && (
         <label className="fld">
           {asOwner ? "Which building" : "Property"}{" "}
@@ -23291,8 +23358,10 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
         <label className="fld">Square footage<input inputMode="numeric" value={f.sqft} onChange={(e) => set("sqft", e.target.value.replace(/[^0-9]/g, ""))} placeholder="2400" /></label>
         <label className="fld">Stories<input inputMode="numeric" value={f.stories} onChange={(e) => set("stories", e.target.value.replace(/[^0-9]/g, ""))} placeholder="2" /></label>
       </div>
+      </>)}
 
-      <div className="form-sec">2 · Schedule</div>
+      {step === 2 && (<>
+      <div className="form-sec">When</div>
       <div className="fld-row">
         <label className="fld">Start date<input type="date" value={f.date} onChange={(e) => set("date", e.target.value)} /></label>
         <label className="fld">Start time<input type="time" value={f.time} onChange={(e) => set("time", e.target.value)} /></label>
@@ -23357,7 +23426,10 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
         </div>
       )}
 
-      <div className="form-sec">3 · Trades needed</div>
+      </>)}
+
+      {step === 3 && (<>
+      <div className="form-sec">Trades needed</div>
       <div className="fld">
         <div className="pick-grid">
           {CATEGORIES.map((c) => (
@@ -23379,7 +23451,10 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
       </div>
       <label className="fld">Overall scope<textarea rows={3} value={f.scope} onChange={(e) => set("scope", e.target.value)} placeholder="What the job covers end to end…" /></label>
 
-      <div className="form-sec">4 · Materials</div>
+      </>)}
+
+      {step === 4 && (<>
+      <div className="form-sec">Materials</div>
       <MaterialSource
         value={f.materialSource}
         onChange={(pick) => setF((st) => ({ ...st, materialSupplier: pick.supplier,
@@ -23395,7 +23470,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
         </select>
       </label>
 
-      <div className="form-sec">5 · Measurement documents</div>
+      <div className="form-sec">Measurement documents</div>
       <p className="sec-note">Uploaded by you — contractors see these on their work order.</p>
       <div className="meas-list">
         {f.measurementDocs.map((d) => (
@@ -23412,17 +23487,31 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
           }} />
         </label>
       </div>
+      </>)}
 
       {/* The modal used to close on click whatever the server said, so a
           job that failed to save looked created until the next reload. */}
       {saveErr && <p className="billing-err" role="alert">{saveErr}</p>}
+      {/* A DEAD NEXT WITH NO REASON BESIDE IT is indistinguishable from a
+          broken one, so the step says what it is waiting for. */}
+      {stepWhy && <p className="fld-note job-step-why">{stepWhy}</p>}
       <div className="form-actions">
-        <button className="btn-ghost" onClick={onCancel} disabled={saving}>Cancel</button>
-        <button className="btn-solid" onClick={save} disabled={!valid || saving}>
-          {edit ? <Check size={15} /> : <Plus size={15} />} {saving ? "Saving…"
-            : edit ? "Save changes"
-              : asking ? "Send this request" : <>Create job &amp; find contractors</>}
-        </button>
+        {step > 1
+          ? <button className="btn-ghost" onClick={() => setStep(step - 1)} disabled={saving}>Back</button>
+          : <button className="btn-ghost" onClick={onCancel} disabled={saving}>Cancel</button>}
+        {/* Editing saves from any step: correcting a street name should not
+            mean walking past three other screens to reach the button. */}
+        {step < STEPS.length && (
+          <button className={edit ? "btn-ghost" : "btn-solid"} disabled={!stepOk(step) || saving}
+            onClick={() => setStep(step + 1)}>Next <ArrowRight size={14} /></button>
+        )}
+        {(edit || step === STEPS.length) && (
+          <button className="btn-solid" onClick={save} disabled={!valid || saving}>
+            {edit ? <Check size={15} /> : <Plus size={15} />} {saving ? "Saving…"
+              : edit ? "Save changes"
+                : asking ? "Send this request" : <>Create job &amp; find contractors</>}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -30857,7 +30946,8 @@ function InspectionSummaryPanel({ inspection, rooms = [], onReload }) {
 }
 
 function InspectionDetail({ inspection, property, onReload, onClose, onRaise, onGoJobs,
-  subs = [], unitWord = "Unit", canEdit = true, onAddOwner }) {
+  subs = [], unitWord = "Unit", canEdit = true, onAddOwner,
+  autoTurnaround = false, onGoAutoSetting }) {
   const [adding, setAdding] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -31319,6 +31409,8 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
 
       {raising && (
         <RaiseFromInspection inspection={inspection} rooms={rooms} subs={subs}
+          autoTurnaround={autoTurnaround}
+          onGoAutoSetting={onGoAutoSetting && (() => { setRaising(false); onGoAutoSetting(); })}
           onCancel={() => setRaising(false)}
           onRaise={async (body) => { await onRaise(inspection.id, body); setRaising(false); }} />
       )}
@@ -31333,7 +31425,8 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
 // The scope is composed on the SERVER from the flagged rooms through the same
 // `inspectionJobScope` this previews with, so the preview cannot disagree with
 // what gets written.
-function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
+function RaiseFromInspection({ inspection, rooms, onCancel, onRaise,
+  autoTurnaround = false, onGoAutoSetting }) {
   // WHAT THEY ALREADY SAID, READ BACK. Somebody who has written "trim needs
   // to be repaired" has named the trade; making them find Finish Carpentry in
   // a grid of twenty-nine is asking them to say it twice. `suggestTrades` is
@@ -31505,6 +31598,31 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
         {!trades.length && !busy && (
           <p className="fld-note insp-need">Pick at least one trade — it is what becomes the slot a contractor fills.</p>
         )}
+        {/* WHETHER SUBSUB WILL PICK THE CONTRACTOR, SAID WHERE THE JOB IS
+            RAISED. The setting has lived on Account → Company since 065, and
+            this is the one moment it acts -- so a manager who had never found
+            it had no way to learn it existed, and one who had switched it on
+            could not see it was about to happen. Turnarounds only, which is
+            the rule the server keeps. */}
+        {isTurnaroundKind(inspection?.kind) && (
+          <div className={`insp-auto ${autoTurnaround ? "on" : ""}`}>
+            <Zap size={14} />
+            {autoTurnaround ? (
+              <span><b>Auto-schedule is on.</b> SubSub puts somebody from your roster on{" "}
+                {trades[0] ? <b>{catMeta(trades[0]).label}</b> : "the first trade"} and gets a time
+                agreed — you do not need to assign it.
+                {trades.length > 1 ? " Any other trades are yours to assign." : ""}</span>
+            ) : (
+              <span><b>Want SubSub to pick the contractor and the time?</b> Auto-schedule for
+                move-ins and move-outs is off.{" "}
+                {onGoAutoSetting && (
+                  <button type="button" className="insp-auto-go" onClick={onGoAutoSetting}>
+                    Turn it on
+                  </button>
+                )}</span>
+            )}
+          </div>
+        )}
         <div className="form-actions">
           <button className="btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
           <button className="btn-solid" disabled={busy || !trades.length} onClick={go}>
@@ -31514,6 +31632,25 @@ function RaiseFromInspection({ inspection, rooms, onCancel, onRaise }) {
       </div>
     </Modal>
   );
+}
+
+// What auto-schedule did with a job just raised, in one sentence, or nothing
+// when it was not asked to do anything.
+function autoRaiseText(auto) {
+  if (!auto) return "";
+  if (auto.ok) {
+    const trade = catMeta(auto.trade).label;
+    return `Auto-scheduled: ${auto.company} is on ${trade}. `
+      + (auto.proposed ? "A time has gone out to them." : "A time goes out as soon as they accept.");
+  }
+  if (auto.skipped === "no_candidate") {
+    return "Auto-schedule found nobody on your roster who could take it — assign it by hand.";
+  }
+  if (auto.skipped === "assign_refused") {
+    return "Auto-schedule picked somebody but the work order was refused — assign it by hand.";
+  }
+  if (auto.skipped === "threw") return "Auto-schedule did not run this time — assign it by hand.";
+  return "";
 }
 
 // SENDING A FINISHED INSPECTION TO THE BUILDING'S OWNER.
@@ -31660,7 +31797,8 @@ function InspectionSend({ inspection, onReload, onAddOwner }) {
 
 
 function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
-  unitWord = "Unit", canEdit = true, onAddOwner, focus = null }) {
+  unitWord = "Unit", canEdit = true, onAddOwner, focus = null,
+  autoTurnaround = false, onGoAutoSetting, onNote }) {
   const [form, setForm] = useState(null);
   const [open, setOpen] = useState(null);   // the loaded inspection
   const [iq, setIq] = useState("");
@@ -31682,6 +31820,8 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
   // nonce as well as the id, so asking for the same one twice opens it twice.
   useEffect(() => {
     if (focus?.id) load(focus.id);
+    // From the header's Add menu: the New inspection form, over the list.
+    if (focus?.newForm && canEdit) { setOpen(null); setForm({ kind: "move_out" }); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus?.id, focus?.n]);
 
@@ -31718,6 +31858,11 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
   const raise = async (id, body) => {
     const made = await api.raiseInspectionJob(id, body);
     await load(id); await onReload();
+    // WHAT AUTO-SCHEDULE DID, said once the job exists. The route has always
+    // answered it and nothing drew it, so a manager who switched it on could
+    // not tell "it put Pacific on it" from "nobody could take it".
+    const said = autoRaiseText(made.auto);
+    if (said && onNote) onNote(said);
     onGoJobs(made.jobId);
   };
 
@@ -31752,6 +31897,7 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
           property={properties.find((p) => p.id === open.propertyId)}
           onReload={() => load(open.id)}
           onRaise={raise}
+          autoTurnaround={autoTurnaround} onGoAutoSetting={onGoAutoSetting}
           onGoJobs={onGoJobs}
           onClose={() => { setOpen(null); onReload(); }} />
       </main>
@@ -35766,6 +35912,14 @@ strong.insp-name{background:none;border:0;padding:0}
    the one line here that changes what somebody should do next -- a note in
    the same grey as the suggestion above it reads as more of the same
    sentence. */
+.insp-auto{display:flex;gap:9px;align-items:flex-start;margin:14px 0 4px;padding:10px 12px;border-radius:10px;
+  background:var(--paper);border:1px solid var(--line);font-size:13px;line-height:1.45;color:var(--ink-soft)}
+.insp-auto svg{flex:none;margin-top:2px;color:var(--ink-soft)}
+.insp-auto.on{background:#f0f7f2;border-color:#cfe5d6}
+.insp-auto.on svg{color:var(--brand)}
+.insp-auto b{color:var(--ink)}
+.insp-auto-go{background:none;border:0;padding:0;font:inherit;font-weight:700;color:var(--brand);text-decoration:underline;cursor:pointer}
+.pane-ring{box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 28%,transparent);transition:box-shadow .3s}
 .insp-unread{display:block;margin:-4px 0 9px;font-size:12px;line-height:1.55;
   color:var(--ink);background:color-mix(in srgb,var(--amber) 10%,var(--card));
   border:1px solid color-mix(in srgb,var(--amber) 32%,var(--line));
@@ -37393,6 +37547,8 @@ iframe.dv-frame{display:block}
 .sf-more-chev{transition:transform .15s;flex:none}
 .sf-more-chev.open{transform:rotate(180deg)}
 @media (prefers-reduced-motion:reduce){.sf-more-chev{transition:none}}
+.job-steps{margin:2px 0 14px}
+.job-step-why{margin:10px 0 0}
 .sf-steps{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;
   margin:14px 0 20px}
 .sf-steps button{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;

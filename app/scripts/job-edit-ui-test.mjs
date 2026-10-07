@@ -260,7 +260,18 @@ try {
     });
     t.ck("the job name is the way in", opened === true);
     await wait(700);
-    const form = await page.evaluate(() => {
+    // THE FORM IS FOUR STEPS NOW, so every field is read off the step it is
+    // on: Where (name, client, address), When (date, time), Trades (the chips
+    // and the scope). Editing reaches every tab, which is itself asserted.
+    const tabs = await page.evaluate(() =>
+      [...document.querySelectorAll(".modal .job-steps button")].map((b) => ({ t: b.innerText.trim(), off: b.disabled })));
+    t.ck("the edit form is in four steps", tabs.length === 4, JSON.stringify(tabs));
+    const goStep = async (label) => {
+      await page.evaluate((ll) => [...document.querySelectorAll(".modal .job-steps button")]
+        .find((b) => b.innerText.includes(ll))?.click(), label);
+      await wait(250);
+    };
+    const readStep = () => page.evaluate(() => {
       const m = document.querySelector(".modal");
       if (!m) return { missing: "modal" };
       const val = (sel) => m.querySelector(sel)?.value ?? null;
@@ -283,6 +294,19 @@ try {
         access: [...m.querySelectorAll(".acc-grid")].length,
       };
     });
+    const merged = {};
+    for (const label of ["Where", "When", "Trades", "Materials"]) {
+      await goStep(label);
+      const r = await readStep();
+      for (const [k, v] of Object.entries(r)) {
+        if (Array.isArray(v) && Array.isArray(merged[k])) merged[k] = merged[k].length ? merged[k] : v;
+        else if (typeof v === "number") merged[k] = (merged[k] || 0) + v;
+        else if (merged[k] == null || merged[k] === "") merged[k] = v;
+      }
+    }
+    const form = merged;
+    // Back to the trades, where the chip presses below happen.
+    await goStep("Trades");
     t.ck("it opens an edit form", form.heading === "Edit job", JSON.stringify(form).slice(0, 180));
     // SEEDED FROM THE JOB. An edit form that opens blank is a form that
     // silently clears everything somebody does not retype.
@@ -343,6 +367,10 @@ try {
   {
     patched.length = 0;
     visitReads.length = 0;
+    // The name is on the first step, and Save is on every step when editing.
+    await page.evaluate(() => [...document.querySelectorAll(".modal .job-steps button")]
+      .find((b) => b.innerText.includes("Where"))?.click());
+    await wait(250);
     await page.evaluate(() => {
       const m = document.querySelector(".modal");
       const l = [...m.querySelectorAll("label")].find((x) =>

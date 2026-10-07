@@ -385,9 +385,11 @@ console.log("\n-- and they can watch the work at it, without touching it --");
     t.ck("and names who it goes to", /sound pm/i.test(form?.sub || ""), form?.sub);
     t.ck("and that nothing is booked until they approve",
       /nothing is booked until they approve/i.test(form?.sub || ""), form?.sub);
-    t.ck("the button sends rather than creates",
-      form.send.some((b) => /send this request/i.test(b))
-        && !form.send.some((b) => /find contractors/i.test(b)), JSON.stringify(form.send));
+    // THE FORM IS IN STEPS, so the first one offers Next and nothing that
+    // sends: the request goes from the last step, once a trade is picked.
+    t.ck("the first step moves on rather than sending",
+      form.send.some((b) => /^next/i.test(b)) && !form.send.some((b) => /send this request/i.test(b)),
+      JSON.stringify(form.send));
     // The picker says which buildings are somebody else's to run, so the
     // answer is visible before anything is sent.
     t.ck("the list marks the building somebody else runs",
@@ -404,9 +406,36 @@ console.log("\n-- and they can watch the work at it, without touching it --");
       const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
       set.call(ti, "Boiler making a noise");
       ti.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await wait(300);
+    const next = () => page.evaluate(() => {
+      const f = document.querySelector(".modal .form") || document.querySelector(".form");
+      [...f.querySelectorAll(".form-actions button")].find((b) => /^next/i.test(b.innerText.trim()))?.click();
+    });
+    await next(); await wait(250);      // Where -> When
+    await next(); await wait(250);      // When -> Trades
+    // A DEAD NEXT WITH NO REASON BESIDE IT is indistinguishable from a broken
+    // one: with no trade picked the step says so, and Next waits for it.
+    const bare = await page.evaluate(() => {
+      const f = document.querySelector(".modal .form") || document.querySelector(".form");
+      return { off: [...f.querySelectorAll(".form-actions button")].find((b) => /^next/i.test(b.innerText.trim()))?.disabled ?? null,
+        why: f.querySelector(".job-step-why")?.innerText.trim() || "" };
+    });
+    t.ck("Next waits for a trade", bare.off === true, String(bare.off));
+    t.ck("and says what it is waiting for", /at least one trade/i.test(bare.why), bare.why);
+    await page.evaluate(() => {
+      const f = document.querySelector(".modal .form") || document.querySelector(".form");
       [...f.querySelectorAll(".pick")].find((b) => /plumb/i.test(b.innerText))?.click();
     });
-    await wait(400);
+    await wait(300);
+    await next(); await wait(300);      // Trades -> Materials
+    const last = await page.evaluate(() => {
+      const f = document.querySelector(".modal .form") || document.querySelector(".form");
+      return [...f.querySelectorAll(".form-actions button")].map((b) => b.innerText.trim());
+    });
+    t.ck("the last step sends rather than creates",
+      last.some((b) => /send this request/i.test(b))
+        && !last.some((b) => /find contractors/i.test(b)), JSON.stringify(last));
     await page.evaluate(() => {
       const f = document.querySelector(".modal .form") || document.querySelector(".form");
       [...f.querySelectorAll(".form-actions button")].find((b) => /send this request/i.test(b.innerText))?.click();

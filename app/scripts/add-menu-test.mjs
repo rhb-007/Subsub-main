@@ -98,6 +98,8 @@ try {
     t.ck("and a job", items.some((x) => /^job$/i.test(x)), JSON.stringify(items));
     // The half that is deliberately absent: a GC has no building list.
     t.ck("and NOT a property", !items.some((x) => /^property$/i.test(x)), JSON.stringify(items));
+    // Nor an inspection: a unit walk needs a unit, and a GC keeps no buildings.
+    t.ck("and NOT an inspection", !items.some((x) => /^inspection$/i.test(x)), JSON.stringify(items));
     await ctx.close().catch(() => {});
   }
 
@@ -108,6 +110,7 @@ try {
     const items = await openMenu(page);
     t.ck(`${kind}: Property is offered`, items.some((x) => /^property$/i.test(x)), JSON.stringify(items));
     t.ck(`${kind}: and a job still is`, items.some((x) => /^job$/i.test(x)), JSON.stringify(items));
+    t.ck(`${kind}: and an inspection`, items.some((x) => /^inspection$/i.test(x)), JSON.stringify(items));
     t.ck(`${kind}: with the roster and the invite link`,
       items.some((x) => /contractor/i.test(x)) && items.some((x) => /invite link/i.test(x)),
       JSON.stringify(items));
@@ -116,21 +119,21 @@ try {
 
   console.log("\n-- AND THE DASHBOARD DOES NOT SAY IT TWICE --");
   {
-    // A seat narrowed to named buildings runs those buildings, not the firm,
-    // so its only Add action is the job — which is exactly the dashboard's own
-    // call to action. THIS is the reported state.
-    KIND = "property_manager"; ROLE = "pm"; SCOPE = ["prop_1"];
+    // A seat whose ONE Add action is the dashboard's own call to action. That
+    // was a building-scoped manager until inspections joined the menu; it is
+    // a building owner now, whose one action is Request work.
+    KIND = "property_manager"; ROLE = "owner"; SCOPE = ["prop_1"];
     const { ctx, page } = await open();
     const cta = await dashCta(page);
-    t.ck("the dashboard offers New job", cta.some((x) => /new job/i.test(x)), JSON.stringify(cta));
+    t.ck("the dashboard offers Request work", cta.some((x) => /request work/i.test(x)), JSON.stringify(cta));
     const h = await readHeader(page);
     // The property under test: not that the header is empty in general, but
     // that this ONE screen does not carry the same button twice.
     t.ck("and the header does not repeat it", h.label === null, JSON.stringify(h));
     const all = await page.evaluate(() => [...document.querySelectorAll("button")]
       .map((b) => (b.innerText || "").replace(/\s+/g, " ").trim())
-      .filter((x) => /^(\+ )?New job$/i.test(x)));
-    t.ck("so New job appears exactly once on the page", all.length === 1, JSON.stringify(all));
+      .filter((x) => /^(\+ )?Request work$/i.test(x)));
+    t.ck("so Request work appears exactly once on the page", all.length === 1, JSON.stringify(all));
 
     // And it is only dropped HERE. On every other screen the header button is
     // the only way in, so removing it outright would take the action away.
@@ -138,7 +141,7 @@ try {
       .find((b) => /^jobs/i.test((b.innerText || "").trim()))?.click());
     await wait(1200);
     const onJobs = await readHeader(page);
-    t.ck("the Jobs screen still offers it", /new job/i.test(onJobs.label || ""), JSON.stringify(onJobs));
+    t.ck("the Jobs screen still offers it", /request work/i.test(onJobs.label || ""), JSON.stringify(onJobs));
     await ctx.close().catch(() => {});
   }
 
@@ -205,9 +208,16 @@ try {
     KIND = "property_manager"; ROLE = "pm"; SCOPE = ["prop_1"];
     const { ctx, page } = await open();
     const h = await readHeader(page);
-    // Their only Add action is the job, which the dashboard already carries --
-    // so the header draws nothing there at all.
-    t.ck("the header offers no menu", h.isMenu === false, JSON.stringify(h));
+    // Their buildings are theirs to walk, so the menu is a job and an
+    // inspection -- and neither door that belongs to the firm.
+    t.ck("the header offers a menu", h.isMenu === true, JSON.stringify(h));
+    const items = await openMenu(page);
+    t.ck("of a job and an inspection", items.some((x) => /^job$/i.test(x)) && items.some((x) => /^inspection$/i.test(x)),
+      JSON.stringify(items));
+    t.ck("and neither the roster, the invite link nor a property",
+      !items.some((x) => /contractor|invite link|^property$/i.test(x)), JSON.stringify(items));
+    await page.evaluate(() => document.querySelector(".add-scrim")?.click());
+    await wait(300);
     await page.evaluate(() => [...document.querySelectorAll("nav button")]
       .find((b) => /^propert|^your build/i.test((b.innerText || "").trim()))?.click());
     await wait(1200);

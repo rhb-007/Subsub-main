@@ -10274,6 +10274,59 @@ refactor.
   row beside the expired one, because a fix that put the button everywhere
   passes every positive check.
 
+- **THE JOB FORM IS FOUR STEPS, THE ADD MENU OFFERS AN INSPECTION, AND
+  AUTO-SCHEDULE SAYS SO WHERE THE JOB IS RAISED.** Asked for in one message
+  with a fourth part that was a question: *"how do I set up auto matching and
+  scheduling … I can't find this anywhere, it was supposed to be built and
+  pushed many migrations ago."*
+
+  **IT WAS BUILT, AND IT WAS A SWITCH NOBODY COULD FIND.** 065 shipped the
+  route, the ranking, the chain and Account → Company → *Auto-schedule
+  turnarounds*, and the one place the setting matters — **raising a job from
+  a move-in or move-out inspection** — said nothing about it either way.
+  Sixteenth correct-pieces-with-no-way-in in this file, and the first where
+  the missing piece was a sentence. So the raise form says whether it is on,
+  which trade it will take (the first; any others are yours), and offers
+  *Turn it on* when it is off — opening Account → Company and **ringing** the
+  switch, because landing somewhere is not the same as pointing at something.
+  After the raise, `autoRaiseText` turns the reply's `auto` into one line —
+  who it put on the job, or why it did not — because a manager who switched
+  this on and heard nothing would assume it worked. The link is drawn only
+  for an admin, since the switch is admin-only; a screen offering a door the
+  role cannot open is the screen-that-lies rule pointed at a link.
+
+  **THE ADD MENU OFFERS AN INSPECTION** to any seat that can write one, on an
+  account kind with buildings — `can("inspections") && mayWriteInspection` —
+  and it opens the New inspection form directly rather than the list, because
+  *Add → Inspection* landing on a list is a menu entry that does half of what
+  it says. A general contractor has no units to walk and is asserted to get
+  none, in the same suite as the three kinds that do.
+
+  **FOUR STEPS — WHERE, WHEN, TRADES, MATERIALS — and the bar is also the way
+  back.** `stepOk` is the job's own `valid` split by the step its fields are
+  on, so a step and the final save cannot disagree about what is required.
+  Next is gated on the step and **says what it is waiting for**, because a
+  dead Next with nothing beside it is indistinguishable from a broken one.
+  Creating saves only from the last step; **editing saves from any step**,
+  because correcting a street name must not mean walking past three screens
+  to reach the button. The mutation that confines Save to the last step when
+  editing fails `test:jobeditui`; the one that drops the Next gate fails
+  `test:handoverui`. One assertion was **removed rather than kept**: *editing
+  can reach every tab* cannot fail, because an existing job has every step
+  answered whichever rule is in force.
+
+  Two suites read fields off the form and both now walk the steps the way a
+  person would rather than being given a test-only flag that draws it flat —
+  a suite testing a layout nobody sees.
+
+  **And the test data was removed from one account by SQL, in dependency
+  order, proven first.** Jobs and inspections only — every user, seat,
+  building, contractor and activity row stays. Generated against a seeded
+  copy of the real schema with foreign keys ON: running the job delete first
+  fails on a foreign key, which is the ordering proved rather than assumed;
+  running the whole thing twice is a no-op, so a paste that stops halfway is
+  safe to re-run; and the other account in the fixture is untouched.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
