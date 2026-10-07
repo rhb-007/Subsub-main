@@ -10327,6 +10327,61 @@ refactor.
   running the whole thing twice is a no-op, so a paste that stops halfway is
   safe to re-run; and the other account in the fixture is untouched.
 
+- **A PHOTOGRAPH TRAVELLED AT CAMERA SIZE THREE TIMES, AND A 12-MEGAPIXEL
+  ONE OFTEN DID NOT TRAVEL AT ALL.** Reported as inspection pictures and their
+  drafted notes *"taking a very long time to load or import"*. Every photo went
+  up at full size, came back down at full size to be a thumbnail, and was
+  decoded at full size again before its note was drafted -- a room of twelve
+  was the better part of a hundred megabytes over a phone connection. And the
+  upload route refuses anything over `MAX_PHOTO_BYTES` (10 MB), which an
+  uncompressed or HEIC phone picture can exceed, so some of the slowness was
+  uploads that were never going to land.
+
+  **Shrunk in the browser before upload, in one place.** `shrinkPhoto` in
+  `src/lib/photoshrink.js` is called by `api.uploadReportPhoto`, which both
+  doors that take a photograph go through (a tenant's report and an
+  inspection room), so neither can be the one still sending twelve megabytes.
+  2048px on the long edge at JPEG 0.85 -- sharper than any screen it is read
+  on and plain enough to show a hairline crack. A Worker cannot resize an
+  image, which is the same reason the draft downscale already lives in the
+  browser.
+
+  **It never makes things worse.** A file small in bytes AND in pixels, one
+  the browser cannot decode (HEIC outside Safari), an animated GIF, or a
+  result larger than the original all go up exactly as they were: failing to
+  shrink costs time, failing to upload costs the photo. A file small on disk
+  but large in pixels IS shrunk, because a 12-megapixel picture costs the same
+  to decode and draw however well it compressed -- which the first fixture
+  found by accident with a 570 KB, 3000px PNG. Re-encoding drops the camera's
+  metadata, GPS included; when the photo was taken is already on the row.
+
+  **The type stored is the server's answer.** A shrunk photo is a JPEG
+  whatever was chosen, so the tenant door now attaches the `type` the upload
+  route returned rather than the original file's, or a JPEG would be served
+  back labelled HEIC.
+
+  **Three uploads at a time**, through `inPool`, which keeps the order they
+  were chosen in. One after another was most of the wait; all at once on one
+  bar of signal finishes none of them. Draft preparation runs four at a time
+  for the same reason.
+
+  **And a room edit no longer waits on a second full read.** Every room route
+  already answers with the rooms as they now stand, and the screen threw that
+  away and re-fetched the whole inspection before letting go of the button --
+  two round trips per verdict, note and caption. The returned rooms are drawn
+  at once and the full re-read follows in the background for what lives on
+  the inspection rather than a room. **A ticket stops a stale re-read painting
+  over a newer answer**: two quick taps can have the first tap's re-read land
+  after the second tap's rooms, which would draw the room as it was one tap
+  ago.
+
+  `test:photoshrink` measures what leaves the page -- type, bytes and pixel
+  dimensions of every PUT, read in the page because the stub mangles binary
+  bodies, plus how many were in flight at once. Removing the shrink fails
+  three assertions and a pool of one fails one. **Still open:** photos already
+  stored at full size stay that size; there is no server-side thumbnail, so an
+  old full-size photo still downloads whole for its thumbnail.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

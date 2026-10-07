@@ -37,6 +37,7 @@ import {
   Info,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE } from "./lib/api";
+import { inPool } from "./lib/photoshrink.js";
 // The same file the Worker imports, so a problem cannot be an emergency in
 // the browser and ordinary work on the server, or the other way round.
 import { HEALTH_HOSTS, LIGHTS, integrationLight } from "../shared/syshealth.js";
@@ -15019,7 +15020,9 @@ function useShots() {
     for (const sh of shots) {
       try {
         const r = await api.uploadReportPhoto(sh.file);
-        done.push({ key: r.key, name: sh.name, type: sh.file.type, size: r.size ?? sh.size });
+        // The type the SERVER stored, because a photograph shrunk on the way
+        // up is a JPEG whatever the original was.
+        done.push({ key: r.key, name: sh.name, type: r.type || sh.file.type, size: r.size ?? sh.size });
       } catch (e) { console.error("[photo] upload failed:", e); failed.push(sh.name); }
     }
     setNote(failed.length ? `Could not send: ${failed.join(", ")}. The rest went.` : "");
@@ -30586,11 +30589,12 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
     const list = [...files].slice(0, MAX_ROOM_PHOTOS - photos.length);
     if (!list.length) return;
     await run("photo", async () => {
-      const up = [];
-      for (const f of list) {
+      // Three at a time: one after another was most of the wait on a room of
+      // twelve, and all at once on one bar of signal finishes none of them.
+      const up = await inPool(list, 3, async (f) => {
         const { key, type, size } = await api.uploadReportPhoto(f);
-        up.push({ key, type, size, name: f.name });
-      }
+        return { key, type, size, name: f.name };
+      });
       await onAddPhotos(room.id, up);
     });
   };
@@ -30947,7 +30951,7 @@ function InspectionSummaryPanel({ inspection, rooms = [], onReload }) {
 
 function InspectionDetail({ inspection, property, onReload, onClose, onRaise, onGoJobs,
   subs = [], unitWord = "Unit", canEdit = true, onAddOwner,
-  autoTurnaround = false, onGoAutoSetting }) {
+  autoTurnaround = false, onGoAutoSetting, onRooms }) {
   const [adding, setAdding] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -31034,7 +31038,18 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
     } finally { setBusy(""); }
   };
 
-  const patchRoom = (roomId, body) => api.patchInspectionRoom(inspection.id, roomId, body).then(onReload);
+  // EVERY ROOM ROUTE ANSWERS WITH THE ROOMS AS THEY NOW STAND, and the screen
+  // used to throw that away and ask for the whole inspection again before it
+  // let go of the button -- two round trips for every tap of a verdict, every
+  // note and every caption. The returned rooms are the server's own answer,
+  // so they are drawn at once; the full re-read still follows, in the
+  // background, for what lives on the inspection rather than in a room (the
+  // summary, the step, who it went to).
+  const settle = (r) => {
+    if (Array.isArray(r?.rooms) && onRooms) onRooms(r.rooms);
+    onReload();
+  };
+  const patchRoom = (roomId, body) => api.patchInspectionRoom(inspection.id, roomId, body).then(settle);
 
   // DRAFTING A ROOM'S PHOTO NOTES.
   //
@@ -31049,26 +31064,29 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
   // revoking that one blanks the thumbnail, so a url read out of `shots` is
   // borrowed and left alone.
   const draftRoom = async (roomId, want, shots = {}) => {
-    const body = [];
-    for (const ph of want) {
+    // Four at a time rather than one after another: each is a fetch (when
+    // its thumbnail has not landed) and a decode, and twelve of those in a
+    // row was most of the wait before the model was even asked.
+    const prepared = await inPool(want, 4, async (ph) => {
       const borrowed = shots[ph.id];
       let mine = null;
       try {
         const src = borrowed || (mine = await api.inspectionPhotoBlob(inspection.id, ph.id));
-        body.push({ id: ph.id, data: await jpegForDraft(src) });
+        return { id: ph.id, data: await jpegForDraft(src) };
       } catch (e) {
         // One unreadable photograph must not cost the other eleven their
         // drafts, so this is the one place a skip is right -- and the count
         // the screen reports afterwards comes off the server's answer, so a
         // skipped one is visibly still undrafted rather than quietly lost.
         console.warn("[photo-draft] skipped one:", ph.id, e?.message || e);
+        return null;
       } finally {
         if (mine) URL.revokeObjectURL(mine);
       }
-    }
+    });
+    const body = prepared.filter(Boolean);
     if (!body.length) throw Object.assign(new Error("no_photos"), { body: { error: "no_photos" } });
-    await api.draftInspectionPhotos(inspection.id, roomId, body);
-    await onReload();
+    settle(await api.draftInspectionPhotos(inspection.id, roomId, body));
   };
 
   // One way in for both doors — a tapped suggestion and the typed box — so
@@ -31083,9 +31101,8 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
       return;
     }
     return run("add", async () => {
-      await api.addInspectionRoom(inspection.id, want);
+      settle(await api.addInspectionRoom(inspection.id, want));
       setAdding("");
-      await onReload();
     });
   };
   // What is left to walk. Compared on the trimmed, case-folded name, because
@@ -31252,12 +31269,12 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
           <InspectionRoom key={r.id} inspectionId={inspection.id} room={r} locked={locked}
             nodeRef={(el) => { nodes.current[r.id] = el; }} ringed={ringing(r.id)}
             onPatch={patchRoom}
-            onRemove={(roomId) => api.removeInspectionRoom(inspection.id, roomId).then(onReload)}
-            onAddPhotos={(roomId, photos) => api.addInspectionPhotos(inspection.id, roomId, photos).then(onReload)}
+            onRemove={(roomId) => api.removeInspectionRoom(inspection.id, roomId).then(settle)}
+            onAddPhotos={(roomId, photos) => api.addInspectionPhotos(inspection.id, roomId, photos).then(settle)}
             onRemovePhoto={(roomId, photoId) =>
-              api.removeInspectionPhoto(inspection.id, roomId, photoId).then(onReload)}
+              api.removeInspectionPhoto(inspection.id, roomId, photoId).then(settle)}
             onCaption={(roomId, photoId, caption) =>
-              api.captionInspectionPhoto(inspection.id, roomId, photoId, caption).then(onReload)}
+              api.captionInspectionPhoto(inspection.id, roomId, photoId, caption).then(settle)}
             onDraft={draftRoom}
             /* Read off the inspection rather than assumed: only the Worker
                knows whether there is a key, and a button that cannot work
@@ -31808,9 +31825,20 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  // A RE-READ THAT LANDS AFTER A NEWER ANSWER MUST NOT PAINT OVER IT. Room
+  // edits draw the rooms the server sends back at once and re-read the rest
+  // in the background, so two taps in quick succession can have the first
+  // tap's re-read arrive after the second tap's rooms -- drawing the room as
+  // it was one tap ago. Every write and every read takes a ticket, and a
+  // read whose ticket has been overtaken is dropped.
+  const ticket = useRef(0);
   const load = async (id) => {
     setErr("");
-    try { setOpen(await api.getInspection(id)); }
+    const mine = ++ticket.current;
+    try {
+      const got = await api.getInspection(id);
+      if (mine === ticket.current) setOpen(got);
+    }
     catch (e) {
       console.error("[inspection] load failed:", e);
       setErr("Could not open that inspection.");
@@ -31896,6 +31924,7 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
           onAddOwner={onAddOwner && ((p) => onAddOwner(p, () => load(open.id)))}
           property={properties.find((p) => p.id === open.propertyId)}
           onReload={() => load(open.id)}
+          onRooms={(rooms) => { ticket.current++; setOpen((o) => (o ? { ...o, rooms } : o)); }}
           onRaise={raise}
           autoTurnaround={autoTurnaround} onGoAutoSetting={onGoAutoSetting}
           onGoJobs={onGoJobs}

@@ -11,6 +11,7 @@
 // Either way, `X-Account-Id` is still sent — it's not an identity claim,
 // just which of the signed-in person's accounts they're currently acting
 // in; the server always re-checks that a real membership backs it up.
+import { shrinkPhoto } from "./photoshrink.js";
 import { supabase, supabaseEnabled } from "./supabaseClient";
 
 // Where the API lives.
@@ -293,7 +294,10 @@ export const api = {
   // R2 first and the report is told about them after, so a failed upload
   // leaves a report with one fewer photo rather than a row pointing at
   // something that is not there.
-  uploadReportPhoto: (file) => uploadFile("report-photo", file),
+  // Shrunk on the way up -- see lib/photoshrink.js. Both doors that take a
+  // photograph (a tenant's report and an inspection room) come through here,
+  // so neither can be the one that still sends twelve megabytes.
+  uploadReportPhoto: async (file) => uploadFile("report-photo", await shrinkPhoto(file)),
   addReportPhotos: (jobId, photos) =>
     request(`/jobs/${jobId}/photos`, { method: "POST", body: JSON.stringify({ photos }) }),
   removeReportPhoto: (jobId, photoId) =>
