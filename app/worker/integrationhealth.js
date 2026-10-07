@@ -48,6 +48,27 @@ export const PROBES = {
     return asProbe(r, "Supabase answered and accepted the key.",
       "Supabase refused SUPABASE_ANON_KEY. It may belong to a different project than SUPABASE_URL.");
   },
+  // Google sign-in. Google's own client id and secret are held by Supabase,
+  // not by this Worker, so nothing here can test them directly -- but the
+  // settings endpoint says whether Supabase has the Google provider switched
+  // on, which is the failure that actually happens: a provider toggled off,
+  // or a project rebuilt without it, and every "Continue with Google" button
+  // on every sign-in page answers an error while email sign-in works and the
+  // Supabase light above stays green. Read-only, and the same anon key.
+  google: async (env, f, now) => {
+    const url = clean(env.SUPABASE_URL).replace(/\/+$/, "");
+    const r = await timed(f, now, `${url}/auth/v1/settings`, { headers: { apikey: clean(env.SUPABASE_ANON_KEY) } });
+    const p = asProbe(r, "Supabase has Google sign-in switched on.",
+      "Supabase refused SUPABASE_ANON_KEY, so it could not say whether Google sign-in is on.");
+    if (p.refused || p.error !== undefined || p.timedOut) return p;
+    const g = r.json?.external?.google;
+    if (g === false) {
+      return { off: true, ms: r.ms,
+        say: "Google sign-in is switched off in Supabase, so the Continue with Google button on every sign-in page fails. Email sign-in still works." };
+    }
+    if (g !== true) return { warn: true, ms: r.ms, say: "Supabase answered without saying whether Google sign-in is on." };
+    return p;
+  },
   // A sending-only key cannot list domains and Resend says exactly that, in a
   // 401 named restricted_api_key. That is a key Resend recognised, which is
   // the question, so it is green -- reading it as refused would draw red over

@@ -96,6 +96,10 @@ export function integrationLight(state, probe) {
       say: probe.timedOut ? `No answer within ${TIMEOUT_MS / 1000} seconds.` : `Did not answer${probe.error ? `: ${probe.error}` : "."}` };
   }
   if (probe.refused) return { light: "red", word: "Refused", say: probe.say || "It refused the credentials." };
+  // Answered, accepted the key, and said the feature itself is switched off:
+  // red, because the thing customers press does not work, and worded as what
+  // it is rather than as a refusal nobody made.
+  if (probe.off) return { light: "red", word: "Switched off", say: probe.say || "It is switched off." };
   if (probe.warn) return { light: "amber", word: "Check", say: probe.say };
   if (probe.ms >= SLOW_MS) return { light: "amber", word: "Slow", say: `Answered in ${(probe.ms / 1000).toFixed(1)} seconds.${probe.say ? " " + probe.say : ""}` };
   return { light: "green", word: "Working", say: probe.say || `Answered in ${Math.round(probe.ms)} ms.` };

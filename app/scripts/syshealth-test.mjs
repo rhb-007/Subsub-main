@@ -159,6 +159,24 @@ ok("with the key and the version header", calls[0]?.headers["x-api-key"] === "sk
 replies = { "api.anthropic.com/v1/models": [401, { type: "error", error: { type: "authentication_error" } }] };
 ih = await integrationHealth({ ANTHROPIC_API_KEY: "bad" }, groups(["ai"]), { fetchImpl: stub, now: () => Date.now() });
 ok("a refused Claude key is red and named", L("ai").light === "red" && /ANTHROPIC_API_KEY/.test(L("ai").say), L("ai").say);
+// Google sign-in: the settings endpoint, the anon key, and the provider flag.
+calls.length = 0;
+replies = { "sb.test/auth/v1/settings": [200, { external: { google: true, email: true } }] };
+ih = await integrationHealth(ENV, groups(["google"]), { fetchImpl: stub, now: () => Date.now() });
+ok("Google switched on in Supabase is Working", L("google").word === "Working" && L("google").light === "green", JSON.stringify(ih.probes.google));
+ok("it reads Supabase's settings with the anon key, and only reads",
+  calls.length === 1 && /\/auth\/v1\/settings$/.test(calls[0].url) && calls[0].headers.apikey === "anon" && calls[0].method === "GET",
+  JSON.stringify(calls));
+replies = { "sb.test/auth/v1/settings": [200, { external: { google: false, email: true } }] };
+ih = await integrationHealth(ENV, groups(["google"]), { fetchImpl: stub, now: () => Date.now() });
+ok("Google switched off is red, and says so in words rather than as a refusal",
+  L("google").light === "red" && L("google").word === "Switched off" && /Continue with Google/.test(L("google").say), JSON.stringify(L("google")));
+replies = { "sb.test/auth/v1/settings": [200, { disable_signup: false }] };
+ih = await integrationHealth(ENV, groups(["google"]), { fetchImpl: stub, now: () => Date.now() });
+ok("an answer that does not say is amber, not green", L("google").light === "amber", JSON.stringify(L("google")));
+replies = { "sb.test/auth/v1/settings": [401, { message: "Invalid API key" }] };
+ih = await integrationHealth(ENV, groups(["google"]), { fetchImpl: stub, now: () => Date.now() });
+ok("a refused key is red and named", L("google").word === "Refused" && /SUPABASE_ANON_KEY/.test(L("google").say));
 ih = await integrationHealth({}, groups(["payouts"]), { fetchImpl: stub, now: () => Date.now() });
 ok("Connect's webhook secret has no probe, so it reads Configured, never Working",
   ih.probes.payouts === undefined && integrationLight("ok", ih.probes.payouts).word === "Configured");

@@ -9,7 +9,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-feesms-test");
@@ -17,8 +17,9 @@ const WEB = 5353, API = 9049;
 const t = tally();
 const sent = [];
 
+let KIND = "general_contractor";
 const acct = () => ({
-  id: "acc_gc", name: "Alder Construction", subdomain: "alder", kind: "general_contractor",
+  id: "acc_gc", name: "Alder Construction", subdomain: "alder", kind: KIND,
   plan: "scale", billing: "monthly", useDefaultMark: true, theme: null, trades: ["roofing"],
   logoKey: null, subscriptionStatus: "active", hostnameStatus: "active",
   user: { id: "usr_a", name: "Chris Lane", email: "chris@alder.test", role: "admin" },
@@ -101,6 +102,8 @@ try {
     await page.evaluate(() => [...document.querySelectorAll("nav button")]
       .find((b) => /^Jobs/i.test((b.innerText || "").trim()))?.click());
     await wait(900);
+    // Jobs are lines until opened; the work order link is on the card.
+    await openCards(page);
     const opened = await page.evaluate(() => { const b = document.querySelector(".ta-wo-link"); b?.click(); return !!b; });
     await wait(1400);
     const panel = await page.evaluate(() => document.querySelector(".wof-figs")?.innerText || "");
@@ -216,6 +219,58 @@ try {
       JSON.stringify(after.pressed));
     t.ck("and it says emails and emergencies still go",
       /Emails still go out, and emergency call-outs are still texted/.test(after.note), after.note);
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  // THE PLAN CARDS SAY WHAT THE PRICING PAGE SAYS. They carried "Email & SMS
+  // notifications available" beside a usage row reading "$0.02 each" and a
+  // footnote calling texts billed separately -- the price before texts were
+  // folded into Scale. Read off the drawn page, and on BOTH kinds in the same
+  // place, because the noun follows who is hiring.
+  for (const [kind, noun] of [["general_contractor", "subcontractors"], ["property_manager", "contractors"]]) {
+    console.log(`\n-- the plan cards match pricing.html (${kind}) --`);
+    KIND = kind;
+    const { ctx, page, crashes } = await visitApp(browser, { host: "alder", webPort: WEB,
+      seat: { userId: "usr_a", accountId: "acc_gc" }, viewport: { width: 1340, height: 1500 } });
+    await wait(2600);
+    await page.click(".user-btn");
+    await wait(300);
+    await page.click(".um-account");
+    await wait(800);
+    await page.evaluate(() => [...document.querySelectorAll(".seg-tabs button")]
+      .find((x) => /^Subscription$/.test(x.innerText.trim()))?.click());
+    await wait(1200);
+    const r = await page.evaluate(() => ({
+      cards: [...document.querySelectorAll(".plan-card")].map((c) => ({
+        tag: c.querySelector(".plan-tag")?.innerText || "",
+        feats: [...c.querySelectorAll(".plan-feats li")].map((li) => li.innerText.trim()),
+      })),
+      usage: document.querySelector(".usage-panel")?.innerText || "",
+    }));
+    const [basic, scale] = r.cards;
+    t.ck("two plan cards drew", r.cards.length === 2, String(r.cards.length));
+    t.ck("Scale's text line is the included allowance and the block price, not a per-text price",
+      (scale?.feats || []).includes("Email and SMS notifications — 2,500 texts a month; past that, $50 per 5,000 sent, on the 1st"),
+      JSON.stringify(scale?.feats));
+    t.ck("and it lists lien waivers and the CRM connection, as the pricing page does",
+      (scale?.feats || []).some((f) => /^Lien waivers — /.test(f)) && (scale?.feats || []).some((f) => /^Connect your CRM — /.test(f)),
+      JSON.stringify(scale?.feats));
+    t.ck("Easy Pay quotes the fee the server charges",
+      (scale?.feats || []).some((f) => f.includes("first $50,000 free, then 0.5% a payment, never more than $500")), JSON.stringify(scale?.feats));
+    t.ck(`the roster noun follows the account -- ${noun}`,
+      basic?.feats?.[0] === `Up to 3 ${noun}` && scale?.feats?.[0] === `Unlimited ${noun}`
+        && (scale?.feats || []).some((f) => f.endsWith(`your ${noun} get the full amount`)),
+      JSON.stringify([basic?.feats?.[0], scale?.feats?.[0]]));
+    t.ck("Basic carries email notifications and not texts",
+      (basic?.feats || []).includes("Email notifications") && !(basic?.feats || []).some((f) => /SMS|text/i.test(f)),
+      JSON.stringify(basic?.feats));
+    t.ck("each card says who it is for", /small, steady list/.test(basic?.tag || "") && /growing list/.test(scale?.tag || ""),
+      JSON.stringify([basic?.tag, scale?.tag]));
+    t.ck("the usage panel drew", r.usage.length > 0, r.usage);
+    t.ck("and no per-text price is left anywhere on it", !/\$0\.02|each|billed separately|separately from/i.test(r.usage), r.usage);
+    t.ck("it says texts are included, and what going over costs",
+      /Text messages\s*2,500 a month included/.test(r.usage) && /\$50 for every 5,000 sent that month, charged on the 1st/.test(r.usage), r.usage);
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

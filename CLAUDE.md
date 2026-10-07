@@ -10187,6 +10187,56 @@ refactor.
   upward.
 
 
+- **THE IN-APP PLAN CARDS QUOTED THE OLD TEXT PRICE, AND GOOGLE SIGN-IN HAS
+  ITS OWN LIGHT.** Reported with Account → Subscription on screen: Scale's card
+  read *Email & SMS notifications available*, and *Usage this month* had a row
+  reading **SMS notifications: $0.02 each** over a footnote saying texts were
+  *billed monthly, separately from your Scale subscription*. That was the
+  pricing before texts were included in Scale. The pricing page, the server and
+  the Text messages panel on the same screen all say 2,500 a month included,
+  then $50 for every 5,000 sent, charged on the 1st.
+
+  **The cards now say what pricing.html says, item for item and in its order**:
+  who each plan is for, Basic's email notifications and *no card, no expiry*,
+  and Scale's lien waivers, CRM connection and Easy Pay terms. **Every figure
+  comes off the constant the server charges by**: texts from `smsquota.js` and
+  the payment fee from `fee.js`. That way the card cannot quote a price the bill
+  does not, which is exactly how $0.02 outlived the price it described. The
+  usage row says *2,500 a month included*, and the footnote says what going over
+  costs and that texts can be turned off. The upgrade prompt's one-line summary
+  follows the same list.
+
+  **The noun follows the account kind**, the rule `hiresLabel` draws everywhere
+  else. A property manager's card says *Up to 3 contractors*, not
+  subcontractors. `test:feesms` drives both kinds in the same place, and
+  hard-coding the word fails only the property-manager branch, which is the
+  diagonal coverage this file keeps refusing. Putting the $0.02 row back fails
+  two assertions. That suite had also been red since job cards became lines:
+  its fee block clicked a work-order link that is only on the open card. It
+  opens the cards now.
+
+  **Google sign-in gets its own light, because Google's keys are not ours to
+  test.** The Google client id and secret live in Supabase, never in this
+  Worker, so nothing here can probe Google itself. What actually breaks is the
+  provider being switched off in Supabase, or a project rebuilt without it.
+  When that happens, every *Continue with Google* button fails while email
+  sign-in works and the Supabase light stays green.
+
+  `GET /auth/v1/settings` with the anon key is read-only and reports
+  `external.google`:
+  - **Switched off** is red, with words of its own (`probe.off`) rather than
+    *Refused*, because nobody refused anything.
+  - An answer that does not say is amber.
+  - A refused key is red and names the key.
+
+  It is its own group over the same two settings, so the Google light does not
+  hide under the Supabase one. Deleting the switched-off branch fails its
+  assertion.
+
+  **Not verified here:** the live Supabase answer. The field name is GoTrue's
+  documented settings shape, and the first look at Health on the deployed
+  console is the real test.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

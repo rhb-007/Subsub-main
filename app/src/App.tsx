@@ -54,7 +54,7 @@ import { KIND_WORDS, kindShort, kindRefusal, isConditional, formsReasonText, ren
 import { coverProblemText, fixableByUpload } from "../shared/paygate.js";
 import { MIN_FUND_CENTS, canPay, payRefusalText, fundSuggestion } from "../shared/escrow.js";
 import { feeTermsText, DEFAULT_FEE_TERMS } from "../shared/fee.js";
-import { smsUsageText, smsOverageText, SMS_OVERAGE_TERMS } from "../shared/smsquota.js";
+import { smsUsageText, smsOverageText, SMS_OVERAGE_TERMS, SMS_INCLUDED_SCALE, SMS_BLOCK_MESSAGES, SMS_BLOCK_PRICE_CENTS } from "../shared/smsquota.js";
 import { INSURANCE_LINES, OPTIONAL_LINES, BOND_MIN, INSURANCE_MIN, checkItems, findingsFor,
   problemsIn, allConfirmed, reviewProgress, outcomeWords } from "../shared/doccheck.js";
 import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/autoschedule.js";
@@ -16460,8 +16460,9 @@ function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, on
       <p className="up-sub">{why}</p>
 
       <p className="up-gets">
-        <strong>Scale</strong> gives you unlimited subcontractors, users and jobs, your own logo
-        and sign-in address, SMS notifications and uniform ordering.
+        <strong>Scale</strong> gives you unlimited {words.many}, users and jobs, your own logo
+        and sign-in address, {SMS_INCLUDED_SCALE.toLocaleString("en-US")} texts a month, lien waivers,
+        uniform ordering and a connection to your CRM.
       </p>
 
       <div className="cycle up-cycle" role="tablist" aria-label="Billing cycle">
@@ -16511,34 +16512,54 @@ function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, on
 // engages 3 of the same ones. Cascade Roofworks is ONE company with TWO
 // engagements — different rating, notes and document verdicts in each.
 // Sign in as miguel@cascaderoof.com to see the account switcher.
+// The plan cards say what pricing.html says, item for item and in its order,
+// because somebody deciding whether to upgrade has usually just read that page
+// and a second, older list in the app reads as a different offer. Every figure
+// in them comes off the constant the server charges by -- SMS off smsquota.js,
+// the payment fee off fee.js -- so the card cannot quote a price the bill does
+// not. They used to carry "Email & SMS notifications available" beside a usage
+// row reading "$0.02 each", which was the pricing before texts were included.
+//
+// The noun follows the account kind (`words`), the rule hiresLabel already
+// draws everywhere else: a property manager is not told about subcontractors.
+const smsN = (x) => x.toLocaleString("en-US");
+const SMS_PLAN_TERMS = `${smsN(SMS_INCLUDED_SCALE)} texts a month; past that, `
+  + `${formatDollars(SMS_BLOCK_PRICE_CENTS / 100)} per ${smsN(SMS_BLOCK_MESSAGES)} sent, on the 1st`;
+const easyPayTerms = (w) => `first ${formatDollars(DEFAULT_FEE_TERMS.freeCents / 100)} free, then `
+  + `${DEFAULT_FEE_TERMS.bps / 100}% a payment, never more than `
+  + `${formatDollars(DEFAULT_FEE_TERMS.capCents / 100)}, and your ${w.many} get the full amount`;
 const PLANS = {
   basic: {
     id: "basic", name: "Basic", price: "Free", per: "",
+    tagline: (w) => `For a small, steady list of ${w.many}`, bill: "No card, no expiry.",
     limit: 3, userLimit: 1, jobsPerMonth: 5, branding: false,
-    features: [
-      "Up to 3 subcontractors",
-      "1 user",
-      "5 jobs & work orders per month",
-      "Schedule and manage contractors in one place",
-      "Compliance document tracking",
-      "Contractor portal",
+    features: (w) => [
+      [`Up to 3 ${w.many}`],
+      ["1 user"],
+      ["5 jobs & work orders per month"],
+      ["Onboarding, approvals and compliance tracking"],
+      ["Crew scheduling and the contractor portal"],
+      ["Email notifications"],
     ],
-    excluded: ["Your own logo", "Your own sign-in address"],
+    excluded: [["Your own logo", "SubSub branding instead"], ["Your own sign-in address"]],
   },
   scale: {
     id: "scale", name: "Scale", price: "$99", per: "/mo",
+    tagline: () => "For a growing list and a real team",
     // Annual is two months free: $990 vs $1,188 billed monthly.
     annual: 990, annualPer: "/yr", annualMonthly: "$82.50", annualSaving: 198,
     limit: Infinity, userLimit: Infinity, jobsPerMonth: Infinity, branding: true,
-    features: [
-      "Unlimited subcontractors",
-      "Unlimited users",
-      "Unlimited jobs and work orders",
-      "Your logo and your own sign-in address",
-      "Email & SMS notifications available",
-      "Uniform ordering and approvals",
-      "Connect your CRM — jobs post in by API",
-      "Easy Pay subcontractors (coming soon)",
+    features: (w) => [
+      [`Unlimited ${w.many}`],
+      ["Unlimited users"],
+      ["Unlimited jobs and work orders"],
+      ["Your logo and your own sign-in address", "yourcompany.subsub.work"],
+      ["Everything else in Basic"],
+      ["Email and SMS notifications", SMS_PLAN_TERMS],
+      ["Uniform ordering and approvals"],
+      ["Lien waivers", "asked for, signed and tracked against every payment"],
+      ["Connect your CRM", "jobs arrive on their own from JobNimbus, Zapier, Make or your own script"],
+      [`Easy Pay ${w.many} (coming soon)`, easyPayTerms(w)],
     ],
     excluded: [],
   },
@@ -20202,6 +20223,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // somebody has not reached yet is not an error, it is an empty field.
   const subProblem = slug ? subdomainProblem(slug) : null;
   const active = PLANS[plan];
+  const planWords = rosterWords({ kind: accountKind });
 
   return (
     <main className="ss-main">
@@ -21013,6 +21035,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <div key={pl.id} className={`plan-card ${plan === pl.id ? "on" : ""}`}>
                 {plan === pl.id && <span className="plan-badge">Current</span>}
                 <span className="plan-name">{pl.name}</span>
+                {pl.tagline && <span className="plan-tag">{pl.tagline(planWords)}</span>}
                 <div className="plan-price">
                   {pl.annual && billing === "annual"
                     ? <>{pl.annualMonthly}<span>{pl.per}</span></>
@@ -21030,10 +21053,13 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                       : "Billed monthly, plus sales tax · cancel any time"}
                   </span>
                 )}
+                {pl.bill && <span className="plan-bill">{pl.bill}</span>}
                 <ul className="plan-feats">
-                  {pl.features.map((ft) => <li key={ft}><Check size={13} /> {ft}</li>)}
-                  {(pl.excluded || []).map((ft) => (
-                    <li key={ft} className="feat-off"><X size={13} /> {ft}</li>
+                  {pl.features(planWords).map(([ft, note]) => (
+                    <li key={ft}><Check size={13} /><span><b>{ft}</b>{note && <> — {note}</>}</span></li>
+                  ))}
+                  {(pl.excluded || []).map(([ft, note]) => (
+                    <li key={ft} className="feat-off"><X size={13} /><span>{ft}{note && <> — {note}</>}</span></li>
                   ))}
                 </ul>
                 {/* Each card's button is about that card's plan. The way
@@ -21097,16 +21123,20 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <h4>Usage this month</h4>
               <div className="usage-rows">
                 <div className="wd-row"><span>Email notifications</span><strong>Included</strong></div>
-                <div className="wd-row"><span>SMS notifications</span><strong>$0.02 each</strong></div>
-                <div className="wd-row"><span>{rosterWords({ kind: accountKind }).Many} on account</span><strong>{subs.length}</strong></div>
+                {/* Texts are part of the plan now, not a per-message line.
+                    It said "$0.02 each" over a footnote calling them billed
+                    separately, which was the old price and the opposite of
+                    the one on the pricing page. The count itself is on the
+                    Text messages panel, read off the server. */}
+                <div className="wd-row"><span>Text messages</span><strong>{SMS_INCLUDED_SCALE.toLocaleString("en-US")} a month included</strong></div>
+                <div className="wd-row"><span>{planWords.Many} on account</span><strong>{subs.length}</strong></div>
                 <div className="wd-row"><span>User seats</span><strong>{seatCount} · unlimited</strong></div>
               </div>
-              {/* Was "$50 subscription", which is neither the monthly nor
-                  the annual price. A number typed into a sentence goes stale
-                  the first time pricing moves; the plan's name does not. */}
               <p className="cov-hint">
-                SMS usage is billed monthly, separately from your Scale subscription.
-                Email notifications are included at no extra cost.
+                Emails are included. Past {SMS_INCLUDED_SCALE.toLocaleString("en-US")} texts in a month they
+                keep going, at {formatDollars(SMS_BLOCK_PRICE_CENTS / 100)} for every
+                {" "}{SMS_BLOCK_MESSAGES.toLocaleString("en-US")} sent that month, charged on the 1st. You can
+                turn text messages off at any time, and emails still go out.
               </p>
             </div>
           )}
@@ -36831,7 +36861,9 @@ strong.insp-name{background:none;border:0;padding:0}
 .plan-feats{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:7px;flex:1}
 .plan-feats li{display:flex;align-items:flex-start;gap:7px;font-size:12.5px;color:var(--ink-soft);line-height:1.4}
 .plan-feats svg{flex:none;margin-top:2px;color:var(--brand)}
+.plan-feats li b{color:var(--ink);font-weight:700}
 .plan-feats li.feat-off{color:#A9B3AD}
+.plan-tag{display:block;font-size:12.5px;color:var(--ink-soft);margin-top:2px}
 .plan-feats li.feat-off svg{color:#A9B3AD}
 .plan-btn{width:100%;justify-content:center;margin-top:6px}
 .usage-panel{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:18px;margin-top:14px;box-shadow:var(--shadow)}

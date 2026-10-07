@@ -24,6 +24,16 @@ const GROUPS = [
       + "which is exactly why a missing one goes unnoticed.",
   },
   {
+    // The same two settings as the group above, because Google sign-in goes
+    // through Supabase: Google's client id and secret live in Supabase's
+    // dashboard, never in this Worker. Its own row so a provider switched off
+    // in Supabase is a light of its own rather than hiding under a green one.
+    id: "google", label: "Google sign-in (through Supabase)",
+    vars: ["SUPABASE_URL", "SUPABASE_ANON_KEY"],
+    matters: "The Continue with Google button on every sign-in page. Google's own keys are set in Supabase "
+      + "(Authentication, Sign In / Providers, Google), so this asks Supabase whether that provider is on.",
+  },
+  {
     id: "mail", label: "Email (Resend)",
     vars: ["RESEND_API_KEY", "MAIL_FROM"],
     matters: "Document requests, work orders and application receipts. "
