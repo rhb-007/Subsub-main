@@ -427,23 +427,18 @@ body.nav-open{overflow:hidden}
      with no card around it. The mask feathers the bottom edge, where the
      photograph stops mid-torso -- without it the hero ends in a hard
      horizontal line across six chests. */
-  /* TOP-ALIGNED WITH THE COPY, which reverses the earlier decision and is
-     worth saying so. It used to be bottom-aligned with a -62px overrun into
-     the section's padding, so the crew "stood in" the hero. That was written
-     for a 1.75-aspect picture; the one here is 1.50, so at the same width it
-     is taller and the old alignment dropped it a long way down the hero --
-     starting 176px below the headline and finishing 114px above the last line
-     of copy, which reads as a separate thing floating beside the text rather
-     than the other half of the same block.
-     So the crew now starts level with the h1 and runs to within 40px of the
-     fine print: even with the copy, top and bottom.
-     The width is what makes that possible. A 1.50 picture as tall as a 500px
-     column of copy needs ~750px, which is more than the column holds -- hence
-     the wider grid share AND the overrun, and hence overflow-x above. The left
-     edge may sit a little inside the widest line of text because the cutout
-     carries ~6% transparent margin of its own, so the nearest puppet is still
-     clear of the words. */
-  .hero-crew{align-self:start}
+  /* CENTRED ON THE COPY, and the alignment follows the picture's shape.
+     It was bottom-aligned for a 1.75-aspect picture, then top-aligned for a
+     1.50 one, which was tall enough to run from the h1 to within 40px of the
+     fine print. The six-puppet picture now here is 1.71 -- wider for its
+     height -- so top-aligned it finished ~100px above the copy, the
+     floating-beside-the-text look the last swap was fixed for. Centred splits
+     that gap evenly above and below, so the two still read as one block.
+     The width share and the overrun stay: they are what make it as tall as it
+     is, and overflow-x above clips the spill. This cutout runs nearly to its
+     own left edge, so the box sits a little inside the widest line of text;
+     centring is also what keeps the hammer below the headline. */
+  .hero-crew{align-self:center}
   .hero-crew img{display:block;width:125%;max-width:none;margin-left:-13%;height:auto;
     -webkit-mask-image:linear-gradient(to bottom,#000 84%,transparent 100%);
             mask-image:linear-gradient(to bottom,#000 84%,transparent 100%)}
@@ -598,10 +593,10 @@ body.nav-open{overflow:hidden}
 
       <div class="hero-crew">
         <picture>
-          <source type="image/webp" srcset="hero-crew.webp 768w, hero-crew@2x.webp 1535w"
+          <source type="image/webp" srcset="hero-crew.webp 820w, hero-crew@2x.webp 1639w"
             sizes="(max-width:900px) 92vw, 46vw">
-          <img src="hero-crew.png" srcset="hero-crew.png 768w, hero-crew@2x.png 1535w"
-            sizes="(max-width:900px) 92vw, 46vw" width="768" height="512"
+          <img src="hero-crew.png" srcset="hero-crew.png 820w, hero-crew@2x.png 1639w"
+            sizes="(max-width:900px) 92vw, 46vw" width="820" height="480"
             alt="Six sock-puppet subcontractors in hard hats and hi-vis, grinning, holding a tape measure, a nail gun, a hammer and a length of timber, with one in front giving two thumbs up"
             fetchpriority="high" decoding="async">
         </picture>

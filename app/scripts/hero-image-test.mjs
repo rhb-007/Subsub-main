@@ -148,11 +148,11 @@ try {
   // padding. That was written for a 1.75-aspect picture; at 1.50 the same
   // rule dropped it 176px below the headline and finished it 114px above the
   // last line of copy -- a separate thing floating beside the text rather
-  // than the other half of the same block. It is top-aligned now.
+  // than the other half of the same block. It was top-aligned for that 1.50
+  // picture, and is centred for the 1.71 one that replaced it.
   //
-  // Worth a test because nothing else would say a word: restoring
-  // `align-items:center` or `align-self:end` renders perfectly, loads
-  // perfectly, and is simply in the wrong place.
+  // Worth a test because nothing else would say a word: the wrong alignment
+  // renders perfectly, loads perfectly, and is simply in the wrong place.
   console.log("\n-- and it sits level with the copy --");
   // 1024 is in here on purpose. The first version of this checked only the two
   // widths that happened to pass, which is choosing the evidence: at 1024 the
@@ -185,22 +185,30 @@ try {
       };
     });
     await ctx.close();
-    ck(`${name}: the crew starts level with the headline`, Math.abs(o.topVsH1) <= 8, `${o.topVsH1}px`);
-    // The numbers hold across the whole desktop range rather than at the width
-    // that flatters them: at 1024 the copy reflows to more lines while the
-    // crew only scales, so the gap widens. They are still far from what they
-    // exist to catch -- bottom-aligned, the old rule put the crew 176px below
-    // the headline, 114px short of the copy and at 0.73 of its height.
-    ck(`${name}: and finishes near the end of the copy`, Math.abs(o.bottomVsCopy) <= 80, `${o.bottomVsCopy}px`);
+    // CENTRED ON THE COPY, which is the rule for a 1.71 picture. The 1.50 one
+    // was top-aligned and finished within 43px of the fine print; this one is
+    // wider for its height, so top-aligned it finished ~100px above the copy
+    // -- the floating-beside-the-text look the previous swap was fixed for.
+    // Centred splits that gap above and below, so the property is BALANCE:
+    // either gap alone passes with the other alignment back in force.
+    const above = o.topVsH1, below = -o.bottomVsCopy;
+    ck(`${name}: the crew is centred on the copy, not hung from its top or its foot`,
+      Math.abs(above - below) <= 24, `${above}px below the headline, ${below}px above the end of the copy`);
+    ck(`${name}: and neither gap is a separate block's worth`,
+      above >= 0 && above <= 90 && below >= 0 && below <= 90, `${above}px / ${below}px`);
+    // A wider picture is shorter beside the same copy, and at 1024 the copy
+    // reflows to more lines while the crew only scales. The bound is what this
+    // assertion's own name says -- not a third of the copy -- with room for
+    // that reflow rather than tuned to the widest desktop.
     ck(`${name}: so it is the same height as the copy, not a third of it`,
-      o.imgH / o.copyH > 0.8, `crew ${o.imgH}px vs copy ${o.copyH}px (${(o.imgH / o.copyH).toFixed(2)})`);
+      o.imgH / o.copyH > 0.65, `crew ${o.imgH}px vs copy ${o.copyH}px (${(o.imgH / o.copyH).toFixed(2)})`);
     // It overruns its column on purpose and .hero clips the spill, so the
     // no-sideways-scroll check above can no longer fail on this. This is what
     // replaces it: a future width bump must not cut a puppet in half.
     ck(`${name}: and no more than a sliver is clipped off the right`,
       o.overRight <= o.imgW * 0.08, `${o.overRight}px past the viewport, image ${o.imgW}px`);
-    // The cutout carries ~6% transparent margin, so a small negative is the
-    // box overlapping, not a puppet sitting on the words.
+    // The box may overlap the widest line a little; the bound is that no
+    // puppet sits on the words.
     ck(`${name}: the crew does not land on the words`, o.inkGap > -40, `${o.inkGap}px`);
   }
 

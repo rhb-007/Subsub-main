@@ -10486,6 +10486,33 @@ refactor.
   `standing.reasons` unguarded, so a stub with no `eligible` field threw there
   and read exactly like the switch vanishing.
 
+- **THE NEW CREW ARRIVED AS A PICTURE OF A CHECKERBOARD, AGAIN, AND WAS CUT
+  OUT RATHER THAN SHIPPED.** The replacement six puppets came as an **RGB** PNG
+  with the transparency grid drawn into it: white near 253, grey near 236,
+  irregular squares of about 12px. That is the exact failure the hero entry
+  above records and `test:hero` exists for, and swapping it in as supplied
+  fails three of its assertions -- which is the check that it still guards.
+
+  **Cut by flood fill from the edges through light, neutral pixels**, so the
+  white hard hat and the eye whites, which are enclosed by the puppets and not
+  connected to the border, are never reached. One enclosed pocket (behind the
+  nail gun's grip) was cleared because it carried both checker tones in
+  quantity, which a hat or an eye does not. The foreground is eroded by a pixel
+  and feathered, so no pale fringe survives on the forest green, and every edge
+  was looked at zoomed on that green before anything was written.
+
+  **The files follow the picture, not the old numbers**: 1639x960, so 2x is the
+  whole image and 1x is 820, and the srcset and width/height say so.
+
+  **And the alignment moved a third time, to centre**, because it follows the
+  picture's shape. At 1.71 this one is wider for its height than the 1.50 it
+  replaced, so top-aligned it finished ~100px above the copy. Centred splits
+  that gap above and below, and the test now asserts the BALANCE, because
+  either gap alone passes with the other alignment back in force: top- and
+  bottom-aligned each fail five assertions. The height bound loosened from 0.8
+  to 0.65 of the copy, for the 1024 reflow, and still catches the "a third of
+  it" case its own name describes.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
