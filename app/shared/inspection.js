@@ -657,6 +657,36 @@ function roomTrades(r) {
   return { hits, photo, unread, noFault };
 }
 
+// ROOMS MARKED FINE WHOSE WORDS DESCRIBE WORK.
+//
+// Reported as "raise a job from an inspection has disappeared". It had not:
+// it is offered only once a room is Follow-up or Fail, and the walk on screen
+// had both rooms marked OK -- one of them noted "need to refinished and
+// polished". So the verdict said nothing was wrong while the words said
+// otherwise, and the one control the whole walk exists to reach was simply
+// absent, with nothing saying why.
+//
+// The words are read through the same `faultClauses` the photographs are, and
+// for the same reason: a room that is NOT flagged inherits nothing from a
+// flag, so its note has to name a fault itself -- "Carpet." under an OK room
+// is somebody saying the carpet is fine. Captions are read the same way;
+// unkept drafts are not, because a model's sentence nobody kept is not
+// something the manager said.
+//
+// It never CHANGES a verdict. It names the room and the words, and the screen
+// offers marking it Follow-up as one tap -- the manager is standing in the
+// flat and is the one who decides.
+export function unflaggedWork(rooms = []) {
+  const out = [];
+  for (const r of Array.isArray(rooms) ? rooms : []) {
+    if (isFlagged(r)) continue;
+    const words = [faultClauses(r?.note), ...(r?.photos || []).map((p) => faultClauses(p?.caption))]
+      .map((w) => String(w || "").trim()).filter(Boolean);
+    if (words.length) out.push({ id: r.id, name: roomName(r), status: r?.status || "unchecked", words: words[0] });
+  }
+  return out;
+}
+
 export function suggestTrades(rooms = []) {
   const why = {};
   const fromPhoto = new Set();

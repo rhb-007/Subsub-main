@@ -10382,6 +10382,34 @@ refactor.
   stored at full size stay that size; there is no server-side thumbnail, so an
   old full-size photo still downloads whole for its thumbnail.
 
+- **"RAISE A JOB HAS DISAPPEARED" -- IT HAD NOT, AND THE SCREEN SAID NOTHING
+  ABOUT WHY.** Reported with a finished move-out on screen: two rooms, both
+  marked OK, and a Kitchen note reading *"need to refinished and polished"*.
+  Raise a job is offered only once a room is Follow-up or Fail -- the route
+  refuses `nothing_flagged` -- so the verdict said nothing was wrong while the
+  words said otherwise, and the one control the whole walk exists to reach was
+  absent with nothing in its place. That is the disabled-control-with-no-reason
+  failure in its purest form, because here even the control was gone.
+
+  **The screen now says why, where the button would be**, and names any room
+  whose words describe work under an unflagged verdict, with the one tap that
+  fixes it: *Mark Kitchen Follow-up* on a draft, *Reopen to mark it* on a
+  finished walk. Never a write on a finished one -- the route refuses it, and
+  reopening is on the record by design.
+
+  **`unflaggedWork` reads through `faultClauses`, the photographs' rule.** A
+  room that is not flagged inherits nothing from a flag, so its note has to
+  name a fault itself: *"Carpet."* under an OK room is somebody saying the
+  carpet is fine, and the fixture carries exactly that row. Reading the raw
+  note is the mutation that names it. Kept captions are read, unkept drafts are
+  not. It **never changes a verdict** -- it names the room and offers the tap,
+  because the manager standing in the flat is the one who decides.
+
+  `test:nojobwhy` drives all three states: a draft (one press sends Follow-up
+  for that room only, Raise a job appears and the note goes), a finished walk
+  (Reopen, and nothing written), and a flagged walk (no note beside the
+  button). Offering *Mark* on a finished walk fails three assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

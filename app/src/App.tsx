@@ -72,7 +72,7 @@ import { suggestedAccessForInspection } from "../shared/inspection.js";
 import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   MAX_ROOM_PHOTOS, roomName, inspectionTally, flaggedRooms,
   whyNotFinish, canSendInspection, mayWriteInspection,
-  suggestTrades, inspectionStep, quoteInspectionShape } from "../shared/inspection.js";
+  suggestTrades, inspectionStep, quoteInspectionShape, unflaggedWork } from "../shared/inspection.js";
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { SUMMARY_REFUSALS, countComments, whyNotSummary } from "../shared/inspectsummary.js";
@@ -31377,6 +31377,43 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
         </div>
       )}
 
+      {/* WHY THERE IS NO RAISE A JOB, said where the button would be. Reported
+          as the feature having disappeared: it is offered only once a room is
+          Follow-up or Fail, and a walk with every room marked OK showed
+          nothing at all in its place -- the most important control on the
+          screen, absent with no reason, which this file calls
+          indistinguishable from broken. It names any room whose words
+          describe work under an OK verdict, and offers the one tap that
+          fixes it: marking it Follow-up on a draft, or reopening a finished
+          walk, since the verdict is the manager's to change and not ours. */}
+      {canEdit && !inspection.jobId && rooms.length > 0 && tally.flagged === 0 && (() => {
+        const suspects = unflaggedWork(rooms);
+        const finished = inspection.status === "finished";
+        return (
+          <div className="insp-nojob">
+            <p><Hammer size={14} /> <b>No job to raise yet.</b> A job is raised from the rooms marked
+              {" "}<b>Follow-up</b> or <b>Fail</b>, and none here are.
+              {finished && !suspects.length ? " Reopen it to mark the room that needs work." : ""}</p>
+            {suspects.slice(0, 3).map((r) => (
+              <div key={r.id} className="insp-nojob-room">
+                <span><b>{r.name}</b> is marked {ROOM_STATUSES[r.status]?.label || "not checked"}, but
+                  says “{r.words.length > 120 ? `${r.words.slice(0, 117)}…` : r.words}”</span>
+                {finished ? (
+                  reopenWhy === null && (
+                    <button className="btn-ghost small" onClick={() => setReopenWhy("")}>
+                      <Pencil size={13} /> Reopen to mark it</button>
+                  )
+                ) : (
+                  <button className="btn-solid small" disabled={!!busy}
+                    onClick={() => run(`flag-${r.id}`, () => patchRoom(r.id, { status: "follow_up" }))}>
+                    <AlertTriangle size={13} /> {busy === `flag-${r.id}` ? "Marking…" : `Mark ${r.name} Follow-up`}</button>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
       <div className="pd-acts">
         <button className="btn-ghost small" onClick={onClose}>Close</button>
         {!locked && canEdit && (
@@ -35638,6 +35675,15 @@ p.fld-note{margin:6px 0 0}
 .insp-reopen.open p{margin:0 0 10px;line-height:1.5}
 .insp-reopens{list-style:none;margin:10px 0 0;padding:0;font-size:13px;color:var(--ink-soft)}
 .insp-reopens li{display:flex;align-items:baseline;gap:6px;padding:3px 0}
+/* Why there is no Raise a job, where the button would be. Amber edge, because
+   a room whose words describe work under an OK verdict is waiting on somebody. */
+.insp-nojob{margin:14px 0 0;padding:12px 14px;border:1px solid var(--line);border-left:4px solid var(--amber);
+  border-radius:10px;background:var(--paper);font-size:14px;color:var(--ink)}
+.insp-nojob p{margin:0;line-height:1.5}
+.insp-nojob p svg{vertical-align:-2px}
+.insp-nojob-room{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;
+  margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.insp-nojob-room span{flex:1 1 240px;line-height:1.45;color:var(--ink-soft)}
 /* The job details opened from a dashboard row. What needs doing, the rooms and
    photographs it came from, and every trade on the job, above the same action
    the row offers. */
