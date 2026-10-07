@@ -3934,6 +3934,29 @@ export default function SubSub() {
     logEvent("overflow_posted", `Put ${body.trade} out to overflow`);
     return made;
   };
+  // The Overflow control on a trade row: a button, or what is already out.
+  // One function because it is drawn on an empty slot AND on a slot whose
+  // contractor declined or never replied -- two copies would be two places to
+  // keep the "already out" pill in step.
+  const overflowControl = (j, t) => {
+    const out = overflowPosts.find((p) =>
+      p.jobId === j.id && p.trade === t && p.status === "open");
+    if (out) {
+      return (
+        <span className="ovf-pill" title={`Closes ${new Date(out.expiresAt).toLocaleString()}`}>
+          <Zap size={11} /> Out to overflow
+          {out.responses.length
+            ? ` · ${out.responses.length} answered`
+            : " · no answers yet"}
+        </span>
+      );
+    }
+    return (
+      <button className="trade-swap" onClick={() => setPostingOverflow({ job: j, trade: t })}>
+        <Zap size={12} /> Overflow
+      </button>
+    );
+  };
   const pickOverflow = async (postId, companyId) => {
     try {
       const got = await api.pickOverflow(postId, companyId);
@@ -6752,6 +6775,13 @@ export default function SubSub() {
                                       onClick={() => setAssigning({ job: j, trade: t, replacing: a.subId })}>
                                       <Zap size={12} /> Find alternatives
                                     </button>
+                                    {/* Overflow too, because the contractor
+                                        asked has not answered. The server no
+                                        longer counts somebody who let this
+                                        slot run out as "you have somebody for
+                                        this", so when they were the only one
+                                        who covers it the post goes. */}
+                                    {!done && overflowControl(j, t)}
                                     <button className="trade-swap" onClick={() => unassignTrade(j.id, t)}>Withdraw</button>
                                   </div>
                                 ) : a.status === "pending" ? (
@@ -6778,6 +6808,9 @@ export default function SubSub() {
                                         : <><XCircle size={14} /> Declined{subName(subs, a.subId) ? ` by ${subName(subs, a.subId)}` : ""}</>}
                                     </span>
                                     {!done && <button className="trade-swap" onClick={() => unassignTrade(j.id, t)}>Replace</button>}
+                                    {/* A decline is the same answer as no
+                                        reply, so the same way out. */}
+                                    {!done && a.status === "declined" && overflowControl(j, t)}
                                   </div>
                                 )}
                                 {canRate && done && a.status !== "declined" && (
@@ -6894,25 +6927,7 @@ export default function SubSub() {
                                     so the button being here is not an invitation
                                     to skip your own roster, and the server
                                     refuses it too. */}
-                                {(() => {
-                                  const out = overflowPosts.find((p) =>
-                                    p.jobId === j.id && p.trade === t && p.status === "open");
-                                  if (out) {
-                                    return (
-                                      <span className="ovf-pill" title={`Closes ${new Date(out.expiresAt).toLocaleString()}`}>
-                                        <Zap size={11} /> Out to overflow
-                                        {out.responses.length
-                                          ? ` · ${out.responses.length} answered`
-                                          : " · no answers yet"}
-                                      </span>
-                                    );
-                                  }
-                                  return (
-                                    <button className="trade-swap" onClick={() => setPostingOverflow({ job: j, trade: t })}>
-                                      <Zap size={12} /> Overflow
-                                    </button>
-                                  );
-                                })()}
+                                {overflowControl(j, t)}
                                 {/* TAKING A TRADE OFF, from the row it is on.
                                     An inspection suggests trades from words in
                                     the notes, and some of those turn out not

@@ -112,9 +112,19 @@ export const ELIGIBILITY_TEXT = {
 // the answer is no -- with the ones who could named, because they are the
 // account's own contractors and telling them to use their own roster is the
 // whole point.
-export function canBroadcast({ ownRoster = [], trade } = {}) {
+//
+// `passed` is the companies already offered THIS slot who declined it or let
+// the reply window run out. They are on the roster and could in principle be
+// issued it, but they have been asked and the answer was no -- counting them as
+// "you have somebody for this" sent the account back to the one contractor who
+// had just not answered, and left overflow unreachable for exactly the job it
+// exists for. Asking a second time is still open to them through Find
+// alternatives; what this stops is that contractor standing in the way.
+export function canBroadcast({ ownRoster = [], trade, passed = [] } = {}) {
+  const gone = new Set(passed);
   const usable = ownRoster.filter((s) =>
-    (s.categories || []).includes(trade) && s.available !== false && s.assignable !== false);
+    (s.categories || []).includes(trade) && s.available !== false && s.assignable !== false
+    && !(s.id && gone.has(s.id)));
   if (usable.length) {
     return { ok: false, reason: "own_roster_available", companies: usable.map((s) => s.company) };
   }

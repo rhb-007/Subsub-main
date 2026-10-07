@@ -39,6 +39,24 @@ const JOBS = [{
   date: iso(1), time: null, address: "1 Cedar", area: "Seattle", zip: "98101",
   trades: ["plumbing"], assignments: {}, notes: "", createdAt: iso(-1), photos: [],
   severity: "urgent",
+}, {
+  // The reported card: the contractor asked never replied, and the window ran
+  // out. Beside it a trade somebody accepted, which must NOT offer overflow.
+  id: "job2", accountId: "acc_outer", title: "Move-out work unit 32", status: "active",
+  date: iso(2), time: null, address: "2028 NW 59th", area: "Seattle", zip: "98107",
+  trades: ["electrical", "roofing"], notes: "", createdAt: iso(-1), photos: [], severity: null,
+  assignments: {
+    electrical: { id: "wo_e", subId: "cmp_mine", company: "My Electric", wo: "WO-336667", value: 150000,
+      status: "pending", auto: false, responseWindow: "24h", respondBy: inHours(-5) },
+    roofing: { id: "wo_r", subId: "cmp_roof", company: "My Roofing", wo: "WO-1", value: 100000,
+      status: "accepted", auto: false },
+  },
+}, {
+  id: "job3", accountId: "acc_outer", title: "Gutter run at Elm", status: "active",
+  date: iso(3), time: null, address: "3 Elm", area: "Seattle", zip: "98101",
+  trades: ["gutters"], notes: "", createdAt: iso(-1), photos: [], severity: null,
+  assignments: { gutters: { id: "wo_g", subId: "cmp_mine", company: "My Gutters", wo: "WO-2", value: 50000,
+    status: "declined", auto: false } },
 }];
 
 // One open post with one answer, and nobody else ever named.
@@ -71,7 +89,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/overflow/posts") return [200, POSTS];
   if (path === "/api/overflow/offers") return [200, []];
   if (path === "/api/overflow/standing") return [200, { eligible: false, reasons: [], overflowOptIn: false, overflowTrades: [] }];
-  if (path.startsWith("/api/jobs/job1/overflow/eligibility")) return [200, ELIGIBILITY];
+  if (/^\/api\/jobs\/[^/]+\/overflow\/eligibility/.test(path)) return [200, ELIGIBILITY];
   if (path === "/api/jobs/job1/overflow" && method === "POST") {
     posted.push(body);
     return [201, { id: "ovf2", trade: body.trade, severity: body.severity, expiresAt: inHours(6), feeBps: 0, sent: true }];
@@ -246,6 +264,46 @@ console.log("\n-- before the migration is run, it says so before asking anything
 
   t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
   await ctx.close();
+
+  console.log("\n-- a contractor who never replied, or declined: overflow is on offer --");
+  {
+    const { ctx: c4, page: p4, crashes: cr4 } = await openApp();
+    await toJobs(p4);
+    const rows = await p4.evaluate(() => {
+      const out = {};
+      for (const card of document.querySelectorAll(".job-card")) {
+        const title = card.querySelector(".job-card-head")?.innerText || "";
+        for (const r of card.querySelectorAll(".trade-row")) {
+          const name = r.querySelector(".trade-name")?.innerText.trim();
+          out[`${/unit 32/.test(title) ? "job2" : /Gutter/.test(title) ? "job3" : "job1"}:${name}`] =
+            [...r.querySelectorAll("button")].map((b) => b.innerText.trim()).filter(Boolean);
+        }
+      }
+      return out;
+    });
+    const has = (k, re) => (rows[k] || []).some((b) => re.test(b));
+    t.ck("the expired row drew", (rows["job2:Electrical"] || []).length > 0, JSON.stringify(rows));
+    t.ck("no reply -- expired: Find alternatives AND Overflow",
+      has("job2:Electrical", /Find alternatives/) && has("job2:Electrical", /^Overflow$/), JSON.stringify(rows["job2:Electrical"]));
+    t.ck("declined: Overflow too", has("job3:Gutters", /^Overflow$/), JSON.stringify(rows["job3:Gutters"]));
+    t.ck("an accepted trade does not offer it", !has("job2:Roofing", /^Overflow$/), JSON.stringify(rows["job2:Roofing"]));
+
+    // Pressing it opens the same form, for THAT job and trade.
+    await p4.evaluate(() => {
+      const card = [...document.querySelectorAll(".job-card")].find((c) => /unit 32/.test(c.innerText));
+      const row = [...card.querySelectorAll(".trade-row")].find((r) => /Electrical/.test(r.innerText));
+      [...row.querySelectorAll("button")].find((b) => b.innerText.trim() === "Overflow")?.click();
+    });
+    await wait(1100);
+    const form = await p4.evaluate(() => {
+      const f = [...document.querySelectorAll(".form")].find((x) => /put this out to overflow/i.test(x.innerText));
+      return f ? f.querySelector(".form-sub")?.innerText || "" : null;
+    });
+    t.ck("pressing it opens the overflow form for that job and trade",
+      form !== null && /unit 32/.test(form) && /Electrical/.test(form), String(form));
+    t.ck("nothing threw", cr4.length === 0, cr4.join(" | "));
+    await c4.close();
+  }
 } finally {
   await browser.close();
   web.close(); api.close();

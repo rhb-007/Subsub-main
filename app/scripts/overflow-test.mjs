@@ -276,6 +276,71 @@ console.log("\n-- it is only for overflow --");
   ck("a trade they have nobody for may be broadcast", b.ok === true, JSON.stringify(b));
 }
 
+console.log("\n-- the contractor you asked and never heard from does not block it --");
+{
+  // Reported from a job card: two trades read "no reply -- expired" and
+  // offered only Find alternatives. Overflow was refused because the gate
+  // counted the very contractor who had just let the offer run out as
+  // "you have somebody for this".
+  const { db, env } = seed();
+  const ins = (id, job, status, respondBy, voided = null) => db.prepare(
+    `INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status,respond_by,voided_at)
+     VALUES (?,?,?,?,?,?,?,?,?)`).run(id, `WO-${id}`, job, "plumbing", "cmp_mine", "en_mine", status, respondBy, voided);
+  const elig = async () => (await json(await call(env, "u_admin", "acc1",
+    "/jobs/job1/overflow/eligibility?trade=plumbing")))[1];
+  const past = new Date(Date.now() - 3600_000).toISOString();
+  const future = new Date(Date.now() + 3600_000).toISOString();
+
+  // Still inside the window: they may yet answer, so they still count.
+  ins("wo_wait", "job1", "pending", future);
+  let b = await elig();
+  ck("an offer still inside its window keeps them counted", b.ok === false, JSON.stringify(b));
+  // Withdrawn before the deadline: they were never given the full time.
+  db.prepare(`UPDATE work_orders SET voided_at = CURRENT_TIMESTAMP WHERE id = 'wo_wait'`).run();
+  b = await elig();
+  ck("and one withdrawn before its deadline is not a pass", b.ok === false, JSON.stringify(b));
+
+  // The reported case: the reply window ran out on THIS slot.
+  ins("wo_exp", "job1", "pending", past);
+  b = await elig();
+  ck("once their window runs out with no reply, overflow is open", b.ok === true, JSON.stringify(b));
+  const [s, posted] = await json(await call(env, "u_admin", "acc1", "/jobs/job1/overflow",
+    { method: "POST", body: JSON.stringify({ trade: "plumbing" }) }));
+  ck("and the post goes, not only the check", s === 201 && posted.sent === true, `${s} ${JSON.stringify(posted)}`);
+}
+{
+  // Withdrawing the expired order voids it; the silence still counts.
+  const { db, env } = seed();
+  db.prepare(`INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status,respond_by,voided_at)
+    VALUES ('wo_x','WO-x','job1','plumbing','cmp_mine','en_mine','pending',?,CURRENT_TIMESTAMP)`)
+    .run(new Date(Date.now() - 3600_000).toISOString());
+  const [, b] = await json(await call(env, "u_admin", "acc1", "/jobs/job1/overflow/eligibility?trade=plumbing"));
+  ck("withdrawing an expired order afterwards does not undo it", b.ok === true, JSON.stringify(b));
+}
+{
+  const { db, env } = seed();
+  db.prepare(`INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status)
+    VALUES ('wo_d','WO-d','job1','plumbing','cmp_mine','en_mine','declined')`).run();
+  const [, b] = await json(await call(env, "u_admin", "acc1", "/jobs/job1/overflow/eligibility?trade=plumbing"));
+  ck("a decline on this slot opens it too", b.ok === true, JSON.stringify(b));
+}
+{
+  // A pass is about ONE slot. Declining another job says nothing about this one.
+  const { db, env } = seed();
+  db.exec(`INSERT INTO jobs(id,account_id,title,date,status,area,zip,severity) VALUES
+    ('job_other','acc1','Another job','${iso(2)}','active','Seattle','98101','urgent')`);
+  db.prepare(`INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status)
+    VALUES ('wo_o','WO-o','job_other','plumbing','cmp_mine','en_mine','declined')`).run();
+  const [, b] = await json(await call(env, "u_admin", "acc1", "/jobs/job1/overflow/eligibility?trade=plumbing"));
+  ck("a decline on a different job does not open this one", b.ok === false, JSON.stringify(b));
+}
+{
+  const r = [{ id: "c1", company: "A", categories: ["plumbing"] }, { id: "c2", company: "B", categories: ["plumbing"] }];
+  const v = canBroadcast({ ownRoster: r, trade: "plumbing", passed: ["c1"] });
+  ck("somebody else on the roster who covers it still sends them there, by name",
+    v.ok === false && JSON.stringify(v.companies) === JSON.stringify(["B"]), JSON.stringify(v));
+}
+
 console.log("\n-- posting tells the account nothing about who it reached --");
 {
   const { db, env } = seed();

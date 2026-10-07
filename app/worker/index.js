@@ -16341,7 +16341,7 @@ app.get("/api/jobs/:jobId/overflow/eligibility", requireRole("admin", "pm"), asy
   if (!job || !maySeeJob(c.get("auth"), jobId)) return c.json({ error: "job_not_found" }, 404);
 
   const roster = await ownRosterFor(c.env.DB, accountId, job.date);
-  const verdict = canBroadcast({ ownRoster: roster, trade });
+  const verdict = canBroadcast({ ownRoster: roster, trade, passed: await passedOnSlot(c.env.DB, jobId, trade) });
 
   // Whether the feature can run at all. This route reads none of 038's tables,
   // so without it the answer would be a cheerful "yes, go ahead" followed by a
@@ -16368,6 +16368,22 @@ app.get("/api/jobs/:jobId/overflow/eligibility", requireRole("admin", "pm"), asy
 
 // The account's own contractors, shaped for canBroadcast(). Scoped to the
 // caller's engagements, as every company read on a customer route must be.
+// Who has already been offered this slot and said no, or let the window run
+// out. A declined order is a no; a pending one past its respond_by is no reply.
+// Voided rows count too: Withdraw on an expired order voids it, and that does
+// not turn the silence into a yes. One withdrawn BEFORE its deadline is not
+// counted, because they were never given the full time to answer.
+async function passedOnSlot(db, jobId, trade) {
+  const now = new Date().toISOString();
+  const { results } = await db.prepare(
+    `SELECT DISTINCT company_id FROM work_orders
+      WHERE job_id = ? AND trade = ?
+        AND (status = 'declined'
+          OR (status = 'pending' AND auto_scheduled = 0 AND respond_by IS NOT NULL AND respond_by <= ?))`
+  ).bind(jobId, trade, now).all();
+  return (results || []).map((r) => r.company_id);
+}
+
 async function ownRosterFor(db, accountId, jobDate) {
   const { results } = await db.prepare(
     `SELECT co.id, co.company, co.available, co.insurance, co.bond, co.contract, co.doc_files,
@@ -16386,7 +16402,7 @@ async function ownRosterFor(db, accountId, jobDate) {
       covers = coversJob(docs, jobDate || today, EXPIRING_KINDS).ok;
     } catch (err) { if (!missingSchema(err)) throw err; }
     out.push({
-      company: r.company, categories: parseJson(r.categories, []),
+      id: r.id, company: r.company, categories: parseJson(r.categories, []),
       available: !!r.available,
       // Somebody who cannot legally be issued the work is not a reason to
       // refuse a broadcast -- that is precisely when an account has nobody.
@@ -16423,7 +16439,7 @@ app.post("/api/jobs/:jobId/overflow", requireRole("admin", "pm"), async (c) => {
   // take this is not overflowing, and without this check the feature is a
   // marketplace with extra steps.
   const roster = await ownRosterFor(c.env.DB, accountId, job.date);
-  const allowed = canBroadcast({ ownRoster: roster, trade });
+  const allowed = canBroadcast({ ownRoster: roster, trade, passed: await passedOnSlot(c.env.DB, jobId, trade) });
   if (!allowed.ok) {
     return c.json({ error: allowed.reason, companies: allowed.companies }, 409);
   }

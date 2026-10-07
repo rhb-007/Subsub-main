@@ -10237,6 +10237,43 @@ refactor.
   documented settings shape, and the first look at Health on the deployed
   console is the real test.
 
+- **A CONTRACTOR WHO NEVER REPLIED WAS COUNTED AS "YOU HAVE SOMEBODY FOR
+  THIS", SO OVERFLOW WAS SHUT ON EXACTLY THE JOB IT EXISTS FOR.** Reported with a
+  move-out job showing two trades as *no reply — expired*, each with only *Find
+  alternatives* and *Withdraw* on the row: *"shouldn't overflow be an option
+  here since my own sub didn't reply to the job?"*
+
+  It is two faults. The screen offered Overflow only on an empty slot. And had
+  it offered it, the server would have refused: `canBroadcast` counts every
+  roster company that covers the trade and could be issued the work, and the
+  contractor who had just let the offer run out still met all three conditions.
+  So the account was told to use the one person who had just not answered.
+
+  **`passedOnSlot` names who has already been asked about THIS slot and said
+  no.** That means a declined work order, or a pending one past its
+  `respond_by`, on the same job and trade. `canBroadcast` takes that list and
+  leaves them out. Three boundaries, each pinned by a mutation:
+  - **Per slot.** Declining one job says nothing about another, and dropping
+    the job filter fails the assertion built on a decline on a different job.
+  - **Only once the window has run out.** An offer still inside its window
+    keeps them counted, and so does one **withdrawn before its deadline**,
+    because they were never given the full time to answer. Dropping the
+    deadline check fails both.
+  - **Voided still counts.** *Withdraw* on an expired order voids it, and that
+    does not turn the silence into a yes.
+
+  **Somebody else on the roster who covers it still refuses the post, by
+  name.** Overflow is for when nobody of your own can take it, and one
+  contractor not answering is not the same as nobody. The modal then says who
+  to use. Only when the one who passed was the only one does the post go.
+
+  **On the screen, `overflowControl` is one function drawn in three places**:
+  the empty slot, the expired row and the declined row. Two copies of the *Out
+  to overflow* pill would be two to keep in step. It is never drawn on an
+  accepted trade or a closed job, and `test:overflowui` asserts the accepted
+  row beside the expired one, because a fix that put the button everywhere
+  passes every positive check.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
