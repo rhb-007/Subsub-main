@@ -219,6 +219,10 @@ This is an automated message from an unmonitored address. Replies aren't receive
 // than the feature is worth.
 export function autoScheduleRequestEmail({ company, contact, account, note }) {
   const who = account?.name || "our team";
+  // The link lands ON the switch (Job Settings, Availability tab, rung), and
+  // the path is spelled out under it, because "open your account and go to
+  // what you do" named no screen at all.
+  const autoLink = `https://${portalUrl(account?.subdomain)}/?open=auto-schedule`;
   const text = `Hi ${contact || company.company},
 
 ${who} has asked whether you'd like to turn on auto-schedule for the work
@@ -247,8 +251,9 @@ THIS IS YOURS TO DECIDE
   notified.
 
 TO TURN IT ON
-  https://${portalUrl(account?.subdomain)}
-  Open your account, go to what you do, and switch on auto-schedule.
+  ${autoLink}
+  That link opens the switch. To find it yourself after signing in:
+  Menu > Job Settings > Availability > Auto-schedule.
 
 — ${who}
 
@@ -257,7 +262,7 @@ This is an automated message from an unmonitored address. Replies aren't receive
   return {
     subject: `${who}: would you like jobs booked automatically?`,
     text,
-    html: textToHtml(text, `https://${portalUrl(account?.subdomain)}`),
+    html: textToHtml(text, autoLink),
   };
 }
 

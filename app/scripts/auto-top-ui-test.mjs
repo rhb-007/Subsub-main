@@ -5,9 +5,10 @@
 // the very foot of them. "Put the auto scheduled settings towards the top of
 // the page for contractors subcontractors instead of buried on the bottom."
 //
-// It is the one setting on that page that decides whether work lands on this
-// calendar without anybody being asked, so it now sits above the tabs and is
-// on every one of them. The hiring side's card had the same shape one screen
+// Then, with an arrow from the page title to the Availability tab: it lives
+// THERE, first on that tab, because it books jobs onto the days marked free
+// below it -- and the request email names that path and links straight to it
+// (?open=auto-schedule), landing on the tab with the switch rung. The hiring side's card had the same shape one screen
 // along -- under the capabilities and the stat cards -- and moves up under
 // the trades and Edit.
 //
@@ -123,23 +124,28 @@ try {
   t.ck("Job settings is in the nav", await nav(page, /^job settings/));
   await wait(900);
   let s = await settings(page);
-  // The positive half first: "the switch is above the grids" passes loudest
-  // on a screen that never rendered.
-  t.ck("the trades tab drew both chip grids", s.gridCount >= 2, JSON.stringify(s));
-  t.ck("there is exactly one Auto-schedule switch on the page", s.cards === 1, JSON.stringify(s));
-  t.ck("it sits above the tabs", s.card != null && s.tabs != null && s.card < s.tabs,
-    `${s.card} vs tabs ${s.tabs}`);
-  t.ck("and above the first chip grid, not under the last",
-    s.card != null && s.card < s.firstGrid, `${s.card} vs ${s.firstGrid}/${s.lastGrid}`);
-
-  // Every tab, not only Trades: it is not a trades setting.
-  for (const tab of ["Coverage", "Availability", "Overflow work"]) {
+  // The positive half first: "the switch is not here" passes loudest on a
+  // screen that never rendered.
+  t.ck("the trades tab drew its chip grids", s.gridCount >= 2, JSON.stringify(s));
+  t.ck("and the switch is no longer at the foot of them", s.cards === 0, JSON.stringify(s));
+  for (const tab of ["Coverage", "Overflow work"]) {
     await page.evaluate((l) => [...document.querySelectorAll(".seg-tabs button")]
       .find((b) => b.innerText.trim() === l)?.click(), tab);
     await wait(500);
     const x = await settings(page);
-    t.ck(`it is still there on ${tab}`, x.cards === 1 && x.card < x.tabs, JSON.stringify(x));
+    t.ck(`nor on ${tab}`, x.tabs != null && x.cards === 0, JSON.stringify(x));
   }
+  await page.evaluate(() => [...document.querySelectorAll(".seg-tabs button")]
+    .find((b) => b.innerText.trim() === "Availability")?.click());
+  await wait(600);
+  s = await settings(page);
+  t.ck("on Availability there is exactly one switch", s.cards === 1, JSON.stringify(s));
+  const firstOnTab = await page.evaluate(() => {
+    const tabs = document.querySelector(".seg-tabs");
+    let el = tabs?.nextElementSibling;
+    return el ? (el.className || el.tagName) : null;
+  });
+  t.ck("and it is the first thing under the tabs", /auto-card/.test(firstOnTab || ""), String(firstOnTab));
 
   // And it still does what it did.
   const el = await page.$(".auto-card .auto-toggle input");
@@ -186,6 +192,24 @@ try {
   t.ck("and above the stat cards", d.auto != null && d.auto < d.stats, JSON.stringify(d));
   t.ck("but under who they are and what they do", d.auto != null && d.auto > d.trades, JSON.stringify(d));
   t.ck("nothing threw on the hiring side", logs2.length === 0, logs2.join(" | "));
+
+  console.log("\n-- the request email's link lands on the switch --");
+  SEAT = "contractor"; AUTO = false;
+  const v3 = await visitApp(browser, { host: "soundpm", webPort: WEB, path: "/?open=auto-schedule",
+    seat: { userId: "u_juan", accountId: "acc_pm" }, viewport: { width: 1280, height: 1600 } });
+  await wait(2600);
+  const land = await v3.page.evaluate(() => ({
+    head: document.querySelector(".dash-hello h2")?.innerText.trim() || "",
+    tab: document.querySelector(".seg-tabs button.on")?.innerText.trim() || "",
+    ringed: !!document.querySelector(".auto-card.ringed"),
+    ring: getComputedStyle(document.querySelector(".auto-card") || document.body).boxShadow,
+    search: location.search,
+  }));
+  t.ck("it opens Job settings", /job settings/i.test(land.head), JSON.stringify(land));
+  t.ck("on the Availability tab", land.tab === "Availability", JSON.stringify(land));
+  t.ck("with the switch rung", land.ringed && /3px/.test(land.ring), JSON.stringify(land));
+  t.ck("and the query is spent, so a reload does not do it again", land.search === "", land.search);
+  await v3.page.close();
 } finally {
   await browser.close(); web.close(); api.close();
 }

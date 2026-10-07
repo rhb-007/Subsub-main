@@ -10454,32 +10454,37 @@ refactor.
   that case is real, the answer is a recorded *finish without a job, because*
   reason, the shape the cover override already has, not loosening the gate.
 
-- **AUTO-SCHEDULE LEADS THE CONTRACTOR'S SETTINGS, AND THE HIRING SIDE'S
-  CARD.** Reported with Job settings on screen: twenty-nine trade chips, every
-  capability chip, and the Auto-schedule switch at the very foot of them --
-  *"put the auto scheduled settings towards the top of the page ... instead of
-  buried on the bottom"*. It is the one setting on that page that decides
-  whether work lands on somebody's calendar without them being asked, and it
-  was the last thing on it.
+- **AUTO-SCHEDULE LIVES ON JOB SETTINGS > AVAILABILITY, AND THE EMAIL ASKING
+  FOR IT NAMES THAT PATH AND LINKS STRAIGHT TO IT.** Reported with Job settings
+  on screen: twenty-nine trade chips, every capability chip, and the
+  Auto-schedule switch at the very foot of them, *"buried on the bottom"*. A
+  first pass put it above the tabs; the next screenshot drew an arrow from the
+  page title to **Availability**, and the follow-up named the path in words.
 
-  **Above the tabs, on every tab.** It sat inside the Trades tab, which made it
-  look like a trades setting and hid it entirely on Coverage, Availability and
-  Overflow work. It is not about any one of them, so it now sits under the page
-  head and above the tab row. Still **one** switch -- the suite counts them,
-  because moving a control without removing it from where it was prints it
-  twice. **The hiring side's contractor card had the same shape one screen
-  along**, under the capabilities and the stat cards, and moves up under the
-  trades and Edit: who they are and what they do first, then the switch that
-  changes what happens the next time a job is assigned to them.
+  **Availability, first on the tab, and nowhere else.** The switch books jobs
+  onto the days marked free directly below it, so it belongs with them rather
+  than with the trades -- and one place is what lets the email name one path.
+  **The hiring side's contractor card had the same buried shape**, under the
+  capabilities and the stat cards, and moves up under the trades and Edit.
 
-  `test:autotop` measures positions with `getBoundingClientRect` on both sides,
-  because source order is not screen order. Before it compares anything it
-  asserts the subject actually rendered (the chip grids, the stat cards), since
-  "it is above the grid" passes loudest on a screen that never drew one.
-  Reverting the change fails nine assertions. One fixture trap: the Overflow
-  work tab reads `standing.reasons` unguarded, so a standing reply with no
-  `eligible` field threw on that tab and read exactly like the switch
-  vanishing.
+  **The request email said "open your account, go to what you do"**, which
+  named no screen at all. It now says *Menu > Job Settings > Availability >
+  Auto-schedule* and links `/?open=auto-schedule`. That link opens Job settings
+  on the Availability tab with the switch rung. The intent is held until
+  somebody is signed in, because the link is usually opened signed out, and
+  it applies only to a seat with the portal, since the switch belongs to the
+  contractor's own seat. The query is then removed from the address, so a
+  reload does not ring it again. "Menu", not "Account": Job Settings is a nav
+  entry (in the drawer on an iPad), and Account is a different screen.
+
+  `test:autotop` measures with `getBoundingClientRect` rather than reading
+  source order. It asserts the subject rendered before asserting an absence,
+  because "the switch is not here" passes loudest on a screen that never drew.
+  Putting the card back on Trades fails seven assertions, and dropping the
+  deep-link navigation fails three. `test:autoschedule` pins the path, the
+  link and the clickable HTML. Fixture trap: the Overflow work tab reads
+  `standing.reasons` unguarded, so a stub with no `eligible` field threw there
+  and read exactly like the switch vanishing.
 
 ## Working here
 

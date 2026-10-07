@@ -266,6 +266,17 @@ console.log("\n-- asking is the hiring side's only move, and it is honest about 
   ck("it says doing nothing is an answer", /do nothing/i.test(p.text));
   ck("it says it is only for this account", /applies only to/i.test(p.text));
   ck("it carries the note", /Cedar Park Tuesdays/.test(p.text));
+  // It names the screen, not "go to what you do" -- the switch is on Job
+  // Settings, Availability tab -- and links straight to it.
+  ck("it names the exact path to the switch",
+    /Menu > Job Settings > Availability > Auto-schedule/.test(p.text), p.text.match(/TO TURN IT ON[\s\S]*?\n\n/)?.[0]);
+  ck("it no longer says the vague old line", !/go to what you do/i.test(p.text));
+  ck("its link lands on the switch", /\/\?open=auto-schedule/.test(p.text));
+  const { autoScheduleRequestEmail } = await import("../worker/mail.js");
+  const m = autoScheduleRequestEmail({ company: { company: "San Juan" }, contact: "RB",
+    account: { name: "Outerhome", subdomain: "outerhome" } });
+  ck("and the html makes that link clickable",
+    /<a href="https:\/\/outerhome\.subsub\.work\/\?open=auto-schedule"/.test(m.html), m.html.slice(0, 200));
   ck("it reports that delivery is not configured", p.configured === false, String(p.configured));
 
   // Already on: there is nothing to ask for.

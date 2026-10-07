@@ -4999,6 +4999,25 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Arriving from the auto-schedule request email (?open=auto-schedule). The
+  // mail names the path -- Menu > Job Settings > Availability > Auto-schedule
+  // -- and this link lands on it, rung. Held until somebody is signed in,
+  // because the link is usually opened signed out; and only for a seat that
+  // has the portal, since the switch belongs to the contractor's own seat.
+  const [autoAsk] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("open") === "auto-schedule"; }
+    catch { return false; }
+  });
+  const [aimAuto, setAimAuto] = useState(null);
+  const autoAimed = useRef(false);
+  useEffect(() => {
+    if (!autoAsk || autoAimed.current || !loggedIn || !can("portal")) return;
+    autoAimed.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    setTab("portal"); setPane("settings"); setAimAuto({ n: Date.now() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoAsk, loggedIn, role]);
+
   // A code belongs to a company, and switching seats switches company. Held
   // over, the menu would show the last one -- which is somebody else's
   // standing offer to be asked, handed to the wrong person to show around.
@@ -7220,7 +7239,7 @@ export default function SubSub() {
           upload banner stacked below them. */}
       {(can("portal") ? tab !== "account" : ownWork && tab === "portal") && (
         portalSub ? (
-          <ContractorPortal weather={weather} sub={portalSub} jobs={jobs} pane={pane}
+          <ContractorPortal weather={weather} sub={portalSub} jobs={jobs} pane={pane} aimAuto={aimAuto}
             /* NOTHING FROM THIS ACCOUNT'S OWN JOB LIST when the seat IS the
                account: those are jobs they hire OUT, not work they have been
                given. Everything they are owed arrives through `myWork`, which
@@ -25929,8 +25948,20 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   quotes = [], onAnswerQuote, brand, me, orders, now,
   connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage,
   overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow,
-  onAnswerVisit, onProposeVisit, onGoPane }) {
+  onAnswerVisit, onProposeVisit, onGoPane, aimAuto = null }) {
   const [sub2, setSub2] = useState("trades");
+  // Arriving from the auto-schedule request email: open Availability and ring
+  // the switch. Keyed on a counter so asking twice lands twice.
+  const autoRef = useRef(null);
+  const [autoRing, setAutoRing] = useState(false);
+  useEffect(() => {
+    if (!aimAuto) return;
+    setSub2("availability");
+    setAutoRing(true);
+    const t1 = setTimeout(() => autoRef.current?.scrollIntoView({ block: "center", behavior: "smooth" }), 80);
+    const t2 = setTimeout(() => setAutoRing(false), 4000);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [aimAuto?.n]);
   // My Jobs filter bar: free text, which client, and which list.
   const [wq, setWq] = useState("");
   const [wClient, setWClient] = useState("");
@@ -26278,25 +26309,6 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
         <>
           <PageHead title="Job settings"
             sub="What you work in, where you go, and when you are free" />
-          {/* AUTO-SCHEDULE LEADS THE PAGE, above the tabs, on every one of
-              them. It sat under two chip grids at the foot of the Trades tab
-              -- the one setting here that decides whether work lands on this
-              calendar without being asked, and the last thing on the page.
-              Same sentence source as the hiring side's card, so the two
-              descriptions of one switch cannot drift apart. */}
-          <div className={`auto-card my-auto ${sub.autoSchedule ? "on" : ""}`}>
-            <Zap size={18} />
-            <div className="auto-card-main">
-              <span className="auto-title">Auto-schedule</span>
-              <span className="auto-desc">
-                {autoStateText({ on: !!sub.autoSchedule, portal: true, side: "contractor" })}
-              </span>
-            </div>
-            <label className="auto-toggle">
-              <input type="checkbox" checked={!!sub.autoSchedule} onChange={(e) => onSetAutoSchedule(e.target.checked)} />
-              <span>{sub.autoSchedule ? "On" : "Off"}</span>
-            </label>
-          </div>
           <div className="seg-tabs">
             {[["trades", "Trades"], ["coverage", "Coverage"], ["availability", "Availability"],
               ["overflow", "Overflow work"]].map(([id, l]) => (
@@ -26354,6 +26366,29 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
             <OverflowOffers standing={overflowStanding} offers={overflowOffers}
               onOptIn={onSetOverflowOptIn} onRespond={onRespondOverflow}
               categories={sub.categories || []} />
+          )}
+
+          {/* AUTO-SCHEDULE IS THE FIRST THING ON AVAILABILITY. It books jobs
+              straight onto the days marked free below it, so it belongs with
+              them rather than at the foot of the trades grid where it sat --
+              and the request email names exactly this path. The deep link
+              (?open=auto-schedule) lands here and rings it. Same sentence
+              source as the hiring side's card, so the two descriptions of one
+              switch cannot drift apart. */}
+          {sub2 === "availability" && (
+            <div ref={autoRef} className={`auto-card my-auto ${sub.autoSchedule ? "on" : ""} ${autoRing ? "ringed" : ""}`}>
+              <Zap size={18} />
+              <div className="auto-card-main">
+                <span className="auto-title">Auto-schedule</span>
+                <span className="auto-desc">
+                  {autoStateText({ on: !!sub.autoSchedule, portal: true, side: "contractor" })}
+                </span>
+              </div>
+              <label className="auto-toggle">
+                <input type="checkbox" checked={!!sub.autoSchedule} onChange={(e) => onSetAutoSchedule(e.target.checked)} />
+                <span>{sub.autoSchedule ? "On" : "Off"}</span>
+              </label>
+            </div>
           )}
 
           {sub2 === "availability" && <MyAvailability sub={sub} jobs={jobs}
@@ -35260,6 +35295,7 @@ p.fld-note{margin:6px 0 0}
 .auto-card.on{border-color:#ecd9b0;background:#fffdf6}
 .auto-card>svg{color:var(--ink-soft);flex:none}
 .auto-card.on>svg{color:var(--amber)}
+.auto-card.ringed{box-shadow:0 0 0 3px var(--brand);transition:box-shadow .3s}
 .auto-card-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .auto-title{font-size:14.5px;font-weight:700}
 .auto-desc{font-size:12.5px;color:var(--ink-soft);line-height:1.4}
