@@ -142,6 +142,7 @@
     "test:firstadmin": "node --no-warnings scripts/first-admin-test.mjs",
     "test:impseat": "node --no-warnings scripts/impersonate-seat-test.mjs",
     "test:avatarkey": "node scripts/avatar-key-test.mjs",
+    "test:avatarcrop": "node --no-warnings scripts/avatar-crop-ui-test.mjs",
     "test:geopick": "node scripts/geopick-test.mjs",
     "test:approveref": "node --no-warnings scripts/approve-refused-test.mjs",
     "test:pagehead": "node scripts/page-head-test.mjs",

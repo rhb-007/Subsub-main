@@ -441,8 +441,11 @@ export const api = {
   // The caller owns revoking it; see avatarUrl() in App.tsx, which keeps one
   // per person rather than one per row that draws them.
   userAvatarBlob: async (userId) => {
+    // no-store: the route answers with a five-minute private max-age, so a
+    // re-fetch after REPLACING a picture was served the old one from the
+    // browser's own cache.
     const res = await fetch(`${API_BASE}/account-users/${encodeURIComponent(userId)}/avatar`,
-      { headers: await authHeaders() });
+      { headers: await authHeaders(), cache: "no-store" });
     if (!res.ok) throw new Error(`avatar_${res.status}`);
     return URL.createObjectURL(await res.blob());
   },

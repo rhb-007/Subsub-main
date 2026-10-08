@@ -10742,6 +10742,44 @@ refactor.
   from. `test:tenanthomeui` pins the exact string and the absence of the
   building's name, and putting the name back fails three assertions.
 
+- **A PROFILE PICTURE IS POSITIONED BEFORE IT IS SAVED, AND REPLACING ONE
+  SHOWS THE NEW ONE.** Reported from a tenant's My account: *"not letting me
+  replace"* and *"not letting me place the picture better in the profile, can
+  preview and make perfect, it just loads it and can't customize."*
+
+  **Replace had saved fine the whole time, and the screen never showed it.**
+  Every `Avatar` circle keyed its fetch on who the person is and whether they
+  have a picture. A replace changes neither, so the old face stayed up over a
+  new one already stored. `forgetAvatars` bumped a module-level version that
+  nothing was listening to. Underneath that, the avatar route answers with a
+  five-minute private `max-age`, so even a re-fetch was served from the
+  browser's own cache. Two fixes, and either alone is not enough:
+  `useAvatarVersion` subscribes every circle to the version, and
+  `userAvatarBlob` fetches with `cache: "no-store"`.
+
+  **`AvatarCropper` sits between choosing and uploading.** Drag to move, pinch
+  (two pointers), scroll or slider to zoom, arrow keys to nudge, and a 64px
+  circle beside it shows exactly what everybody else will see. The image
+  covers the circle at zoom 1 and is clamped so there is never an empty edge.
+  What goes up is that circle's square drawn to a **512px JPEG**, so the
+  original photo never leaves the device and the crop cannot be undone by a
+  later screen choosing a different centre. Nothing uploads until *Use this
+  picture*, and Cancel uploads nothing.
+
+  **Inline, not a modal**, because the picker is also used inside a modal (an
+  admin editing somebody's row), and a modal over a modal is a close button
+  that closes the wrong one. The wheel listener is attached by hand as
+  non-passive, or the page scrolls under the picture and React logs a refusal
+  per notch.
+
+  `test:avatarcrop` drives a tenant end to end with a three-band photo (red,
+  green, blue), reading the colour at the left and right edges of the JPEG that
+  actually leaves the page. A drag puts green on the left where the default
+  centre would put red, a zoom puts green on both edges, and a SECOND upload
+  must change the drawn circle. Three mutations fire: the version dropped from
+  the circle's deps (which reproduces the report), the crop ignoring the drag,
+  and the cache bypass removed.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

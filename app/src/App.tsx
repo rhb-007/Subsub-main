@@ -18160,6 +18160,17 @@ function forgetAvatars() {
   for (const p of avatarCache.values()) p.then?.((u) => u && URL.revokeObjectURL(u));
   avatarCache.clear();
   avatarVersion += 1;
+  // And TELL every circle on the page. Bumping the version alone did nothing
+  // to a circle already drawn: its effect keyed on who and whether they have
+  // a picture, both unchanged by a REPLACE, so the old face stayed up over a
+  // new one that had saved fine -- reported as "not letting me replace".
+  avatarListeners.forEach((fn) => fn(avatarVersion));
+}
+const avatarListeners = new Set();
+function useAvatarVersion() {
+  const [v, setV] = useState(avatarVersion);
+  useEffect(() => { avatarListeners.add(setV); return () => { avatarListeners.delete(setV); }; }, []);
+  return v;
 }
 
 // A person, as a circle. Their photograph if they have set one, their
@@ -18167,14 +18178,13 @@ function forgetAvatars() {
 function Avatar({ user, className = "" }) {
   const [url, setUrl] = useState(null);
   const id = user?.id, has = !!user?.hasAvatar;
+  const version = useAvatarVersion();
   useEffect(() => {
     let live = true;
     if (!has || !id) { setUrl(null); return; }
     avatarUrl(id).then((u) => { if (live) setUrl(u); });
     return () => { live = false; };
-    // avatarVersion is not state; the upload path re-renders the tree that
-    // owns these rows, which is what brings a new picture in.
-  }, [id, has]);
+  }, [id, has, version]);
   const initials = String(user?.name || "?").split(" ").map((w) => w[0]).join("").slice(0, 2);
   return (
     <span className={`user-avatar ${className}`}>
@@ -18834,27 +18844,35 @@ function ApiTokens({ isScale, canInspect }) {
 function AvatarPicker({ user, onSave }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // The picture being positioned, before anything is uploaded. Choosing a
+  // photo used to upload it as it came off the camera roll, centred however
+  // the camera happened to centre it, with no way to see the circle first.
+  const [crop, setCrop] = useState(null);
   const file = useRef(null);
-  const pick = async (f) => {
+  const pick = (f) => {
+    if (file.current) file.current.value = "";
     if (!f) return;
-    if (!/^image\//.test(f.type)) { setErr("That isn't an image."); return; }
-    // The same ceiling report photos get. A phone camera clears it easily;
-    // a RAW file does not, and finding that out after the upload is worse.
-    if (f.size > 10 * 1024 * 1024) { setErr("That picture is over 10MB — try a smaller one."); return; }
+    if (!/^image\//.test(f.type) && !/\.(heic|heif)$/i.test(f.name || "")) { setErr("That isn't an image."); return; }
+    // Generous, because what goes up is the cropped circle, not this file.
+    if (f.size > 40 * 1024 * 1024) { setErr("That picture is over 40MB — try a smaller one."); return; }
+    setErr(""); setCrop(f);
+  };
+  const save = async (blob) => {
     setBusy(true); setErr("");
     try {
-      const { key } = await api.uploadAvatar(f);
+      const { key } = await api.uploadAvatar(new File([blob], "avatar.jpg", { type: "image/jpeg" }));
       await onSave(key);
       forgetAvatars();
+      setCrop(null);
     } catch (e) {
       console.error("[avatar] upload failed:", e);
       const code = e?.body?.error;
       setErr(code === "migration_needed"
         ? `The database isn't migrated yet — run ${e.body.migration || "032_user_avatar"}.sql and reload.`
         : code === "not_an_image" ? "That isn't a picture this can store — try a JPEG or PNG."
-        : code === "too_big" ? "That picture is over 10MB — try a smaller one."
+        : code === "too_big" ? "That picture is too big — try a smaller one."
         : "That didn't upload. Try again.");
-    } finally { setBusy(false); if (file.current) file.current.value = ""; }
+    } finally { setBusy(false); }
   };
   const clear = async () => {
     setBusy(true); setErr("");
@@ -18863,18 +18881,181 @@ function AvatarPicker({ user, onSave }) {
     finally { setBusy(false); }
   };
   return (
-    <div className="ua-pick">
-      <Avatar user={user} className="lg" />
-      <div className="ua-pick-acts">
-        <input ref={file} type="file" accept="image/*" hidden
-          onChange={(e) => pick(e.target.files?.[0])} />
-        <button type="button" className="pick" disabled={busy} onClick={() => file.current?.click()}>
-          <ImagePlus size={13} /> {busy ? "Uploading…" : user?.hasAvatar ? "Change picture" : "Add a picture"}
-        </button>
-        {user?.hasAvatar && (
-          <button type="button" className="pick" disabled={busy} onClick={clear}>Remove</button>
-        )}
-        {err && <span className="fld-note err" role="alert">{err}</span>}
+    <div className="ua-pick-wrap">
+      <div className="ua-pick">
+        <Avatar user={user} className="lg" />
+        <div className="ua-pick-acts">
+          <input ref={file} type="file" accept="image/*" hidden
+            onChange={(e) => pick(e.target.files?.[0])} />
+          <button type="button" className="pick" disabled={busy || !!crop} onClick={() => file.current?.click()}>
+            <ImagePlus size={13} /> {user?.hasAvatar ? "Change picture" : "Add a picture"}
+          </button>
+          {user?.hasAvatar && !crop && (
+            <button type="button" className="pick" disabled={busy} onClick={clear}>Remove</button>
+          )}
+          {err && <span className="fld-note err" role="alert">{err}</span>}
+        </div>
+      </div>
+      {crop && (
+        <AvatarCropper file={crop} busy={busy} name={user?.name}
+          onCancel={() => { setCrop(null); setErr(""); }}
+          onPickAnother={() => file.current?.click()}
+          onFail={(m) => { setCrop(null); setErr(m); }}
+          onDone={save} />
+      )}
+    </div>
+  );
+}
+
+// POSITIONING A PROFILE PICTURE BEFORE IT IS SAVED. Drag to move it, pinch or
+// use the slider to zoom, and the small circle beside it is exactly what
+// everybody else will see. What is saved is that circle's square at 512px --
+// not the original photo -- so a twelve-megapixel picture never leaves the
+// device and the crop cannot be undone by a later screen choosing a different
+// centre.
+//
+// Drawn inline rather than in a modal, because the picker is itself used
+// inside a modal (an admin editing somebody's row) and a modal over a modal
+// is a close button that closes the wrong one.
+const CROP_VIEW = 260, CROP_OUT = 512, CROP_MAX_ZOOM = 4;
+function AvatarCropper({ file, busy, name, onCancel, onPickAnother, onFail, onDone }) {
+  const [src, setSrc] = useState(null);
+  const [nat, setNat] = useState(null); // natural size once decoded
+  const [zoom, setZoom] = useState(1);
+  const [pos, setPos] = useState({ x: 0, y: 0 }); // image top-left, in view px
+  const imgRef = useRef(null);
+  const pointers = useRef(new Map());
+  const pinch = useRef(null);
+
+  useEffect(() => {
+    const u = URL.createObjectURL(file);
+    setSrc(u); setNat(null); setZoom(1);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+
+  // Cover: the short side fills the circle at zoom 1, so there is never an
+  // empty edge to explain.
+  const base = nat ? CROP_VIEW / Math.min(nat.w, nat.h) : 1;
+  const scale = base * zoom;
+  const clamp = (p, sc = scale) => {
+    if (!nat) return p;
+    const w = nat.w * sc, h = nat.h * sc;
+    return { x: Math.min(0, Math.max(CROP_VIEW - w, p.x)), y: Math.min(0, Math.max(CROP_VIEW - h, p.y)) };
+  };
+  const loaded = (e) => {
+    const w = e.currentTarget.naturalWidth, h = e.currentTarget.naturalHeight;
+    if (!w || !h) { onFail("That picture couldn't be opened here — try a JPEG or PNG."); return; }
+    setNat({ w, h });
+    const sc = CROP_VIEW / Math.min(w, h);
+    setPos({ x: (CROP_VIEW - w * sc) / 2, y: (CROP_VIEW - h * sc) / 2 });
+  };
+  // Zooming keeps whatever is in the middle of the circle in the middle.
+  const zoomTo = (z) => {
+    const nz = Math.min(CROP_MAX_ZOOM, Math.max(1, z));
+    if (!nat) { setZoom(nz); return; }
+    const cx = (CROP_VIEW / 2 - pos.x) / scale, cy = (CROP_VIEW / 2 - pos.y) / scale;
+    const ns = base * nz;
+    setZoom(nz);
+    setPos(clamp({ x: CROP_VIEW / 2 - cx * ns, y: CROP_VIEW / 2 - cy * ns }, ns));
+  };
+
+  const down = (e) => {
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size === 2) {
+      const [a, b] = [...pointers.current.values()];
+      pinch.current = { d: Math.hypot(a.x - b.x, a.y - b.y), z: zoom };
+    }
+  };
+  const move = (e) => {
+    const prev = pointers.current.get(e.pointerId);
+    if (!prev) return;
+    const next = { x: e.clientX, y: e.clientY };
+    pointers.current.set(e.pointerId, next);
+    if (pointers.current.size === 2 && pinch.current) {
+      const [a, b] = [...pointers.current.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch.current.d > 0) zoomTo(pinch.current.z * (d / pinch.current.d));
+      return;
+    }
+    setPos((p) => clamp({ x: p.x + (next.x - prev.x), y: p.y + (next.y - prev.y) }));
+  };
+  const up = (e) => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) pinch.current = null;
+  };
+  // Wheel zoom needs a non-passive listener, or the page scrolls under it
+  // and React logs a refusal for every notch. Attached by hand for that.
+  const viewRef = useRef(null);
+  const zoomRef = useRef(zoomTo);
+  zoomRef.current = zoomTo;
+  const zoomNow = useRef(zoom);
+  zoomNow.current = zoom;
+  useEffect(() => {
+    const el = viewRef.current;
+    if (!el) return undefined;
+    const on = (e) => { e.preventDefault(); zoomRef.current(zoomNow.current * (e.deltaY < 0 ? 1.08 : 1 / 1.08)); };
+    el.addEventListener("wheel", on, { passive: false });
+    return () => el.removeEventListener("wheel", on);
+  }, []);
+  const nudge = (dx, dy) => setPos((p) => clamp({ x: p.x + dx, y: p.y + dy }));
+  const keys = (e) => {
+    const step = e.shiftKey ? 30 : 8;
+    const k = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
+    if (k) { e.preventDefault(); nudge(...k); }
+    if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomTo(zoom * 1.15); }
+    if (e.key === "-") { e.preventDefault(); zoomTo(zoom / 1.15); }
+  };
+
+  const use = () => {
+    const img = imgRef.current;
+    if (!img || !nat) return;
+    const cv = document.createElement("canvas");
+    cv.width = CROP_OUT; cv.height = CROP_OUT;
+    const g = cv.getContext("2d");
+    g.fillStyle = "#fff"; g.fillRect(0, 0, CROP_OUT, CROP_OUT);
+    g.imageSmoothingQuality = "high";
+    g.drawImage(img, -pos.x / scale, -pos.y / scale, CROP_VIEW / scale, CROP_VIEW / scale, 0, 0, CROP_OUT, CROP_OUT);
+    cv.toBlob((b) => { if (b) onDone(b); else onFail("That picture couldn't be saved — try another."); }, "image/jpeg", 0.9);
+  };
+
+  const imgStyle = nat ? { width: nat.w * scale, height: nat.h * scale, transform: `translate(${pos.x}px, ${pos.y}px)` } : { opacity: 0 };
+  const mini = 64 / CROP_VIEW;
+  const miniStyle = nat ? { width: nat.w * scale * mini, height: nat.h * scale * mini,
+    transform: `translate(${pos.x * mini}px, ${pos.y * mini}px)` } : { opacity: 0 };
+  return (
+    <div className="ua-crop" role="group" aria-label="Position your picture">
+      <p className="ua-crop-h">Position your picture</p>
+      <p className="ua-crop-sub">Drag to move it. Pinch, scroll or use the slider to zoom.</p>
+      <div className="ua-crop-row">
+        <div className="ua-crop-view" style={{ width: CROP_VIEW, height: CROP_VIEW }} tabIndex={0}
+          onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
+          ref={viewRef} onKeyDown={keys} aria-label="Picture — drag to move, arrow keys to nudge">
+          {src && <img ref={imgRef} src={src} alt="" draggable={false} onLoad={loaded}
+            onError={() => onFail("That picture couldn't be opened here — try a JPEG or PNG.")}
+            className="ua-crop-img" style={imgStyle} />}
+          <span className="ua-crop-ring" aria-hidden="true" />
+        </div>
+        <div className="ua-crop-side">
+          <span className="ua-crop-prev-l">How it will look</span>
+          <span className="ua-crop-prev" aria-hidden="true">
+            {src && <img src={src} alt="" draggable={false} className="ua-crop-img" style={miniStyle} />}
+          </span>
+          <span className="ua-crop-who">{name || ""}</span>
+        </div>
+      </div>
+      <label className="ua-crop-zoom">
+        <span>Zoom</span>
+        <button type="button" className="pick" aria-label="Zoom out" onClick={() => zoomTo(zoom / 1.2)}>−</button>
+        <input type="range" min="1" max={CROP_MAX_ZOOM} step="0.01" value={zoom}
+          onChange={(e) => zoomTo(Number(e.target.value))} aria-label="Zoom" />
+        <button type="button" className="pick" aria-label="Zoom in" onClick={() => zoomTo(zoom * 1.2)}>+</button>
+      </label>
+      <div className="form-actions ua-crop-acts">
+        <button type="button" className="btn-ghost" disabled={busy} onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn-ghost" disabled={busy} onClick={onPickAnother}>Choose another</button>
+        <button type="button" className="btn-solid" disabled={busy || !nat} onClick={use}>
+          <Check size={14} /> {busy ? "Saving…" : "Use this picture"}</button>
       </div>
     </div>
   );
@@ -39135,6 +39316,23 @@ iframe.dv-frame{display:block}
 .ua-pick .user-avatar.lg{flex:none}
 .ua-pick-acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
 .ua-pick-acts .fld-note.err{color:var(--red);flex-basis:100%}
+.ua-crop{margin:0 0 18px;padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--card);max-width:520px}
+.ua-crop-h{margin:0;font-weight:800;font-size:15px}
+.ua-crop-sub{margin:2px 0 12px;font-size:13px;color:var(--ink-soft)}
+.ua-crop-row{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.ua-crop-view{position:relative;overflow:hidden;border-radius:12px;background:#1f2a24;touch-action:none;cursor:grab;flex:none;user-select:none;-webkit-user-select:none}
+.ua-crop-view:active{cursor:grabbing}
+.ua-crop-view:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+.ua-crop-img{position:absolute;left:0;top:0;max-width:none;transform-origin:0 0;pointer-events:none;-webkit-user-drag:none}
+.ua-crop-ring{position:absolute;inset:0;border-radius:50%;box-shadow:0 0 0 999px rgba(15,22,18,.55);border:2px solid rgba(255,255,255,.9);pointer-events:none}
+.ua-crop-side{display:flex;flex-direction:column;align-items:center;gap:6px}
+.ua-crop-prev-l{font-size:12px;color:var(--ink-soft);font-weight:700}
+.ua-crop-prev{position:relative;width:64px;height:64px;border-radius:50%;overflow:hidden;background:var(--paper);border:1px solid var(--line)}
+.ua-crop-who{font-size:12.5px;font-weight:700;max-width:120px;text-align:center}
+.ua-crop-zoom{display:flex;align-items:center;gap:8px;margin:14px 0 4px;font-size:13px;font-weight:700}
+.ua-crop-zoom input{flex:1;min-width:0}
+.ua-crop-zoom .pick{width:36px;justify-content:center;padding:4px 0;font-size:16px}
+.ua-crop-acts{flex-wrap:wrap}
 
 /* What happened when somebody was just added. Green for the ordinary case,
    because the ordinary case -- added AND invited, in one go -- is the thing
