@@ -21,7 +21,7 @@
 // screens come to say "waiting on them" and nothing moves -- which is why
 // `waitingOn` is one function for an agreement, and the same reason here.
 
-import { accessFor, needsTenantConfirm, canAskTenant } from "./access.js";
+import { accessFor, needsTenantConfirm, canAskTenant, accessTenant } from "./access.js";
 
 export const VISIT_PARTIES = {
   tenant: { id: "tenant", label: "the tenant", mine: "You" },
@@ -179,6 +179,32 @@ export const ANSWERS_EARLY = ["tenant"];
 export const mayConfirm = (visit, parties, party) =>
   !!party && waitingOn(visit, parties).includes(party)
   && (nextToAnswer(visit, parties) === party || ANSWERS_EARLY.includes(party));
+
+// A WINDOW THE TENANT PUT FORWARD IS SETTLED BY THE CREW, not by the hiring
+// side as well. Reported as *"Pacific confirmed newly proposed time by tenant,
+// but it's not confirming still on the tenants side"*: the tenant offered
+// Thursday, the crew said yes, and the window sat on "Waiting on Sound
+// Property Management to confirm it" -- with the agent never told there was
+// anything to press.
+//
+// The hiring side's hop exists for a crew COUNTER: a slot the account did not
+// choose and may have to let somebody in for. On a window the tenant proposed
+// the tenant is the one being let in, and the two diaries that decide it --
+// theirs and the crew's -- have both said yes. Asking the agent to ratify an
+// appointment between the two people who have to be there is a round trip
+// that answers nothing.
+//
+// A fact about the WINDOW, not the job: who proposed it. So it narrows the
+// job's parties per visit, and every reader -- the propose route, the respond
+// route, the visit list and the crew's own work list -- goes through this one
+// function, because two of them disagreeing is a booked window on one screen
+// and a waiting one on another.
+export const tenantProposed = (visit, job) => {
+  const by = visit?.proposedBy || visit?.proposed_by;
+  return !!by && accessTenant(job) === by;
+};
+export const windowParties = (parties, { byTenant = false } = {}) =>
+  byTenant ? (parties || []).filter((p) => p !== "manager") : (parties || []);
 
 // A DECLINE FROM EITHER SIDE ENDS IT, and that is deliberate rather than a
 // simplification. A time one party cannot make is not a time -- carrying on

@@ -342,22 +342,43 @@ try {
       String(jobOf(db, "job_both").date));
   }
   {
-    // ONLY THE TENANT ANSWERS EARLY. The hiring side agreeing ahead of the
-    // crew is agreeing to a slot nobody can staff, which is why the order
-    // exists -- so a window the TENANT put forward still asks the crew first.
+    // A WINDOW THE TENANT PUT FORWARD IS SETTLED BY THE CREW. Reported as
+    // "Pacific confirmed newly proposed time by tenant, but it's not
+    // confirming still on the tenants side": the crew said yes and the window
+    // sat waiting on the managing agent, who was never asked anything. The
+    // two people who have to be there have both said yes.
     const { db, env } = seed();
     const [ps, tp] = await json(await propose(env, "job_both", "u_ten"));
     ck("a tenant may propose a time for their own report", ps === 201, `${ps} ${JSON.stringify(tp)}`);
     ck("their own proposal is their agreement", !!tp.respondedAt, String(tp.respondedAt));
-    ck("and it goes to the crew first, then the hiring side",
-      (tp.waitingOn || []).join() === "contractor,manager" && tp.turn === "contractor",
-      `${JSON.stringify(tp.waitingOn)} ${tp.turn}`);
-    const [ms, mEarly] = await json(await respond(env, tp.id, { status: "confirmed" }, "u_mgr"));
-    ck("the hiring side may not answer ahead of the crew", ms === 409 && mEarly.turn === "contractor",
-      `${ms} ${JSON.stringify(mEarly)}`);
-    await respond(env, tp.id, { status: "confirmed" }, "u_sub");
-    const [, m] = await json(await respond(env, tp.id, { status: "confirmed" }, "u_mgr"));
-    ck("and once both have, it is booked", m.status === "confirmed", String(m.status));
+    ck("and it goes to the crew, and only the crew",
+      (tp.waitingOn || []).join() === "contractor" && tp.turn === "contractor"
+      && !(tp.parties || []).includes("manager"),
+      `${JSON.stringify(tp.waitingOn)} ${tp.turn} ${JSON.stringify(tp.parties)}`);
+    // Every reader says the same, or the crew's card and the tenant's row
+    // disagree about whether it is booked.
+    const listed = async (who) => {
+      const r = await worker.fetch(new Request("https://api.subsub.work/api/visits", {
+        headers: { "X-User-Id": who, "X-Account-Id": "acc_pm" } }), env);
+      return ((await r.json().catch(() => [])) || []).find((x) => x.id === tp.id);
+    };
+    const lt = await listed("u_ten"), lm = await listed("u_mgr");
+    ck("the tenant's list is not waiting on the agent",
+      !(lt?.parties || []).includes("manager") && lt?.turn === "contractor",
+      JSON.stringify(lt && { parties: lt.parties, turn: lt.turn }));
+    ck("and neither is the agent's", !(lm?.parties || []).includes("manager"),
+      JSON.stringify(lm?.parties));
+    const mw = await worker.fetch(new Request("https://api.subsub.work/api/my-work", {
+      headers: { "X-User-Id": "u_sub", "X-Account-Id": "acc_pm" } }), env);
+    const mine = ((await mw.json().catch(() => ({}))).work || []).find((w) => w.jobId === "job_both");
+    ck("the crew's own card asks them, and names nobody else",
+      mine?.visit?.turn === "contractor" && (mine?.visit?.waitingOn || []).join() === "contractor",
+      JSON.stringify(mine?.visit));
+    const [cs, cy] = await json(await respond(env, tp.id, { status: "confirmed" }, "u_sub"));
+    ck("so the crew's yes books it", cs === 200 && cy.status === "confirmed", `${cs} ${JSON.stringify(cy)}`);
+    ck("with no turn left over", cy.turn === null, String(cy.turn));
+    ck("and the date lands on the job", jobOf(db, "job_both").date === "2026-10-09",
+      String(jobOf(db, "job_both").date));
     // Only their own report, and only where they have to be in.
     const [fs, f] = await json(await propose(env, "job_nobody", "u_ten"));
     ck("a tenant cannot propose for a job that is not theirs", fs === 404 || fs === 403,
@@ -698,10 +719,12 @@ try {
     // tenant in the loop at all.
     ck("the note is addressed to whoever attends",
       /pp !== "manager"/.test(vblock));
-    // ONE form for both sides. A second copy of three inputs and a window
-    // validation is two things to keep in step.
-    ck("there is one propose form, used twice",
-      (App.match(/<VisitForm /g) || []).length === 2,
+    // ONE form for all three sides -- the hiring side, the crew and the
+    // tenant. A second copy of three inputs and a window validation is two
+    // things to keep in step; a fourth mount should raise this number on
+    // purpose, never by a copy.
+    ck("there is one propose form, used three times",
+      (App.match(/<VisitForm /g) || []).length === 3,
       String((App.match(/<VisitForm /g) || []).length));
     ck("and the contractor's door opens it", /onProposeVisit={setProposeWO}/.test(App));
     // ONE DOOR INTO ANOTHER ACCOUNT. `onGoClient` -- the only route a

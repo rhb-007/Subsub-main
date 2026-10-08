@@ -10972,8 +10972,8 @@ refactor.
     answers `no_tenant_needed`, because a time from them is a time nobody asked
     for.
 
-  Their proposal is their agreement, so it goes to the crew first and then the
-  hiring side. They are not texted about a time they put forward themselves.
+  Their proposal is their agreement, so it goes to the crew, and the crew's yes
+  books it (see the entry below). They are not texted about a time they put forward themselves.
   `TENANT_ALLOWED` gained the line, and removing it is the mutation that
   reproduces the 403.
 
@@ -10993,6 +10993,43 @@ refactor.
   `test:tenantvisitui` is the first browser suite to draw the tenant's answer
   at all. Three mutations fire, each on its own assertions: the panel back to
   turn-only, the propose button removed, and the popup's dead end restored.
+
+- **A TIME THE TENANT PROPOSED IS BOOKED BY THE CREW'S YES, NOT ALSO THE
+  AGENT'S.** Reported the day the tenant could first propose: *"Pacific
+  confirmed newly proposed time by tenant, but it's not confirming still on
+  the tenants side"*. The tenant offered Thursday 9:45, the crew said yes, and
+  the row sat on *Waiting on Sound Property Management to confirm it*. Nothing
+  told the agent there was anything to press.
+
+  `visitParties` always counts the hiring side once 064 is in, which is right
+  for a crew counter. That hop exists because a slot the account did not choose
+  may be one it cannot let anybody into. **On a window the tenant proposed, the
+  tenant is the person being let in**, and the two diaries that decide it have
+  both said yes. Asking the agent to ratify an appointment between the two
+  people who have to be there answers nothing.
+
+  **It is a fact about the WINDOW, not the job**: who proposed it.
+  `tenantProposed(visit, job)` compares `proposed_by` with `accessTenant`, and
+  `windowParties` drops the hiring side for that one visit. No migration,
+  because `proposed_by` has been on the row since 019. **All four readers go
+  through it**:
+  - the propose route, for the seeded status and the reply;
+  - the respond route, for the settle and the turn;
+  - `/api/visits`, per visit rather than per job;
+  - `/api/my-work`, which now selects the live window's `proposed_by`.
+
+  Two of them disagreeing is a window drawn as booked on one screen and waiting
+  on another. A crew counter and the agent's own proposal are unchanged.
+
+  `test:visitparty` pinned the old answer (*crew first, then the hiring side*)
+  and was rewritten to the new rule rather than loosened. It now reads the
+  tenant's list, the agent's list and the crew's card for the same window.
+  Four mutations fire, one per reader. Leaving the respond route on the job's
+  parties reproduces the report exactly: crew confirmed, `turn: "manager"`,
+  no date on the job.
+
+  **The window already stuck on the live database does not move by itself**,
+  because nothing re-settles a row nobody answers again. It is fixed by hand.
 
 ## Working here
 

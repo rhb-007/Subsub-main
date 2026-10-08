@@ -79,7 +79,7 @@ import { isAccess, accessFor, needsTenantConfirm, canAskTenant,
 // name in one file is how a later edit calls the wrong one about the wrong
 // two-party thing.
 import { visitParties, waitingOn as visitWaitingOn,
-  nextToAnswer, visitSettled, mayConfirm } from "../shared/visitparty.js";
+  nextToAnswer, visitSettled, mayConfirm, tenantProposed, windowParties } from "../shared/visitparty.js";
 // How long a proposed window is, and whether a date change has anybody to be
 // put to. Both live beside `workWhen` because the browser's propose form uses
 // the first and two copies of that arithmetic is two records of one fact.
@@ -8199,9 +8199,12 @@ app.get("/api/visits", async (c) => {
         const j = await c.env.DB.prepare(
           `SELECT id, account_id, requested_by${await hasAccessUser(c.env) ? ", access, access_user_id" : ""}
              FROM jobs WHERE id = ?`).bind(r.job_id).first().catch(() => null);
-        byJob.set(r.job_id, j ? await partiesFor(c.env, j) : []);
+        byJob.set(r.job_id, { job: j, parties: j ? await partiesFor(c.env, j) : [] });
       }
-      const parties = byJob.get(r.job_id);
+      // Narrowed per WINDOW, because who proposed it is a fact about the
+      // window: one the tenant put forward is settled by the crew alone.
+      const { job: pj, parties: jp } = byJob.get(r.job_id);
+      const parties = windowParties(jp, { byTenant: !!pj && tenantProposed(r, pj) });
       rows.push({ ...visitRowToJs(r), parties, turn: nextToAnswer(visitRowToJs(r), parties) });
     }
     return c.json(rows);
@@ -8287,7 +8290,10 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor", "tenan
   if (auth.role === "tenant" && !needsTenant) return c.json({ error: "no_tenant_needed" }, 409);
   // 061. And whether anybody holds the work, which is the other side that has
   // to agree. A time the crew cannot make is not a time.
-  const parties = await partiesFor(c.env, { ...job, account_id: auth.accountId });
+  // A tenant's own window is settled by the crew, not by the hiring side as
+  // well -- see `windowParties`.
+  const parties = windowParties(await partiesFor(c.env, { ...job, account_id: auth.accountId }),
+    { byTenant: auth.role === "tenant" });
   // PROPOSING IS AGREEING, for whoever proposed it. A contractor who offers
   // Tuesday has said they can come on Tuesday, and asking them to confirm
   // their own suggestion is a round trip that answers nothing -- the same
@@ -8457,8 +8463,9 @@ app.post("/api/visits/:id/respond", async (c) => {
   if (v.status !== "proposed") return c.json({ error: "not_open", status: v.status }, 409);
   const note = String(b.note || "").trim().slice(0, 500) || null;
 
-  let parties = await partiesFor(c.env, { id: v.job_id, account_id: auth.accountId,
-    requested_by: v.requested_by, access: v.access, access_user_id: v.access_user_id });
+  const vJob = { id: v.job_id, account_id: auth.accountId,
+    requested_by: v.requested_by, access: v.access, access_user_id: v.access_user_id };
+  let parties = windowParties(await partiesFor(c.env, vJob), { byTenant: tenantProposed(v, vJob) });
   // A DATABASE WITHOUT 061 HAS NO CONTRACTOR LEG, and `SELECT v.*` is what
   // says so: the key is absent rather than null. Without this the tenant
   // confirms, the contractor is counted as a party who can never answer, and
@@ -11639,7 +11646,10 @@ app.get("/api/my-work", async (c) => {
               (SELECT v.responded_at FROM visits v WHERE v.job_id = j.id
                  AND v.status IN ('proposed','confirmed')
                 ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_tat,
-              ${lv >= 2 ? "(SELECT v.manager_at FROM visits v WHERE v.job_id = j.id AND v.status IN ('proposed','confirmed') ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)" : "NULL"} AS visit_mat
+              ${lv >= 2 ? "(SELECT v.manager_at FROM visits v WHERE v.job_id = j.id AND v.status IN ('proposed','confirmed') ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)" : "NULL"} AS visit_mat,
+              (SELECT v.proposed_by FROM visits v WHERE v.job_id = j.id
+                 AND v.status IN ('proposed','confirmed')
+                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_by
          FROM work_orders w
          JOIN jobs j ON j.id = w.job_id
          JOIN accounts a ON a.id = j.account_id
@@ -11714,11 +11724,11 @@ app.get("/api/my-work", async (c) => {
           const v = { date: r.visit_date, status: r.visit_status,
             respondedAt: r.visit_tat || null, contractorAt: r.visit_cat || null,
             managerAt: r.visit_mat || null };
-          const parties = visitParties(
-            { requested_by: r.requested_by, access: r.access, access_user_id: r.access_user_id },
+          const vj = { requested_by: r.requested_by, access: r.access, access_user_id: r.access_user_id };
+          const parties = windowParties(visitParties(vj,
             { tenantReported: r.requested_by_role === "tenant",
               hasContractor: r.status === "accepted" || !!r.auto_scheduled,
-              hasManagerLeg: level >= 2 });
+              hasManagerLeg: level >= 2 }), { byTenant: tenantProposed({ proposedBy: r.visit_by }, vj) });
           return { parties, turn: nextToAnswer(v, parties),
             waitingOn: visitWaitingOn(v, parties) };
         })(),
