@@ -91,7 +91,14 @@ const WORK = () => ({ work: [
     // A job date in the PAST and a confirmed visit ahead of it: the only
     // fixture that can show which of the two the screen is reading.
     visit: { id: "v2", date: LATER, startTime: "14:00", endTime: "16:00",
-      status: "confirmed", note: null } },
+      status: "confirmed", note: null },
+    // 073. HOW THEY GET IN, as the server shapes it for this crew: the tenant
+    // who is letting them in, by first name and mobile, and their own row.
+    accessPlan: { kind: "tenant", how: "Meet at the front door", howFrom: "tenant", live: true,
+      when: { date: LATER, startTime: "14:00", endTime: "16:00", status: "confirmed" },
+      people: [{ side: "tenant", firstName: "John", phone: "2065550111", bestTime: "after 9am" },
+        { side: "crew", company: "Pacific apartment maintenance", firstName: "Juan",
+          phone: "2065550122", you: true }] } },
   // 061. A window WE have already agreed and the tenant has not. The only row
   // that can tell "offer a Confirm" apart from "say who is left", and without
   // it a card that always drew the buttons would pass.
@@ -166,7 +173,12 @@ const WORK = () => ({ work: [
     propertyName: null, date: LATER, time: null, severity: null, jobStatus: "active",
     completedAt: null, tradeScope: null, crewName: null, payKind: "fixed", value: "100",
     rate: "", capHours: null, signedWO: null, issuedAt: null, updatedAtIso: null,
-    visit: null },
+    visit: null,
+    // At another client, opened by the office: the crew is given the office.
+    accessPlan: { kind: "manager", how: null, howFrom: null, live: true, when: null,
+      people: [{ side: "manager", firstName: "Dana", phone: "2065550133" },
+        { side: "crew", company: "Pacific apartment maintenance", firstName: "Juan",
+          phone: "2065550122", you: true }] } },
 ] });
 
 // THE ROWS AS /api/jobs SERVES THEM, which is where the card for the account
@@ -751,6 +763,42 @@ try {
     const ok = await proposeAs(null);
     t.ck("and an accepted one closes the form", ok.open === false && proposals.length === before + 1,
       JSON.stringify({ ok, n: proposals.length - before }));
+  }
+
+  console.log("\n-- 073: who lets the crew in, and how to reach them --");
+  {
+    await page.evaluate(() => document.querySelector(".modal .btn-ghost")?.click());
+    await wait(300);
+    const accOf = (re) => page.evaluate((rs) => {
+      const card = [...document.querySelectorAll(".jr-card")]
+        .find((el) => new RegExp(rs, "i").test(el.querySelector("h3")?.innerText || ""));
+      if (!card) return { card: false };
+      const p = card.querySelector(".acc-panel");
+      return {
+        card: true, panel: !!p,
+        text: (p?.innerText || "").replace(/\s+/g, " ").trim(),
+        tel: [...(p?.querySelectorAll("a[href^='tel:']") || [])].map((a) => a.getAttribute("href")),
+        line: (card.querySelector(".jr-access")?.innerText || "").trim(),
+        edit: !!p?.querySelector(".acc-change"),
+      };
+    }, re.source);
+    const sink = await accOf(/leaking sink/);
+    t.ck("an accepted job carries an Access panel", sink.card && sink.panel, JSON.stringify(sink));
+    t.ck("which says the tenant lets them in, by first name",
+      /John \(the tenant\) lets you in\./.test(sink.text), sink.text);
+    t.ck("where to meet and when", /Meet at the front door/.test(sink.text) && /said by the tenant/.test(sink.text),
+      sink.text);
+    t.ck("the tenant's mobile, with one tap to call",
+      /\(206\)555-0111/.test(sink.text) && JSON.stringify(sink.tel) === JSON.stringify(["tel:2065550111"]),
+      JSON.stringify(sink));
+    t.ck("and the best time to reach them", /after 9am/.test(sink.text), sink.text);
+    t.ck("the crew cannot rewrite where to meet", sink.edit === false);
+    t.ck("and the old one-line sentence is gone where the panel is", sink.line === "", sink.line);
+    const lobby = await accOf(/Repaint the lobby/);
+    t.ck("a job the office opens names the office, not the tenant",
+      /Dana from the office lets you in/.test(lobby.text) && !/2065550111|555-0111/.test(lobby.text), lobby.text);
+    const wait_ = await accOf(/Basement sump/);
+    t.ck("an offer not yet accepted carries no panel", wait_.card && !wait_.panel, JSON.stringify(wait_));
   }
 
   await ctx.close();

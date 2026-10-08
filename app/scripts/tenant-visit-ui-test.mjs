@@ -65,6 +65,18 @@ const fresh = () => ({
 let VISIT = fresh();
 const answers = [];
 const proposals = [];
+// 073. The Access panel's answer for this job, as the server shapes it for
+// the tenant: their own number marked as theirs, and the crew that accepted.
+const freshPlan = () => ({
+  kind: "tenant", how: null, howFrom: null, live: true, migration: null, canEditHow: true,
+  when: { date: SOON, startTime: "11:15", endTime: "12:15", status: "confirmed" },
+  people: [
+    { side: "tenant", firstName: "John", phone: "2065550111", you: true },
+    { side: "crew", company: "Pacific apartment maintenance", firstName: "Juan", phone: "2065550122" },
+  ],
+});
+let PLAN = freshPlan();
+const hows = [];
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
@@ -87,6 +99,12 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
       status: "proposed", note: body.note || null, respondedAt: new Date().toISOString(),
       contractorAt: null, managerAt: null, parties: ["contractor", "manager", "tenant"], turn: "contractor" };
     return [201, VISIT];
+  }
+  if (path === "/api/jobs/job_w/access" && method === "GET") return [200, PLAN];
+  if (path === "/api/jobs/job_w/access-how" && method === "PUT") {
+    hows.push(body);
+    PLAN = { ...PLAN, how: body.how, howFrom: "tenant" };
+    return [200, PLAN];
   }
   if (path === "/api/my-manager") return [200, { company: "Sound Property Management", managers: [] }];
   if (path === "/api/notices") return [200, { notices: [] }];
@@ -207,6 +225,52 @@ try {
       === JSON.stringify(["Yes, that works", "Propose another time", "That doesn't work"]), JSON.stringify(m?.btns));
     t.ck("rather than sending them to the dashboard",
       !(await page.evaluate(() => /confirm it on your dashboard/i.test(document.querySelector(".modal")?.innerText || ""))));
+    await ctx.close();
+  }
+  console.log("\n-- who lets who in, and how to reach them --");
+  {
+    VISIT = fresh(); PLAN = freshPlan(); hows.length = 0;
+    const { ctx, page, crashes } = await asTenant();
+    const acc = (scope) => page.evaluate((sc) => {
+      const p = document.querySelector(`${sc} .acc-panel`);
+      if (!p) return null;
+      return {
+        text: p.innerText,
+        tel: [...p.querySelectorAll("a[href^='tel:']")].map((a) => a.getAttribute("href")),
+        sms: [...p.querySelectorAll("a[href^='sms:']")].map((a) => a.getAttribute("href")),
+      };
+    }, scope);
+    const a = await acc(".tn-row");
+    t.ck("the report row carries an Access panel", !!a, String(a));
+    t.ck("which says who lets who in, from the tenant's side",
+      /You let Pacific apartment maintenance in\./.test(a?.text || ""), a?.text);
+    t.ck("names the crew by first name, with their mobile",
+      /Juan/.test(a?.text || "") && /\(206\)555-0122/.test(a?.text || ""), a?.text);
+    t.ck("one tap to call them and one to text",
+      JSON.stringify(a?.tel) === JSON.stringify(["tel:2065550122"])
+      && JSON.stringify(a?.sms) === JSON.stringify(["sms:2065550122"]), JSON.stringify(a));
+    t.ck("and shows the tenant their own number as the one the crew has",
+      /\(206\)555-0111/.test(a?.text || "") && /You/.test(a?.text || ""), a?.text);
+    t.ck("with no call button on their own number", !(a?.tel || []).includes("tel:2065550111"));
+
+    await page.evaluate(() => [...document.querySelectorAll(".tn-row .acc-change")][0]?.click());
+    await wait(300);
+    await page.evaluate(() => [...document.querySelectorAll(".tn-row .acc-preset")]
+      .find((b) => /garage/.test(b.innerText))?.click());
+    await wait(200);
+    await page.evaluate(() => [...document.querySelectorAll(".tn-row .acc-edit button")]
+      .find((b) => /^Save$/.test(b.innerText.trim()))?.click());
+    await wait(700);
+    t.ck("saying which door reaches the server", hows.length === 1
+      && hows[0].how === "The tenant will open the garage door", JSON.stringify(hows));
+    const after = await acc(".tn-row");
+    t.ck("and the panel then says it", /The tenant will open the garage door/.test(after?.text || ""), after?.text);
+
+    await page.evaluate(() => document.querySelector(".tn-row .tn-row-open")?.click());
+    await wait(600);
+    const m = await acc(".modal");
+    t.ck("the popup carries the same panel", /You let Pacific apartment maintenance in\./.test(m?.text || ""), m?.text);
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
 } finally {

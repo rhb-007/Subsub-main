@@ -11031,6 +11031,38 @@ refactor.
   **The window already stuck on the live database does not move by itself**,
   because nothing re-settles a row nobody answers again. It is fixed by hand.
 
+- **WHO LETS WHO IN IS A PANEL ON ALL THREE SIDES, WITH A FIRST NAME AND A
+  MOBILE FOR EACH.** Reported once the tenant's time booked: *"on the pm side
+  it shows tenant lets service provider in, but in both of their accounts
+  (tenant and service provider) it's not clear who lets who in"*, asking for
+  where to meet, when, and *"both of their contact numbers (mobile numbers and
+  first name)"*. 060 recorded WHO as one of three words and every screen drew
+  it as the manager's decision, not as directions for the two people at the
+  door. Migration 073 (`job_access`), `app/shared/accessplan.js`.
+
+  **`AccessPanel` is one component on three screens**: the agent's job card
+  (inside the visit block), the tenant's report row and popup, and the crew's
+  job card. It says who meets whom from the reader's side (*You let Pacific
+  in*, *John (the tenant) lets you in*), where (a typed sentence with
+  suggestions such as *Meet at the front door*), when (the live window), and a
+  first name, mobile, Call and Text for the other side. The agent and the
+  tenant who opens the door may write the "where"; the crew may not.
+
+  **WHOSE NUMBER GOES WHERE IS `visiblePeople`, and the server decides it.** A
+  tenant's mobile reaches a crew only on a job that tenant is letting them into
+  and only a crew that has **accepted** the work; a crew's mobile reaches the
+  tenant on the same two conditions. On a job the office opens, the crew gets
+  the office (`buildingManagers`, the same tiers Tenant HQ's card uses) and
+  never the tenant, and the tenant gets the office and not the crew. Nobody to
+  meet hands the tenant nobody, and **a finished job hands nobody's number to
+  anybody**. Another tenant and a crew merely offered the job get not-found.
+  Five server mutations fire, each on its own assertion.
+
+  **Its own table, not a column**, so the paste can be run twice. Before 073
+  the panel still draws, without the sentence, and saving names the file. The
+  crew's copy rides on `/api/my-work` because half that list is on other
+  accounts; the tenant and the office read `GET /api/jobs/:id/access`.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

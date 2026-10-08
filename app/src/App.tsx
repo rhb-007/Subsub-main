@@ -87,6 +87,7 @@ import { handymanCapCheck, handymanCapText,
 import { workWhen, scheduledOn, WHEN_KINDS, windowEnd } from "../shared/schedule.js";
 import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
   mayChooseAccess, maySetAccess, accessTenant } from "../shared/access.js";
+import { ACCESS_HOW_PRESETS, ACCESS_HOW_MAX, accessHeadline } from "../shared/accessplan.js";
 import { visitParties, waitingOn as visitWaitingOn, partyText as partyWords,
   mayAnswer as visitMayAnswer, partySaid as visitPartySaid } from "../shared/visitparty.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
@@ -3543,6 +3544,12 @@ export default function SubSub() {
     for (const w of myWork) if (w.access && !m[w.jobId]) m[w.jobId] = w.access;
     return m;
   }, [myWork]);
+  // 073. How they get in, per job, from the same single source.
+  const myAccessPlan = useMemo(() => {
+    const m = {};
+    for (const w of myWork) if (w.accessPlan && !m[w.jobId]) m[w.jobId] = w.accessPlan;
+    return m;
+  }, [myWork]);
 
   // job slots assigned to me, for the contractor dashboard + tab badge
   const myAssignments = mySub ? jobs.flatMap((j) =>
@@ -3550,7 +3557,8 @@ export default function SubSub() {
       .filter(([, a]) => a.subId === mySub.id)
       .map(([trade, a]) => ({
         job: { ...j, visit: myVisits[j.id] || null,
-          access: myAccess[j.id] || j.accessEffective || null },
+          access: myAccess[j.id] || j.accessEffective || null,
+          accessPlan: myAccessPlan[j.id] || null },
         trade, a }))) : [];
 
   // The same thing at every OTHER client. /api/jobs is one account at a time,
@@ -3575,6 +3583,7 @@ export default function SubSub() {
       // 060, effective. Absent here and the door sentence renders on this
       // account's rows and not on the other twenty-four clients'.
       access: w.access || null,
+      accessPlan: w.accessPlan || null,
       scope: w.tradeScope || null, propertyName: w.propertyName,
       // Absent on this shape rather than undefined: every card reads them and
       // the jobs list has white-screened on a missing one before.
@@ -14462,6 +14471,7 @@ function TenantReportModal({
               <TenantVisitAsk visit={visit} brandName={brandName}
                 onRespond={onRespondVisit} onPropose={onProposeVisit} />
             )}
+            {!isClosed(job) && assignedTo.length > 0 && <TenantAccess job={job} visit={visit} />}
 
             {confirmWithdraw ? (
               <div className="tn-edit">
@@ -14522,6 +14532,13 @@ function TenantReportModal({
 // above, which is also where correcting and withdrawing now happen. This
 // used to carry both forms inline and could show two of the five things a
 // tenant had actually filled in.
+// The tenant's copy of the Access panel, fetched for their own report and
+// re-read when the window moves so "when" cannot go stale under them.
+function TenantAccess({ job, visit }) {
+  const [plan, setPlan] = useJobAccess(job.id, `${visit?.id || ""}|${visit?.status || ""}`);
+  return <AccessPanel plan={plan} viewer="tenant" jobId={job.id} onSaved={setPlan} />;
+}
+
 function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRespondVisit, onVisitOutcome, onProposeVisit, onOpen }) {
   const photos = job.photos || [];
   const asks = stage.key === "confirm" || stage.key === "passed";
@@ -14558,6 +14575,8 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
           <TenantVisitAsk visit={visit} brandName={brandName}
             onRespond={onRespondVisit} onPropose={onProposeVisit} />
         )}
+        {/* 073. WHO LETS WHO IN, said to the person opening the door. */}
+        {!isClosed(job) && assignedTo.length > 0 && <TenantAccess job={job} visit={visit} />}
         {/* Only when somebody was actually sent. "Did somebody come?" is
             not a question a tenant can answer usefully about a job nobody
             was booked for, and a yes to it reads on the manager's side as
@@ -14823,8 +14842,134 @@ function VisitForm({ jobId, startDate = "", forWhom, replacing = false, placehol
 
 // On the manager's side of the same thing: where the visit stands, and the
 // form to propose one (or the next one).
+// 073. HOW THE CREW GETS IN, said to the people at the door. The manager's
+// card said "Tenant lets them in" and the tenant's and the crew's screens said
+// nothing concrete at all -- reported as *"it's not clear who lets who in"*.
+// One panel for all three sides, so the three cannot describe one doorstep
+// three ways: who is meeting whom, where, when, and a first name and a mobile
+// for each side. WHOSE number each viewer is given is the server's answer
+// (`visiblePeople` in shared/accessplan.js), never derived here.
+// `refresh` is whatever should make it read again -- the access answer and the
+// window, because the panel's "who" and "when" are both about those.
+function useJobAccess(jobId, refresh = "") {
+  const [plan, setPlan] = useState(null);
+  useEffect(() => {
+    if (!jobId) return undefined;
+    let gone = false;
+    api.jobAccess(jobId).then((p) => { if (!gone) setPlan(p); }).catch(() => {});
+    return () => { gone = true; };
+  }, [jobId, refresh]);
+  return [plan, setPlan];
+}
+
+const ACCESS_SIDE_WORD = { tenant: "Tenant", manager: "Office", crew: "Crew" };
+
+function AccessPanel({ plan, viewer, jobId, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [how, setHow] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  if (!plan || !plan.kind) return null;
+  const head = accessHeadline(plan, viewer);
+  const presets = ACCESS_HOW_PRESETS[plan.kind] || [];
+  const people = plan.people || [];
+  const others = people.filter((p) => !p.you);
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      const next = await api.setJobAccessHow(jobId, how);
+      onSaved?.(next);
+      setEditing(false);
+    } catch (e) {
+      setErr(e?.body?.error === "migration_needed"
+        ? `Saving this needs migration ${e.body.migration || "073_job_access"} pasted first.`
+        : e?.body?.error === "forbidden" ? "Only the office can change this on this job."
+          : "That didn't save. Try again in a moment.");
+    } finally { setBusy(false); }
+  };
+  return (
+    <section className="acc-panel" aria-label="Access">
+      <h4 className="acc-title"><Key size={15} /> Access</h4>
+      {head && <p className="acc-head">{head}</p>}
+      <dl className="acc-facts">
+        <div>
+          <dt>Where</dt>
+          <dd>{plan.how
+            ? <>{plan.how}{plan.howFrom && <span className="acc-from"> — said by {plan.howFrom === "tenant" ? (viewer === "tenant" ? "you" : "the tenant") : "the office"}</span>}</>
+            : <span className="acc-none">{plan.kind === "none" ? "Nobody needs to meet you." : "Not said yet."}</span>}</dd>
+        </div>
+        <div>
+          <dt>When</dt>
+          <dd>{plan.when?.date
+            ? <>{visitWhen(plan.when)}{plan.when.status !== "confirmed" && <span className="acc-from"> — proposed, not confirmed yet</span>}</>
+            : <span className="acc-none">No time agreed yet.</span>}</dd>
+        </div>
+      </dl>
+      {people.length > 0 && (
+        <ul className="acc-people">
+          {people.map((p, i) => (
+            <li key={i} className={p.you ? "acc-you" : ""}>
+              <div className="acc-who">
+                <b>{p.firstName || (p.side === "crew" ? p.company : ACCESS_SIDE_WORD[p.side])}</b>
+                <span className="acc-role">{p.you ? "You" : p.side === "crew" ? (p.company || "Crew") : ACCESS_SIDE_WORD[p.side]}</span>
+                {p.bestTime && !p.you && <span className="acc-role">Best time: {p.bestTime}</span>}
+              </div>
+              {p.phone ? (
+                <div className="acc-call">
+                  <span className="acc-num">{formatPhone(p.phone)}</span>
+                  {!p.you && (
+                    <>
+                      <a className="acc-btn" href={`tel:${phoneDigits(p.phone)}`}><PhoneCall size={15} /> Call</a>
+                      <a className="acc-btn" href={`sms:${phoneDigits(p.phone)}`}><MessageSquareText size={15} /> Text</a>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <span className="acc-none">{p.you
+                  ? (viewer === "tenant" ? "No mobile on file. Add one in My account so the crew can reach you." : "No mobile on file.")
+                  : "No mobile on file."}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {plan.live && viewer === "tenant" && plan.kind === "tenant" && !others.length && (
+        <p className="acc-none">The crew's first name and mobile appear here once they accept the job.</p>
+      )}
+      {plan.live && viewer === "team" && !people.some((p) => p.side === "crew") && (
+        <p className="acc-none">Nobody has accepted this job yet. Their name and number appear here once they do.</p>
+      )}
+      {plan.canEditHow && plan.kind !== "none" && (editing ? (
+        <div className="acc-edit">
+          <label className="acc-lbl" htmlFor={`acc-how-${jobId}`}>Where to meet, or how they get in</label>
+          <textarea id={`acc-how-${jobId}`} rows={2} maxLength={ACCESS_HOW_MAX} value={how}
+            onChange={(e) => setHow(e.target.value)} placeholder="e.g. Meet at the front door" />
+          <div className="acc-presets">
+            {presets.map((t) => (
+              <button key={t} type="button" className="acc-preset" onClick={() => setHow(t)}>{t}</button>
+            ))}
+          </div>
+          {err && <p className="form-err">{err}</p>}
+          <VisitActs acts={[
+            { kind: "yes", label: busy ? "Saving…" : "Save", icon: <Check size={16} />,
+              onClick: save, disabled: busy },
+            { kind: "quiet", label: "Cancel", onClick: () => { setEditing(false); setErr(""); } },
+          ]} />
+        </div>
+      ) : (
+        <button type="button" className="acc-change" onClick={() => { setHow(plan.how || ""); setEditing(true); }}>
+          <MapPin size={14} /> {plan.how ? "Change where to meet" : "Say where to meet"}
+        </button>
+      ))}
+    </section>
+  );
+}
+
 function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswerVisit,
   canSetAccess = false, hiresWord = "contractor" }) {
+  // 073. How the crew gets in, re-read whenever the answer or the window moves.
+  const [accPlan, setAccPlan] = useJobAccess(job.id,
+    `${job.accessEffective || ""}|${visit?.id || ""}|${visit?.status || ""}`);
   // Open by default whenever there is no live time to wait on: nothing
   // proposed, a time refused, or one that came and went with nobody there.
   const [open, setOpen] = useState(!visit || visit.status === "declined" || visit.status === "missed");
@@ -15044,6 +15189,7 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
             onClick: () => setOpen(true) },
         ]} />
       )}
+      <AccessPanel plan={accPlan} viewer="team" jobId={job.id} onSaved={setAccPlan} />
     </div>
   );
 }
@@ -29059,9 +29205,13 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           fail to prevent. The words are the contractor's own, not the
           manager's: what a manager decides and what somebody arriving needs to
           know are different sentences. */}
-      {ACCESS_KINDS[job.access] && (
-        <p className="jr-access"><Key size={12} /> {ACCESS_KINDS[job.access].forContractor}</p>
-      )}
+      {/* 073. And once the job is theirs, HOW: who is meeting them, where,
+          when, and that person's first name and mobile. */}
+      {job.accessPlan
+        ? <AccessPanel plan={job.accessPlan} viewer="crew" jobId={job.id} />
+        : ACCESS_KINDS[job.access] && (
+          <p className="jr-access"><Key size={12} /> {ACCESS_KINDS[job.access].forContractor}</p>
+        )}
       {(a.tradeScope || job.scope) && <p className="job-scope">{a.tradeScope || job.scope}</p>}
       {a.crewName && <p className="portal-crew"><Users size={12} /> Your crew: {a.crewName}</p>}
       {job.materialSource && <p className="portal-crew"><Layers size={12} /> Materials: {job.materialSource} ({job.materialsPaidBy})</p>}
@@ -37507,6 +37657,46 @@ strong.insp-name{background:none;border:0;padding:0}
 .visit-access{display:flex;align-items:flex-start;gap:7px;margin:0 0 8px;padding:8px 10px;
   border-radius:10px;background:var(--paper);font-size:12.5px;line-height:1.45;color:var(--ink-soft)}
 .visit-access > svg{flex:none;margin-top:2px}
+/* 073. The Access panel: who lets who in, where, when, and a first name and
+   a mobile per side. A card of its own rather than a line, because it is the
+   thing somebody reads on the doorstep with a phone in one hand. */
+.acc-panel{margin:10px 0;padding:12px 14px;border:1.5px solid var(--line);border-radius:12px;
+  background:var(--card,#fff);font-size:13.5px;line-height:1.45;color:var(--ink)}
+.acc-title{display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:13px;
+  font-weight:700;letter-spacing:.02em;text-transform:none;color:var(--ink)}
+.acc-head{margin:0 0 8px;font-size:15px;font-weight:600}
+.acc-facts{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0 0 10px}
+.acc-facts > div{display:contents}
+.acc-facts dt{font-size:12px;font-weight:600;color:var(--ink-soft);padding-top:1px}
+.acc-facts dd{margin:0}
+.acc-from{color:var(--ink-soft);font-size:12.5px}
+.acc-none{color:var(--ink-soft);font-size:12.5px}
+.acc-people{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.acc-people li{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;
+  gap:8px;padding:9px 10px;border-radius:10px;background:var(--paper)}
+.acc-people li.acc-you{background:transparent;border:1px dashed var(--line)}
+.acc-who{display:flex;flex-direction:column;min-width:0}
+.acc-who b{font-size:14.5px}
+.acc-role{font-size:12px;color:var(--ink-soft)}
+.acc-call{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.acc-num{font-weight:600;font-variant-numeric:tabular-nums}
+.acc-btn{display:inline-flex;align-items:center;gap:5px;min-height:44px;padding:0 14px;
+  border-radius:10px;border:1.5px solid var(--brand);color:var(--brand);font-weight:600;
+  font-size:14px;text-decoration:none;background:#fff}
+.acc-change{display:inline-flex;align-items:center;gap:6px;margin-top:10px;min-height:44px;
+  padding:0 14px;border-radius:10px;border:1.5px solid var(--line);background:#fff;
+  font-weight:600;font-size:14px;cursor:pointer;color:var(--ink)}
+.acc-edit{margin-top:10px;display:flex;flex-direction:column;gap:7px}
+.acc-lbl{font-size:12.5px;font-weight:600}
+.acc-edit textarea{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;
+  border:1.5px solid var(--line);border-radius:10px}
+.acc-presets{display:flex;flex-wrap:wrap;gap:6px}
+.acc-preset{padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:var(--paper);
+  font-size:12.5px;cursor:pointer;color:var(--ink)}
+@media (max-width:520px){
+  .acc-people li{flex-direction:column;align-items:stretch}
+  .acc-call{justify-content:flex-start}
+}
 .va-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
 .va-pick{display:flex;flex-wrap:wrap;gap:6px}
 .va-pick .pick{padding:4px 10px;font-size:11.5px}

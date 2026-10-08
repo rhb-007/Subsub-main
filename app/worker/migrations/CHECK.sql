@@ -239,6 +239,9 @@ WITH spec(j) AS (SELECT
   -- Until it is run the dashboard draws without them and saving says which file.
   ',["m072_tenant_contacts","col","tenant_contacts",["account_id","user_id","prefer","best_time","emergency_name","emergency_relation","emergency_phone"]]' ||
   ',["m072_building_notices","col","building_notices",["id","account_id","property_id","title","body","important","ends_on","removed_at","emailed"]]' ||
+  -- 073. How the crew gets in, in words. Until it is run the Access panel
+  -- draws without the sentence and saving it says which file.
+  ',["m073_job_access","col","job_access",["job_id","how","updated_by","updated_at"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

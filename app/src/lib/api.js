@@ -383,6 +383,10 @@ export const api = {
   // inspection behind it. An empty map is the ordinary answer for a job
   // nobody walked, so callers never branch on an error for it.
   jobTradeScope: (jobId) => request(`/jobs/${jobId}/trade-scope`),
+  // 073. How the crew gets in: who meets whom, where, when, and a first name
+  // and a mobile per side -- whose number is the server's decision.
+  jobAccess: (jobId) => request(`/jobs/${jobId}/access`),
+  setJobAccessHow: (jobId, how) => request(`/jobs/${jobId}/access-how`, { method: "PUT", body: JSON.stringify({ how }) }),
   woInspectionPhotoBlob: async (woId, photoId) => {
     const res = await fetch(`${API_BASE}/work-orders/${woId}/inspection/photo/${photoId}`,
       { headers: await authHeaders() });

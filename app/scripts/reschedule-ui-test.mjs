@@ -133,6 +133,13 @@ const VISITS = () => [{
 }];
 
 const sent = [];
+// 073. The Access panel's answer for the tenant's request, as the server
+// shapes it for the office: both sides, and the sentence editable.
+const hows = [];
+let PLAN = { kind: "tenant", how: null, howFrom: null, live: true, canEditHow: true,
+  when: { date: "2026-10-09", startTime: "09:45", endTime: "10:45", status: "confirmed" },
+  people: [{ side: "tenant", firstName: "Ada", phone: "2065550111" },
+    { side: "crew", company: "Pacific apartment maintenance", firstName: "Juan", phone: "2065550122" }] };
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, PM];
@@ -141,6 +148,12 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/account-users") return [200, USERS];
   if (path === "/api/jobs") return [200, JOBS()];
   if (path === "/api/visits") return [200, VISITS()];
+  if (path === "/api/jobs/asked/access" && method === "GET") return [200, PLAN];
+  if (path === "/api/jobs/asked/access-how" && method === "PUT") {
+    hows.push(body);
+    PLAN = { ...PLAN, how: body.how, howFrom: "office" };
+    return [200, PLAN];
+  }
   if (/^\/api\/jobs\/[^/]+\/visits$/.test(path) && method === "POST") {
     sent.push({ path, body });
     // THE ROW, as the real route answers. It returned `{ok, status}` with no
@@ -489,6 +502,45 @@ try {
   // Scheduling a request nobody has approved would book work nobody has
   // agreed to do. Asserted in the same place as the positive cases.
   t.ck("but no scheduling block on it", pending === null, JSON.stringify(pending));
+
+  console.log("\n-- 073: the office sees who lets who in, and says where --");
+  {
+    await openCard(page, "Bathroom extractor dead");
+    await wait(800);
+    const accOf = () => page.evaluate(() => {
+      const card = [...document.querySelectorAll(".job-card")]
+        .find((el) => /Bathroom extractor dead/i.test(el.querySelector("h3")?.innerText || ""));
+      const p = card?.querySelector(".acc-panel");
+      if (!p) return null;
+      return {
+        text: p.innerText.replace(/\s+/g, " ").trim(),
+        tel: [...p.querySelectorAll("a[href^='tel:']")].map((a) => a.getAttribute("href")),
+      };
+    });
+    const a = await accOf();
+    t.ck("the job card carries the Access panel", !!a, String(a));
+    t.ck("saying who lets who in, by first name",
+      /Ada \(the tenant\) lets Pacific apartment maintenance in\./.test(a?.text || ""), a?.text);
+    t.ck("with both sides' mobiles, each one tap to call",
+      JSON.stringify(a?.tel) === JSON.stringify(["tel:2065550111", "tel:2065550122"]), JSON.stringify(a));
+    await page.evaluate(() => {
+      const card = [...document.querySelectorAll(".job-card")]
+        .find((el) => /Bathroom extractor dead/i.test(el.querySelector("h3")?.innerText || ""));
+      card?.querySelector(".acc-change")?.click();
+    });
+    await wait(300);
+    await page.evaluate(() => [...document.querySelectorAll(".acc-preset")]
+      .find((b) => /^Meet at the front door$/.test(b.innerText.trim()))?.click());
+    await wait(200);
+    await page.evaluate(() => [...document.querySelectorAll(".acc-edit button")]
+      .find((b) => /^Save$/.test(b.innerText.trim()))?.click());
+    await wait(700);
+    t.ck("the office can say where to meet", hows.length === 1 && hows[0].how === "Meet at the front door",
+      JSON.stringify(hows));
+    const after = await accOf();
+    t.ck("and the panel then says it, and who said it",
+      /Meet at the front door/.test(after?.text || "") && /said by the office/.test(after?.text || ""), after?.text);
+  }
 
   console.log("\n-- nothing threw --");
   t.ck("no \\uXXXX escape reached the page",

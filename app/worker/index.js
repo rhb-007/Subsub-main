@@ -75,6 +75,7 @@ import { ENGAGED_AS, isEngagedAs, engagedAs, isHandyman, mayEngageHandyman,
 import { handymanCapCheck, handymanCapText } from "../shared/handycap.js";
 import { isAccess, accessFor, needsTenantConfirm, canAskTenant,
   accessTenant } from "../shared/access.js";
+import { normalizeHow, mayEditHow, visiblePeople, firstName } from "../shared/accessplan.js";
 // Aliased: `waitingOn` is already the AGREEMENT's, and two functions of one
 // name in one file is how a later edit calls the wrong one about the wrong
 // two-party thing.
@@ -701,6 +702,12 @@ const TENANT_ALLOWED = [
   // Who runs their building: the account's own managers, by name and how to
   // reach them. Read-only, and it answers nothing about anybody else here.
   [/^\/api\/my-manager$/, ["GET"]],
+  // 073. How the crew gets in to their own repair: the meeting point, the
+  // window and the first name and number of whoever is coming. The routes
+  // check they are the tenant who has to be let in; the PUT is the sentence
+  // saying which door, which is theirs to say on a job they open.
+  [/^\/api\/jobs\/[^/]+\/access$/, ["GET"]],
+  [/^\/api\/jobs\/[^/]+\/access-how$/, ["PUT"]],
   // Their own profile picture: the upload (checked kind, like a report
   // photo), setting it on their own row, and reading it back. The read is
   // narrowed to their OWN picture in the handler -- a guest seat has no
@@ -5295,6 +5302,33 @@ const contactRowToJs = (r, u) => ({
   updatedAt: r?.updated_at || null,
 });
 
+// WHO LOOKS AFTER THESE BUILDINGS, in the order a tenant would want to ring
+// them: a project manager narrowed to one of them, then a manager narrowed to
+// nothing, then the admins. The first tier with anybody in it is the answer,
+// at most two people. One function, read by Tenant HQ's card and by the
+// Access panel, so the two cannot name different people for one building.
+async function buildingManagers(env, accountId, propertyIds = []) {
+  const { results: team } = await env.DB.prepare(
+    `SELECT m.id AS mid, m.user_id, m.role, u.name, u.email, u.phone
+       FROM memberships m JOIN users u ON u.id = m.user_id
+      WHERE m.account_id = ? AND m.role IN ('admin','pm')
+      ORDER BY u.name`).bind(accountId).all();
+  const scopes = new Map();
+  for (const t of team || []) {
+    const { results } = await env.DB.prepare(
+      `SELECT property_id FROM membership_properties WHERE membership_id = ?`).bind(t.mid).all()
+      .catch(() => ({ results: [] }));
+    scopes.set(t.mid, (results || []).map((x) => x.property_id));
+  }
+  const pms = (team || []).filter((t) => t.role === "pm");
+  const tiers = [
+    pms.filter((t) => scopes.get(t.mid).some((p) => propertyIds.includes(p))),
+    pms.filter((t) => scopes.get(t.mid).length === 0),
+    (team || []).filter((t) => t.role === "admin"),
+  ];
+  return (tiers.find((t) => t.length) || []).slice(0, 2);
+}
+
 // WHO RUNS MY BUILDING, for the card on Tenant HQ. Asked for as *"the property
 // manager profile and contact info, in a quick digestible format so a tenant
 // can quickly look"*. The account itself carries no office phone or address,
@@ -5316,31 +5350,147 @@ app.get("/api/my-manager", requireRole("tenant"), async (c) => {
        JOIN membership_properties mp ON mp.membership_id = m.id
       WHERE m.user_id = ? AND m.account_id = ?`).bind(userId, accountId).all()
     .then((r) => (r.results || []).map((x) => x.property_id)).catch(() => []);
-  const { results: team } = await c.env.DB.prepare(
-    `SELECT m.id AS mid, m.role, u.name, u.email, u.phone
-       FROM memberships m JOIN users u ON u.id = m.user_id
-      WHERE m.account_id = ? AND m.role IN ('admin','pm')
-      ORDER BY u.name`).bind(accountId).all();
-  const scopes = new Map();
-  for (const t of team || []) {
-    const { results } = await c.env.DB.prepare(
-      `SELECT property_id FROM membership_properties WHERE membership_id = ?`).bind(t.mid).all()
-      .catch(() => ({ results: [] }));
-    scopes.set(t.mid, (results || []).map((x) => x.property_id));
-  }
-  const pms = (team || []).filter((t) => t.role === "pm");
-  const tiers = [
-    pms.filter((t) => scopes.get(t.mid).some((p) => mine.includes(p))),
-    pms.filter((t) => scopes.get(t.mid).length === 0),
-    (team || []).filter((t) => t.role === "admin"),
-  ];
-  const pick = (tiers.find((t) => t.length) || []).slice(0, 2);
+  const pick = await buildingManagers(c.env, accountId, mine);
   return c.json({
     company: acct?.name || null,
     kind: acct?.kind || null,
     managers: pick.map((t) => ({ name: t.name || null, role: t.role,
       email: realEmail(t.email) || null, phone: t.phone || null })),
   });
+});
+
+// 073. HOW THE CREW GETS IN, for the two people who have to meet at the door.
+// The rule about whose number each viewer is given is `visiblePeople` in
+// shared/accessplan.js; this only gathers the facts it decides between.
+//
+// `viewer` is "team", "crew" (the caller's company, which must hold accepted
+// work here -- the route checks that before it gets this far) or "tenant" (the
+// person who has to be let in). A job that is finished with hands nobody's
+// number to anybody: a phone number outliving the visit it was for is a number
+// somebody holds for no reason.
+async function accessPlanFor(env, job, { viewer = "team", companyId = null } = {}) {
+  const who = accessTenant(job);
+  const seat = who ? await env.DB.prepare(
+    `SELECT role FROM memberships WHERE user_id = ? AND account_id = ?`)
+    .bind(who, job.account_id).first().catch(() => null) : null;
+  const kind = accessFor(job, { tenantReported: seat?.role === "tenant" });
+  let how = null, howFrom = null, migration = null;
+  try {
+    const r = await env.DB.prepare(`SELECT how, updated_by FROM job_access WHERE job_id = ?`)
+      .bind(job.id).first();
+    how = r?.how || null;
+    howFrom = r?.how ? (r.updated_by && r.updated_by === who ? "tenant" : "office") : null;
+  } catch (err) {
+    migration = missingSchema(err);
+    if (!migration) throw err;
+  }
+  const v = await env.DB.prepare(
+    `SELECT date, start_time, end_time, status FROM visits
+      WHERE job_id = ? AND status IN ('proposed','confirmed')
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).bind(job.id).first().catch(() => null);
+  const live = !jobIsClosed(job);
+  let tenant = null, manager = null, crews = [];
+  if (live) {
+    if (kind === "tenant" && who) {
+      const u = await env.DB.prepare(`SELECT name, phone FROM users WHERE id = ?`).bind(who).first();
+      let bestTime = null;
+      try {
+        bestTime = (await env.DB.prepare(
+          `SELECT best_time FROM tenant_contacts WHERE account_id = ? AND user_id = ?`)
+          .bind(job.account_id, who).first())?.best_time || null;
+      } catch (err) { if (!missingSchema(err)) throw err; }
+      tenant = { firstName: firstName(u?.name), phone: u?.phone || null, bestTime };
+    }
+    if (kind === "manager") {
+      const [m] = await buildingManagers(env, job.account_id, job.property_id ? [job.property_id] : []);
+      manager = m ? { firstName: firstName(m.name), phone: m.phone || null } : null;
+    }
+    // ACCEPTED, never merely offered: somebody who has not said yes to the job
+    // is not coming, and is not owed the tenant's number.
+    const { results: wos } = await env.DB.prepare(
+      `SELECT w.company_id, w.crew_name, c.company, c.contact, c.phone
+         FROM work_orders w JOIN companies c ON c.id = w.company_id
+        WHERE w.job_id = ? AND w.voided_at IS NULL AND w.status = 'accepted'
+        ORDER BY w.trade`).bind(job.id).all();
+    const seen = new Set();
+    for (const w of wos || []) {
+      if (seen.has(w.company_id)) continue;
+      if (viewer === "crew" && w.company_id !== companyId) continue;
+      seen.add(w.company_id);
+      let name = firstName(w.contact), phone = w.phone || null;
+      if (!name || !phone) {
+        const u = await env.DB.prepare(
+          `SELECT u.name, u.phone FROM memberships m JOIN users u ON u.id = m.user_id
+            WHERE m.company_id = ? AND m.role = 'contractor'
+            ORDER BY (u.phone IS NULL), u.name LIMIT 1`).bind(w.company_id).first().catch(() => null);
+        name = name || firstName(u?.name);
+        phone = phone || u?.phone || null;
+      }
+      crews.push({ company: w.company, firstName: name, phone });
+    }
+  }
+  return {
+    kind, how, howFrom, live, migration,
+    when: v ? { date: v.date, startTime: v.start_time || null, endTime: v.end_time || null,
+      status: v.status } : null,
+    people: visiblePeople({ kind, viewer, tenant, manager, crews }),
+  };
+}
+
+// Who may read it, checked on the row rather than taken from a header: the
+// tenant who has to be let in, a company holding accepted work on the job, or
+// the team. Anybody else -- another tenant, a crew that was never given the
+// job -- gets the same not-found as a job that does not exist.
+async function accessViewer(c, job) {
+  const auth = c.get("auth");
+  if (auth.role === "tenant") return accessTenant(job) === auth.userId ? { viewer: "tenant" } : null;
+  if (auth.role === "contractor") {
+    const wo = await c.env.DB.prepare(
+      `SELECT 1 AS yes FROM work_orders WHERE job_id = ? AND company_id = ?
+          AND voided_at IS NULL AND status = 'accepted' LIMIT 1`).bind(job.id, auth.companyId).first();
+    return wo?.yes ? { viewer: "crew", companyId: auth.companyId } : null;
+  }
+  return { viewer: "team" };
+}
+
+app.get("/api/jobs/:id/access", requireRole("admin", "pm", "tenant", "contractor"), async (c) => {
+  const auth = c.get("auth");
+  const job = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ? AND account_id = ?`)
+    .bind(c.req.param("id"), auth.accountId).first();
+  const v = job ? await accessViewer(c, job) : null;
+  if (!v) return c.json({ error: "job_not_found" }, 404);
+  const plan = await accessPlanFor(c.env, job, v);
+  return c.json({ ...plan, canEditHow: mayEditHow(auth.role,
+    { kind: plan.kind, isAccessTenant: accessTenant(job) === auth.userId }) });
+});
+
+app.put("/api/jobs/:id/access-how", requireRole("admin", "pm", "tenant"), async (c) => {
+  const auth = c.get("auth");
+  const job = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ? AND account_id = ?`)
+    .bind(c.req.param("id"), auth.accountId).first();
+  const v = job ? await accessViewer(c, job) : null;
+  if (!v) return c.json({ error: "job_not_found" }, 404);
+  const before = await accessPlanFor(c.env, job, v);
+  if (!mayEditHow(auth.role, { kind: before.kind, isAccessTenant: accessTenant(job) === auth.userId })) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  const b = await c.req.json().catch(() => ({}));
+  const how = normalizeHow(b.how);
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO job_access (job_id, how, updated_by, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT (job_id) DO UPDATE SET how = excluded.how,
+         updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP`
+    ).bind(job.id, how, auth.userId).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+  await touchJob(c.env, job.id);
+  const plan = await accessPlanFor(c.env, job, v);
+  return c.json({ ...plan, canEditHow: true });
 });
 
 app.get("/api/me/contact", requireRole("tenant"), async (c) => {
@@ -6804,6 +6954,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\bjob_access\b/i.test(m)) return "073_job_access";
   if (/\btenant_contacts\b|\bbuilding_notices\b/i.test(m)) return "072_tenant_home";
   if (/\bwaiver_forms\b|ux_waiver_open/i.test(m)) return "069_waiver_forms";
   if (/\binspection_(sources|status_rules|unmapped)\b/i.test(m)) return "068_inspection_ingest";
@@ -11676,9 +11827,23 @@ app.get("/api/my-work", async (c) => {
       level -= 1;
     }
   }
+  // 073. HOW THEY GET IN, on every job this company has said yes to. Only
+  // accepted work: an offer nobody has taken is not owed a tenant's number.
+  // Read straight off the job row, because half of this list is on other
+  // accounts and the plan has to be the same whichever one it is.
+  const plans = {};
+  for (const r of rows || []) {
+    if (r.status !== "accepted" || plans[r.job_id] !== undefined) continue;
+    const job = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(r.job_id).first()
+      .catch(() => null);
+    plans[r.job_id] = job ? await accessPlanFor(c.env, job, { viewer: "crew", companyId })
+      .catch((err) => { console.warn("[my-work] access plan:", err?.message || err); return null; })
+      : null;
+  }
   return c.json({
     work: (rows || []).map((r) => ({
       woId: r.wo_id, wo: r.wo_number, jobId: r.job_id, trade: r.trade,
+      accessPlan: plans[r.job_id] || null,
       // The account this is for. `here` is what lets the screen offer the
       // accept and decline buttons on the rows it can actually act on: this
       // list spans accounts and responding is an account-scoped write, so a

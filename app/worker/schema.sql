@@ -2171,6 +2171,14 @@ CREATE TABLE IF NOT EXISTS account_fee_terms (
 -- 072. The tenant's own dashboard. How this account should reach a tenant and
 -- who to call if it cannot, keyed by (account, person) because it is something
 -- they told THIS landlord; and notices a manager posts to one building.
+-- 073. How the crew gets in, in words. See migrations/073_job_access.sql.
+CREATE TABLE IF NOT EXISTS job_access (
+  job_id      TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+  how         TEXT,
+  updated_by  TEXT,
+  updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS tenant_contacts (
   account_id          TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
