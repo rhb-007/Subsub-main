@@ -695,6 +695,9 @@ const TENANT_ALLOWED = [
   [/^\/api\/weather$/, ["GET"]],
   [/^\/api\/notices$/, ["GET"]],
   [/^\/api\/me\/contact$/, ["GET", "PUT"]],
+  // Who runs their building: the account's own managers, by name and how to
+  // reach them. Read-only, and it answers nothing about anybody else here.
+  [/^\/api\/my-manager$/, ["GET"]],
   // Their own profile picture: the upload (checked kind, like a report
   // photo), setting it on their own row, and reading it back. The read is
   // narrowed to their OWN picture in the handler -- a guest seat has no
@@ -5287,6 +5290,54 @@ const contactRowToJs = (r, u) => ({
   phone: u?.phone || null,
   email: realEmail(u?.email) || null,
   updatedAt: r?.updated_at || null,
+});
+
+// WHO RUNS MY BUILDING, for the card on Tenant HQ. Asked for as *"the property
+// manager profile and contact info, in a quick digestible format so a tenant
+// can quickly look"*. The account itself carries no office phone or address,
+// so the answer is the people: a project manager narrowed to this tenant's
+// building first, because that is the person who actually looks after it;
+// then a manager narrowed to nothing, who runs every building; then the
+// account's admins. The first tier that has anybody in it is the answer, at
+// most two names -- a list of the whole office is not "your manager".
+//
+// This account's own team, read by somebody this account houses. A name, a
+// title, a work email and the phone on their seat: what a tenant needs to
+// reach the people who run their home, and nothing about anybody else on the
+// account -- no other tenants, no contractors, no owners.
+app.get("/api/my-manager", requireRole("tenant"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const acct = await c.env.DB.prepare(`SELECT name, kind FROM accounts WHERE id = ?`).bind(accountId).first();
+  const mine = await c.env.DB.prepare(
+    `SELECT mp.property_id FROM memberships m
+       JOIN membership_properties mp ON mp.membership_id = m.id
+      WHERE m.user_id = ? AND m.account_id = ?`).bind(userId, accountId).all()
+    .then((r) => (r.results || []).map((x) => x.property_id)).catch(() => []);
+  const { results: team } = await c.env.DB.prepare(
+    `SELECT m.id AS mid, m.role, u.name, u.email, u.phone
+       FROM memberships m JOIN users u ON u.id = m.user_id
+      WHERE m.account_id = ? AND m.role IN ('admin','pm')
+      ORDER BY u.name`).bind(accountId).all();
+  const scopes = new Map();
+  for (const t of team || []) {
+    const { results } = await c.env.DB.prepare(
+      `SELECT property_id FROM membership_properties WHERE membership_id = ?`).bind(t.mid).all()
+      .catch(() => ({ results: [] }));
+    scopes.set(t.mid, (results || []).map((x) => x.property_id));
+  }
+  const pms = (team || []).filter((t) => t.role === "pm");
+  const tiers = [
+    pms.filter((t) => scopes.get(t.mid).some((p) => mine.includes(p))),
+    pms.filter((t) => scopes.get(t.mid).length === 0),
+    (team || []).filter((t) => t.role === "admin"),
+  ];
+  const pick = (tiers.find((t) => t.length) || []).slice(0, 2);
+  return c.json({
+    company: acct?.name || null,
+    kind: acct?.kind || null,
+    managers: pick.map((t) => ({ name: t.name || null, role: t.role,
+      email: realEmail(t.email) || null, phone: t.phone || null })),
+  });
 });
 
 app.get("/api/me/contact", requireRole("tenant"), async (c) => {

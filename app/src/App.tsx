@@ -7245,7 +7245,8 @@ export default function SubSub() {
           unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey}
           visits={visits} onRespondVisit={respondVisit} onVisitOutcome={visitOutcome}
           onWithdraw={withdrawReport} onEdit={editReport} onPhotosChanged={changeReportPhotos}
-          onReport={(r) => createJob({ ...r, trades: r.trades || [] })} weather={weather} />
+          onReport={(r) => createJob({ ...r, trades: r.trades || [] })} weather={weather}
+          onOpenAccount={(pane) => { setOpenPane({ pane, n: Date.now() }); setTab("account"); }} />
       )}
 
       {/* ONE DASHBOARD PER SCREEN. A contractor seat lives in the portal, so
@@ -15294,7 +15295,12 @@ const contactError = (e) => e?.body?.error === "migration_needed"
 // Two cards over one record: how this account should reach them, and who to
 // call if it cannot. One fetch and one save, because the route stores both
 // halves in one row and two components would be two copies of it.
-function TenantDetails({ brandName }) {
+// MY ACCOUNT holds these now, one card per tab. They sat at the foot of
+// Tenant HQ, which is the screen a tenant glances at to see what is happening
+// at their home -- their own settings are something they set once, and that
+// is what My account is for. `only` picks the card; the record is still one
+// row, so whichever is mounted saves both halves.
+function TenantDetails({ brandName, only = null }) {
   const [c, setC] = useState(null);
   const [editing, setEditing] = useState(null);   // "contact" | "emergency" | null
   const [f, setF] = useState({});
@@ -15341,7 +15347,8 @@ function TenantDetails({ brandName }) {
   );
   const prefLabelOf = (id) => CONTACT_PREFS.find((p) => p.id === id)?.label;
   return (
-    <section className="tn-details" aria-label="Your details">
+    <section className={`tn-details ${only ? "tn-details-one" : ""}`} aria-label="Your details">
+      {only !== "emergency" && (
       <div className="tn-card tn-contact">
         <div className="tn-card-head">
           <h3><Phone size={15} /> Preferred contact</h3>
@@ -15388,7 +15395,9 @@ function TenantDetails({ brandName }) {
           </p>
         )}
       </div>
+      )}
 
+      {only !== "contact" && (
       <div className="tn-card tn-emergency">
         <div className="tn-card-head">
           <h3><HeartPulse size={15} /> Emergency contact</h3>
@@ -15429,11 +15438,74 @@ function TenantDetails({ brandName }) {
           Only {brandName} sees this. Fire, gas or someone hurt? <strong>Call 911</strong> first.
         </p>
       </div>
+      )}
     </section>
   );
 }
 
-function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onVisitOutcome, onWithdraw, onEdit, onPhotosChanged, weather = null }) {
+// WHO RUNS YOUR BUILDING, where the two contact cards used to sit. Asked for
+// as *"the property manager profile and contact info -- in a quick digestible
+// design format so a tenant can quickly look"*. The company, then the person
+// who looks after this building, and one tap to call, text or email them.
+// Where nobody is set up to answer it says so and points back at Report a
+// problem, which always reaches them -- an empty card would read as a broken
+// one. A tenant's OWN details live in My account, and the foot of the card
+// says so, because that is where they went.
+const initialsOf = (name) => String(name || "?").split(/\s+/).filter(Boolean)
+  .map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "?";
+const telHref = (p) => `tel:${String(p || "").replace(/[^\d+]/g, "")}`;
+function TenantManager({ brand, onOpenAccount }) {
+  const [m, setM] = useState(null);
+  useEffect(() => {
+    let live = true;
+    api.myManager().then((r) => { if (live) setM(r || {}); })
+      .catch(() => { if (live) setM({}); });
+    return () => { live = false; };
+  }, []);
+  if (!m) return null;
+  const company = m.company || brand.name;
+  const people = Array.isArray(m.managers) ? m.managers : [];
+  return (
+    <section className="tn-card tn-mgr" aria-label="Your property manager">
+      <div className="tn-card-head">
+        <h3><Building2 size={15} /> Your property manager</h3>
+      </div>
+      <div className="tn-mgr-co"><BrandMark brand={brand} height={28} /><b>{company}</b></div>
+      {people.length ? (
+        <div className="tn-mgr-people">
+          {people.map((p) => (
+            <div className="tn-mgr-person" key={`${p.name}-${p.email}`}>
+              <span className="tn-mgr-av" aria-hidden="true">{initialsOf(p.name)}</span>
+              <span className="tn-mgr-who">
+                <b>{p.name || company}</b>
+                <span>{p.role === "pm" ? "Property manager" : `Manager at ${company}`}</span>
+                {(p.phone || p.email) && <span>{[p.phone, p.email].filter(Boolean).join(" · ")}</span>}
+              </span>
+              <span className="tn-mgr-acts">
+                {p.phone && <a className="tn-mgr-act" href={telHref(p.phone)}><Phone size={15} /> Call</a>}
+                {p.phone && <a className="tn-mgr-act" href={`sms:${String(p.phone).replace(/[^\d+]/g, "")}`}>
+                  <MessageSquareText size={15} /> Text</a>}
+                {p.email && <a className="tn-mgr-act" href={`mailto:${p.email}`}><Mail size={15} /> Email</a>}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="tn-card-empty">Report a problem above and it goes straight to {company}.</p>
+      )}
+      <div className="tn-mgr-foot">
+        <p className="tn-card-note">Fire, gas or someone hurt? <strong>Call 911</strong> first.</p>
+        {onOpenAccount && (
+          <button type="button" className="tn-mgr-link" onClick={() => onOpenAccount("reach")}>
+            How {company} reaches you <ChevronRight size={12} />
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onVisitOutcome, onWithdraw, onEdit, onPhotosChanged, weather = null, onOpenAccount = null }) {
   // 072. The notices posted to their building. A failure is silence: the
   // reports below are what this screen is for, and a table the account has
   // not created yet must not cost them.
@@ -15754,7 +15826,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         );
       })()}
 
-      <TenantDetails brandName={brand.name} />
+      <TenantManager brand={brand} onOpenAccount={onOpenAccount} />
 
       {(() => {
         const open = mine.find((j) => j.id === openId);
@@ -20866,7 +20938,12 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // Compliance pack earns a tab of its own because it is referenced constantly:
   // it is the one screen a hireable account opens weekly, and it was the fifth
   // panel down inside another tab.
-  const panes = [["profile", "Profile"]]
+  // A TENANT'S ACCOUNT IS THREE TABS: who they are, how they are reached, and
+  // who to call if they cannot be. The last two used to sit at the foot of
+  // Tenant HQ and were moved here on request.
+  const panes = role === "tenant"
+    ? [["profile", "Profile"], ["reach", "How we reach you"], ["emergency", "Emergency contact"]]
+    : [["profile", "Profile"]]
     .concat(canManage ? [["company", "Company"]] : [])
     .concat(canManage ? [["branding", "Branding"]] : [])
     // Only an account that can be hired has paperwork of its own to keep.
@@ -20988,7 +21065,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
         </div>
       )}
 
-      {pane === "profile" && role === "tenant" && (
+      {pane === "reach" && role === "tenant" && <TenantDetails brandName={brand.name} only="contact" />}
+      {pane === "emergency" && role === "tenant" && <TenantDetails brandName={brand.name} only="emergency" />}
+      {pane === "reach" && role === "tenant" && (
         <div className="portal-panel settings-panel">
           <h4>Notifications</h4>
           <p className="panel-note">
@@ -36415,6 +36494,27 @@ p.fld-note{margin:6px 0 0}
   background:var(--paper);border:1px solid var(--line);color:var(--ink-soft);border-radius:6px;padding:2px 7px}
 .tn-details{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:22px}
 @media (max-width:560px){.tn-details{grid-template-columns:1fr}}
+.tn-details.tn-details-one{grid-template-columns:1fr;margin:0 0 16px}
+.tn-mgr{margin-top:22px}
+.tn-mgr-co{display:flex;align-items:center;gap:10px;min-width:0}
+.tn-mgr-co b{font-size:15px;font-weight:700;overflow-wrap:anywhere}
+.tn-mgr-people{display:flex;flex-direction:column;gap:10px}
+.tn-mgr-person{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--line);
+  padding-top:10px}
+.tn-mgr-av{width:40px;height:40px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;
+  background:var(--paper);border:1px solid var(--line);font-size:13.5px;font-weight:800;color:var(--ink-soft)}
+.tn-mgr-who{display:flex;flex-direction:column;gap:2px;flex:1 1 160px;min-width:0}
+.tn-mgr-who b{font-size:14.5px;font-weight:700;overflow-wrap:anywhere}
+.tn-mgr-who span{font-size:12.5px;color:var(--ink-soft);overflow-wrap:anywhere}
+.tn-mgr-acts{display:flex;gap:8px;flex-wrap:wrap}
+.tn-mgr-act{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 14px;border-radius:10px;
+  border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:13.5px;font-weight:700;
+  text-decoration:none}
+.tn-mgr-act:hover{border-color:var(--brand);color:var(--brand)}
+.tn-mgr-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 12px}
+.tn-mgr-link{background:none;border:0;padding:0;color:var(--brand);font:inherit;font-size:12.5px;
+  font-weight:700;cursor:pointer}
+@media (max-width:560px){.tn-mgr-acts{width:100%}.tn-mgr-act{flex:1 1 0;justify-content:center}}
 .tn-card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px 16px;
   box-shadow:var(--shadow);display:flex;flex-direction:column;gap:8px;min-width:0}
 .tn-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}

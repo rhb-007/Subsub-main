@@ -298,6 +298,40 @@ console.log("\n-- a town the geocoder only knows in another state --");
     && calls.some((x) => /name=98407/.test(x.url)), JSON.stringify(b) + " " + calls.map((x) => x.url).join(" | "));
 }
 
+console.log("\n-- who runs my building --");
+{
+  const db = seed(); const env = envOf(db);
+  db.prepare("UPDATE users SET phone = '(253) 555-0170' WHERE id = 'u_pm3'").run();
+  // The manager narrowed to THIS tenant's building is the answer, ahead of
+  // the admin: they are the one who actually looks after it.
+  let [st, b] = await call(env, "u_t2", "acc1", "/my-manager");
+  ck("a tenant gets the manager narrowed to their own building", st === 200
+    && JSON.stringify(b.managers?.map((x) => x.name)) === '["Pat Narrow"]' && b.managers[0].role === "pm"
+    && b.managers[0].phone === "(253) 555-0170" && b.company === "Cascade Management", JSON.stringify(b));
+  // Pat looks after Harbor House only, so a tenant at Rainier does not get
+  // Pat -- with no manager for their building, the account's admin answers.
+  [st, b] = await call(env, "u_t1", "acc1", "/my-manager");
+  ck("a tenant elsewhere is not handed another building's manager",
+    st === 200 && JSON.stringify(b.managers?.map((x) => x.name)) === '["Ann Admin"]', JSON.stringify(b));
+  // A manager narrowed to nothing runs every building, and outranks the admin.
+  db.exec(`INSERT INTO users(id,name,email) VALUES ('u_pmall','Gail General','gail@cascade.test');
+    INSERT INTO memberships(id,user_id,account_id,role) VALUES ('m_pmall','u_pmall','acc1','pm');`);
+  [st, b] = await call(env, "u_t1", "acc1", "/my-manager");
+  ck("an unnarrowed manager answers before the admin",
+    JSON.stringify(b.managers?.map((x) => x.name)) === '["Gail General"]', JSON.stringify(b));
+  // Nothing about anybody else on the account: no tenants, no contractors.
+  const all = JSON.stringify(b);
+  ck("and says nothing about other tenants or contractors",
+    !/Tess|Olly|Quinn|Ned|Sam/.test(all.replace(/"company":"[^"]*"/, "")), all);
+  // The same person on another account gets THAT account's people.
+  [st, b] = await call(env, "u_t1", "acc2", "/my-manager");
+  ck("on another account, that account's own", JSON.stringify(b.managers?.map((x) => x.name)) === '["Far Admin"]'
+    && b.company === "Sound PM", JSON.stringify(b));
+  // Only a tenant asks it.
+  [st] = await call(env, "u_sub", "acc1", "/my-manager");
+  ck("a contractor seat is refused", st === 403, String(st));
+}
+
 console.log("\n-- a database without 072 --");
 {
   const db = seed(); const env = envOf(db);

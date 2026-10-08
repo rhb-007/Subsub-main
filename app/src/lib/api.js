@@ -387,6 +387,7 @@ export const api = {
   // posted to buildings. The contact route takes no id: it is always the
   // caller's own row.
   myContact: () => request("/me/contact"),
+  myManager: () => request("/my-manager"),
   saveMyContact: (body) => request("/me/contact", { method: "PUT", body: JSON.stringify(body) }),
   listNotices: () => request("/notices"),
   postNotice: (body) => request("/notices", { method: "POST", body: JSON.stringify(body) }),

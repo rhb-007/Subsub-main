@@ -54,6 +54,8 @@ const USERS = [
 ];
 let NOTICES = [];
 let CONTACT = {};
+let MANAGER = { company: "Sound Property Management", kind: "property_manager",
+  managers: [{ name: "Riley Park", role: "pm", email: "riley@soundpm.test", phone: "(206) 555-0142" }] };
 let WEATHER = {};
 const sent = [];
 
@@ -73,6 +75,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     NOTICES = [n, ...NOTICES];
     return [201, { notice: n, emailed: body.email ? 3 : 0, notEmailed: body.email ? 1 : 0 }];
   }
+  if (path === "/api/my-manager") return [200, MANAGER];
   if (path === "/api/me/contact" && method === "GET") return [200, CONTACT];
   if (path === "/api/me/contact" && method === "PUT") {
     sent.push({ path, body });
@@ -127,6 +130,10 @@ const read = (page) => page.evaluate(() => {
     ctaRect: r(q(".tn-actions .tn-cta")), aiRect: r(q(".tn-ai")),
     ai: q(".tn-ai")?.innerText || null,
     contact: q(".tn-contact")?.innerText || null,
+    mgr: q(".tn-mgr")?.innerText || null,
+    mgrHrefs: [...document.querySelectorAll(".tn-mgr a")].map((a) => a.getAttribute("href")),
+    tabs: [...document.querySelectorAll(".seg-tabs button")].map((b) => b.innerText.trim()),
+    tabOn: q(".seg-tabs button.on")?.innerText.trim() || null,
     emergency: q(".tn-emergency")?.innerText || null,
     width: document.documentElement.scrollWidth,
   };
@@ -217,10 +224,29 @@ try {
     t.ck("the two sit side by side", s.ctaRect && s.aiRect && Math.abs(s.ctaRect.top - s.aiRect.top) < 4,
       JSON.stringify({ c: s.ctaRect?.top, a: s.aiRect?.top }));
 
+    // THE TWO CONTACT CARDS MOVED TO MY ACCOUNT, and in their place is who
+    // runs the building and how to reach them.
+    t.ck("the contact cards are no longer on Tenant HQ", s.contact === null && s.emergency === null,
+      JSON.stringify({ c: s.contact, e: s.emergency }));
+    t.ck("the property manager card is there, naming the company",
+      /Your property manager/i.test(s.mgr || "") && /Sound Property Management/.test(s.mgr || ""), String(s.mgr));
+    t.ck("and the person who looks after the building, with their title",
+      /Riley Park/.test(s.mgr || "") && /Property manager/.test(s.mgr || ""), String(s.mgr));
+    t.ck("one tap to call, text or email them",
+      JSON.stringify(s.mgrHrefs) === JSON.stringify(["tel:2065550142", "sms:2065550142", "mailto:riley@soundpm.test"]),
+      JSON.stringify(s.mgrHrefs));
+    t.ck("and 911 first", /Call 911/.test(s.mgr || ""), String(s.mgr));
+
+    // AND THE WAY TO THEIR OWN DETAILS, because that is where they went.
+    await clickText(page, ".tn-mgr-link", /reaches you/);
+    await wait(700);
+    let acc = await read(page);
+    t.ck("the link opens My account on the right tab",
+      JSON.stringify(acc.tabs) === JSON.stringify(["Profile", "How we reach you", "Emergency contact"])
+      && acc.tabOn === "How we reach you", JSON.stringify({ tabs: acc.tabs, on: acc.tabOn }));
     t.ck("preferred contact asks, naming the number on file",
-      /Preferred contact/.test(s.contact || "") && /Not chosen yet/.test(s.contact || "") && /555-0188/.test(s.contact || ""), String(s.contact));
-    t.ck("emergency contact asks, and says 911 first",
-      /Emergency contact/.test(s.emergency || "") && /None given yet/.test(s.emergency || "") && /Call 911/.test(s.emergency || ""), String(s.emergency));
+      /Preferred contact/.test(acc.contact || "") && /Not chosen yet/.test(acc.contact || "") && /555-0188/.test(acc.contact || ""), String(acc.contact));
+    t.ck("one card per tab", acc.emergency === null, String(acc.emergency));
 
     console.log("\n-- saving a preference and an emergency contact --");
     sent.length = 0;
@@ -236,6 +262,12 @@ try {
     let now = await read(page);
     t.ck("and the card reads it back", /Text me/.test(now.contact || "") && /Weekdays after 5pm/.test(now.contact || ""), String(now.contact));
 
+    await clickText(page, ".seg-tabs button", /^Emergency contact$/);
+    await wait(400);
+    acc = await read(page);
+    t.ck("emergency contact has its own tab, and says 911 first",
+      /Emergency contact/.test(acc.emergency || "") && /None given yet/.test(acc.emergency || "") && /Call 911/.test(acc.emergency || ""),
+      String(acc.emergency));
     sent.length = 0;
     await clickText(page, ".tn-emergency .tn-card-head button", /Add/);
     await wait(300);
@@ -260,6 +292,7 @@ try {
   console.log("\n-- no weather draws nothing; no notices still draws the section --");
   {
     WEATHER = {}; NOTICES = []; CONTACT = { prefer: null, phone: null, email: "tess@x.test" };
+    MANAGER = { company: "Sound Property Management", managers: [] };
     const { ctx, page } = await asTenant();
     const s = await read(page);
     t.ck("the tenant is in", /Hello, Tess/.test(s.hello), s.hello);
@@ -273,6 +306,9 @@ try {
     t.ck("saying just No messages, with an icon", (s.noticesEmpty || "").trim() === "No messages"
       && (await page.evaluate(() => !!document.querySelector(".tn-notice-empty svg"))), String(s.noticesEmpty));
     t.ck("and the report button is still there", /Report a problem/.test(s.cta || ""));
+    // Nobody set up to answer is said, never an empty card.
+    t.ck("with nobody to name, the manager card points at Report a problem",
+      /Report a problem above/.test(s.mgr || "") && s.mgrHrefs.length === 0, String(s.mgr));
     await ctx.close();
   }
 

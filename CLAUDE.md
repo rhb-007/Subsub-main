@@ -10846,6 +10846,43 @@ refactor.
   `test:workwhenui` pinned the old answer, *a job with no time has nothing to
   press*, and was rewritten to the new rule rather than loosened.
 
+- **A TENANT'S OWN DETAILS LIVE IN MY ACCOUNT, AND TENANT HQ SAYS WHO RUNS
+  THEIR BUILDING.** Asked for as *"move these 2 sections to My Account, tab
+  these out so more organized"* and, in their place, *"the property manager
+  profile and contact info, in a quick digestible format"*.
+
+  **My account is three tabs for a tenant**: *Profile* (picture and details),
+  *How we reach you* (preferred contact and notifications) and *Emergency
+  contact*. The two cards are still **one component over one record**
+  (`TenantDetails only=…`). The route stores one row, so whichever tab is open
+  saves both halves, and `test:tenanthomeui` reads the second save's body for
+  the first half.
+
+  **The card on Tenant HQ comes from `GET /api/my-manager`.** It lists the
+  company and **at most two people**, taken from the first group that has
+  anybody in it:
+  1. a project manager narrowed to this tenant's own building, because that is
+     who actually looks after it;
+  2. a project manager narrowed to nothing, who runs every building;
+  3. the account's admins.
+
+  The account itself carries no office phone or address, so the people are the
+  answer. If the office line matters, `accounts.phone` and `.address` would need
+  a migration.
+
+  **It answers nothing about anybody else on the account**: no other tenants,
+  no contractors, no owners. It is for a tenant seat only, and it is on
+  `TENANT_ALLOWED` as GET.
+
+  **One tap to call, text or email.** With nobody to name, the card points at
+  Report a problem, because an empty card reads as a broken one. Its foot links
+  to *How we reach you*, which is where the cards went. Manager photos are
+  deliberately not shown: a guest reads only its own avatar, so the people are
+  drawn as initials.
+
+  Three server mutations fire: a manager handed to any building, the
+  allowlist line removed, and admins ranked first.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
