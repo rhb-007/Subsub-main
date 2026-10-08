@@ -11063,6 +11063,34 @@ refactor.
   crew's copy rides on `/api/my-work` because half that list is on other
   accounts; the tenant and the office read `GET /api/jobs/:id/access`.
 
+- **EVERY WORK ORDER CARRIES AN ACCESS LINK, WHERE THE HIRING ACCOUNT KEEPS
+  BUILDINGS.** Asked for as *"put a link on all work orders to access
+  information (if a property manager, portfolio manager, or owner)"*. The work
+  order is what a crew opens before driving somewhere, and the access panel
+  lived on the job card, a screen away from it.
+
+  `WorkOrderDoc` takes `accessViewer` and, for the three kinds in
+  `ACCESS_ACCOUNT_KINDS` (read through `mayChooseAccess`), draws an **Access**
+  button in its header, an Access row in the Job section that says who lets
+  whom in, and an Access section that the button scrolls to and rings. It is
+  **the same `AccessPanel` and the same `GET /api/jobs/:id/access`** the job
+  card uses, so the two cannot disagree, and the server still decides whose
+  number each viewer gets. The downloaded copy carries the same block,
+  including only the numbers the viewer was given.
+
+  **A general contractor gets none**, and opening one of its work orders asks
+  the access route nothing: a GC keeps no buildings and no tenants, so the
+  section would be a heading over nothing. **A guest seat gets none either**,
+  because the route refuses owners and tenants and a link onto a refusal is
+  the screen-that-lies rule. **A crew holding only an offer** keeps the link
+  and is told the details appear once they accept, because the route refuses
+  them on purpose and a blank reads as broken. `useJobAccess` now returns
+  whether the read failed, which is what tells that case from loading.
+
+  `test:woaccess` drives the office, the crew, the crew with an offer and a
+  general contractor in one suite. Four mutations fire: the kind gate dropped,
+  the download block dropped, the failure line dropped and the ring dropped.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

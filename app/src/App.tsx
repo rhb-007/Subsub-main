@@ -7662,6 +7662,8 @@ export default function SubSub() {
         <WorkOrderDoc job={viewWO.job} trade={viewWO.trade} cos={cosFor(changeOrders, viewWO.job.id, viewWO.trade)}
           a={viewWOAssign}
           canUpload={role !== "contractor"} brand={brand}
+          accessViewer={mayChooseAccess(kindOf(account))
+            ? (role === "contractor" ? "crew" : ["admin", "pm"].includes(role) ? "team" : null) : null}
           onUploadSigned={(file) => uploadSignedWO(viewWO.job.id, viewWO.trade, file)}
           onClose={() => setViewWO(null)} />
         {/* WHAT THE INSPECTION FOUND, with the photographs, for whoever is
@@ -14853,13 +14855,19 @@ function VisitForm({ jobId, startDate = "", forWhom, replacing = false, placehol
 // window, because the panel's "who" and "when" are both about those.
 function useJobAccess(jobId, refresh = "") {
   const [plan, setPlan] = useState(null);
+  // Whether the read was refused, so a caller can tell "still loading" from
+  // "this viewer has no access plan here" -- a crew holding only an offer,
+  // say -- and say the second rather than drawing a blank.
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     if (!jobId) return undefined;
     let gone = false;
-    api.jobAccess(jobId).then((p) => { if (!gone) setPlan(p); }).catch(() => {});
+    setFailed(false);
+    api.jobAccess(jobId).then((p) => { if (!gone) setPlan(p); })
+      .catch(() => { if (!gone) setFailed(true); });
     return () => { gone = true; };
   }, [jobId, refresh]);
-  return [plan, setPlan];
+  return [plan, setPlan, failed];
 }
 
 const ACCESS_SIDE_WORD = { tenant: "Tenant", manager: "Office", crew: "Crew" };
@@ -30330,7 +30338,27 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
 }
 
 // ---- Work order document (derived view, downloadable) -------------------
-function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand, cos }) {
+function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand, cos,
+  accessViewer = null }) {
+  // ACCESS ON EVERY WORK ORDER, where the hiring account keeps buildings.
+  // Asked for as *"put a link on all work orders to access information"*. The
+  // work order is what a crew opens when they are deciding to drive somewhere,
+  // and until now the one thing it never said was how they get in: the panel
+  // lived on the job card, a screen away. It is the SAME panel and the same
+  // read the job card uses, so the two cannot say different things, and the
+  // server still decides whose number this viewer is given.
+  //
+  // `accessViewer` is null wherever there is nothing to say: a general
+  // contractor's work runs job to job with no tenant to let anybody in, so
+  // the caller passes it only for the three kinds with buildings.
+  const [accPlan, setAccPlan, accFailed] = useJobAccess(accessViewer ? job.id : null);
+  const accRef = useRef(null);
+  const [accRing, setAccRing] = useState(0);
+  const goAccess = () => {
+    accRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    setAccRing((n) => n + 1);
+  };
+  const accHead = accPlan?.kind ? accessHeadline(accPlan, accessViewer) : null;
   const coList = (cos || []).filter((c) => c.status === "accepted").sort((x, y) => x.seq - y.seq);
   const coPending = (cos || []).filter((c) => c.status === "pending").length;
   const revised = Number(moneyRaw(a.value) || 0) + coList.reduce((n, c) => n + c.valueDelta, 0);
@@ -30353,6 +30381,16 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
       "",
       `Materials source: ${job.materialSource || "—"}`,
       `Materials paid by: ${job.materialsPaidBy || "—"}`,
+      "",
+      ...(accHead ? [
+        "",
+        "ACCESS",
+        accHead,
+        `Where: ${accPlan.how || (accPlan.kind === "none" ? "Nobody needs to meet you." : "Not said yet.")}`,
+        `When: ${accPlan.when?.date ? visitWhen(accPlan.when) + (accPlan.when.status !== "confirmed" ? " (proposed, not confirmed yet)" : "") : "No time agreed yet."}`,
+        ...(accPlan.people || []).filter((p) => !p.you && p.phone)
+          .map((p) => `Contact: ${p.firstName || p.company || ACCESS_SIDE_WORD[p.side]} (${p.side === "crew" ? (p.company || "Crew") : ACCESS_SIDE_WORD[p.side]}) ${formatPhone(p.phone)}`),
+      ] : []),
       "",
       "SCOPE OF WORK",
       a.tradeScope || job.scope || "—",
@@ -30388,7 +30426,14 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
           <h2>{a.wo}</h2>
           <p className="wdh-sub">Issued {a.woIssued} · {M.label}</p>
         </div>
-        <span className={`job-status st-${a.auto ? "accepted" : a.status}`}>{a.auto ? "auto-scheduled" : a.status}</span>
+        <div className="wdh-right">
+          <span className={`job-status st-${a.auto ? "accepted" : a.status}`}>{a.auto ? "auto-scheduled" : a.status}</span>
+          {accessViewer && (
+            <button type="button" className="wd-acc-link" onClick={goAccess}>
+              <Key size={13} /> Access
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="wo-doc-grid">
@@ -30420,7 +30465,29 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
         {job.sqft && <div className="wd-row"><span>Square footage</span><strong>{Number(job.sqft).toLocaleString()} sq ft</strong></div>}
         {job.stories && <div className="wd-row"><span>Stories</span><strong>{job.stories}</strong></div>}
         <div className="wd-row"><span>Start</span><strong>{formatWhen(job.date, job.time) || "TBD"}</strong></div>
+        {accessViewer && (
+          <div className="wd-row"><span>Access</span>
+            <strong>{accHead || (accFailed ? "See below" : "Loading…")}
+              <button type="button" className="wd-acc-inline" onClick={goAccess}>
+                <Key size={12} /> {accessViewer === "crew" ? "Who lets you in" : "How they get in"}
+              </button>
+            </strong>
+          </div>
+        )}
       </div>
+
+      {accessViewer && (
+        <div ref={accRef} key={accRing} className={`wo-acc ${accRing ? "rung" : ""}`}>
+          <div className="wo-doc-sec">Access</div>
+          {accPlan?.kind
+            ? <AccessPanel plan={accPlan} viewer={accessViewer} jobId={job.id} onSaved={setAccPlan} />
+            : accFailed
+              ? <p className="muted">{accessViewer === "crew"
+                ? "Who lets you in, where to meet and their number appear here once you accept this work order."
+                : "Access details could not be loaded. Open the job card to see them."}</p>
+              : <p className="muted">Loading…</p>}
+        </div>
+      )}
 
       <div className="wo-doc-sec">Materials</div>
       <div className="wo-doc-grid">
@@ -37660,6 +37727,14 @@ strong.insp-name{background:none;border:0;padding:0}
 /* 073. The Access panel: who lets who in, where, when, and a first name and
    a mobile per side. A card of its own rather than a line, because it is the
    thing somebody reads on the doorstep with a phone in one hand. */
+.wdh-right{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.wd-acc-link{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:6px 14px;border-radius:999px;border:1.5px solid var(--brand);background:transparent;color:var(--brand);font-weight:700;font-size:13.5px;cursor:pointer}
+.wd-acc-link:hover{background:var(--brand-soft, rgba(0,0,0,.04))}
+.wd-acc-inline{display:inline-flex;align-items:center;gap:4px;margin-left:8px;border:0;background:none;padding:0;cursor:pointer;font:inherit;font-size:12.5px;font-weight:700;color:var(--brand)}
+.wo-acc{border-radius:12px;scroll-margin-top:16px}
+.wo-acc .acc-title{display:none}
+.wo-acc.rung{animation:woAccRing 1.6s ease-out}
+@keyframes woAccRing{0%{box-shadow:0 0 0 0 rgba(31,122,77,.55)}30%{box-shadow:0 0 0 6px rgba(31,122,77,.35)}100%{box-shadow:0 0 0 0 rgba(31,122,77,0)}}
 .acc-panel{margin:10px 0;padding:12px 14px;border:1.5px solid var(--line);border-radius:12px;
   background:var(--card,#fff);font-size:13.5px;line-height:1.45;color:var(--ink)}
 .acc-title{display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:13px;

@@ -235,7 +235,8 @@
     "test:inspingest": "node --no-warnings scripts/inspect-ingest-test.mjs",
     "test:inspingestui": "node scripts/inspect-ingest-ui-test.mjs",
     "test:syshealth": "node scripts/syshealth-test.mjs",
-    "test:revhealthui": "node scripts/console-revhealth-ui-test.mjs"
+    "test:revhealthui": "node scripts/console-revhealth-ui-test.mjs",
+    "test:woaccess": "node --no-warnings scripts/wo-access-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
