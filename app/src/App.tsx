@@ -7630,10 +7630,10 @@ export default function SubSub() {
           from -- one component, because two copies of three inputs and a
           window validation is two things to keep in step. */}
       {proposeWO && <Modal onClose={() => setProposeWO(null)}>
-        <div className="form-sec">Propose a different time</div>
+        <div className="form-sec">{proposeWO.first ? "Propose a time" : "Propose a different time"}</div>
         <p className="pw-job">{proposeWO.job.title}</p>
         <VisitForm jobId={proposeWO.job.id} startDate={proposeWO.job.date || ""}
-          forWhom="the managing agent" replacing
+          forWhom="the managing agent" replacing={!proposeWO.first}
           placeholder="e.g. We can do Thursday morning instead"
           onPropose={proposeVisit} onDone={() => setProposeWO(null)}
           onCancel={() => setProposeWO(null)} />
@@ -28680,6 +28680,11 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
   // one tap that gets them to where they can.
   const mustAnswer = !past && when.visitId && when.kind === "proposed" && onAnswerVisit
     && (when.turn ? when.turn === "contractor" : !when.mine);
+  // NO WINDOW ON A JOB THAT IS THEIRS. A target date is the job's, not an
+  // appointment, so it counts as untimed too -- nobody has said they will be
+  // there on it.
+  const untimed = when.kind === "none" || when.kind === "target";
+  const needsTime = !away && !past && untimed && (a.status === "accepted" || !!a.auto);
   // MINIMIZED BY DEFAULT, and the line names the thing to do. A closed card
   // that hid an offer running out, or a time waiting on this crew, would be a
   // list that reads as quiet when it is not -- so the flag on the line is
@@ -28690,6 +28695,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
     const flag = mustAnswer ? { tone: "warn", text: "Confirm the time" }
       : asked && expired ? { tone: "bad", text: "Expired" }
       : asked ? { tone: urgency === "ok" ? "wait" : "warn", text: `Reply · ${countdown(left)} left` }
+      : needsTime && onProposeVisit ? { tone: "warn", text: "Set a time" }
       : null;
     return (
       <div className={`job-card jr-card job-line ${past ? "past" : ""} ${away ? "jr-away" : ""}`}>
@@ -28780,6 +28786,25 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
         </p>
       )}
       {when.note && !mustAnswer && <p className="jr-whenmsg">“{when.note}”</p>}
+      {/* TAKEN AND NOT TIMED, WHICH IS A JOB NOBODY WILL TURN UP TO. Reported
+          from exactly this card: auto-scheduled, "booked to your calendar",
+          and no day anywhere on it with nothing to press. The crew is the one
+          party who knows when they can come, and the propose route has taken a
+          contractor since it was written -- so the way out is on the card
+          rather than a telephone call to the office. Only once the job is
+          theirs (accepted, or auto-scheduled), only at this account, and only
+          while no window is live: a proposed or confirmed time has its own
+          panel above. */}
+      {needsTime && !mustAnswer && onProposeVisit && (
+        <div className="vans jr-notime">
+          <p className="vans-head"><Clock size={16} /> <b>No time set yet</b></p>
+          <p className="vans-q">Say when you can come and the office confirms it.</p>
+          <VisitActs acts={[
+            { kind: "yes", label: "Propose a time", icon: <Calendar size={16} />,
+              onClick: () => onProposeVisit({ job, trade, a, first: true }) },
+          ]} />
+        </div>
+      )}
       {/* AGREED BY US AND STILL NOT BOOKED, which means somebody else has not
           answered. Said rather than drawn as settled -- a tick on a window
           nobody is attending is the worst of the three states.
@@ -28858,7 +28883,13 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
         </div>
       ) : showActions && expired ? null : (
         <div className={`job-final ${a.status} portal-final`}>
-          {a.auto ? <><Zap size={15} /> Auto-scheduled — booked to your calendar</>
+          {/* "BOOKED" ONLY WHEN THERE IS A BOOKING. Auto-scheduled says the
+              work order was accepted for them; it said nothing about a day,
+              and the line claimed one over a card reading "No date yet". */}
+          {a.auto ? <><Zap size={15} /> {when.kind === "confirmed"
+              ? "Auto-scheduled — booked to your calendar"
+              : untimed ? "Auto-scheduled — no time set yet"
+              : "Auto-scheduled — time proposed, not confirmed yet"}</>
             : a.status === "accepted" ? <><CheckCircle2 size={15} /> You accepted this job</>
             : <><XCircle size={15} /> You declined this job</>}
         </div>

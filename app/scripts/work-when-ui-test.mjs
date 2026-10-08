@@ -564,7 +564,12 @@ try {
     // drawn on every card.
     t.ck("a confirmed window is not asked about", (set?.btns || []).length === 0,
       JSON.stringify(set?.btns));
-    t.ck("nor a job with no time at all", (nodate?.btns || []).length === 0,
+    // A JOB THAT IS THEIRS WITH NO TIME ON IT IS NOT "NOTHING TO ANSWER" --
+    // that was the old rule, and it is the card reported as auto-scheduled
+    // with no day and nothing to press. It has nothing to CONFIRM, and one
+    // thing to do: say when they can come.
+    t.ck("a job with no time at all offers only a way to propose one",
+      JSON.stringify(nodate?.btns || []) === JSON.stringify(["Propose a time"]),
       JSON.stringify(nodate?.btns));
 
     // A ROW AT ANOTHER CLIENT. Answering is an account-scoped write, so it

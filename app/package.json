@@ -105,6 +105,7 @@
     "test:resched": "node --no-warnings scripts/reschedule-ui-test.mjs",
     "test:ownportal": "node --no-warnings scripts/own-portal-ui-test.mjs",
     "test:autoturn": "node --no-warnings scripts/auto-turnaround-test.mjs",
+    "test:autobook": "node --no-warnings scripts/auto-book-test.mjs",
     "test:visitparty": "node --no-warnings scripts/visit-party-test.mjs",
     "test:jobaccess": "node --no-warnings scripts/job-access-test.mjs",
     "test:workwhen": "node --no-warnings scripts/work-when-test.mjs",

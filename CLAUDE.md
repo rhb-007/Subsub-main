@@ -10797,6 +10797,55 @@ refactor.
   selected one opens, that a second tap closes it, and a long title at 390px;
   drawing the body on every line fails six assertions.
 
+- **AUTO-SCHEDULED MEANS A TIME ON THE CALENDAR, NOT ONLY A YES.** Reported
+  from Pacific's own card, with three things circled: *No date yet*, *No date
+  on this job and no visit time proposed*, and under them *Auto-scheduled —
+  booked to your calendar*. *"There was no scheduling of the actual day/time
+  and … nor is there a prompt to get it scheduled."*
+
+  The grant did exactly what it was built to do and no more: a work order
+  issued to a crew that has granted auto-schedule goes out **accepted**.
+  Picking the day was nobody's job. 065 put a window forward only for a
+  move-in or move-out turnaround, so on every other job the setting named for
+  scheduling scheduled nothing, and the card claimed a booking over a blank.
+
+  **Issuing to an auto-scheduled crew now puts a window forward on the spot**
+  (`autoBookOnIssue`), from the assign route and from a quote award. It uses the
+  job's own date and time when they are still ahead and the crew is free that
+  day, and otherwise the crew's next free working day in the standing morning
+  slot. It goes **through the real propose route as the hiring side**, so the
+  chain still asks the tenant where the tenant has to be in. It never moves a
+  window that is already live. It never throws, because the work order already
+  exists by then. The turnaround run passes `autoBook: false`, because it
+  chooses its own day from the ranking. **An emergency call-out is
+  deliberately left out**: a next-day morning slot is the wrong answer to a
+  flood.
+
+  **The crew's grant is their agreement to the time** (`crewGrantedBooking` in
+  the propose route). Granting auto-schedule means "write work to my calendar
+  without asking", so sending the window back with *Can you make it?* is the
+  round trip they switched off, under a line that says *Auto-scheduled*. Three
+  limits keep it to what was granted:
+  - **Every** crew holding accepted work on the job must have granted it.
+  - The day must not be one they marked themselves out of.
+  - The grant is read **fresh** from the engagement, so withdrawing it counts
+    from the very next window.
+
+  Declining is still open to the crew either way.
+
+  **And the card has a way in, because existing jobs have no window and the
+  route can refuse.** An accepted job at this account with no live window
+  draws *No time set yet* and **Propose a time**. The propose route has taken
+  a contractor since it was written. The minimized line says *Set a time*.
+  The footer says *booked to your calendar* only over a **confirmed** window;
+  otherwise it says *no time set yet* or *time proposed, not confirmed yet*.
+
+  `test:autobook` covers all of it: the reported job, the job's own date and
+  time, a day the crew is out, a crew that never granted it, a window that is
+  already live, and both limits on the grant. Five mutations fire.
+  `test:workwhenui` pinned the old answer, *a job with no time has nothing to
+  press*, and was rewritten to the new rule rather than loosened.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

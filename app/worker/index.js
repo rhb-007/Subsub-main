@@ -8231,7 +8231,9 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
   const nowIso = new Date().toISOString();
   const myLeg = auth.role === "contractor" ? "contractor"
     : auth.role === "tenant" ? "tenant" : "manager";
-  const mineNow = myLeg === "contractor" ? nowIso : null;
+  const crewGranted = myLeg === "manager" && parties.includes("contractor")
+    && await crewGrantedBooking(c.env, { jobId, accountId: auth.accountId, date });
+  const mineNow = myLeg === "contractor" || crewGranted ? nowIso : null;
   const id = uid();
   try {
     // The combined verdict from one rule, rather than a second expression of
@@ -9325,7 +9327,7 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const jobId = c.req.param("jobId");
   const { trade, companyId, crewName, tradeScope, value, responseWindow,
-    payKind, rate, capHours } = await c.req.json();
+    payKind, rate, capHours, autoBook } = await c.req.json();
 
   const job = await jobWithEnding(c.env, await c.env.DB.prepare(
     `SELECT id, requested_by, approved_at, date, status, withdrawn_at, declined_at
@@ -9626,9 +9628,14 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
     `Issued ${woNumber} to ${await companyName(c.env.DB, companyId)} · ${trade}`);
   await touchJob(c.env, jobId);
   await notifyTenant(c, jobId, autoScheduled ? "booked" : "arranging");
+  // AUTO-SCHEDULED MEANS A DAY ON THE CALENDAR, not only a yes. `autoBook:
+  // false` is the turnaround's own run, which picks the day itself from the
+  // ranking and must not be beaten to it by a second, cruder choice.
+  const autoBooked = autoScheduled && autoBook !== false
+    ? await autoBookOnIssue(c, { jobId, companyId, accountId }) : null;
   const summarised = await summariseForWorkOrder(c, { jobId, accountId, userId });
   return c.json({ id, woNumber, status: autoScheduled ? "accepted" : "pending",
-    notified, capWarning, summarised }, 201);
+    notified, capWarning, summarised, autoBooked }, 201);
 });
 
 // THE SUMMARY THE WORK ORDER CARRIES, WRITTEN WHEN THE WORK ORDER IS ISSUED.
@@ -11439,7 +11446,9 @@ app.post("/api/quote-requests/:id/award", requireRole("admin", "pm"), async (c) 
     await logActivity(c.env, accountId, userId, "quote_awarded",
       `${woNumber} awarded for ${req.trade} on "${job?.title || "a job"}"`);
     await touchJob(c.env, req.job_id);
-    return c.json({ ok: true, woId, woNumber, companyId: invite.company_id });
+    const autoBooked = autoScheduled
+      ? await autoBookOnIssue(c, { jobId: req.job_id, companyId: invite.company_id, accountId }) : null;
+    return c.json({ ok: true, woId, woNumber, companyId: invite.company_id, autoBooked });
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;
@@ -15221,7 +15230,7 @@ async function autoTurnaround(c, { jobId, kind, trades, job }) {
 
   const got = await asSelf(c, `/api/jobs/${jobId}/assign`, {
     trade, companyId: picked.companyId, payKind: "fixed", value: "",
-    responseWindow: "24h",
+    responseWindow: "24h", autoBook: false,
   });
   if (got.status >= 300) {
     await logActivity(c.env, auth.accountId, auth.userId, "auto_turnaround",
@@ -15258,6 +15267,83 @@ async function autoTurnaround(c, { jobId, kind, trades, job }) {
     booked: put?.body?.status === "confirmed",
     considered: cands.length, skipped,
   };
+}
+
+// AUTO-SCHEDULED MEANS A TIME, NOT ONLY A YES.
+//
+// Reported from the crew's own card: a work order issued to a company that has
+// granted auto-schedule went out ACCEPTED -- which is what the grant buys --
+// and drew "Auto-scheduled, booked to your calendar" over "No date yet", with
+// nothing anywhere to press. Accepting the work was automatic and choosing the
+// day was nobody's job, so the one thing the setting is named for never
+// happened on any job that was not a move-in or move-out turnaround.
+//
+// So issuing to an auto-scheduled crew puts a window forward on the spot: the
+// job's own date when it is still ahead and they are free on it, otherwise
+// their next free working day. Only when nothing is live already, so it never
+// moves a time somebody has proposed. Proposed AS THE HIRING SIDE, through the
+// real route, so every gate there holds and the chain still asks the tenant
+// where the tenant is a party -- and the crew's own grant is their agreement,
+// which `crewGrantedBooking` reads inside that route.
+//
+// Never throws. By the time this runs the work order exists and the crew has
+// been told; a failure to pick a day must leave the work order standing and
+// say why, because the card now offers the crew a way to propose one.
+async function autoBookOnIssue(c, { jobId, companyId, accountId }) {
+  try {
+    const live = await c.env.DB.prepare(
+      `SELECT 1 AS yes FROM visits WHERE job_id = ? AND status IN ('proposed','confirmed') LIMIT 1`)
+      .bind(jobId).first().catch(() => null);
+    if (live?.yes) return { proposed: false, reason: "already_timed" };
+    const job = await c.env.DB.prepare(`SELECT date, time FROM jobs WHERE id = ?`)
+      .bind(jobId).first().catch(() => null);
+    const cands = await autoCandidates(c.env, accountId, null);
+    const mine = cands.find((x) => x.companyId === companyId);
+    const today = dayKeyUtc();
+    const off = new Set([...(mine?.busy || []), ...(mine?.unavailable || [])]);
+    const jd = String(job?.date || "").slice(0, 10);
+    const day = DATE_RE.test(jd) && jd >= today && !off.has(jd) ? jd
+      : slotFor({ from: DATE_RE.test(jd) && jd > today ? jd : today,
+        busy: mine?.busy, unavailable: mine?.unavailable });
+    if (!day) return { proposed: false, reason: "no_slot" };
+    // The time on the job when the window lands on the job's own day, because
+    // somebody typed it; the standing morning otherwise.
+    const keep = day === jd && TIME_RE.test(String(job?.time || "")) ? job.time : null;
+    const startTime = keep || AUTO_START;
+    const endTime = keep ? windowEnd(keep) : AUTO_END;
+    const auth = c.get("auth");
+    const as = ["admin", "pm"].includes(auth?.role) ? null : await accountSeat(c.env, accountId);
+    const put = await asSelf(c, `/api/jobs/${jobId}/visits`, { date: day, startTime, endTime }, as);
+    if (put.status >= 300) return { proposed: false, reason: put.body?.error || String(put.status) };
+    return { proposed: true, date: day, startTime, endTime, status: put.body?.status || null };
+  } catch (err) {
+    console.warn("[auto-book] could not put a time forward:", err?.message || err);
+    return { proposed: false, reason: "error" };
+  }
+}
+
+// HAS THE CREW ALREADY AGREED TO A TIME THE HIRING SIDE BOOKS? Yes, when every
+// crew holding accepted work on the job granted this account auto-schedule and
+// the day is not one they marked themselves out of. That grant is exactly
+// "you may write work to my calendar without asking" -- so asking them to
+// confirm a window on a free day is the round trip they switched off, and a
+// card drawing "Can you make it?" under "Auto-scheduled" contradicts itself.
+// A day they marked unavailable is still asked, because the grant was never
+// for those. Read fresh from the engagement, so withdrawing the grant takes
+// effect on the very next window. Declining is still open to them either way.
+async function crewGrantedBooking(env, { jobId, accountId, date }) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT w.auto_scheduled, e.auto_schedule, co.unavailable_days
+         FROM work_orders w
+         JOIN engagements e ON e.account_id = ? AND e.company_id = w.company_id
+         JOIN companies co ON co.id = w.company_id
+        WHERE w.job_id = ? AND w.voided_at IS NULL AND w.status = 'accepted'`
+    ).bind(accountId, jobId).all();
+    const rows = results || [];
+    return rows.length > 0 && rows.every((r) => !!r.auto_scheduled && !!r.auto_schedule
+      && !parseJson(r.unavailable_days, []).includes(date));
+  } catch { return false; }
 }
 
 // THE FIRST WINDOW, ONCE THE CREW HAS TAKEN THE JOB. Only on a turnaround the
