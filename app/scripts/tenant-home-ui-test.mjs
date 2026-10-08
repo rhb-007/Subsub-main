@@ -112,7 +112,6 @@ const read = (page) => page.evaluate(() => {
     eyebrow: q(".tn-eyebrow")?.innerText || null,
     nav: [...document.querySelectorAll("button")].map((b) => (b.innerText || "").trim()).filter((x) => /^(Tenant HQ|Dashboard)$/.test(x)),
     wxPlace: q(".tn-wx-place")?.innerText || null,
-    wxTown: q(".tn-wx-town")?.innerText || null,
     noticesHead: q(".tn-notices .tn-sec-h")?.innerText || null,
     noticesEmpty: q(".tn-notice-empty")?.innerText || null,
     wx: q(".tn-wx")?.innerText || null,
@@ -159,9 +158,10 @@ try {
     t.ck("the tenant is in", /Hello, Tess/.test(s.hello), s.hello);
     t.ck("the weather is drawn, highlighted", s.wx && /58°F/.test(s.wx) && /Rain/.test(s.wx), String(s.wx));
     t.ck("with today's high and low and the town", s.wx && /H 62°/.test(s.wx) && /L 50°/.test(s.wx) && /Seattle/.test(s.wx), String(s.wx));
-    // Whose weather it is: the BUILDING, by name, with the town under it.
-    t.ck("the weather names the tenant's building", /Cedar Flats/.test(s.wxPlace || ""), String(s.wxPlace));
-    t.ck("and the town under it", /Seattle/.test(s.wxTown || ""), String(s.wxTown));
+    // Where the reading is for: the building's town, state and ZIP -- not its
+    // name, which says nothing about where it is.
+    t.ck("the weather says the building's city, state and ZIP", s.wxPlace === "Seattle, WA 98101", String(s.wxPlace));
+    t.ck("and not the building's name", !/Cedar Flats/.test(s.wx || ""), String(s.wx));
     t.ck("the screen is called Tenant HQ, on the page", /Tenant HQ/i.test(s.eyebrow || ""), String(s.eyebrow));
     t.ck("and in the nav, with no Dashboard beside it", s.nav.includes("Tenant HQ") && !s.nav.includes("Dashboard"),
       JSON.stringify(s.nav));

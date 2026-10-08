@@ -10727,6 +10727,21 @@ refactor.
   `country_code`, `population`) is Open-Meteo's documented one, and the first
   look at a Ruston tenant's screen is the real test.
 
+- **THE TENANT'S WEATHER CARD SAYS WHERE THE READING IS FOR: CITY, STATE AND
+  ZIP.** Asked for as *"you don't have to put the name of the building in the
+  weather, just put the name of the city, state, zip the building is in so the
+  weather is accurate."* The Tenant HQ card showed the building's name with the
+  town under it. A building's name says nothing about where it is, and the
+  question the card has to answer is whether the reading is for the right
+  place, which is what the Ruston, WA report was about.
+
+  It reads `Ruston, WA 98407` now, off the building's **own** columns rather
+  than the geocoder's reply, so it is the address the tenant knows and the same
+  one the route geocodes with (city, state, then ZIP; see the Ruston entry
+  above). A building with no city falls back to the town the reading came
+  from. `test:tenanthomeui` pins the exact string and the absence of the
+  building's name, and putting the name back fails three assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

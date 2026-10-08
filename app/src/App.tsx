@@ -15177,8 +15177,12 @@ function TenantWeather({ weather, building = null }) {
   if (!weather || typeof weather.tempF !== "number" || !label) return null;
   const Icon = WX_ICON[label] || Cloud;
   const hasRange = typeof weather.hiF === "number" && typeof weather.loF === "number";
+  const town = String(building?.city || weather.place || "").trim();
+  const st = String(building?.state || "").trim();
+  const zip = String(building?.zip || "").trim().slice(0, 5);
+  const where = [town && st ? `${town}, ${st}` : town || st, zip].filter(Boolean).join(" ");
   return (
-    <div className="tn-wx" aria-label={`Weather at ${building?.name || weather.place || "your building"}`}>
+    <div className="tn-wx" aria-label={`Weather in ${where || "your area"}`}>
       <Icon size={40} className="tn-wx-icon" aria-hidden="true" />
       <div className="tn-wx-main">
         <span className="tn-wx-temp">{Math.round(weather.tempF)}°F</span>
@@ -15188,13 +15192,12 @@ function TenantWeather({ weather, building = null }) {
         {hasRange && (
           <span className="tn-wx-range">H {Math.round(weather.hiF)}° · L {Math.round(weather.loF)}°</span>
         )}
-        {/* The building first, because that is whose weather it is: a
-            tenant reads "at North Highland" as theirs and "Seattle" as a
-            guess. The town rides under it for anybody who wants to check. */}
-        {(building?.name || weather.place) && (
-          <span className="tn-wx-place"><MapPin size={11} /> {building?.name || weather.place}</span>
-        )}
-        {building?.name && weather.place && <span className="tn-wx-town">{weather.place}</span>}
+        {/* WHERE THE READING IS FOR: the building's own town, state and ZIP,
+            not its name. Asked for in those words -- the address is what
+            says the weather is for the right place, and a building's name
+            says nothing about where it is. Read off the building rather than
+            the geocoder's reply, so it is the place the tenant knows. */}
+        {where && <span className="tn-wx-place"><MapPin size={11} /> {where}</span>}
       </div>
     </div>
   );
@@ -36151,7 +36154,6 @@ p.fld-note{margin:6px 0 0}
   border:1px dashed var(--line);border-radius:12px;padding:12px 15px}
 .tn-eyebrow{margin:0 0 2px!important;font-size:11.5px!important;font-weight:800;text-transform:uppercase;
   letter-spacing:.08em;color:var(--brand)!important}
-.tn-wx-town{font-size:11.5px;opacity:.8}
 .tn-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:22px}
 @media (max-width:560px){.tn-actions{grid-template-columns:1fr}}
 .tn-actions .tn-cta{justify-content:flex-start;text-align:left;padding:18px 18px;min-height:96px}
