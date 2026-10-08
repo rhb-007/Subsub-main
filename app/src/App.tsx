@@ -15206,7 +15206,21 @@ function TenantWeather({ weather, building = null }) {
 // What the building's manager has told everybody who lives there. Important
 // ones first and tinted, and the section is drawn even when there is nothing
 // in it -- see the empty state below for why.
+//
+// ONE THIN LINE PER NOTICE, OPENED IN PLACE. Asked for as "make them more
+// narrow and expand upon selecting them": the title, the Important mark and
+// the day it went up are the whole of what somebody scans for; the body and
+// the dates are one tap away. In place rather than in a modal, because this
+// is a short list on a page somebody glances at, and a window over it is a
+// second thing to close. The whole line is the button, so it is one thumb-
+// sized target on a phone rather than a chevron to aim at.
 function TenantNotices({ notices }) {
+  const [open, setOpen] = useState(() => new Set());
+  const toggle = (id) => setOpen((o) => {
+    const n = new Set(o);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  });
   return (
     <section className="tn-notices" aria-label="Building notices">
       <h3 className="tn-sec-h"><Megaphone size={15} /> Notices from your building</h3>
@@ -15217,20 +15231,31 @@ function TenantNotices({ notices }) {
       {notices.length === 0 && (
         <p className="tn-notice-empty"><MessageSquareText size={16} aria-hidden="true" /> No messages</p>
       )}
-      {notices.map((n) => (
-        <article key={n.id} className={`tn-notice ${n.important ? "important" : ""}`}>
-          <div className="tn-notice-head">
-            {n.important && <span className="tn-notice-badge">Important</span>}
-            <h4>{n.title}</h4>
-          </div>
-          {n.body && <p className="tn-notice-body prose">{n.body}</p>}
-          <p className="tn-notice-meta">
-            {[n.createdAt ? `Posted ${niceDay(String(n.createdAt).slice(0, 10))}` : null,
-              n.endsOn ? `until ${niceDay(n.endsOn)}` : null,
-              n.propertyName].filter(Boolean).join(" · ")}
-          </p>
-        </article>
-      ))}
+      {notices.map((n) => {
+        const isOpen = open.has(n.id);
+        const posted = n.createdAt ? String(n.createdAt).slice(0, 10) : null;
+        return (
+          <article key={n.id} className={`tn-notice ${n.important ? "important" : ""} ${isOpen ? "open" : ""}`}>
+            <button type="button" className="tn-notice-line" aria-expanded={isOpen}
+              onClick={() => toggle(n.id)}>
+              {n.important && <span className="tn-notice-badge">Important</span>}
+              <span className="tn-notice-title">{n.title}</span>
+              {posted && <span className="tn-notice-when">{rowDay(posted)}</span>}
+              <ChevronDown size={16} className="tn-notice-chev" aria-hidden="true" />
+            </button>
+            {isOpen && (
+              <div className="tn-notice-more">
+                {n.body && <p className="tn-notice-body prose">{n.body}</p>}
+                <p className="tn-notice-meta">
+                  {[posted ? `Posted ${niceDay(posted)}` : null,
+                    n.endsOn ? `until ${niceDay(n.endsOn)}` : null,
+                    n.propertyName].filter(Boolean).join(" · ")}
+                </p>
+              </div>
+            )}
+          </article>
+        );
+      })}
     </section>
   );
 }
@@ -36318,15 +36343,24 @@ p.fld-note{margin:6px 0 0}
   font-size:12.5px;color:#3b5a7a;text-align:right}
 .tn-wx-place{display:inline-flex;align-items:center;gap:3px}
 .tn-sec-h{display:flex;align-items:center;gap:7px;margin:0 0 9px;font-size:14px;font-weight:700}
-.tn-notices{display:flex;flex-direction:column;gap:9px;margin-bottom:18px}
-.tn-notice{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 15px;
-  box-shadow:var(--shadow)}
+.tn-notices{display:flex;flex-direction:column;gap:6px;margin-bottom:18px}
+.tn-notice{background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);
+  overflow:hidden}
 .tn-notice.important{background:#fff8e8;border-color:#f0d494;border-left:4px solid #d99a14}
-.tn-notice-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
-.tn-notice-head h4{margin:0;font-size:15px;font-weight:700;letter-spacing:-.01em}
-.tn-notice-badge{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
+.tn-notice-line{display:flex;align-items:center;gap:9px;width:100%;min-height:44px;padding:8px 12px;
+  background:none;border:0;border-radius:0;box-shadow:none;margin:0;text-align:left;font:inherit;
+  color:inherit;cursor:pointer}
+.tn-notice-line:hover{background:rgba(0,0,0,.025)}
+.tn-notice-title{flex:1 1 auto;min-width:0;font-size:14.5px;font-weight:700;letter-spacing:-.01em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tn-notice.open .tn-notice-title{white-space:normal;overflow-wrap:anywhere}
+.tn-notice-when{flex:none;font-size:12px;color:var(--ink-soft);white-space:nowrap}
+.tn-notice-chev{flex:none;color:var(--ink-soft);transition:transform .15s}
+.tn-notice.open .tn-notice-chev{transform:rotate(180deg)}
+.tn-notice-badge{flex:none;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
   background:#d99a14;color:#fff;border-radius:6px;padding:2px 7px}
-.tn-notice-body{margin:6px 0 0;font-size:13.5px;line-height:1.5;white-space:pre-wrap}
+.tn-notice-more{padding:0 12px 11px}
+.tn-notice-body{margin:0;font-size:13.5px;line-height:1.5;white-space:pre-wrap}
 .tn-notice-meta{margin:7px 0 0;font-size:12px;color:var(--ink-soft)}
 .tn-notice-empty{margin:0;display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;
   color:var(--ink-soft)}

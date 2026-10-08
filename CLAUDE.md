@@ -10783,6 +10783,20 @@ refactor.
   the circle's deps (which reproduces the report), the crop ignoring the drag,
   and the cache bypass removed.
 
+- **A NOTICE IS ONE THIN LINE UNTIL SOMEBODY SELECTS IT.** Asked for as
+  *"tenant notice make them more narrow and expand upon selecting them"*. Each
+  card drew its title, its whole body and its dates, so three notices about
+  the bins, the water and the packages were most of Tenant HQ. The line is the
+  Important mark, the title (ellipsed) and the day it went up; tapping it opens
+  the body and the dates **in place**, not in a modal, because this is a short
+  list on a page somebody glances at and a window over it is one more thing to
+  close. The whole line is the button, 44px high, with `aria-expanded`. Each
+  notice opens on its own, and none opens by itself -- an important one is
+  marked on the line, which is what makes leaving it closed safe.
+  `test:tenanthomeui` measures the closed and open heights, that only the
+  selected one opens, that a second tap closes it, and a long title at 390px;
+  drawing the body on every line fails six assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

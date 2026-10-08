@@ -117,7 +117,12 @@ const read = (page) => page.evaluate(() => {
     wx: q(".tn-wx")?.innerText || null,
     wxRect: r(q(".tn-wx")), helloRect: r(q(".tn-hello")),
     notices: [...document.querySelectorAll(".tn-notice")].map((n) => ({
-      text: n.innerText, important: n.classList.contains("important") })),
+      text: n.innerText, important: n.classList.contains("important"),
+      open: !!n.querySelector(".tn-notice-more"),
+      expanded: n.querySelector(".tn-notice-line")?.getAttribute("aria-expanded") || null,
+      lineH: n.querySelector(".tn-notice-line")?.getBoundingClientRect().height ?? null,
+      h: n.getBoundingClientRect().height,
+      right: n.getBoundingClientRect().right })),
     cta: q(".tn-actions .tn-cta")?.innerText || null,
     ctaRect: r(q(".tn-actions .tn-cta")), aiRect: r(q(".tn-ai")),
     ai: q(".tn-ai")?.innerText || null,
@@ -175,8 +180,33 @@ try {
     t.ck("the building's notices are drawn", s.notices.length === 2, JSON.stringify(s.notices.map((n) => n.text.slice(0, 30))));
     t.ck("the important one first, and marked", s.notices[0]?.important && /Water off Tuesday/.test(s.notices[0].text)
       && /Important/i.test(s.notices[0].text), JSON.stringify(s.notices[0]));
-    t.ck("with its details and its last day", /main is being replaced/.test(s.notices[0]?.text || "") && /until /.test(s.notices[0]?.text || ""));
     t.ck("one past its last day is not drawn", !s.notices.some((n) => /Old news/.test(n.text)));
+
+    // NARROW UNTIL SELECTED. Each notice is a thin line -- the mark, the title
+    // and the day -- and the body is one tap away. Length checks first: an
+    // every() over no notices is true, and would pass loudest exactly when the
+    // list had disappeared.
+    t.ck("every notice starts as a closed line", s.notices.length === 2
+      && s.notices.every((n) => !n.open && n.expanded === "false"), JSON.stringify(s.notices.map((n) => [n.open, n.expanded])));
+    t.ck("and a closed line is thin", s.notices.length === 2 && s.notices.every((n) => n.h <= 60 && n.lineH >= 44),
+      JSON.stringify(s.notices.map((n) => [n.h, n.lineH])));
+    t.ck("the closed line does not show the body", !/main is being replaced/.test(s.notices[0]?.text || ""),
+      String(s.notices[0]?.text));
+    t.ck("but does say when it went up", /\S/.test(s.notices[0]?.text || "") && /(Today|Yesterday|\w{3},? \w{3} \d)/.test(s.notices[0]?.text || ""),
+      String(s.notices[0]?.text));
+    await clickText(page, ".tn-notice .tn-notice-line", /Water off Tuesday/);
+    await wait(250);
+    const o = await read(page);
+    t.ck("selecting one opens it, with its details and its last day",
+      o.notices[0]?.open && o.notices[0]?.expanded === "true"
+      && /main is being replaced/.test(o.notices[0]?.text || "") && /until /.test(o.notices[0]?.text || ""),
+      JSON.stringify(o.notices[0]));
+    t.ck("and only that one", o.notices.length === 2 && !o.notices[1].open, JSON.stringify(o.notices.map((n) => n.open)));
+    await clickText(page, ".tn-notice .tn-notice-line", /Water off Tuesday/);
+    await wait(250);
+    const c = await read(page);
+    t.ck("selecting it again closes it", c.notices.length === 2 && !c.notices[0].open
+      && !/main is being replaced/.test(c.notices[0].text), JSON.stringify(c.notices[0]));
 
     t.ck("Report a problem is the big button", /Report a problem/.test(s.cta || "") && s.ctaRect?.height >= 80,
       JSON.stringify(s.ctaRect));
@@ -249,9 +279,16 @@ try {
   console.log("\n-- on a phone --");
   {
     WEATHER = { tempF: 58.4, code: 61, place: "Seattle", hiF: 62.2, loF: 49.6 };
+    // A long title is the case a thin line has to survive at phone width.
+    NOTICES = [{ id: "n9", propertyId: "prop_1", propertyName: "Cedar Flats",
+      title: "Packages have been taken from the lobby twice this week, please collect deliveries promptly",
+      body: "Use the parcel lockers by the mail room.", important: true, endsOn: null,
+      createdAt: `${dayKey()} 09:00:00` }];
     const { ctx, page } = await asTenant({ width: 390, height: 1400 });
     const s = await read(page);
     t.ck("nothing runs off the side", s.width <= 390, String(s.width));
+    t.ck("a long notice is still one thin line on a phone", s.notices.length === 1
+      && s.notices[0].h <= 60 && s.notices[0].right <= 390, JSON.stringify(s.notices[0]));
     if (process.env.SHOT) await page.screenshot({ path: `${process.env.SHOT}/tenant-phone.png`, fullPage: true });
     t.ck("the two report cards stack", s.ctaRect && s.aiRect && s.aiRect.top > s.ctaRect.bottom - 1,
       JSON.stringify({ c: s.ctaRect, a: s.aiRect }));
