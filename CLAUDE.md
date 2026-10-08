@@ -10935,6 +10935,65 @@ refactor.
   `resumeSession` refuses an impersonated session by design, so the harness
   cannot land in one, the same limit `test:staffwriteui` records.
 
+- **THE TENANT IS ASKED LAST AND MAY ANSWER FIRST, AND MAY PUT ANOTHER TIME
+  FORWARD.** Reported with the tenant's report on screen: a chip reading
+  *Confirm a time*, a line saying the window had been put forward, and a popup
+  saying *close this and confirm it on your dashboard*. Nothing anywhere could
+  be pressed. *"From the tenant's side, there is no functional way to accept or
+  propose another day/time."*
+
+  **Two holes, and only one was the chain.** 064 refused the tenant with
+  `not_your_turn` until the crew and the hiring side had both agreed, so the
+  row drew a sentence and no buttons. Separately, the propose route was
+  `requireRole("admin","pm","contractor")`. A tenant could say yes or no to a
+  time somebody else picked and **could never offer one of their own**, even
+  though the route's own leg logic already had a `tenant` branch that nothing
+  could reach. That is correct pieces with no way in, again.
+
+  **The chain decides whom we ASK; it no longer decides who may SPEAK.**
+  `mayConfirm` in `shared/visitparty.js` lets the tenant confirm out of turn and
+  nobody else. The asymmetry is the reason the order exists:
+  - The tenant's yes depends on nobody else's.
+  - The hiring side agreeing ahead of the crew is agreeing to a slot nobody can
+    staff, so that is still refused, and a test pins it.
+
+  An early yes is recorded and never prompted. The crew's yes then books the
+  window **without asking the tenant again**. If the window moves, the new one
+  asks them in turn as before. 064's reason for the order (do not make somebody
+  book a morning off for a time that evaporates) is about *asking*, and asking
+  is unchanged. **This changes a recorded decision**, at the owner's request,
+  and `test:visitparty` was updated to the new rule rather than loosened.
+
+  **A tenant may propose, with two limits.**
+  - Only for the job they have to be let in for (`accessTenant`). Anybody
+    else's report answers `job_not_found`, the same as a job that does not
+    exist.
+  - Only where they are a party at all. A repair with nobody needed indoors
+    answers `no_tenant_needed`, because a time from them is a time nobody asked
+    for.
+
+  Their proposal is their agreement, so it goes to the crew first and then the
+  hiring side. They are not texted about a time they put forward themselves.
+  `TENANT_ALLOWED` gained the line, and removing it is the mutation that
+  reproduces the 403.
+
+  **On the screen, one panel in both places.** `TenantVisitAsk` draws on the
+  row and inside the report popup, replacing the dead-end sentence. It has three
+  answers in the crew's and the hiring side's order: **Yes, that works**,
+  **Propose another time** (the same `VisitForm` the other two sides use) and
+  **That doesn't work**. Before it is their turn it says who still has to
+  confirm, naming the managing agent by name rather than "the hiring side".
+  After an early yes the question goes, the chip reads *Waiting on
+  confirmation*, and *Propose another time* stays, because plans change. It
+  says *Proposed time*, not "<agent> proposes", because the reported window was
+  the crew's and a line guessing who proposed it would have been wrong. Both
+  routes now return `turn`, because the screen replaces its row with the reply
+  and a row with no turn reads as the tenant's to answer.
+
+  `test:tenantvisitui` is the first browser suite to draw the tenant's answer
+  at all. Three mutations fire, each on its own assertions: the panel back to
+  turn-only, the propose button removed, and the popup's dead end restored.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -163,6 +163,23 @@ export function nextToAnswer(visit, parties) {
 export const mayAnswer = (visit, parties, party) =>
   !!party && nextToAnswer(visit, parties) === party;
 
+// THE TENANT IS ASKED LAST AND MAY ANSWER FIRST. The chain decides whom we
+// ASK, in order, so nobody books a morning off for a time the crew has not
+// committed to. It does not have to decide who may SPEAK: a tenant who opens
+// their report and sees the window put forward should be able to say it works
+// for them, and refusing that left them looking at "Confirm a time" with
+// nothing to press -- reported as there being no functional way to accept.
+//
+// So the tenant may confirm out of turn, and the crew and the hiring side may
+// not. The difference is the reason for the order: the tenant's yes depends on
+// nobody else's, while the hiring side agreeing before the crew is agreeing to
+// a slot nobody can staff. An early yes is recorded and never prompted; if the
+// window then moves, the new one asks them in turn as usual.
+export const ANSWERS_EARLY = ["tenant"];
+export const mayConfirm = (visit, parties, party) =>
+  !!party && waitingOn(visit, parties).includes(party)
+  && (nextToAnswer(visit, parties) === party || ANSWERS_EARLY.includes(party));
+
 // A DECLINE FROM EITHER SIDE ENDS IT, and that is deliberate rather than a
 // simplification. A time one party cannot make is not a time -- carrying on
 // collecting the other party's answer would leave a window with a tick against

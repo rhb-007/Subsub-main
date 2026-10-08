@@ -94,6 +94,7 @@
     "test:setupgaps": "node --no-warnings scripts/setup-gaps-test.mjs",
     "test:compare": "node --no-warnings scripts/compare-test.mjs",
     "test:workwhenui": "node --no-warnings scripts/work-when-ui-test.mjs",
+    "test:tenantvisitui": "node --no-warnings scripts/tenant-visit-ui-test.mjs",
     "test:consoleas": "node --no-warnings scripts/console-engaged-test.mjs",
     "test:mycal": "node --no-warnings scripts/my-calendar-ui-test.mjs",
     "test:woinsp": "node --no-warnings scripts/wo-inspection-ui-test.mjs",

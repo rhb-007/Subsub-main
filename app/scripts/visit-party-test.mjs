@@ -275,15 +275,9 @@ try {
     ck("and the hiring side is not waited on for its own proposal",
       !(b.waitingOn || []).includes("manager"), JSON.stringify(b.waitingOn));
 
-    // THE TENANT IS NOT ASKED YET, which is the whole of 064. Asking them to
-    // confirm a window the crew has not committed to risks asking them twice,
-    // and the second ask is the one that costs their trust -- by then they
-    // have booked a morning off work to be in.
-    const [ts, tEarly] = await json(await respond(env, b.id, { status: "confirmed" }, "u_ten"));
-    ck("the tenant cannot answer before the crew has", ts === 409, String(ts));
-    ck("and is told whose turn it is", tEarly.turn === "contractor", String(tEarly.turn));
-    ck("so the job still has no date", jobOf(db, "job_both").date === null,
-      String(jobOf(db, "job_both").date));
+    // THE TENANT IS NOT ASKED YET, which is the whole of 064 -- the turn says
+    // so. Whether they may answer early is the next block.
+    ck("the crew is asked first", b.turn === "contractor", String(b.turn));
 
     const [, c] = await json(await respond(env, b.id, { status: "confirmed" }, "u_sub"));
     // THE CREW'S YES DOES NOT SETTLE IT, because somebody still has to be in.
@@ -313,9 +307,7 @@ try {
       !!counter.contractorAt, String(counter.contractorAt));
     ck("and it comes back to the hiring side first",
       (counter.waitingOn || []).join() === "manager,tenant", JSON.stringify(counter.waitingOn));
-    // The tenant is still not asked -- the time is not settled upstream yet.
-    const [te] = await json(await respond(env, counter.id, { status: "confirmed" }, "u_ten"));
-    ck("the tenant is still not asked", te === 409, String(te));
+    ck("the hiring side's turn, not the tenant's", counter.turn === "manager", String(counter.turn));
     const [, m] = await json(await respond(env, counter.id, { status: "confirmed" }, "u_mgr"));
     ck("the hiring side agreeing hands it to the tenant",
       m.status === "proposed" && (m.waitingOn || []).join() === "tenant",
@@ -324,6 +316,55 @@ try {
     ck("and the tenant closes it", t2.status === "confirmed", String(t2.status));
     ck("the superseded first window is not still live",
       visitOf(db, "job_both").id === counter.id, visitOf(db, "job_both").id + " vs " + first.id);
+  }
+
+  console.log("\n-- the tenant is asked last and may answer first --");
+  {
+    // Reported as no functional way for a tenant to accept: their report read
+    // "Confirm a time" over nothing to press, because the route refused them
+    // until the crew and the hiring side had both agreed. The chain decides
+    // whom we ASK; it does not have to stop the person who has to be in from
+    // saying the time works.
+    const { db, env } = seed();
+    const [, b] = await json(await propose(env, "job_both"));
+    const [ts, early] = await json(await respond(env, b.id, { status: "confirmed" }, "u_ten"));
+    ck("the tenant may say yes before the crew has", ts === 200, `${ts} ${JSON.stringify(early)}`);
+    ck("which does not settle it", early.status === "proposed", String(early.status));
+    ck("and leaves only the crew to answer", (early.waitingOn || []).join() === "contractor",
+      JSON.stringify(early.waitingOn));
+    ck("and says whose turn it now is", early.turn === "contractor", String(early.turn));
+    ck("so the job still has no date", jobOf(db, "job_both").date === null,
+      String(jobOf(db, "job_both").date));
+    const [, c] = await json(await respond(env, b.id, { status: "confirmed" }, "u_sub"));
+    ck("the crew's yes then books it, without asking the tenant again",
+      c.status === "confirmed", String(c.status));
+    ck("and the date lands", jobOf(db, "job_both").date === "2026-10-09",
+      String(jobOf(db, "job_both").date));
+  }
+  {
+    // ONLY THE TENANT ANSWERS EARLY. The hiring side agreeing ahead of the
+    // crew is agreeing to a slot nobody can staff, which is why the order
+    // exists -- so a window the TENANT put forward still asks the crew first.
+    const { db, env } = seed();
+    const [ps, tp] = await json(await propose(env, "job_both", "u_ten"));
+    ck("a tenant may propose a time for their own report", ps === 201, `${ps} ${JSON.stringify(tp)}`);
+    ck("their own proposal is their agreement", !!tp.respondedAt, String(tp.respondedAt));
+    ck("and it goes to the crew first, then the hiring side",
+      (tp.waitingOn || []).join() === "contractor,manager" && tp.turn === "contractor",
+      `${JSON.stringify(tp.waitingOn)} ${tp.turn}`);
+    const [ms, mEarly] = await json(await respond(env, tp.id, { status: "confirmed" }, "u_mgr"));
+    ck("the hiring side may not answer ahead of the crew", ms === 409 && mEarly.turn === "contractor",
+      `${ms} ${JSON.stringify(mEarly)}`);
+    await respond(env, tp.id, { status: "confirmed" }, "u_sub");
+    const [, m] = await json(await respond(env, tp.id, { status: "confirmed" }, "u_mgr"));
+    ck("and once both have, it is booked", m.status === "confirmed", String(m.status));
+    // Only their own report, and only where they have to be in.
+    const [fs, f] = await json(await propose(env, "job_nobody", "u_ten"));
+    ck("a tenant cannot propose for a job that is not theirs", fs === 404 || fs === 403,
+      `${fs} ${JSON.stringify(f)}`);
+    const [ns, n] = await json(await propose(env, "job_subonly", "u_ten"));
+    ck("nor for one they do not have to be in for", ns === 409 && n.error === "no_tenant_needed",
+      `${ns} ${JSON.stringify(n)}`);
   }
 
   console.log("\n-- proposing is agreeing, for whoever proposed it --");

@@ -88,7 +88,7 @@ import { workWhen, scheduledOn, WHEN_KINDS, windowEnd } from "../shared/schedule
 import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
   mayChooseAccess, maySetAccess, accessTenant } from "../shared/access.js";
 import { visitParties, waitingOn as visitWaitingOn, partyText as partyWords,
-  mayAnswer as visitMayAnswer } from "../shared/visitparty.js";
+  mayAnswer as visitMayAnswer, partySaid as visitPartySaid } from "../shared/visitparty.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -7301,6 +7301,7 @@ export default function SubSub() {
         <TenantPortal me={me} brand={brand} jobs={jobs} properties={accountProperties}
           unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey}
           visits={visits} onRespondVisit={respondVisit} onVisitOutcome={visitOutcome}
+          onProposeVisit={proposeVisit}
           onWithdraw={withdrawReport} onEdit={editReport} onPhotosChanged={changeReportPhotos}
           onReport={(r) => createJob({ ...r, trades: r.trades || [] })} weather={weather}
           onOpenAccount={(pane) => { setOpenPane({ pane, n: Date.now() }); setTab("account"); }} />
@@ -13688,6 +13689,11 @@ function tenantStage(job, visit) {
   if (job.status === "completed") return { key: "done", label: "Done", tone: "ok" };
   // A date on the job is not a date with the tenant. Only a visit they have
   // confirmed reads as scheduled; one waiting on them asks them.
+  // Said yes early and still waiting on somebody else: not a question any
+  // more, so the chip stops asking it.
+  if (visit?.status === "proposed" && (visit.respondedAt || visit.responded_at)) {
+    return { key: "agreed", label: "Waiting on confirmation", tone: "wait" };
+  }
   if (visit?.status === "proposed") return { key: "confirm", label: "Confirm a time", tone: "wait" };
   // A confirmed visit whose window has passed is not "Scheduled" any more.
   // It said "Somebody is coming" about an afternoon two days gone, which is
@@ -14271,7 +14277,7 @@ function PhotoLightbox({ photos = [], urls = {}, at = 0, onAt, onClose }) {
 // fields either way.
 function TenantReportModal({
   job, stage, visit, brandName, where, unit, assignedTo,
-  onEdit, onWithdraw, onPhotosChanged, onClose,
+  onEdit, onWithdraw, onPhotosChanged, onRespondVisit, onProposeVisit, onClose,
 }) {
   const detail = job.reportDetail || null;
   const [editing, setEditing] = useState(false);
@@ -14447,8 +14453,14 @@ function TenantReportModal({
               </div>
             )}
 
-            {stage.key === "confirm" && (
-              <p className="tn-visit-q">A time has been proposed. Close this and confirm it on your dashboard.</p>
+            {/* THE ANSWER, HERE. This used to say "close this and confirm it on
+                your dashboard", over a dashboard that offered nothing to press
+                -- the reported dead end, at the one moment somebody was looking
+                at the report the time is for. The same panel as the row, so
+                the two cannot ask different questions. */}
+            {(stage.key === "confirm" || stage.key === "agreed") && visit && (
+              <TenantVisitAsk visit={visit} brandName={brandName}
+                onRespond={onRespondVisit} onPropose={onProposeVisit} />
             )}
 
             {confirmWithdraw ? (
@@ -14510,7 +14522,7 @@ function TenantReportModal({
 // above, which is also where correcting and withdrawing now happen. This
 // used to carry both forms inline and could show two of the five things a
 // tenant had actually filled in.
-function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRespondVisit, onVisitOutcome, onOpen }) {
+function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRespondVisit, onVisitOutcome, onProposeVisit, onOpen }) {
   const photos = job.photos || [];
   const asks = stage.key === "confirm" || stage.key === "passed";
   return (
@@ -14535,14 +14547,16 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
             outstanding, which is what `visitparty.js` exists to stop. A row
             from a database without the column has no `turn` at all, and the
             old behaviour is what that falls back to. */}
-        {stage.key === "confirm" && (visit?.turn === undefined || visit?.turn === "tenant") && (
-          <TenantVisitAsk visit={visit} brandName={brandName} onRespond={onRespondVisit} />
-        )}
-        {stage.key === "confirm" && visit?.turn && visit.turn !== "tenant" && (
-          <p className="tn-visit-wait">
-            <Clock size={12} /> {visitWhen(visit)} has been put forward. We'll ask you to confirm it
-            once the contractor has said they can come.
-          </p>
+        {/* THE TENANT IS ASKED LAST AND MAY ANSWER FIRST. This drew a
+            sentence and no buttons until the crew and the hiring side had
+            both agreed, under a chip reading "Confirm a time" -- reported as
+            there being no functional way to accept or propose another time.
+            The chain still decides whom we ASK and in what order; it no longer
+            stops the person who has to be in from answering. See
+            `mayConfirm` in shared/visitparty.js. */}
+        {(stage.key === "confirm" || stage.key === "agreed") && visit && (
+          <TenantVisitAsk visit={visit} brandName={brandName}
+            onRespond={onRespondVisit} onPropose={onProposeVisit} />
         )}
         {/* Only when somebody was actually sent. "Did somebody come?" is
             not a question a tenant can answer usefully about a job nobody
@@ -14563,52 +14577,96 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
 }
 
 // The question a tenant is asked when a time has been proposed: does this
-// work? Two answers, and room to say why not -- "I'm at work until 6" is
-// the thing the manager needs to propose the next one.
-function TenantVisitAsk({ visit, brandName, onRespond }) {
-  const [saying, setSaying] = useState(false);
+// work? THREE answers, because two was not enough to book anything. "That
+// doesn't work" with only a note field left the manager turning a sentence
+// into a date by hand; the person who has to be in is the one most likely to
+// know a better morning, so they can put one forward themselves.
+//
+// It is shown whoever's turn it is. Until the crew and the hiring side have
+// agreed, it says so and still lets them answer -- an early yes is recorded
+// and they are not asked again for this window. Once they have said yes it
+// says who is left, and still offers another time, because plans change.
+function TenantVisitAsk({ visit, brandName, onRespond, onPropose }) {
+  const [mode, setMode] = useState("");          // "" | "no" | "other"
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  const said = !!(visit.respondedAt || visit.responded_at);
+  // Who else still has to agree, in the tenant's words rather than the
+  // product's: the managing agent by name, the crew as "the contractor".
+  const others = (visit.parties || [])
+    .filter((pp) => pp !== "tenant" && !visitPartySaid(visit, pp))
+    .map((pp) => (pp === "manager" ? brandName : "the contractor"));
+  const othersText = others.length === 2 ? `${others[0]} and ${others[1]}` : others[0] || "";
   const answer = async (status) => {
     setBusy(status); setErr("");
-    try { await onRespond(visit.id, { status, note: note.trim() }); }
-    catch (e) { console.error("[visit] respond failed:", e); setErr("That didn't go through. Try again in a moment."); }
+    try { await onRespond(visit.id, { status, note: note.trim() }); setMode(""); }
+    catch (e) { console.error("[visit] respond failed:", e); setErr(tenantVisitErrText(e)); }
     finally { setBusy(""); }
   };
   return (
     <div className="tn-visit">
-      <div className="tn-visit-when"><Calendar size={15} /> {brandName} proposes <b>{visitWhen(visit)}</b></div>
+      <div className="tn-visit-when"><Calendar size={15} />
+        {/* Not "{brandName} proposes": the crew puts times forward too, and
+            the reported one was theirs. Who proposed it does not change the
+            question, so the line does not guess at it. */}
+        {said ? <>You said <b>{visitWhen(visit)}</b> works</> : <>Proposed time: <b>{visitWhen(visit)}</b></>}
+      </div>
       {visit.note && <p className="tn-visit-note">“{visit.note}”</p>}
-      <p className="tn-visit-q">Someone will need to be in. Does that work for you?</p>
-      {saying ? (
+      <p className="tn-visit-q">
+        {said
+          ? (othersText ? `Waiting on ${othersText} to confirm it. We'll let you know when it's booked.` : "That's booked.")
+          : othersText
+            ? `${othersText[0].toUpperCase()}${othersText.slice(1)} still ${others.length === 2 ? "have" : "has"} to confirm it, but you can answer now. Someone will need to be in — does that work for you?`
+            : "Someone will need to be in. Does that work for you?"}
+      </p>
+      {mode === "other" ? (
+        <VisitForm jobId={visit.jobId} startDate={visit.date || ""} forWhom={brandName} replacing
+          placeholder="e.g. Any weekday after 5 pm works too"
+          onPropose={onPropose} onDone={() => setMode("")} onCancel={() => setMode("")} cancelLabel="Back" />
+      ) : mode === "no" ? (
         <>
           <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
-            placeholder="When would work instead? e.g. weekday mornings, or any time after 5" />
+            placeholder="Why not? e.g. I'm at work until 6" />
           <VisitActs acts={[
-            { kind: "quiet", label: "Back", disabled: !!busy, onClick: () => setSaying(false) },
+            { kind: "quiet", label: "Back", disabled: !!busy, onClick: () => setMode("") },
             { kind: "no", label: "Send — that time doesn't work", disabled: !!busy,
               busy: busy === "declined" ? "Sending…" : null,
               onClick: () => answer("declined") },
           ]} />
         </>
+      ) : said ? (
+        onPropose ? <VisitActs acts={[
+          { kind: "alt", label: "Propose another time", icon: <Calendar size={16} />,
+            onClick: () => setMode("other") },
+        ]} /> : null
       ) : (
-        /* THE SAME ROW THE CREW AND THE HIRING SIDE GET. These were the
-           default form buttons, right-aligned at the bottom of the panel --
-           smaller than the crew's and in the opposite order, so one party to
-           an appointment was answering a different-looking question from the
-           other. Yes leads here as it does there. */
+        /* THE SAME ROW THE CREW AND THE HIRING SIDE GET. Yes leads here as it
+           does there, then another time, then no. */
         <VisitActs acts={[
           { kind: "yes", label: "Yes, that works", icon: <Check size={17} />,
             disabled: !!busy, busy: busy === "confirmed" ? "Confirming…" : null,
             onClick: () => answer("confirmed") },
+          ...(onPropose ? [{ kind: "alt", label: "Propose another time", icon: <Calendar size={16} />,
+            disabled: !!busy, onClick: () => setMode("other") }] : []),
           { kind: "no", label: "That doesn't work", disabled: !!busy,
-            onClick: () => setSaying(true) },
+            onClick: () => setMode("no") },
         ]} />
       )}
       {err && <p className="billing-err" role="alert">{err}</p>}
     </div>
   );
+}
+
+// A tenant's answer refused, by name -- "try again" fixes none of these.
+function tenantVisitErrText(e) {
+  const code = e?.body?.error || "";
+  if (code === "impersonation_expired") return proposeErrText(e);
+  if (code === "not_open") return "That time has already been changed or settled. Reload to see the latest.";
+  if (code === "not_your_turn") return "This time isn't ready for your answer yet. Reload to see where it stands.";
+  if (code === "forbidden" || code === "not_found") return "This report isn't yours to answer any more. Reload to see where it stands.";
+  if (!e?.status) return "Couldn't reach SubSub. Check your connection and try again.";
+  return `That didn't go through (${code || `error ${e.status}`}). Try again, and if it keeps happening tell us that code.`;
 }
 
 // And the question afterwards. Nothing in the system knew whether a visit
@@ -14688,6 +14746,7 @@ function proposeErrText(e) {
   if (code === "not_approved") return "Approve the request first.";
   if (code === "forbidden") return "You don't hold a live work order on this job any more, so you can't set its time. Reload to see where it stands.";
   if (code === "job_not_found") return "This job isn't on this account any more. Reload to see where it stands.";
+  if (code === "no_tenant_needed") return "Nobody needs to be in for this one, so there's no time for you to set.";
   if (code === "bad_date") return "Pick a date.";
   if (code === "bad_time") return "One of the times isn't a valid time. Pick it again from the box.";
   if (code === "bad_window") return "The window ends before it starts.";
@@ -15595,7 +15654,7 @@ function TenantManager({ brand, onOpenAccount }) {
   );
 }
 
-function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onVisitOutcome, onWithdraw, onEdit, onPhotosChanged, weather = null, onOpenAccount = null }) {
+function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onVisitOutcome, onProposeVisit, onWithdraw, onEdit, onPhotosChanged, weather = null, onOpenAccount = null }) {
   // 072. The notices posted to their building. A failure is silence: the
   // reports below are what this screen is for, and a table the account has
   // not created yet must not cost them.
@@ -15867,6 +15926,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
                 j.declinedAt ? `not approved${j.declinedNote ? ` — “${j.declinedNote}”` : ""}` : null,
               ].filter(Boolean).join(" · ")}
               onRespondVisit={onRespondVisit} onVisitOutcome={onVisitOutcome}
+              onProposeVisit={onProposeVisit}
               onOpen={() => setOpenId(j.id)} />
           );
         };
@@ -15927,6 +15987,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
             job={open} stage={tenantStage(open, v)} visit={v} brandName={brand.name}
             where={where} unit={unit} assignedTo={assignedOn(open)}
             onEdit={onEdit} onWithdraw={onWithdraw} onPhotosChanged={onPhotosChanged}
+            onRespondVisit={onRespondVisit} onProposeVisit={onProposeVisit}
             onClose={() => setOpenId(null)} />
         );
       })()}

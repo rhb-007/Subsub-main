@@ -79,7 +79,7 @@ import { isAccess, accessFor, needsTenantConfirm, canAskTenant,
 // name in one file is how a later edit calls the wrong one about the wrong
 // two-party thing.
 import { visitParties, waitingOn as visitWaitingOn,
-  nextToAnswer, visitSettled } from "../shared/visitparty.js";
+  nextToAnswer, visitSettled, mayConfirm } from "../shared/visitparty.js";
 // How long a proposed window is, and whether a date change has anybody to be
 // put to. Both live beside `workWhen` because the browser's propose form uses
 // the first and two copies of that arithmetic is two records of one fact.
@@ -685,6 +685,9 @@ const TENANT_ALLOWED = [
   // The proposed time for a repair of theirs, and their answer to it.
   [/^\/api\/visits$/, ["GET"]],
   [/^\/api\/visits\/[^/]+\/respond$/, ["POST"]],
+  // Proposing a time for their own report. The route checks it is the job
+  // they have to be in for; this line only lets the request reach it.
+  [/^\/api\/jobs\/[^/]+\/visits$/, ["POST"]],
   // And, once the window has been and gone, whether anybody actually came.
   [/^\/api\/visits\/[^/]+\/outcome$/, ["POST"]],
   // 072. Their dashboard: the weather where their building is, the notices
@@ -8211,7 +8214,11 @@ app.get("/api/visits", async (c) => {
 
 // Propose one. The manager, or a contractor who holds a live work order on
 // the job -- they are the one who knows when they can come.
-app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async (c) => {
+// AND THE TENANT, who until now could only say yes or no to a time somebody
+// else picked. The person who has to be in is the one most likely to know a
+// better morning, and "that doesn't work" with no way to say what would is a
+// round trip through a note field the manager then has to turn into a date.
+app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor", "tenant"), async (c) => {
   const auth = c.get("auth");
   const jobId = c.req.param("id");
   const b = await c.req.json().catch(() => ({}));
@@ -8239,6 +8246,12 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
       `SELECT id FROM work_orders WHERE job_id = ? AND company_id = ? AND voided_at IS NULL`
     ).bind(jobId, auth.companyId).first();
     if (!wo) return c.json({ error: "forbidden" }, 403);
+  }
+  // A tenant proposes only for the job they have to be in for. Somebody else's
+  // report answers as missing, the same reply as a job that does not exist, so
+  // a tenant cannot learn which ids are real.
+  if (auth.role === "tenant" && accessTenant(job) !== auth.userId) {
+    return c.json({ error: "job_not_found" }, 404);
   }
   const date = String(b.date || "").trim();
   const start = b.startTime ? String(b.startTime).trim() : null;
@@ -8268,6 +8281,10 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
   // has. The override decides whether to ask; whether there is anybody to ask
   // is still a fact.
   const needsTenant = needsTenantConfirm(access) && canAskTenant(job);
+  // And a tenant who does not have to be in has no window to propose: the
+  // repair is fixed from outside, or the agent lets them in, and a time from
+  // them would be a time nobody asked for. Said rather than written.
+  if (auth.role === "tenant" && !needsTenant) return c.json({ error: "no_tenant_needed" }, 409);
   // 061. And whether anybody holds the work, which is the other side that has
   // to agree. A time the crew cannot make is not a time.
   const parties = await partiesFor(c.env, { ...job, account_id: auth.accountId });
@@ -8376,10 +8393,12 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor"), async
     await logActivity(c.env, auth.accountId, auth.userId, "visit_proposed",
       `Proposed a visit for "${job.title}": ${when}`);
   }
-  if (needsTenant) await notifyTenant(c, jobId, "visit", when);
+  // Not the tenant about a time they put forward themselves.
+  if (needsTenant && myLeg !== "tenant") await notifyTenant(c, jobId, "visit", when);
   await touchJob(c.env, jobId);
   const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(id).first();
-  return c.json({ ...visitRowToJs(row), parties, waitingOn: visitWaitingOn(visitRowToJs(row), parties) }, 201);
+  return c.json({ ...visitRowToJs(row), parties, waitingOn: visitWaitingOn(visitRowToJs(row), parties),
+    turn: nextToAnswer(visitRowToJs(row), parties) }, 201);
 });
 
 // The tenant's answer. Only the person who reported it; only while it is
@@ -8473,7 +8492,11 @@ app.post("/api/visits/:id/respond", async (c) => {
     return c.json({ error: "migration_needed",
       migration: myLeg === "manager" ? "064_visit_manager" : "061_visit_contractor" }, 503);
   }
-  if (status !== "declined" && nextToAnswer(v, parties) !== myLeg) {
+  // AND THE TENANT MAY SAY YES EARLY. `mayConfirm` holds the rule and the
+  // reason: the chain decides whom we ask, not who may speak, and a tenant
+  // looking at a window put forward for their own home was being shown
+  // "Confirm a time" with nothing to press.
+  if (status !== "declined" && !mayConfirm(v, parties, myLeg)) {
     return c.json({ error: "not_your_turn", turn: nextToAnswer(v, parties) }, 409);
   }
   const now = new Date().toISOString();
@@ -8531,8 +8554,12 @@ app.post("/api/visits/:id/respond", async (c) => {
   }
   const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(v.id).first();
   await touchJob(c.env, v.job_id);
+  // `turn` as well, because the screen replaces its row with this one and a
+  // row with no turn reads as "the tenant's to answer" -- which would put the
+  // question straight back in front of a tenant who has just answered it.
   return c.json({ ...visitRowToJs(row), parties,
-    waitingOn: visitWaitingOn(visitRowToJs(row), parties) });
+    waitingOn: visitWaitingOn(visitRowToJs(row), parties),
+    turn: nextToAnswer(visitRowToJs(row), parties) });
 });
 
 // What happened on the day. A confirmed visit is a promise, and until now
