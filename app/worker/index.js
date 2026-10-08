@@ -10,7 +10,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
-  INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen,
+  INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen, buildingNoticeEmail,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
   connectRequestEmail, connectRequestSms, workOrderIssuedSms,
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
@@ -125,6 +125,7 @@ import {
   hostnameConfig, brandedHost, provisionHostname, deprovisionHostname, checkHostname, diagnose,
 } from "./hostnames.js";
 import { setupCheck } from "./setup-check.js";
+import { PREF_IDS, NEEDS_PHONE, validNotice, noticeLive, sortNotices } from "../shared/tenanthome.js";
 import { systemHealth } from "./syshealth.js";
 import { integrationHealth } from "./integrationhealth.js";
 import { verifyWithFallback, configuredProviders, askProvider, PROVIDERS } from "./licenses.js";
@@ -626,6 +627,9 @@ const OWNER_ALLOWED = [
   [/^\/api\/inspections$/, ["GET"]],                  // scoped: their buildings
   [/^\/api\/inspections\/[^/]+$/, ["GET"]],           // scoped, and finished only
   [/^\/api\/inspections\/[^/]+\/photos\/[^/]+$/, ["GET"]],
+  // 072. The weather and the notices on their buildings, both read only.
+  [/^\/api\/weather$/, ["GET"]],
+  [/^\/api\/notices$/, ["GET"]],
   [/^\/api\/jobs$/, ["GET", "POST"]],      // scoped; POST creates a request
   [/^\/api\/subs$/, ["GET"]],              // scoped: who works their buildings
   [/^\/api\/service-calls$/, ["GET"]],     // scoped: on their own jobs
@@ -675,6 +679,14 @@ const TENANT_ALLOWED = [
   [/^\/api\/visits\/[^/]+\/respond$/, ["POST"]],
   // And, once the window has been and gone, whether anybody actually came.
   [/^\/api\/visits\/[^/]+\/outcome$/, ["POST"]],
+  // 072. Their dashboard: the weather where their building is, the notices
+  // posted to it, and how they would like to be reached. The weather route
+  // names a town and nothing else; the notices route is scoped to their
+  // building; the contact route only ever reads and writes the caller's own
+  // row on this account.
+  [/^\/api\/weather$/, ["GET"]],
+  [/^\/api\/notices$/, ["GET"]],
+  [/^\/api\/me\/contact$/, ["GET", "PUT"]],
 ];
 
 app.use("/api/*", async (c, next) => {
@@ -3431,7 +3443,31 @@ const weatherCache = new Map();
 // relearning: `company_id` is what a hireable account has, not what an account
 // has. Anything reading it to answer a question about the ACCOUNT is answering
 // it for two kinds out of five.
-async function accountPlace(env, accountId) {
+async function accountPlace(env, accountId, propertyIds = null) {
+  // 072. A seat narrowed to named buildings -- a tenant, a guest owner, a
+  // scoped manager -- is asking about THEIR building, not the account's
+  // commonest town. A tenant in Olympia on a Tacoma agent's books was told
+  // Tacoma's weather, and "is it raining at home" is the one question this
+  // line exists to answer. Their buildings only, the same tie-break.
+  if (Array.isArray(propertyIds)) {
+    if (!propertyIds.length) return null;
+    try {
+      const row = await env.DB.prepare(
+        `SELECT city, state, COUNT(*) AS n
+           FROM properties
+          WHERE id IN (${propertyIds.map(() => "?").join(",")})
+            AND city IS NOT NULL AND TRIM(city) <> ''
+          GROUP BY lower(TRIM(city)), lower(TRIM(COALESCE(state, '')))
+          ORDER BY n DESC, lower(TRIM(city)) ASC
+          LIMIT 1`
+      ).bind(...propertyIds).first();
+      const city = String(row?.city || "").trim();
+      return city ? { city, state: String(row.state || "").trim() } : null;
+    } catch (err) {
+      if (!missingSchema(err)) throw err;
+      return null;
+    }
+  }
   // What they said about themselves, when there is a row that can hold it.
   try {
     const co = await env.DB.prepare(
@@ -3469,9 +3505,9 @@ async function accountPlace(env, accountId) {
 }
 
 app.get("/api/weather", async (c) => {
-  const { accountId } = c.get("auth");
+  const { accountId, propertyIds } = c.get("auth");
   try {
-    const where = await accountPlace(c.env, accountId);
+    const where = await accountPlace(c.env, accountId, propertyIds || null);
     // No address, no weather, and no apology: a dashboard that says "we do not
     // know where you are" has spent a line to say nothing.
     if (!where) return c.json({});
@@ -3491,6 +3527,9 @@ app.get("/api/weather", async (c) => {
 
     const wx = await fetch(
       `https://api.open-meteo.com/v1/forecast?current=temperature_2m,weather_code`
+      // 072. Today's high and low, for the tenant's weather card. Same call,
+      // so it costs nothing more; absent from a reply, the card shows only now.
+      + `&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&timezone=auto`
       + `&temperature_unit=fahrenheit&latitude=${place.latitude}&longitude=${place.longitude}`
     ).then((r) => r.json()).catch(() => null);
     const cur = wx?.current;
@@ -3500,6 +3539,8 @@ app.get("/api/weather", async (c) => {
     }
 
     const value = { tempF: cur.temperature_2m, code: cur.weather_code, place: city };
+    const hi = wx?.daily?.temperature_2m_max?.[0], lo = wx?.daily?.temperature_2m_min?.[0];
+    if (typeof hi === "number" && typeof lo === "number") { value.hiF = hi; value.loF = lo; }
     weatherCache.set(key, { at: Date.now(), value });
     return c.json(value);
   } catch (err) {
@@ -5190,6 +5231,232 @@ app.patch("/api/me", async (c) => {
   return c.json({ ok: true, notify });
 });
 
+// 072. HOW A TENANT WOULD LIKE THIS ACCOUNT TO REACH THEM, AND WHO TO CALL IF
+// IT CANNOT. Keyed by (account, person): a person is global and may rent from
+// two landlords, and the emergency contact they gave one of them is not the
+// other's to read. The number itself is users.phone, which is what every text
+// already goes to -- a second copy here would be two records of one fact and
+// the texts would follow one of them.
+//
+// The caller's own row and nobody else's: there is no id in the path, so
+// there is nothing here a tenant could point at another tenant.
+const contactRowToJs = (r, u) => ({
+  prefer: r?.prefer || null,
+  bestTime: r?.best_time || null,
+  emergencyName: r?.emergency_name || null,
+  emergencyRelation: r?.emergency_relation || null,
+  emergencyPhone: r?.emergency_phone || null,
+  phone: u?.phone || null,
+  email: realEmail(u?.email) || null,
+  updatedAt: r?.updated_at || null,
+});
+
+app.get("/api/me/contact", requireRole("tenant"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const user = await c.env.DB.prepare(`SELECT phone, email FROM users WHERE id = ?`).bind(userId).first();
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT * FROM tenant_contacts WHERE account_id = ? AND user_id = ?`
+    ).bind(accountId, userId).first();
+    return c.json(contactRowToJs(row, user));
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    // The dashboard draws without it; the number on file still shows.
+    return c.json({ ...contactRowToJs(null, user), migration });
+  }
+});
+
+app.put("/api/me/contact", requireRole("tenant"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const prefer = b.prefer == null || b.prefer === "" ? null : String(b.prefer);
+  if (prefer && !PREF_IDS.includes(prefer)) return c.json({ error: "bad_prefer" }, 400);
+
+  // Their own number. Blank is allowed -- somebody may not want to give one --
+  // but a number that will not text is refused rather than stored, the rule
+  // createTenant follows, because a bad number is otherwise found out by the
+  // text that never arrives.
+  const phoneRaw = String(b.phone ?? "").trim();
+  const phone = phoneRaw ? normalizePhone(phoneRaw) : null;
+  if (phoneRaw && (!phone || !toE164(phoneRaw))) return c.json({ error: "bad_phone" }, 400);
+  if (prefer && NEEDS_PHONE.includes(prefer) && !phone) return c.json({ error: "phone_required" }, 400);
+
+  const user = await c.env.DB.prepare(`SELECT phone, email FROM users WHERE id = ?`).bind(userId).first();
+  if (prefer === "email" && !realEmail(user?.email)) return c.json({ error: "email_required" }, 400);
+
+  const ename = String(b.emergencyName ?? "").trim().slice(0, 80) || null;
+  const erel = String(b.emergencyRelation ?? "").trim().slice(0, 40) || null;
+  const ephoneRaw = String(b.emergencyPhone ?? "").trim();
+  const ephone = ephoneRaw ? normalizePhone(ephoneRaw) : null;
+  if (ephoneRaw && !ephone) return c.json({ error: "bad_emergency_phone" }, 400);
+  // A name with no number, or a number with nobody's name on it, is a contact
+  // nobody can use at the moment it is needed.
+  if (!!ename !== !!ephone) return c.json({ error: "emergency_incomplete" }, 400);
+  const best = String(b.bestTime ?? "").trim().slice(0, 80) || null;
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO tenant_contacts (account_id, user_id, prefer, best_time,
+              emergency_name, emergency_relation, emergency_phone, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT (account_id, user_id) DO UPDATE SET
+         prefer = excluded.prefer, best_time = excluded.best_time,
+         emergency_name = excluded.emergency_name,
+         emergency_relation = excluded.emergency_relation,
+         emergency_phone = excluded.emergency_phone,
+         updated_at = CURRENT_TIMESTAMP`
+    ).bind(accountId, userId, prefer, best, ename, erel, ephone).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+  // Written after the row, so a refused save does not move the number.
+  if ((user?.phone || null) !== phone) {
+    await c.env.DB.prepare(`UPDATE users SET phone = ? WHERE id = ?`).bind(phone, userId).run();
+  }
+  const row = await c.env.DB.prepare(
+    `SELECT * FROM tenant_contacts WHERE account_id = ? AND user_id = ?`).bind(accountId, userId).first();
+  return c.json(contactRowToJs(row, { ...user, phone }));
+});
+
+// 072. NOTICES TO A BUILDING. Per building and never per account: a notice
+// about one address shown at another is the wrong answer to "is my water off".
+//
+// Who reads them: the team, and the guests scoped to that building -- a
+// tenant and an owner. Not a contractor seat, which is on this account to do
+// work and has no reason to read what the manager tells the residents.
+const NOTICE_READ_ROLES = ["admin", "pm", "tenant", "owner"];
+const noticeRowToJs = (r) => ({
+  id: r.id, propertyId: r.property_id, propertyName: r.property_name || null,
+  title: r.title, body: r.body || null, important: !!r.important,
+  endsOn: r.ends_on || null, createdAt: r.created_at, createdBy: r.created_by || null,
+  createdByName: r.created_by_name || null, emailed: Number(r.emailed || 0),
+});
+// A day either side of UTC, because the reader's own clock decides "today"
+// and the browser filters again with it: a notice up "until Friday" must not
+// vanish at 5pm on Friday in Seattle because it is already Saturday in UTC.
+const utcYesterday = () => new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+app.get("/api/notices", requireRole(...NOTICE_READ_ROLES), async (c) => {
+  const auth = c.get("auth");
+  const scope = scopeClause(auth, "n.property_id");
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT n.*, p.name AS property_name, u.name AS created_by_name
+         FROM building_notices n
+         JOIN properties p ON p.id = n.property_id
+         LEFT JOIN users u ON u.id = n.created_by
+        WHERE n.account_id = ? AND n.removed_at IS NULL ${scope.sql}
+        ORDER BY n.created_at DESC
+        LIMIT 200`
+    ).bind(auth.accountId, ...scope.vals).all();
+    const since = utcYesterday();
+    const live = (results || []).filter((r) => noticeLive(r, since)).map(noticeRowToJs);
+    return c.json({ notices: sortNotices(live) });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    // Nothing to show is the honest answer on a database without 072, and a
+    // dashboard must not lose its reports over a table it does not need.
+    return c.json({ notices: [], migration });
+  }
+});
+
+app.post("/api/notices", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const propertyId = String(b.propertyId || "");
+  if (!propertyId) return c.json({ error: "property_required" }, 400);
+  if (!maySeeProperty(auth, propertyId)) return c.json({ error: "not_found" }, 404);
+  const property = await c.env.DB.prepare(
+    `SELECT id, name FROM properties WHERE id = ? AND account_id = ?`
+  ).bind(propertyId, auth.accountId).first();
+  // Operated here, not merely owned: the people who live there are this
+  // account's tenants only where this account runs the building.
+  if (!property) return c.json({ error: "not_found" }, 404);
+  const v = validNotice(b, utcYesterday());
+  if (v.error) return c.json({ error: v.error }, 400);
+
+  const id = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO building_notices (id, account_id, property_id, title, body, important, ends_on, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, auth.accountId, propertyId, v.title, v.body, v.important ? 1 : 0, v.endsOn, auth.userId).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+
+  // Emailed only when asked. Text messages are deliberately not offered: a
+  // notice to a two-hundred-flat building is two hundred texts against the
+  // account's allowance, and that is a decision for its own control.
+  let emailed = 0, notEmailed = 0;
+  if (b.email) {
+    const [{ results: tenants }, account] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT u.id, u.name, u.email, u.notify
+           FROM memberships m
+           JOIN membership_properties mp ON mp.membership_id = m.id
+           JOIN users u ON u.id = m.user_id
+          WHERE m.account_id = ? AND m.role = 'tenant' AND mp.property_id = ?`
+      ).bind(auth.accountId, propertyId).all(),
+      c.env.DB.prepare(`SELECT id, name, subdomain, hostname_status FROM accounts WHERE id = ?`)
+        .bind(auth.accountId).first(),
+    ]);
+    const link = `${accountOrigin(account)}/`;
+    for (const t of tenants || []) {
+      const to = realEmail(t.email);
+      // Their own choice: somebody who switched email off is not emailed by
+      // the back door of a notice.
+      if (!to || !notifyOf(t).email) { notEmailed++; continue; }
+      const m = buildingNoticeEmail({ firstName: String(t.name || "").split(" ")[0], account,
+        propertyName: property.name, title: v.title, body: v.body, endsOn: v.endsOn,
+        important: v.important, link });
+      const result = await sendEmail(c.env, { to, subject: m.subject, text: m.text, html: m.html });
+      await logMail(c.env, { accountId: auth.accountId, to, kind: "building_notice",
+        subject: m.subject, result, sentBy: auth.userId });
+      if (result?.ok) emailed++; else notEmailed++;
+    }
+    await c.env.DB.prepare(`UPDATE building_notices SET emailed = ? WHERE id = ?`).bind(emailed, id).run();
+  }
+  await logActivity(c.env, auth.accountId, auth.userId, "notice_posted",
+    `Posted a${v.important ? "n important" : ""} notice at ${property.name}: ${v.title}`);
+
+  const row = await c.env.DB.prepare(
+    `SELECT n.*, p.name AS property_name FROM building_notices n
+       JOIN properties p ON p.id = n.property_id WHERE n.id = ?`).bind(id).first();
+  return c.json({ notice: noticeRowToJs(row), emailed, notEmailed }, 201);
+});
+
+app.delete("/api/notices/:id", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  let row;
+  try {
+    row = await c.env.DB.prepare(
+      `SELECT n.*, p.name AS property_name FROM building_notices n
+         JOIN properties p ON p.id = n.property_id
+        WHERE n.id = ? AND n.account_id = ?`
+    ).bind(c.req.param("id"), auth.accountId).first();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+  // Another building's notice answers like one that does not exist.
+  if (!row || !maySeeProperty(auth, row.property_id)) return c.json({ error: "not_found" }, 404);
+  if (row.removed_at) return c.json({ ok: true });
+  await c.env.DB.prepare(
+    `UPDATE building_notices SET removed_at = CURRENT_TIMESTAMP WHERE id = ? AND removed_at IS NULL`
+  ).bind(row.id).run();
+  await logActivity(c.env, auth.accountId, auth.userId, "notice_removed",
+    `Took down the notice at ${row.property_name}: ${row.title}`);
+  return c.json({ ok: true });
+});
+
 // Branding/plan/billing for the current account.
 app.patch("/api/account", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
@@ -6255,7 +6522,27 @@ app.get("/api/tenants", requireRole("admin", "pm"), async (c) => {
       WHERE m.account_id = ? AND m.role = 'tenant' ${scope.sql}
       ORDER BY p.name, m.unit, u.name`
   ).bind(auth.accountId, ...scope.vals).all();
-  return c.json((results || []).map(tenantRowToJs));
+  // 072. How each would like to be reached and who to call if they cannot.
+  // A second query rather than a join, so a database without 072 still lists
+  // its tenants -- losing the contact line must never cost the list.
+  let contacts = new Map();
+  try {
+    const { results: cs } = await c.env.DB.prepare(
+      `SELECT * FROM tenant_contacts WHERE account_id = ?`).bind(auth.accountId).all();
+    contacts = new Map((cs || []).map((r) => [r.user_id, r]));
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+  }
+  return c.json((results || []).map((r) => {
+    const t = tenantRowToJs(r);
+    const k = contacts.get(r.user_id);
+    t.contact = k ? {
+      prefer: k.prefer || null, bestTime: k.best_time || null,
+      emergencyName: k.emergency_name || null, emergencyRelation: k.emergency_relation || null,
+      emergencyPhone: k.emergency_phone || null,
+    } : null;
+    return t;
+  }));
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;
@@ -6425,6 +6712,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\btenant_contacts\b|\bbuilding_notices\b/i.test(m)) return "072_tenant_home";
   if (/\bwaiver_forms\b|ux_waiver_open/i.test(m)) return "069_waiver_forms";
   if (/\binspection_(sources|status_rules|unmapped)\b/i.test(m)) return "068_inspection_ingest";
   if (/\bjob_endings\b/i.test(m)) return "066_job_endings";

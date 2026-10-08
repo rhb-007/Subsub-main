@@ -235,6 +235,10 @@ WITH spec(j) AS (SELECT
   -- 071. An account's own fee terms from the staff console. Until it is run
   -- every account is on the defaults and the console's fee panel says so.
   ',["m071_fee_terms","col","account_fee_terms",["account_id","fee_bps","cap_cents","free_cents","updated_by"]]' ||
+  -- 072. The tenant's dashboard: their contact details and building notices.
+  -- Until it is run the dashboard draws without them and saving says which file.
+  ',["m072_tenant_contacts","col","tenant_contacts",["account_id","user_id","prefer","best_time","emergency_name","emergency_relation","emergency_phone"]]' ||
+  ',["m072_building_notices","col","building_notices",["id","account_id","property_id","title","body","important","ends_on","removed_at","emailed"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

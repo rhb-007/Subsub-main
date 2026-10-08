@@ -10513,6 +10513,86 @@ refactor.
   to 0.65 of the copy, for the 1024 reflow, and still catches the "a third of
   it" case its own name describes.
 
+- **THE TENANT'S SCREEN IS A DASHBOARD NOW, AND EVERY CARD ON IT ANSWERS ONE
+  QUESTION A RENTER ACTUALLY ASKS.** Asked for as *"a proper dashboard with
+  weather highlighted, report a problem, a place holder for a AI powered number
+  to call/text into a # and report a problem, important building notification,
+  preferred contact information, emergency contact"*. It was a greeting, one
+  button and a list. Migration 072, `app/shared/tenanthome.js`.
+
+  **THE WEATHER HAD NEVER REACHED A TENANT AT ALL.** `GET /api/weather` was not
+  on `TENANT_ALLOWED`, so every tenant got a 403 and the greeting drew without
+  it -- silently, because every failure on that route answers nothing on
+  purpose. The allowlist-is-a-second-record-of-one-fact shape 056 recorded,
+  found on a route nobody had thought of as a guest's. And once it answered, it
+  answered the wrong town: `accountPlace` takes the account's **commonest**
+  town, so a tenant in Olympia on a Tacoma agent's books was told Tacoma's
+  weather. A seat narrowed to buildings now reads **its own buildings**. The
+  card adds today's high and low from the same Open-Meteo call, and it is still
+  decoration: no reading, no card, never an empty box.
+
+  **THE AI LINE PRINTS NO NUMBER, and that is the whole of the placeholder.** A
+  number that does not answer is worse than none -- somebody with water through
+  the ceiling would ring it. So the card says what is coming and *Coming soon*,
+  points back at Report a problem, and the browser suite reads it for anything
+  shaped like a phone number. `AI_LINE_LIVE` is the switch the day it answers.
+
+  **"Buying" was read as "building".** A notice is **per building, never per
+  account**: a notice about one address shown at another is the wrong answer to
+  *is my water off*. Posted from the building's own window on Properties by an
+  admin or a project manager, **only on a building this account operates** --
+  its tenants are this account's tenants only where it runs the building.
+  Important ones sort first and are tinted. A last day is **inclusive** and the
+  browser filters with **its own** date, so a notice up until Friday is still up
+  on Friday evening in Seattle when UTC has moved on; the server keeps one day
+  of slack for the same reason. **Taken down, never deleted**, because *we did
+  tell them* is the question a notice gets asked afterwards. Read by the team
+  and the building's guests, **never a contractor seat**, which is on the
+  account to do work and has no business reading what residents are told.
+
+  **Emailing one follows each tenant's own choice.** Somebody who switched email
+  off is not emailed by the back door of a notice, and one with no real address
+  is counted rather than skipped -- the panel says *emailed to 3 (1 not
+  emailed)*, because "posted" and "posted and emailed" are different things to
+  have done. **Texts are deliberately not offered**: a notice to a two-hundred
+  flat building is two hundred texts against the allowance, and that is a
+  decision for its own control.
+
+  **CONTACT DETAILS ARE KEYED BY (ACCOUNT, PERSON), NOT BY PERSON.** A person is
+  global and may rent from two landlords, and the emergency contact they gave
+  one of them is not the other's to read -- the rule this file runs on
+  everywhere, applied to the most personal record a tenant gives. The fixture
+  that proves it is a tenant of **two** accounts; keyed by person alone, the
+  second landlord reads the first one's answer. **The phone number itself stays
+  on `users.phone`**, which is what every text already goes to: a second number
+  in the new table would be two records of one fact and the texts would follow
+  one of them. It is written **after** the row, so a save refused for want of
+  072 does not move the number either.
+
+  **A preference nobody can act on is refused**: *text me* or *call me* with no
+  number, *email me* with no real address, an emergency contact with a name and
+  no number (or the reverse), a number that will not text. A blank one is
+  allowed -- not everybody wants to give a number.
+
+  **ONE SAVE CARRIES BOTH CARDS.** The route stores the whole row, so saving the
+  emergency contact sends the preference with it; a body carrying only the half
+  being edited would wipe the other half. The browser suite saves one, then the
+  other, and reads the second body for the first half -- the mutation that sends
+  half a row fails exactly that.
+
+  **The manager reads it on Account → Tenants**, one line per tenant who said
+  something and nothing for one who did not -- *no preference* on three hundred
+  rows is noise. A second query rather than a join, so a database without 072
+  still lists its tenants.
+
+  `test:tenanthome` is the server (59, ten mutations each on its own
+  assertion); `test:tenanthomeui` draws both halves at 1100px and 390px (36,
+  eight mutations). The phone-width stack is measured rather than read: without
+  the media query the two report cards squeeze side by side at 175px each.
+  **Still open:** the AI line itself -- a number, a voice and text agent, and
+  what it is allowed to promise somebody at 2am -- is its own piece, and a
+  decision about cost per call before it is a build.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

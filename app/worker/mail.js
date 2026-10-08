@@ -722,6 +722,31 @@ an unmonitored address. Replies aren't received.`;
     : `${who}: "${title}" has moved`;
   return { subject, text, html: textToHtml(text, link) };
 }
+// A notice a manager posted to one building, sent to the people who live
+// there. The notice itself is the message, so it is quoted whole rather than
+// summarised: "the water is off on Tuesday from 9 to 1" is exactly the line
+// somebody needs and a paraphrase would lose the hours.
+export function buildingNoticeEmail({ firstName, account, propertyName, title, body, endsOn, important, link }) {
+  const who = account?.name || "Your building manager";
+  const until = endsOn ? `\n(This notice is up until ${endsOn}.)` : "";
+  const text = `Hi ${firstName || "there"},
+
+${who} has posted a${important ? "n important" : ""} notice for ${propertyName || "your building"}:
+
+${title}
+${body ? `\n${body}\n` : ""}${until}
+
+You can see it, and anything you've reported, here:
+  ${link}
+
+-- ${who}
+
+This is an automated message from an unmonitored address. Replies aren't
+received; to answer it, contact ${who} the way you usually would.`;
+  const subject = `${important ? "Important: " : ""}${who}: ${title}`;
+  return { subject, text, html: textToHtml(text, link) };
+}
+
 export function tenantStatusSms({ account, title, stage, link, detail }) {
   const who = account?.name || "Your building manager";
   return `${who}: your report "${title}" ${stageWords(stage, detail)}. ${link}`;

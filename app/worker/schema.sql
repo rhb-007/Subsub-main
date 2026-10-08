@@ -2167,3 +2167,33 @@ CREATE TABLE IF NOT EXISTS account_fee_terms (
   updated_by  TEXT,
   updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 072. The tenant's own dashboard. How this account should reach a tenant and
+-- who to call if it cannot, keyed by (account, person) because it is something
+-- they told THIS landlord; and notices a manager posts to one building.
+CREATE TABLE IF NOT EXISTS tenant_contacts (
+  account_id          TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  prefer              TEXT,
+  best_time           TEXT,
+  emergency_name      TEXT,
+  emergency_relation  TEXT,
+  emergency_phone     TEXT,
+  updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (account_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS building_notices (
+  id           TEXT PRIMARY KEY,
+  account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  property_id  TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  title        TEXT NOT NULL,
+  body         TEXT,
+  important    INTEGER NOT NULL DEFAULT 0,
+  ends_on      TEXT,
+  created_by   TEXT,
+  created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  removed_at   TEXT,
+  emailed      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_building_notices_property ON building_notices(property_id, removed_at);

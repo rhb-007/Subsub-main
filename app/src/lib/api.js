@@ -383,6 +383,14 @@ export const api = {
   // Tenants. The first two need a signed-in manager; the last two are how
   // somebody holding a link becomes a tenant, before they have any account.
   listTenants: () => request("/tenants"),
+  // 072. A tenant's own contact details on this account, and the notices
+  // posted to buildings. The contact route takes no id: it is always the
+  // caller's own row.
+  myContact: () => request("/me/contact"),
+  saveMyContact: (body) => request("/me/contact", { method: "PUT", body: JSON.stringify(body) }),
+  listNotices: () => request("/notices"),
+  postNotice: (body) => request("/notices", { method: "POST", body: JSON.stringify(body) }),
+  removeNotice: (id) => request(`/notices/${id}`, { method: "DELETE" }),
   addTenant: (body) => request("/tenants", { method: "POST", body: JSON.stringify(body) }),
   // Up to 25 rows per call; the import screen sends a spreadsheet in batches
   // so a long list cannot time out a single request.

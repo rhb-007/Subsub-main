@@ -34,7 +34,7 @@ import {
   // standing for the idea of one.
   QrCode as QrCodeIcon,
   Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles,
-  Info,
+  Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE } from "./lib/api";
 import { inPool } from "./lib/photoshrink.js";
@@ -99,7 +99,8 @@ import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
 import { applyFormHtml, applyLink, applyUrl, applyTargetOk } from "../shared/embed.js";
 import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
 import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
-import { greetingFor, weatherLine } from "../shared/greeting.js";
+import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
+import { CONTACT_PREFS, NEEDS_PHONE, contactLine, emergencyLine, noticeLive, sortNotices, NOTICE_TITLE_MAX, NOTICE_BODY_MAX } from "../shared/tenanthome.js";
 import { TRADES } from "../shared/trades.js";
 import { SOURCE_PRESETS } from "../shared/crmsources.js";
 import { ANY_SOURCE } from "../shared/crmmap.js";
@@ -6364,6 +6365,7 @@ export default function SubSub() {
           onOpenSub={(s) => { setSelected(s); setTab("contractors"); }}
           onNewJob={(p) => tryAddJob(null, p)} newAt={newPropertyAt}
           canManage={runsTheAccount(role, membership)} asOwner={role === "owner"}
+          canPostNotices={role === "admin" || role === "pm"}
           owners={users.filter((u) => memberships.some((m) => m.userId === u.id
             && m.accountId === account.id && m.role === "owner"))
             .map((u) => ({ ...u, propertyIds: (memberships.find((m) => m.userId === u.id
@@ -7227,7 +7229,7 @@ export default function SubSub() {
           unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey}
           visits={visits} onRespondVisit={respondVisit} onVisitOutcome={visitOutcome}
           onWithdraw={withdrawReport} onEdit={editReport} onPhotosChanged={changeReportPhotos}
-          onReport={(r) => createJob({ ...r, trades: r.trades || [] })} />
+          onReport={(r) => createJob({ ...r, trades: r.trades || [] })} weather={weather} />
       )}
 
       {/* ONE DASHBOARD PER SCREEN. A contractor seat lives in the portal, so
@@ -12652,6 +12654,17 @@ function TenantsPane({ properties, accountKind }) {
                     t.email && !t.email.endsWith("@no-email.invalid") ? t.email : null,
                     t.phone].filter(Boolean).join(" · ")}
                 </p>
+                {/* 072. What they told this account on their own dashboard.
+                    Said only when they said it -- a line reading "no
+                    preference" on three hundred rows is noise. */}
+                {(contactLine(t.contact) || emergencyLine(t.contact)) && (
+                  <p className="user-row-sub tn-contact-line">
+                    {contactLine(t.contact) && <span>{contactLine(t.contact)}</span>}
+                    {emergencyLine(t.contact) && (
+                      <span><HeartPulse size={11} /> Emergency: {emergencyLine(t.contact)}</span>
+                    )}
+                  </p>
+                )}
               </div>
               {/* The row opens the invite, so anything inside it that does
                   something else has to say so and stop there. */}
@@ -15100,7 +15113,259 @@ function TenantSection({ id, title, count, defaultOpen = true, children }) {
   );
 }
 
-function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onVisitOutcome, onWithdraw, onEdit, onPhotosChanged }) {
+// ---- The tenant's dashboard, around their reports ------------------------
+// 072. What a tenant opens this for is "my thing is broken" -- and the
+// screen used to be exactly that and nothing else: a greeting, one button and
+// a list. The rest of what a renter checks is here now, each card answering
+// one question: what is it like outside, is anything happening to my
+// building, how do I report something, and does my landlord have the right
+// way to reach me.
+
+// The icon follows the words weatherLabel already chose, so the picture and
+// the sentence cannot disagree about whether it is raining.
+const WX_ICON = {
+  "Clear": Sun, "Mostly sunny": CloudSun, "Overcast": Cloud, "Fog": CloudFog,
+  "Drizzle": CloudRain, "Rain": CloudRain, "Snow": CloudSnow, "Thunderstorms": CloudLightning,
+};
+
+// Highlighted, and still decoration: no reading means no card, never an
+// empty box or a spinner -- the same rule the greeting's chip follows.
+function TenantWeather({ weather }) {
+  const label = weatherLabel(weather?.code);
+  if (!weather || typeof weather.tempF !== "number" || !label) return null;
+  const Icon = WX_ICON[label] || Cloud;
+  const hasRange = typeof weather.hiF === "number" && typeof weather.loF === "number";
+  return (
+    <div className="tn-wx" aria-label={`Weather in ${weather.place || "your area"}`}>
+      <Icon size={40} className="tn-wx-icon" aria-hidden="true" />
+      <div className="tn-wx-main">
+        <span className="tn-wx-temp">{Math.round(weather.tempF)}°F</span>
+        <span className="tn-wx-label">{label}</span>
+      </div>
+      <div className="tn-wx-side">
+        {hasRange && (
+          <span className="tn-wx-range">H {Math.round(weather.hiF)}° · L {Math.round(weather.loF)}°</span>
+        )}
+        {weather.place && <span className="tn-wx-place"><MapPin size={11} /> {weather.place}</span>}
+      </div>
+    </div>
+  );
+}
+
+// What the building's manager has told everybody who lives there. Important
+// ones first and tinted; nothing at all draws nothing, because a heading over
+// "no notices" is a panel that says less than its absence.
+function TenantNotices({ notices }) {
+  if (!notices.length) return null;
+  return (
+    <section className="tn-notices" aria-label="Building notices">
+      <h3 className="tn-sec-h"><Megaphone size={15} /> From your building</h3>
+      {notices.map((n) => (
+        <article key={n.id} className={`tn-notice ${n.important ? "important" : ""}`}>
+          <div className="tn-notice-head">
+            {n.important && <span className="tn-notice-badge">Important</span>}
+            <h4>{n.title}</h4>
+          </div>
+          {n.body && <p className="tn-notice-body prose">{n.body}</p>}
+          <p className="tn-notice-meta">
+            {[n.createdAt ? `Posted ${niceDay(String(n.createdAt).slice(0, 10))}` : null,
+              n.endsOn ? `until ${niceDay(n.endsOn)}` : null,
+              n.propertyName].filter(Boolean).join(" · ")}
+          </p>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+// The AI line. A placeholder that says it is one: NO number is printed,
+// because a number that does not answer is worse than none -- somebody with
+// water coming through the ceiling would ring it. AI_LINE_LIVE is the switch
+// the day it does.
+function TenantAiLine({ brandName }) {
+  return (
+    <div className="tn-act tn-ai" aria-label="Call or text to report — coming soon">
+      <div className="tn-act-icons" aria-hidden="true"><PhoneCall size={18} /><MessageSquareText size={18} /></div>
+      <div className="tn-act-text">
+        <span className="tn-act-title">Call or text to report <span className="tn-soon">Coming soon</span></span>
+        <span className="tn-act-sub">
+          One number to call or text, any hour. An assistant takes down what's wrong and sends it
+          to {brandName} — the same as reporting it here.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+const CONTACT_ERRORS = {
+  bad_phone: "That phone number doesn't look right — it needs all ten digits.",
+  phone_required: "Add a phone number to be called or texted on.",
+  email_required: "There's no email address on your account to be emailed at.",
+  bad_emergency_phone: "That emergency phone number doesn't look right — it needs all ten digits.",
+  emergency_incomplete: "An emergency contact needs both a name and a phone number.",
+  bad_prefer: "Pick how you'd like to be contacted.",
+};
+const contactError = (e) => e?.body?.error === "migration_needed"
+  ? `Your building manager's account isn't finished being set up — tell them to run ${e.body.migration || "072_tenant_home"}.sql.`
+  : CONTACT_ERRORS[e?.body?.error] || "That didn't save. Check your connection and try again.";
+
+// Two cards over one record: how this account should reach them, and who to
+// call if it cannot. One fetch and one save, because the route stores both
+// halves in one row and two components would be two copies of it.
+function TenantDetails({ brandName }) {
+  const [c, setC] = useState(null);
+  const [editing, setEditing] = useState(null);   // "contact" | "emergency" | null
+  const [f, setF] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let live = true;
+    api.myContact().then((r) => { if (live) setC(r || {}); })
+      .catch(() => { if (live) setC({}); });
+    return () => { live = false; };
+  }, []);
+  if (!c) return null;
+  const open = (which) => {
+    setErr("");
+    setF({ prefer: c.prefer || "", phone: c.phone || "", bestTime: c.bestTime || "",
+      emergencyName: c.emergencyName || "", emergencyRelation: c.emergencyRelation || "",
+      emergencyPhone: c.emergencyPhone || "" });
+    setEditing(which);
+  };
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      // The whole row, both halves: the route stores one record.
+      const next = await api.saveMyContact({
+        prefer: f.prefer || null, phone: f.phone, bestTime: f.bestTime,
+        emergencyName: f.emergencyName, emergencyRelation: f.emergencyRelation,
+        emergencyPhone: f.emergencyPhone,
+      });
+      setC(next); setEditing(null);
+    } catch (e) {
+      // Left open with the reason on it: closing on failure reads as saved.
+      setErr(contactError(e));
+    }
+    setBusy(false);
+  };
+  const actions = (
+    <div className="form-actions">
+      <button className="btn-ghost" onClick={() => setEditing(null)} disabled={busy}>Cancel</button>
+      <button className="btn-solid" onClick={save} disabled={busy}>
+        <Check size={15} /> {busy ? "Saving…" : "Save"}
+      </button>
+    </div>
+  );
+  const prefLabelOf = (id) => CONTACT_PREFS.find((p) => p.id === id)?.label;
+  return (
+    <section className="tn-details" aria-label="Your details">
+      <div className="tn-card tn-contact">
+        <div className="tn-card-head">
+          <h3><Phone size={15} /> Preferred contact</h3>
+          {editing !== "contact" && (
+            <button className="btn-ghost small" onClick={() => open("contact")}>
+              {c.prefer ? <><Pencil size={13} /> Edit</> : <><Plus size={13} /> Add</>}
+            </button>
+          )}
+        </div>
+        {editing === "contact" ? (
+          <div className="tn-card-form">
+            <div className="fld">How should {brandName} reach you?
+              <div className="tn-when" role="group">
+                {CONTACT_PREFS.map((p) => (
+                  <button key={p.id} type="button" aria-pressed={f.prefer === p.id}
+                    className={`pick ${f.prefer === p.id ? "on" : ""}`}
+                    onClick={() => set("prefer", f.prefer === p.id ? "" : p.id)}>{p.label}</button>
+                ))}
+              </div>
+            </div>
+            <label className="fld">Mobile number
+              <input type="tel" inputMode="tel" value={f.phone} onChange={(e) => set("phone", e.target.value)}
+                placeholder="(206) 555-0100" />
+              {NEEDS_PHONE.includes(f.prefer) && !f.phone.trim() && (
+                <span className="fld-note">Needed to {f.prefer === "text" ? "text" : "call"} you.</span>
+              )}
+            </label>
+            <label className="fld">Best time to reach you <span className="fld-note">optional</span>
+              <input value={f.bestTime} onChange={(e) => set("bestTime", e.target.value)}
+                placeholder="Weekdays after 5pm" />
+            </label>
+            {c.email && <p className="tn-card-note">Email goes to {c.email}, the address you sign in with.</p>}
+            {err && <p className="billing-err" role="alert">{err}</p>}
+            {actions}
+          </div>
+        ) : c.prefer ? (
+          <p className="tn-card-val">
+            <strong>{prefLabelOf(c.prefer)}</strong>
+            {[c.prefer === "email" ? c.email : c.phone, c.bestTime].filter(Boolean).map((x) => <span key={x}> · {x}</span>)}
+          </p>
+        ) : (
+          <p className="tn-card-empty">
+            Not chosen yet. Tell {brandName} whether to text, call or email you{c.phone ? ` — ${c.phone} is on file` : ""}.
+          </p>
+        )}
+      </div>
+
+      <div className="tn-card tn-emergency">
+        <div className="tn-card-head">
+          <h3><HeartPulse size={15} /> Emergency contact</h3>
+          {editing !== "emergency" && (
+            <button className="btn-ghost small" onClick={() => open("emergency")}>
+              {c.emergencyName ? <><Pencil size={13} /> Edit</> : <><Plus size={13} /> Add</>}
+            </button>
+          )}
+        </div>
+        {editing === "emergency" ? (
+          <div className="tn-card-form">
+            <label className="fld">Their name
+              <input value={f.emergencyName} onChange={(e) => set("emergencyName", e.target.value)} />
+            </label>
+            <label className="fld">How you know them <span className="fld-note">optional</span>
+              <input value={f.emergencyRelation} onChange={(e) => set("emergencyRelation", e.target.value)}
+                placeholder="Sister, partner, friend" />
+            </label>
+            <label className="fld">Their phone number
+              <input type="tel" inputMode="tel" value={f.emergencyPhone}
+                onChange={(e) => set("emergencyPhone", e.target.value)} placeholder="(206) 555-0100" />
+            </label>
+            {err && <p className="billing-err" role="alert">{err}</p>}
+            {actions}
+          </div>
+        ) : c.emergencyName ? (
+          <p className="tn-card-val">
+            <strong>{c.emergencyName}</strong>
+            {c.emergencyRelation && <span> ({c.emergencyRelation})</span>}
+            {c.emergencyPhone && <span> · {c.emergencyPhone}</span>}
+          </p>
+        ) : (
+          <p className="tn-card-empty">
+            None given yet. Who should {brandName} call if something happens at your home and they can't reach you?
+          </p>
+        )}
+        <p className="tn-card-note">
+          Only {brandName} sees this. Fire, gas or someone hurt? <strong>Call 911</strong> first.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onVisitOutcome, onWithdraw, onEdit, onPhotosChanged, weather = null }) {
+  // 072. The notices posted to their building. A failure is silence: the
+  // reports below are what this screen is for, and a table the account has
+  // not created yet must not cost them.
+  const [notices, setNotices] = useState([]);
+  useEffect(() => {
+    let live = true;
+    api.listNotices()
+      .then((r) => { if (live) setNotices(Array.isArray(r?.notices) ? r.notices : []); })
+      .catch(() => { /* decoration */ });
+    return () => { live = false; };
+  }, []);
+  // The reader's own today, not the server's: a notice up "until Friday" is
+  // still up on Friday evening in Seattle, when UTC has moved on.
+  const liveNotices = sortNotices(notices.filter((n) => noticeLive(n, dayKey())));
   const visitOf = (jobId) => visits.find((v) => v.jobId === jobId) || null;
   // Closed-out reports -- done, or taken back -- keep out of the way of the
   // live ones but stay reachable: "did they ever fix the fan" is a question
@@ -15280,12 +15545,15 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
 
   return (
     <main className="ss-main tn-main">
-      <div className="tn-hello">
-        <h2>Hello, {me.name.split(" ")[0]}</h2>
-        <p>
-          {building ? building.name : "Your building"}
-          {unit ? ` · Unit ${unit}` : ""}
-        </p>
+      <div className="tn-top">
+        <div className="tn-hello">
+          <h2>Hello, {me.name.split(" ")[0]}</h2>
+          <p>
+            {building ? building.name : "Your building"}
+            {unit ? ` · Unit ${unit}` : ""}
+          </p>
+        </div>
+        <TenantWeather weather={weather} />
       </div>
 
       {sent && (
@@ -15295,9 +15563,20 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         </div>
       )}
 
-      <button className="tn-cta" onClick={start}>
-        <Plus size={18} /> Report a problem
-      </button>
+      <TenantNotices notices={liveNotices} />
+
+      {/* The two ways to tell the building something is wrong: the one that
+          works now, made the biggest thing on the page, and the one coming. */}
+      <div className="tn-actions">
+        <button className="tn-cta" onClick={start}>
+          <span className="tn-cta-icon" aria-hidden="true"><Plus size={22} /></span>
+          <span className="tn-cta-text">
+            <span className="tn-act-title">Report a problem</span>
+            <span className="tn-act-sub">Pick what's wrong, add a photo, and it goes straight to {brand.name}.</span>
+          </span>
+        </button>
+        <TenantAiLine brandName={brand.name} />
+      </div>
 
       {(() => {
         // A confirmed visit is the one thing on this page with a date on
@@ -15390,6 +15669,8 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
           </>
         );
       })()}
+
+      <TenantDetails brandName={brand.name} />
 
       {(() => {
         const open = mine.find((j) => j.id === openId);
@@ -15677,7 +15958,7 @@ function PropertyOwners({ property, owners, onAddOwner, onEditOwner, onResendInv
   );
 }
 
-function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, onGoVendors, onGoJobs, newAt, canManage = true, asOwner = false,
+function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, onGoVendors, onGoJobs, newAt, canManage = true, asOwner = false, canPostNotices = false,
   owners = [], onAddOwner, onEditOwner, onResendInvite,
   transfers = [], viewingAccountId, onAskTransfer, onDecideTransfer, onCancelTransfer, onAppointManager,
   accountKind, onDeclareOwnership }) {
@@ -15985,6 +16266,11 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                   onDeclareOwnership={canManage ? onDeclareOwnership : null} />
               )}
 
+              {/* 072. What the people who live here are told. Only on a
+                  building this account runs: its tenants are this account's
+                  tenants only where it operates the building. */}
+              {canPostNotices && !p.ownedNotOperated && <BuildingNotices property={p} />}
+
               {p.notes && <p className="prop-notes">{p.notes}</p>}
 
               <div className="pd-acts">
@@ -16018,6 +16304,127 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
         );
       })()}
     </main>
+  );
+}
+
+// 072. Notices to one building's tenants, posted from the building itself.
+// The panel fetches the account's live notices and keeps this building's, so
+// what it lists is exactly what a tenant here is shown.
+const NOTICE_ERRORS = {
+  title_required: "Give the notice a headline.",
+  title_too_long: `Keep the headline under ${NOTICE_TITLE_MAX} characters.`,
+  body_too_long: `Keep the details under ${NOTICE_BODY_MAX} characters.`,
+  bad_date: "That last day isn't a real date.",
+  date_past: "That last day has already gone, so nobody would see the notice.",
+};
+function BuildingNotices({ property }) {
+  const [list, setList] = useState(null);
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  const [removing, setRemoving] = useState(null);
+  const load = () => api.listNotices()
+    .then((r) => setList((r?.notices || []).filter((n) => n.propertyId === property.id && noticeLive(n, dayKey()))))
+    .catch(() => setList([]));
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [property.id]);
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const post = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = await api.postNotice({ propertyId: property.id, title: form.title, body: form.body,
+        important: form.important, endsOn: form.endsOn || null, email: form.email });
+      // Said rather than assumed: "posted" and "posted and emailed to 14" are
+      // different things to have done, and a mail that did not go is worth
+      // knowing while the panel is still open.
+      setNote(form.email
+        ? `Posted, and emailed to ${r.emailed} tenant${r.emailed === 1 ? "" : "s"}${r.notEmailed ? ` (${r.notEmailed} not emailed — no address, or they switched email off)` : ""}.`
+        : "Posted. Tenants here see it on their dashboard.");
+      setForm(null);
+      await load();
+    } catch (e) {
+      setErr(e?.body?.error === "migration_needed"
+        ? `Notices need a database update — run ${e.body.migration || "072_tenant_home"}.sql.`
+        : NOTICE_ERRORS[e?.body?.error] || "That didn't post. Try again in a moment.");
+    }
+    setBusy(false);
+  };
+  const takeDown = async (n) => {
+    setBusy(true); setErr("");
+    try { await api.removeNotice(n.id); setRemoving(null); setNote("Taken down."); await load(); }
+    catch { setErr("That didn't come down. Try again in a moment."); }
+    setBusy(false);
+  };
+  return (
+    <div className="pd-notices">
+      <div className="pd-notices-head">
+        <h4><Megaphone size={14} /> Notices to tenants</h4>
+        {!form && (
+          <button className="btn-ghost small" onClick={() => { setNote(""); setErr("");
+            setForm({ title: "", body: "", important: false, endsOn: "", email: false }); }}>
+            <Plus size={13} /> Post a notice
+          </button>
+        )}
+      </div>
+      {note && <p className="pd-notices-note" role="status">{note}</p>}
+      {form && (
+        <div className="pd-notice-form">
+          <label className="fld">Headline
+            <input value={form.title} maxLength={NOTICE_TITLE_MAX} onChange={(e) => set("title", e.target.value)}
+              placeholder="Water off Tuesday 9am to 1pm" />
+          </label>
+          <label className="fld">Details <span className="fld-note">optional</span>
+            <textarea rows={3} value={form.body} maxLength={NOTICE_BODY_MAX} onChange={(e) => set("body", e.target.value)}
+              placeholder="What is happening, when, and anything they need to do." />
+          </label>
+          <label className="fld">Last day to show it <span className="fld-note">optional — leave it and it stays up until you take it down</span>
+            <input type="date" value={form.endsOn} min={dayKey()} onChange={(e) => set("endsOn", e.target.value)} />
+          </label>
+          <label className="pd-chk"><input type="checkbox" checked={form.important}
+            onChange={(e) => set("important", e.target.checked)} /> Important — shown first and highlighted</label>
+          <label className="pd-chk"><input type="checkbox" checked={form.email}
+            onChange={(e) => set("email", e.target.checked)} /> Also email the tenants of {property.name}</label>
+          <p className="fld-note">It shows on the dashboard of every tenant at {property.name}. It is not texted.</p>
+          {err && <p className="billing-err" role="alert">{err}</p>}
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => setForm(null)} disabled={busy}>Cancel</button>
+            <button className="btn-solid" onClick={post} disabled={busy || !form.title.trim()}>
+              <Megaphone size={14} /> {busy ? "Posting…" : "Post notice"}
+            </button>
+          </div>
+        </div>
+      )}
+      {list === null ? null : list.length === 0 ? (
+        !form && <p className="prop-none">Nothing posted. Tenants here see what you post on their dashboard.</p>
+      ) : (
+        <ul className="pd-notice-list">
+          {list.map((n) => (
+            <li key={n.id} className={n.important ? "important" : ""}>
+              <div className="pd-notice-main">
+                <strong>{n.important && <span className="tn-notice-badge">Important</span>} {n.title}</strong>
+                <span className="pd-notice-meta">
+                  {[n.createdAt ? `Posted ${niceDay(String(n.createdAt).slice(0, 10))}` : null,
+                    n.createdByName ? `by ${n.createdByName}` : null,
+                    n.endsOn ? `until ${niceDay(n.endsOn)}` : "until taken down",
+                    n.emailed ? `emailed to ${n.emailed}` : null].filter(Boolean).join(" · ")}
+                </span>
+              </div>
+              {/* Asked in place rather than in a second modal over this one,
+                  which would draw underneath it. */}
+              {removing === n.id ? (
+                <span className="pd-notice-confirm">
+                  Take it down?
+                  <button className="btn-ghost small danger" disabled={busy} onClick={() => takeDown(n)}>Yes</button>
+                  <button className="btn-ghost small" disabled={busy} onClick={() => setRemoving(null)}>No</button>
+                </span>
+              ) : (
+                <button className="btn-ghost small" onClick={() => setRemoving(n.id)}>Take down</button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -35623,6 +36030,61 @@ p.fld-note{margin:6px 0 0}
   background:var(--brand);color:#fff;border:0;border-radius:13px;padding:17px;
   font:700 15.5px Inter,sans-serif;cursor:pointer;box-shadow:var(--shadow)}
 .tn-cta:hover{background:var(--brand-dk)}
+/* 072. The dashboard around the reports. The greeting and the weather share a
+   row at the top, wrapping under each other on a phone; the two ways to
+   report sit side by side; the two details cards close the page. */
+.tn-top{display:flex;flex-wrap:wrap;align-items:stretch;gap:12px 16px;margin-bottom:18px}
+.tn-top .tn-hello{flex:1 1 220px;min-width:0;align-self:center}
+.tn-top .tn-hello p{margin:0}
+.tn-wx{flex:1 1 260px;display:flex;align-items:center;gap:14px;border-radius:14px;padding:14px 18px;
+  background:linear-gradient(135deg,#e8f1fb 0%,#f3f8fd 100%);border:1px solid #d3e3f3;color:#16324f;
+  box-shadow:var(--shadow)}
+.tn-wx-icon{flex:none;color:#2f6db0}
+.tn-wx-main{display:flex;flex-direction:column;min-width:0}
+.tn-wx-temp{font-size:32px;font-weight:800;letter-spacing:-.03em;line-height:1}
+.tn-wx-label{font-size:13.5px;font-weight:600;margin-top:3px}
+.tn-wx-side{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:4px;
+  font-size:12.5px;color:#3b5a7a;text-align:right}
+.tn-wx-place{display:inline-flex;align-items:center;gap:3px}
+.tn-sec-h{display:flex;align-items:center;gap:7px;margin:0 0 9px;font-size:14px;font-weight:700}
+.tn-notices{display:flex;flex-direction:column;gap:9px;margin-bottom:18px}
+.tn-notice{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 15px;
+  box-shadow:var(--shadow)}
+.tn-notice.important{background:#fff8e8;border-color:#f0d494;border-left:4px solid #d99a14}
+.tn-notice-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.tn-notice-head h4{margin:0;font-size:15px;font-weight:700;letter-spacing:-.01em}
+.tn-notice-badge{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
+  background:#d99a14;color:#fff;border-radius:6px;padding:2px 7px}
+.tn-notice-body{margin:6px 0 0;font-size:13.5px;line-height:1.5;white-space:pre-wrap}
+.tn-notice-meta{margin:7px 0 0;font-size:12px;color:var(--ink-soft)}
+.tn-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:22px}
+@media (max-width:560px){.tn-actions{grid-template-columns:1fr}}
+.tn-actions .tn-cta{justify-content:flex-start;text-align:left;padding:18px 18px;min-height:96px}
+.tn-cta-text{display:flex;flex-direction:column;gap:4px;min-width:0}
+.tn-cta-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;
+  border-radius:50%;background:rgba(255,255,255,.18)}
+.tn-actions .tn-cta{gap:14px}
+.tn-act-title{font-size:16px;font-weight:800;letter-spacing:-.01em;display:flex;align-items:center;flex-wrap:wrap;gap:7px}
+.tn-act-sub{font-size:12.5px;font-weight:500;line-height:1.4;opacity:.92}
+.tn-act{display:flex;align-items:flex-start;gap:12px;border-radius:13px;padding:16px 18px;
+  background:var(--card);border:1px dashed var(--line);color:var(--ink)}
+.tn-act-icons{display:flex;gap:4px;color:var(--ink-soft);margin-top:2px;flex:none}
+.tn-act-text{display:flex;flex-direction:column;gap:4px;min-width:0}
+.tn-ai .tn-act-sub{color:var(--ink-soft);opacity:1}
+.tn-soon{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
+  background:var(--paper);border:1px solid var(--line);color:var(--ink-soft);border-radius:6px;padding:2px 7px}
+.tn-details{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:22px}
+@media (max-width:560px){.tn-details{grid-template-columns:1fr}}
+.tn-card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px 16px;
+  box-shadow:var(--shadow);display:flex;flex-direction:column;gap:8px;min-width:0}
+.tn-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.tn-card-head h3{display:flex;align-items:center;gap:7px;margin:0;font-size:14.5px;font-weight:700}
+.tn-card-val{margin:0;font-size:14px;line-height:1.45;overflow-wrap:anywhere}
+.tn-card-empty{margin:0;font-size:13px;line-height:1.45;color:var(--ink-soft)}
+.tn-card-note{margin:0;font-size:12px;line-height:1.45;color:var(--ink-soft)}
+.tn-card-form{display:flex;flex-direction:column;gap:6px}
+.tn-contact-line{display:flex;flex-wrap:wrap;gap:4px 12px}
+.tn-contact-line span{display:inline-flex;align-items:center;gap:4px}
 .tn-sent{display:flex;align-items:flex-start;gap:9px;background:#eef6f1;border:1px solid #cfe4d8;
   color:#1d5740;border-radius:11px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.45}
 .tn-list{display:flex;flex-direction:column;gap:9px}
@@ -38102,6 +38564,22 @@ iframe.dv-frame{display:block}
   overflow:hidden;text-overflow:ellipsis}
 /* The detail panel: everything the tile stopped carrying. */
 .prop-detail{display:flex;flex-direction:column;gap:14px}
+.pd-notices{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px}
+.pd-notices-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.pd-notices-head h4{display:flex;align-items:center;gap:6px;margin:0;font-size:14px;font-weight:700}
+.pd-notices-note{margin:0;font-size:12.5px;color:#1d5740}
+.pd-notice-form{display:flex;flex-direction:column;gap:6px;background:var(--paper);border:1px solid var(--line);
+  border-radius:11px;padding:12px}
+.pd-notice-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
+.pd-notice-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:var(--card)}
+.pd-notice-list li.important{border-left:4px solid #d99a14;background:#fff8e8}
+.pd-notice-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1 1 220px}
+.pd-notice-main strong{font-size:13.5px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.pd-notice-meta{font-size:12px;color:var(--ink-soft)}
+.pd-notice-confirm{display:inline-flex;align-items:center;gap:6px;font-size:12.5px}
+.pd-chk{display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer}
+.pd-chk input{width:auto;margin:0}
 .pd-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
   padding-right:28px}
 .pd-head h2{margin:0;font-size:20px;letter-spacing:-.02em}

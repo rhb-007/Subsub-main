@@ -53,6 +53,8 @@
     "test:autosched": "node --no-warnings scripts/autoschedule-test.mjs",
     "test:autoturnui": "node --no-warnings scripts/auto-turn-ui-test.mjs",
     "test:autoschedui": "node scripts/autoschedule-ui-test.mjs",
+    "test:tenanthomeui": "node --no-warnings scripts/tenant-home-ui-test.mjs",
+    "test:tenanthome": "node --no-warnings scripts/tenant-home-test.mjs",
     "test:autotop": "node --no-warnings scripts/auto-top-ui-test.mjs",
     "test:consoleroster": "node --no-warnings scripts/console-roster-test.mjs",
     "test:consolerosterui": "node scripts/console-roster-ui-test.mjs",
