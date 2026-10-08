@@ -643,6 +643,13 @@ const OWNER_ALLOWED = [
   // The upload itself. Narrowed to this one kind: the generic route would
   // otherwise let a tenant write any prefix under the account.
   [/^\/api\/uploads\/report-photo\/.+$/, ["PUT"]],
+  // Their own profile picture: the upload (checked kind, like a report
+  // photo), setting it on their own row, and reading it back. The read is
+  // narrowed to their OWN picture in the handler -- a guest seat has no
+  // business fetching everybody else's face on the account.
+  [/^\/api\/uploads\/avatar\/.+$/, ["PUT"]],
+  [/^\/api\/me\/avatar$/, ["PATCH"]],
+  [/^\/api\/account-users\/[^/]+\/avatar$/, ["GET"]],
 ];
 
 // A tenant's is narrower again. They report problems and watch what happens
@@ -687,6 +694,13 @@ const TENANT_ALLOWED = [
   [/^\/api\/weather$/, ["GET"]],
   [/^\/api\/notices$/, ["GET"]],
   [/^\/api\/me\/contact$/, ["GET", "PUT"]],
+  // Their own profile picture: the upload (checked kind, like a report
+  // photo), setting it on their own row, and reading it back. The read is
+  // narrowed to their OWN picture in the handler -- a guest seat has no
+  // business fetching everybody else's face on the account.
+  [/^\/api\/uploads\/avatar\/.+$/, ["PUT"]],
+  [/^\/api\/me\/avatar$/, ["PATCH"]],
+  [/^\/api\/account-users\/[^/]+\/avatar$/, ["GET"]],
 ];
 
 app.use("/api/*", async (c, next) => {
@@ -4530,7 +4544,11 @@ const ownedKey = (key, accountId) =>
 // path from the request, so it cannot be pointed at anything else in the
 // bucket.
 app.get("/api/account-users/:userId/avatar", async (c) => {
-  const { accountId } = c.get("auth");
+  const { accountId, userId: me, role } = c.get("auth");
+  // A guest seat -- an owner or a tenant -- sees its own face and nobody
+  // else's. Same answer as no picture, so it cannot be used to ask which
+  // people on the account have one.
+  if (ALWAYS_SCOPED_ROLES.includes(role) && c.req.param("userId") !== me) return c.notFound();
   const row = await c.env.DB.prepare(
     `SELECT u.avatar_key FROM users u
        JOIN memberships m ON m.user_id = u.id AND m.account_id = ?
@@ -15502,14 +15520,16 @@ app.put("/api/uploads/:kind/:fileName", async (c) => {
   // declared length is refused early so a large body is never streamed at
   // all; the real length is checked after, because Content-Length can lie
   // and a chunked upload does not send one.
-  if (kind === "report-photo") {
+  // An avatar is the same shape of thing from the same kind of person -- a
+  // guest seat may upload one -- so it gets the same checks.
+  if (kind === "report-photo" || kind === "avatar") {
     if (!PHOTO_TYPES.has(type)) return c.json({ error: "not_an_image", type }, 415);
     const declared = Number(c.req.header("Content-Length") || 0);
     if (declared > MAX_PHOTO_BYTES) return c.json({ error: "too_big", max: MAX_PHOTO_BYTES }, 413);
     const body = await c.req.arrayBuffer();
     if (body.byteLength > MAX_PHOTO_BYTES) return c.json({ error: "too_big", max: MAX_PHOTO_BYTES }, 413);
     if (body.byteLength === 0) return c.json({ error: "empty" }, 400);
-    const key = `${accountId}/report-photo/${uid()}-${safeFileName(fileName)}`;
+    const key = `${accountId}/${kind}/${uid()}-${safeFileName(fileName)}`;
     await c.env.FILES.put(key, body, { httpMetadata: { contentType: type } });
     return c.json({ key, size: body.byteLength, type });
   }

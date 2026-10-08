@@ -448,6 +448,10 @@ export const api = {
   },
   // Your own, which any seat may change. Needing to ask an administrator to
   // change your profile picture is not a permission model, it is an errand.
+  // Shrunk on the way up like a report photo: a picture straight off an
+  // iPad can be a HEIC the server would otherwise store as-is, and a face in
+  // a 36px circle does not need twelve megapixels.
+  uploadAvatar: async (file) => uploadFile("avatar", await shrinkPhoto(file)),
   setMyAvatar: (avatarKey) => request("/me/avatar", { method: "PATCH", body: JSON.stringify({ avatarKey }) }),
   // Cancelling happens here rather than in Stripe's hosted portal, which has
   // no embedded form. Always at period end -- they paid for the period.

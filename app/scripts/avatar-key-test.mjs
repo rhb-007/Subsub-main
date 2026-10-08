@@ -43,8 +43,12 @@ const make = ({ role = "admin", accountId = "acc1", avatarKey = null, shareAccou
     }),
     first: async () => row(sql, []), all: async () => ({ results: [] }), run: async () => ({ meta: { changes: 1 } }),
   }) };
-  const FILES = { get: async (k) => { reads.push(k); return { body: "bytes", httpMetadata: { contentType: "image/png" } }; } };
-  return { env: { DB, FILES }, writes, reads };
+  const puts = [];
+  const FILES = {
+    get: async (k) => { reads.push(k); return { body: "bytes", httpMetadata: { contentType: "image/png" } }; },
+    put: async (k, body, opts) => { puts.push({ k, type: opts?.httpMetadata?.contentType }); },
+  };
+  return { env: { DB, FILES }, writes, reads, puts };
 };
 
 const call = (env, path, init = {}) => worker.fetch(
@@ -115,6 +119,57 @@ console.log("\n-- reading a face --");
   const { env } = make({ avatarKey: null });
   const res = await call(env, "/api/account-users/u2/avatar");
   ck("404 for somebody who has not set one", res.status === 404, String(res.status));
+}
+
+// Reported from a tenant's own screen: "Add a picture" answered "That didn't
+// upload" every time, because none of the three avatar routes were on the
+// guest allowlists. A guest seat is an owner or a tenant, and both need all
+// three -- and need the read narrowed to their own face.
+for (const role of ["tenant", "owner"]) {
+  console.log(`\n-- a ${role} setting their own picture --`);
+  const png = new Uint8Array([137, 80, 78, 71, 1, 2, 3, 4]);
+  {
+    const { env, puts } = make({ role });
+    const res = await call(env, "/api/uploads/avatar/face.png",
+      { method: "PUT", body: png, headers: { "Content-Type": "image/png", "Content-Length": String(png.length) } });
+    const body = await res.json().catch(() => ({}));
+    ck(`${role}: the upload is let through`, res.status === 200 && /^acc1\/avatar\//.test(body.key || ""), `${res.status} ${JSON.stringify(body)}`);
+    ck(`${role}: and lands under this account's avatar prefix`, puts.length === 1 && /^acc1\/avatar\//.test(puts[0].k), JSON.stringify(puts));
+  }
+  {
+    const { env, puts } = make({ role });
+    const res = await call(env, "/api/uploads/avatar/notes.txt",
+      { method: "PUT", body: "hello", headers: { "Content-Type": "text/plain" } });
+    ck(`${role}: a file that is not a picture is refused`, res.status === 415 && puts.length === 0, `${res.status} ${JSON.stringify(puts)}`);
+  }
+  {
+    const { env, puts } = make({ role });
+    const res = await call(env, "/api/uploads/sub-doc/insurance.pdf",
+      { method: "PUT", body: png, headers: { "Content-Type": "application/pdf" } });
+    ck(`${role}: any OTHER upload kind is still refused`, res.status === 403 && puts.length === 0, `${res.status}`);
+  }
+  {
+    const { env, writes } = make({ role });
+    const res = await call(env, "/api/me/avatar",
+      { method: "PATCH", body: JSON.stringify({ avatarKey: "acc1/avatar/abc-face.png" }) });
+    ck(`${role}: setting it on their own row works`, res.status === 200 && writes[0] === "acc1/avatar/abc-face.png",
+      `${res.status} ${JSON.stringify(writes)}`);
+  }
+  {
+    const { env, reads } = make({ role, avatarKey: "acc1/avatar/abc-face.png" });
+    const res = await call(env, "/api/account-users/u1/avatar");
+    ck(`${role}: and reading their own back works`, res.status === 200 && reads.length === 1, `${res.status}`);
+  }
+  {
+    const { env, reads } = make({ role, avatarKey: "acc1/avatar/someone.png" });
+    const res = await call(env, "/api/account-users/u2/avatar");
+    ck(`${role}: but not somebody else's on the account`, res.status === 404 && reads.length === 0, `${res.status} ${JSON.stringify(reads)}`);
+  }
+}
+{
+  const { env, reads } = make({ role: "pm", avatarKey: "acc1/avatar/someone.png" });
+  const res = await call(env, "/api/account-users/u2/avatar");
+  ck("a team seat still reads a colleague's", res.status === 200 && reads.length === 1, String(res.status));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

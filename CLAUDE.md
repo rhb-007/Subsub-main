@@ -10635,6 +10635,36 @@ refactor.
   given the building, the empty section hidden again, the Add entry removed, and
   the modal opening onto the list instead of the form.
 
+- **A TENANT COULD NOT ADD A PROFILE PICTURE, BECAUSE NONE OF THE THREE
+  AVATAR ROUTES WERE ON THE GUEST ALLOWLISTS.** Reported from a tenant's own
+  My account, with *Add a picture* answering *That didn't upload. Try again*
+  every time. `PATCH /api/me/avatar` says in its own comment *"any seat, not
+  just an admin"*, and the role check was right. But a guest seat (an owner or
+  a tenant) reaches only what `OWNER_ALLOWED` / `TENANT_ALLOWED` list, and the
+  upload, the set and the read-back were on neither, so the first request got a
+  403. This is the allowlist-is-a-second-record-of-one-fact shape 056 recorded,
+  for the third time. The screen also flattened the 403 into "try again", which
+  hid it.
+
+  **All three routes are listed now, and each is narrowed.** The upload is
+  `PUT /api/uploads/avatar/.+` only. The generic upload route writes any prefix,
+  so `avatar` is now a **checked kind** with the same image-type and 10MB checks
+  a report photo gets, and every other kind still answers 403 to a guest. The
+  read-back is **their own face and nobody else's**: a guest asking for another
+  member's picture gets the same 404 as "has none", so it cannot be used to ask
+  who on the account has one. Team seats still read colleagues' pictures, and
+  that branch is asserted beside the guest one.
+
+  **It is shrunk on the way up**, through the `shrinkPhoto` both photo doors
+  already use. An iPad picture can be a HEIC that would otherwise be stored
+  as-is and fail to render in other browsers, and a face in a 36px circle does
+  not need twelve megapixels. The picker now names `not_an_image` and `too_big`
+  rather than a bare "try again".
+
+  Three mutations fire, each on its own assertions: the upload line removed
+  (which reproduces the report, a 403), the self-only read removed, and the
+  avatar kind left unchecked.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

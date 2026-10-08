@@ -18834,13 +18834,16 @@ function AvatarPicker({ user, onSave }) {
     if (f.size > 10 * 1024 * 1024) { setErr("That picture is over 10MB — try a smaller one."); return; }
     setBusy(true); setErr("");
     try {
-      const { key } = await api.uploadFile("avatar", f);
+      const { key } = await api.uploadAvatar(f);
       await onSave(key);
       forgetAvatars();
     } catch (e) {
       console.error("[avatar] upload failed:", e);
-      setErr(e?.body?.error === "migration_needed"
+      const code = e?.body?.error;
+      setErr(code === "migration_needed"
         ? `The database isn't migrated yet — run ${e.body.migration || "032_user_avatar"}.sql and reload.`
+        : code === "not_an_image" ? "That isn't a picture this can store — try a JPEG or PNG."
+        : code === "too_big" ? "That picture is over 10MB — try a smaller one."
         : "That didn't upload. Try again.");
     } finally { setBusy(false); if (file.current) file.current.value = ""; }
   };
