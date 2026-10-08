@@ -10593,6 +10593,48 @@ refactor.
   what it is allowed to promise somebody at 2am -- is its own piece, and a
   decision about cost per call before it is a build.
 
+- **THE TENANT'S SCREEN IS CALLED TENANT HQ, ITS WEATHER IS THE BUILDING'S,
+  AND THE NOTICES SECTION IS THERE BEFORE ANYTHING IS POSTED.** Asked for as
+  *"the weather should be weather location of building - there should be a
+  section of important notices or messages from the building or pm: ie. Garbage
+  location moved, recycling on different days, attempted theft of Amazon
+  packages, mail room cleanliness - call it Tenant HQ"*.
+
+  **The weather was already the building's town, and the card did not say
+  so.** A seat narrowed to buildings has read its own buildings since 072, but
+  the card printed only the town, which reads as a guess at where somebody
+  lives. It now names the **building** and puts the town under it. A building
+  with **no city on file** used to get no reading at all, so `accountPlace`
+  falls back to the building's ZIP and the geocoder is asked by
+  `ZIP + countryCode=US`. It is never widened to the account's commonest town,
+  which is the wrong answer for a tenant in Olympia on a Tacoma agent's books.
+  The fixture is a building with only a ZIP, so dropping the fallback fails two
+  assertions.
+
+  **The notices section is always drawn.** It used to appear only once
+  something was posted, so a tenant had never seen it on the day the bins
+  moved and did not know to look. The empty state names what lands there (bin
+  and recycling days, package and mail-room warnings, water or power work), in
+  the building's own name.
+
+  **One name for one screen.** The nav entry and an eyebrow over the greeting
+  both say *Tenant HQ*, and the manager's notice panel says its notices show
+  *on Tenant HQ* rather than on "their dashboard". A nav reading Dashboard over
+  a page called something else is two names for one place.
+
+  **And a manager can post one from the Add menu.** The only door was inside a
+  building's own window on Properties, which is not where anybody is standing
+  when the recycling day changes. *Add -> Notice to tenants* opens the same
+  `BuildingNotices` panel with its form already open. It picks the building by
+  itself when the account runs one, and offers a picker when it runs several.
+  Its gates are the route's: admin or pm, on an account with a building it
+  operates. One component behind both doors, so they cannot post two
+  different shapes.
+
+  Four browser mutations fire, each on its own assertions: the weather card not
+  given the building, the empty section hidden again, the Add entry removed, and
+  the modal opening onto the list instead of the form.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -109,6 +109,12 @@ const read = (page) => page.evaluate(() => {
     return { top: b.top, left: b.left, bottom: b.bottom, height: b.height, width: b.width }; };
   return {
     hello: q(".tn-hello h2")?.innerText || "",
+    eyebrow: q(".tn-eyebrow")?.innerText || null,
+    nav: [...document.querySelectorAll("button")].map((b) => (b.innerText || "").trim()).filter((x) => /^(Tenant HQ|Dashboard)$/.test(x)),
+    wxPlace: q(".tn-wx-place")?.innerText || null,
+    wxTown: q(".tn-wx-town")?.innerText || null,
+    noticesHead: q(".tn-notices .tn-sec-h")?.innerText || null,
+    noticesEmpty: q(".tn-notice-empty")?.innerText || null,
     wx: q(".tn-wx")?.innerText || null,
     wxRect: r(q(".tn-wx")), helloRect: r(q(".tn-hello")),
     notices: [...document.querySelectorAll(".tn-notice")].map((n) => ({
@@ -153,6 +159,15 @@ try {
     t.ck("the tenant is in", /Hello, Tess/.test(s.hello), s.hello);
     t.ck("the weather is drawn, highlighted", s.wx && /58°F/.test(s.wx) && /Rain/.test(s.wx), String(s.wx));
     t.ck("with today's high and low and the town", s.wx && /H 62°/.test(s.wx) && /L 50°/.test(s.wx) && /Seattle/.test(s.wx), String(s.wx));
+    // Whose weather it is: the BUILDING, by name, with the town under it.
+    t.ck("the weather names the tenant's building", /Cedar Flats/.test(s.wxPlace || ""), String(s.wxPlace));
+    t.ck("and the town under it", /Seattle/.test(s.wxTown || ""), String(s.wxTown));
+    t.ck("the screen is called Tenant HQ, on the page", /Tenant HQ/i.test(s.eyebrow || ""), String(s.eyebrow));
+    t.ck("and in the nav, with no Dashboard beside it", s.nav.includes("Tenant HQ") && !s.nav.includes("Dashboard"),
+      JSON.stringify(s.nav));
+    t.ck("the notices section is headed as the building's", /Notices from your building/i.test(s.noticesHead || ""),
+      String(s.noticesHead));
+    t.ck("with notices on it there is no empty-state line", s.noticesEmpty === null, String(s.noticesEmpty));
     t.ck("beside the greeting on a wide screen",
       s.wxRect && s.helloRect && Math.abs(s.wxRect.top - s.helloRect.top) < 60 && s.wxRect.left > s.helloRect.left,
       JSON.stringify({ wx: s.wxRect?.top, hi: s.helloRect?.top }));
@@ -212,15 +227,20 @@ try {
     await ctx.close();
   }
 
-  console.log("\n-- nothing to show draws nothing, not an empty box --");
+  console.log("\n-- no weather draws nothing; no notices still draws the section --");
   {
     WEATHER = {}; NOTICES = []; CONTACT = { prefer: null, phone: null, email: "tess@x.test" };
     const { ctx, page } = await asTenant();
     const s = await read(page);
     t.ck("the tenant is in", /Hello, Tess/.test(s.hello), s.hello);
     t.ck("no weather means no weather card", s.wx === null, String(s.wx));
-    t.ck("no notices means no notices heading", s.notices.length === 0
-      && !(await page.evaluate(() => !!document.querySelector(".tn-notices"))));
+    // The notices section is ALWAYS there: a section a tenant has never seen
+    // is one they do not know to look at the day the bins move.
+    t.ck("no notices still draws the notices section", s.notices.length === 0
+      && /Notices from your building/i.test(s.noticesHead || ""), String(s.noticesHead));
+    t.ck("saying nothing is posted, and what would land there",
+      /Nothing posted right now/.test(s.noticesEmpty || "") && /recycling/.test(s.noticesEmpty || "")
+      && /Cedar Flats/.test(s.noticesEmpty || ""), String(s.noticesEmpty));
     t.ck("and the report button is still there", /Report a problem/.test(s.cta || ""));
     await ctx.close();
   }
@@ -267,6 +287,33 @@ try {
     t.ck("it says how many were emailed, and how many were not", /emailed to 3 tenants/.test(after) && /1 not emailed/.test(after), after);
     t.ck("and lists it, marked important", /Water off Tuesday 9 to 1/.test(after) && /Important/i.test(after), after);
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+
+    console.log("\n-- and posts one from the Add menu, without opening the building --");
+    await page.evaluate(() => document.querySelector(".modal-close")?.click());
+    await wait(300);
+    const opened = await page.evaluate(() => { const b = document.querySelector(".add-btn"); if (b) b.click(); return !!b; });
+    await wait(300);
+    const items = await page.evaluate(() => [...document.querySelectorAll("button, [role=menuitem]")]
+      .map((b) => (b.innerText || "").trim()).filter((x) => /Notice to tenants/.test(x)));
+    t.ck("the Add menu offers a notice to tenants", opened && items.length >= 1, JSON.stringify({ opened, items }));
+    await clickText(page, "button, [role=menuitem]", /^Notice to tenants$/);
+    await wait(500);
+    const modal = await page.evaluate(() => ({
+      text: document.querySelector(".notice-modal")?.innerText || null,
+      formOpen: !!document.querySelector(".notice-modal .pd-notice-form"),
+      picker: !!document.querySelector(".notice-modal select"),
+    }));
+    t.ck("it opens straight onto the form", modal.formOpen, JSON.stringify(modal));
+    t.ck("one building is picked for you, with no picker", !modal.picker && /Cedar Flats|Notices to tenants/i.test(modal.text || ""),
+      JSON.stringify(modal));
+    sent.length = 0;
+    await typeInto(page, ".notice-modal .pd-notice-form input:not([type])", "Recycling moves to Thursdays");
+    await clickText(page, ".notice-modal .pd-notice-form .form-actions button", /Post notice/);
+    await wait(700);
+    const b2 = sent.find((x) => x.path === "/api/notices")?.body;
+    t.ck("and it posts to that building", b2?.propertyId === "prop_1" && b2?.title === "Recycling moves to Thursdays",
+      JSON.stringify(b2));
+    t.ck("nothing crashed on the way", crashes.length === 0, crashes.join(" | "));
 
     console.log("\n-- and reads what a tenant told them --");
     await page.keyboard.press("Escape");

@@ -3462,7 +3462,19 @@ async function accountPlace(env, accountId, propertyIds = null) {
           LIMIT 1`
       ).bind(...propertyIds).first();
       const city = String(row?.city || "").trim();
-      return city ? { city, state: String(row.state || "").trim() } : null;
+      if (city) return { city, state: String(row.state || "").trim() };
+      // A building typed in with a street and a ZIP and no town is common,
+      // and a tenant's weather is the one place that cannot fall back to the
+      // account's other buildings -- that would be somebody else's weather.
+      // So the ZIP stands in, and it is the building's own.
+      const z = await env.DB.prepare(
+        `SELECT zip FROM properties
+          WHERE id IN (${propertyIds.map(() => "?").join(",")})
+            AND zip IS NOT NULL AND TRIM(zip) <> ''
+          ORDER BY id LIMIT 1`
+      ).bind(...propertyIds).first();
+      const zip = String(z?.zip || "").trim().slice(0, 5);
+      return /^\d{5}$/.test(zip) ? { city: "", state: "", zip } : null;
     } catch (err) {
       if (!missingSchema(err)) throw err;
       return null;
@@ -3511,16 +3523,17 @@ app.get("/api/weather", async (c) => {
     // No address, no weather, and no apology: a dashboard that says "we do not
     // know where you are" has spent a line to say nothing.
     if (!where) return c.json({});
-    const { city, state } = where;
+    const { city, state, zip = "" } = where;
 
-    const key = `${city.toLowerCase()}|${state.toLowerCase()}`;
+    const key = city ? `${city.toLowerCase()}|${state.toLowerCase()}` : `zip|${zip}`;
     const hit = weatherCache.get(key);
     if (hit && Date.now() - hit.at < WEATHER_TTL_MIN * 60_000) return c.json(hit.value);
 
     const geo = await fetch(
       `https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json`
-      + `&name=${encodeURIComponent(city)}`
-      + (state ? `&admin1=${encodeURIComponent(state)}` : "")
+      + (city
+        ? `&name=${encodeURIComponent(city)}` + (state ? `&admin1=${encodeURIComponent(state)}` : "")
+        : `&name=${encodeURIComponent(zip)}&countryCode=US`)
     ).then((r) => r.json()).catch(() => null);
     const place = geo?.results?.[0];
     if (!place) { weatherCache.set(key, { at: Date.now(), value: {} }); return c.json({}); }
@@ -3538,7 +3551,7 @@ app.get("/api/weather", async (c) => {
       return c.json({});
     }
 
-    const value = { tempF: cur.temperature_2m, code: cur.weather_code, place: city };
+    const value = { tempF: cur.temperature_2m, code: cur.weather_code, place: city || place.name || zip };
     const hi = wx?.daily?.temperature_2m_max?.[0], lo = wx?.daily?.temperature_2m_min?.[0];
     if (typeof hi === "number" && typeof lo === "number") { value.hiF = hi; value.loF = lo; }
     weatherCache.set(key, { at: Date.now(), value });

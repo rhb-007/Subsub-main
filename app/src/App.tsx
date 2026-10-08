@@ -3413,6 +3413,8 @@ export default function SubSub() {
   // details on the dashboard. A nonce rides with the id so asking for the same
   // one twice opens it twice, the rule the compliance pack's focus follows.
   const [inspectionFocus, setInspectionFocus] = useState(null);
+  // The Add menu's notice: which building it is being written for, or null.
+  const [noticeOpen, setNoticeOpen] = useState(null);
   const openInspection = (id) => { setInspectionFocus({ id, n: Date.now() }); setTab("inspections"); };
   // "Move-out · unit 14b" -- the walk a job was raised from, in the words the
   // Inspections list already uses for it.
@@ -5547,6 +5549,14 @@ export default function SubSub() {
                     setInspectionFocus({ newForm: true, n: Date.now() }); setTab("inspections");
                   }]);
                 }
+                // A NOTICE TO TENANTS, from anywhere. It also lives in each
+                // building's own window, which is a door nobody finds the day
+                // the bins move. The same gates as the route: admin or pm, on
+                // an account with buildings it runs.
+                if ((role === "admin" || role === "pm") && can("properties")
+                  && accountProperties.some((p) => !p.ownedNotOperated)) {
+                  actions.push(["notice", "Notice to tenants", "Notice to tenants", Megaphone, () => setNoticeOpen({ propertyId: "" })]);
+                }
               }
               if (actions.length === 1) {
                 // ON THE DASHBOARD THIS IS THE SECOND COPY OF THE SAME BUTTON.
@@ -5728,7 +5738,7 @@ export default function SubSub() {
             <>
               <button className={tab === "tenant" ? "on" : ""}
                 onClick={() => { setTab("tenant"); setHomeKey((k) => k + 1); }}>
-                Dashboard
+                Tenant HQ
               </button>
               <button onClick={() => { setTab("tenant"); setReportKey((k) => k + 1); }}>
                 Report a problem
@@ -7718,6 +7728,32 @@ export default function SubSub() {
           }}
           onCancel={() => { setAdding(false); setResumeAssign(null); }} /></Modal>}
 
+      {noticeOpen && (() => {
+        // Only buildings this account runs: its tenants are its tenants
+        // only where it operates the building, which is the route's rule.
+        const runs = accountProperties.filter((p) => !p.ownedNotOperated);
+        const pid = noticeOpen.propertyId || (runs.length === 1 ? runs[0].id : "");
+        const p = runs.find((x) => x.id === pid) || null;
+        return (
+          <Modal onClose={() => setNoticeOpen(null)}>
+            <div className="form notice-modal">
+              <h2><Megaphone size={18} style={{ verticalAlign: -3, marginRight: 8 }} />Notice to tenants</h2>
+              <p className="form-sub prose">
+                Shown on Tenant HQ to everybody who lives in the building you pick — and emailed too, if you tick it.
+              </p>
+              {runs.length > 1 && (
+                <label className="fld">Which building
+                  <select value={pid} onChange={(e) => setNoticeOpen({ propertyId: e.target.value })}>
+                    <option value="">Choose…</option>
+                    {runs.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                  </select>
+                </label>
+              )}
+              {p && <BuildingNotices key={p.id} property={p} startOpen />}
+            </div>
+          </Modal>
+        );
+      })()}
       {inviteOpen && <Modal onClose={() => setInviteOpen(false)}>
         <InviteLinks onSent={refreshInvites} subs={subs} invites={openInvites} words={rosterWords(account)}
           canEngageHandyman={mayEngageHandyman(kindOf(account))}
@@ -15130,13 +15166,13 @@ const WX_ICON = {
 
 // Highlighted, and still decoration: no reading means no card, never an
 // empty box or a spinner -- the same rule the greeting's chip follows.
-function TenantWeather({ weather }) {
+function TenantWeather({ weather, building = null }) {
   const label = weatherLabel(weather?.code);
   if (!weather || typeof weather.tempF !== "number" || !label) return null;
   const Icon = WX_ICON[label] || Cloud;
   const hasRange = typeof weather.hiF === "number" && typeof weather.loF === "number";
   return (
-    <div className="tn-wx" aria-label={`Weather in ${weather.place || "your area"}`}>
+    <div className="tn-wx" aria-label={`Weather at ${building?.name || weather.place || "your building"}`}>
       <Icon size={40} className="tn-wx-icon" aria-hidden="true" />
       <div className="tn-wx-main">
         <span className="tn-wx-temp">{Math.round(weather.tempF)}°F</span>
@@ -15146,20 +15182,35 @@ function TenantWeather({ weather }) {
         {hasRange && (
           <span className="tn-wx-range">H {Math.round(weather.hiF)}° · L {Math.round(weather.loF)}°</span>
         )}
-        {weather.place && <span className="tn-wx-place"><MapPin size={11} /> {weather.place}</span>}
+        {/* The building first, because that is whose weather it is: a
+            tenant reads "at North Highland" as theirs and "Seattle" as a
+            guess. The town rides under it for anybody who wants to check. */}
+        {(building?.name || weather.place) && (
+          <span className="tn-wx-place"><MapPin size={11} /> {building?.name || weather.place}</span>
+        )}
+        {building?.name && weather.place && <span className="tn-wx-town">{weather.place}</span>}
       </div>
     </div>
   );
 }
 
 // What the building's manager has told everybody who lives there. Important
-// ones first and tinted; nothing at all draws nothing, because a heading over
-// "no notices" is a panel that says less than its absence.
-function TenantNotices({ notices }) {
-  if (!notices.length) return null;
+// ones first and tinted, and the section is drawn even when there is nothing
+// in it -- see the empty state below for why.
+function TenantNotices({ notices, brandName, buildingName }) {
   return (
     <section className="tn-notices" aria-label="Building notices">
-      <h3 className="tn-sec-h"><Megaphone size={15} /> From your building</h3>
+      <h3 className="tn-sec-h"><Megaphone size={15} /> Notices from your building</h3>
+      {/* ALWAYS DRAWN, with an empty state that says what lands here. A
+          section that only appears once something is posted is a section a
+          tenant has never seen on the day it matters, and does not know to
+          look for. */}
+      {notices.length === 0 && (
+        <p className="tn-notice-empty">
+          Nothing posted right now. When {brandName} has news about {buildingName || "your building"} —
+          a change to bin or recycling days, a package or mail-room warning, water or power work — it shows up here.
+        </p>
+      )}
       {notices.map((n) => (
         <article key={n.id} className={`tn-notice ${n.important ? "important" : ""}`}>
           <div className="tn-notice-head">
@@ -15547,13 +15598,15 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
     <main className="ss-main tn-main">
       <div className="tn-top">
         <div className="tn-hello">
+          {/* What this screen is called, in the nav and here: one name. */}
+          <p className="tn-eyebrow">Tenant HQ</p>
           <h2>Hello, {me.name.split(" ")[0]}</h2>
           <p>
             {building ? building.name : "Your building"}
             {unit ? ` · Unit ${unit}` : ""}
           </p>
         </div>
-        <TenantWeather weather={weather} />
+        <TenantWeather weather={weather} building={building} />
       </div>
 
       {sent && (
@@ -15563,7 +15616,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         </div>
       )}
 
-      <TenantNotices notices={liveNotices} />
+      <TenantNotices notices={liveNotices} brandName={brand.name} buildingName={building?.name} />
 
       {/* The two ways to tell the building something is wrong: the one that
           works now, made the biggest thing on the page, and the one coming. */}
@@ -16317,9 +16370,9 @@ const NOTICE_ERRORS = {
   bad_date: "That last day isn't a real date.",
   date_past: "That last day has already gone, so nobody would see the notice.",
 };
-function BuildingNotices({ property }) {
+function BuildingNotices({ property, startOpen = false }) {
   const [list, setList] = useState(null);
-  const [form, setForm] = useState(null);
+  const [form, setForm] = useState(startOpen ? { title: "", body: "", important: false, endsOn: "", email: false } : null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
@@ -16339,7 +16392,7 @@ function BuildingNotices({ property }) {
       // knowing while the panel is still open.
       setNote(form.email
         ? `Posted, and emailed to ${r.emailed} tenant${r.emailed === 1 ? "" : "s"}${r.notEmailed ? ` (${r.notEmailed} not emailed — no address, or they switched email off)` : ""}.`
-        : "Posted. Tenants here see it on their dashboard.");
+        : "Posted. Tenants here see it on Tenant HQ.");
       setForm(null);
       await load();
     } catch (e) {
@@ -16371,11 +16424,11 @@ function BuildingNotices({ property }) {
         <div className="pd-notice-form">
           <label className="fld">Headline
             <input value={form.title} maxLength={NOTICE_TITLE_MAX} onChange={(e) => set("title", e.target.value)}
-              placeholder="Water off Tuesday 9am to 1pm" />
+              placeholder="Recycling moves to Thursdays" />
           </label>
           <label className="fld">Details <span className="fld-note">optional</span>
             <textarea rows={3} value={form.body} maxLength={NOTICE_BODY_MAX} onChange={(e) => set("body", e.target.value)}
-              placeholder="What is happening, when, and anything they need to do." />
+              placeholder="What is happening, when, and anything they need to do — e.g. the bins have moved behind building B, or please bring packages in promptly after two thefts this week." />
           </label>
           <label className="fld">Last day to show it <span className="fld-note">optional — leave it and it stays up until you take it down</span>
             <input type="date" value={form.endsOn} min={dayKey()} onChange={(e) => set("endsOn", e.target.value)} />
@@ -16384,7 +16437,7 @@ function BuildingNotices({ property }) {
             onChange={(e) => set("important", e.target.checked)} /> Important — shown first and highlighted</label>
           <label className="pd-chk"><input type="checkbox" checked={form.email}
             onChange={(e) => set("email", e.target.checked)} /> Also email the tenants of {property.name}</label>
-          <p className="fld-note">It shows on the dashboard of every tenant at {property.name}. It is not texted.</p>
+          <p className="fld-note">It shows on Tenant HQ for every tenant at {property.name}. It is not texted.</p>
           {err && <p className="billing-err" role="alert">{err}</p>}
           <div className="form-actions">
             <button className="btn-ghost" onClick={() => setForm(null)} disabled={busy}>Cancel</button>
@@ -16395,7 +16448,7 @@ function BuildingNotices({ property }) {
         </div>
       )}
       {list === null ? null : list.length === 0 ? (
-        !form && <p className="prop-none">Nothing posted. Tenants here see what you post on their dashboard.</p>
+        !form && <p className="prop-none">Nothing posted. Tenants here see what you post on Tenant HQ.</p>
       ) : (
         <ul className="pd-notice-list">
           {list.map((n) => (
@@ -36057,6 +36110,11 @@ p.fld-note{margin:6px 0 0}
   background:#d99a14;color:#fff;border-radius:6px;padding:2px 7px}
 .tn-notice-body{margin:6px 0 0;font-size:13.5px;line-height:1.5;white-space:pre-wrap}
 .tn-notice-meta{margin:7px 0 0;font-size:12px;color:var(--ink-soft)}
+.tn-notice-empty{margin:0;font-size:13px;line-height:1.5;color:var(--ink-soft);background:var(--card);
+  border:1px dashed var(--line);border-radius:12px;padding:12px 15px}
+.tn-eyebrow{margin:0 0 2px!important;font-size:11.5px!important;font-weight:800;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--brand)!important}
+.tn-wx-town{font-size:11.5px;opacity:.8}
 .tn-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:22px}
 @media (max-width:560px){.tn-actions{grid-template-columns:1fr}}
 .tn-actions .tn-cta{justify-content:flex-start;text-align:left;padding:18px 18px;min-height:96px}

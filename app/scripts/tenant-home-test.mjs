@@ -248,6 +248,22 @@ console.log("\n-- the weather is their building's --");
     calls.some((x) => /name=Olympia/.test(x.url)) && !calls.some((x) => /Harbor|olly/i.test(x.url)));
   [st, b] = await call(env, "u_admin", "acc1", "/weather");
   ck("the manager still gets the portfolio's commonest town", b.place === "Tacoma", String(b.place));
+
+  // A building typed in with a ZIP and no town. The tenant's weather must not
+  // fall back to the account's other buildings -- that is somebody else's
+  // weather -- so the ZIP stands in, and it is this building's.
+  db.exec(`INSERT INTO properties(id,account_id,owner_account_id,name,city,state,zip) VALUES
+      ('p4','acc1','acc1','Zip Only Flats',NULL,NULL,'98501-1234');
+    INSERT INTO memberships(id,user_id,account_id,role,unit) VALUES ('m_t5','u_t3','acc2','tenant','5');
+    UPDATE memberships SET user_id = 'u_t3' WHERE id = 'm_t5';
+    DELETE FROM membership_properties WHERE membership_id = 'm_t3';
+    INSERT INTO membership_properties(membership_id,property_id) VALUES ('m_t3','p4');`);
+  calls.length = 0;
+  [st, b] = await call(env, "u_t3", "acc1", "/weather");
+  ck("a building with only a ZIP still gets its own reading", st === 200 && b.tempF === 61.2, JSON.stringify(b));
+  ck("asked for by that ZIP, not by the account's commonest town",
+    calls.some((x) => /name=98501&countryCode=US/.test(x.url)) && !calls.some((x) => /name=Tacoma/.test(x.url)),
+    calls.map((x) => x.url).join(" | "));
 }
 
 console.log("\n-- a database without 072 --");
