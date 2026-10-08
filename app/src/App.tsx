@@ -36,7 +36,7 @@ import {
   Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
 } from "lucide-react";
-import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE } from "./lib/api";
+import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool } from "./lib/photoshrink.js";
 // The same file the Worker imports, so a problem cannot be an emergency in
 // the browser and ordinary work on the server, or the other way round.
@@ -2221,6 +2221,28 @@ export default function SubSub() {
     }
   };
   const [impersonating, setImpersonating] = useState(null);  // { by, account }
+  // A STAFF SESSION LASTS THIRTY MINUTES AND THE SCREEN NEVER SAID SO. After
+  // that every write is refused with impersonation_expired, and the app went
+  // on looking exactly as it had -- so a contractor's "Propose a time" came
+  // back "Couldn't propose that. Try again in a moment.", which no amount of
+  // trying could satisfy. The banner turns into the reason and the way back,
+  // either when the clock runs out or when the API first says so, whichever
+  // comes first: the clock alone misses a session ended from elsewhere, and the
+  // refusal alone waits for somebody to lose a press to it.
+  const [impAgain, setImpAgain] = useState({ busy: false, err: "" });
+  useEffect(() => {
+    const lapse = () => setImpersonating((cur) => (cur && cur.token ? { ...cur, expired: true } : cur));
+    window.addEventListener(IMPERSONATION_LAPSED, lapse);
+    return () => window.removeEventListener(IMPERSONATION_LAPSED, lapse);
+  }, []);
+  useEffect(() => {
+    if (!impersonating?.expiresAt || impersonating.expired) return undefined;
+    const ms = impEndsAt(impersonating.expiresAt) - Date.now();
+    const lapse = () => setImpersonating((cur) => (cur ? { ...cur, expired: true } : cur));
+    if (!(ms > 0)) { lapse(); return undefined; }
+    const t = setTimeout(lapse, ms);
+    return () => clearTimeout(t);
+  }, [impersonating?.expiresAt, impersonating?.expired]);
 
   // Arrived on a confirmation or reset link. Decided from the fragment the
   // module captured before Supabase could clear it, then confirmed by the
@@ -5380,6 +5402,10 @@ export default function SubSub() {
                 // where the account should have been.
                 setAuth({ userId: r.actAsUserId, accountId: r.accountId, impersonation: r.token });
                 setImpersonating({ by: me.name, account: acct, token: r.token,
+                  // When it runs out, and whose seat to ask for again when it
+                  // does -- so "Sign in again" lands in the same seat rather
+                  // than whichever one the server would pick by default.
+                  expiresAt: r.expiresAt || null, asUserId: r.actAsUserId,
                   // WHICH SEAT, when it is not an admin one. Landing in a pm
                   // seat and finding Account, billing and branding missing
                   // reads as the tool being broken; naming it reads as the
@@ -5452,6 +5478,20 @@ export default function SubSub() {
     );
   }
 
+  // Hand the seat back rather than just walking away from it: the session
+  // would expire on its own, but a revoked one cannot be used by anything that
+  // still has the token. One function, because the lapsed banner offers the
+  // same way out and two copies of four steps is how one of them loses a step.
+  const leaveImpersonation = async () => {
+    if (impersonating?.token && !impersonating.expired) await api.platform.endImpersonation(impersonating.token);
+    clearStoredAuth();
+    // Return to whoever the server said this staff user is. There is no
+    // seeded staff list to fall back to any more.
+    setImpersonating(null); setSuperadminView(true); setLoggedIn(false);
+    setImpAgain({ busy: false, err: "" });
+    if (staff?.userId) setCurrentUserId(staff.userId);
+  };
+
   return (
     <div className="ss-root">
       <style>{CSS}</style>
@@ -5463,10 +5503,37 @@ export default function SubSub() {
           <button onClick={() => window.location.reload()}>Reload</button>
         </div>
       )}
-      {impersonating && (
+      {impersonating?.expired && (
+        <div className="imp-banner imp-lapsed" role="alert">
+          <AlertTriangle size={14} />
+          <span>Your sign-in as <b>{impersonating.account.name}</b> ran out. Staff sessions last 30 minutes,
+            so nothing pressed since then was saved. Sign in again to carry on from here.
+            {impAgain.err && <> <b>{impAgain.err}</b></>}</span>
+          <button disabled={impAgain.busy} onClick={async () => {
+            // The same seat, through the same audited route: a fresh session
+            // is a fresh row in the log, which is the point of there being one.
+            setImpAgain({ busy: true, err: "" });
+            try {
+              const r = await api.platform.impersonate(impersonating.account.id, null, impersonating.asUserId);
+              setAuth({ ...(getAuth() || {}), userId: r.actAsUserId, accountId: r.accountId, impersonation: r.token });
+              setImpersonating((cur) => ({ ...cur, token: r.token, expiresAt: r.expiresAt || null,
+                expired: false, standingIn: !!r.standingIn }));
+              await hydrateAccount(r.accountId, r.actAsUserId);
+              setImpAgain({ busy: false, err: "" });
+            } catch (e) {
+              setImpAgain({ busy: false, err: e?.status === 403
+                ? "You no longer have permission to sign in as this account."
+                : "That didn't work. Go back to the console and open the account again." });
+            }
+          }}>{impAgain.busy ? "Signing in…" : "Sign in again"}</button>
+          <button onClick={leaveImpersonation}>Back to console</button>
+        </div>
+      )}
+      {impersonating && !impersonating.expired && (
         <div className="imp-banner">
           <Shield size={14} />
           <span>Viewing <b>{impersonating.account.name}</b> as superadmin ({impersonating.by}). Actions are recorded.
+            {impersonating.expiresAt && <> Session ends {impEndsText(impersonating.expiresAt)}.</>}
             {/* WHAT IS WRONG WITH THE ACCOUNT, which is a different
                 sentence from what is wrong with this session.
 
@@ -5491,17 +5558,7 @@ export default function SubSub() {
                 so this is that person&rsquo;s view of the account rather than the whole of it.
                 {impersonating.noAdmin && " This account has no admin."}</>
             ) : null}</span>
-          <button onClick={async () => {
-            // Hand the seat back rather than just walking away from it: the
-            // session would expire on its own, but a revoked one cannot be
-            // used by anything that still has the token.
-            if (impersonating.token) await api.platform.endImpersonation(impersonating.token);
-            clearStoredAuth();
-            // Return to whoever the server said this staff user is. There is no
-            // seeded staff list to fall back to any more.
-            setImpersonating(null); setSuperadminView(true); setLoggedIn(false);
-            if (staff?.userId) setCurrentUserId(staff.userId);
-          }}>Back to console</button>
+          <button onClick={leaveImpersonation}>Back to console</button>
         </div>
       )}
       <header className="ss-header">
@@ -14603,6 +14660,42 @@ function TenantVisitOutcome({ visit, brandName, onSay }) {
   );
 }
 
+// The server writes a staff session's end as "YYYY-MM-DD HH:MM:SS" in UTC.
+function impEndsAt(v) {
+  const t = Date.parse(String(v || "").replace(" ", "T") + "Z");
+  return Number.isFinite(t) ? t : NaN;
+}
+function impEndsText(v) {
+  const t = impEndsAt(v);
+  return Number.isFinite(t)
+    ? `at ${new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "soon";
+}
+
+// WHAT A REFUSED PROPOSAL SAYS, BY NAME. Reported as "tried to propose a time
+// but couldn't", over a form reading "Couldn't propose that. Try again in a
+// moment." -- which was the answer to every refusal the route can give except
+// two, and trying again fixes none of them. The commonest of them on a staff
+// sign-in is the session itself running out: it lasts thirty minutes, every
+// write after that is refused with impersonation_expired, and the screen went
+// on looking exactly as it did. So each refusal names its cause and the one
+// thing that works, and an unknown one names its code rather than nothing.
+function proposeErrText(e) {
+  const code = e?.body?.error || "";
+  if (code === "impersonation_expired") {
+    return "Your sign-in as this account ran out (staff sessions last 30 minutes), so this was not saved. Use Sign in again on the banner at the top, then propose it again.";
+  }
+  if (code === "migration_needed") return `The database isn't migrated yet — run ${e.body.migration || "019_visits"}.sql and try again.`;
+  if (code === "not_approved") return "Approve the request first.";
+  if (code === "forbidden") return "You don't hold a live work order on this job any more, so you can't set its time. Reload to see where it stands.";
+  if (code === "job_not_found") return "This job isn't on this account any more. Reload to see where it stands.";
+  if (code === "bad_date") return "Pick a date.";
+  if (code === "bad_time") return "One of the times isn't a valid time. Pick it again from the box.";
+  if (code === "bad_window") return "The window ends before it starts.";
+  if (e?.status === 401) return "You've been signed out, so this was not saved. Sign in again and propose it again.";
+  if (!e?.status) return "Couldn't reach SubSub, so this was not saved. Check your connection and try again.";
+  return `Couldn't propose that (${code || `error ${e.status}`}). Try again, and if it keeps happening tell us that code.`;
+}
+
 // THE FORM THAT PROPOSES A TIME, and it is ONE form for both sides of the
 // appointment.
 //
@@ -14644,9 +14737,7 @@ function VisitForm({ jobId, startDate = "", forWhom, replacing = false, placehol
     try { await onPropose(jobId, f); onDone?.(); }
     catch (e) {
       console.error("[visit] propose failed:", e);
-      setErr(e?.body?.error === "migration_needed" ? `The database isn't migrated yet — run ${e.body.migration || "019_visits"}.sql and try again.`
-        : e?.body?.error === "not_approved" ? "Approve the request first."
-        : "Couldn't propose that. Try again in a moment.");
+      setErr(proposeErrText(e));
     } finally { setBusy(false); }
   };
   return (
@@ -39524,6 +39615,12 @@ iframe.dv-frame{display:block}
 .imp-banner span{flex:1}
 .imp-banner button{background:#1a1207;color:#fff;border:0;border-radius:7px;padding:7px 12px;
   font:700 12.5px Inter,sans-serif;cursor:pointer}
+/* A lapsed staff session is not a note about the account, it is a session that
+   no longer saves anything, so it wears the error red rather than the amber
+   that means "you are standing in somebody's seat". */
+.imp-banner.imp-lapsed{background:#b42318;color:#fff}
+.imp-banner.imp-lapsed button{background:#fff;color:#b42318}
+.imp-banner.imp-lapsed button:disabled{opacity:.6;cursor:default}
 
 /* console — tablet and phone */
 @media (max-width:1000px){

@@ -212,6 +212,9 @@ const JOBS = () => [
 // fires anyway.
 const answers = [];
 const proposals = [];
+// What the propose route answers, when a block wants it to refuse. Null is the
+// ordinary 201.
+let proposeReply = null;
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
@@ -223,6 +226,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
       waitingOn: ["tenant"] }];
   }
   if (/^\/api\/jobs\/[^/]+\/visits$/.test(path) && method === "POST") {
+    if (proposeReply) return proposeReply;
     proposals.push({ jobId: path.split("/")[3], ...body });
     return [201, { id: "v9", jobId: path.split("/")[3], date: body.date,
       startTime: body.startTime, endTime: body.endTime, status: "proposed",
@@ -698,6 +702,55 @@ try {
     t.ck("nor can a window we have already agreed",
       await page.evaluate(() => !document.querySelector(".modal .visit-form")));
 
+
+    // A REFUSED PROPOSAL SAYS WHY. Reported as "tried to propose a time but
+    // couldn't" over "Couldn't propose that. Try again in a moment." -- the
+    // answer to every refusal but two, and trying again fixes none of them. The
+    // one that caught it was a staff sign-in that had run out after thirty
+    // minutes, refused with impersonation_expired and drawn as a blip.
+    const proposeAs = async (reply) => {
+      proposeReply = reply;
+      await page.evaluate(() => document.querySelector(".modal .btn-ghost")?.click());
+      await wait(300);
+      await page.evaluate(() => {
+        const card = [...document.querySelectorAll(".jr-card")]
+          .find((el) => /Hallway light/i.test(el.querySelector("h3")?.innerText || ""));
+        [...(card?.querySelectorAll("button") || [])]
+          .find((b) => /^Propose a time$/.test(b.innerText.trim()))?.click();
+      });
+      await wait(400);
+      const opened = await page.evaluate((d) => {
+        const inp = document.querySelector(".modal .visit-form input[type=date]");
+        if (!inp) return false;
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(inp, d);
+        inp.dispatchEvent(new Event("input", { bubbles: true }));
+        return true;
+      }, LATER);
+      await wait(200);
+      await page.evaluate(() => document.querySelector(".modal .visit-form .btn-solid")?.click());
+      await wait(700);
+      return page.evaluate((o) => ({
+        opened: o,
+        open: !!document.querySelector(".modal .visit-form"),
+        err: (document.querySelector(".modal .visit-form .fld-err")?.innerText || "").trim(),
+      }), opened);
+    };
+    const lapsed = await proposeAs([401, { error: "impersonation_expired" }]);
+    t.ck("the propose form really opened", lapsed.opened === true, JSON.stringify(lapsed));
+    t.ck("a lapsed staff sign-in says so, not 'try again'",
+      /ran out/i.test(lapsed.err) && /30 minutes/.test(lapsed.err) && !/try again in a moment/i.test(lapsed.err),
+      lapsed.err);
+    t.ck("and the form stays open over what was not saved", lapsed.open === true);
+    const noWo = await proposeAs([403, { error: "forbidden" }]);
+    t.ck("losing the work order is named as that", /work order/i.test(noWo.err), noWo.err);
+    const odd = await proposeAs([500, { error: "boom_unknown" }]);
+    // An unknown refusal names its code: "try again" over something nobody
+    // recognised is how the reported one stayed a mystery.
+    t.ck("an unknown refusal names its code", /boom_unknown/.test(odd.err), odd.err);
+    const before = proposals.length;
+    const ok = await proposeAs(null);
+    t.ck("and an accepted one closes the form", ok.open === false && proposals.length === before + 1,
+      JSON.stringify({ ok, n: proposals.length - before }));
   }
 
   await ctx.close();

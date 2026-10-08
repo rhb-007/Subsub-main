@@ -127,6 +127,10 @@ async function authHeaders() {
   return headers;
 }
 
+// The event a lapsed staff session raises, so the banner can say so before
+// somebody presses anything else.
+export const IMPERSONATION_LAPSED = "subsub:impersonation-lapsed";
+
 async function request(path, options = {}, retried = false) {
   const headers = { "Content-Type": "application/json", ...(await authHeaders()), ...(options.headers || {}) };
 
@@ -144,7 +148,18 @@ async function request(path, options = {}, retried = false) {
   // Only request() bodies get replayed, and those are always JSON strings.
   // uploadFile() sends a stream and does not come through here, which is
   // just as well -- a stream cannot be sent twice.
-  if (res.status === 401 && supabaseEnabled && !retried) {
+  // A STAFF SESSION THAT RAN OUT IS NOT A STALE TOKEN. Impersonation lasts
+  // thirty minutes and refreshing the staff member's own Supabase session does
+  // nothing for it, so it is read first and never retried -- and the app is
+  // told, because until now every write after minute thirty failed with a
+  // "try again" that no amount of trying could satisfy.
+  const lapsed = res.status === 401 && !!headers["X-Impersonation-Token"]
+    && (await res.clone().json().catch(() => ({})))?.error === "impersonation_expired";
+  if (lapsed) {
+    try { window.dispatchEvent(new CustomEvent(IMPERSONATION_LAPSED)); } catch { /* no window */ }
+  }
+
+  if (res.status === 401 && supabaseEnabled && !retried && !lapsed) {
     const session = await refreshOnce();
     if (session?.access_token) return request(path, options, true);
   }

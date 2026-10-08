@@ -10889,6 +10889,52 @@ refactor.
   card was noise. The company is still named in the title line and in the link
   at the foot.
 
+- **A STAFF SIGN-IN RUNS OUT AFTER THIRTY MINUTES, AND UNTIL NOW NOTHING ON
+  THE SCREEN SAID SO.** Reported from a contractor seat opened through the
+  console: *"Tried to propose a time but couldn't"*, over a form reading
+  *Couldn't propose that. Try again in a moment.*
+
+  **The route was not at fault, and that was proved rather than assumed.** A
+  contractor proposing on that exact job (a tenant's report, approved, an
+  accepted auto-scheduled work order, a handyman engagement) answers 201
+  through the real Worker. It does so both with the contractor's own headers
+  and through a real `impersonation_sessions` row. What the session cannot
+  survive is its own clock: `POST /api/platform/impersonate` writes
+  `expires_at` thirty minutes out, and after that the middleware answers
+  `impersonation_expired` (401) to every call. The screen kept every list it
+  had already loaded, so it looked exactly as it had, and every press failed
+  with "try again". **Not verified: that this was the cause on the live
+  database**, which this session cannot reach. The fix makes the next refusal
+  name itself either way.
+
+  **The banner turns into the reason and the way back.** It turns either when
+  the clock passes `expiresAt` or when the API first answers
+  `impersonation_expired`, whichever comes first. The clock alone misses a
+  session ended elsewhere; the refusal alone waits for somebody to lose a press
+  to it. `request()` raises `IMPERSONATION_LAPSED` and skips the Supabase
+  refresh-and-retry for it, because refreshing the staff member's own token
+  does nothing for a staff session. *Sign in again* asks for the **same seat**
+  (`asUserId` is kept for that) through the same audited route, so a fresh
+  session is a fresh row in the log. It is red rather than amber, because amber
+  already means "you are standing in somebody's seat". The running banner now
+  says when the session ends. `leaveImpersonation` is one function behind both
+  banners' *Back to console*.
+
+  **And the propose form names every refusal.** `proposeErrText` covers:
+  - the lapsed session;
+  - a work order no longer held;
+  - a job no longer on the account;
+  - the three bad-input codes;
+  - being signed out;
+  - no connection.
+
+  An unknown refusal **names its code**, because "try again" over a code
+  nobody recognised is how this one stayed a mystery. `test:workwhenui` drives
+  the form against each refusal and the 201. Putting the old sentence back
+  fails three assertions. **The banner itself is not driven in a browser**:
+  `resumeSession` refuses an impersonated session by design, so the harness
+  cannot land in one, the same limit `test:staffwriteui` records.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
