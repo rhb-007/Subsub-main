@@ -10883,6 +10883,12 @@ refactor.
   Three server mutations fire: a manager handed to any building, the
   allowlist line removed, and admins ranked first.
 
+  **The card carries no logo and no company line of its own.** The header
+  already shows the company's mark and name, and each person's title names it
+  again (*Manager at Sound Property Management*), so a third copy inside the
+  card was noise. The company is still named in the title line and in the link
+  at the foot.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

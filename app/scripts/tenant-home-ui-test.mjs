@@ -131,6 +131,7 @@ const read = (page) => page.evaluate(() => {
     ai: q(".tn-ai")?.innerText || null,
     contact: q(".tn-contact")?.innerText || null,
     mgr: q(".tn-mgr")?.innerText || null,
+    mgrMark: !!document.querySelector(".tn-mgr img, .tn-mgr .brand-initials, .tn-mgr-co"),
     mgrHrefs: [...document.querySelectorAll(".tn-mgr a")].map((a) => a.getAttribute("href")),
     tabs: [...document.querySelectorAll(".seg-tabs button")].map((b) => b.innerText.trim()),
     tabOn: q(".seg-tabs button.on")?.innerText.trim() || null,
@@ -230,6 +231,9 @@ try {
       JSON.stringify({ c: s.contact, e: s.emergency }));
     t.ck("the property manager card is there, naming the company",
       /Your property manager/i.test(s.mgr || "") && /Sound Property Management/.test(s.mgr || ""), String(s.mgr));
+    // The company is already in the header and in each person's title, so the
+    // card carries no logo and no company line of its own.
+    t.ck("and no second logo or company line on it", s.mgrMark === false, String(s.mgrMark));
     t.ck("and the person who looks after the building, with their title",
       /Riley Park/.test(s.mgr || "") && /Property manager/.test(s.mgr || ""), String(s.mgr));
     t.ck("one tap to call, text or email them",

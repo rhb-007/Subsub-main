@@ -15470,7 +15470,6 @@ function TenantManager({ brand, onOpenAccount }) {
       <div className="tn-card-head">
         <h3><Building2 size={15} /> Your property manager</h3>
       </div>
-      <div className="tn-mgr-co"><BrandMark brand={brand} height={28} /><b>{company}</b></div>
       {people.length ? (
         <div className="tn-mgr-people">
           {people.map((p) => (
@@ -36496,11 +36495,10 @@ p.fld-note{margin:6px 0 0}
 @media (max-width:560px){.tn-details{grid-template-columns:1fr}}
 .tn-details.tn-details-one{grid-template-columns:1fr;margin:0 0 16px}
 .tn-mgr{margin-top:22px}
-.tn-mgr-co{display:flex;align-items:center;gap:10px;min-width:0}
-.tn-mgr-co b{font-size:15px;font-weight:700;overflow-wrap:anywhere}
 .tn-mgr-people{display:flex;flex-direction:column;gap:10px}
 .tn-mgr-person{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--line);
   padding-top:10px}
+.tn-mgr-person:first-child{border-top:0;padding-top:0}
 .tn-mgr-av{width:40px;height:40px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;
   background:var(--paper);border:1px solid var(--line);font-size:13.5px;font-weight:800;color:var(--ink-soft)}
 .tn-mgr-who{display:flex;flex-direction:column;gap:2px;flex:1 1 160px;min-width:0}
