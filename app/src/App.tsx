@@ -14536,9 +14536,9 @@ function TenantReportModal({
 // tenant had actually filled in.
 // The tenant's copy of the Access panel, fetched for their own report and
 // re-read when the window moves so "when" cannot go stale under them.
-function TenantAccess({ job, visit }) {
+function TenantAccess({ job, visit, compact = false }) {
   const [plan, setPlan] = useJobAccess(job.id, `${visit?.id || ""}|${visit?.status || ""}`);
-  return <AccessPanel plan={plan} viewer="tenant" jobId={job.id} onSaved={setPlan} />;
+  return <AccessPanel plan={plan} viewer="tenant" jobId={job.id} onSaved={setPlan} compact={compact} />;
 }
 
 function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRespondVisit, onVisitOutcome, onProposeVisit, onOpen }) {
@@ -14547,13 +14547,21 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
   return (
     <div className={`tn-row ${asks ? "needs-you" : ""} ${stage.key === "withdrawn" ? "is-off" : ""}`}>
       <div className="tn-row-main">
-        <button type="button" className="tn-row-open" onClick={onOpen}>
-          <span className="tn-row-title">{job.title}</span>
-          <span className="tn-row-meta">
-            {meta}
-            {photos.length ? ` · ${photos.length} photo${photos.length === 1 ? "" : "s"}` : ""}
-          </span>
-        </button>
+        {/* THE CHIP SITS ON THE TITLE'S LINE. It was a column of its own on
+            the right of the whole row, so a scheduled report was a narrow
+            stack of panels beside a wide empty strip with one pill floating
+            halfway down it -- most of a page for one report. The row is
+            full width now and the answer to "when" is at the top. */}
+        <div className="tn-row-head">
+          <button type="button" className="tn-row-open" onClick={onOpen}>
+            <span className="tn-row-title">{job.title}</span>
+            <span className="tn-row-meta">
+              {meta}
+              {photos.length ? ` · ${photos.length} photo${photos.length === 1 ? "" : "s"}` : ""}
+            </span>
+          </button>
+          <span className={`tn-chip ${stage.tone}`}>{stage.label}</span>
+        </div>
         {/* 064. ONLY ONCE IT IS THEIRS TO ANSWER. The tenant is last in the
             chain on purpose: asking them to confirm a window the crew has not
             committed to risks asking them twice, and the second ask is the one
@@ -14577,8 +14585,13 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
           <TenantVisitAsk visit={visit} brandName={brandName}
             onRespond={onRespondVisit} onPropose={onProposeVisit} />
         )}
-        {/* 073. WHO LETS WHO IN, said to the person opening the door. */}
-        {!isClosed(job) && assignedTo.length > 0 && <TenantAccess job={job} visit={visit} />}
+        {/* 073. WHO LETS WHO IN, said to the person opening the door -- as
+            ONE LINE on the row, because a dashboard holding three booked
+            repairs cannot spend a screen on each. The other side's first
+            name, Call and Text stay on the line, since those are what
+            somebody waiting in for a crew reaches for; where to meet and the
+            rest open in place, and the popup carries the whole panel. */}
+        {!isClosed(job) && assignedTo.length > 0 && <TenantAccess job={job} visit={visit} compact />}
         {/* Only when somebody was actually sent. "Did somebody come?" is
             not a question a tenant can answer usefully about a job nobody
             was booked for, and a yes to it reads on the manager's side as
@@ -14592,7 +14605,6 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
           </button>
         </div>
       </div>
-      <span className={`tn-chip ${stage.tone}`}>{stage.label}</span>
     </div>
   );
 }
@@ -14872,11 +14884,15 @@ function useJobAccess(jobId, refresh = "") {
 
 const ACCESS_SIDE_WORD = { tenant: "Tenant", manager: "Office", crew: "Crew" };
 
-function AccessPanel({ plan, viewer, jobId, onSaved }) {
+function AccessPanel({ plan, viewer, jobId, onSaved, compact = false }) {
   const [editing, setEditing] = useState(false);
   const [how, setHow] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // Compact: one line until somebody asks for the rest. Opened in place
+  // rather than in a window, because the row it sits on is already the
+  // thing they were looking at.
+  const [open, setOpen] = useState(false);
   if (!plan || !plan.kind) return null;
   const head = accessHeadline(plan, viewer);
   const presets = ACCESS_HOW_PRESETS[plan.kind] || [];
@@ -14895,9 +14911,43 @@ function AccessPanel({ plan, viewer, jobId, onSaved }) {
           : "That didn't save. Try again in a moment.");
     } finally { setBusy(false); }
   };
+  const sideWord = (p) => (p.side === "crew" ? (p.company || "Crew") : ACCESS_SIDE_WORD[p.side]);
+  if (compact && !open) {
+    const canSayWhere = plan.canEditHow && plan.kind !== "none" && !plan.how;
+    return (
+      <section className="acc-strip" aria-label="Access">
+        <p className="acc-strip-head">
+          <Key size={14} />
+          <span>{head}{plan.how && <span className="acc-strip-how"> {plan.how}.</span>}</span>
+        </p>
+        <div className="acc-strip-row">
+          {others.map((p, i) => (
+            <span key={i} className="acc-strip-p">
+              <span className="acc-strip-who"><b>{p.firstName || sideWord(p)}</b>
+                {p.firstName && <span className="acc-role"> · {sideWord(p)}</span>}</span>
+              {p.phone && (
+                <span className="acc-strip-btns">
+                  <a className="acc-ico" href={`tel:${phoneDigits(p.phone)}`} aria-label={`Call ${p.firstName || sideWord(p)}`}
+                    title={formatPhone(p.phone)}><PhoneCall size={16} /></a>
+                  <a className="acc-ico" href={`sms:${phoneDigits(p.phone)}`} aria-label={`Text ${p.firstName || sideWord(p)}`}
+                    title={formatPhone(p.phone)}><MessageSquareText size={16} /></a>
+                </span>
+              )}
+            </span>
+          ))}
+          <button type="button" className="acc-strip-more"
+            onClick={() => { setOpen(true); if (canSayWhere) { setHow(""); setEditing(true); } }}>
+            {canSayWhere ? <><MapPin size={13} /> Say where to meet</> : <>Access details <ChevronRight size={13} /></>}
+          </button>
+        </div>
+      </section>
+    );
+  }
   return (
-    <section className="acc-panel" aria-label="Access">
-      <h4 className="acc-title"><Key size={15} /> Access</h4>
+    <section className={`acc-panel ${compact ? "acc-open" : ""}`} aria-label="Access">
+      <h4 className="acc-title"><Key size={15} /> Access
+        {compact && <button type="button" className="acc-less" onClick={() => { setOpen(false); setEditing(false); setErr(""); }}>Show less</button>}
+      </h4>
       {head && <p className="acc-head">{head}</p>}
       <dl className="acc-facts">
         <div>
@@ -36896,7 +36946,10 @@ p.fld-note{margin:6px 0 0}
   color:#1d5740;border-radius:11px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.45}
 .tn-list{display:flex;flex-direction:column;gap:9px}
 .tn-row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
-  border-radius:12px;padding:14px 15px;box-shadow:var(--shadow)}
+  border-radius:12px;padding:12px 14px;box-shadow:var(--shadow)}
+.tn-row-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.tn-row-head .tn-row-open{flex:1 1 220px;width:auto;min-width:0}
+.tn-row-head .tn-chip{white-space:normal;text-align:right;max-width:100%}
 .tn-row-main{flex:1;min-width:0}
 .tn-row-title{font-size:14.5px;font-weight:700;letter-spacing:-.01em}
 /* The whole line is the way in, so it is a button rather than a div with a
@@ -37768,6 +37821,26 @@ strong.insp-name{background:none;border:0;padding:0}
 .acc-presets{display:flex;flex-wrap:wrap;gap:6px}
 .acc-preset{padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:var(--paper);
   font-size:12.5px;cursor:pointer;color:var(--ink)}
+/* The one-line form on a tenant's report row. Call and Text are icons here,
+   each still a full 40px thumb target, with the number on hover and in the
+   label; the panel they open to has the number written out. */
+.acc-strip{margin:8px 0 0;padding:8px 10px;border-radius:10px;background:var(--paper);
+  font-size:13px;line-height:1.4;color:var(--ink)}
+.acc-strip-head{display:flex;align-items:flex-start;gap:6px;margin:0;font-weight:600}
+.acc-strip-head > svg{flex:none;margin-top:2px;color:var(--ink-soft)}
+.acc-strip-how{font-weight:400;color:var(--ink-soft)}
+.acc-strip-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin-top:6px}
+.acc-strip-p{display:inline-flex;align-items:center;gap:8px;min-width:0}
+.acc-strip-who{min-width:0}
+.acc-strip-btns{display:inline-flex;gap:6px}
+.acc-ico{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;
+  border-radius:10px;border:1.5px solid var(--brand);color:var(--brand);background:#fff;text-decoration:none}
+.acc-strip-more{display:inline-flex;align-items:center;gap:5px;margin-left:auto;min-height:40px;
+  padding:0 4px;border:0;background:none;color:var(--brand);font:inherit;font-size:13px;
+  font-weight:700;cursor:pointer}
+.acc-panel.acc-open{margin:8px 0 0}
+.acc-less{margin-left:auto;border:0;background:none;color:var(--brand);font:inherit;
+  font-size:12.5px;font-weight:700;cursor:pointer;padding:4px 0}
 @media (max-width:520px){
   .acc-people li{flex-direction:column;align-items:stretch}
   .acc-call{justify-content:flex-start}

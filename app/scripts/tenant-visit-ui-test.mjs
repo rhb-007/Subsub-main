@@ -240,21 +240,46 @@ try {
         sms: [...p.querySelectorAll("a[href^='sms:']")].map((a) => a.getAttribute("href")),
       };
     }, scope);
-    const a = await acc(".tn-row");
-    t.ck("the report row carries an Access panel", !!a, String(a));
+    // ON THE ROW IT IS ONE LINE. A dashboard holding several booked repairs
+    // cannot spend a screen on each, so the row carries the sentence, the
+    // other side's first name and one tap each to call or text -- and NOT
+    // the full panel, which is in the popup.
+    const strip = await page.evaluate(() => {
+      const r = document.querySelector(".tn-row");
+      const st = r?.querySelector(".acc-strip");
+      if (!st) return null;
+      return {
+        panelToo: !!r.querySelector(".acc-panel"),
+        text: st.innerText,
+        h: Math.round(st.getBoundingClientRect().height),
+        tel: [...st.querySelectorAll("a[href^='tel:']")].map((a) => a.getAttribute("href")),
+        sms: [...st.querySelectorAll("a[href^='sms:']")].map((a) => a.getAttribute("href")),
+        chipOnTitleLine: (() => {
+          const c = r.querySelector(".tn-chip"), tt = r.querySelector(".tn-row-title");
+          return !!(c && tt && c.closest(".tn-row-head") && Math.abs(c.getBoundingClientRect().top - tt.getBoundingClientRect().top) < 24);
+        })(),
+      };
+    });
+    t.ck("the report row carries a one-line access strip", !!strip, String(strip));
+    t.ck("and not the full panel", strip && !strip.panelToo);
     t.ck("which says who lets who in, from the tenant's side",
-      /You let Pacific apartment maintenance in\./.test(a?.text || ""), a?.text);
-    t.ck("names the crew by first name, with their mobile",
-      /Juan/.test(a?.text || "") && /\(206\)555-0122/.test(a?.text || ""), a?.text);
+      /You let Pacific apartment maintenance in\./.test(strip?.text || ""), strip?.text);
+    t.ck("names the crew by first name", /Juan/.test(strip?.text || ""), strip?.text);
     t.ck("one tap to call them and one to text",
-      JSON.stringify(a?.tel) === JSON.stringify(["tel:2065550122"])
-      && JSON.stringify(a?.sms) === JSON.stringify(["sms:2065550122"]), JSON.stringify(a));
-    t.ck("and shows the tenant their own number as the one the crew has",
-      /\(206\)555-0111/.test(a?.text || "") && /You/.test(a?.text || ""), a?.text);
-    t.ck("with no call button on their own number", !(a?.tel || []).includes("tel:2065550111"));
+      JSON.stringify(strip?.tel) === JSON.stringify(["tel:2065550122"])
+      && JSON.stringify(strip?.sms) === JSON.stringify(["sms:2065550122"]), JSON.stringify(strip));
+    t.ck("with no call button on their own number", !(strip?.tel || []).includes("tel:2065550111"));
+    t.ck("and stays short", strip && strip.h <= 110, String(strip?.h));
+    t.ck("the status chip sits on the title's line", strip?.chipOnTitleLine === true);
 
-    await page.evaluate(() => [...document.querySelectorAll(".tn-row .acc-change")][0]?.click());
+    // Saying where to meet opens the panel in place, straight into the form.
+    await page.evaluate(() => [...document.querySelectorAll(".tn-row .acc-strip-more")][0]?.click());
     await wait(300);
+    const a = await acc(".tn-row");
+    t.ck("asking to say where opens the whole panel in place", !!a, String(a));
+    t.ck("which shows the tenant their own number as the one the crew has",
+      /\(206\)555-0111/.test(a?.text || "") && /You/.test(a?.text || ""), a?.text);
+    t.ck("and the crew's mobile written out", /\(206\)555-0122/.test(a?.text || ""), a?.text);
     await page.evaluate(() => [...document.querySelectorAll(".tn-row .acc-preset")]
       .find((b) => /garage/.test(b.innerText))?.click());
     await wait(200);
@@ -265,6 +290,11 @@ try {
       && hows[0].how === "The tenant will open the garage door", JSON.stringify(hows));
     const after = await acc(".tn-row");
     t.ck("and the panel then says it", /The tenant will open the garage door/.test(after?.text || ""), after?.text);
+    await page.evaluate(() => document.querySelector(".tn-row .acc-less")?.click());
+    await wait(300);
+    const back = await page.evaluate(() => document.querySelector(".tn-row .acc-strip")?.innerText || null);
+    t.ck("Show less folds it back to one line, carrying the door",
+      /garage door/.test(back || ""), String(back));
 
     await page.evaluate(() => document.querySelector(".tn-row .tn-row-open")?.click());
     await wait(600);

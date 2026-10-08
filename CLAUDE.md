@@ -11091,6 +11091,29 @@ refactor.
   general contractor in one suite. Four mutations fire: the kind gate dropped,
   the download block dropped, the failure line dropped and the ring dropped.
 
+- **A BOOKED REPAIR ON TENANT HQ IS A HEADER AND ONE LINE, NOT A SCREEN.**
+  Reported with one scheduled report filling most of an iPad: *"it's taking up
+  way too much of the page… we need this optimized for multiple issues"*. The
+  row drew the title, then the whole Access panel (headline, Where, When, the
+  tenant's own number, the crew's number with two large buttons, *Say where to
+  meet*), with the status chip in a column of its own on the right, floating
+  halfway down a wide empty strip.
+
+  **The chip sits on the title's line now**, so the row is full width and the
+  answer to *when* is at the top. **The Access panel is one line on the row**
+  (`AccessPanel compact`): who lets whom in, the place to meet once said, and
+  the other side's first name with Call and Text as 40px icons. *Say where to
+  meet* or *Access details* opens the whole panel **in place**, and *Show
+  less* folds it back. The tenant's own number and the When line are not on
+  the strip: the first is theirs, and the chip already says the second. The
+  popup still carries the full panel.
+
+  `test:tenantvisitui` was rewritten to the new rule rather than loosened: the
+  row carries the strip and not the panel, the strip stays under 110px, and the
+  chip is measured on the title's line. Three mutations fire: the row back on
+  the full panel, the chip back in its own column, and *Show less* doing
+  nothing.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
