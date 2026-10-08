@@ -3068,9 +3068,15 @@ export default function SubSub() {
 
   // Agreeing to work a building owner asked for. Until this happens nothing
   // can be assigned against it, which the server enforces too.
-  const approveJob = (id) => {
+  //
+  // Awaited, THEN patched. It used to patch first and hand the request to
+  // `persist`, which only logs -- so a refused approve took the row off the
+  // dashboard, the server kept it waiting, and it came back on the next
+  // reload reading as an approve that had not stuck. Same rule as
+  // completeJob and declineJob beside it. The caller shows the reason.
+  const approveJob = async (id) => {
     const jb = allJobs.find((j) => j.id === id);
-    persist("approveJob", api.approveJob(id));
+    await api.approveJob(id);
     setJobs((js) => js.map((j) => (j.id === id
       ? { ...j, approvedAt: new Date().toISOString() } : j)));
     if (jb) logEvent("job_approved", `Approved requested work: ${jb.title}`);
@@ -22075,6 +22081,17 @@ function DeclineBox({ who, onCancel, onDecline }) {
 // Approve and Decline live in here too, because the moment you have read it
 // is the moment you know, and going back to the row to act would be a step
 // for nothing.
+// What a refused approve says. Named rather than "try again", because the
+// commonest refusals are not fixed by trying again.
+function approveErrText(e) {
+  const code = e?.body?.error;
+  if (code === "job_not_found") return "This request isn't on this account any more. Reload to see where it went.";
+  if (code === "withdrawn") return "They took this request back, so there is nothing to approve.";
+  if (code === "not_a_request") return "This is already a job, not a request.";
+  if (code === "forbidden") return "Your seat can't approve requests. Ask an admin or a project manager.";
+  return `That didn't go through${code ? ` (${code})` : ""}. Try again in a moment.`;
+}
+
 function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], subs = [], onApprove, onDecline, onClose, readOnly = false }) {
   const d = job.reportDetail || null;
   const [busy, setBusy] = useState(false);
@@ -22092,7 +22109,7 @@ function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], su
     try { await onApprove(job.id); onClose(); }
     catch (e) {
       console.error("[request] approve failed:", e);
-      setErr("That didn't go through. Try again in a moment.");
+      setErr(approveErrText(e));
       setBusy(false);
     }
   };
@@ -22921,7 +22938,23 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   const props = properties || [];
   // A request nobody has agreed to yet. The owner watches for it to clear;
   // the account has to do something about it.
-  const awaitingApproval = jobs.filter((j) => j.requestedBy && !j.approvedAt && !j.withdrawnAt && !j.declinedAt);
+  // Never a read-only row: work at a building this account owns but somebody
+  // else runs, a report under a previous manager, or a repair inherited in a
+  // handover sits on ANOTHER account, so Approve here can only ever be
+  // refused -- and the row would stay waiting for ever.
+  const awaitingApproval = jobs.filter((j) => j.requestedBy && !j.approvedAt && !j.withdrawnAt && !j.declinedAt
+    && !j.readOnly);
+  // Which row's Approve is in flight, and what a refused one said.
+  const [approving, setApproving] = useState(null);
+  const [approveErr, setApproveErr] = useState({});
+  const approveRow = async (id) => {
+    setApproving(id); setApproveErr((m) => ({ ...m, [id]: "" }));
+    try { await onApproveJob(id); }
+    catch (e) {
+      console.error("[dashboard] approve failed:", e);
+      setApproveErr((m) => ({ ...m, [id]: approveErrText(e) }));
+    } finally { setApproving(null); }
+  };
   // Emergencies, above everything. An urgent one that has already been
   // dispatched stays here until somebody has marked it done: "a contractor
   // is on the way" is exactly the thing a manager wants in front of them,
@@ -22995,10 +23028,11 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
                 <div className="dash-row-btns">
                   <button className="btn-ghost sm" onClick={() => setDeclining(j.id)}>
                     <X size={13} /> Decline</button>
-                  <button className="btn-solid dash-row-btn" onClick={() => onApproveJob(j.id)}>
-                    <Check size={14} /> Approve</button>
+                  <button className="btn-solid dash-row-btn" disabled={approving === j.id} onClick={() => approveRow(j.id)}>
+                    <Check size={14} /> {approving === j.id ? "Approving…" : "Approve"}</button>
                 </div>
               )}
+              {approveErr[j.id] && <p className="fld-note err dash-row-err" role="alert">{approveErr[j.id]}</p>}
               {!isOwner && declining === j.id && (
                 <DeclineBox who={who} onCancel={() => setDeclining(null)}
                   onDecline={async (note) => { await onDeclineJob(j.id, note); setDeclining(null); }} />
@@ -38350,6 +38384,7 @@ iframe.dv-frame{display:block}
 .decline-box .fld{margin-bottom:8px}
 .decline-box .form-actions{margin-top:4px}
 @media(max-width:640px){.dash-row-btns{width:100%}.dash-row-btns button{flex:1}}
+.dash-row-err{flex-basis:100%;width:100%;margin:6px 0 0}
 .tn-row.is-off{opacity:.72}
 .tn-row-actions{display:flex;gap:14px;margin-top:8px}
 .tn-link{display:inline-flex;align-items:center;gap:5px;background:none;border:0;padding:0;

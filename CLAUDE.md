@@ -10665,6 +10665,34 @@ refactor.
   (which reproduces the report, a 403), the self-only read removed, and the
   avatar kind left unchecked.
 
+- **APPROVING A WORK REQUEST IS AWAITED, AND A REFUSED ONE SAYS SO.**
+  Reported from a property manager's dashboard: *"I already approved this job
+  and it's still there."* `approveJob` patched the row off the screen first and
+  handed the request to `persist`, which only logs. So a refusal from the
+  server took the row away, kept the request waiting, and put it back on the
+  next reload, where it read as an approve that had not stuck. The request
+  modal's own catch could never fire either, because the function it awaited
+  returned before the request did. This is the save-that-reports-success shape
+  this file already records about `updateSub` and `completeJob`, on the press
+  that turns a tenant's report into work.
+
+  It awaits and THEN patches. The row stays put with the reason beside it
+  (`approveErrText`), which names the refusal rather than saying *try again*,
+  because the commonest refusals are not fixed by trying again.
+
+  **And a read-only row is never offered for approval.** Work at a building this
+  account owns and somebody else runs, a report under a previous manager, and a
+  repair inherited in a handover all sit on ANOTHER account, where Approve can
+  only ever answer `job_not_found`. They carried `requestedBy` and no
+  `approvedAt`, so they passed the panel's filter and would have waited for
+  ever. **Not verified: whether that was the reported row.** The fix makes the
+  next refusal name its reason either way.
+
+  `test:approveref` drives the dashboard: a refused approve keeps the row and
+  names why, an accepted one clears it, and the other account's request is
+  absent. Three mutations fire: the optimistic patch restored, the read-only
+  filter dropped, and the reason line removed.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
