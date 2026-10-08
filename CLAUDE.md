@@ -10693,6 +10693,40 @@ refactor.
   absent. Three mutations fire: the optimistic patch restored, the read-only
   filter dropped, and the reason line removed.
 
+- **RUSTON, WA WAS SHOWN RUSTON, LOUISIANA'S WEATHER, BECAUSE THE GEOCODER
+  TAKES NO STATE FILTER.** Reported from a tenant's Tenant HQ: *"the weather is
+  wrong at the building location of Ruston, WA."* The route asked Open-Meteo's
+  geocoder for `count=1` by name and passed the state as `admin1`. That API does
+  not filter on `admin1`, so the parameter was silently ignored and the top hit
+  (the most populous Ruston) won. Every town sharing a name with a bigger one
+  elsewhere was wrong the same way, and nothing could show it: a temperature
+  from the wrong state still looks like a temperature.
+
+  `shared/geopick.js` decides now. The route asks for twenty US matches.
+  `pickPlace` keeps only those in the building's own state, then prefers the
+  one whose postcodes include the building's ZIP, then an exact name, then the
+  bigger place. **No match in the right state is no weather**, never another
+  state's, because a wrong reading is read and believed. If the town gives
+  nothing in the right state, the building's ZIP is looked up instead. The
+  scoped branch of `accountPlace` now carries the ZIP alongside the city for
+  exactly that, and the cache key includes it.
+
+  **The stubs were what let it pass.** Both weather suites answered one place
+  for any name, so a route taking the first hit and one choosing the right
+  state could not be told apart. The stub now answers the way the real
+  geocoder does, with a same-named, more populous Louisiana town FIRST that has
+  its own weather (91°F), so choosing it shows up in the reading. The state no
+  longer leaves in the URL, and the assertion that pinned `admin1=WA` going out
+  pinned a parameter that never did anything. **A test can pin a no-op as
+  firmly as a behaviour.**
+
+  Four mutations fire: the state filter dropped, the ZIP preference dropped,
+  the route back to the first hit (which reproduces the report), and the ZIP
+  fallback removed. **Not verified here:** the live geocoder, which this
+  container cannot reach. The response shape (`admin1`, `postcodes`,
+  `country_code`, `population`) is Open-Meteo's documented one, and the first
+  look at a Ruston tenant's screen is the real test.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

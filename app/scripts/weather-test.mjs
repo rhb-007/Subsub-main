@@ -75,17 +75,33 @@ const seed = () => {
 // Every outbound call is recorded rather than made. Open-Meteo is two hops --
 // geocode the town, then read the current conditions at the coordinates -- and
 // what is asserted is not only the answer but WHAT LEFT: a town and a state.
+// A geocoder that answers like the real one: SEVERAL places per name, the
+// biggest first, and a same-named town in another state at the top. That is
+// the Ruston, WA case -- Ruston, Louisiana outranks it -- and a stub that
+// answered one place could never tell a route that picks the right state
+// from one that takes the first hit. The Louisiana one has its own weather,
+// so choosing it shows up in the reading.
+const geoReply = (url) => {
+  const name = decodeURIComponent((/[?&]name=([^&]*)/.exec(url) || [])[1] || "");
+  const zipName = /^\d{5}$/.test(name);
+  return { results: [
+    ...(zipName ? [] : [{ name, admin1: "Louisiana", country_code: "US", latitude: 32.5, longitude: -92.6,
+      population: 22000, postcodes: ["71270"] }]),
+    { name: zipName ? "Somewhere" : name, admin1: "Washington", country_code: "US", latitude: 47.2, longitude: -122.4,
+      population: 900, postcodes: ["98407", "98501"] },
+  ] };
+};
+const wrongState = (url) => /latitude=32\.5/.test(url);
 const calls = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (input) => {
   const url = String(input?.url || input);
   calls.push(url);
   if (url.includes("geocoding-api.open-meteo.com")) {
-    return new Response(JSON.stringify({ results: [{ latitude: 47.2, longitude: -122.4 }] }),
-      { headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify(geoReply(url)), { headers: { "Content-Type": "application/json" } });
   }
   if (url.includes("api.open-meteo.com/v1/forecast")) {
-    return new Response(JSON.stringify({ current: { temperature_2m: 54.4, weather_code: 61 } }),
+    return new Response(JSON.stringify({ current: { temperature_2m: wrongState(url) ? 91.0 : 54.4, weather_code: 61 } }),
       { headers: { "Content-Type": "application/json" } });
   }
   return new Response("{}", { headers: { "Content-Type": "application/json" } });
@@ -199,7 +215,9 @@ try {
     const r = await ask(env, "u_pm", "acc_pm");
     const all = r.sent.join(" ");
     ck("the call was actually made, not served from cache", r.sent.length === 2, String(r.sent.length));
-    ck("a town and a state go out", /name=Spokane/.test(all) && /admin1=WA/.test(all), all);
+    // The STATE does not go out: the geocoder takes no state filter, so the
+    // route chooses among its answers instead (shared/geopick.js).
+    ck("a town goes out, asked within the US", /name=Spokane/.test(all) && /countryCode=US/.test(all), all);
     ck("no street address", !/Pine/.test(all) && !/412/.test(all), all);
     ck("no building name", !/Rainier/.test(all), all);
     ck("no account or person", !/acc_pm/.test(all) && !/sound\.test/.test(all), all);

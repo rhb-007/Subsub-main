@@ -80,6 +80,26 @@ const seed = () => {
   return db;
 };
 
+// A geocoder that answers like the real one: SEVERAL places per name, the
+// biggest first, and a same-named town in another state at the top. That is
+// the Ruston, WA case -- Ruston, Louisiana outranks it -- and a stub that
+// answered one place could never tell a route that picks the right state
+// from one that takes the first hit. The Louisiana one has its own weather,
+// so choosing it shows up in the reading.
+const geoReply = (url) => {
+  const name = decodeURIComponent((/[?&]name=([^&]*)/.exec(url) || [])[1] || "");
+  const zipName = /^\d{5}$/.test(name);
+  // A town the geocoder only knows in ANOTHER state: the ZIP has to rescue it.
+  if (name === "Nowhereville") return { results: [{ name, admin1: "Louisiana", country_code: "US",
+    latitude: 32.5, longitude: -92.6, population: 500, postcodes: ["71000"] }] };
+  return { results: [
+    ...(zipName ? [] : [{ name, admin1: "Louisiana", country_code: "US", latitude: 32.5, longitude: -92.6,
+      population: 22000, postcodes: ["71270"] }]),
+    { name: zipName ? "Somewhere" : name, admin1: "Washington", country_code: "US", latitude: 47.2, longitude: -122.4,
+      population: 900, postcodes: ["98407", "98501"] },
+  ] };
+};
+const wrongState = (url) => /latitude=32\.5/.test(url);
 // Every outbound call is recorded. Resend and Open-Meteo are the two hosts.
 const calls = [];
 globalThis.fetch = async (input, init = {}) => {
@@ -87,9 +107,9 @@ globalThis.fetch = async (input, init = {}) => {
   calls.push({ url, body: init.body ? String(init.body) : "" });
   const j = (o) => new Response(JSON.stringify(o), { headers: { "Content-Type": "application/json" } });
   if (url.includes("resend.test")) return j({ id: "em_" + calls.length });
-  if (url.includes("geocoding-api.open-meteo.com")) return j({ results: [{ latitude: 47, longitude: -122.9 }] });
+  if (url.includes("geocoding-api.open-meteo.com")) return j(geoReply(url));
   if (url.includes("api.open-meteo.com/v1/forecast")) {
-    return j({ current: { temperature_2m: 61.2, weather_code: 2 },
+    return j({ current: { temperature_2m: wrongState(url) ? 91.0 : 61.2, weather_code: 2 },
       daily: { temperature_2m_max: [66.4], temperature_2m_min: [48.1] } });
   }
   return j({});
@@ -262,8 +282,20 @@ console.log("\n-- the weather is their building's --");
   [st, b] = await call(env, "u_t3", "acc1", "/weather");
   ck("a building with only a ZIP still gets its own reading", st === 200 && b.tempF === 61.2, JSON.stringify(b));
   ck("asked for by that ZIP, not by the account's commonest town",
-    calls.some((x) => /name=98501&countryCode=US/.test(x.url)) && !calls.some((x) => /name=Tacoma/.test(x.url)),
+    calls.some((x) => /countryCode=US&name=98501/.test(x.url)) && !calls.some((x) => /name=Tacoma/.test(x.url)),
     calls.map((x) => x.url).join(" | "));
+}
+
+console.log("\n-- a town the geocoder only knows in another state --");
+{
+  const db = seed(); const env = envOf(db);
+  db.exec(`UPDATE properties SET city = 'Nowhereville', state = 'WA', zip = '98407' WHERE id IN
+    (SELECT property_id FROM membership_properties WHERE membership_id = 'm_t2');`);
+  calls.length = 0;
+  const [st, b] = await call(env, "u_t2", "acc1", "/weather");
+  ck("is not given that other state's weather", b.tempF !== 91, JSON.stringify(b));
+  ck("the building's ZIP is asked instead, and answers", st === 200 && b.tempF === 61.2
+    && calls.some((x) => /name=98407/.test(x.url)), JSON.stringify(b) + " " + calls.map((x) => x.url).join(" | "));
 }
 
 console.log("\n-- a database without 072 --");

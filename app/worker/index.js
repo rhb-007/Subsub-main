@@ -35,6 +35,7 @@ import { INSPECT_PRESETS, isInspectSource, readInspection,
 // something else -- an old build, a script, a typo that got through --
 // cannot put it in the database.
 import { normalizeState, stateName } from "../shared/states.js";
+import { pickPlace } from "../shared/geopick.js";
 // Money, and whether a chain of waivers is clear. Shared with the browser
 // so a figure on screen and a figure written here cannot disagree.
 import { releaseAmounts, milestonesCover } from "../shared/money.js";
@@ -3467,7 +3468,7 @@ async function accountPlace(env, accountId, propertyIds = null) {
     if (!propertyIds.length) return null;
     try {
       const row = await env.DB.prepare(
-        `SELECT city, state, COUNT(*) AS n
+        `SELECT city, state, COUNT(*) AS n, MIN(NULLIF(TRIM(zip), '')) AS zip
            FROM properties
           WHERE id IN (${propertyIds.map(() => "?").join(",")})
             AND city IS NOT NULL AND TRIM(city) <> ''
@@ -3476,7 +3477,9 @@ async function accountPlace(env, accountId, propertyIds = null) {
           LIMIT 1`
       ).bind(...propertyIds).first();
       const city = String(row?.city || "").trim();
-      if (city) return { city, state: String(row.state || "").trim() };
+      // The ZIP rides along: it is what tells Ruston, WA from Ruston, LA when
+      // the geocoder's list holds both.
+      if (city) return { city, state: String(row.state || "").trim(), zip: String(row.zip || "").trim().slice(0, 5) };
       // A building typed in with a street and a ZIP and no town is common,
       // and a tenant's weather is the one place that cannot fall back to the
       // account's other buildings -- that would be somebody else's weather.
@@ -3539,17 +3542,21 @@ app.get("/api/weather", async (c) => {
     if (!where) return c.json({});
     const { city, state, zip = "" } = where;
 
-    const key = city ? `${city.toLowerCase()}|${state.toLowerCase()}` : `zip|${zip}`;
+    const key = city ? `${city.toLowerCase()}|${state.toLowerCase()}|${zip}` : `zip|${zip}`;
     const hit = weatherCache.get(key);
     if (hit && Date.now() - hit.at < WEATHER_TTL_MIN * 60_000) return c.json(hit.value);
 
-    const geo = await fetch(
-      `https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json`
-      + (city
-        ? `&name=${encodeURIComponent(city)}` + (state ? `&admin1=${encodeURIComponent(state)}` : "")
-        : `&name=${encodeURIComponent(zip)}&countryCode=US`)
+    // The geocoder takes no state filter -- an `admin1` parameter is silently
+    // ignored, which is how Ruston, WA got Ruston, LOUISIANA's weather. So
+    // ask for several US matches and choose among them (shared/geopick.js),
+    // then try the ZIP itself if the town gave nothing in the right state.
+    const geocode = (name) => fetch(
+      `https://geocoding-api.open-meteo.com/v1/search?count=20&language=en&format=json&countryCode=US`
+      + `&name=${encodeURIComponent(name)}`
     ).then((r) => r.json()).catch(() => null);
-    const place = geo?.results?.[0];
+    let place = null;
+    if (city) place = pickPlace((await geocode(city))?.results, { city, state, zip });
+    if (!place && /^\d{5}$/.test(zip)) place = pickPlace((await geocode(zip))?.results, { state, zip });
     if (!place) { weatherCache.set(key, { at: Date.now(), value: {} }); return c.json({}); }
 
     const wx = await fetch(
