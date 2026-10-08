@@ -15206,19 +15206,16 @@ function TenantWeather({ weather, building = null }) {
 // What the building's manager has told everybody who lives there. Important
 // ones first and tinted, and the section is drawn even when there is nothing
 // in it -- see the empty state below for why.
-function TenantNotices({ notices, brandName, buildingName }) {
+function TenantNotices({ notices }) {
   return (
     <section className="tn-notices" aria-label="Building notices">
       <h3 className="tn-sec-h"><Megaphone size={15} /> Notices from your building</h3>
-      {/* ALWAYS DRAWN, with an empty state that says what lands here. A
-          section that only appears once something is posted is a section a
-          tenant has never seen on the day it matters, and does not know to
-          look for. */}
+      {/* ALWAYS DRAWN, so a tenant knows where to look the day something is
+          posted. Empty is one icon and two words, asked for in those terms:
+          a paragraph about what might arrive was noise on a screen somebody
+          glances at and moves on from. */}
       {notices.length === 0 && (
-        <p className="tn-notice-empty">
-          Nothing posted right now. When {brandName} has news about {buildingName || "your building"} —
-          a change to bin or recycling days, a package or mail-room warning, water or power work — it shows up here.
-        </p>
+        <p className="tn-notice-empty"><MessageSquareText size={16} aria-hidden="true" /> No messages</p>
       )}
       {notices.map((n) => (
         <article key={n.id} className={`tn-notice ${n.important ? "important" : ""}`}>
@@ -15625,7 +15622,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         </div>
       )}
 
-      <TenantNotices notices={liveNotices} brandName={brand.name} buildingName={building?.name} />
+      <TenantNotices notices={liveNotices} />
 
       {/* The two ways to tell the building something is wrong: the one that
           works now, made the biggest thing on the page, and the one coming. */}
@@ -36331,8 +36328,8 @@ p.fld-note{margin:6px 0 0}
   background:#d99a14;color:#fff;border-radius:6px;padding:2px 7px}
 .tn-notice-body{margin:6px 0 0;font-size:13.5px;line-height:1.5;white-space:pre-wrap}
 .tn-notice-meta{margin:7px 0 0;font-size:12px;color:var(--ink-soft)}
-.tn-notice-empty{margin:0;font-size:13px;line-height:1.5;color:var(--ink-soft);background:var(--card);
-  border:1px dashed var(--line);border-radius:12px;padding:12px 15px}
+.tn-notice-empty{margin:0;display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;
+  color:var(--ink-soft)}
 .tn-eyebrow{margin:0 0 2px!important;font-size:11.5px!important;font-weight:800;text-transform:uppercase;
   letter-spacing:.08em;color:var(--brand)!important}
 .tn-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:22px}

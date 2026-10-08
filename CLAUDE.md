@@ -10613,9 +10613,12 @@ refactor.
 
   **The notices section is always drawn.** It used to appear only once
   something was posted, so a tenant had never seen it on the day the bins
-  moved and did not know to look. The empty state names what lands there (bin
-  and recycling days, package and mail-room warnings, water or power work), in
-  the building's own name.
+  moved and did not know to look. **Empty, it is an icon and "No messages",
+  and nothing more.** The first version carried a paragraph naming what might
+  arrive (bin days, packages, water work), and it was asked off in so many
+  words: *"should just be an icon with showing no messages ... not a long
+  paragraph"*. A screen somebody glances at and moves on from does not need
+  an essay about what it would say if it had something to say.
 
   **One name for one screen.** The nav entry and an eyebrow over the greeting
   both say *Tenant HQ*, and the manager's notice panel says its notices show

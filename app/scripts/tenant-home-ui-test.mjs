@@ -238,9 +238,10 @@ try {
     // is one they do not know to look at the day the bins move.
     t.ck("no notices still draws the notices section", s.notices.length === 0
       && /Notices from your building/i.test(s.noticesHead || ""), String(s.noticesHead));
-    t.ck("saying nothing is posted, and what would land there",
-      /Nothing posted right now/.test(s.noticesEmpty || "") && /recycling/.test(s.noticesEmpty || "")
-      && /Cedar Flats/.test(s.noticesEmpty || ""), String(s.noticesEmpty));
+    // Asked for as an icon and "no messages", not a paragraph: two words,
+    // and the long explanation is gone.
+    t.ck("saying just No messages, with an icon", (s.noticesEmpty || "").trim() === "No messages"
+      && (await page.evaluate(() => !!document.querySelector(".tn-notice-empty svg"))), String(s.noticesEmpty));
     t.ck("and the report button is still there", /Report a problem/.test(s.cta || ""));
     await ctx.close();
   }
