@@ -29095,7 +29095,23 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
   // own target date -- so a job somebody had proposed Saturday 11am for drew
   // "No date" on the screen where this company is asked to accept it. The
   // appointment lives in `visits` and nothing here had ever heard of it.
-  const when = workWhen(job);
+  //
+  // AND IF THE CROSS-ACCOUNT LIST DID NOT CARRY IT, ASK THE JOB. Reported from
+  // this card on a job the tenant's own screen read as Scheduled Oct 9 9:45:
+  // "Target date", "No time set yet" and the bare one-line door sentence --
+  // which is exactly what the card draws when the row reaches it without the
+  // /api/my-work half, because the visit and the access plan come from there
+  // alone. So a job that is ours, at this account, with no plan on it reads
+  // the same route the work order and the tenant read. Never for an offer
+  // (the route refuses a crew that has not said yes, on purpose) and never
+  // for a row at another client, which this seat cannot read.
+  const askJob = !away && (a.status === "accepted" || !!a.auto) && !job.accessPlan;
+  const [fbPlan] = useJobAccess(askJob ? job.id : null);
+  const plan = job.accessPlan || (fbPlan?.kind ? fbPlan : null);
+  const fbVisit = !job.visit && fbPlan?.when?.date
+    ? { date: fbPlan.when.date, startTime: fbPlan.when.startTime || null,
+        endTime: fbPlan.when.endTime || null, status: fbPlan.when.status } : null;
+  const when = workWhen(fbVisit ? { ...job, visit: fbVisit } : job);
   const W = WHEN_KINDS[when.kind] || WHEN_KINDS.none;
   // IS THERE A TIME WAITING ON US.
   //
@@ -29265,8 +29281,8 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           know are different sentences. */}
       {/* 073. And once the job is theirs, HOW: who is meeting them, where,
           when, and that person's first name and mobile. */}
-      {job.accessPlan
-        ? <AccessPanel plan={job.accessPlan} viewer="crew" jobId={job.id} />
+      {plan
+        ? <AccessPanel plan={plan} viewer="crew" jobId={job.id} />
         : ACCESS_KINDS[job.access] && (
           <p className="jr-access"><Key size={12} /> {ACCESS_KINDS[job.access].forContractor}</p>
         )}
@@ -30409,6 +30425,17 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
     setAccRing((n) => n + 1);
   };
   const accHead = accPlan?.kind ? accessHeadline(accPlan, accessViewer) : null;
+  // THE AGREED TIME, beside the job's own date rather than instead of it.
+  // "Start" is the date somebody typed when the job was raised; the visit is
+  // the appointment, and a work order that printed only the first sent a crew
+  // to read the job card for the second. Off the access read when there is
+  // one -- the same row the tenant's screen reads -- otherwise the visit the
+  // card already holds.
+  const woVisit = accPlan?.when?.date ? accPlan.when
+    : job.visit?.date && ["proposed", "confirmed"].includes(job.visit.status) ? job.visit : null;
+  const woVisitText = woVisit
+    ? visitWhen(woVisit) + (woVisit.status === "confirmed" ? " (confirmed)" : " (proposed, not confirmed yet)")
+    : null;
   const coList = (cos || []).filter((c) => c.status === "accepted").sort((x, y) => x.seq - y.seq);
   const coPending = (cos || []).filter((c) => c.status === "pending").length;
   const revised = Number(moneyRaw(a.value) || 0) + coList.reduce((n, c) => n + c.valueDelta, 0);
@@ -30428,6 +30455,7 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
       job.sqft ? `Square footage: ${Number(job.sqft).toLocaleString()} sq ft` : "",
       job.stories ? `Stories: ${job.stories}` : "",
       `Start: ${formatWhen(job.date, job.time) || job.date || "TBD"}`,
+      woVisitText ? `Visit: ${woVisitText}` : "",
       "",
       `Materials source: ${job.materialSource || "—"}`,
       `Materials paid by: ${job.materialsPaidBy || "—"}`,
@@ -30515,6 +30543,11 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
         {job.sqft && <div className="wd-row"><span>Square footage</span><strong>{Number(job.sqft).toLocaleString()} sq ft</strong></div>}
         {job.stories && <div className="wd-row"><span>Stories</span><strong>{job.stories}</strong></div>}
         <div className="wd-row"><span>Start</span><strong>{formatWhen(job.date, job.time) || "TBD"}</strong></div>
+        {(woVisitText || accessViewer) && (
+          <div className="wd-row wd-visit"><span>Visit</span>
+            <strong>{woVisitText || (accPlan || accFailed ? "No time agreed yet" : "Loading…")}</strong>
+          </div>
+        )}
         {accessViewer && (
           <div className="wd-row"><span>Access</span>
             <strong>{accHead || (accFailed ? "See below" : "Loading…")}

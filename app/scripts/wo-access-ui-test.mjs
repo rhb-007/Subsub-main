@@ -131,6 +131,7 @@ const read = (page) => page.evaluate(() => {
     title: (doc.querySelector("h2")?.innerText || "").trim(),
     link: link ? link.innerText.trim() : null,
     row: row ? row.querySelector("strong")?.innerText.replace(/\s+/g, " ").trim() : null,
+    visit: (doc.querySelector(".wd-visit strong")?.innerText || "").replace(/\s+/g, " ").trim() || null,
     sec: sec ? sec.innerText.replace(/\s+/g, " ").trim() : null,
     panel: !!sec?.querySelector(".acc-panel"),
     calls: [...(sec?.querySelectorAll('a[href^="tel:"]') || [])].map((a) => a.getAttribute("href")),
@@ -149,6 +150,8 @@ try {
     const r = await read(page);
     t.ck("the work order opened", !!r && r.title === "WO-1", JSON.stringify(r));
     t.ck("its header carries an Access link", r?.link === "Access", String(r?.link));
+    t.ck("its Job section carries the agreed visit beside the job's own date",
+      /9 AM.10 AM.*\(confirmed\)/.test(r?.visit || ""), String(r?.visit));
     t.ck("the Job section names who lets who in",
       /John \(the tenant\) lets Pacific apartment maintenance in/.test(r?.row || ""), String(r?.row));
     t.ck("its link reads from the office's side", /How they get in/.test(r?.row || "") && !/Who lets you in/.test(r?.row || ""));
@@ -181,9 +184,39 @@ try {
     const { ctx, page, crashes } = await visitApp(browser, { host: "soundpm", webPort: WEB,
       seat: { userId: "u_me", accountId: "acc_pm" }, viewport: { width: 1340, height: 1400 } });
     await wait(2600);
-    await openAsCrew(page);
+    // THE CARD, BEFORE THE WORK ORDER. /api/my-work answers no rows here,
+    // which is the live report: the card reached the crew without the
+    // cross-account half and drew "Target date", "No time set yet" and the
+    // bare door sentence over a job the tenant's screen read as booked.
+    await openCards(page); await wait(900);
+    const card = await page.evaluate(() => {
+      const c = document.querySelector(".jr-card:not(.job-line)");
+      if (!c) return null;
+      return {
+        when: (c.querySelector(".jr-when")?.innerText || "").replace(/\s+/g, " ").trim(),
+        note: (c.querySelector(".jr-whennote")?.innerText || "").replace(/\s+/g, " ").trim(),
+        notime: !!c.querySelector(".jr-notime"),
+        panel: !!c.querySelector(".acc-panel"),
+        bare: !!c.querySelector(".jr-access"),
+        how: /Meet at the front door/.test(c.innerText || ""),
+        footer: (c.querySelector(".portal-final")?.innerText || "").trim(),
+      };
+    });
+    t.ck("the crew's card opened", !!card, JSON.stringify(card));
+    t.ck("it says the agreed time, read off the job",
+      /9 AM.10 AM/.test(card?.when || ""), String(card?.when));
+    t.ck("and calls it confirmed rather than a target date",
+      !/Target date/.test(card?.note || "") && /onfirm/.test(card?.note || ""), String(card?.note));
+    t.ck("with no Propose-a-time panel over a booked job", card?.notime === false);
+    t.ck("the card draws the access panel", card?.panel === true);
+    t.ck("not the bare one-line sentence", card?.bare === false);
+    t.ck("and says where to meet", card?.how === true);
+    await page.evaluate(() => document.querySelector(".jr-card .wo-open-btn")?.click());
+    await wait(1300);
     const r = await read(page);
     t.ck("the crew's work order opened", !!r && r.title === "WO-1", JSON.stringify(r));
+    t.ck("its Job section carries the agreed visit",
+      /Oct 9.*9 AM.10 AM.*\(confirmed\)/.test(r?.visit || ""), String(r?.visit));
     t.ck("it carries the Access link too", r?.link === "Access");
     t.ck("written from the crew's side", /John \(the tenant\) lets you in/.test(r?.row || ""), String(r?.row));
     t.ck("and its link reads from their side", /Who lets you in/.test(r?.row || ""));
@@ -223,6 +256,7 @@ try {
     t.ck("the work order opened (so the absence below means something)",
       !!r && r.title === "WO-1", JSON.stringify(r));
     t.ck("no Access link", r && r.link === null, String(r?.link));
+    t.ck("and no Visit row with nothing to say", r && r.visit === null, String(r?.visit));
     t.ck("no Access section", r && r.sec === null);
     t.ck("and opening it asks the access route nothing", S.accessAsks === before, `${before} -> ${S.accessAsks}`);
     await ctx.close();

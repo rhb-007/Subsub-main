@@ -11114,6 +11114,46 @@ refactor.
   the full panel, the chip back in its own column, and *Show less* doing
   nothing.
 
+- **THE CREW'S CARD READ THE TIME AND THE DOOR FROM ONE LIST, AND WHEN THAT
+  LIST WAS MISSING THE ROW IT DREW A JOB NOBODY HAD BOOKED.** Reported from
+  Pacific's own job, with the tenant's screen reading *Scheduled Oct 9 ·
+  9:45 AM–10:45 AM* and the crew's card reading *Target date. No visit time
+  has been agreed*, *No time set yet / Propose a time*, and the old one-line
+  *The tenant will let you in*. *"Need to make this consistent with all
+  relevant information."*
+
+  **That is exactly what the card draws when the row arrives without its
+  `/api/my-work` half**, because the visit and the access plan come from
+  there and nowhere else: `myVisits` and `myAccessPlan` are keyed off it, and
+  the fallbacks are the job's own target date and its raw access word. The
+  route is right in every suite, so **not verified: why it was missing on the
+  live view** -- an impersonated session past its thirty minutes and a stale
+  list both produce it, and neither can be seen from here.
+
+  **So the card asks the job when the list did not answer.** A row at this
+  account, accepted or auto-scheduled, with no plan on it reads
+  `GET /api/jobs/:id/access` -- the same route the work order and the tenant
+  read -- and takes the live window off its `when` when the row carried no
+  visit. **Never for an offer**, because that route refuses a crew that has
+  not said yes, on purpose; never for a row at another client, which this
+  seat cannot read. The fallback visit carries no id, so it can never offer a
+  Confirm the route would refuse -- it only stops the card claiming nothing
+  is booked.
+
+  **And the work order says the agreed time beside the job's own date.**
+  *Start* is the date somebody typed when the job was raised; a work order
+  that printed only that sent a crew to the card for the appointment. A
+  **Visit** row reads the access plan's `when`, or the visit the card holds,
+  and says *confirmed* or *proposed, not confirmed yet*; the download carries
+  the same line. No row where there is nothing to say -- a general
+  contractor's work order with no visit draws none, asserted beside the
+  office and the crew.
+
+  `test:woaccess` already ran with `/api/my-work` empty, which is the live
+  shape, so it now reads the crew's card as well as the work order. Three
+  mutations fire: the card never asking (six), the fetched window ignored
+  (three), and the Visit row dropped (two).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
