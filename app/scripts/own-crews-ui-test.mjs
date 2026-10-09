@@ -108,23 +108,39 @@ try {
 
   const items = await nav(page);
   t.ck("the app rendered", items.length > 0, JSON.stringify(items));
-  t.ck("My availability is in the nav", items.some((x) => /^My availability/.test(x)), JSON.stringify(items));
-  t.ck("and My Crews", items.some((x) => /^My Crews/.test(x)), JSON.stringify(items));
+  // ONE ENTRY FOR THE WORK. My calendar, My availability and My Crews were
+  // three more nav items for one question, reported as too many.
+  t.ck("My Jobs is in the nav", items.some((x) => /^My Jobs/.test(x)), JSON.stringify(items));
+  t.ck("and My calendar, My availability and My Crews are not",
+    !items.some((x) => /^My calendar|^My availability|^My Crews/.test(x)), JSON.stringify(items));
 
-  await open(page, "My availability");
+  await open(page, "My Jobs");
+  const tabs = await page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].map((b) => b.innerText.trim()));
+  t.ck("My Jobs carries a Jobs and a Calendar view", tabs.length === 2 && /^Jobs/.test(tabs[0]) && /^Calendar/.test(tabs[1]),
+    JSON.stringify(tabs));
+  await page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].find((b) => /Calendar/.test(b.innerText))?.click());
+  await wait(800);
   let txt = await main(page);
-  t.ck("My availability opens on its own page", /My availability/.test(txt) && /Every client that hires you sees them/.test(txt),
+  t.ck("the calendar opens under My Jobs", /Your jobs and your crews' days off/.test(txt) && !!(await page.$(".jcal-grid")),
     txt.slice(0, 200));
+  t.ck("and My Jobs stays the selected nav entry", /^My Jobs/.test(await page.evaluate(() =>
+    (document.querySelector("nav button.on")?.innerText || "").trim())));
   // NO CREWS IS A WAY IN, not a sentence pointing somewhere else.
   const goBtn = await page.evaluate(() => {
-    const b = [...document.querySelectorAll(".ss-main button")].find((x) => /Add a crew/.test(x.innerText));
+    const b = [...document.querySelectorAll(".mcal-crews button")].find((x) => /Add a crew/.test(x.innerText));
     b?.click();
     return !!b;
   });
   t.ck("with no crews it offers to add one", goBtn);
   await wait(900);
   txt = await main(page);
-  t.ck("and that lands on My crews", /My crews/i.test(txt) && /Save crews/.test(txt), txt.slice(0, 200));
+  // CREWS SIT WITH THE SUBCONTRACTORS, because both are the labour.
+  const netTabs = await page.evaluate(() => [...document.querySelectorAll(".net-view button")]
+    .map((b) => ({ t: b.innerText.trim(), on: b.classList.contains("on") })));
+  t.ck("that lands on the roster page's My crews tab",
+    netTabs.length === 2 && /^Subcontractors/.test(netTabs[0].t) && /^My crews/.test(netTabs[1].t) && netTabs[1].on,
+    JSON.stringify(netTabs));
+  t.ck("with the crew editor on it", /Save crews/.test(txt), txt.slice(0, 200));
 
   console.log("\n-- naming a crew and saving it --");
   await setVal(page, ".crew-name-input", 0, "Day crew");
@@ -140,39 +156,58 @@ try {
   t.ck("and never through the roster's route", subPatches.length === 0, JSON.stringify(subPatches));
   t.ck("and it says Saved over a write that happened", /Saved/.test(await main(page)));
 
-  console.log("\n-- marking a day off --");
-  await open(page, "My availability");
-  const day = await page.evaluate(() => {
-    const b = [...document.querySelectorAll(".mini-cal .mc-day.free")][3];
-    const k = b?.getAttribute("data-day");
-    b?.click();
-    return k;
+  // The nav entry lands on the roster, not on whichever tab was open last.
+  await open(page, "Subcontractors");
+  const back = await page.evaluate(() => [...document.querySelectorAll(".net-view button")]
+    .map((b) => b.classList.contains("on")));
+  t.ck("the Subcontractors entry opens on the roster half", back[0] === true && back[1] === false, JSON.stringify(back));
+
+  console.log("\n-- marking a day off on the calendar --");
+  await open(page, "My Jobs");
+  await page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].find((b) => /Calendar/.test(b.innerText))?.click());
+  await wait(800);
+  const chip = await page.evaluate(() => document.querySelector(".mcal-crew")?.innerText.replace(/\s+/g, " ").trim() || "");
+  t.ck("the crew is named above the month, taking work", /Day crew/.test(chip) && /Taking work/.test(chip), chip);
+  const today = await page.evaluate(() => {
+    const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   });
+  const pickDay = (skip) => page.evaluate(({ today, skip }) => {
+    const cells = [...document.querySelectorAll(".jcal-cell[data-day]")].filter((c) => c.dataset.day > today);
+    const c = cells[skip];
+    c?.click();
+    return c?.dataset.day || null;
+  }, { today, skip });
+  const day = await pickDay(1);
+  await wait(500);
+  const row = await page.evaluate(() => document.querySelector(".jcd-crew")?.innerText.replace(/\s+/g, " ").trim() || "");
+  t.ck("the day's panel says who is working", /Day crew/.test(row) && /Working/.test(row), row);
+  await page.evaluate(() => [...document.querySelectorAll(".jcd-crew button")].find((b) => /Mark off/.test(b.innerText))?.click());
   await wait(900);
   const p1 = patches.at(-1);
-  t.ck("tapping a day posts it on that crew", patches.length === 2 && p1?.crews?.[0]?.unavailableDays?.includes(day),
+  t.ck("Mark off posts that day on that crew", patches.length === 2 && p1?.crews?.[0]?.unavailableDays?.includes(day),
     JSON.stringify({ day, p1 }));
-  const drawn = await page.evaluate((k) => document.querySelector(`.mini-cal [data-day="${k}"]`)?.className || "", day);
-  t.ck("and the day is drawn off", /\boff\b/.test(drawn), drawn);
+  const drawn = await page.evaluate((k) => document.querySelector(`.jcal-cell[data-day="${k}"]`)?.className || "", day);
+  t.ck("and the day is drawn off on the same calendar as the jobs", /crew-off/.test(drawn), drawn);
+  t.ck("and the panel offers the way back", /Mark working/.test(await page.evaluate(() =>
+    document.querySelector(".jcd-crew")?.innerText || "")));
 
   console.log("\n-- a refusal --");
   REFUSE = true;
-  const day2 = await page.evaluate(() => {
-    const b = [...document.querySelectorAll(".mini-cal .mc-day.free")][5];
-    const k = b?.getAttribute("data-day");
-    b?.click();
-    return k;
-  });
+  const day2 = await pickDay(4);
+  await wait(500);
+  await page.evaluate(() => [...document.querySelectorAll(".jcd-crew button")].find((b) => /Mark off/.test(b.innerText))?.click());
   await wait(900);
-  const drawn2 = await page.evaluate((k) => document.querySelector(`.mini-cal [data-day="${k}"]`)?.className || "", day2);
-  t.ck("a refused day is put back", /\bfree\b/.test(drawn2) && !/\boff\b/.test(drawn2), drawn2);
+  const drawn2 = await page.evaluate((k) => document.querySelector(`.jcal-cell[data-day="${k}"]`)?.className || "", day2);
+  t.ck("a refused day is put back", !/crew-off/.test(drawn2), drawn2);
   const err = await page.evaluate(() => document.querySelector(".ss-main .fld-err")?.innerText || "");
   t.ck("and it says why", /Each crew needs a name/.test(err), err);
-  t.ck("and the earlier day is still off", /\boff\b/.test(
-    await page.evaluate((k) => document.querySelector(`.mini-cal [data-day="${k}"]`)?.className || "", day)));
+  t.ck("and the earlier day is still off", /crew-off/.test(
+    await page.evaluate((k) => document.querySelector(`.jcal-cell[data-day="${k}"]`)?.className || "", day)));
 
-  // And on My Crews: a refused save says why and does NOT say Saved.
-  await open(page, "My Crews");
+  // And on My crews: a refused save says why and does NOT say Saved.
+  await open(page, "Subcontractors");
+  await page.evaluate(() => [...document.querySelectorAll(".net-view button")].find((b) => /My crews/.test(b.innerText))?.click());
+  await wait(600);
   const n0 = patches.length;
   await page.evaluate(() => [...document.querySelectorAll(".ss-main button")]
     .find((x) => /Save crews/.test(x.innerText))?.click());
@@ -182,12 +217,50 @@ try {
     saved: !!document.querySelector(".ss-main .saved-note"),
   }));
   t.ck("a refused crew save reached the server", patches.length === n0 + 1, `${n0} -> ${patches.length}`);
-  t.ck("and My Crews says why", /Each crew needs a name/.test(crewsPane.err), JSON.stringify(crewsPane));
+  t.ck("and My crews says why", /Each crew needs a name/.test(crewsPane.err), JSON.stringify(crewsPane));
   t.ck("and does not claim Saved", !crewsPane.saved, JSON.stringify(crewsPane));
   REFUSE = false;
 
   t.ck("no page error", crashes.length === 0 && logs.length === 0, [...crashes, ...logs].join(" | "));
   await ctx.close();
+
+  console.log("\n-- a paused crew, and pausing one --");
+  {
+    // A paused crew is not taking work at all, so its days off must not turn
+    // a day half-closed: the one working crew being off is the whole company
+    // off. Only a paused crew that ALSO has the day off can tell those apart.
+    const d = new Date(Date.now() + 9 * 86400000);
+    const D = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    CREWS = [
+      { id: "a", name: "Day crew", available: true, unavailableDays: [D], members: [{ name: "Rob", role: "" }] },
+      { id: "b", name: "Night crew", available: false, unavailableDays: [D], members: [{ name: "Ana", role: "" }] },
+    ];
+    const v3 = await visitApp(browser, { host: "cascade", webPort: WEB,
+      seat: { userId: "u_rb", accountId: "acc_cas" }, viewport: { width: 1340, height: 1800 } });
+    await wait(2600);
+    await open(v3.page, "My Jobs");
+    await v3.page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].find((b) => /Calendar/.test(b.innerText))?.click());
+    await wait(700);
+    // Page to the month the day is in, if it is next month.
+    if (!(await v3.page.$(`.jcal-cell[data-day="${D}"]`))) {
+      await v3.page.evaluate(() => document.querySelector('.jcal-nav[aria-label="Next month"]')?.click());
+      await wait(400);
+    }
+    const cls = await v3.page.evaluate((k) => document.querySelector(`.jcal-cell[data-day="${k}"]`)?.className || "", D);
+    t.ck("the only working crew off is the whole day off, whatever a paused crew says", /crew-off/.test(cls) && !/crew-part/.test(cls), cls);
+    const chips = await v3.page.evaluate(() => [...document.querySelectorAll(".mcal-crew")].map((b) => b.innerText.replace(/\s+/g, " ").trim()));
+    t.ck("the paused crew says so above the month", chips.some((c) => /Night crew/.test(c) && /Paused/.test(c)), JSON.stringify(chips));
+    const before = patches.length;
+    await v3.page.evaluate(() => [...document.querySelectorAll(".mcal-crew")].find((b) => /Day crew/.test(b.innerText))?.click());
+    await wait(800);
+    const pp = patches.at(-1);
+    t.ck("pressing a crew pauses it, through the account's own company",
+      patches.length === before + 1 && pp?.crews?.find((c) => c.id === "a")?.available === false, JSON.stringify(pp));
+    t.ck("and with every crew paused the calendar says nothing will be booked",
+      /Every crew is paused/.test(await v3.page.evaluate(() => document.querySelector(".mcal-paused")?.innerText || "")));
+    await v3.ctx.close();
+    CREWS = [];
+  }
 
   console.log("\n-- an account nobody can hire --");
   KIND = "property_manager";
@@ -196,8 +269,14 @@ try {
   await wait(2800);
   const items2 = await nav(v2.page);
   t.ck("the app rendered for a property manager", items2.length > 0, JSON.stringify(items2));
-  t.ck("and there is no My availability or My Crews",
-    !items2.some((x) => /^My availability|^My Crews/.test(x)), JSON.stringify(items2));
+  t.ck("and there is no My Jobs, My availability or My Crews",
+    !items2.some((x) => /^My Jobs|^My availability|^My Crews/.test(x)), JSON.stringify(items2));
+  await v2.page.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => /^Contractors/.test(b.innerText.trim()))?.click());
+  await wait(900);
+  const pmHead = await v2.page.evaluate(() => (document.querySelector(".ss-main")?.innerText || "").slice(0, 300));
+  t.ck("its roster page opened", /Contractors/.test(pmHead), pmHead.slice(0, 120));
+  t.ck("and carries no My crews tab, because it has no company of its own",
+    !(await v2.page.$(".net-view")), pmHead.slice(0, 120));
   await v2.ctx.close();
 } finally {
   await browser.close();

@@ -1041,6 +1041,10 @@ const notifyLabel = (s) => {
   return "Email only";
 };
 const crewOffDays = (c) => c.unavailableDays || [];
+// The panes that are My Jobs: the list, and the calendar that carries the
+// crews' days off. "availability" was a page of its own and lands on the
+// calendar now, so an old way in still arrives somewhere.
+const JOB_PANES = ["jobs", "schedule", "availability"];
 const crewFreeOn = (c, day) => c.available !== false && !crewOffDays(c).includes(day);
 // legacy contractor-level off-days still respected if present
 const isOffDay = (s, day) => (s.unavailableDays || []).includes(day);
@@ -3931,6 +3935,10 @@ export default function SubSub() {
   // day drawn as off over a write that never happened is a crew booked on a
   // day they believe they blocked.
   const [ownCrewErr, setOwnCrewErr] = useState("");
+  // Which half of the roster page is showing: the companies this account
+  // hires, or its own crews. The two are both the labour, which is why they
+  // share a page rather than taking a nav entry each.
+  const [netView, setNetView] = useState("roster");
   const saveOwnCrews = async (crews) => {
     const prev = myCompany?.crews || [];
     setOwnCrewErr("");
@@ -5896,7 +5904,7 @@ export default function SubSub() {
             </button>
           )}
           {can("contractors") && (
-            <button className={tab === "network" ? "on" : ""} onClick={() => setTab("network")}>
+            <button className={tab === "network" ? "on" : ""} onClick={() => { setTab("network"); setNetView("roster"); }}>
               {rosterWords(account).Many} <span className="count">{subs.length}</span>
             </button>
           )}
@@ -5968,22 +5976,27 @@ export default function SubSub() {
               Job Settings, which is engagement-shaped, so the business owner
               had nowhere to block a single day. Crews and their days off live
               on the company row, which IS theirs, so these two are not. */}
-          {!can("portal") && ownWork && [["jobs", "My Jobs"], ["schedule", "My calendar"],
-            ["availability", "My availability"], ["crews", "My Crews"]]
+          {/* ONE ENTRY. My Jobs, My calendar, My availability and My Crews
+              were four nav items for one question -- who is going where, and
+              when -- reported as "too many navigation items to spread out".
+              The calendar and the days off are one view inside My Jobs
+              (JOB_PANES), and the crews are a tab of the roster page beside
+              the companies this account hires, because both are the labour. */}
+          {!can("portal") && ownWork && [["jobs", "My Jobs"]]
             .map(([id, label]) => (
-              <button key={id} className={tab === "portal" && pane === id ? "on" : ""}
+              <button key={id} className={tab === "portal" && JOB_PANES.includes(pane) ? "on" : ""}
                 onClick={() => { setPane(id); setTab("portal"); }}>
                 {label}
                 {id === "jobs" && pendingCount > 0 && <span className="count amber">{pendingCount}</span>}
               </button>
             ))}
           {can("portal") && [
-            /* My calendar sits directly after My Jobs, because it is the same
-               work asked a different way -- what have I got, and when am I
-               due. Its own entry rather than a view switch inside My Jobs: a
-               month is a screen somebody opens on purpose, and burying it
-               behind a toggle on a page of cards is how it stays unfound. */
-            ["jobs", "My Jobs"], ["schedule", "My calendar"], ["settings", "Job Settings"],
+            /* My calendar was an entry of its own here, on the reasoning that
+               a month buried behind a toggle stays unfound. It is a tab at the
+               top of My Jobs now, carrying the crews' days off as well,
+               because one question -- who goes where, and when -- was spread
+               over four nav items and that is what was reported. */
+            ["jobs", "My Jobs"], ["settings", "Job Settings"],
             /* ONE NAME FOR ONE OBJECT. The account side has called this the
                compliance pack since Account was split into tabs, and the
                portal went on calling it "My Documents" -- two names for the
@@ -5995,7 +6008,7 @@ export default function SubSub() {
             ["crews", "My Crews"], ["docs", "Compliance pack"], ["uniforms", "Uniforms"],
             ["connect", "Connect"],
           ].map(([id, label]) => (
-            <button key={id} className={tab === "portal" && pane === id ? "on" : ""}
+            <button key={id} className={tab === "portal" && (pane === id || (id === "jobs" && JOB_PANES.includes(pane))) ? "on" : ""}
               onClick={() => { setPane(id); setTab("portal"); }}>
               {label}
               {id === "jobs" && pendingCount > 0 && <span className="count amber">{pendingCount}</span>}
@@ -6106,10 +6119,12 @@ export default function SubSub() {
       {tab === "network" && can("contractors") && (
         <main className="ss-main">
           <PageHead title={rosterWords(account).Many}
-            sub={subs.length === 0
-              ? "Nobody on your list yet."
-              : `${subs.length} on your list \u00b7 ${subs.filter(docsComplete).length} ready to schedule`}>
-            {can("contractors") && runsTheAccount(role, membership) && (
+            sub={netView === "crews" && ownSub
+              ? `${crewCount(ownSub)} ${crewCount(ownSub) === 1 ? "crew" : "crews"} \u00b7 ${headCount(ownSub)} people`
+              : subs.length === 0
+                ? "Nobody on your list yet."
+                : `${subs.length} on your list \u00b7 ${subs.filter(docsComplete).length} ready to schedule`}>
+            {can("contractors") && runsTheAccount(role, membership) && !(netView === "crews" && ownSub) && (
               <>
                 <button className="btn-solid" onClick={() => setInviteOpen(true)}>
                   <Mail size={15} /> Invite</button>
@@ -6118,6 +6133,29 @@ export default function SubSub() {
               </>
             )}
           </PageHead>
+          {/* THE LABOUR IS ONE PAGE, IN TWO HALVES. Who this account hires and
+              the crews it sends out itself are the same question -- who can do
+              the work -- so My crews sits here as a tab rather than as a nav
+              entry of its own. Only for an account that has a company of its
+              own (ownSub): a crew belongs to a company, and an account nobody
+              can hire has none. Saved through the account's own row, never
+              patchSub, for the reason saveOwnCrews gives. */}
+          {ownSub && (
+            <div className="seg-tabs net-view" role="tablist">
+              <button role="tab" aria-selected={netView !== "crews"} className={netView !== "crews" ? "on" : ""}
+                onClick={() => setNetView("roster")}>
+                {rosterWords(account).Many} <span className="nv-n">{subs.length}</span>
+              </button>
+              <button role="tab" aria-selected={netView === "crews"} className={netView === "crews" ? "on" : ""}
+                onClick={() => setNetView("crews")}>
+                My crews <span className="nv-n">{crewCount(ownSub)}</span>
+              </button>
+            </div>
+          )}
+          {netView === "crews" && ownSub ? (
+            <MyCrews key={ownSub.id} embedded crews={ownSub.crews || []}
+              onSave={saveOwnCrews} saveErr={ownCrewErr} />
+          ) : (<>
           {/* Arriving from a building's card. A filtered list that does not
               say it is filtered is how somebody concludes they have three
               contractors when they have thirty. */}
@@ -6463,6 +6501,7 @@ export default function SubSub() {
               )}
             </section>
           )}
+          </>)}
         </main>
       )}
 
@@ -7414,7 +7453,10 @@ export default function SubSub() {
               : () => { setTab("account"); setOpenPane({ pane: "docs", focus: "docs", n: Date.now() }); }}
             /* One way to change pane, so the nav and every in-page pointer
                land on the same screen. */
-            onGoPane={(id) => { setPane(id); setTab("portal"); }}
+            onGoPane={(id) => {
+              if (id === "crews" && !mySub && ownSub) { setTab("network"); setNetView("crews"); return; }
+              setPane(id); setTab("portal");
+            }}
             elsewhere={elsewhere}
             /* THROUGH `goToSeat`, BECAUSE THIS DOOR DID LESS WORK THAN THE
                OTHER TWO. It set `currentAccountId` and stopped -- no
@@ -27148,8 +27190,20 @@ const subName = (list, subId) =>
 // agreed*. So confirmed is the settled tone, proposed is the one that still
 // needs answering, and a day that has been and gone is spent. Same three
 // classes the other grid already defines, pointed at a different fact.
-function MyCalendar({ rows, onOpen }) {
+function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggleCrewAvailable = null,
+  onGoCrews = null, saveErr = "" }) {
   const todayK = dayKey();
+  // THE CREWS' DAYS OFF, READ THE WAY THE WORKER READS THEM (shared/crews.js):
+  // a day is off only when every crew that is taking work has it off. One
+  // crew on holiday is drawn as a mark, not as a closed day, because the
+  // company can still be booked.
+  const working = crews.filter((c) => c.available !== false);
+  const offOn = (k) => {
+    if (!working.length) return "";
+    const n = working.filter((c) => crewOffDays(c).includes(k)).length;
+    return n === 0 ? "" : n === working.length ? "off" : "part";
+  };
+  const allPaused = crews.length > 0 && working.length === 0;
   const dated = rows
     .map((m) => ({ m, when: workWhen(m.job) }))
     .filter((x) => !!x.when.date);
@@ -27200,8 +27254,36 @@ function MyCalendar({ rows, onOpen }) {
 
   return (
     <div className="mycal">
-      <PageHead title="My calendar"
-        sub="Every job you have a work order on, across every client. A day is spoken for once the time is agreed." />
+      <PageHead title="Calendar"
+        sub="Your jobs and your crews' days off, across every client. Tap a day to see it and mark a crew off." />
+      {saveErr && <p className="fld-err" role="alert"><AlertTriangle size={13} /> {saveErr}</p>}
+      {/* The crews, and whether each is taking work. Pausing is a fact about
+          a crew rather than a day, so it sits above the month rather than in
+          a day's panel. No crews is said with the way to add one, because
+          days off are kept per crew. */}
+      <div className="mcal-crews">
+        {crews.length === 0 ? (
+          <p className="mcal-nocrew">
+            Days off are kept per crew.{" "}
+            {onGoCrews && <button className="sh-link" onClick={onGoCrews}>Add a crew</button>}
+          </p>
+        ) : crews.map((c) => {
+          const on = c.available !== false;
+          return (
+            <button key={c.id} className={`mcal-crew ${on ? "on" : "paused"}`} aria-pressed={on}
+              disabled={!onToggleCrewAvailable}
+              title={on ? `${c.name} is taking work. Tap to pause.` : `${c.name} is paused. Tap to take work again.`}
+              onClick={() => onToggleCrewAvailable?.(c.id, !on)}>
+              <span className={`avail-dot ${on ? "up" : "down"}`} />
+              <span className="mc-name">{c.name}</span>
+              <span className="mc-state">{on ? "Taking work" : "Paused"}</span>
+            </button>
+          );
+        })}
+      </div>
+      {allPaused && (
+        <p className="mcal-paused"><AlertTriangle size={13} /> Every crew is paused, so nothing will be booked on any day until one takes work again.</p>
+      )}
       <div className="jcal">
         <div className="jcal-top">
           <button className="jcal-nav" onClick={() => step(-1)} aria-label="Previous month">
@@ -27226,9 +27308,10 @@ function MyCalendar({ rows, onOpen }) {
           {cells.map((k, i) => {
             if (!k) return <span key={`pad${i}`} className="jcal-cell empty" />;
             const list = byDay[k] || [];
+            const off = offOn(k);
             return (
-              <button key={k}
-                className={`jcal-cell ${list.length ? "has" : ""} ${k === todayK ? "today" : ""} ${k === selected ? "on" : ""} ${k < todayK ? "past" : ""}`}
+              <button key={k} data-day={k}
+                className={`jcal-cell ${list.length ? "has" : ""} ${k === todayK ? "today" : ""} ${k === selected ? "on" : ""} ${k < todayK ? "past" : ""}${off ? ` crew-${off}` : ""}`}
                 onClick={() => setSelected(k === selected ? "" : k)}
                 aria-pressed={k === selected}
                 title={list.length ? `${list.length} job${list.length === 1 ? "" : "s"} on ${niceDay(k)}` : niceDay(k)}>
@@ -27245,9 +27328,10 @@ function MyCalendar({ rows, onOpen }) {
                 )}
                 {/* Read out, because three coloured dots say nothing at all to
                     a screen reader. */}
+                {off && <span className={`jc-off ${off}`} aria-hidden="true">{off === "off" ? "Off" : "Part"}</span>}
                 <span className="sr-only">{list.length
                   ? `${list.length} job${list.length === 1 ? "" : "s"}, ${tone(list) === "open" ? "not all confirmed" : "confirmed"}`
-                  : "nothing booked"}</span>
+                  : "nothing booked"}{off === "off" ? ", every crew off" : off === "part" ? ", some crews off" : ""}</span>
               </button>
             );
           })}
@@ -27257,6 +27341,8 @@ function MyCalendar({ rows, onOpen }) {
           <span><i className="jc-dot full" /> Time agreed</span>
           <span><i className="jc-dot open" /> Waiting on a yes</span>
           <span><i className="jc-dot done" /> Been and gone</span>
+          {working.length > 0 && <span><i className="jc-offkey off" /> Every crew off</span>}
+          {working.length > 1 && <span><i className="jc-offkey part" /> Some crews off</span>}
         </div>
 
         {selected && (
@@ -27265,6 +27351,28 @@ function MyCalendar({ rows, onOpen }) {
               <h4>{niceDay(selected)} <span className="jcd-rel">{relDay(selected, todayK)}</span></h4>
               <button className="jcd-close" onClick={() => setSelected("")} aria-label="Close this day"><X size={14} /></button>
             </div>
+            {/* WHO IS WORKING THIS DAY, and the press that changes it. A day
+                already gone cannot be marked: nothing can be booked on it. */}
+            {crews.length > 0 && (
+              <div className="jcd-crews">
+                {crews.map((c) => {
+                  const paused = c.available === false;
+                  const isOff = crewOffDays(c).includes(selected);
+                  return (
+                    <div key={c.id} className={`jcd-crew ${paused ? "paused" : isOff ? "off" : "on"}`}>
+                      <span className={`avail-dot ${!paused && !isOff ? "up" : "down"}`} />
+                      <span className="jcdc-name">{c.name}</span>
+                      <span className="jcdc-state">{paused ? "Paused" : isOff ? "Off this day" : "Working"}</span>
+                      {!paused && selected >= todayK && onToggleCrewDay && (
+                        <button className="mini" onClick={() => onToggleCrewDay(c.id, selected)}>
+                          {isOff ? "Mark working" : "Mark off"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {dayRows.length === 0 ? (
               <div className="dash-empty"><ClipboardList size={22} /><p>Nothing booked for this day.</p></div>
             ) : dayRows.map((x) => (
@@ -27552,6 +27660,22 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   const workShown = fPending.length + fUpcoming.length + fPast.length + fDeclined.length + fOpenQuotes.length + fSentQuotes.length;
   const narrowed = !!(wq.trim() || wClient || wShow);
 
+  // MY JOBS IS TWO VIEWS OF ONE BOOK: the list of work, and the calendar that
+  // also carries the crews' days off. The tabs sit first on both, in the same
+  // place, so switching is one press and never a hunt.
+  const onCal = pane === "schedule" || pane === "availability";
+  const jobTabs = (
+    <div className="seg-tabs jobs-view" role="tablist">
+      <button role="tab" aria-selected={!onCal} className={!onCal ? "on" : ""} onClick={() => onGoPane?.("jobs")}>
+        <ClipboardList size={14} /> Jobs
+        {pending.length > 0 && <span className="nv-n amber">{pending.length}</span>}
+      </button>
+      <button role="tab" aria-selected={onCal} className={onCal ? "on" : ""} onClick={() => onGoPane?.("schedule")}>
+        <Calendar size={14} /> Calendar
+      </button>
+    </div>
+  );
+
   return (
     <main className="ss-main">
       {miss.length > 0 && pane !== "docs" && (
@@ -27582,6 +27706,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
 
       {pane === "jobs" && (
         <>
+          {jobTabs}
           {(changeOrders || []).filter((c) => c.status === "pending").length > 0 && (
             <section className="portal-sec">
               <h3><FilePlus2 size={15} /> Change orders
@@ -27793,28 +27918,30 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
         </>
       )}
 
-      {/* THE MONTH, ON ITS OWN PAGE. Fed `accepted` rather than `upcoming`:
-          a calendar is also what you look back at -- "was I there on the
-          Tuesday" is the question a dispute asks -- and the dashboard panel
-          is the one that is deliberately only about what is coming. */}
-      {pane === "schedule" && <MyCalendar rows={accepted}
-        onOpen={(m) => (m.elsewhere
-          ? onGoClient?.(m.elsewhere.accountId)
-          : onViewWO({ job: m.job, trade: m.trade, a: m.a }))} />}
-      {pane === "crews" && <MyCrews crews={sub.crews || []} onSave={onSetCrews} saveErr={crewSaveErr} />}
+      {/* THE MONTH, AND THE DAYS OFF ON IT. Fed `accepted` rather than
+          `upcoming`: a calendar is also what you look back at -- "was I there
+          on the Tuesday" is the question a dispute asks -- and the dashboard
+          panel is the one that is deliberately only about what is coming.
 
-      {/* The account's own team reaches availability here; a contractor seat
-          reaches the same panel under Job settings, Availability. One
-          component, so the two cannot draw days off differently. */}
-      {pane === "availability" && (
+          It is ALSO where days off are set, which used to be a page of its
+          own (My availability) beside My calendar: two grids of the same
+          month, one saying where the crews are booked and one saying where
+          they cannot be, read side by side by somebody deciding whether to
+          take Thursday. One grid answers both. The contractor seat's Job
+          Settings > Availability tab draws the same crews off the same
+          handlers, so the two cannot disagree. */}
+      {onCal && (
         <>
-          <PageHead title="My availability"
-            sub="Tap the days a crew can't work. Every client that hires you sees them, and nothing is booked on them." />
-          {crewSaveErr && <p className="fld-err" role="alert"><AlertTriangle size={13} /> {crewSaveErr}</p>}
-          <MyAvailability sub={sub} jobs={jobs} onGoCrews={() => onGoPane?.("crews")}
-            onToggleCrewDay={onToggleCrewDay} onToggleCrewAvailable={onToggleCrewAvailable} />
+          {jobTabs}
+          <MyCalendar rows={accepted} crews={sub.crews || []}
+            onToggleCrewDay={onToggleCrewDay} onToggleCrewAvailable={onToggleCrewAvailable}
+            onGoCrews={onGoPane ? () => onGoPane("crews") : null} saveErr={crewSaveErr}
+            onOpen={(m) => (m.elsewhere
+              ? onGoClient?.(m.elsewhere.accountId)
+              : onViewWO({ job: m.job, trade: m.trade, a: m.a }))} />
         </>
       )}
+      {pane === "crews" && <MyCrews crews={sub.crews || []} onSave={onSetCrews} saveErr={crewSaveErr} />}
 
       {pane === "connect" && (
         <ConnectPane requests={connectRequests} onRespond={onRespondConnect} onReload={onReloadConnects} />
@@ -29736,7 +29863,9 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
 }
 
 // ---- Contractor: manage own crews ---------------------------------------
-function MyCrews({ crews, onSave, saveErr = "" }) {
+// \`embedded\`: drawn as a tab of the roster page, which already carries the
+// page heading -- a second one under it is two titles for one screen.
+function MyCrews({ crews, onSave, saveErr = "", embedded = false }) {
   const [list, setList] = useState(() => JSON.parse(JSON.stringify(crews.length ? crews : [{ id: "c1", name: "Crew 1", available: true, unavailableDays: [], members: [{ name: "", role: "" }] }])));
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -29759,12 +29888,12 @@ function MyCrews({ crews, onSave, saveErr = "" }) {
 
   return (
     <>
-    <PageHead title="My crews"
+    {!embedded && <PageHead title="My crews"
       sub={crews.length === 0 ? "No crews yet."
         : `${crews.length} crew${crews.length === 1 ? "" : "s"} \u00b7 ${
-            crews.reduce((n, c) => n + (c.members || []).length, 0)} people`} />
+            crews.reduce((n, c) => n + (c.members || []).length, 0)} people`} />}
     <div className="portal-panel">
-      <p className="panel-note">Name each crew and list who's on it. Admins pick which crew runs a job.</p>
+      <p className="panel-note">Name each crew and list who's on it. Days off and pausing a crew are on the calendar under My Jobs.</p>
       <div className="crew-edit">
         {list.map((cr, ci) => (
           <div key={cr.id} className="crew-edit-card">
@@ -38648,6 +38777,37 @@ strong.insp-name{background:none;border:0;padding:0}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .jcd-meta{font-size:12px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .jcal-undated{margin:12px 0 0;font-size:12px;color:var(--ink-soft)}
+/* Days off on the same month as the jobs. A day every working crew has off
+   is hatched, so it reads as closed at a glance; a day only some crews have
+   off carries a small mark, because the company can still be booked. */
+.jcal-cell.crew-off{background:repeating-linear-gradient(135deg,#f3ece4 0 6px,#e9dfd3 6px 12px);border-color:#dccbb6}
+.jc-off{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;border-radius:5px;padding:0 4px;line-height:14px}
+.jc-off.off{background:#8a5a2b;color:#fff}
+.jc-off.part{background:#f1e4d3;color:#7a4f22}
+.jc-offkey{display:inline-block;width:12px;height:12px;border-radius:3px}
+.jc-offkey.off{background:repeating-linear-gradient(135deg,#f3ece4 0 3px,#d9c6ae 3px 6px);border:1px solid #c9b293}
+.jc-offkey.part{background:#f1e4d3;border:1px solid #d9c6ae}
+.mcal-crews{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.mcal-crew{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:6px 12px;border-radius:10px;
+  border:1px solid var(--line);background:var(--card);font:inherit;cursor:pointer}
+.mcal-crew .avail-dot{margin-top:0}
+.mcal-crew .mc-name{font-size:13.5px;font-weight:700;color:var(--ink)}
+.mcal-crew .mc-state{font-size:11.5px;font-weight:700;color:var(--ink-soft)}
+.mcal-crew.paused{background:var(--paper)}
+.mcal-crew.paused .mc-state{color:#a3431f}
+.mcal-crew:disabled{cursor:default}
+.mcal-nocrew{margin:0;font-size:13px;color:var(--ink-soft)}
+.mcal-paused{display:flex;align-items:center;gap:6px;margin:0 0 12px;font-size:13px;font-weight:600;color:#a3431f}
+.jcd-crews{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
+.jcd-crew{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+.jcd-crew .avail-dot{margin-top:0}
+.jcd-crew.off{background:#f6efe7;border-color:#e2d3c1}
+.jcdc-name{font-size:13.5px;font-weight:700;flex:1;min-width:0}
+.jcdc-state{font-size:12px;font-weight:700;color:var(--ink-soft)}
+.jcd-crew .mini{min-height:36px}
+.nv-n{display:inline-block;margin-left:6px;background:var(--line);color:var(--ink);font-size:11px;font-weight:800;padding:0 7px;border-radius:20px}
+.nv-n.amber{background:var(--amber);color:#fff}
+.jobs-view button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
 /* Arrived at from the schedule or the grid: here, and then quiet again. */
 .job-card.landed{border-color:var(--brand);box-shadow:0 0 0 3px rgba(31,107,74,.15)}
 /* Said to a screen reader, where three coloured dots say nothing at all. */

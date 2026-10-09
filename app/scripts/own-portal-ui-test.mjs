@@ -127,7 +127,8 @@ try {
   const items = await nav(page);
   t.ck("the app rendered at all", items.length > 0, JSON.stringify(items));
   t.ck("My Jobs is in the nav", items.some((x) => /^My Jobs/.test(x)), JSON.stringify(items));
-  t.ck("and My calendar", items.some((x) => /^My calendar/.test(x)), JSON.stringify(items));
+  // The calendar is a view inside My Jobs now, not an entry of its own.
+  t.ck("and no separate My calendar", !items.some((x) => /^My calendar/.test(x)), JSON.stringify(items));
 
   console.log("\n-- and pressing it lands on the work, not back on the dashboard --");
   await open(page, "My Jobs");
@@ -155,12 +156,13 @@ try {
     (jobsPane.text.match(/\w+ for [A-Z][^·|]{0,40}/) || [""])[0]);
 
   console.log("\n-- the calendar opens too --");
-  await open(page, "My calendar");
+  await page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].find((b) => /Calendar/.test(b.innerText))?.click());
+  await new Promise((r) => setTimeout(r, 900));
   const cal = await page.evaluate(() => ({
     onNav: (document.querySelector("nav button.on")?.innerText || "").trim(),
     grid: !!document.querySelector(".jcal, .mycal"),
   }));
-  t.ck("My calendar is the selected tab", /^My calendar/.test(cal.onNav), cal.onNav);
+  t.ck("My Jobs stays the selected entry", /^My Jobs/.test(cal.onNav), cal.onNav);
   t.ck("and a month grid is drawn", cal.grid === true, JSON.stringify(cal));
 
   console.log("\n-- nobody verifies their own paperwork --");

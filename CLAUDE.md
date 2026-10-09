@@ -11392,6 +11392,49 @@ refactor.
   that hires them sees them, which is what was asked. There is no private day
   off per client.
 
+- **ONE NAV ENTRY FOR THE WORK, ONE CALENDAR FOR JOBS AND DAYS OFF, AND THE
+  CREWS SIT WITH THE SUBCONTRACTORS.** Reported with the drawer on screen and
+  four entries boxed: *My Jobs, My calendar, My availability, My Crews*.
+  *"Too many navigation items… all of this should be coordinated on one
+  calendar, and my crew should be coupled with subcontractors, because that's
+  essentially the labor."*
+
+  **My Jobs is two views of one book**: *Jobs* (the list) and *Calendar*,
+  tabs at the top of both (`JOB_PANES`, and the nav entry stays lit on
+  either). The calendar is the old My calendar month **with the crews' days
+  off drawn on it**: a day every working crew has off is hatched, a day only
+  some have off carries a small mark, and tapping a day opens a panel saying
+  who is working with **Mark off / Mark working** on each crew. Pausing a crew
+  is a chip above the month, because it is a fact about a crew rather than a
+  day. Two grids of one month, one for bookings and one for days off, were
+  being read side by side by somebody deciding whether to take Thursday.
+
+  **The day-off rule is `shared/crews.js`'s, not a second one.** Off only when
+  every crew that is taking work has it off, so a paused crew's days off never
+  half-close a day. The fixture that proves it is a paused crew with the same
+  day off as the one working crew; counting all crews instead of working ones
+  draws "part" there and fails.
+
+  **My crews is a tab of the Subcontractors page**, for an account with a
+  company of its own (`ownSub`), saved through `PATCH /api/my-company` as
+  before. The page title stays the roster word, because the nav says it and
+  two names for one place is the trap this file records; the tabs name the
+  halves. The nav entry always opens on the roster half, and *Add a crew* on
+  an empty calendar lands on the crews half. A property manager, which has no
+  company of its own, gets no crews tab.
+
+  **The contractor seat lost its My calendar entry too**, for the same reason;
+  its My Crews entry stays, because a contractor seat has no roster page to
+  put it on. **Still open:** a contractor seat can also set days off under Job
+  Settings > Availability, beside the auto-schedule switch the request email
+  links to. Both doors use the same crews and the same handlers, so they cannot
+  disagree, but it is two places, and removing that one means moving the
+  auto-schedule switch and its deep link first.
+
+  `test:owncrewsui` drives all of it; seven browser mutations fire, each on its
+  own assertion. `test:ownportal`, `test:mycal` and `test:owncrews` pinned the
+  old entries and were rewritten to the new rule rather than loosened.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

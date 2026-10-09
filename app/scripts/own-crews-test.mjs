@@ -254,8 +254,8 @@ try {
   console.log("\n-- the screen --");
   {
     const src = readFileSync(join(app, "src", "App.tsx"), "utf8");
-    ck("the account's own team has My availability and My Crews in its nav",
-      /!can\("portal"\) && ownWork && \[\["jobs", "My Jobs"\], \["schedule", "My calendar"\],\s*\["availability", "My availability"\], \["crews", "My Crews"\]\]/.test(src));
+    ck("the account's own team has one nav entry for its work",
+      /!can\("portal"\) && ownWork && \[\["jobs", "My Jobs"\]\]/.test(src));
     ck("its crews save through its own company, never patchSub",
       /onSetCrews=\{\(crews\) => \(mySub \? patchSub\(mySub\.id, \{ crews \}\) : saveOwnCrews\(crews\)\)\}/.test(src));
     ck("and saveOwnCrews goes to my-company", /const saveOwnCrews[\s\S]{0,400}api\.saveMyCompany\(\{ crews \}\)/.test(src));

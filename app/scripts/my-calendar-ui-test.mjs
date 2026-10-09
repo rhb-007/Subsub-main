@@ -211,7 +211,8 @@ try {
   await wait(900);
   let c = await cal(page);
   t.ck("and it opens", !!c, String(c));
-  t.ck("headed as theirs", /my calendar/i.test(c?.head || ""), c?.head);
+  // A view of My Jobs now, headed as the calendar it is.
+  t.ck("headed as the calendar", /^calendar/i.test(c?.head || ""), c?.head);
 
   console.log("\n-- it opens on the month the work is in --");
   // Today's month has two appointments in this fixture, so it must stay put
@@ -346,9 +347,10 @@ try {
   await nav(page, "My Jobs");
   await wait(700);
   t.ck("leaving it works", await page.evaluate(() => !document.querySelector(".mycal")));
-  await nav(page, "My calendar");
+  // One nav entry for the work: the calendar is the second tab of My Jobs.
+  await page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].find((b) => /Calendar/.test(b.innerText))?.click());
   await wait(900);
-  t.ck("and the nav brings it back", !!(await cal(page)));
+  t.ck("and the Calendar tab brings it back", !!(await cal(page)));
 
   t.ck("nothing threw on the page", logs.length === 0, logs.join(" | "));
   t.ck("and the harness saw no crash", crashes.length === 0, crashes.join(" | "));
