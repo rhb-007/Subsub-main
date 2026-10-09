@@ -11269,6 +11269,31 @@ refactor.
   sender is rate-limited to a handful an hour until SMTP is set. DEPLOYMENT.md
   says where. **Not verified here:** a live code to a real inbox.
 
+- **"NOBODY ON SUBSUB MATCHES THAT" WAS PRINTED FOR THREE ANSWERS, AND TWO
+  OF THEM WERE NOT A MISS.** Reported from the console, standing in Sound
+  Property Management: typing `rbraun@gmail.com` (Cascade Apartment Services,
+  a subcontractor account, open to hire, with an admin who signs in) said
+  nobody matched. The route was proved right against that exact shape: a
+  Sound admin's lookup answers `found: true` with Ask to connect.
+
+  `useConnectMatch` drew the one sentence for a real miss, for the caller's
+  **own** company (`reason: own_company`), and for a lookup that **never
+  reached an answer**. Its catch said so in a comment: *reported as "not
+  found" rather than as an error, because the next thing on screen is the
+  same either way.* It is not the same: "not found" sends somebody off to
+  type in a duplicate of a company that is plainly on SubSub. The likeliest
+  live cause is the console's staff sign-in past its thirty minutes, which
+  answers every call `impersonation_expired`.
+
+  `why` is now `none`, `own_company` or `failed`, a failure names its
+  refusal (`connectLookupFailText`) and offers **Try again**, and the found
+  branch is asserted in the same suite (`test:connectwhy`), so a fix that
+  drew nothing cannot pass. Mapping a failure back to `none` fails six
+  assertions, dropping the own-company branch fails two. **A catch that
+  turns "could not ask" into "the answer is no" is the
+  catch-wide-enough-to-hide-a-real-error shape, on a screen**, and this file
+  has now recorded it at every layer.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

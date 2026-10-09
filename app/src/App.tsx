@@ -34788,6 +34788,17 @@ function useConnectMatch(enabled, { email, phone, license }) {
   // it there is no way to tell "nobody has looked yet" from "looked, and
   // they are not here" -- and those want opposite words on screen.
   const [searched, setSearched] = useState(false);
+  // WHY nothing came back, because three different answers were printed as
+  // one sentence. "Nobody on SubSub matches that" was drawn for a real miss,
+  // for the account's OWN company (which cannot be connected to itself), and
+  // for a lookup that never reached an answer at all -- a staff sign-in past
+  // its thirty minutes, a dropped connection. Reported as typing the address
+  // of a company that is plainly on SubSub and being told it is not, which
+  // reads as the search being wrong rather than the check not having run.
+  // "none" | "own_company" | "failed", and the refusal's code when it failed.
+  const [why, setWhy] = useState(null);
+  const [failCode, setFailCode] = useState("");
+  const [nonce, setNonce] = useState(0);
   // Whole values only. A lookup on every keystroke of a half-typed address
   // is a lot of requests and cannot match anything anyway.
   const ready = {
@@ -34799,10 +34810,10 @@ function useConnectMatch(enabled, { email, phone, license }) {
 
   useEffect(() => {
     if (!enabled || !(ready.email || ready.phone || ready.license)) {
-      setMatch(null); setSearched(false); return;
+      setMatch(null); setSearched(false); setWhy(null); return;
     }
     let alive = true;
-    setChecking(true); setSearched(false);
+    setChecking(true); setSearched(false); setWhy(null); setFailCode("");
     // Typing an address is a burst of keystrokes and then a pause. Ask on
     // the pause.
     const t = setTimeout(() => {
@@ -34811,22 +34822,38 @@ function useConnectMatch(enabled, { email, phone, license }) {
       if (ready.phone) q.phone = ready.phone;
       if (ready.license) q.license = ready.license;
       api.connectLookup(q)
-        .then((r) => { if (alive) { setMatch(r.found ? r.match : null); setSearched(true); } })
+        .then((r) => {
+          if (!alive) return;
+          setMatch(r.found ? r.match : null); setSearched(true);
+          setWhy(r.found ? null : r.reason === "own_company" ? "own_company" : "none");
+        })
         .catch((err) => {
           // A lookup that fails must not block adding somebody by hand --
-          // that is the path that has always worked. It is reported as
-          // "not found" rather than as an error, because the next thing on
-          // screen is the same either way: carry on and type them in.
+          // that is the path that has always worked -- but it must not say
+          // "not found" either, because it did not look.
           console.warn("[connect] lookup failed:", err);
-          if (alive) { setMatch(null); setSearched(true); }
+          if (alive) {
+            setMatch(null); setSearched(true); setWhy("failed");
+            setFailCode(err?.body?.error || (err?.status ? String(err.status) : "no_connection"));
+          }
         })
         .finally(() => { if (alive) setChecking(false); });
     }, 500);
     return () => { alive = false; clearTimeout(t); setChecking(false); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, key]);
+  }, [enabled, key, nonce]);
 
-  return { match, checking, searched };
+  return { match, checking, searched, why, failCode, retry: () => setNonce((n) => n + 1) };
+}
+
+// What a lookup that did not reach an answer says, by its refusal. Never
+// "nobody matches": it did not look.
+function connectLookupFailText(code) {
+  if (code === "impersonation_expired") return "Your staff sign-in has run out, so SubSub could not check. Sign in to this account again from the console, then try.";
+  if (code === "slow_down") return "Too many look-ups in a few minutes. Wait a moment, then try again.";
+  if (code === "no_connection") return "Couldn't reach SubSub to check. Check your connection and try again.";
+  if (code === "401" || code === "unauthorized") return "You have been signed out, so SubSub could not check. Sign in again, then try.";
+  return `SubSub could not check that just now (${code}). Try again.`;
 }
 
 function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect,
@@ -35052,7 +35079,7 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
   const [dismissedMatch, setDismissedMatch] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [connectErr, setConnectErr] = useState("");
-  const { match, checking: matchChecking, searched } =
+  const { match, checking: matchChecking, searched, why: matchWhy, failCode: matchFail, retry: retryMatch } =
     useConnectMatch(!existing && !!onConnect, { email: f.email, phone: f.phone, license: f.license });
   const showMatch = match && !dismissedMatch;
 
@@ -35199,6 +35226,18 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
               </>
             )}
           </div>
+        ) : searched && !matchChecking && matchWhy === "failed" ? (
+          // Did not look. Saying "nobody matches" here sent somebody who had
+          // typed a company plainly on SubSub off to add a duplicate of it.
+          <p className="cov-hint cx-lookup-failed" role="alert">
+            <AlertTriangle size={12} /> {connectLookupFailText(matchFail)}{" "}
+            <button type="button" className="cx-retry" onClick={retryMatch}>Try again</button>
+          </p>
+        ) : searched && !matchChecking && matchWhy === "own_company" ? (
+          <p className="cov-hint cx-lookup-own">
+            <AlertTriangle size={12} /> That is this account's own company — it cannot be added
+            to its own list. Check which account you are signed in to.
+          </p>
         ) : searched && !matchChecking ? (
           // Looked, and they are not here. Said plainly rather than left
           // blank, because a blank space is indistinguishable from a box
@@ -35831,6 +35870,8 @@ body{background:var(--paper)}
 .inv-linkonly:hover{color:var(--ink)}
 .inv-linkonly:disabled{opacity:.6;cursor:default}
 .cov-hint.ok{color:var(--forest-lift)}
+.cx-lookup-failed,.cx-lookup-own{color:var(--amber-ink,#8a5a00);font-style:normal}
+.cx-retry{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--forest);text-decoration:underline;cursor:pointer}
 .inv-row-out{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;
   border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin-top:9px;background:var(--card)}
 .inv-row-out.spent{opacity:.6}
