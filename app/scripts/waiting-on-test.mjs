@@ -80,7 +80,7 @@ try {
   console.log("\n-- the dashboard says who has not answered --");
   {
     const { ctx, page, crashes } = await open();
-    // The section shows ONE row and offers the rest behind "See all", which
+    // The section shows TWO rows and offers the rest behind "More", which
     // opens the list as a page of its own -- the house style for these
     // roll-ups. Open it, or half the assertions below are about rows that are
     // deliberately not drawn yet.
@@ -90,11 +90,13 @@ try {
       const n = h?.closest(".dash-sec")?.querySelectorAll(".dash-row").length;
       const more = h?.closest(".dash-sec")?.querySelector(".dash-more");
       if (more) more.click();
-      return { n, hadMore: !!more, label: more?.innerText.trim() };
+      return { n, hadMore: !!more, label: more?.innerText.replace(/\s+/g, " ").trim(),
+        all: more?.getAttribute("aria-label") };
     });
-    t.ck("it shows one row rather than running down the page",
-      capped.n === 1 && capped.hadMore, JSON.stringify(capped));
-    t.ck("and offers the rest", /see all 5/i.test(capped.label || ""), String(capped.label));
+    t.ck("it shows two rows rather than running down the page",
+      capped.n === 2 && capped.hadMore, JSON.stringify(capped));
+    t.ck("and offers the rest as More, with how many are left",
+      /^More 3$/.test(capped.label || "") && /see all 5/i.test(capped.all || ""), JSON.stringify(capped));
     await wait(250);
 
     // "See all" is a PAGE: that section alone, every row, under a way back --
@@ -183,8 +185,8 @@ try {
           rows: h?.closest(".dash-sec")?.querySelectorAll(".dash-row").length });
       }, 250));
     });
-    t.ck("Dashboard puts the whole page back, one row a section",
-      !back.back && back.hello && back.rows === 1, JSON.stringify(back));
+    t.ck("Dashboard puts the whole page back, two rows a section",
+      !back.back && back.hello && back.rows === 2, JSON.stringify(back));
 
     // The tile that caused the confusion.
     const tiles = await page.$$eval(".dash-card .dc-lab", (n) => n.map((x) => x.innerText.trim()));

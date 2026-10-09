@@ -118,7 +118,7 @@ try {
         title: s.querySelector("h3")?.textContent.trim().replace(/\s+/g, " ") || "",
         count: Number(s.querySelector(".sec-count")?.textContent.trim() || 0),
         rows, more: more?.innerText.trim() || null,
-        showAll: /^See all (\d+)/.exec(more?.innerText || "")?.[1] || null,
+        showAll: /^See all (\d+)/.exec(more?.getAttribute("aria-label") || "")?.[1] || null,
       };
     }));
     ck("there are sections to look at", secs.length >= 4, `${secs.length}`);
@@ -130,15 +130,15 @@ try {
       secs.map((x) => `${x.title}:${x.rows}`).join(" | "));
     if (!capped.length) throw new Error("no section was capped -- nothing below would be testing anything");
     // The cap itself.
-    ck("and each of those shows one row",
-      capped.every((x) => x.rows === 1), capped.map((x) => `${x.title} ${x.rows}`).join(" | "));
+    ck("and each of those shows two rows",
+      capped.every((x) => x.rows === 2), capped.map((x) => `${x.title} ${x.rows}`).join(" | "));
     // The heading and its number stay put. That is the whole argument for
     // capping rather than folding: the count is the signal.
     ck("every section still says how many it has",
       secs.every((x) => x.count > 0 || x.rows > 0),
       secs.map((x) => `${x.title}=${x.count}`).join(" | "));
     ck("and the button says how many are hidden behind it",
-      capped.every((x) => Number(x.showAll) > 1), capped.map((x) => x.more).join(" | "));
+      capped.every((x) => Number(x.showAll) > 2 && /^More/.test(x.more || "")), capped.map((x) => x.more).join(" | "));
 
     // Opening one is a page: that section alone, every row it said it had,
     // under a way back.
@@ -166,11 +166,11 @@ try {
     const after = await page.evaluate(() => ({
       back: !!document.querySelector(".dash-back"),
       rows: [...document.querySelectorAll(".dash-sec")]
-        .filter((s) => /^See all/.test(s.querySelector(".dash-more")?.innerText || ""))
+        .filter((s) => /^See all/.test(s.querySelector(".dash-more")?.getAttribute("aria-label") || ""))
         .map((s) => s.querySelectorAll(".dash-row, .dash-doc-row").length),
     }));
-    ck("and a reload starts on the dashboard, every list one row again",
-      !after.back && after.rows.length > 0 && after.rows.every((n) => n === 1), JSON.stringify(after));
+    ck("and a reload starts on the dashboard, every list two rows again",
+      !after.back && after.rows.length > 0 && after.rows.every((n) => n === 2), JSON.stringify(after));
     await ctx.close();
   }
 } catch (err) {

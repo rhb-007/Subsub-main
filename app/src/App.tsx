@@ -23271,7 +23271,9 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
 // struck through: "reduce all these categories to one line, and an arrow
 // below that opens the rest of those listings on another page".
 //
-// So a section is its heading, its count and its FIRST row. The count stays
+// So a section is its heading, its count and its first TWO rows -- one was
+// tried first and read as the rest having been deleted, so two it is, and
+// "More >" under them says how many are waiting on the next page. The count stays
 // because it is the whole signal -- "5 documents to verify" is the thing
 // somebody needs to see whether or not they open it -- and the first row
 // stays because it says what kind of thing the list is and lets the
@@ -23288,7 +23290,7 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
 // a caller elsewhere still gets every row behind one press.
 const DashPage = React.createContext(null);
 
-function DashRows({ id, peek = 1, children }) {
+function DashRows({ id, peek = 2, children }) {
   const rows = React.Children.toArray(children).filter(Boolean);
   const pager = React.useContext(DashPage);
   const [open, setOpen] = useState(false);
@@ -23303,9 +23305,11 @@ function DashRows({ id, peek = 1, children }) {
       {over && (
         <button className="dash-more dash-more-page"
           onClick={() => (pager ? pager.open(id) : setOpen((was) => !was))}
-          aria-expanded={pager ? undefined : open}>
-          {pager || !open ? `See all ${rows.length}` : "Show fewer"}
-          <ArrowRight size={14} />
+          aria-expanded={pager ? undefined : open}
+          aria-label={pager || !open ? `See all ${rows.length}` : "Show fewer"}
+          data-total={rows.length}>
+          {pager || !open ? <>More <span className="dm-n">{rows.length - peek}</span></> : "Show fewer"}
+          <ChevronRight size={15} />
         </button>
       )}
     </div>
@@ -39141,10 +39145,11 @@ strong.insp-name{background:none;border:0;padding:0}
    pushed a screen down. The two containers a section can sit in are the
    main column and the top row; whatever there does not hold the open list
    is hidden, a modal excepted so a row on the page can still open one. */
-.dash-more-page{display:flex;width:100%;justify-content:center;gap:6px;
-  min-height:40px;margin-top:2px;border:1px dashed var(--line);border-radius:10px;
-  font-size:13px}
-.dash-more-page:hover{text-decoration:none;background:var(--paper)}
+.dash-more-page{display:flex;margin:4px 0 0 auto;justify-content:flex-end;gap:5px;
+  min-height:40px;padding:0 4px;font-size:14px;font-weight:700}
+.dash-more-page .dm-n{display:inline-grid;place-items:center;min-width:20px;height:20px;
+  padding:0 6px;border-radius:999px;background:var(--paper);border:1px solid var(--line);
+  font-size:11.5px;color:var(--ink-soft)}
 .dash-rows > .dash-row:last-of-type{margin-bottom:0}
 .dash-rows > .dash-row + .dash-more-page{margin-top:8px}
 .dash-back{display:inline-flex;align-items:center;gap:4px;border:0;background:none;

@@ -11435,8 +11435,8 @@ refactor.
   own assertion. `test:ownportal`, `test:mycal` and `test:owncrews` pinned the
   old entries and were rewritten to the new rule rather than loosened.
 
-- **EVERY DASHBOARD LIST IS ONE ROW, AND "SEE ALL" OPENS THE REST AS A PAGE
-  OF ITS OWN.** Reported with the dashboard on screen and every row after the
+- **EVERY DASHBOARD LIST IS ITS FIRST ROWS, AND "MORE" OPENS THE REST AS A
+  PAGE OF ITS OWN.** Reported with the dashboard on screen and every row after the
   first in each section struck through: *"way too much overwhelming information
   on the dashboard ... reduce all these categories to one line and then a
   little arrow below that would open up the rest of those listings on another
@@ -11459,7 +11459,14 @@ refactor.
   empties under the page (every request approved) says *Nothing left in that
   list* rather than a back button over nothing.
 
-  `test:waitingon` drives it: one row, the page, everything else hidden, and
+  **AND IT IS TWO ROWS AND "MORE", NOT ONE AND "SEE ALL".** One row read as
+  the rest having been deleted: *"there should be a more > ... just show 1-2
+  on the dashboard and the rest on their own page"*. So `DashRows` shows two,
+  and under them a right-aligned **More ›** carries how many are left; its
+  `aria-label` still says *See all N*. Two rows fit with no More at all,
+  which `test:approveref` now pins.
+
+  `test:waitingon` drives it: two rows, the page, everything else hidden, and
   Dashboard bringing it all back. Three mutations fire (back to three rows,
   nothing hiding, the page drawing one row). Its "the other sections hid"
   assertion was vacuous on a one-section fixture, so it counts the tiles and

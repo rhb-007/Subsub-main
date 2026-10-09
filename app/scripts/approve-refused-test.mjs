@@ -91,15 +91,10 @@ try {
   const { ctx, page, crashes } = await visitApp(browser, { host: "x", webPort: WEB,
     seat: { userId: "usr_r", accountId: "acc_x" }, viewport: { width: 1340, height: 1300 } });
   await wait(2600);
-  // The dashboard shows one row a section and the rest behind "See all",
-  // which opens the whole list as a page. Open it, or the second request is
-  // deliberately not drawn and every assertion below reads half the list.
-  t.ck("the panel offers the rest of its list",
-    await page.evaluate(() => {
-      const b = document.querySelector(".dash-sec.sec-top .dash-more");
-      if (b) b.click(); return !!b;
-    }));
-  await wait(300);
+  // The dashboard shows two rows a section and the rest behind "More". Two
+  // requests fit, so there must be no More here.
+  t.ck("both requests fit without a More",
+    await page.evaluate(() => !document.querySelector(".dash-sec.sec-top .dash-more")));
   let r = await rows(page);
   // The positive first: an absence below means nothing on a panel that never drew.
   t.ck("the work requests panel is on screen with both requests",

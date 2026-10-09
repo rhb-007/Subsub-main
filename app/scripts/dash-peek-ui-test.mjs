@@ -147,14 +147,6 @@ try {
   page.on("console", (m) => { if (m.type() === "error") logs.push(m.text()); });
   await wait(2600);
 
-  // One row a section, the rest behind "See all", which opens that list as a
-  // page of its own. Open Needs a contractor so both slots are drawn.
-  t.ck("Needs a contractor offers the rest of its list", await page.evaluate(() => {
-    const h = [...document.querySelectorAll(".dash-sec h3")].find((x) => /needs a contractor/i.test(x.innerText));
-    const b = h?.closest(".dash-sec")?.querySelector(".dash-more");
-    if (b) b.click(); return !!b;
-  }));
-  await wait(300);
   const rows = await openRows(page);
   t.ck("the dashboard lists both open slots", rows?.length === 2, JSON.stringify(rows));
 
