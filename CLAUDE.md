@@ -11294,6 +11294,52 @@ refactor.
   catch-wide-enough-to-hide-a-real-error shape, on a screen**, and this file
   has now recorded it at every layer.
 
+- **A WA REGISTRATION CHECK THAT NEVER RAN WAS DRAWN AS ACTIVE.** Asked as
+  *"License L&I verification"*, while a test contractor was being set up to be
+  assignable. Reading the Verify button for it turned up three faults, each
+  one silent.
+
+  **The screen made the answer up.** `verifyLicense` caught any failure of
+  `POST /api/subs/:id/verify-license` (a staff sign-in past its thirty minutes,
+  being signed out, no connection, `no_license_on_file`) and fell back on
+  `lookupLicense`, a stand-in from before the route existed. That stand-in
+  answered **ACTIVE**, with an invented bond and insurer, for any number at
+  all. So a check that never ran drew a verified registration and made the
+  contractor assignable on screen. That is the worst thing a compliance
+  screen can say, and it said it exactly when nothing had been checked. It is
+  deleted. `LicenseVerifyButton` awaits the press and names the refusal
+  (`licenseVerifyErrText`), and both Verify buttons (the card and the
+  dashboard's Registration problems row) are that one control.
+
+  **A real L&I answer drew an empty bond.** The screen reads
+  `{surety, amount}` and `{carrier, coverage}`. Washington's bond and insurance
+  datasets answer in their own field names (`surety_company`, `bond_amount`,
+  `insurance_company`, `coverage_amount`), and those were stored as they came.
+  `checkView` in `app/shared/licensecheck.js` is the one translation. It runs
+  when a check is stored **and** when a company row is read, so checks stored
+  before it existed read correctly with no migration.
+
+  **A failed check overwrote a real answer.** L&I being down for an evening
+  stored `CHECK_FAILED` over `ACTIVE`, and the nightly sweep does that for
+  every company with a number. So one outage made every contractor on every
+  roster unassignable until the next night. `nextStoredCheck` records every
+  attempt in `license_checks`, failures included, but a failure never replaces
+  an answer on the company row. It keeps the last answer with `lastFailedAt`,
+  and the press says *L&I didn't answer just now, so nothing changed*. A clean
+  "no such number" **is** an answer and replaces it. With no earlier answer to
+  keep, the failure is what gets stored.
+
+  **And the pack page compared against lower-case `"active"`**, which no
+  registry sends, so a real L&I check never read as verified on the page a
+  general contractor opens. `licenseActive` is the one rule, read by the roster
+  and the pack page.
+
+  **Not verified here:** a live answer from `data.wa.gov`, which this
+  environment cannot reach. The bond and insurance field names are the ones
+  this code already relied on. The policy and bond numbers are read from
+  several plausible names and draw nothing if none match, so a wrong guess
+  costs a blank, never a wrong figure.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

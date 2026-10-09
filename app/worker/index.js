@@ -133,6 +133,7 @@ import { PREF_IDS, NEEDS_PHONE, validNotice, noticeLive, sortNotices } from "../
 import { systemHealth } from "./syshealth.js";
 import { integrationHealth } from "./integrationhealth.js";
 import { verifyWithFallback, configuredProviders, askProvider, PROVIDERS } from "./licenses.js";
+import { checkView, bondView, insuranceView, licenseActive, nextStoredCheck } from "../shared/licensecheck.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 
 const app = new Hono();
@@ -204,7 +205,7 @@ const ENGAGEMENT_FIELDS = new Set([
 const companyRowToJs = (r) => ({
   id: r.id, company: r.company, contact: r.contact, phone: r.phone, email: r.email,
   license: r.license, ubi: r.ubi,
-  licenseCheck: parseJson(r.license_check),
+  licenseCheck: checkView(parseJson(r.license_check), r.license),
   city: r.city, state: r.state, zip: r.zip,
   mailStreet: r.mail_street, mailCity: r.mail_city, mailState: r.mail_state, mailZip: r.mail_zip,
   crews: parseJson(r.crews, []),
@@ -6917,6 +6918,11 @@ async function verifyLicenseForState(env, state, licenseNumber) {
 }
 
 async function storeLicenseCheck(db, companyId, state, result) {
+  // Every attempt is a row in the history, failures included -- "we tried
+  // on the 9th and L&I did not answer" is part of the record. What the
+  // company row says is a different question, and a failed attempt does not
+  // get to answer it over a real one (nextStoredCheck says why).
+  const bond = bondView(result.bond), insurance = insuranceView(result.insurance);
   await db.prepare(
     `INSERT INTO license_checks
       (company_id, state, status, license_type, effective_date, expiration_date, suspend_date,
@@ -6925,15 +6931,19 @@ async function storeLicenseCheck(db, companyId, state, result) {
   ).bind(
     companyId, state, result.status ?? (result.found ? null : "NOT_FOUND"), result.licenseType ?? null,
     result.effectiveDate ?? null, result.expirationDate ?? null, result.suspendDate ?? null,
-    result.bond ? Math.round(Number(result.bond.bond_amount || 0) * 100) : null,
-    result.bond?.surety_company ?? null,
-    result.insurance ? Math.round(Number(result.insurance.coverage_amount || 0) * 100) : null,
-    result.insurance?.insurance_company ?? null,
+    bond?.amount != null ? Math.round(bond.amount * 100) : null,
+    bond?.surety ?? null,
+    insurance?.coverage != null ? Math.round(insurance.coverage * 100) : null,
+    insurance?.carrier ?? null,
     result.fieldMappingVerified ? 1 : 0,
     JSON.stringify(result)
   ).run();
+  const row = await db.prepare(`SELECT license, license_check FROM companies WHERE id = ?`).bind(companyId).first();
+  const { stored, kept } = nextStoredCheck(parseJson(row?.license_check, null), result);
+  const view = checkView(stored, row?.license || null);
   await db.prepare(`UPDATE companies SET license_check = ? WHERE id = ?`)
-    .bind(JSON.stringify(result), companyId).run();
+    .bind(JSON.stringify(view), companyId).run();
+  return { stored: view, kept };
 }
 
 // ===========================================================================
@@ -7140,8 +7150,11 @@ app.post("/api/subs/:companyId/verify-license", requireRole("admin", "pm"), asyn
   const state = (company.state || "WA").trim().toUpperCase();
 
   const result = await verifyLicenseForState(c.env, state, company.license);
-  await storeLicenseCheck(c.env.DB, companyId, state, result);
-  return c.json(result);
+  const { stored, kept } = await storeLicenseCheck(c.env.DB, companyId, state, result);
+  // What the screen draws is what the row now says. When the registry could
+  // not be reached and an earlier answer was kept, say so beside it, so a
+  // press that changed nothing does not read as a fresh confirmation.
+  return c.json(kept ? { ...stored, checkFailed: true, failure: result.status || "CHECK_FAILED" } : stored);
 });
 
 // ---------------------------------------------------------------------------
@@ -12474,7 +12487,7 @@ app.get("/api/pack/:token", async (c) => {
     license: row.license || null,
     // Verified against the state registry, with the date -- the one thing on
     // here that an emailed PDF genuinely cannot carry.
-    licenseVerified: lic?.status === "active" || lic?.ok === true,
+    licenseVerified: licenseActive(lic),
     licenseCheckedAt: lic?.checkedAt || null,
     sentTo: row.to_name || null,
     note: row.note || null,

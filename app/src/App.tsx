@@ -42,6 +42,7 @@ import { inPool } from "./lib/photoshrink.js";
 // the browser and ordinary work on the server, or the other way round.
 import { HEALTH_HOSTS, LIGHTS, integrationLight } from "../shared/syshealth.js";
 import { severityOf, severityRank } from "../shared/emergency.js";
+import { licenseActive } from "../shared/licensecheck.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 // One list of states, shared with the Worker, so the two cannot disagree
 // about what a state is.
@@ -1293,52 +1294,68 @@ function coverageFor(sub, job, now) {
 }
 
 // ---- WA L&I license verification ----------------------------------------
-// Washington publishes the contractor registry as free open data (Socrata
-// SODA, no API key). Four datasets join on the license number:
-//   m8qx-ubtq  general    — status, type, effective/expiration, UBI, principal
-//   ciwg-agsx  insurance  — carrier, policy #, coverage amount, dates
-//   bzff-4fmt  bond       — surety firm, bond amount, impairment, dates
-//   4xk5-x9j6  principals — owners and officers of record
-// In production this is a single fetch; here it is stubbed so the UI is real.
-const LNI_BASE = "https://data.wa.gov/resource";
-const LNI_DATASETS = { general: "m8qx-ubtq", insurance: "ciwg-agsx", bond: "bzff-4fmt", principals: "4xk5-x9j6" };
-const lniVerifyUrl = (lic) =>
-  `${LNI_BASE}/${LNI_DATASETS.general}.json?contractorlicensenumber=${encodeURIComponent(lic)}`;
+// The check itself runs on the server (POST /api/subs/:id/verify-license),
+// against Washington's open registry data. There used to be a stand-in here
+// that the screen fell back on whenever that call failed -- for ANY reason,
+// a signed-out session included -- and it answered ACTIVE, with a made-up
+// bond and insurer, for any number at all. So a check that never ran drew a
+// verified registration and made the contractor assignable. Gone: a failed
+// check is said as a failed check.
 const lniPublicLookup = (lic) =>
   `https://secure.lni.wa.gov/verify/Detail.aspx?LIC=${encodeURIComponent(lic)}`;
 
-// Stand-in for the live lookup. Returns the same shape the SODA join gives.
-function lookupLicense(sub) {
-  const lic = (sub.license || "").trim();
-  if (!lic) return { found: false, error: "No license number on file" };
-  // Demo behavior: a license ending in "X" simulates an expired registration.
-  const expired = /X$/i.test(lic);
-  const today = new Date();
-  const exp = new Date(today); exp.setDate(today.getDate() + (expired ? -40 : 400));
-  return {
-    found: true,
-    licenseNumber: lic,
-    businessName: sub.company,
-    ubi: sub.ubi || null,
-    licenseType: "CONSTRUCTION CONTRACTOR",
-    status: expired ? "EXPIRED" : "ACTIVE",
-    effectiveDate: "2023-04-11",
-    expirationDate: exp.toISOString().slice(0, 10),
-    suspendDate: null,
-    primaryPrincipal: sub.contact,
-    bond: { surety: "North River Insurance Company", number: "46CF842686", amount: 30000, expires: "Until Canceled" },
-    insurance: { carrier: "State National Ins Co", policy: "NXT9PTHTLT-01-GL", coverage: 1000000, expires: exp.toISOString().slice(0, 10) },
-    checkedAt: new Date().toISOString().slice(0, 10),
-    source: lniVerifyUrl(lic),
-  };
-}
-// License must be found, ACTIVE, not suspended, and not past expiry.
+// License must be found, ACTIVE, not suspended, and not past expiry. The rule
+// is shared/licensecheck.js's, which the pack page reads too.
 function licenseOk(sub) {
-  const c = sub.licenseCheck;
-  if (!c?.found) return false;
-  if (c.status !== "ACTIVE" || c.suspendDate) return false;
-  return !c.expirationDate || c.expirationDate >= new Date().toISOString().slice(0, 10);
+  return licenseActive(sub?.licenseCheck);
 }
+
+// Why pressing Verify did not produce a check. Named, because "try again"
+// is the wrong advice for most of these.
+function licenseVerifyErrText(err) {
+  const code = err?.body?.error || (err?.status ? String(err.status) : "no_connection");
+  if (code === "no_license_on_file") return "There is no licence number on file. Add it with Edit, then verify.";
+  if (code === "impersonation_expired") return "Your staff sign-in has run out, so nothing was checked. Sign in to this account again from the console.";
+  if (code === "401" || code === "unauthorized") return "You have been signed out, so nothing was checked. Sign in again, then verify.";
+  if (code === "403" || code === "forbidden") return "Only an admin or a project manager can run this check.";
+  if (code === "no_connection") return "Couldn't reach SubSub, so nothing was checked. Check your connection and try again.";
+  return `The check didn't run (${code}). Nothing was changed.`;
+}
+
+// The Verify / Re-check control, with what happened under it. Awaited, so a
+// press that did not run says so instead of leaving the old chip looking like
+// a fresh answer; and when L&I did not answer and the earlier result was kept,
+// it says that too, with the date the kept result is from.
+function LicenseVerifyButton({ sub, onVerify, className = "doc-review" }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const press = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await onVerify(sub);
+      if (r?.checkFailed) {
+        setMsg({ tone: "warn", text: `L&I didn't answer just now, so nothing changed. Still showing the result from ${r.checkedAt || "the last check"}.` });
+      } else if (r?.status === "CHECK_FAILED") {
+        setMsg({ tone: "warn", text: "L&I didn't answer just now. Try again in a few minutes." });
+      } else if (r) {
+        setMsg({ tone: "ok", text: r.found ? `Checked with L&I just now: ${licenseBadge(r)}.` : "Checked with L&I just now: no registration with that number." });
+      }
+    } catch (err) {
+      setMsg({ tone: "err", text: licenseVerifyErrText(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span className="lic-verify">
+      <button className={className} onClick={press} disabled={busy}>
+        <Shield size={13} /> {busy ? "Checking…" : sub.licenseCheck ? "Re-check" : "Verify"}
+      </button>
+      {msg && <span className={`lic-verify-msg ${msg.tone}`} role="status">{msg.text}</span>}
+    </span>
+  );
+}
+
 // How to talk about a registration check -- for every shape one can really
 // have, not just the happy one.
 //
@@ -4109,17 +4126,15 @@ export default function SubSub() {
   };
 
   // Runs the L&I lookup and stores the result on the contractor record.
+  // Throws when the check did not run; the button that pressed it says why.
+  // Nothing is drawn in its place -- see licenseVerifyErrText.
   const verifyLicense = async (id) => {
-    const co = companies.find((c) => c.id === id);
-    if (!co) return;
-    { const sb = subs.find((x) => x.id === id); if (sb) logEvent("license_check", `Ran L&I license check on ${sb.company}`); }
-    try {
-      const result = await api.verifyLicense(id);
-      patchCompany(id, { licenseCheck: result });
-    } catch (err) {
-      console.error("[persist] verifyLicense failed, using local simulation:", err);
-      patchCompany(id, { licenseCheck: lookupLicense(co) });
-    }
+    const result = await api.verifyLicense(id);
+    const { checkFailed, failure, ...stored } = result || {};
+    patchCompany(id, { licenseCheck: stored });
+    const sb = subs.find((x) => x.id === id);
+    if (sb) logEvent("license_check", `Ran L&I license check on ${sb.company}`);
+    return result;
   };
 
   // The FILE belongs to the company (uploaded once, shared by every GC).
@@ -24099,9 +24114,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
                     : `${s.license} — ${licenseStatusText(s.licenseCheck)}${s.licenseCheck.expirationDate ? `, expired ${s.licenseCheck.expirationDate}` : ""}`}
                 </span>
               </div>
-              <button className="btn-solid dash-row-btn" onClick={() => onVerifyLicense(s)}>
-                <Shield size={13} /> {s.licenseCheck ? "Re-check" : "Verify"}
-              </button>
+              <LicenseVerifyButton sub={s} onVerify={onVerifyLicense} className="btn-solid dash-row-btn" />
             </div>
           ))}
           </DashRows>
@@ -34387,9 +34400,7 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
                 )}
               </div>
               <div className="lic-actions">
-                <button className="doc-review" onClick={() => onVerifyLicense(sub)}>
-                  <Shield size={13} /> {c ? "Re-check" : "Verify"}
-                </button>
+                <LicenseVerifyButton sub={sub} onVerify={onVerifyLicense} />
                 <a className="lic-link" href={lniPublicLookup(sub.license)} target="_blank" rel="noopener noreferrer">
                   L&amp;I record
                 </a>
@@ -39505,6 +39516,11 @@ iframe.dv-frame{display:block}
 .lic-meta{font-size:11.5px;color:var(--ink-soft);line-height:1.4}
 .lic-state{font-size:11px;color:var(--ink-soft);font-style:italic;margin-top:2px}
 .lic-actions{display:flex;align-items:center;gap:8px;flex:none}
+.lic-verify{display:inline-flex;flex-direction:column;align-items:flex-end;gap:4px;max-width:260px}
+.lic-verify-msg{font-size:12px;line-height:1.35;text-align:right}
+.lic-verify-msg.ok{color:var(--brand-dk)}
+.lic-verify-msg.warn{color:var(--amber-ink)}
+.lic-verify-msg.err{color:var(--red)}
 .lic-link{font-size:11.5px;font-weight:700;color:var(--brand);text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
 
 /* billing cycle */
