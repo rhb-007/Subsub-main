@@ -718,6 +718,14 @@ export const api = {
   askForInbox: (token) => request(`/pack/${encodeURIComponent(token)}/inbox`,
     { method: "POST", body: "{}" }),
   docInbox: (token) => request(`/inbox/${encodeURIComponent(token)}`),
+  // 074. The page a "Sent via SubSub" link opens: the work order, and a free
+  // login by mobile and a texted code. Public, like the pack and the inbox.
+  claim: (token) => request(`/claim/${encodeURIComponent(token)}`),
+  claimCode: (token, phone) => request(`/claim/${encodeURIComponent(token)}/code`,
+    { method: "POST", body: JSON.stringify({ phone }) }),
+  claimVerify: (token, phone, code) => request(`/claim/${encodeURIComponent(token)}/verify`,
+    { method: "POST", body: JSON.stringify({ phone, code }) }),
+  woClaimLink: (woId) => request(`/work-orders/${encodeURIComponent(woId)}/claim-link`),
   claimInbox: (token) => request(`/inbox/${encodeURIComponent(token)}/claim`,
     { method: "POST", body: "{}" }),
   // Who is asking, for the account deciding whether to say yes. Keyed by the
@@ -863,6 +871,8 @@ export const api = {
     // An account's own fee terms. Reading is any staff member; setting is a
     // superadmin, with a reason, and `{ reset: true }` puts the defaults back.
     feeTerms: (id) => request(`/platform/accounts/${encodeURIComponent(id)}/fee-terms`),
+    // 074. Work orders sent, links opened and subs this account brought onto SubSub.
+    attribution: (id) => request(`/platform/accounts/${encodeURIComponent(id)}/attribution`),
     setFeeTerms: (id, body) =>
       request(`/platform/accounts/${encodeURIComponent(id)}/fee-terms`, { method: "PUT", body: JSON.stringify(body) }),
     deleteAccount: (id, confirmName) =>

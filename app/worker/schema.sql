@@ -2171,6 +2171,34 @@ CREATE TABLE IF NOT EXISTS account_fee_terms (
 -- 072. The tenant's own dashboard. How this account should reach a tenant and
 -- who to call if it cannot, keyed by (account, person) because it is something
 -- they told THIS landlord; and notices a manager posts to one building.
+-- 074. "Sent via SubSub" on every work order: one claim link per work order,
+-- stamped with the account that sent it and the company it went to, and which
+-- account brought each sub onto SubSub. See migrations/074_wo_claims.sql.
+CREATE TABLE IF NOT EXISTS wo_claim_links (
+  token             TEXT PRIMARY KEY,
+  work_order_id     TEXT NOT NULL UNIQUE REFERENCES work_orders(id) ON DELETE CASCADE,
+  account_id        TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  company_id        TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  first_opened_at   TEXT,
+  last_opened_at    TEXT,
+  open_count        INTEGER NOT NULL DEFAULT 0,
+  claimed_at        TEXT,
+  claimed_user_id   TEXT REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS ix_wo_claim_links_account ON wo_claim_links(account_id);
+CREATE INDEX IF NOT EXISTS ix_wo_claim_links_company ON wo_claim_links(company_id);
+
+CREATE TABLE IF NOT EXISTS sub_attributions (
+  company_id     TEXT PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+  account_id     TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  work_order_id  TEXT REFERENCES work_orders(id) ON DELETE SET NULL,
+  token          TEXT,
+  user_id        TEXT REFERENCES users(id) ON DELETE SET NULL,
+  claimed_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_sub_attributions_account ON sub_attributions(account_id);
+
 -- 073. How the crew gets in, in words. See migrations/073_job_access.sql.
 CREATE TABLE IF NOT EXISTS job_access (
   job_id      TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,

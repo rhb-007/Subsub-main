@@ -242,6 +242,11 @@ WITH spec(j) AS (SELECT
   -- 073. How the crew gets in, in words. Until it is run the Access panel
   -- draws without the sentence and saving it says which file.
   ',["m073_job_access","col","job_access",["job_id","how","updated_by","updated_at"]]' ||
+  -- 074. "Sent via SubSub" claim links and who brought which sub in. Until it
+  -- is run work orders go out with the footer and no link, and the claim page
+  -- answers migration_needed naming it.
+  ',["m074_wo_claim_links","col","wo_claim_links",["token","work_order_id","account_id","company_id","open_count","claimed_at"]]' ||
+  ',["m074_sub_attributions","col","sub_attributions",["company_id","account_id","work_order_id","user_id","claimed_at"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -675,6 +680,13 @@ WITH inv(j) AS (SELECT '['
   -- charge -- the sweep writes the reference in the same UPDATE as the status.
   || ',' || json_array('m070_inv_billed_unrecorded', (SELECT COUNT(*) FROM sms_overage
     WHERE status = 'billed' AND (processor_ref IS NULL OR processor_ref = '')))
+  -- Must read ZERO. A claim link marked claimed for a company nothing credits
+  -- to any account is a sub who joined through a work order with the account
+  -- that sent it never recorded -- the claim writes both in the same request,
+  -- and the attribution row is only ever skipped when one already exists.
+  || ',' || json_array('m074_inv_claim_unattributed', (SELECT COUNT(*) FROM wo_claim_links l
+    WHERE l.claimed_at IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM sub_attributions a WHERE a.company_id = l.company_id)))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

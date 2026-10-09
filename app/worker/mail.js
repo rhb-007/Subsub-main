@@ -11,6 +11,7 @@
 // The platform has no inbox. Everything here is a one-way system notification
 // that points the recipient back into their portal, and says so.
 
+import { footerText, footerSms } from "../shared/claim.js";
 import { INSURANCE_LINES, BOND_MIN, checkItems, problemsIn,
   outcomeWords } from "../shared/doccheck.js";
 // The kinds and their words come from shared/docs.js, which is the one list, for
@@ -385,7 +386,13 @@ This is an automated message from an unmonitored address. Replies aren't receive
   };
 }
 
-export function workOrderIssuedEmail({ company, contact, job, trade, woNumber, account, respondBy }) {
+// 074. EVERY WORK ORDER SAYS HOW IT WAS SENT, AND CARRIES THE CLAIM LINK.
+// `claimLink` is null on a database without 074, and the footer still says
+// "Sent via SubSub" -- the line is the attribution, the link is the way in.
+// There is no parameter that leaves the footer off, on purpose: no plan
+// removes it.
+export function workOrderIssuedEmail({ company, contact, job, trade, woNumber, account, respondBy,
+  claimLink = null }) {
   const who = account?.name || "our team";
   const text = `Hi ${contact || company.company},
 
@@ -403,12 +410,22 @@ Open it in your portal to accept or decline:
 
 — ${who}
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+This is an automated message from an unmonitored address. Replies aren't received.
+
+${footerText(claimLink)}`;
   return {
     subject: `${woNumber} — ${job?.title || "new work order"}`,
     text,
-    html: textToHtml(text, `https://${portalUrl(account?.subdomain)}`),
+    html: linkAlso(textToHtml(text, `https://${portalUrl(account?.subdomain)}`), claimLink),
   };
+}
+
+// A second link in a message textToHtml only linked one of. Escaped the same
+// way, so the claim URL it finds is the one the text printed.
+export function linkAlso(html, link) {
+  if (!link) return html;
+  const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return html.replace(esc(link), `<a href="${esc(link)}" style="color:#1B4835">${esc(link)}</a>`);
 }
 
 export function applicationReceivedEmail({ companyName, contact, account }) {
@@ -942,12 +959,12 @@ export function userInviteSms({ account, role, link }) {
 // A work order, on a lock screen. The three things that decide whether
 // somebody turns up: who wants the work, what trade, and by when they have
 // to answer.
-export function workOrderIssuedSms({ job, trade, woNumber, account, respondBy }) {
+export function workOrderIssuedSms({ job, trade, woNumber, account, respondBy, claimLink = null }) {
   const who = account?.name || "A contractor";
   const where = job?.address ? ` at ${job.address}` : "";
   const by = respondBy ? ` Reply by ${String(respondBy).slice(0, 10)}.` : "";
   return `${who} has sent you work order ${woNumber} — ${trade}${where}.${by} `
-    + `Accept or decline it in SubSub.`;
+    + `Accept or decline it in SubSub. ${footerSms(claimLink)}`;
 }
 
 // A certificate renewed, to somebody who was already sent the old one.

@@ -15,7 +15,7 @@ import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, app
   connectRequestEmail, connectRequestSms, workOrderIssuedSms,
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
   docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
-  waiverRequestEmail } from "./mail.js";
+  waiverRequestEmail, portalUrl } from "./mail.js";
 import { sendSms, toE164, smsConfig } from "./sms.js";
 import { monthStart, previousMonth, smsAllowance, smsVerdict, smsOverageBlocks, smsOverageCents,
   SMS_INCLUDED_SCALE, SMS_BLOCK_MESSAGES, SMS_BLOCK_PRICE_CENTS, SMS_OVERAGE_MAX_BLOCKS,
@@ -27,6 +27,8 @@ import { monthStart, previousMonth, smsAllowance, smsVerdict, smsOverageBlocks, 
 import { severityOf } from "../shared/emergency.js";
 import { validateIngest, SOURCES } from "../shared/ingest.js";
 import { TRADES, TRADE_IDS, tradeLabel } from "../shared/trades.js";
+import { claimUrl, validClaimToken, claimPhoneProblem, claimState, maskPhone,
+  footerText, footerSms, claimFunnel } from "../shared/claim.js";
 import { tradesFor, validRule, ANY_SOURCE } from "../shared/crmmap.js";
 import { SOURCE_PRESETS, isSource, unwrap, translate } from "../shared/crmsources.js";
 import { INSPECT_PRESETS, isInspectSource, readInspection,
@@ -330,6 +332,13 @@ app.use("/api/*", async (c, next) => {
     // getting one is what the meeting is for.
     || c.req.path.startsWith("/api/demo/")
     || c.req.path.startsWith("/api/invite/")
+    // 074. A claim link from a work order: the sub holding it has no account
+    // -- getting a free one is the point -- and the 32-byte token is the whole
+    // of the auth, exactly as for the invite above. The verify step proves the
+    // phone with Supabase before it writes anything. The trailing slash
+    // matters: /api/work-orders/:id/claim-link is a signed-in read and stays
+    // behind this middleware.
+    || c.req.path.startsWith("/api/claim/")
     // The tenant equivalent, and public for the same reason: somebody
     // holding the link has no account yet -- getting one is the point. The
     // trailing slash matters: /api/tenants, the manager's roster, stays
@@ -3166,6 +3175,401 @@ app.post("/api/invite/:token", async (c) => {
 
   return c.json({ ok: true,
     ...(await applicantWayIn(c, { account, userId: applicantId, email: body.email, password })) });
+});
+
+// ---------------------------------------------------------------------------
+// 074. "Sent via SubSub" -- the claim link on every work order
+// ---------------------------------------------------------------------------
+// Every work order a hiring account sends carries one line saying where it
+// came from and a link, /claim/<token>, that opens the work order on the
+// sub's phone and makes them a free login with their mobile and a texted
+// code. The rules are in shared/claim.js; this is the database half.
+//
+// One link per work order, minted when it is issued and stamped with the
+// account that sent it and the company it went to. "Which account brought
+// this sub in" is written once, by the claim, and the first claim wins.
+
+// Minted on issue, and lazily for any work order issued before 074 the first
+// time somebody opens it. INSERT OR IGNORE on the work order's unique key, so
+// two requests at once agree on one token rather than racing to two.
+//
+// A database without 074 answers null: the work order still goes, with the
+// footer and no link, because losing the link costs a recruitment and refusing
+// the work order costs the job.
+async function ensureClaimLink(env, { woId, accountId, companyId }) {
+  if (!woId || !accountId || !companyId) return null;
+  try {
+    const have = await env.DB.prepare(
+      `SELECT token FROM wo_claim_links WHERE work_order_id = ?`).bind(woId).first();
+    if (have?.token) return have.token;
+    const token = [...crypto.getRandomValues(new Uint8Array(32))]
+      .map((b) => b.toString(16).padStart(2, "0")).join("");
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO wo_claim_links (token, work_order_id, account_id, company_id)
+       VALUES (?, ?, ?, ?)`).bind(token, woId, accountId, companyId).run();
+    const row = await env.DB.prepare(
+      `SELECT token FROM wo_claim_links WHERE work_order_id = ?`).bind(woId).first();
+    return row?.token || null;
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    console.warn("[claim] 074_wo_claims not applied - work order sent without a claim link");
+    return null;
+  }
+}
+
+// Can anybody sign in as this company already? A contractor seat whose person
+// has a login, anywhere -- or the company is an account's own, run by people
+// who sign in to that account. Deliberately UNSCOPED, for the reason
+// `companyAnswersForItself` is: a roofer whose login is on another general
+// contractor's account is already on SubSub, and this account's work order
+// reaching them is a sign-in, not a recruitment to credit to anybody.
+async function companyLoginAuthIds(env, companyId) {
+  const { results } = await env.DB.prepare(
+    `SELECT DISTINCT u.auth_id FROM memberships m JOIN users u ON u.id = m.user_id
+      WHERE m.company_id = ? AND m.role = 'contractor' AND u.auth_id IS NOT NULL`
+  ).bind(companyId).all();
+  const ids = (results || []).map((r) => r.auth_id);
+  let ownAccount = false;
+  try {
+    ownAccount = !!(await env.DB.prepare(
+      `SELECT 1 AS yes FROM accounts WHERE company_id = ? LIMIT 1`).bind(companyId).first());
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+  }
+  return { ids, ownAccount };
+}
+
+// The link, the work order behind it and the company, or a refusal. Shape is
+// checked before any read, so a guessed path costs nothing; and an unknown
+// token and a malformed one answer alike.
+async function claimLookup(env, token) {
+  if (!validClaimToken(token)) return { error: "invalid" };
+  const link = await env.DB.prepare(`SELECT * FROM wo_claim_links WHERE token = ?`).bind(token).first();
+  if (!link) return { error: "invalid" };
+  const wo = await env.DB.prepare(
+    `SELECT w.*, j.title, j.address, j.area, j.zip, j.date, j.time, j.scope AS job_scope,
+            j.status AS job_status
+       FROM work_orders w JOIN jobs j ON j.id = w.job_id WHERE w.id = ?`
+  ).bind(link.work_order_id).first();
+  const account = await env.DB.prepare(
+    `SELECT id, name, subdomain, theme, logo_key, use_default_mark FROM accounts WHERE id = ?`
+  ).bind(link.account_id).first();
+  const company = await env.DB.prepare(
+    `SELECT id, company, contact, email, phone FROM companies WHERE id = ?`).bind(link.company_id).first();
+  if (!wo || !account || !company) return { error: "invalid" };
+  return { link, wo, account, company };
+}
+
+// THE WORK ORDER, AS THE SUB WAS SENT IT. What the email and the work order
+// itself already carry -- the job, the address, the trade, the scope, the pay,
+// the deadline -- and nothing about anybody else: not the other trades on the
+// job, not the tenant, not the account's notes. A forwarded link shows exactly
+// what a forwarded work order already shows.
+function claimWorkOrderShape(wo) {
+  return {
+    number: wo.wo_number, trade: wo.trade, title: wo.title || null,
+    address: wo.address || null, area: wo.area || null, zip: wo.zip || null,
+    date: wo.date || null, time: wo.time || null,
+    scope: wo.trade_scope || wo.job_scope || null,
+    payKind: wo.pay_kind || "fixed",
+    valueCents: wo.value_cents ?? null, rateCents: wo.rate_cents ?? null,
+    capHours: wo.cap_hours ?? null,
+    respondBy: wo.respond_by || null, status: wo.status,
+    autoScheduled: !!wo.auto_scheduled,
+    withdrawn: !!wo.voided_at,
+  };
+}
+
+async function claimStateFor(env, link) {
+  if (link.claimed_at) return "claimed";
+  const { ids, ownAccount } = await companyLoginAuthIds(env, link.company_id);
+  return claimState({ claimedAt: null, companyHasLogin: ids.length > 0 || ownAccount });
+}
+
+// Opened. Counted on the page load rather than anything later, because
+// "the link was opened" is the event the funnel measures.
+app.get("/api/claim/:token", async (c) => {
+  const rl = await rateLimit(c.env, "claim-view", clientIp(c), { limit: 120, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+  const found = await claimLookup(c.env, c.req.param("token"));
+  if (found.error) return c.json({ error: "not_found" }, 404);
+  const { link, wo, account, company } = found;
+  await c.env.DB.prepare(
+    `UPDATE wo_claim_links SET open_count = open_count + 1, last_opened_at = CURRENT_TIMESTAMP,
+            first_opened_at = COALESCE(first_opened_at, CURRENT_TIMESTAMP)
+      WHERE token = ?`).bind(link.token).run();
+  return c.json({
+    state: await claimStateFor(c.env, link),
+    // Whether a texted code can work here at all, so the page can say so
+    // instead of taking a number it cannot send to.
+    phoneLogin: !!(c.env.SUPABASE_URL && c.env.SUPABASE_ANON_KEY),
+    company: { name: company.company || null, contact: company.contact || null },
+    // The last four digits of the number this account holds for them, never
+    // the whole number: enough to say which phone to use, not enough to hand
+    // somebody holding a forwarded link a phone number they did not have.
+    phoneHint: maskPhone(company.phone),
+    account: {
+      id: account.id, name: account.name, subdomain: account.subdomain,
+      theme: parseJson(account.theme), logoKey: account.logo_key,
+      useDefaultMark: !!account.use_default_mark,
+      signIn: `https://${portalUrl(account.subdomain)}/`,
+    },
+    workOrder: claimWorkOrderShape(wo),
+  });
+});
+
+// Ask Supabase to text a code. Through the Worker rather than straight from
+// the browser so the number can be checked against the one this account holds
+// before anything is sent, and so it is rate-limited per link as well as per
+// address -- a texted code costs money and lands on somebody's phone.
+app.post("/api/claim/:token/code", async (c) => {
+  const token = c.req.param("token");
+  const rlIp = await rateLimit(c.env, "claim-code-ip", clientIp(c), { limit: 20, windowMinutes: 60 });
+  const rlTok = await rateLimit(c.env, "claim-code", token, { limit: 5, windowMinutes: 60 });
+  if (!rlIp.ok || !rlTok.ok) return c.json({ error: "rate_limited" }, 429);
+  const found = await claimLookup(c.env, token);
+  if (found.error) return c.json({ error: "not_found" }, 404);
+  const state = await claimStateFor(c.env, found.link);
+  if (state !== "claimable") return c.json({ error: state }, 409);
+  const b = await c.req.json().catch(() => ({}));
+  const problem = claimPhoneProblem({ entered: b.phone, onRecord: found.company.phone });
+  if (problem) return c.json({ error: problem, hint: maskPhone(found.company.phone) },
+    problem === "bad_phone" ? 400 : 409);
+  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) {
+    return c.json({ error: "phone_login_unavailable" }, 501);
+  }
+  let res, body;
+  try {
+    res = await fetch(`${c.env.SUPABASE_URL}/auth/v1/otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: c.env.SUPABASE_ANON_KEY },
+      body: JSON.stringify({ phone: toE164(b.phone), create_user: true }),
+    });
+    body = await res.json().catch(() => ({}));
+  } catch (err) {
+    return c.json({ error: "auth_unreachable", detail: String(err?.message || err) }, 502);
+  }
+  if (!res.ok) {
+    const msg = String(body?.msg || body?.error_description || body?.message || body?.error || "");
+    // Phone sign-in switched off, or no SMS provider behind it, is OUR
+    // configuration and nothing the person holding the phone can fix -- so it
+    // is its own answer, and the page says to use the work order's own link
+    // instead of "try again".
+    if (/provider|disabled|not enabled|unsupported phone/i.test(msg)) {
+      console.error("[claim] Supabase phone sign-in is not configured:", msg);
+      return c.json({ error: "phone_login_unavailable" }, 501);
+    }
+    if (res.status === 429) return c.json({ error: "rate_limited" }, 429);
+    console.error("[claim] Supabase refused the code:", res.status, msg);
+    return c.json({ error: "code_failed", detail: msg.slice(0, 200) }, 502);
+  }
+  return c.json({ ok: true, sentTo: maskPhone(b.phone) });
+});
+
+// Check the code, make the login, record who brought them in.
+//
+// THE VERIFIED PHONE IS SUPABASE'S, NOT THE BODY'S. It comes back on the user
+// Supabase returns for the code, and that is what is matched against the
+// number on record -- so the check above is a courtesy and this is the gate.
+//
+// The session Supabase hands back is passed through to the browser, which
+// stores it the way a password sign-in does. Nothing here keeps it.
+app.post("/api/claim/:token/verify", async (c) => {
+  const token = c.req.param("token");
+  const rl = await rateLimit(c.env, "claim-verify", token, { limit: 10, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+  const found = await claimLookup(c.env, token);
+  if (found.error) return c.json({ error: "not_found" }, 404);
+  const { link, wo, account, company } = found;
+  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) {
+    return c.json({ error: "phone_login_unavailable" }, 501);
+  }
+  const b = await c.req.json().catch(() => ({}));
+  const phone = toE164(b.phone);
+  const code = String(b.code || "").replace(/\D/g, "");
+  if (!phone) return c.json({ error: "bad_phone" }, 400);
+  if (code.length < 4) return c.json({ error: "bad_code" }, 400);
+
+  // Refused before the code is spent, so somebody told "already on SubSub"
+  // has not burnt the code they will not need.
+  const before = await claimStateFor(c.env, link);
+  if (before === "on_subsub") return c.json({ error: "on_subsub" }, 409);
+
+  let res, sess;
+  try {
+    res = await fetch(`${c.env.SUPABASE_URL}/auth/v1/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: c.env.SUPABASE_ANON_KEY },
+      body: JSON.stringify({ type: "sms", phone, token: code }),
+    });
+    sess = await res.json().catch(() => ({}));
+  } catch (err) {
+    return c.json({ error: "auth_unreachable", detail: String(err?.message || err) }, 502);
+  }
+  if (!res.ok || !sess?.access_token || !sess?.user?.id) {
+    return c.json({ error: "bad_code" }, 400);
+  }
+  const authId = sess.user.id;
+  const verified = sess.user.phone || phone;
+  const problem = claimPhoneProblem({ entered: verified, onRecord: company.phone });
+  if (problem) return c.json({ error: problem, hint: maskPhone(company.phone) }, 409);
+
+  // Already used, by this person: a second press, or a refresh. Same answer,
+  // nothing written twice.
+  if (link.claimed_at) {
+    const mine = link.claimed_user_id && (await c.env.DB.prepare(
+      `SELECT 1 AS yes FROM users WHERE id = ? AND auth_id = ?`).bind(link.claimed_user_id, authId).first());
+    if (!mine) return c.json({ error: "claimed" }, 409);
+    return c.json({ ok: true, attributed: false, ...claimSessionReply(sess, account, link.claimed_user_id) });
+  }
+
+  // A login for the company already exists. If it is this person's own --
+  // they had signed up by text before -- it is a sign-in and nothing is
+  // credited; anybody else's, and the company is not theirs to claim.
+  const holders = await companyLoginAuthIds(c.env, company.id);
+  const already = holders.ids.length > 0 || holders.ownAccount;
+  if (already && !holders.ids.includes(authId)) return c.json({ error: "on_subsub" }, 409);
+
+  // THE PERSON. Their own row if this login is already linked to one; else the
+  // company's unclaimed seat holder -- somebody the account added or invited
+  // who never set up a login -- so one person does not become two; else a new
+  // row. A phone login has no email, so the row takes the company's address
+  // when nobody holds it, and the placeholder the rest of the product already
+  // reads as "no real address" when somebody does.
+  let user = await c.env.DB.prepare(`SELECT * FROM users WHERE auth_id = ?`).bind(authId).first();
+  if (!user) {
+    user = await c.env.DB.prepare(
+      `SELECT u.* FROM memberships m JOIN users u ON u.id = m.user_id
+        WHERE m.company_id = ? AND m.role = 'contractor' AND u.auth_id IS NULL
+        ORDER BY (m.account_id = ?) DESC, u.created_at LIMIT 1`
+    ).bind(company.id, account.id).first();
+    if (user) {
+      await c.env.DB.prepare(`UPDATE users SET auth_id = ?, phone = COALESCE(phone, ?) WHERE id = ?`)
+        .bind(authId, normalizePhone(verified), user.id).run();
+    }
+  }
+  if (!user) {
+    const userId = uid();
+    const emailFree = company.email && !(await c.env.DB.prepare(
+      `SELECT 1 AS yes FROM users WHERE lower(email) = lower(?)`).bind(company.email).first());
+    await c.env.DB.prepare(
+      `INSERT INTO users (id, auth_id, name, email, phone) VALUES (?, ?, ?, ?, ?)`
+    ).bind(userId, authId, company.contact || company.company || "Contractor",
+      emailFree ? company.email : `${userId}@no-email.invalid`, normalizePhone(verified)).run();
+    user = { id: userId };
+  }
+
+  // THE SEAT, on the account that sent the work order, so the work order they
+  // just read is the first thing they can answer. A contractor seat is free:
+  // nothing on any plan counts one.
+  const seat = await c.env.DB.prepare(
+    `SELECT id FROM memberships WHERE user_id = ? AND account_id = ?`).bind(user.id, account.id).first();
+  if (!seat) {
+    await c.env.DB.prepare(
+      `INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, 'contractor', ?)`
+    ).bind(uid(), user.id, account.id, company.id).run();
+  }
+
+  // Claimed, and credited -- unless somebody already holds the credit, which
+  // INSERT OR IGNORE leaves alone: the first account to bring a sub in is the
+  // one that did. Not credited at all when the company had a login already.
+  await c.env.DB.prepare(
+    `UPDATE wo_claim_links SET claimed_at = CURRENT_TIMESTAMP, claimed_user_id = ?
+      WHERE token = ? AND claimed_at IS NULL`).bind(user.id, link.token).run();
+  let attributed = false;
+  if (!already) {
+    const r = await c.env.DB.prepare(
+      `INSERT OR IGNORE INTO sub_attributions (company_id, account_id, work_order_id, token, user_id)
+       VALUES (?, ?, ?, ?, ?)`).bind(company.id, account.id, wo.id, link.token, user.id).run();
+    attributed = (r?.meta?.changes || 0) > 0;
+  }
+  await logEvent(c.env, account.id, user.id, "sub.claimed", company.id,
+    { workOrderId: wo.id, woNumber: wo.wo_number, attributed });
+  if (attributed) {
+    await logActivity(c.env, account.id, user.id, "sub_claimed",
+      `${company.company} joined SubSub from ${wo.wo_number}`);
+  }
+  return c.json({ ok: true, attributed, ...claimSessionReply(sess, account, user.id) });
+});
+
+// What the browser needs to be signed in, and where to go. The tokens are the
+// person's own, straight from Supabase.
+function claimSessionReply(sess, account, userId = null) {
+  return {
+    userId,
+    session: { access_token: sess.access_token, refresh_token: sess.refresh_token || null,
+      expires_in: sess.expires_in || null },
+    accountId: account.id, subdomain: account.subdomain,
+  };
+}
+
+// The link for one work order, for the work order drawn in the app and its
+// downloaded copy. Same door as the rest of the work order's reads, so a
+// contractor gets their own and nobody else's.
+app.get("/api/work-orders/:id/claim-link", async (c) => {
+  const { wo, error } = await loadWorkOrder(c, c.req.param("id"));
+  if (error) return error;
+  const token = await ensureClaimLink(c.env,
+    { woId: wo.id, accountId: wo.account_id, companyId: wo.company_id });
+  return c.json({ url: claimUrl(token) });
+});
+
+// THE FUNNEL, PER SENDING ACCOUNT, for the staff console. Work orders sent is
+// links minted; opened is links somebody opened at least once; claimed is the
+// subs this account is credited with bringing onto SubSub. Staff route: it
+// reads across every account, which is what the console is for and what no
+// customer screen may borrow.
+app.get("/api/platform/attribution", async (c) => {
+  const { error } = await requireStaff(c);
+  if (error) return error;
+  try {
+    const { results: links } = await c.env.DB.prepare(
+      `SELECT account_id, COUNT(*) AS sent,
+              SUM(CASE WHEN first_opened_at IS NOT NULL THEN 1 ELSE 0 END) AS opened,
+              SUM(open_count) AS opens
+         FROM wo_claim_links GROUP BY account_id`).all();
+    const { results: claims } = await c.env.DB.prepare(
+      `SELECT account_id, COUNT(*) AS claimed FROM sub_attributions GROUP BY account_id`).all();
+    const by = {};
+    for (const r of links || []) by[r.account_id] = { sent: r.sent, opened: r.opened || 0, opens: r.opens || 0, claimed: 0 };
+    for (const r of claims || []) (by[r.account_id] ||= { sent: 0, opened: 0, opens: 0, claimed: 0 }).claimed = r.claimed;
+    return c.json({ accounts: Object.entries(by).map(([accountId, f]) => ({ accountId, ...claimFunnel(f), opens: f.opens })) });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ accounts: [], migration });
+  }
+});
+
+// One account's funnel and the subs it brought in, by name, for the account's
+// window in the console.
+app.get("/api/platform/accounts/:id/attribution", async (c) => {
+  const { error } = await requireStaff(c);
+  if (error) return error;
+  const id = c.req.param("id");
+  try {
+    const f = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS sent,
+              SUM(CASE WHEN first_opened_at IS NOT NULL THEN 1 ELSE 0 END) AS opened,
+              SUM(open_count) AS opens
+         FROM wo_claim_links WHERE account_id = ?`).bind(id).first();
+    const { results } = await c.env.DB.prepare(
+      `SELECT a.company_id, co.company, a.claimed_at, w.wo_number
+         FROM sub_attributions a
+         LEFT JOIN companies co ON co.id = a.company_id
+         LEFT JOIN work_orders w ON w.id = a.work_order_id
+        WHERE a.account_id = ? ORDER BY a.claimed_at DESC LIMIT 100`).bind(id).all();
+    return c.json({
+      ...claimFunnel({ sent: f?.sent || 0, opened: f?.opened || 0, claimed: (results || []).length }),
+      opens: f?.opens || 0,
+      subs: (results || []).map((r) => ({ companyId: r.company_id, company: r.company || null,
+        claimedAt: r.claimed_at, woNumber: r.wo_number || null })),
+    });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ ...claimFunnel(), opens: 0, subs: [], migration });
+  }
 });
 
 
@@ -6954,6 +7358,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\bwo_claim_links\b|\bsub_attributions\b/i.test(m)) return "074_wo_claims";
   if (/\bjob_access\b/i.test(m)) return "073_job_access";
   if (/\btenant_contacts\b|\bbuilding_notices\b/i.test(m)) return "072_tenant_home";
   if (/\bwaiver_forms\b|ux_waiver_open/i.test(m)) return "069_waiver_forms";
@@ -9820,6 +10225,10 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   // pressed Assign is the only person who can fix any of those, and they
   // were the one person not told.
   let notified = { emailed: false, texted: false, emailError: null, textError: null, to: null };
+  // 074. Minted here, before anything is sent, so the email, the text and
+  // the work order drawn in the app all carry the same link -- and so a row
+  // exists for every work order that went out, which is what "sent" counts.
+  const claimLink = claimUrl(await ensureClaimLink(c.env, { woId: id, accountId, companyId }));
   {
     const co = await c.env.DB.prepare(
       `SELECT id, company, contact, email, phone, notify FROM companies WHERE id = ?`).bind(companyId).first();
@@ -9840,7 +10249,7 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
       ]);
       if (to) {
         const mail = workOrderIssuedEmail({ company: co, contact: co.contact, job, trade,
-          woNumber, account, respondBy });
+          woNumber, account, respondBy, claimLink });
         const result = await sendEmail(c.env, { to, subject: mail.subject,
           text: mail.text, html: mail.html });
         await logMail(c.env, { accountId, companyId, to, kind: "wo_issued",
@@ -9850,7 +10259,7 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
       }
       if (sms) {
         const result = await sendAccountSms(c.env, { accountId, companyId, to: sms, kind: "wo_issued",
-          body: workOrderIssuedSms({ job, trade, woNumber, account, respondBy }) });
+          body: workOrderIssuedSms({ job, trade, woNumber, account, respondBy, claimLink }) });
         notified.texted = !!result?.ok;
         if (!result?.ok) notified.textError = result?.error || "send_failed";
       }
@@ -10018,12 +10427,14 @@ async function dispatchEmergency(c, jobId, accountId) {
       `SELECT id, company, contact, email, phone, notify FROM companies WHERE id = ?`).bind(companyId).first();
     const where = [job.address, job.zip].filter(Boolean).join(", ");
     const line = `EMERGENCY call-out from ${account.name}: ${job.title}${where ? ` at ${where}` : ""}. ${woNumber}.`;
+    // 074. A call-out is a work order too, and says how it was sent.
+    const claimLink = claimUrl(await ensureClaimLink(c.env, { woId: id, accountId, companyId }));
     // Email and text, both, regardless of what they normally chose. Somebody
     // who opted out of texts did so about job offers, not about this.
     if (co?.email) {
       const result = await sendEmail(c.env, { to: co.email,
         subject: `Emergency call-out — ${job.title}`,
-        text: `${line}\n\n${job.scope || ""}\n\nThis was sent automatically because ${account.name} named you their emergency contractor. Please respond within two hours.` });
+        text: `${line}\n\n${job.scope || ""}\n\nThis was sent automatically because ${account.name} named you their emergency contractor. Please respond within two hours.\n\n${footerText(claimLink)}` });
       await logMail(c.env, { accountId, companyId, to: co.email, kind: "emergency_dispatch",
         subject: `Emergency call-out — ${job.title}`, result, sentBy: null });
     }
@@ -10031,7 +10442,7 @@ async function dispatchEmergency(c, jobId, accountId) {
       // Sent whatever the month's count says -- see SMS_UNCAPPED_KINDS -- and
       // now logged, which it never was, so the console's count is true.
       await sendAccountSms(c.env, { accountId, companyId, to: co.phone,
-        kind: "emergency_dispatch", body: line.slice(0, 300) }).catch(() => {});
+        kind: "emergency_dispatch", body: `${line.slice(0, 220)} ${footerSms(claimLink)}` }).catch(() => {});
     }
 
     await logEvent(c.env, accountId, null, "wo.emergency_dispatched", id, { jobId, companyId, woNumber });
@@ -10072,6 +10483,8 @@ app.post("/api/work-orders/:id/reissue", requireRole("admin", "pm"), async (c) =
   ).bind(newId, n, wo.job_id, wo.trade, wo.company_id, wo.engagement_id,
     b.crewName ?? wo.crew_name, b.tradeScope ?? wo.trade_scope, valueCents).run());
 
+  // 074. A reissued work order is a new document with a link of its own.
+  await ensureClaimLink(c.env, { woId: newId, accountId, companyId: wo.company_id });
   await touchJob(c.env, wo.job_id);
   await logEvent(c.env, accountId, userId, "wo.reissued", newId, { voided: id });
   return c.json({ id: newId, woNumber }, 201);
@@ -11677,6 +12090,8 @@ app.post("/api/quote-requests/:id/award", requireRole("admin", "pm"), async (c) 
          awarded_wo_id = ?, closed_at = CURRENT_TIMESTAMP WHERE id = ?`
     ).bind(invite.company_id, woId, req.id).run();
 
+    // 074. Awarding issues the work order, so it carries its link like any other.
+    await ensureClaimLink(c.env, { woId, accountId, companyId: invite.company_id });
     await logEvent(c.env, accountId, userId, "quotes.awarded", req.id,
       { jobId: req.job_id, trade: req.trade, companyId: invite.company_id, woNumber });
     await logActivity(c.env, accountId, userId, "quote_awarded",

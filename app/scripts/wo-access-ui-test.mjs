@@ -72,6 +72,7 @@ const PLAN = {
   canEditHow: true,
 };
 
+const CLAIM_URL = `https://app.subsub.work/claim/${"c".repeat(64)}`;
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, ACC()];
@@ -88,6 +89,8 @@ const api = serveApi({ port: API, routes: (path) => {
     return S.accessStatus === 200 ? [200, PLAN] : [404, { error: "job_not_found" }];
   }
   if (/^\/api\/work-orders\/[^/]+\/inspection$/.test(path)) return [404, { error: "not_found" }];
+  // 074. The "Sent via SubSub" link the work order prints at its foot.
+  if (/^\/api\/work-orders\/[^/]+\/claim-link$/.test(path)) return [200, { url: CLAIM_URL }];
   if (/^\/api\/work-orders\/[^/]+\/plan$/.test(path))
     return [200, { valueCents: 40000, milestones: [], releases: [], retainageBps: 0 }];
   if (/^\/api\/jobs\/[^/]+\/trade-scope$/.test(path)) return [200, {}];
@@ -136,6 +139,8 @@ const read = (page) => page.evaluate(() => {
     panel: !!sec?.querySelector(".acc-panel"),
     calls: [...(sec?.querySelectorAll('a[href^="tel:"]') || [])].map((a) => a.getAttribute("href")),
     rung: !!sec?.classList.contains("rung"),
+    sentVia: (doc.querySelector(".wo-sentvia")?.innerText || "").replace(/\s+/g, " ").trim() || null,
+    claimHref: doc.querySelector(".wo-sentvia a")?.getAttribute("href") || null,
   };
 });
 
@@ -174,6 +179,12 @@ try {
     t.ck("the downloaded work order carries the access block",
       /ACCESS\n.*lets Pacific apartment maintenance in\.\nWhere: Meet at the front door/.test(txt || ""), String(txt).slice(0, 400));
     t.ck("and the people to call", /Contact: John \(Tenant\)/.test(txt || ""));
+    // 074. Every work order says how it was sent, and carries the claim link.
+    t.ck("the work order says it was sent via SubSub, free for subs",
+      /Sent via SubSub\. SubSub is free for subcontractors, forever\./.test(r?.sentVia || ""), String(r?.sentVia));
+    t.ck("with the claim link the server minted", r?.claimHref === CLAIM_URL, String(r?.claimHref));
+    t.ck("and the downloaded copy carries both",
+      /Sent via SubSub/.test(txt || "") && (txt || "").includes(CLAIM_URL), String(txt).slice(-300));
     t.ck("no page error", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -259,6 +270,10 @@ try {
     t.ck("and no Visit row with nothing to say", r && r.visit === null, String(r?.visit));
     t.ck("no Access section", r && r.sec === null);
     t.ck("and opening it asks the access route nothing", S.accessAsks === before, `${before} -> ${S.accessAsks}`);
+    // A general contractor on Scale -- the branded plan -- still sends the
+    // footer. There is nothing that removes it.
+    t.ck("a Scale general contractor's work order still says Sent via SubSub",
+      /Sent via SubSub/.test(r?.sentVia || "") && r?.claimHref === CLAIM_URL, String(r?.sentVia));
     await ctx.close();
   }
 } finally {

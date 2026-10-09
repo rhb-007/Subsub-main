@@ -267,6 +267,20 @@ See `worker/schema.sql` for the full schema and inline comments, and
 `DEPLOYMENT.pdf` for the reasoning behind it (the identity model, WA L&I
 license verification, work-order immutability, suggested phased rollout).
 
+`DEPLOYMENT.md` holds the per-release deployment notes: which migration to
+paste, what to switch on, and what to check afterwards.
+
+### Work-order attribution (074)
+
+| Table | Key | Meaning |
+|---|---|---|
+| `wo_claim_links` | `token`, unique `work_order_id` | One per work order sent. Stamped with the sending `account_id` and the `company_id` at issue; carries `first_opened_at`, `last_opened_at`, `open_count`, and `claimed_at` / `claimed_user_id` once used. |
+| `sub_attributions` | `company_id` | Which account brought this sub onto SubSub, via which `work_order_id` and `token`, and the `user_id` made. First claim wins; never written for a company that already had a login. |
+
+Per account: **sent** is `COUNT(wo_claim_links)`, **opened** is those with
+`first_opened_at`, **claimed** is `COUNT(sub_attributions)`. Rules are in
+`shared/claim.js`.
+
 ## Trades, white-label colors, and the public application form
 
 - **Trades**: `CATEGORIES`/`CAP_LIBRARY` in `src/App.tsx` cover 29 trades

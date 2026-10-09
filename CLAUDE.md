@@ -11154,6 +11154,90 @@ refactor.
   mutations fire: the card never asking (six), the fetched window ignored
   (three), and the Visit row dropped (two).
 
+- **EVERY WORK ORDER SAYS "SENT VIA SUBSUB", CARRIES A CLAIM LINK, AND A SUB
+  MAKES A FREE LOGIN FROM IT WITH A MOBILE AND A TEXTED CODE.** Asked for as
+  viral attribution on everything a hiring account sends a sub. Migration 074
+  (`wo_claim_links`, `sub_attributions`), `app/shared/claim.js`,
+  `app/DEPLOYMENT.md`.
+
+  **One link per work order, minted on issue, and the same link everywhere.**
+  The assign route, the emergency dispatch, a reissue and a quote award all
+  call `ensureClaimLink` before anything is sent. So the email, the text, the
+  work order drawn in the app and its downloaded copy carry the same URL, and
+  a row per work order is what "sent" counts. `INSERT OR IGNORE` on the work
+  order's unique key, so two requests at once agree on one token. The link is
+  `app.subsub.work/claim/<token>`, **SubSub's own front door and never the
+  account's branded host**: the link introduces SubSub, and a company's own
+  address over our signup is the white-label failure from the other side.
+  `account_id` and `company_id` are **stamped** at issue, so who sent it
+  survives a reissue or a void.
+
+  **The footer is not a setting.** No plan, flag or column removes it, and
+  `test:claim` greps for one. White-labelling changes whose colours a page
+  wears, never whether it says how it was sent. A database without 074 still
+  sends the line, with no link: losing the link costs a recruitment, while
+  refusing the work order costs the job.
+
+  **Holding the link is not being the company.** When the sending account has
+  a mobile for the company, only that mobile claims. The check is on the number
+  **Supabase verified**, not the number in the body, because a code that
+  verified some other phone is a forwarded link. The suite's discriminating
+  case is a body naming the right number over a verify that answered a
+  different one. With no mobile on record, any real US mobile claims: that is
+  the trust an emailed invite already extends.
+
+  **Phone sign-in goes through the Worker with the anon key.** `/auth/v1/otp`
+  then `/auth/v1/verify`, and the session Supabase returns is handed to the
+  browser, which stores it the way a password sign-in does. That puts the
+  number check before anything is sent and rate-limits per link as well as per
+  address, since a texted code costs money and lands on somebody's phone. No
+  service-role key is involved. Phone sign-in switched off in Supabase is its
+  own answer (`phone_login_unavailable`, 501), because "try again" cannot fix
+  our configuration.
+
+  **A company already on SubSub is a sign-in, not a recruitment, and the first
+  account keeps the credit.** `companyLoginAuthIds` is deliberately UNSCOPED,
+  the same reasoning as `companyAnswersForItself`: a roofer whose login is on
+  another general contractor's account is already here. `sub_attributions` is
+  keyed on the company and written with `INSERT OR IGNORE`, so nothing ever
+  overwrites the credit. The claim makes a contractor seat on the **sending**
+  account, so the work order they just read is the first thing they can
+  answer. It reuses the company's unclaimed seat holder rather than making
+  a second person.
+
+  **The page shows what the work order already showed, and nothing else**: the
+  job, the address, the trade's scope, the pay and the deadline. It omits the
+  other trades on the job, the tenant and the account's notes, so a forwarded
+  link shows exactly what a forwarded work order shows. The phone hint is the
+  last four digits only. An unknown token and a malformed one both answer 404.
+
+  **It is a PATH, not a query parameter**, because it is printed at the foot of
+  a document and read off a lock screen. Pages has no `404.html` here, so it
+  serves the app for any path, and `claimPathToken` reads it above the
+  logged-in gate, beside the pack and the inbox.
+
+  **The invariant was run against real rows**, which is 057's lesson:
+  `m074_inv_claim_unattributed` reads 0 on a claimed database and 1 once a
+  credit row is deleted. Seven server mutations and four browser ones fire,
+  each on its own assertion.
+
+  **And the console panel crashed the account window on its first run**,
+  because a stub that answered `[]` made `d.subs.length` throw inside a window
+  that has no error boundary. `test:consolelists` went from 102 green to 39
+  red. That is a new panel taking an existing screen down with it, so the
+  panel now draws nothing for any reply that is not its shape. **A panel added
+  to a shared window has to survive every reply the window's other suites
+  stub**, not only its own.
+
+  **Still open:**
+  - There is no PDF of a work order. It is drawn in the app and downloaded as
+    text, and the footer is on both.
+  - A live Supabase phone round trip has not been run. It needs phone auth and
+    an SMS provider switched on in the Supabase dashboard (DEPLOYMENT.md says
+    where).
+  - `DEPLOYMENT.pdf` cannot be edited in a commit, so the per-release notes
+    start in `DEPLOYMENT.md`.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

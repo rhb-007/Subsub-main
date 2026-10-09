@@ -103,6 +103,7 @@ import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
 import { CONTACT_PREFS, NEEDS_PHONE, contactLine, emergencyLine, noticeLive, sortNotices, NOTICE_TITLE_MAX, NOTICE_BODY_MAX } from "../shared/tenanthome.js";
 import { TRADES } from "../shared/trades.js";
+import { claimPathToken, SENT_VIA, FREE_LINE, footerText } from "../shared/claim.js";
 import { SOURCE_PRESETS } from "../shared/crmsources.js";
 import { ANY_SOURCE } from "../shared/crmmap.js";
 import { qrPath } from "./lib/qr.js";
@@ -2115,6 +2116,12 @@ export default function SubSub() {
     if (typeof window === "undefined") return null;
     return new URLSearchParams(window.location.search).get("inbox");
   });
+  // 074. A "Sent via SubSub" link: /claim/<token>, a PATH rather than a query
+  // parameter because it is printed at the foot of a work order and read off a
+  // lock screen, and a path is the shape people trust in a text. Pages serves
+  // the app for any path it has no file for, so this reaches the bundle.
+  const [claimToken] = useState(() =>
+    typeof window === "undefined" ? null : claimPathToken(window.location.pathname));
   // And `?signup=1`, which meant "I want an account" and was handled by
   // nothing at all -- so it fell through to the sign-in form, which is a
   // password box in front of somebody who has just said they have no account.
@@ -5234,6 +5241,18 @@ export default function SubSub() {
   // page stays public, and the claim knows whether there is anybody to claim
   // onto. Guarded on `loggedIn`, because until then `role` and `account` are
   // the demo seed rather than anybody's real seat.
+  // Above the logged-in gate for the pack's reason: somebody opened a link to
+  // read a work order, and the page is the same whether or not they are signed
+  // in -- the Worker decides whether the company can still be claimed.
+  if (claimToken) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <ClaimPage token={claimToken} />
+      </div>
+    );
+  }
+
   if (inboxToken) {
     return (
       <div className="ss-root">
@@ -9911,6 +9930,8 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
 
             <FeeTermsPanel accountId={open.a.id} canEdit={isSuper} />
 
+            <AttributionPanel accountId={open.a.id} />
+
             <div className="pf-panel">
               <div className="pf-panel-hd">
                 <h3>Team</h3>
@@ -11919,6 +11940,61 @@ function CompPanel({ account, onSave }) {
 // A REASON IS REQUIRED, for the reason a comp carries one: a rate nobody can
 // explain becomes permanent. Only a superadmin may set it, which is what the
 // route enforces; support sees the terms and nothing to press.
+// 074. WHAT THIS ACCOUNT'S WORK ORDERS DID FOR SUBSUB. Every work order it
+// sent carried a "Sent via SubSub" link: how many went, how many were opened,
+// and which subs made their free login from one -- by name, because "which
+// GC brought in which sub" is the question this answers. Read-only, for every
+// staff role; the funnel is a fact about the account, not a setting.
+function AttributionPanel({ accountId }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let live = true;
+    setD(null); setErr("");
+    api.platform.attribution(accountId).then((r) => { if (live) setD(r); })
+      .catch((e) => { if (live) setErr(e?.body?.error === "forbidden" ? "" : "Couldn't load the work order links."); });
+    return () => { live = false; };
+  }, [accountId]);
+  // A reply that is not the shape -- an older Worker, a proxy page -- draws
+  // nothing rather than throwing inside the account window, which has no
+  // error boundary and would take the whole window with it.
+  if (!d || typeof d !== "object" || Array.isArray(d)) {
+    return err ? <div className="pf-panel"><p className="billing-err">{err}</p></div> : null;
+  }
+  const subs = Array.isArray(d.subs) ? d.subs : [];
+  const pct = (n) => (n == null ? "—" : `${n}%`);
+  return (
+    <div className="pf-panel pf-attr">
+      <h3>Subs brought in</h3>
+      {d.migration ? (
+        <p className="cov-hint">Migration 074 has not been run, so work orders go out without a claim link.</p>
+      ) : (
+        <>
+          <div className="pf-attr-kpis">
+            <div><b>{d.sent || 0}</b><span>work orders sent</span></div>
+            <div><b>{d.opened || 0}</b><span>links opened <em>{pct(d.openRate)}</em></span></div>
+            <div><b>{d.claimed || 0}</b><span>profiles claimed <em>{pct(d.claimRate)}</em></span></div>
+          </div>
+          <p className="pf-note">
+            Every work order carries a {"“"}Sent via SubSub{"”"} link. Claimed counts a
+            sub who made their first login from one of this account{"’"}s links; a sub
+            already on SubSub is not counted, and the first account to bring one in keeps it.
+            {d.opens > d.opened ? ` Opened ${d.opens} times in all.` : ""}
+          </p>
+          {subs.length > 0 && (
+            <ul className="pf-attr-list">
+              {subs.map((x) => (
+                <li key={x.companyId}><b>{x.company || "A company"}</b>
+                  <span>{[x.woNumber, niceDay(x.claimedAt)].filter(Boolean).join(" · ")}</span></li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function FeeTermsPanel({ accountId, canEdit }) {
   const [d, setD] = useState(null);
   const [f, setF] = useState(null);
@@ -26299,6 +26375,193 @@ function DocPack({ token }) {
 // auth, and it was emailed rather than linked straight through from a share --
 // holding a forwarded certificate is not proof somebody still reads that
 // mailbox, and this opens everything ever sent to it.
+// 074. THE PAGE A "SENT VIA SUBSUB" LINK OPENS.
+//
+// Somebody who has never heard of SubSub was sent a work order and tapped the
+// link at the foot of it, nearly always on a phone. They get the work order
+// first -- that is what they came for -- and under it a free login in two
+// fields: their mobile, then the code texted to it. No password, no email, no
+// form about their company, because the account that sent the work order has
+// already typed all of that in.
+//
+// "Free" is said twice, above the button and on it, because the one thing
+// that stops a roofer tapping a software company's button is the suspicion of
+// a bill. And it is true for ever: nothing on any plan charges a contractor
+// seat.
+//
+// Mobile-first: one column, every control at least 48px tall, the number box
+// is type=tel and the code box asks the phone to offer the texted code.
+const CLAIM_ERRORS = {
+  bad_phone: "That doesn't look like a US mobile number.",
+  phone_mismatch: "Use the mobile this work order was sent to.",
+  bad_code: "That code didn't work. Check the text, or send a new one.",
+  rate_limited: "Too many tries. Wait a few minutes and try again.",
+  phone_login_unavailable: "Sign-in by text isn't available right now. Use the sign-in link below instead.",
+  claimed: "This link has already been used to make a login. Sign in instead.",
+  on_subsub: "You're already on SubSub. Sign in to answer this work order.",
+  auth_unreachable: "We couldn't reach the sign-in service. Try again in a moment.",
+  code_failed: "We couldn't send a code to that number. Check it and try again.",
+};
+const claimErrText = (e) => CLAIM_ERRORS[e?.body?.error]
+  || (e?.status ? `That didn't work (${e?.body?.error || e.status}).` : "No connection. Check your signal and try again.");
+
+function claimPay(w) {
+  if (w.payKind === "hourly" && w.rateCents != null) {
+    return `${formatCents(w.rateCents)}/hr${w.capHours ? `, up to ${w.capHours} hours` : ""}`;
+  }
+  return w.valueCents != null ? formatCents(w.valueCents) : null;
+}
+
+function ClaimPage({ token }) {
+  const [page, setPage] = useState(null);
+  const [gone, setGone] = useState("");
+  const [step, setStep] = useState("phone");   // phone | code | done
+  const [phone, setPhone] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [sentTo, setSentTo] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    api.claim(token).then((r) => { if (live) setPage(r); })
+      .catch((e) => { if (live) setGone(e?.status === 404 ? "not_found" : "error"); });
+    return () => { live = false; };
+  }, [token]);
+
+  if (gone) return (
+    <div className="pack-page claim-page">
+      <div className="pack-card pack-gone">
+        <AlertTriangle size={26} />
+        <h2>{gone === "not_found" ? "We couldn't find that work order" : "That didn't load"}</h2>
+        <p>{gone === "not_found"
+          ? "The link may have been copied only in part. Open it again from the email or text you were sent."
+          : "Check your signal and open the link again."}</p>
+      </div>
+      <p className="pack-foot">{SENT_VIA}</p>
+    </div>
+  );
+  if (!page) return <div className="pack-page claim-page"><div className="pack-card">Loading…</div></div>;
+
+  const w = page.workOrder || {};
+  const trade = TRADES.find((t) => t.id === w.trade)?.label || w.trade;
+  const pay = claimPay(w);
+  const from = page.account?.name || "A company on SubSub";
+  const signIn = page.account?.signIn || "/";
+
+  const sendCode = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = await api.claimCode(token, phone);
+      setSentTo(r.sentTo || ""); setStep("code");
+    } catch (e) {
+      setErr(claimErrText(e));
+      if (["claimed", "on_subsub"].includes(e?.body?.error)) setPage({ ...page, state: e.body.error });
+    } finally { setBusy(false); }
+  };
+  const verify = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = await api.claimVerify(token, phone, code);
+      // The session is the person's own, straight from Supabase. Stored the
+      // way a password sign-in stores it, so the app opens signed in.
+      if (supabaseEnabled && r.session?.access_token) {
+        await supabase.auth.setSession({ access_token: r.session.access_token,
+          refresh_token: r.session.refresh_token || "" }).catch(() => {});
+      }
+      if (r.userId && r.accountId) setAuth({ userId: r.userId, accountId: r.accountId });
+      setStep("done");
+    } catch (e) {
+      setErr(claimErrText(e));
+      if (["claimed", "on_subsub"].includes(e?.body?.error)) setPage({ ...page, state: e.body.error });
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="pack-page claim-page">
+      <div className="pack-card claim-card">
+        <span className="pack-kicker">Work order from {from}</span>
+        <h1>{trade}{w.title ? ` · ${w.title}` : ""}</h1>
+        <p className="pack-lede">
+          {w.number}{w.withdrawn ? " · withdrawn" : ""}
+          {page.company?.name ? ` · for ${page.company.name}` : ""}
+        </p>
+
+        <dl className="claim-facts">
+          {w.address && <div><dt><MapPin size={14} /> Where</dt>
+            <dd>{[w.address, w.area, w.zip].filter(Boolean).join(", ")}</dd></div>}
+          {w.date && <div><dt><Calendar size={14} /> When</dt>
+            <dd>{niceDay(w.date)}{w.time ? ` · ${niceTime(w.time)}` : ""}</dd></div>}
+          {pay && <div><dt>Pay</dt><dd>{pay}</dd></div>}
+          {w.respondBy && !w.withdrawn && w.status === "pending" && <div><dt><Clock size={14} /> Answer by</dt>
+            <dd>{niceDay(w.respondBy)}</dd></div>}
+        </dl>
+        {w.scope && <p className="claim-scope">{w.scope}</p>}
+
+        <div className="claim-box">
+          {step === "done" ? (
+            <>
+              <h3><CheckCircle2 size={18} /> You're on SubSub</h3>
+              <p>Accept or decline this work order, see your schedule and send your
+                paperwork, all from your phone. It stays free.</p>
+              <a className="btn-solid claim-btn" href="/">Open my work order</a>
+            </>
+          ) : page.state !== "claimable" ? (
+            <>
+              <h3>{page.state === "claimed" ? "This link has been used" : "You're already on SubSub"}</h3>
+              <p>{page.state === "claimed"
+                ? "A login was already made from this work order. Sign in to answer it."
+                : `Sign in to accept or decline it. It is waiting for you on ${from}'s account.`}</p>
+              <a className="btn-solid claim-btn" href={signIn}>Sign in</a>
+            </>
+          ) : !page.phoneLogin ? (
+            <>
+              <h3>Answer this work order in SubSub</h3>
+              <p>{FREE_LINE} Sign in from the link in the email you were sent.</p>
+              <a className="btn-solid claim-btn" href={signIn}>Sign in</a>
+            </>
+          ) : step === "phone" ? (
+            <>
+              <h3>Claim your free profile</h3>
+              <p className="claim-free"><ShieldCheck size={15} /> {FREE_LINE} No card, no trial.</p>
+              <p>Under a minute: your mobile, then the code we text you.</p>
+              <label className="claim-fld">
+                <span>Mobile number{page.phoneHint ? ` (the one ending ${page.phoneHint.slice(-4)})` : ""}</span>
+                <input type="tel" inputMode="tel" autoComplete="tel" placeholder="(206) 555-0101"
+                  value={phone} onChange={(e) => setPhone(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && phone && !busy) sendCode(); }} />
+              </label>
+              {err && <p className="claim-err" role="alert">{err}</p>}
+              <button className="btn-solid claim-btn" disabled={busy || !phone.trim()} onClick={sendCode}>
+                {busy ? "Sending…" : "Text me a code"}
+              </button>
+            </>
+          ) : (
+            <>
+              <h3>Enter the code</h3>
+              <p>We texted a code to {sentTo || "your mobile"}.</p>
+              <label className="claim-fld">
+                <span>Code</span>
+                <input inputMode="numeric" autoComplete="one-time-code" maxLength={8} placeholder="123456"
+                  value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                  onKeyDown={(e) => { if (e.key === "Enter" && code.length >= 4 && !busy) verify(); }} />
+              </label>
+              {err && <p className="claim-err" role="alert">{err}</p>}
+              <button className="btn-solid claim-btn" disabled={busy || code.length < 4} onClick={verify}>
+                {busy ? "Checking…" : "Create my free account"}
+              </button>
+              <button className="claim-back" onClick={() => { setStep("phone"); setCode(""); setErr(""); }}>
+                Use a different number, or send a new code
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      <p className="pack-foot">{SENT_VIA} · free for subcontractors, forever</p>
+    </div>
+  );
+}
+
 function DocInbox({ token, seat = null }) {
   const [box, setBox] = useState(null);
   const [err, setErr] = useState("");
@@ -30440,6 +30703,19 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
   const coPending = (cos || []).filter((c) => c.status === "pending").length;
   const revised = Number(moneyRaw(a.value) || 0) + coList.reduce((n, c) => n + c.valueDelta, 0);
   const M = catMeta(trade);
+  // 074. "SENT VIA SUBSUB", AND THE LINK BEHIND IT, ON EVERY WORK ORDER. The
+  // same link the email and the text carried, minted by the server on issue
+  // and read back here. Not plan-gated and not hidden for a branded account:
+  // white-labelling changes whose colours this wears, never whether it says
+  // how it was sent. A read that fails still draws the line without the link,
+  // because the line is the attribution and the link is only the way in.
+  const [claimLink, setClaimLink] = useState(null);
+  useEffect(() => {
+    if (!a?.id) return undefined;
+    let live = true;
+    api.woClaimLink(a.id).then((r) => { if (live) setClaimLink(r?.url || null); }).catch(() => {});
+    return () => { live = false; };
+  }, [a?.id]);
   const download = () => {
     const lines = [
       `WORK ORDER ${a.wo}`,
@@ -30487,7 +30763,9 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
       "",
       `Status: ${a.auto ? "Auto-scheduled" : a.status}`,
       "",
-      brand ? `${brand.name} — powered by SubSub` : "Powered by SubSub",
+      brand ? brand.name : "",
+      "",
+      footerText(claimLink),
     ].filter((l) => l !== "");
     const blob = new Blob([lines.join("\n")], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
@@ -30625,6 +30903,14 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
           <input type="file" hidden onChange={(e) => { if (e.target.files.length) onUploadSigned(e.target.files[0]); }} />
         </label>
       ) : <p className="muted">Not yet uploaded.</p>}
+
+      <div className="wo-sentvia">
+        <b>{SENT_VIA}.</b> {FREE_LINE}
+        {claimLink && (
+          <>{" "}<a href={claimLink} target="_blank" rel="noopener noreferrer">
+            See this work order and claim your free profile</a></>
+        )}
+      </div>
 
       <div className="form-actions">
         <button className="btn-ghost" onClick={onClose}>Close</button>
@@ -35904,6 +36190,49 @@ body{background:var(--paper)}
 /* Already inside a card, so it drops the popover's own chrome. */
 .qsend-peek.inline{position:static;margin:0;box-shadow:none;border:0;padding:0;background:none;
   width:auto;min-width:0}
+
+/* The console's "Subs brought in" panel. */
+.pf-attr-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:6px 0 10px}
+.pf-attr-kpis > div{background:var(--paper);border:1px solid var(--line);border-radius:10px;
+  padding:9px 10px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.pf-attr-kpis b{font-size:20px}
+.pf-attr-kpis span{font-size:11.5px;color:var(--ink-soft)}
+.pf-attr-kpis em{font-style:normal;font-weight:700;color:var(--ink)}
+.pf-attr-list{list-style:none;margin:8px 0 0;padding:0}
+.pf-attr-list li{display:flex;justify-content:space-between;gap:10px;padding:7px 0;
+  border-top:1px solid var(--line);font-size:13px}
+.pf-attr-list li span{color:var(--ink-soft);white-space:nowrap}
+/* The line at the foot of every work order. Plain and small, never hidden:
+   it is how a work order says where it came from. */
+.wo-sentvia{margin:18px 0 0;padding:11px 13px;border-radius:10px;background:var(--paper);
+  border:1px solid var(--line);font-size:12.5px;line-height:1.55;color:var(--ink-soft)}
+.wo-sentvia b{color:var(--ink)}
+.wo-sentvia a{color:var(--brand-dk);font-weight:700}
+/* ---- The claim page, for a "Sent via SubSub" link ---------------------
+   Read on a phone by somebody who has never seen SubSub: one column, the
+   work order first, and controls at least 48px tall. */
+.claim-page{justify-content:flex-start;padding-top:28px}
+.claim-card h1{font-size:23px;line-height:1.2}
+.claim-facts{margin:16px 0 0;display:flex;flex-direction:column;gap:0}
+.claim-facts > div{display:flex;gap:12px;padding:10px 0;border-top:1px solid var(--line);font-size:14px}
+.claim-facts dt{flex:none;width:96px;display:flex;align-items:center;gap:5px;color:var(--ink-soft);
+  font-size:12.5px;font-weight:700}
+.claim-facts dd{margin:0;min-width:0;overflow-wrap:anywhere;font-weight:600}
+.claim-scope{margin:10px 0 0;padding:12px;border-radius:10px;background:var(--paper);
+  font-size:13.5px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.claim-box{margin-top:20px;padding:18px;border-radius:14px;border:1px solid var(--line);
+  background:var(--paper);display:flex;flex-direction:column;gap:10px}
+.claim-box h3{margin:0;font-size:18px;display:flex;align-items:center;gap:7px}
+.claim-box p{margin:0;font-size:13.5px;line-height:1.55;color:var(--ink)}
+.claim-free{display:flex;align-items:center;gap:6px;font-weight:700;color:var(--brand-dk)!important}
+.claim-fld{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:700;color:var(--ink-soft)}
+.claim-fld input{min-height:48px;font-size:18px;padding:10px 12px;border-radius:10px;
+  border:1px solid var(--line);background:var(--card);color:var(--ink);letter-spacing:.02em}
+.claim-btn{min-height:50px;font-size:16px;justify-content:center;text-align:center;
+  text-decoration:none;display:flex;align-items:center}
+.claim-err{color:#a3342a!important;font-weight:700}
+.claim-back{background:none;border:0;padding:6px 0;font:600 13px Inter,sans-serif;
+  color:var(--ink-soft);text-decoration:underline;cursor:pointer;align-self:flex-start}
 
 /* ---- The inbox -------------------------------------------------------- */
 .pack-wrap.wide .pack-card{max-width:760px}

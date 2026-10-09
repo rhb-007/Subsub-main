@@ -40,6 +40,10 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/platform/companies") return [200, []];
   if (path.startsWith("/api/platform/activity/")) return [200, []];
   if (path === "/api/platform/accounts/acc1/fee-terms" && method === "GET") return [200, TERMS];
+  // 074. Beside the fee: what this account's work orders brought in.
+  if (path === "/api/platform/accounts/acc1/attribution") return [200, {
+    sent: 12, opened: 9, claimed: 3, openRate: 75, claimRate: 33, opens: 14,
+    subs: [{ companyId: "cmp_bay", company: "Bay Roofing", claimedAt: "2026-10-01 10:00:00", woNumber: "WO-1001" }] }];
   if (path === "/api/platform/accounts/acc1/fee-terms" && method === "PUT") {
     sent.push(body);
     TERMS = body.reset ? { ...TERMS, terms: TERMS.defaults, custom: false, note: null }
@@ -98,6 +102,11 @@ try {
     t.ck("the boxes are in percent and dollars", JSON.stringify(r?.inputs) === JSON.stringify(["0.5", "500", "50000"]),
       JSON.stringify(r?.inputs));
     t.ck("Save waits until something changes", r?.save?.disabled === true);
+    // 074. The "Subs brought in" panel, drawn in the same window.
+    const at = await page.evaluate(() => (document.querySelector(".pf-attr")?.innerText || "").replace(/\s+/g, " "));
+    t.ck("the account window says what its work orders brought in",
+      /12 work orders sent/.test(at) && /9 links opened 75%/.test(at) && /3 profiles claimed 33%/.test(at), at);
+    t.ck("and names the subs it brought onto SubSub", /Bay Roofing/.test(at) && /WO-1001/.test(at), at);
 
     await typeIn(page, 0, "0.25");
     await typeIn(page, 1, "250");
