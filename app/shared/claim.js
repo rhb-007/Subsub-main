@@ -123,3 +123,41 @@ export function claimFunnel({ sent = 0, opened = 0, claimed = 0 } = {}) {
   const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : null);
   return { sent, opened, claimed, openRate: pct(opened, sent), claimRate: pct(claimed, opened) };
 }
+
+// ---- or an email address ---------------------------------------------------
+//
+// The same login by a code sent to an address instead of a mobile. It exists
+// so a sub can claim before any SMS provider is set up -- and some people would
+// rather type an address than a number anyway. Supabase sends the code from
+// the email it already sends confirmations from, so nothing new is configured
+// on our side.
+//
+// The rule is the phone rule: when the sending account holds an address for
+// the company, only THAT address may claim, because a forwarded link is
+// exactly a link sitting in somebody else's inbox. With none on record any
+// real address will do, which is the trust an emailed invite already extends.
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const cleanEmail = (v) => {
+  const e = String(v ?? "").trim().toLowerCase();
+  return EMAIL_SHAPE.test(e) && !e.endsWith("@no-email.invalid") ? e : null;
+};
+export const sameEmail = (a, b) => {
+  const x = cleanEmail(a);
+  return !!x && x === cleanEmail(b);
+};
+
+// The first letter and the domain, so the page can say which address to use
+// without handing a forwarded-link holder the whole of it.
+export function maskEmail(v) {
+  const e = cleanEmail(v);
+  if (!e) return null;
+  const [user, domain] = e.split("@");
+  return `${user[0]}•••@${domain}`;
+}
+
+export function claimEmailProblem({ entered, onRecord }) {
+  if (!cleanEmail(entered)) return "bad_email";
+  if (cleanEmail(onRecord) && !sameEmail(entered, onRecord)) return "email_mismatch";
+  return null;
+}

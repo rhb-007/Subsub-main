@@ -26380,27 +26380,32 @@ function DocPack({ token }) {
 // Somebody who has never heard of SubSub was sent a work order and tapped the
 // link at the foot of it, nearly always on a phone. They get the work order
 // first -- that is what they came for -- and under it a free login in two
-// fields: their mobile, then the code texted to it. No password, no email, no
-// form about their company, because the account that sent the work order has
-// already typed all of that in.
+// fields: their email, then the code emailed to it. No password and no form
+// about their company, because the account that sent the work order has
+// already typed all of that in. A texted code is offered beside it only once
+// Supabase says phone sign-in is on, which needs an SMS provider; the server
+// reads that off Supabase's own settings rather than the page guessing.
 //
 // "Free" is said twice, above the button and on it, because the one thing
 // that stops a roofer tapping a software company's button is the suspicion of
 // a bill. And it is true for ever: nothing on any plan charges a contractor
 // seat.
 //
-// Mobile-first: one column, every control at least 48px tall, the number box
-// is type=tel and the code box asks the phone to offer the texted code.
+// Mobile-first: one column, every control at least 48px tall, the address box
+// is type=email and the code box asks the phone to offer the code it received.
 const CLAIM_ERRORS = {
+  bad_email: "That doesn't look like an email address.",
+  email_mismatch: "Use the email address this work order was sent to.",
+  email_login_unavailable: "Sign-in by email code isn't available yet.",
   bad_phone: "That doesn't look like a US mobile number.",
   phone_mismatch: "Use the mobile this work order was sent to.",
-  bad_code: "That code didn't work. Check the text, or send a new one.",
+  bad_code: "That code didn't work. Check it, or send a new one.",
   rate_limited: "Too many tries. Wait a few minutes and try again.",
   phone_login_unavailable: "Sign-in by text isn't available yet.",
   claimed: "This link has already been used to make a login. Sign in instead.",
   on_subsub: "You're already on SubSub. Sign in to answer this work order.",
   auth_unreachable: "We couldn't reach the sign-in service. Try again in a moment.",
-  code_failed: "We couldn't send a code to that number. Check it and try again.",
+  code_failed: "We couldn't send a code there. Check it and try again.",
 };
 const claimErrText = (e) => CLAIM_ERRORS[e?.body?.error]
   || (e?.status ? `That didn't work (${e?.body?.error || e.status}).` : "No connection. Check your signal and try again.");
@@ -26415,8 +26420,10 @@ function claimPay(w) {
 function ClaimPage({ token }) {
   const [page, setPage] = useState(null);
   const [gone, setGone] = useState("");
-  const [step, setStep] = useState("phone");   // phone | code | done
+  const [step, setStep] = useState("who");     // who | code | done
+  const [by, setBy] = useState("email");        // email | phone
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -26449,24 +26456,36 @@ function ClaimPage({ token }) {
   const from = page.account?.name || "A company on SubSub";
   const signIn = page.account?.signIn || "/";
 
+  const canEmail = page.emailLogin !== false;
+  const canPhone = page.phoneLogin === true;
+  // The way in actually in use: phone only when Supabase can text, and the
+  // only one left when email is off.
+  const method = canPhone && (by === "phone" || !canEmail) ? "phone" : "email";
+  const who = method === "email" ? { email } : { phone };
+  const whoFilled = (method === "email" ? email : phone).trim() !== "";
+  // A way in Supabase turns out not to have switched on is ours to fix, not
+  // theirs: a dead phone box falls back to email, and only when neither can
+  // send a code does the form go and the page say so.
+  const methodOff = (code) => {
+    if (code === "phone_login_unavailable") { setErr(""); setBy("email"); setStep("who"); setPage({ ...page, phoneLogin: false }); return true; }
+    if (code === "email_login_unavailable") { setErr(""); setPage({ ...page, emailLogin: false }); return true; }
+    return false;
+  };
   const sendCode = async () => {
     setBusy(true); setErr("");
     try {
-      const r = await api.claimCode(token, phone);
+      const r = await api.claimCode(token, who);
       setSentTo(r.sentTo || ""); setStep("code");
     } catch (e) {
       setErr(claimErrText(e));
       if (["claimed", "on_subsub"].includes(e?.body?.error)) setPage({ ...page, state: e.body.error });
-      // Text sign-in switched off (no SMS provider behind Supabase yet) is
-      // ours to fix and not theirs, so the form goes and the page says so,
-      // rather than leaving a phone box that can never send a code.
-      if (e?.body?.error === "phone_login_unavailable") { setErr(""); setPage({ ...page, phoneLogin: false }); }
+      methodOff(e?.body?.error);
     } finally { setBusy(false); }
   };
   const verify = async () => {
     setBusy(true); setErr("");
     try {
-      const r = await api.claimVerify(token, phone, code);
+      const r = await api.claimVerify(token, who, code);
       // The session is the person's own, straight from Supabase. Stored the
       // way a password sign-in stores it, so the app opens signed in.
       if (supabaseEnabled && r.session?.access_token) {
@@ -26478,10 +26497,7 @@ function ClaimPage({ token }) {
     } catch (e) {
       setErr(claimErrText(e));
       if (["claimed", "on_subsub"].includes(e?.body?.error)) setPage({ ...page, state: e.body.error });
-      // Text sign-in switched off (no SMS provider behind Supabase yet) is
-      // ours to fix and not theirs, so the form goes and the page says so,
-      // rather than leaving a phone box that can never send a code.
-      if (e?.body?.error === "phone_login_unavailable") { setErr(""); setPage({ ...page, phoneLogin: false }); }
+      methodOff(e?.body?.error);
     } finally { setBusy(false); }
   };
 
@@ -26522,33 +26538,57 @@ function ClaimPage({ token }) {
                 : `Sign in to accept or decline it. It is waiting for you on ${from}'s account.`}</p>
               <a className="btn-solid claim-btn" href={signIn}>Sign in</a>
             </>
-          ) : !page.phoneLogin ? (
+          ) : !canEmail && !canPhone ? (
             <>
-              <h3>Claiming by text opens soon</h3>
+              <h3>Claiming opens soon</h3>
               <p>{FREE_LINE} Until then, answer this work order from the email you were
                 sent, or sign in if you already have a login.</p>
               <a className="btn-solid claim-btn" href={signIn}>Sign in</a>
             </>
-          ) : step === "phone" ? (
+          ) : step === "who" ? (
             <>
               <h3>Claim your free profile</h3>
               <p className="claim-free"><ShieldCheck size={15} /> {FREE_LINE} No card, no trial.</p>
-              <p>Under a minute: your mobile, then the code we text you.</p>
-              <label className="claim-fld">
-                <span>Mobile number{page.phoneHint ? ` (the one ending ${page.phoneHint.slice(-4)})` : ""}</span>
-                <input type="tel" inputMode="tel" autoComplete="tel" placeholder="(206) 555-0101"
-                  value={phone} onChange={(e) => setPhone(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && phone && !busy) sendCode(); }} />
-              </label>
+              {method === "email" ? (
+                <>
+                  <p>Under a minute: your email, then the code we send to it.</p>
+                  <label className="claim-fld">
+                    <span>Email{page.emailHint ? ` (the one like ${page.emailHint})` : ""}</span>
+                    <input type="email" inputMode="email" autoComplete="email" autoCapitalize="none"
+                      placeholder="you@yourcompany.com"
+                      value={email} onChange={(e) => setEmail(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && email.trim() && !busy) sendCode(); }} />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <p>Under a minute: your mobile, then the code we text you.</p>
+                  <label className="claim-fld">
+                    <span>Mobile number{page.phoneHint ? ` (the one ending ${page.phoneHint.slice(-4)})` : ""}</span>
+                    <input type="tel" inputMode="tel" autoComplete="tel" placeholder="(206) 555-0101"
+                      value={phone} onChange={(e) => setPhone(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && phone.trim() && !busy) sendCode(); }} />
+                  </label>
+                </>
+              )}
               {err && <p className="claim-err" role="alert">{err}</p>}
-              <button className="btn-solid claim-btn" disabled={busy || !phone.trim()} onClick={sendCode}>
-                {busy ? "Sending…" : "Text me a code"}
+              <button className="btn-solid claim-btn" disabled={busy || !whoFilled} onClick={sendCode}>
+                {busy ? "Sending…" : method === "phone" ? "Text me a code" : "Email me a code"}
               </button>
+              {/* The other way in, only when it can actually send a code. */}
+              {canPhone && canEmail && (
+                <button className="claim-back claim-switch"
+                  onClick={() => { setBy(method === "email" ? "phone" : "email"); setErr(""); }}>
+                  {method === "email" ? "Text me a code instead" : "Email me a code instead"}
+                </button>
+              )}
             </>
           ) : (
             <>
               <h3>Enter the code</h3>
-              <p>We texted a code to {sentTo || "your mobile"}.</p>
+              <p>{method === "phone"
+                ? `We texted a code to ${sentTo || "your mobile"}.`
+                : `We emailed a code to ${sentTo || "your inbox"}. It can take a minute, and check spam if it isn't there.`}</p>
               <label className="claim-fld">
                 <span>Code</span>
                 <input inputMode="numeric" autoComplete="one-time-code" maxLength={8} placeholder="123456"
@@ -26559,8 +26599,9 @@ function ClaimPage({ token }) {
               <button className="btn-solid claim-btn" disabled={busy || code.length < 4} onClick={verify}>
                 {busy ? "Checking…" : "Create my free account"}
               </button>
-              <button className="claim-back" onClick={() => { setStep("phone"); setCode(""); setErr(""); }}>
-                Use a different number, or send a new code
+              <button className="claim-back" onClick={() => { setStep("who"); setCode(""); setErr(""); }}>
+                {method === "phone" ? "Use a different number, or send a new code"
+                  : "Use a different address, or send a new code"}
               </button>
             </>
           )}

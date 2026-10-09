@@ -50,21 +50,40 @@ Until 074 is pasted nothing breaks: work orders go out with the footer and no
 link, and the claim routes and console panel answer `migration_needed`
 naming `074_wo_claims`.
 
-### 2. Turn on phone sign-in in Supabase
+### 2. Put the code in Supabase's emails (the default way in)
 
-The claim page signs people in with a texted code through Supabase's own
-phone auth — the Worker calls `/auth/v1/otp` and `/auth/v1/verify` with the
-**anon** key, and no service-role key is involved. That needs, in the Supabase
-dashboard:
+The claim page signs people in with an **emailed code** through Supabase's own
+email auth — the Worker calls `/auth/v1/otp` and `/auth/v1/verify` with the
+**anon** key, and no service-role key is involved. Email needs no SMS
+provider, which is why it is the default.
+
+Supabase's stock emails carry a **link**, not a code, so add the code to them:
+
+1. **Authentication → Emails → Templates → Magic Link**: add a line such as
+   `Your SubSub code: {{ .Token }}` above the link. Keep the link.
+2. Do the same in **Confirm signup**. A brand-new address gets that template
+   the first time, an existing one gets Magic Link.
+
+Supabase's built-in sender is heavily rate-limited (a handful an hour). Before
+real volume, set **Authentication → Emails → SMTP Settings** to a real sender
+(Resend, which the app already uses, works).
+
+Until Supabase answers, the page says claiming is not open yet and offers the
+account's own sign-in link (`email_login_unavailable`, a 501).
+
+### 2b. Later: a texted code as well (needs an SMS provider)
+
+`GET /api/claim/:token` reads Supabase's `/auth/v1/settings` and offers
+**Text me a code instead** only when `external.phone` is on — so nothing
+appears until it can actually send. To turn it on:
 
 1. **Authentication → Sign In / Providers → Phone**: enable it.
-2. Choose an SMS provider (Twilio is what the app already uses for its own
-   texts) and enter that provider's credentials there. Supabase sends the code;
-   the Worker never sees it.
+2. Choose an SMS provider and enter that provider's credentials there.
+   Supabase sends the code; the Worker never sees it.
 
-Until it is on, the page says sign-in by text is not available and offers the
-account's own sign-in link instead (`phone_login_unavailable`, a 501). Nothing
-is sent and nothing is written.
+An unreadable settings answer offers email alone, never a guess at phone. If a
+texted code is refused anyway (`phone_login_unavailable`), the page falls back
+to email.
 
 ### 3. Nothing to configure for the link itself
 
@@ -75,16 +94,18 @@ needed.
 
 ### What the claim does, and refuses
 
-- **The code goes to the mobile on record.** When the sending account holds a
-  mobile for the company, only that number can claim — a forwarded link is not
-  enough. The check that matters is on the number Supabase *verified*, not the
-  number typed. With no mobile on record, any real US mobile may claim.
+- **The code goes to the address (or mobile) on record.** When the sending
+  account holds an email for the company, only that address can claim by email,
+  and the same for a mobile by text — a forwarded link is not enough. The check
+  that matters is on what Supabase *verified*, not what was typed. With nothing
+  on record, any real address (or US mobile) may claim.
 - **A company already on SubSub** (a contractor seat with a login anywhere, or
   an account's own company row) is a sign-in, not a recruitment: the page sends
   them to sign in and nothing is credited.
-- **What is made**: a `users` row (the company's unclaimed seat holder if there
-  is one, otherwise new, named for the contact, on the company's email when
-  nobody else holds it), and a **contractor seat** on the account that sent the
+- **What is made**: a `users` row (by email, the existing row holding that
+  address with no login, if any; else the company's unclaimed seat holder;
+  else new, named for the contact, on the address they proved or the
+  company's, when nobody else holds it), and a **contractor seat** on the account that sent the
   work order, so the work order they just read is the first thing they can
   answer. A contractor seat is free on every plan.
 - **Rate limits**: 120 page opens an hour per address, 20 codes an hour per
@@ -99,14 +120,14 @@ answers the same for every account at once.
 
 ### Not verified here
 
-- A live Supabase phone round trip. The request shapes are Supabase's
-  documented `otp` and `verify` bodies and the suite asserts them at `fetch`;
-  the first real code to a real phone is the real test.
+- A live Supabase round trip, by email or by phone. The request shapes are
+  Supabase's documented `otp`, `verify` and `settings` bodies and the suite
+  asserts them at `fetch`; the first real code to a real inbox is the real test.
 - There is no PDF of a work order — it is drawn in the app and downloaded as
   text. The footer is on both.
 
 ### Tests
 
-`npm run test:claim` (server, 78) and `npm run test:claimui` (the page at
-390px, 28). `test:woaccess` and `test:feetermsui` cover the work-order footer
+`npm run test:claim` (server, 104) and `npm run test:claimui` (the page at
+390px, 43). `test:woaccess` and `test:feetermsui` cover the work-order footer
 and the console panel.

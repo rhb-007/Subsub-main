@@ -25,7 +25,7 @@
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { claimUrl, claimPathToken, footerText, footerSms, claimPhoneProblem, claimState,
-  claimFunnel, maskPhone, validClaimToken } from "../shared/claim.js";
+  claimFunnel, maskPhone, validClaimToken, claimEmailProblem, maskEmail, cleanEmail } from "../shared/claim.js";
 import { runCheck } from "./lib/check-sql.mjs";
 
 let pass = 0, fail = 0;
@@ -43,7 +43,11 @@ const DOCS = `1,1,1,1,'{"insurance":"coi.pdf","bond":"bond.pdf","contract":"agr.
 // ---- what leaves: email, text, and Supabase's code and verify -------------
 const sent = { mail: [], sms: [], otp: [], verify: [] };
 let verifyPhone = "12065550101";
+let verifyEmail = "rae@bay.test";
 let otpReply = null;
+// What Supabase says is switched on. Phone is OFF by default, which is the
+// state before an SMS provider exists -- and the page must not offer it then.
+let settings = { external: { email: true, phone: false } };
 globalThis.fetch = async (url, init = {}) => {
   const u = String(url);
   const body = init.body ? (typeof init.body === "string" ? init.body : String(init.body)) : "";
@@ -57,6 +61,7 @@ globalThis.fetch = async (url, init = {}) => {
     if (who === "juan") return ok({ id: "auth_juan", email: "juan@pac.test" });
     return ok({ msg: "bad token" }, 401);
   }
+  if (u.endsWith("/auth/v1/settings")) return settings ? ok(settings) : ok({ msg: "down" }, 500);
   if (u.endsWith("/auth/v1/otp")) {
     sent.otp.push(JSON.parse(body));
     return otpReply ? ok(otpReply.body, otpReply.status) : ok({});
@@ -65,6 +70,8 @@ globalThis.fetch = async (url, init = {}) => {
     const b = JSON.parse(body);
     sent.verify.push(b);
     if (b.token !== "123456") return ok({ msg: "Token has expired or is invalid" }, 403);
+    if (b.type === "email") return ok({ access_token: "acc_tok", refresh_token: "ref_tok", expires_in: 3600,
+      user: { id: `auth_${verifyEmail}`, email: verifyEmail } });
     return ok({ access_token: "acc_tok", refresh_token: "ref_tok", expires_in: 3600,
       user: { id: `auth_${verifyPhone}`, phone: verifyPhone } });
   }
@@ -152,6 +159,15 @@ try {
       claimState({ claimedAt: "x", companyHasLogin: true }) === "claimed");
     ck("a company with a login reads on SubSub",
       claimState({ claimedAt: null, companyHasLogin: true }) === "on_subsub");
+    ck("an email on record must be the email used",
+      claimEmailProblem({ entered: "other@bay.test", onRecord: "rae@bay.test" }) === "email_mismatch");
+    ck("in any case, with spaces round it",
+      claimEmailProblem({ entered: " RAE@Bay.test ", onRecord: "rae@bay.test" }) === null);
+    ck("with none on record any real address will do",
+      claimEmailProblem({ entered: "x@y.test", onRecord: null }) === null);
+    ck("the product's own no-address placeholder is not an address",
+      cleanEmail("u1@no-email.invalid") === null && claimEmailProblem({ entered: "nope", onRecord: null }) === "bad_email");
+    ck("the email hint keeps one letter and the domain", maskEmail("rae@bay.test") === "r•••@bay.test");
     const f = claimFunnel({ sent: 4, opened: 2, claimed: 1 });
     ck("the funnel's rates", f.openRate === 50 && f.claimRate === 50, JSON.stringify(f));
     ck("and no rate over nothing", claimFunnel({}).openRate === null && claimFunnel({}).claimRate === null);
@@ -185,7 +201,19 @@ try {
   {
     const [s1, page] = await json(await call(live, `/api/claim/${tok}`));
     ck("the link opens with no sign-in at all", s1 === 200, `${s1} ${JSON.stringify(page)}`);
-    ck("and offers to make a login", page.state === "claimable" && page.phoneLogin === true);
+    ck("and offers to make a login by email", page.state === "claimable" && page.emailLogin === true);
+    ck("never by text while Supabase has no phone sign-in", page.phoneLogin === false, String(page.phoneLogin));
+    ck("with the email hint and never the whole address",
+      page.emailHint === "r•••@bay.test" && !JSON.stringify(page).includes("rae@bay.test"), page.emailHint);
+    settings = { external: { email: true, phone: true } };
+    const [, pOn] = await json(await call(live, `/api/claim/${tok}`));
+    ck("text is offered once Supabase says phone is on", pOn.phoneLogin === true);
+    settings = null;
+    const [, pDown] = await json(await call(live, `/api/claim/${tok}`));
+    ck("an unreadable answer offers email alone, never a guess at phone",
+      pDown.phoneLogin === false && pDown.emailLogin === true, JSON.stringify([pDown.phoneLogin, pDown.emailLogin]));
+    settings = { external: { email: true, phone: false } };
+    db.exec(`UPDATE wo_claim_links SET open_count = 0 WHERE token = '${tok}'`);
     ck("it shows the work order they were sent",
       page.workOrder?.trade === "roofing" && page.workOrder?.title === "Reroof the Lee house"
       && page.workOrder?.address === "12 Elm St" && page.workOrder?.valueCents === 120000,
@@ -196,7 +224,7 @@ try {
     ck("and nothing about the other trades on the job", !/gutters|siding/.test(JSON.stringify(page)));
     await call(live, `/api/claim/${tok}`);
     const row = db.prepare(`SELECT open_count, first_opened_at FROM wo_claim_links WHERE token = ?`).get(tok);
-    ck("every open is counted, and the first one kept", row.open_count === 2 && !!row.first_opened_at, JSON.stringify(row));
+    ck("every open is counted, and the first one kept", row.open_count === 1 && !!row.first_opened_at, JSON.stringify(row));
     const [s404] = await json(await call(live, `/api/claim/${"0".repeat(64)}`));
     const [sbad] = await json(await call(live, `/api/claim/nope`));
     ck("an unknown token and a malformed one answer alike", s404 === 404 && sbad === 404);
@@ -252,6 +280,72 @@ try {
       && db.prepare(`SELECT COUNT(*) AS n FROM users WHERE auth_id = 'auth_12065550101'`).get().n === 1);
     const [, page2] = await json(await call(live, `/api/claim/${tok}`));
     ck("and the page now says it is claimed", page2.state === "claimed");
+  }
+
+  console.log("\n-- by an emailed code, with no texting at all --");
+  {
+    const { db: dbE, env: envE, live: liveE } = seed();
+    // Somebody this address already belongs to, with no login: added from the
+    // console, say. Not a seat holder, so only the email path can find them.
+    dbE.exec(`INSERT INTO users(id,name,email,auth_id) VALUES ('u_rae','Rae B','rae@bay.test',NULL)`);
+    sent.otp.length = 0; sent.verify.length = 0;
+    const [si] = await issue(envE, "j1", "roofing", "cmp_new");
+    ck("the work order goes out", si === 201 || si === 200);
+    const woE = dbE.prepare(`SELECT id FROM work_orders WHERE company_id='cmp_new' AND job_id='j1'`).get()?.id;
+    const tE = tokenOf(dbE, woE);
+    const [sm, mis] = await json(await call(liveE, `/api/claim/${tE}/code`, { method: "POST", body: { email: "someone@else.test" } }));
+    ck("a different address is refused, with the hint", sm === 409 && mis.error === "email_mismatch" && mis.hint === "r•••@bay.test",
+      JSON.stringify(mis));
+    ck("and no code was sent for it", sent.otp.length === 0);
+    const [sb] = await json(await call(liveE, `/api/claim/${tE}/code`, { method: "POST", body: { email: "not an address" } }));
+    ck("something that is not an address is a 400", sb === 400);
+    const [sc, code] = await json(await call(liveE, `/api/claim/${tE}/code`, { method: "POST", body: { email: " Rae@Bay.test " } }));
+    ck("the address on record gets a code", sc === 200 && code.sentTo === "r•••@bay.test", JSON.stringify(code));
+    ck("asked of Supabase by email, never by phone",
+      sent.otp[0]?.email === "rae@bay.test" && sent.otp[0]?.create_user === true && !("phone" in (sent.otp[0] || {})),
+      JSON.stringify(sent.otp[0]));
+    const [snc] = await json(await call(envE, `/api/claim/${tE}/code`, { method: "POST", body: { email: "rae@bay.test" } }));
+    ck("no Supabase at all is its own answer", snc === 501);
+
+    // THE GATE IS THE ADDRESS SUPABASE VERIFIED, not the one in the body.
+    verifyEmail = "thief@else.test";
+    const [sw, wrong] = await json(await call(liveE, `/api/claim/${tE}/verify`,
+      { method: "POST", body: { email: "rae@bay.test", code: "123456" } }));
+    ck("a code that verified some other address does not claim", sw === 409 && wrong.error === "email_mismatch", JSON.stringify(wrong));
+    ck("and wrote nothing", !dbE.prepare(`SELECT claimed_at FROM wo_claim_links WHERE token = ?`).get(tE).claimed_at
+      && !dbE.prepare(`SELECT 1 FROM users WHERE auth_id = 'auth_thief@else.test'`).get());
+    verifyEmail = "rae@bay.test";
+    ck("the verify went to Supabase as an email code",
+      sent.verify.at(-1)?.type === "email" && sent.verify.at(-1)?.email === "rae@bay.test");
+
+    const [sv, ok] = await json(await call(liveE, `/api/claim/${tE}/verify`,
+      { method: "POST", body: { email: "rae@bay.test", code: "123456" } }));
+    ck("the right address and code claim it", sv === 200 && ok.ok === true && ok.attributed === true, JSON.stringify(ok));
+    const linked = dbE.prepare(`SELECT * FROM users WHERE id = 'u_rae'`).get();
+    ck("the person already holding that address is linked rather than duplicated",
+      linked?.auth_id === "auth_rae@bay.test" && ok.userId === "u_rae"
+      && dbE.prepare(`SELECT COUNT(*) AS n FROM users WHERE lower(email) = 'rae@bay.test'`).get().n === 1,
+      JSON.stringify([linked, ok.userId]));
+    ck("and no phone is written onto them from an email sign-in", linked?.phone == null, String(linked?.phone));
+    ck("with a contractor seat on the account that sent it",
+      dbE.prepare(`SELECT role FROM memberships WHERE user_id='u_rae' AND account_id='acc_gc'`).get()?.role === "contractor");
+    ck("and the account is credited",
+      dbE.prepare(`SELECT account_id FROM sub_attributions WHERE company_id='cmp_new'`).get()?.account_id === "acc_gc");
+  }
+
+  console.log("\n-- an email claim with nobody holding the address --");
+  {
+    const { db: dbN, env: envN, live: liveN } = seed();
+    dbN.exec(`UPDATE companies SET email = NULL WHERE id = 'cmp_nop'`);
+    await issue(envN, "j1", "gutters", "cmp_nop");
+    const tN = tokenOf(dbN, dbN.prepare(`SELECT id FROM work_orders WHERE company_id='cmp_nop'`).get()?.id);
+    verifyEmail = "quinn@new.test";
+    const [sv, v] = await json(await call(liveN, `/api/claim/${tN}/verify`,
+      { method: "POST", body: { email: "quinn@new.test", code: "123456" } }));
+    ck("any real address may claim a company with none on record", sv === 200 && v.attributed === true, JSON.stringify(v));
+    const u = dbN.prepare(`SELECT email, phone FROM users WHERE auth_id = 'auth_quinn@new.test'`).get();
+    ck("and the new login is on the address they proved", u?.email === "quinn@new.test" && u?.phone == null, JSON.stringify(u));
+    verifyEmail = "rae@bay.test";
   }
 
   console.log("\n-- the first account to bring them in keeps the credit --");

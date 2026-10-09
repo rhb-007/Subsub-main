@@ -11238,6 +11238,37 @@ refactor.
   - `DEPLOYMENT.pdf` cannot be edited in a commit, so the per-release notes
     start in `DEPLOYMENT.md`.
 
+- **A SUB CLAIMS BY AN EMAILED CODE, AND TEXTING IS OFFERED ONLY ONCE IT CAN
+  SEND.** The claim page shipped phone-only, and there is no SMS provider yet,
+  so every claim was a dead end. Asked for as *"bypass Twilio and text message
+  setup for now"*.
+
+  **Email is the default way in.** The same two routes take `{email}` or
+  `{phone}`, one at a time, and the rule is the same for both: the one on
+  record, or any real one when nothing is. **The gate is the address Supabase
+  verified, not the body's**, and the suite's discriminating case is a body
+  naming the right address over a verify that answered a different one.
+
+  **Whether texting is offered is Supabase's answer, not ours.**
+  `claimLoginMethods` reads `/auth/v1/settings` with the anon key, and
+  `phoneLogin` is true only when `external.phone` is. An unreadable answer, and
+  an older reply carrying no field at all, both read as **email only**: a phone
+  box that can never send a code is the dead end on the first SubSub screen a
+  sub ever sees. If a texted code is refused anyway, the page falls back to
+  email rather than leaving the box.
+
+  **An email sign-in proves the address, so the row already holding it with no
+  login is linked rather than duplicated** (added from the console, or invited
+  and never finished). That is the trust password-help extends. A new row takes
+  the address they proved before the company's, and a phone is written only
+  when a phone was what was verified (that half is doubled by `normalizePhone`
+  rejecting an email, so its assertion cannot fail on its own).
+
+  **Supabase's stock emails carry a link, not a code**, so `{{ .Token }}` has
+  to be added to the Magic Link and Confirm signup templates, and the built-in
+  sender is rate-limited to a handful an hour until SMTP is set. DEPLOYMENT.md
+  says where. **Not verified here:** a live code to a real inbox.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

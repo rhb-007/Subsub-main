@@ -721,10 +721,11 @@ export const api = {
   // 074. The page a "Sent via SubSub" link opens: the work order, and a free
   // login by mobile and a texted code. Public, like the pack and the inbox.
   claim: (token) => request(`/claim/${encodeURIComponent(token)}`),
-  claimCode: (token, phone) => request(`/claim/${encodeURIComponent(token)}/code`,
-    { method: "POST", body: JSON.stringify({ phone }) }),
-  claimVerify: (token, phone, code) => request(`/claim/${encodeURIComponent(token)}/verify`,
-    { method: "POST", body: JSON.stringify({ phone, code }) }),
+  // who is {email} or {phone}: one way in at a time.
+  claimCode: (token, who) => request(`/claim/${encodeURIComponent(token)}/code`,
+    { method: "POST", body: JSON.stringify(who) }),
+  claimVerify: (token, who, code) => request(`/claim/${encodeURIComponent(token)}/verify`,
+    { method: "POST", body: JSON.stringify({ ...who, code }) }),
   woClaimLink: (woId) => request(`/work-orders/${encodeURIComponent(woId)}/claim-link`),
   claimInbox: (token) => request(`/inbox/${encodeURIComponent(token)}/claim`,
     { method: "POST", body: "{}" }),

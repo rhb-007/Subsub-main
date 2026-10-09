@@ -28,7 +28,7 @@ import { severityOf } from "../shared/emergency.js";
 import { validateIngest, SOURCES } from "../shared/ingest.js";
 import { TRADES, TRADE_IDS, tradeLabel } from "../shared/trades.js";
 import { claimUrl, validClaimToken, claimPhoneProblem, claimState, maskPhone,
-  footerText, footerSms, claimFunnel } from "../shared/claim.js";
+  footerText, footerSms, claimFunnel, cleanEmail, maskEmail, claimEmailProblem } from "../shared/claim.js";
 import { tradesFor, validRule, ANY_SOURCE } from "../shared/crmmap.js";
 import { SOURCE_PRESETS, isSource, unwrap, translate } from "../shared/crmsources.js";
 import { INSPECT_PRESETS, isInspectSource, readInspection,
@@ -3280,6 +3280,28 @@ function claimWorkOrderShape(wo) {
   };
 }
 
+// WHAT SUPABASE WILL SEND A CODE BY. /auth/v1/settings with the anon key is
+// read-only and says which providers are switched on: phone is on only once
+// an SMS provider is configured, which is the whole question for the texted
+// code. Best effort with a short timeout -- an answer that cannot be read
+// offers email alone, which needs no SMS provider and is the default anyway.
+// Never "phone on" by guess: a phone box that can never send a code is a dead
+// end on the first SubSub screen a sub ever sees.
+async function claimLoginMethods(env) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return { emailLogin: false, phoneLogin: false };
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 2500);
+    const r = await fetch(`${env.SUPABASE_URL}/auth/v1/settings`,
+      { headers: { apikey: env.SUPABASE_ANON_KEY }, signal: ctl.signal });
+    clearTimeout(t);
+    const j = r.ok ? await r.json().catch(() => ({})) : {};
+    return { emailLogin: j?.external?.email !== false, phoneLogin: j?.external?.phone === true };
+  } catch {
+    return { emailLogin: true, phoneLogin: false };
+  }
+}
+
 async function claimStateFor(env, link) {
   if (link.claimed_at) return "claimed";
   const { ids, ownAccount } = await companyLoginAuthIds(env, link.company_id);
@@ -3300,9 +3322,11 @@ app.get("/api/claim/:token", async (c) => {
       WHERE token = ?`).bind(link.token).run();
   return c.json({
     state: await claimStateFor(c.env, link),
-    // Whether a texted code can work here at all, so the page can say so
-    // instead of taking a number it cannot send to.
-    phoneLogin: !!(c.env.SUPABASE_URL && c.env.SUPABASE_ANON_KEY),
+    // Which ways in can actually send a code, read off Supabase's own
+    // settings, so the page never offers a texted code before an SMS
+    // provider exists behind it. Email is the default way in.
+    ...(await claimLoginMethods(c.env)),
+    emailHint: maskEmail(company.email),
     company: { name: company.company || null, contact: company.contact || null },
     // The last four digits of the number this account holds for them, never
     // the whole number: enough to say which phone to use, not enough to hand
@@ -3332,18 +3356,30 @@ app.post("/api/claim/:token/code", async (c) => {
   const state = await claimStateFor(c.env, found.link);
   if (state !== "claimable") return c.json({ error: state }, 409);
   const b = await c.req.json().catch(() => ({}));
-  const problem = claimPhoneProblem({ entered: b.phone, onRecord: found.company.phone });
-  if (problem) return c.json({ error: problem, hint: maskPhone(found.company.phone) },
-    problem === "bad_phone" ? 400 : 409);
+  // BY EMAIL OR BY MOBILE, one at a time. Email works with no SMS provider at
+  // all -- Supabase sends the code from the address it already sends
+  // confirmations from -- which is what lets a sub claim before texting is set
+  // up. The rule is the same for both: the one on record, or any real one.
+  const byEmail = b.email != null && b.email !== "";
+  const problem = byEmail
+    ? claimEmailProblem({ entered: b.email, onRecord: found.company.email })
+    : claimPhoneProblem({ entered: b.phone, onRecord: found.company.phone });
+  if (problem) {
+    return c.json({ error: problem,
+      hint: byEmail ? maskEmail(found.company.email) : maskPhone(found.company.phone) },
+    problem.startsWith("bad_") ? 400 : 409);
+  }
   if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) {
-    return c.json({ error: "phone_login_unavailable" }, 501);
+    return c.json({ error: byEmail ? "email_login_unavailable" : "phone_login_unavailable" }, 501);
   }
   let res, body;
   try {
     res = await fetch(`${c.env.SUPABASE_URL}/auth/v1/otp`, {
       method: "POST",
       headers: { "Content-Type": "application/json", apikey: c.env.SUPABASE_ANON_KEY },
-      body: JSON.stringify({ phone: toE164(b.phone), create_user: true }),
+      body: JSON.stringify(byEmail
+        ? { email: cleanEmail(b.email), create_user: true }
+        : { phone: toE164(b.phone), create_user: true }),
     });
     body = await res.json().catch(() => ({}));
   } catch (err) {
@@ -3356,14 +3392,14 @@ app.post("/api/claim/:token/code", async (c) => {
     // is its own answer, and the page says to use the work order's own link
     // instead of "try again".
     if (/provider|disabled|not enabled|unsupported phone/i.test(msg)) {
-      console.error("[claim] Supabase phone sign-in is not configured:", msg);
-      return c.json({ error: "phone_login_unavailable" }, 501);
+      console.error("[claim] Supabase sign-in by code is not configured:", msg);
+      return c.json({ error: byEmail ? "email_login_unavailable" : "phone_login_unavailable" }, 501);
     }
     if (res.status === 429) return c.json({ error: "rate_limited" }, 429);
     console.error("[claim] Supabase refused the code:", res.status, msg);
     return c.json({ error: "code_failed", detail: msg.slice(0, 200) }, 502);
   }
-  return c.json({ ok: true, sentTo: maskPhone(b.phone) });
+  return c.json({ ok: true, sentTo: byEmail ? maskEmail(b.email) : maskPhone(b.phone) });
 });
 
 // Check the code, make the login, record who brought them in.
@@ -3381,13 +3417,16 @@ app.post("/api/claim/:token/verify", async (c) => {
   const found = await claimLookup(c.env, token);
   if (found.error) return c.json({ error: "not_found" }, 404);
   const { link, wo, account, company } = found;
-  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) {
-    return c.json({ error: "phone_login_unavailable" }, 501);
-  }
   const b = await c.req.json().catch(() => ({}));
-  const phone = toE164(b.phone);
+  const byEmail = b.email != null && b.email !== "";
+  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) {
+    return c.json({ error: byEmail ? "email_login_unavailable" : "phone_login_unavailable" }, 501);
+  }
+  const email = byEmail ? cleanEmail(b.email) : null;
+  const phone = byEmail ? null : toE164(b.phone);
   const code = String(b.code || "").replace(/\D/g, "");
-  if (!phone) return c.json({ error: "bad_phone" }, 400);
+  if (byEmail && !email) return c.json({ error: "bad_email" }, 400);
+  if (!byEmail && !phone) return c.json({ error: "bad_phone" }, 400);
   if (code.length < 4) return c.json({ error: "bad_code" }, 400);
 
   // Refused before the code is spent, so somebody told "already on SubSub"
@@ -3400,7 +3439,9 @@ app.post("/api/claim/:token/verify", async (c) => {
     res = await fetch(`${c.env.SUPABASE_URL}/auth/v1/verify`, {
       method: "POST",
       headers: { "Content-Type": "application/json", apikey: c.env.SUPABASE_ANON_KEY },
-      body: JSON.stringify({ type: "sms", phone, token: code }),
+      body: JSON.stringify(byEmail
+        ? { type: "email", email, token: code }
+        : { type: "sms", phone, token: code }),
     });
     sess = await res.json().catch(() => ({}));
   } catch (err) {
@@ -3410,9 +3451,14 @@ app.post("/api/claim/:token/verify", async (c) => {
     return c.json({ error: "bad_code" }, 400);
   }
   const authId = sess.user.id;
-  const verified = sess.user.phone || phone;
-  const problem = claimPhoneProblem({ entered: verified, onRecord: company.phone });
-  if (problem) return c.json({ error: problem, hint: maskPhone(company.phone) }, 409);
+  // What Supabase VERIFIED, never what the body named -- the gate is here.
+  const verified = byEmail ? (sess.user.email || email) : (sess.user.phone || phone);
+  const problem = byEmail
+    ? claimEmailProblem({ entered: verified, onRecord: company.email })
+    : claimPhoneProblem({ entered: verified, onRecord: company.phone });
+  if (problem) {
+    return c.json({ error: problem, hint: byEmail ? maskEmail(company.email) : maskPhone(company.phone) }, 409);
+  }
 
   // Already used, by this person: a second press, or a refresh. Same answer,
   // nothing written twice.
@@ -3436,7 +3482,20 @@ app.post("/api/claim/:token/verify", async (c) => {
   // row. A phone login has no email, so the row takes the company's address
   // when nobody holds it, and the placeholder the rest of the product already
   // reads as "no real address" when somebody does.
+  // An email login has proved the address, so the row already holding that
+  // address with no login behind it -- added from the console, or invited and
+  // never finished -- is theirs, and linking it is what keeps one person one
+  // row. The same trust password-help extends when it mints a missing login.
+  // A phone is recorded only when a phone was what was verified.
+  const verifiedPhone = byEmail ? null : normalizePhone(verified);
+  const verifiedEmail = byEmail ? cleanEmail(verified) : null;
   let user = await c.env.DB.prepare(`SELECT * FROM users WHERE auth_id = ?`).bind(authId).first();
+  if (!user && verifiedEmail) {
+    user = await c.env.DB.prepare(
+      `SELECT * FROM users WHERE lower(email) = ? AND auth_id IS NULL ORDER BY created_at LIMIT 1`
+    ).bind(verifiedEmail).first();
+    if (user) await c.env.DB.prepare(`UPDATE users SET auth_id = ? WHERE id = ?`).bind(authId, user.id).run();
+  }
   if (!user) {
     user = await c.env.DB.prepare(
       `SELECT u.* FROM memberships m JOIN users u ON u.id = m.user_id
@@ -3445,17 +3504,21 @@ app.post("/api/claim/:token/verify", async (c) => {
     ).bind(company.id, account.id).first();
     if (user) {
       await c.env.DB.prepare(`UPDATE users SET auth_id = ?, phone = COALESCE(phone, ?) WHERE id = ?`)
-        .bind(authId, normalizePhone(verified), user.id).run();
+        .bind(authId, verifiedPhone, user.id).run();
     }
   }
   if (!user) {
     const userId = uid();
-    const emailFree = company.email && !(await c.env.DB.prepare(
-      `SELECT 1 AS yes FROM users WHERE lower(email) = lower(?)`).bind(company.email).first());
+    // The address they proved first, then the one this account holds for the
+    // company, and the placeholder the product reads as "no real address" when
+    // somebody else already holds it.
+    const want = verifiedEmail || cleanEmail(company.email);
+    const emailFree = want && !(await c.env.DB.prepare(
+      `SELECT 1 AS yes FROM users WHERE lower(email) = lower(?)`).bind(want).first());
     await c.env.DB.prepare(
       `INSERT INTO users (id, auth_id, name, email, phone) VALUES (?, ?, ?, ?, ?)`
     ).bind(userId, authId, company.contact || company.company || "Contractor",
-      emailFree ? company.email : `${userId}@no-email.invalid`, normalizePhone(verified)).run();
+      emailFree ? want : `${userId}@no-email.invalid`, verifiedPhone).run();
     user = { id: userId };
   }
 
