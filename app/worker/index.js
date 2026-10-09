@@ -134,6 +134,7 @@ import { systemHealth } from "./syshealth.js";
 import { integrationHealth } from "./integrationhealth.js";
 import { verifyWithFallback, configuredProviders, askProvider, PROVIDERS } from "./licenses.js";
 import { checkView, bondView, insuranceView, licenseActive, nextStoredCheck } from "../shared/licensecheck.js";
+import { validCrews, offDays, isOffOn } from "../shared/crews.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 
 const app = new Hono();
@@ -4294,6 +4295,12 @@ const myCompanyToJs = (co) => ({
   // empty, never absent.
   coverage: validCoverage(parseJson(co.coverage, null))
     || { mode: "cities", cities: [], radii: [] },
+  // Their crews and the days each one is off. The same column the roster
+  // carries for every contractor, so the account's own team and a hiring
+  // account read one record. Normalised on the way out as well as in, for the
+  // reason coverage is: a row written before validCrews existed must not hand
+  // the availability grid a crew with no members array.
+  crews: validCrews(parseJson(co.crews, [])) || [],
 });
 
 app.get("/api/my-company", requireRole("admin", "pm"), async (c) => {
@@ -4382,6 +4389,17 @@ app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
       .bind(JSON.stringify(cov), companyId).run();
   }
 
+  // Crews, and with them every crew's days off. Their own write for the
+  // reason coverage has one: the availability grid saves a tap at a time and
+  // must not need a whole profile sent with it. Checked on the way in, because
+  // this lands on the shared row every hiring account's roster reads.
+  if (b.crews !== undefined) {
+    const crews = validCrews(b.crews);
+    if (!crews) return c.json({ error: "invalid_crews" }, 400);
+    await c.env.DB.prepare(`UPDATE companies SET crews = ? WHERE id = ?`)
+      .bind(JSON.stringify(crews), companyId).run();
+  }
+
   if (b.openToHire !== undefined) {
     try {
       await c.env.DB.prepare(`UPDATE companies SET open_to_hire = ? WHERE id = ?`)
@@ -4397,7 +4415,10 @@ app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
   const set = Object.entries(fields).filter(([, v]) => v !== undefined);
   if (!set.length) {
     // Answering only the switch is a complete request, not an empty one.
-    if (b.openToHire !== undefined || b.coverage !== undefined) return c.json({ ok: true });
+    if (b.openToHire !== undefined || b.coverage !== undefined || b.crews !== undefined) {
+      const co = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(companyId).first();
+      return c.json({ ok: true, ...myCompanyToJs(co) });
+    }
     return c.json({ error: "nothing_to_change" }, 400);
   }
   // A company row with no name is not a thing anybody can be shown.
@@ -15899,7 +15920,7 @@ const asSelf = async (c, path, body, as = null) => {
 async function autoCandidates(env, accountId, trade, companyState) {
   const { results } = await env.DB.prepare(
     `SELECT e.company_id, e.categories, e.engaged_as, e.rating, e.doc_review,
-            c.company, c.insurance, c.bond, c.contract, c.w9, c.unavailable_days
+            c.company, c.insurance, c.bond, c.contract, c.w9, c.unavailable_days, c.crews
        FROM engagements e JOIN companies c ON c.id = e.company_id
       WHERE e.account_id = ? AND ${onRosterSql("e.status")}`
   ).bind(accountId).all().catch(() => ({ results: [] }));
@@ -15931,7 +15952,14 @@ async function autoCandidates(env, accountId, trade, companyState) {
       categories: parseJson(r.categories, []), engagedAs: r.engaged_as,
       rating: r.rating, blockers, shape,
       busy: (busy || []).map((x) => x.date),
-      unavailable: parseJson(r.unavailable_days, []),
+      // The days they cannot be booked, worked out from their CREWS as well
+      // as the old company-wide list -- which no screen writes any more, so
+      // reading it alone booked a crew on a day every crew had marked off.
+      ...(() => {
+        const o = offDays({ unavailableDays: parseJson(r.unavailable_days, []),
+          crews: parseJson(r.crews, []) });
+        return { unavailable: o.days, paused: o.allPaused };
+      })(),
       openJobs: (open || [])[0]?.n || 0,
     });
   }
@@ -16044,6 +16072,7 @@ async function autoBookOnIssue(c, { jobId, companyId, accountId }) {
     const cands = await autoCandidates(c.env, accountId, null);
     const mine = cands.find((x) => x.companyId === companyId);
     const today = dayKeyUtc();
+    if (mine?.paused) return { proposed: false, reason: "paused" };
     const off = new Set([...(mine?.busy || []), ...(mine?.unavailable || [])]);
     const jd = String(job?.date || "").slice(0, 10);
     const day = DATE_RE.test(jd) && jd >= today && !off.has(jd) ? jd
@@ -16078,7 +16107,7 @@ async function autoBookOnIssue(c, { jobId, companyId, accountId }) {
 async function crewGrantedBooking(env, { jobId, accountId, date }) {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT w.auto_scheduled, e.auto_schedule, co.unavailable_days
+      `SELECT w.auto_scheduled, e.auto_schedule, co.unavailable_days, co.crews
          FROM work_orders w
          JOIN engagements e ON e.account_id = ? AND e.company_id = w.company_id
          JOIN companies co ON co.id = w.company_id
@@ -16086,7 +16115,8 @@ async function crewGrantedBooking(env, { jobId, accountId, date }) {
     ).bind(accountId, jobId).all();
     const rows = results || [];
     return rows.length > 0 && rows.every((r) => !!r.auto_scheduled && !!r.auto_schedule
-      && !parseJson(r.unavailable_days, []).includes(date));
+      && !isOffOn({ unavailableDays: parseJson(r.unavailable_days, []),
+        crews: parseJson(r.crews, []) }, date));
   } catch { return false; }
 }
 
@@ -16112,6 +16142,7 @@ async function autoProposeOnAccept(c, wo) {
 
   const cands = await autoCandidates(c.env, job.account_id, null);
   const mine = cands.find((x) => x.companyId === wo.company_id);
+  if (mine?.paused) return { stopped: "paused" };
   const from = (job.date || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
   const day = slotFor({ from, busy: mine?.busy, unavailable: mine?.unavailable });
   if (!day) return { stopped: "no_slot" };
@@ -16175,6 +16206,7 @@ async function autoRepropose(c, visit) {
   // The day that was just refused is on the row, so the search starts from it
   // rather than from the job's target -- otherwise the next try offers the
   // same week again.
+  if (mine?.paused) return { stopped: "paused" };
   const day = slotFor({ from: visit.date, busy: mine?.busy, unavailable: mine?.unavailable });
   if (!day) return { stopped: "no_slot" };
   // AS THE ACCOUNT, for the reason `autoProposeOnAccept` is: this runs inside

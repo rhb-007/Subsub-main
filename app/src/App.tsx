@@ -3801,7 +3801,11 @@ export default function SubSub() {
       zip: myCompany.zip || "", coverage: myCompany.coverage,
       // The account's own trade chips. A company's trades live on the account
       // for a hireable kind, which is where the signup form puts them.
-      categories: account.trades || [], caps: [], crews: [],
+      // Their crews and each crew's days off, off the company row -- the
+      // same column a hiring account's roster reads, so marking a day off
+      // here is what every client sees.
+      categories: account.trades || [], caps: [], crews: myCompany.crews || [],
+      available: true,
       docs,
       // NOBODY VERIFIES THEIR OWN PAPERWORK, which is why these are presence
       // and not approval. `docVerified` reads a hiring account's verdict, so
@@ -3918,6 +3922,33 @@ export default function SubSub() {
   // the optimistic write patchSub does wrong here -- it would draw the switch
   // as On and log the refusal to the console, which is exactly the lie the
   // rule exists to prevent. So this one awaits, then moves.
+  // THE ACCOUNT'S OWN CREWS GO THROUGH PATCH /api/my-company, never
+  // patchSub. That route is the one for an account's own row, and patchSub
+  // would write to PATCH /api/subs/:companyId, which is for a company this
+  // account HIRES -- the reason ownSub is a separate value from mySub at all.
+  // Drawn at once so a tapped day answers the tap, then replaced by what the
+  // server stored; a refusal puts the old crews back and says so, because a
+  // day drawn as off over a write that never happened is a crew booked on a
+  // day they believe they blocked.
+  const [ownCrewErr, setOwnCrewErr] = useState("");
+  const saveOwnCrews = async (crews) => {
+    const prev = myCompany?.crews || [];
+    setOwnCrewErr("");
+    setMyCompany((m) => (m ? { ...m, crews } : m));
+    try {
+      const r = await api.saveMyCompany({ crews });
+      if (Array.isArray(r?.crews)) setMyCompany((m) => (m ? { ...m, crews: r.crews } : m));
+    } catch (e) {
+      setMyCompany((m) => (m ? { ...m, crews: prev } : m));
+      const code = e?.body?.error;
+      setOwnCrewErr(code === "impersonation_expired"
+        ? "Your staff sign-in has run out, so that didn't save. Sign in to this account again from the console."
+        : code === "invalid_crews"
+          ? "Each crew needs a name and at least one person on it."
+          : "That didn't save, so nothing changed. Check your connection and try again.");
+      throw e;
+    }
+  };
   const setAutoSchedule = async (companyId, on) => {
     await api.patchSub(companyId, { autoSchedule: on });
     patchEngagement(companyId, { autoSchedule: on });
@@ -5928,11 +5959,17 @@ export default function SubSub() {
           {/* AND A HIREABLE ACCOUNT'S OWN TEAM GETS THE TWO THAT ARE ABOUT
               WORK GIVEN TO THEM. Not the whole portal: Compliance pack is
               already a tab in Account for them and two names for one object
-              is how somebody concludes there are two of them; My Crews and
-              Job Settings are engagement-shaped and there is no engagement
-              with yourself; Connect is on the dashboard, which is where it
+              is how somebody concludes there are two of them; Job Settings
+              is engagement-shaped and there is no engagement with yourself;
+              Connect is on the dashboard, which is where it
               was moved for exactly this reason. */}
-          {!can("portal") && ownWork && [["jobs", "My Jobs"], ["schedule", "My calendar"]]
+          {/* AND THEIR AVAILABILITY. Reported as "where do I adjust my
+              availability, I can't find it": the contractor seat sets it under
+              Job Settings, which is engagement-shaped, so the business owner
+              had nowhere to block a single day. Crews and their days off live
+              on the company row, which IS theirs, so these two are not. */}
+          {!can("portal") && ownWork && [["jobs", "My Jobs"], ["schedule", "My calendar"],
+            ["availability", "My availability"], ["crews", "My Crews"]]
             .map(([id, label]) => (
               <button key={id} className={tab === "portal" && pane === id ? "on" : ""}
                 onClick={() => { setPane(id); setTab("portal"); }}>
@@ -7429,19 +7466,25 @@ export default function SubSub() {
             onSetAutoSchedule={(v) => patchSub(mySub.id, { autoSchedule: v })}
             overflowStanding={overflowStanding} overflowOffers={overflowOffers}
             onSetOverflowOptIn={setOverflowOptIn} onRespondOverflow={respondOverflow}
-            onSetCrews={(crews) => patchSub(mySub.id, { crews })}
+            onSetCrews={(crews) => (mySub ? patchSub(mySub.id, { crews }) : saveOwnCrews(crews))}
+            crewSaveErr={mySub ? "" : ownCrewErr}
             onSetCoverage={(coverage) => patchSub(mySub.id, { coverage })}
-            onToggleCrewDay={(crewId, day) => patchSub(mySub.id, {
-              crews: (mySub.crews || []).map((c) => c.id !== crewId ? c : {
+            /* Through the one door that fits the seat: a contractor seat
+               writes the roster row it was invited onto, the account's own
+               team writes its own company. Same crew shape either way. */
+            onToggleCrewDay={(crewId, day) => {
+              const crews = (portalSub.crews || []).map((c) => c.id !== crewId ? c : {
                 ...c,
                 unavailableDays: crewOffDays(c).includes(day)
                   ? crewOffDays(c).filter((d) => d !== day)
                   : [...crewOffDays(c), day],
-              }),
-            })}
-            onToggleCrewAvailable={(crewId, v) => patchSub(mySub.id, {
-              crews: (mySub.crews || []).map((c) => c.id !== crewId ? c : { ...c, available: v }),
-            })}
+              });
+              return mySub ? patchSub(mySub.id, { crews }) : saveOwnCrews(crews).catch(() => {});
+            }}
+            onToggleCrewAvailable={(crewId, v) => {
+              const crews = (portalSub.crews || []).map((c) => c.id !== crewId ? c : { ...c, available: v });
+              return mySub ? patchSub(mySub.id, { crews }) : saveOwnCrews(crews).catch(() => {});
+            }}
             onSetWarranty={(w) => patchSub(mySub.id, { warranty: w })}
             onSetCategories={(cats) => patchSub(mySub.id, {
               categories: cats,
@@ -27409,7 +27452,7 @@ function MySchedule({ rows, onOpen, onOpenCalendar }) {
 
 function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [], onGoClient, hostKind = null,
   quotes = [], onAnswerQuote, brand, me, orders, now,
-  connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage,
+  connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage, crewSaveErr = "",
   overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow,
   onAnswerVisit, onProposeVisit, onGoPane, aimAuto = null }) {
   const [sub2, setSub2] = useState("trades");
@@ -27758,7 +27801,20 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
         onOpen={(m) => (m.elsewhere
           ? onGoClient?.(m.elsewhere.accountId)
           : onViewWO({ job: m.job, trade: m.trade, a: m.a }))} />}
-      {pane === "crews" && <MyCrews crews={sub.crews || []} onSave={onSetCrews} />}
+      {pane === "crews" && <MyCrews crews={sub.crews || []} onSave={onSetCrews} saveErr={crewSaveErr} />}
+
+      {/* The account's own team reaches availability here; a contractor seat
+          reaches the same panel under Job settings, Availability. One
+          component, so the two cannot draw days off differently. */}
+      {pane === "availability" && (
+        <>
+          <PageHead title="My availability"
+            sub="Tap the days a crew can't work. Every client that hires you sees them, and nothing is booked on them." />
+          {crewSaveErr && <p className="fld-err" role="alert"><AlertTriangle size={13} /> {crewSaveErr}</p>}
+          <MyAvailability sub={sub} jobs={jobs} onGoCrews={() => onGoPane?.("crews")}
+            onToggleCrewDay={onToggleCrewDay} onToggleCrewAvailable={onToggleCrewAvailable} />
+        </>
+      )}
 
       {pane === "connect" && (
         <ConnectPane requests={connectRequests} onRespond={onRespondConnect} onReload={onReloadConnects} />
@@ -29680,10 +29736,17 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
 }
 
 // ---- Contractor: manage own crews ---------------------------------------
-function MyCrews({ crews, onSave }) {
+function MyCrews({ crews, onSave, saveErr = "" }) {
   const [list, setList] = useState(() => JSON.parse(JSON.stringify(crews.length ? crews : [{ id: "c1", name: "Crew 1", available: true, unavailableDays: [], members: [{ name: "", role: "" }] }])));
   const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
   const touch = (next) => { setList(next); setSaved(false); };
+  // Awaited, so "Saved" is said about a write that happened. Over a refusal it
+  // stays unsaid and the reason shows instead.
+  const save = async (clean) => {
+    setBusy(true);
+    try { await onSave(clean); setSaved(true); } catch { setSaved(false); } finally { setBusy(false); }
+  };
   const addCrew = () => touch([...list, { id: "c" + Date.now(), name: `Crew ${list.length + 1}`, members: [{ name: "", role: "" }] }]);
   const removeCrew = (ci) => touch(list.filter((_, i) => i !== ci));
   const setName = (ci, name) => touch(list.map((c, i) => i === ci ? { ...c, name } : c));
@@ -29721,12 +29784,13 @@ function MyCrews({ crews, onSave }) {
         ))}
         <button type="button" className="add-crew" onClick={addCrew}><Plus size={13} /> Add crew</button>
       </div>
+      {saveErr && !busy && <p className="fld-err" role="alert"><AlertTriangle size={13} /> {saveErr}</p>}
       <div className="panel-actions">
         <span className="panel-count">{clean.length} {clean.length === 1 ? "crew" : "crews"} · {total} people</span>
         {saved
           ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
-          : <button className="btn-solid" disabled={!clean.length} onClick={() => { onSave(clean); setSaved(true); }}>
-              <Check size={15} /> Save crews
+          : <button className="btn-solid" disabled={!clean.length || busy} onClick={() => save(clean)}>
+              <Check size={15} /> {busy ? "Saving…" : "Save crews"}
             </button>}
       </div>
     </div>
@@ -29854,7 +29918,7 @@ function MyCoverage({ sub, onSave }) {
   );
 }
 // ---- Contractor: crew-based availability --------------------------------
-function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable }) {
+function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable, onGoCrews }) {
   const crews = sub.crews || [];
   const [crewId, setCrewId] = useState(crews[0]?.id || "");
   const [offset, setOffset] = useState(0);
@@ -29867,7 +29931,10 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable }) {
   const fmt = dayKey;
 
   const isAll = crewId === "__all";
-  const crew = crews.find((c) => c.id === crewId);
+  // The crews can arrive after the first render (the account's own company is
+  // fetched), so a picker seeded from an empty list must still land on a crew
+  // rather than reading .available off nothing.
+  const crew = crews.find((c) => c.id === crewId) || crews[0];
 
   // which days each crew is booked on
   const bookedFor = (name) => new Set(
@@ -29881,7 +29948,8 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable }) {
       <div className="portal-panel">
         <h4>My availability</h4>
         <div className="dash-empty"><Users size={24} />
-          <p>Add a crew under My Crews first — availability is set per crew.</p></div>
+          <p>Add a crew under My Crews first — availability is set per crew.</p>
+          {onGoCrews && <button className="btn-solid" onClick={onGoCrews}><Plus size={14} /> Add a crew</button>}</div>
       </div>
     );
   }
@@ -29895,7 +29963,7 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable }) {
         {crews.map((c) => {
           const off = crewOffDays(c).length;
           return (
-            <button key={c.id} className={`cp-btn ${crewId === c.id ? "on" : ""} ${c.available === false ? "paused" : ""}`}
+            <button key={c.id} className={`cp-btn ${!isAll && crew?.id === c.id ? "on" : ""} ${c.available === false ? "paused" : ""}`}
               onClick={() => setCrewId(c.id)}>
               <span className="cp-name">{c.name}</span>
               <span className="cp-meta">
@@ -33391,6 +33459,7 @@ function AutoMissPanel({ miss, onAssign, onOpenJob, onDismiss }) {
     }
     if (x.why === "documents") return `documents not verified yet (${docs(x.kinds)})`;
     if (x.why === "no_slot") return "no free working day in the next few weeks";
+    if (x.why === "paused") return "every one of their crews is paused";
     return x.why;
   };
   let head = "Auto-schedule could not place this one, so it needs you.";

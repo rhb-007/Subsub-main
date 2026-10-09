@@ -11340,6 +11340,58 @@ refactor.
   several plausible names and draw nothing if none match, so a wrong guess
   costs a blank, never a wrong figure.
 
+- **A SUBCONTRACTOR ACCOUNT'S OWNER COULD NOT BLOCK A DAY, AND AUTO-SCHEDULE
+  DID NOT READ THE DAYS ANYBODY HAD BLOCKED.** Reported as *"if I'm a contractor
+  or subcontractor where do I adjust my personal availability, I can't find the
+  calendars"*. A contractor seat sets it under Job Settings > Availability. The
+  admin of their own subcontractor account had My Jobs and My calendar and no
+  screen at all, because Job Settings is engagement-shaped and there is no
+  engagement with yourself.
+
+  **Crews and their days off live on the company row, which IS theirs**, so
+  **My availability** and **My Crews** are now on the account's own menu
+  beside My Jobs, gated on `ownWork` like the other two. They are the same
+  `MyAvailability` and `MyCrews` components a contractor seat uses, so the two
+  cannot draw days off differently. With no crew yet, My availability offers
+  *Add a crew* rather than a sentence pointing elsewhere.
+
+  **It saves through `PATCH /api/my-company`, never `patchSub`.** `ownSub` is a
+  separate value from `mySub` for exactly this reason: `patchSub` writes to the
+  route for a company this account HIRES. `crews` is its own write on that
+  route, like coverage, so a tapped day does not need a whole profile sent with
+  it, and **`validCrews` in `app/shared/crews.js` checks the shape on the way
+  in**, because the row is shared and every hiring account's availability grid
+  reads it. Not a list is `invalid_crews`. A tapped day is drawn at once and
+  then replaced with what the server stored; **a refusal puts the day back and
+  says why**, because a day drawn as off over a write that never happened is a
+  crew booked on a day they believe they blocked. My Crews awaits its save, so
+  *Saved* is said only about a write that happened.
+
+  **AND THE SERVER HAD NEVER READ A CREW'S DAY OFF.** Every auto-scheduling
+  path (`autoCandidates`, `crewGrantedBooking`, `autoBookOnIssue`,
+  `autoProposeOnAccept`, `autoRepropose`) read `companies.unavailable_days`, a
+  company-wide list no screen has written since availability moved onto crews.
+  So a crew that marked a day off was still auto-booked on it, and the grant
+  still counted as their agreement to it. `offDays` is the one answer now:
+  - **A day is off only when every crew that is taking work has it off.** One
+    crew on holiday is not the company on holiday.
+  - **Every crew paused** is not taking work on any day, which a list of dates
+    cannot say, so it is `allPaused`. The ranking passes the company over with
+    `why: "paused"`, and issuing to one books no window (`reason: "paused"`).
+  - **No crews at all is not "never free"**, because most contractors never fill
+    My Crews in and that reading would stop auto-scheduling for all of them.
+  - The old company-wide list still counts, for rows that carry one.
+
+  Ten server mutations and five browser ones fire, each on its own assertion
+  (`test:owncrews`, `test:owncrewsui`). The turnaround case needed a control
+  beside it: with Tuesday free the better-rated company wins, so the fixture
+  where its crews are all off on Tuesday is the only one that shows the
+  ranking reading them.
+
+  **Still open:** the days live on the shared company row, so every client
+  that hires them sees them, which is what was asked. There is no private day
+  off per client.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

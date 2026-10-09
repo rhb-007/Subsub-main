@@ -89,6 +89,9 @@ export const AUTO_SKIP = {
   not_this_trade: "not engaged for this trade",
   documents: "documents outstanding",
   no_slot: "no free day in range",
+  // Every crew switched off in My Crews. Its own reason rather than no_slot,
+  // because the way out is theirs and is one switch, not a day to free up.
+  paused: "every crew is paused",
 };
 
 // THE RANKING. Ordered, and each criterion is here for a reason rather than
@@ -129,6 +132,10 @@ export function rankCandidates(cands = [], { trade, from } = {}) {
     if ((cnd.blockers || []).length) {
       skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "documents",
         kinds: [...cnd.blockers] });
+      continue;
+    }
+    if (cnd.paused) {
+      skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "paused" });
       continue;
     }
     const day = slotFor({ from, busy: cnd.busy, unavailable: cnd.unavailable });
